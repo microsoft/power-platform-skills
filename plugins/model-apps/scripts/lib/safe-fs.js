@@ -6,6 +6,9 @@
 // file. `writeFileSync` and `appendFileSync` follow links. Replacing the directory entry (write to
 // a temp file in the same directory, then rename) does not.
 //
+// `writeFileSafe(…, { exclusive: true })` is the no-clobber form: it writes the file whole to a sibling nobody else knows and gives it the target's name with a hard link, which
+// fails when the name is taken — so the file system decides whether the name is free, in one step, and a failure removes only the sibling it made.
+//
 // Only the FINAL component is inspected. A symlinked ancestor is the caller's own choice: macOS
 // temp directories live under a symlinked `/var`, and a junctioned project root is a normal setup.
 // That is the same rule as `checkWorkspaceClearable` in workspace-paths.js. That helper is not
@@ -203,12 +206,20 @@ function writeFileSafe(filePath, data, opts) {
   const resolved = path.resolve(filePath);
   const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
   const target = path.join(realDir, path.basename(resolved));
+  // `exclusive`: the file is CREATED here, and never replaces one. A name that is taken — by a file, a read-only file, a link, a directory: anything — is reported as taken, and
+  // the decision is the file system's, made in the single step that gives the finished file its name (createExclusive: a hard link, which fails with EEXIST when the name is
+  // taken and never follows a link planted there). The look beforehand only gives the refusal its precise name: it says nothing about the moment of the write, and a caller
+  // whose work before the write takes minutes has no other way to promise "not over a file that appeared meanwhile".
+  if (opts && opts.exclusive) {
+    if (existingTarget(target, fsImpl)) throw existsError(target);
+    return createExclusive(fsImpl, target, data, opts);
+  }
   const st = assertWritableTarget(target, fsImpl);
   // The checks above describe the past: a link swapped in before a direct write would be followed.
   // An exclusive temp file plus rename replaces the directory entry, so that link is discarded
   // rather than followed. `wx` fails instead of reusing a name someone else created — that file
   // is not ours to delete.
-  const tmp = path.join(realDir, `.${path.basename(resolved)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  const tmp = siblingTempName(realDir, path.basename(resolved));
   let createdTmp = false;
   try {
     const fd = fsImpl.openSync(tmp, 'wx');
@@ -226,14 +237,116 @@ function writeFileSafe(filePath, data, opts) {
       try { fsImpl.unlinkSync(tmp); } catch { /* already renamed, or removed by someone else */ }
     }
     if (err && (err.code === UNSAFE || err.code === 'IO_ERROR')) throw err;
-    const locked = process.platform === 'win32' && RENAME_LOCK_CODES.has(err && err.code);
-    const e = new Error(locked
-      ? `failed to write ${filePath}: it could not be replaced (${err.code}) — another program may have it open. Close it and retry.`
-      : `failed to write ${filePath}: ${(err && err.message) || err}`);
+    throw writeFailure(filePath, err);
+  }
+  return target;
+}
+
+// The refusal of an exclusive write whose name is taken. `reason` is how a caller tells it from every other write failure (which it does not retry or report alike).
+function existsError(target) {
+  const e = new Error(`refusing to write ${target}: it already exists`);
+  e.code = 'IO_ERROR';
+  e.reason = 'exists';
+  return e;
+}
+
+// `replacing` is false for a write that creates the name (nothing is being replaced, so "could not be replaced — another program may have it open" would be untrue).
+function writeFailure(filePath, err, { replacing = true } = {}) {
+  const locked = replacing && process.platform === 'win32' && RENAME_LOCK_CODES.has(err && err.code);
+  const e = new Error(locked
+    ? `failed to write ${filePath}: it could not be replaced (${err.code}) — another program may have it open. Close it and retry.`
+    : `failed to write ${filePath}: ${(err && err.message) || err}`);
+  e.code = 'IO_ERROR';
+  return e;
+}
+
+// The name of a temporary sibling of `name` in `dir`: hidden, and unique to this process and call.
+function siblingTempName(dir, name) {
+  return path.join(dir, `.${name}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+}
+
+// What a failed `link` says about the file system, as opposed to about this file: the codes of a file system that cannot make a second name for a file — FAT and exFAT (libuv reports
+// Windows' ERROR_INVALID_FUNCTION as EISDIR), some network shares and FUSE mounts (ENOTSUP, EOPNOTSUPP, EPERM on Linux vfat, ENOSYS), a link count already at its limit (EMLINK) or a
+// name that is on another device (EXDEV). Anything else — a full disk, a permission, a vanished folder — is an ordinary write failure.
+const HARD_LINK_UNSUPPORTED_CODES = new Set(['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EPERM', 'EXDEV', 'EMLINK', 'EISDIR', 'EINVAL']);
+
+// An exclusive write: the file is written WHOLE to a sibling of the target that only this call knows, and is then given the target's name in one atomic step that refuses to replace
+// anything — a hard link, `link(sibling, target)`, which fails with EEXIST when the name is taken (POSIX link(2); Windows CreateHardLinkW) — and the sibling's own name is removed.
+//
+// Why not create the target itself (`wx`) and write into it: the name then exists, half written, from the moment of the create, and a failed write has to remove it — by its NAME, which
+// another writer may by then have renamed away and replaced with a file of its own (a maker's filled-in settings, say); the unlink would delete that file. Here the only name this call ever
+// removes is the sibling's, which it created exclusively and nobody else knows, so a failure can never reach another writer's file; and a reader never sees a half-written target.
+//
+// A file system without hard links cannot do this: the call then FAILS — `reason: 'no-hard-links'` — rather than fall back to something that cannot keep the promise. A caller that does
+// not need it (it replaces a file anyway) does not pass `exclusive`.
+function createExclusive(fsImpl, target, data, opts) {
+  const dir = path.dirname(target);
+  const name = path.basename(target);
+  let tmp;
+  let fd;
+  for (let attempt = 0; fd === undefined; attempt += 1) {
+    tmp = siblingTempName(dir, name);
+    try {
+      fd = fsImpl.openSync(tmp, 'wx');
+    } catch (err) {
+      // A sibling name that is already taken (not by us: ours is new) is another call's: try another name. Anything else is the write failing.
+      if (!(err && err.code === 'EEXIST') || attempt >= 4) throw writeFailure(target, err, { replacing: false });
+    }
+  }
+  const removeSibling = () => {
+    try { fsImpl.unlinkSync(tmp); } catch { /* already gone */ }
+  };
+  try {
+    try {
+      if (opts && opts.encoding) fsImpl.writeFileSync(fd, data, { encoding: opts.encoding });
+      else fsImpl.writeFileSync(fd, data);
+    } finally {
+      fsImpl.closeSync(fd);
+    }
+    try {
+      fsImpl.linkSync(tmp, target);
+    } catch (err) {
+      if (err && err.code === 'EEXIST') throw existsError(target);
+      if (err && HARD_LINK_UNSUPPORTED_CODES.has(err.code)) throw noHardLinksError(target, err);
+      throw err;
+    }
+  } catch (err) {
+    removeSibling();
+    if (err && err.code === 'IO_ERROR') throw err;
+    throw writeFailure(target, err, { replacing: false });
+  }
+  // The target is complete under its name. Dropping the sibling's name leaves one name for it; a name that cannot be dropped (Windows holds a just-written file for a moment while a
+  // scanner reads it, hence the retry) is reported, because the file then has two names and a later write of it is refused as a hard link.
+  try {
+    unlinkWithRetry(fsImpl, tmp);
+  } catch (err) {
+    const e = new Error(`${target} was written, but its temporary name ${tmp} could not be removed (${(err && err.code) || err}): remove it, or the file keeps two names and a later write of it is refused as a hard link`);
     e.code = 'IO_ERROR';
+    e.reason = 'sibling-left';
     throw e;
   }
   return target;
+}
+
+function noHardLinksError(target, err) {
+  const e = new Error(`failed to create ${target} without replacing a file: this file system cannot make a second name for a file (link failed with ${err.code}), which is how the no-replace guarantee is kept. Write to a folder on a file system that supports hard links (NTFS, ext4, APFS).`);
+  e.code = 'IO_ERROR';
+  e.reason = 'no-hard-links';
+  return e;
+}
+
+// `unlink` with the bounded retry a Windows lock needs, as renameWithRetry has.
+function unlinkWithRetry(fsImpl, file) {
+  for (let i = 0; ; i += 1) {
+    try {
+      fsImpl.unlinkSync(file);
+      return;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return;
+      if (process.platform !== 'win32' || !RENAME_LOCK_CODES.has(err.code) || i >= RENAME_RETRY_MS.length) throw err;
+      sleepSync(RENAME_RETRY_MS[i]);
+    }
+  }
 }
 
 function appendFileSafe(filePath, data, opts) {

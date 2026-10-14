@@ -247,6 +247,170 @@ test('a failed replace removes the temp file and leaves the existing target', ()
   assert.deepStrictEqual(fs.readdirSync(d).filter((n) => n.endsWith('.tmp')), []);
 });
 
+// `exclusive` is the no-clobber form: the caller promised "never over a file that is there", possibly minutes before it writes.
+test('writeFileSafe with exclusive creates a file that is not there, and reports anything that is — a file, a read-only file, a directory — as taken, leaving it as it was', () => {
+  const d = tmp('out');
+  fs.mkdirSync(d);
+  const file = path.join(d, 'settings.json');
+  assert.strictEqual(writeFileSafe(file, 'one\n', { exclusive: true, encoding: 'utf8' }), path.join(fs.realpathSync.native(d), 'settings.json'));
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'one\n');
+  const taken = (e) => e.code === 'IO_ERROR' && e.reason === 'exists' && /already exists/.test(e.message);
+  assert.throws(() => writeFileSafe(file, 'two\n', { exclusive: true }), taken);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'one\n');
+  fs.chmodSync(file, 0o444);
+  try {
+    assert.throws(() => writeFileSafe(file, 'three\n', { exclusive: true }), taken, 'a read-only file is a file that is there');
+  } finally {
+    fs.chmodSync(file, 0o644);
+  }
+  const asDir = path.join(d, 'a-directory');
+  fs.mkdirSync(asDir);
+  assert.throws(() => writeFileSafe(asDir, 'x', { exclusive: true }), taken);
+  assert.deepStrictEqual(fs.readdirSync(d).sort(), ['a-directory', 'settings.json'], 'no temp file is left');
+  writeFileSafe(file, 'replaced\n');
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'replaced\n', 'without exclusive the same call still replaces');
+});
+
+test('writeFileSafe with exclusive lets the file system decide: a name that appears after the look is never overwritten, and a link planted there is never followed', (t) => {
+  const base = tmp();
+  const d = path.join(base, 'out');
+  fs.mkdirSync(d);
+  const target = path.join(fs.realpathSync.native(d), 'settings.json');
+  const outside = path.join(base, 'outside.txt');
+  fs.writeFileSync(outside, 'secret');
+  // Another process takes the name just after this call looked and found it free: the step that gives the finished file its name is where it is handed over.
+  const racing = (create) => ({ ...fs, linkSync: (from, to) => { if (to === target) create(); return fs.linkSync(from, to); } });
+  const taken = (e) => e.code === 'IO_ERROR' && e.reason === 'exists';
+  assert.throws(() => writeFileSafe(target, 'mine', { exclusive: true, fs: racing(() => fs.writeFileSync(target, 'theirs')) }), taken);
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'theirs', 'the file that appeared is not replaced');
+  assert.deepStrictEqual(fs.readdirSync(d), ['settings.json'], 'and the sibling this call made is gone');
+  fs.rmSync(target);
+  const probe = path.join(base, 'probe-link');
+  if (tryLink(outside, probe, 'file')) {
+    t.diagnostic('file symlinks need an extra privilege on this host (EPERM); skipped the planted-link sub-case');
+    return;
+  }
+  assert.throws(() => writeFileSafe(target, 'mine', { exclusive: true, fs: racing(() => fs.symlinkSync(outside, target, 'file')) }), taken);
+  assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'secret', 'a link planted at the name is not written through');
+});
+
+test('an exclusive write that fails part way removes what it created, and one that cannot create the name says so — it is not "already exists"', () => {
+  const d = tmp('out');
+  fs.mkdirSync(d);
+  const file = path.join(d, 'settings.json');
+  const failure = (code, message) => () => { throw Object.assign(new Error(message), { code }); };
+  assert.throws(
+    () => writeFileSafe(file, 'x', { exclusive: true, fs: { ...fs, writeFileSync: failure('ENOSPC', 'no space left on device') } }),
+    (e) => e.code === 'IO_ERROR' && e.reason === undefined && /failed to write .*no space left on device/.test(e.message)
+  );
+  assert.deepStrictEqual(fs.readdirSync(d), [], 'neither the target nor the sibling is left: half a file is not left under any name');
+  assert.throws(
+    () => writeFileSafe(file, 'x', { exclusive: true, fs: { ...fs, openSync: failure('EACCES', 'permission denied') } }),
+    (e) => e.code === 'IO_ERROR' && e.reason === undefined && /failed to write .*permission denied/.test(e.message)
+  );
+});
+
+// A failed exclusive write used to unlink the TARGET by its name, which another writer may by then have renamed away and replaced with a file of its own — a maker's filled-in settings —
+// deleting that. The write is now made to a sibling only this call knows, and a failure removes that sibling alone: no name it ever removes can be anyone else's.
+test('a failed exclusive write never removes a file at the target name that another writer put there — the write goes to a sibling, and only the sibling is removed', () => {
+  const d = tmp('out');
+  fs.mkdirSync(d);
+  const target = path.join(fs.realpathSync.native(d), 'settings.json');
+  const original = path.join(d, 'original.json');
+  const replacement = '{"EnvironmentVariables":[{"SchemaName":"new_Secret","Value":"filled by another writer"}]}';
+  const siblings = [];
+  const interleaved = {
+    ...fs,
+    openSync: (p, flags, ...rest) => { if (flags === 'wx') siblings.push(p); return fs.openSync(p, flags, ...rest); },
+    // The write fails part way, after another writer has put its file at the target name (and moved an earlier one aside): the interleaving the cleanup used to lose it in.
+    writeFileSync: (fd) => {
+      fs.writeFileSync(fd, '{"incomplete":');
+      if (fs.existsSync(target)) fs.renameSync(target, original);
+      fs.writeFileSync(target, replacement);
+      throw Object.assign(new Error('synthetic device write failure after a concurrent replace'), { code: 'EIO' });
+    },
+  };
+  assert.throws(() => writeFileSafe(target, '{}', { exclusive: true, fs: interleaved }), (e) => e.code === 'IO_ERROR' && e.reason === undefined && /synthetic device write failure/.test(e.message));
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), replacement, 'the other writer\'s file is still there, untouched');
+  assert.strictEqual(siblings.length, 1, 'one sibling was made');
+  assert.notStrictEqual(siblings[0], target, 'and it is not the target');
+  assert.strictEqual(fs.existsSync(siblings[0]), false, 'the sibling — the one name this call owns — was removed');
+  assert.deepStrictEqual(fs.readdirSync(d), ['settings.json'], 'nothing else is left');
+});
+
+test('an exclusive write is published whole, under its name, by one atomic step: the target does not exist until the finished file is linked to it, and the sibling\'s name is then removed', () => {
+  const d = tmp('out');
+  fs.mkdirSync(d);
+  const target = path.join(fs.realpathSync.native(d), 'settings.json');
+  const seen = [];
+  let sibling;
+  const watching = {
+    ...fs,
+    openSync: (p, flags, ...rest) => { if (flags === 'wx') sibling = p; return fs.openSync(p, flags, ...rest); },
+    writeFileSync: (fd, data, ...rest) => {
+      fs.writeFileSync(fd, data, ...rest);
+      seen.push(['after the write', fs.existsSync(target)]);
+    },
+    linkSync: (from, to) => {
+      seen.push(['at the link', fs.existsSync(target), fs.readFileSync(from, 'utf8'), from === sibling, to === target]);
+      return fs.linkSync(from, to);
+    },
+  };
+  assert.strictEqual(writeFileSafe(target, 'the whole content\n', { exclusive: true, encoding: 'utf8', fs: watching }), target);
+  assert.deepStrictEqual(seen, [['after the write', false], ['at the link', false, 'the whole content\n', true, true]], 'no name held a partial file, and the link was given the finished one');
+  assert.strictEqual(path.dirname(sibling), path.dirname(target), 'the sibling is in the target\'s folder, which is what lets the link be made');
+  assert.match(path.basename(sibling), /^\.settings\.json\.\d+\.[0-9a-f]{8}\.tmp$/, 'a hidden name made of the target\'s, the process and a random part');
+  assert.deepStrictEqual(fs.readdirSync(d), ['settings.json'], 'the sibling\'s name is gone');
+  assert.strictEqual(fs.statSync(target).nlink, 1, 'and the file has one name, so a later write of it is not refused as a hard link');
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'the whole content\n');
+});
+
+test('a file system that cannot make a hard link fails an exclusive write with its own reason, leaves nothing behind, and an ordinary link failure stays an ordinary write failure', () => {
+  const d = tmp('out');
+  fs.mkdirSync(d);
+  const target = path.join(d, 'settings.json');
+  const linkFails = (code) => ({ ...fs, linkSync: () => { throw Object.assign(new Error(`link: ${code}`), { code }); } });
+  for (const code of ['EPERM', 'EISDIR', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK', 'EINVAL']) {
+    assert.throws(
+      () => writeFileSafe(target, 'x', { exclusive: true, fs: linkFails(code) }),
+      (e) => e.code === 'IO_ERROR' && e.reason === 'no-hard-links' && e.message.includes(`link failed with ${code}`) && /file system that supports hard links/.test(e.message),
+      code
+    );
+    assert.deepStrictEqual(fs.readdirSync(d), [], `${code}: neither the target nor the sibling is left`);
+  }
+  for (const code of ['ENOSPC', 'EACCES', 'EIO', 'ENOENT']) {
+    assert.throws(() => writeFileSafe(target, 'x', { exclusive: true, fs: linkFails(code) }), (e) => e.code === 'IO_ERROR' && e.reason === undefined && /failed to write/.test(e.message), code);
+    assert.deepStrictEqual(fs.readdirSync(d), [], code);
+  }
+});
+
+test('an exclusive write whose sibling\'s name cannot be removed after the file is published says so — the file is complete, and the leftover name is named — and one whose first sibling name is taken tries another', () => {
+  const d = tmp('out');
+  fs.mkdirSync(d);
+  const target = path.join(fs.realpathSync.native(d), 'settings.json');
+  let sibling;
+  const stuck = {
+    ...fs,
+    openSync: (p, flags, ...rest) => { if (flags === 'wx') sibling = p; return fs.openSync(p, flags, ...rest); },
+    // EIO is not a lock code, so no platform retries it.
+    unlinkSync: (p) => { if (p === sibling) throw Object.assign(new Error('unlink failed'), { code: 'EIO' }); return fs.unlinkSync(p); },
+  };
+  assert.throws(() => writeFileSafe(target, 'complete\n', { exclusive: true, fs: stuck }), (e) => e.code === 'IO_ERROR' && e.reason === 'sibling-left' && e.message.includes(sibling) && /was written/.test(e.message));
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'complete\n', 'the file itself is complete');
+  fs.rmSync(sibling, { force: true });
+  fs.rmSync(target);
+
+  let refused = 0;
+  const taken = { ...fs, openSync: (p, flags, ...rest) => { if (flags === 'wx' && refused === 0) { refused += 1; throw Object.assign(new Error('exists'), { code: 'EEXIST' }); } return fs.openSync(p, flags, ...rest); } };
+  assert.strictEqual(writeFileSafe(target, 'second try\n', { exclusive: true, fs: taken }), target);
+  assert.strictEqual(refused, 1);
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'second try\n');
+  // A name that stays taken is not retried for ever.
+  const always = { ...fs, openSync: (p, flags) => { if (flags === 'wx') throw Object.assign(new Error('exists'), { code: 'EEXIST' }); return fs.openSync(p, flags); } };
+  fs.rmSync(target);
+  assert.throws(() => writeFileSafe(target, 'x', { exclusive: true, fs: always }), (e) => e.code === 'IO_ERROR' && e.reason === undefined && /failed to write/.test(e.message));
+});
+
 test('appendFileSafe appends to a regular file and creates a missing one', () => {
   const d = tmp('out');
   fs.mkdirSync(d);

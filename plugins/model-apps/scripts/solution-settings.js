@@ -1,0 +1,948 @@
+#!/usr/bin/env node
+'use strict';
+// solution-settings: the deployment settings of a solution — the file that says which connection each connection reference binds to and
+// which value each environment variable takes in the environment a solution is imported into — and the import that applies it. Replaces
+// `pac solution create-settings` and `pac solution import --settings-file` (skills/genpage/SKILL.md, Phase 6.7: the deployer supplies each
+// ConnectionId at import).
+//
+//   template  writes the settings file for a solution package: every environment variable (`SchemaName`, an empty `Value`, and pac's
+//             informational `DefaultValue`, `TypeId`, `IsRequired`) and every connection reference (`LogicalName`, an empty `ConnectionId`,
+//             `ConnectorId`) the package holds, sorted by name, in pac's own format — so a settings file pac wrote, and one this wrote, are
+//             read alike by both. The package is read the way the platform reads it: staged in the environment (`StageSolution`; nothing is
+//             imported, and the staging copy is deleted), so `--env` is the environment to stage in — the one the solution was exported
+//             from, when it can be, because a package with a missing dependency does not stage. With `--solution` the script exports the
+//             solution from `--env` first; with `--package` it reads a zip you already have. Without `--env` there is nothing to stage in,
+//             and the zip is read by pac, offline (`pac solution create-settings --solution-zip`).
+//   import    imports a package into `--env` and applies the settings file IN the import (`ComponentParameters`), after checking that every
+//             filled entry names a variable or connection reference of the package (the platform would otherwise apply it to whatever the
+//             environment holds under that name). An entry left empty overrides nothing.
+//
+// pac's defaults, for the flags `pac solution import` takes: a plain synchronous import that overwrites no unmanaged customizations
+// (--force-overwrite off), activates no plug-ins or workflows (--activate-plugins off), skips no dependency check, is not a holding
+// solution or an upgrade, does not publish the changes afterwards, and skips nothing for a lower version. None of them is a flag here.
+//
+// SDK first, pac as the fallback — only where the SDK REFUSES (lib/sdk-first.js is the rule):
+//   template  SOLUTION_STAGING_FAILED, SOLUTION_STAGING_UNREADABLE: the platform's staging would not take, or answered what the SDK cannot
+//             read with certainty. pac reads the zip itself, offline.
+//   import    SOLUTION_STAGING_UNREADABLE, and a settings file with a feature pac applies and the SDK does not (a non-empty Workflows,
+//             CanvasApps or CopilotAgents list, a ConnectionInstance): pac imports it. The feature is found in the FILE, and the SDK's error
+//             is taken for this refusal only when it is exactly the sentence the SDK words for that feature — a settings key or a name that
+//             merely contains the phrase is a failure, not a feature. A package that did not pass staging
+//             (SOLUTION_STAGING_FAILED, with the dependencies it is missing) is NOT retried by pac — the platform has said it cannot be
+//             imported there.
+// Any other failure is reported with the SDK's own code and is never answered by pac.
+//
+// ExportSolution, StageSolution and ImportSolution are sent EXACTLY ONCE (solutionHttpClient): they are long-running, a gateway can answer 502, 504 or 401
+// for work the platform accepted and is still doing, and a second send is a second import of the same job, a second staging copy, or a refusal that hides what the
+// first one did. The first answer is the SDK's, with its status and code. When it does not say how the import ended (no answer, 401, 408, any 5xx) the failure says
+// the import was sent once and names its job, and the job's log is read once for the platform's own reason (never failing the report if it cannot be read).
+//
+// What is never printed: a token, a settings value (an environment variable of a secret type holds its secret there) or a connection id.
+// The settings file is read from and written to disk only; the output names entries, never their values; and every message — the SDK's, the
+// platform's, pac's, a job log's — goes through `sanitizer`, WHOLE, before it is shown. Whether a variable is a secret is decided by the package's own definition
+// (the type the staging reply the SDK reads gives it; isSecretVariable), not by the file's optional `TypeId`, and a variable the package was not read for is treated as one.
+// A text is looked at as it is and in each form decoding it gives (JSON string escapes, XML character references, percent-encoding), in any case: one that repeats a SECRET value in any of
+// them is withheld whole; a connection id or a value that is not a secret is replaced by `<redacted>` where the text spells it as it is, and the text is withheld whole when
+// one of them is only in a decoded form. An import's failure is rebuilt from its parts (message, status, code, job), so nothing attached to the SDK's own error object
+// travels with it.
+//
+// Usage:
+//   node scripts/solution-settings.js template --env <envUrl> --solution <uniqueName> --out <settings.json> [--force]
+//   node scripts/solution-settings.js template --package <solution.zip> --out <settings.json> [--env <envUrl>] [--force]
+//   node scripts/solution-settings.js import --env <envUrl> --package <solution.zip> --settings <settings.json>
+//   --env       the environment's https origin, e.g. https://contoso.crm.dynamics.com
+//   --solution  the unique name of an unmanaged solution in --env
+//   --package   a solution .zip
+//   --out       where the settings file is written; an existing file is not replaced unless --force is given (pac replaced it silently,
+//               and with it every value already filled in)
+//   --settings  the settings file to apply
+//
+// Output (stdout, one pure-ASCII JSON line), exit 0:
+//   template  { "ok": true, "source": "sdk", "out": "<absolute path>", "environmentVariables": 2, "connectionReferences": 1 }
+//   import    { "ok": true, "source": "sdk", "importJobId": "<guid>", "applied": { "environmentVariables": ["new_Url"], "connectionReferences": ["new_Dataverse"] } }
+//   and, when pac answered because the SDK refused, "source": "pac" and "fallback": { "code": "<the SDK's code>", "message": "…" } — the SDK's own words, so
+//   the "Nothing was imported" in one is about the SDK's attempt, which stopped before any request; pac then did the work;
+//   "warnings": [...] when the SDK could not delete the staged copy of the package it made. For pac `applied` lists the entries the file
+//   filled (pac does not report what it applied).
+//
+// Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
+//   { "ok": false, "error": "<message>", "code": "<the SDK's or the PAC step's code>" [, "status": <HTTP status of the answer>] [, "fallback": { … }, "importJobId": "<guid>"]
+//     [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl } = require('./lib/dataverse-auth.js');
+const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { sdkFirst } = require('./lib/sdk-first.js');
+const { runPac } = require('./lib/pac-fallback.js');
+const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
+
+const USAGE = [
+  'Usage:',
+  '  node scripts/solution-settings.js template --env <envUrl> --solution <uniqueName> --out <settings.json> [--force]',
+  '  node scripts/solution-settings.js template --package <solution.zip> --out <settings.json> [--env <envUrl>] [--force]',
+  '  node scripts/solution-settings.js import --env <envUrl> --package <solution.zip> --settings <settings.json>',
+].join('\n');
+
+const COMMAND_FLAGS = {
+  template: { known: ['env', 'solution', 'package', 'out', 'force'], needValue: ['env', 'solution', 'package', 'out'] },
+  import: { known: ['env', 'package', 'settings'], needValue: ['env', 'package', 'settings'] },
+};
+
+// A solution's unique name: a letter, then letters, digits and underscores (what the platform accepts; scripts/provision-solution.js enforces it too).
+const SOLUTION_UNIQUE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,64}$/;
+// A guard against reading an unexpectedly large file into memory, not a limit of the service: the package is held, then held again as base64.
+const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;
+const MAX_SETTINGS_BYTES = 5 * 1024 * 1024;
+// Every ZIP's first entry starts with a local file header, `PK\x03\x04`: a file that does not is not a solution package.
+const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
+// How long ExportSolution, StageSolution and ImportSolution may stay silent. They are the platform's long-running actions: an import of a
+// real solution takes minutes, and the HTTP client's usual five-minute limit would end the wait — and, were they not sent once (solutionHttpClient), SEND IT
+// AGAIN: a second import of the same job id, or a second staging copy left behind. pac's own longest wait for an import is 60 minutes (`--max-async-wait-time`).
+const ACTION_TIMEOUT_MS = 60 * 60 * 1000;
+const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
+
+const REDACTED = '<redacted>';
+// A value that is NOT a secret and is shorter than this is not hidden from a message: it would be taken out of ordinary words ("1", "true"), and a message with every digit
+// blanked explains nothing. By the package's own definition such a value is not a secret, so there is nothing to protect by hiding it. A SECRET is hidden whatever its length
+// (isSecretVariable), and so is every connection id (every id there is, is longer than this).
+const MIN_HIDDEN_LENGTH = 6;
+// The most of one text the sanitizer reads — a message, a few lines of a log; pac's own stderr can be megabytes. A text longer than this is withheld whole, not cut: a value that
+// straddled the cut would leave its first half in what is shown.
+const MAX_SANITIZED_CHARS = 1024 * 1024;
+// `environmentvariabledefinition.type` option 100000005, "Secret" — what pac and the SDK write as `TypeId` in a settings file for a variable that holds a secret.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition (the `type` choices)
+const SECRET_TYPE_ID = 100000005;
+// How long a failed import waits for its job's log before reporting without it: the log only explains a failure that is already known.
+const JOB_LOG_TIMEOUT_MS = 20 * 1000;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Arguments
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * The request an argv asks for, or `{ error }` naming what is wrong with it — before any file is written, process started or request sent.
+ */
+function readRequest(argv) {
+  const [command, ...rest] = argv;
+  if (command !== 'template' && command !== 'import') {
+    return { error: command === undefined ? 'a command is required: template or import' : `unknown command '${command}': use template or import` };
+  }
+  const contract = COMMAND_FLAGS[command];
+  const flagError = validateFlags(rest, contract);
+  if (flagError) return { error: flagError };
+  const { positional, flags } = parseArgs(rest);
+  if (positional.length > 0) return { error: `unexpected argument '${positional[0]}'` };
+  // A boolean flag takes no value, and parseArgs gives one to whatever follows it: `--force --out x` is fine, `--force x` is not.
+  if (flags.force !== undefined && flags.force !== true) return { error: `--force takes no value (got '${flags.force}')` };
+
+  let env;
+  if (flags.env !== undefined) {
+    try {
+      env = requireDataverseOrigin(flags.env);
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
+  if (command === 'import') {
+    const missing = ['env', 'package', 'settings'].find((name) => flags[name] === undefined);
+    if (missing) return { error: `--${missing} is required` };
+    return { request: { command, env, packagePath: path.resolve(flags.package), settingsPath: path.resolve(flags.settings) } };
+  }
+
+  if (flags.out === undefined) return { error: '--out is required' };
+  if ((flags.solution === undefined) === (flags.package === undefined)) return { error: 'name the solution to export with --solution, or a package with --package — one of the two' };
+  if (flags.solution !== undefined) {
+    if (!env) return { error: '--solution needs --env: the solution is exported from that environment' };
+    if (!SOLUTION_UNIQUE_NAME.test(flags.solution)) return { error: `--solution must be a solution's unique name: a letter, then letters, digits and underscores (got '${flags.solution}')` };
+  }
+  return {
+    request: {
+      command,
+      env,
+      solution: flags.solution,
+      packagePath: flags.package === undefined ? undefined : path.resolve(flags.package),
+      outPath: path.resolve(flags.out),
+      force: flags.force === true,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------------------------------------------------
+
+function fail(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+// The package, checked as far as a file can be: a regular file, not empty, not absurdly large, and a ZIP by its first bytes. The whole file is
+// read only for a caller that sends it (`withBytes`). `maxBytes` is a seam for the test of the limit, which a 128 MiB file would otherwise need.
+function inspectPackage(packagePath, { withBytes, maxBytes = MAX_PACKAGE_BYTES }) {
+  let stat;
+  try {
+    stat = fs.statSync(packagePath);
+  } catch (err) {
+    throw fail('PACKAGE_UNREADABLE', `--package: ${packagePath} could not be read (${err.code || err.message}).`);
+  }
+  if (!stat.isFile()) throw fail('PACKAGE_UNREADABLE', `--package: ${packagePath} is not a file.`);
+  if (stat.size === 0) throw fail('PACKAGE_UNREADABLE', `--package: ${packagePath} is empty.`);
+  if (stat.size > maxBytes) throw fail('PACKAGE_UNREADABLE', `--package: ${packagePath} is larger than ${maxBytes / (1024 * 1024)} MiB, which this script does not read into memory.`);
+  let bytes;
+  let head;
+  try {
+    if (withBytes) {
+      bytes = fs.readFileSync(packagePath);
+      head = bytes.subarray(0, ZIP_SIGNATURE.length);
+    } else {
+      const fd = fs.openSync(packagePath, 'r');
+      try {
+        head = Buffer.alloc(ZIP_SIGNATURE.length);
+        fs.readSync(fd, head, 0, head.length, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+  } catch (err) {
+    throw fail('PACKAGE_UNREADABLE', `--package: ${packagePath} could not be read (${err.code || err.message}).`);
+  }
+  if (!head.equals(ZIP_SIGNATURE)) {
+    throw fail('PACKAGE_UNREADABLE', `--package: ${packagePath} is not a solution package: it is not a .zip file (it does not begin with PK).`);
+  }
+  return withBytes ? { bytes, base64: bytes.toString('base64') } : {};
+}
+
+// The problem with a settings object, naming the entry and the field and never the value: a file may hold a secret and this text is printed.
+// Only the shape a deployment-settings file has is checked here (pac's: lists of entries with a name and a value); which keys it may carry, and
+// whether each entry is one of the package's, is the SDK's check (and pac's), so a feature of the format that appears later is not refused by this copy.
+function settingsProblem(settings) {
+  if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) return 'the file must hold one JSON object, { "EnvironmentVariables": [...], "ConnectionReferences": [...] }';
+  if (settings.EnvironmentVariables === undefined && settings.ConnectionReferences === undefined) return 'the file has neither an "EnvironmentVariables" nor a "ConnectionReferences" list';
+  const lists = [
+    // [list, the key that names an entry, the key that fills it, whether what fills it is an identifier]
+    ['EnvironmentVariables', 'SchemaName', 'Value', false],
+    ['ConnectionReferences', 'LogicalName', 'ConnectionId', true],
+  ];
+  for (const [list, nameKey, valueKey, valueIsIdentifier] of lists) {
+    const entries = settings[list];
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries)) return `"${list}" must be a list`;
+    for (let i = 0; i < entries.length; i += 1) {
+      const at = `${list}[${i}]`;
+      const entry = entries[i];
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return `${at} must be an object`;
+      const name = entry[nameKey];
+      if (typeof name !== 'string' || name === '') return `${at}.${nameKey} must be a non-empty string`;
+      if (name.trim() !== name) return `${at}.${nameKey} must not begin or end with white space`;
+      const value = entry[valueKey];
+      if (typeof value !== 'string') return `${at}.${valueKey} must be a string — empty to leave the entry unset`;
+      // A connection id is an identifier, and the SDK refuses white space around one. An environment variable's value is TEXT — a JSON document that ends in a
+      // newline, a string with leading spaces, one made of white space alone — and the SDK sends it as it is (api/SolutionApi.ts readOverrides checks only that it is
+      // a string), so it is passed through byte for byte: what the file holds is what the environment gets.
+      if (valueIsIdentifier && value.trim() !== value) return `${at}.${valueKey} must not begin or end with white space`;
+    }
+  }
+  return null;
+}
+
+// A parsed settings file, or a failure naming the problem. UTF-8, with the byte order mark Windows tools add taken off (JSON.parse refuses it).
+function parseSettings(text, where) {
+  let settings;
+  try {
+    settings = JSON.parse(String(text).replace(/^\uFEFF/, ''));
+  } catch {
+    throw fail('SETTINGS_INVALID', `${where} is not valid JSON.`);
+  }
+  const problem = settingsProblem(settings);
+  if (problem) throw fail('SETTINGS_INVALID', `${where} is not a deployment-settings file: ${problem}.`);
+  return settings;
+}
+
+function readSettingsFile(settingsPath) {
+  let stat;
+  try {
+    stat = fs.statSync(settingsPath);
+  } catch (err) {
+    throw fail('SETTINGS_UNREADABLE', `--settings: ${settingsPath} could not be read (${err.code || err.message}).`);
+  }
+  if (!stat.isFile()) throw fail('SETTINGS_UNREADABLE', `--settings: ${settingsPath} is not a file.`);
+  if (stat.size > MAX_SETTINGS_BYTES) throw fail('SETTINGS_UNREADABLE', `--settings: ${settingsPath} is larger than ${MAX_SETTINGS_BYTES / (1024 * 1024)} MiB.`);
+  return parseSettings(fs.readFileSync(settingsPath, 'utf8'), `--settings ${settingsPath}`);
+}
+
+/** The names of the entries a settings object FILLS in — a value or a connection id that is not empty — never what they are filled with. */
+function filledNames(settings) {
+  const names = (list, nameKey, valueKey) => (settings[list] || []).filter((entry) => entry[valueKey] !== '').map((entry) => entry[nameKey]);
+  return {
+    environmentVariables: names('EnvironmentVariables', 'SchemaName', 'Value'),
+    connectionReferences: names('ConnectionReferences', 'LogicalName', 'ConnectionId'),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// What may be printed
+// ---------------------------------------------------------------------------------------------------------------------
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A variable's type as a number: the number itself, or its decimal text — the two forms the settings file's `TypeId` and a staged definition's `type` come in
+// (api/SolutionApi.ts readTypeId of the vendored SDK) — else undefined.
+function typeIdOf(value) {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (typeof value === 'string' && /^\d{1,15}$/.test(value)) return Number(value);
+  return undefined;
+}
+
+/**
+ * Whether a filled variable holds a secret. The PACKAGE's own definition decides — the `type` its definition has in the StageSolution reply the SDK reads (`packageType`, recorded
+ * by recordStagedTypes). The file's `TypeId` is only informational: the SDK accepts it and ignores it (api/SolutionApi.ts, VARIABLE_KEYS), a file may leave it out, and a value that
+ * is a secret must not depend on a field that is optional and unchecked. So the file can only ADD secrecy — a `TypeId` of Secret where the package says another type — and never take
+ * it away; and a variable the package's definitions were not read for (the pac fallback, a staging reply that could not be read, a name the package does not define) is not known to be
+ * anything else, so it is treated as a secret. What that costs is a message withheld where it could have been shown with a value taken out of it; the status, the code and the
+ * import job's id are separate fields and stay.
+ */
+function isSecretVariable(entry, packageType) {
+  return packageType === SECRET_TYPE_ID || typeIdOf(entry.TypeId) === SECRET_TYPE_ID || packageType === undefined;
+}
+
+// What the StageSolution reply says each environment variable of the package is, by lower-cased schema name — the reply the SDK stages the package with before an import that fills
+// anything in (api/SolutionApi.ts readStagedPackage), recorded as it passes through solutionHttpClient. Its shape, as the SDK reads it (measured):
+//   { "StageSolutionResults": { "StageSolutionStatus": "Passed", "SolutionComponentsDetails": [
+//       { "ComponentTypeName": "EnvironmentVariableDefinition",
+//         "Attributes": { "Count": 3, "Keys": ["schemaname", "type", "defaultvalue"], "Values": ["new_Secret", "100000005", ""] } }, … ] } }
+// Read leniently and never thrown from — what cannot be read is simply not recorded, and a variable with no recorded type is one the package's definition is not known for
+// (isSecretVariable) — and whatever the status: the types a failed staging still lists are as true as a passed one's. The SDK matches a settings entry to a definition by the lower-cased
+// schema name too, so a name is recorded that way.
+function recordStagedTypes(definitions, body) {
+  let parsed;
+  try {
+    parsed = typeof body === 'string' ? JSON.parse(body) : body;
+  } catch {
+    return;
+  }
+  const details = parsed && parsed.StageSolutionResults && parsed.StageSolutionResults.SolutionComponentsDetails;
+  if (!Array.isArray(details)) return;
+  for (const element of details) {
+    if (!element || typeof element.ComponentTypeName !== 'string' || element.ComponentTypeName.toLowerCase() !== 'environmentvariabledefinition') continue;
+    const attributes = element.Attributes;
+    if (!attributes || !Array.isArray(attributes.Keys) || !Array.isArray(attributes.Values) || attributes.Keys.length !== attributes.Values.length) continue;
+    const valueOf = (key) => {
+      const at = attributes.Keys.findIndex((candidate) => typeof candidate === 'string' && candidate.toLowerCase() === key);
+      return at === -1 ? undefined : attributes.Values[at];
+    };
+    const name = valueOf('schemaname');
+    const type = typeIdOf(valueOf('type'));
+    if (typeof name === 'string' && name !== '' && type !== undefined) definitions.set(name.toLowerCase(), type);
+  }
+}
+
+// ---- Decoded views of a text -----------------------------------------------------------------------------------------
+// A message that quotes a value rarely quotes it as it is: an error that includes JSON.stringify(value) writes a quote as `\"` — or, as any JSON encoder may, `\u0022` —, an XML log
+// writes it `&quot;`, a URL `%22`, and any of these can sit inside another. A finite list of the spellings a value can take is a list whose missing entry someone finds (`\u0022`, the standard
+// JSON escape of a double quote, is easy to leave out), so the TEXT is decoded instead and looked at in each decoded form — JSON string escapes, XML character references,
+// percent-encoding — and in every combination of them a few levels deep; a value found in any of those views is found.
+
+// A JSON string's escapes (https://www.rfc-editor.org/rfc/rfc8259#section-7): `\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t` and `\uXXXX` in either hex case (Newtonsoft writes `\u003c`,
+// System.Text.Json `\u003C`; a surrogate pair is two escapes, which joined are the character). `\'` and `\xHH` are not JSON but are how other serializers write a quote and a byte.
+const JSON_ESCAPE = /\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(["'\\/bfnrt]))/g;
+const JSON_SIMPLE_ESCAPES = { '"': '"', "'": "'", '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+function jsonUnescape(text) {
+  return text.replace(JSON_ESCAPE, (whole, unicode, hex, simple) => (simple !== undefined ? JSON_SIMPLE_ESCAPES[simple] : String.fromCharCode(parseInt(unicode !== undefined ? unicode : hex, 16))));
+}
+
+const XML_ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+// `&lt;`, `&amp;`, `&#39;` and `&#x27;`: what an XML attribute value holds in place of the characters it may not contain.
+const decodeXml = (text) => text.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(lt|gt|amp|quot|apos));/gi, (whole, decimal, hex, name) => {
+  if (name) return XML_ENTITIES[name.toLowerCase()];
+  try {
+    return String.fromCodePoint(decimal !== undefined ? Number(decimal) : parseInt(hex, 16));
+  } catch {
+    return whole; // not a character
+  }
+});
+
+// `%XX` runs read as UTF-8 bytes. Leniently: a run that is not valid UTF-8 has its valid parts decoded all the same (the invalid bytes become U+FFFD), where decodeURIComponent throws for
+// the whole run and would leave a `%22` standing beside a stray `%FF`. `plus` also reads `+` as a space, as a form encoding (application/x-www-form-urlencoded) writes one.
+function percentDecode(text, plus) {
+  const source = plus ? text.replace(/\+/g, ' ') : text;
+  return source.replace(/(?:%[0-9a-fA-F]{2})+/g, (run) => Buffer.from(run.replace(/%/g, ''), 'hex').toString('utf8'));
+}
+
+const VIEW_DECODERS = [jsonUnescape, decodeXml, (text) => percentDecode(text, false), (text) => percentDecode(text, true)];
+// Four decoders three levels deep are at most 1 + 4 + 16 + 64 views, so the closure always fits and none is dropped; a text that is only plain has one.
+const MAX_VIEW_DEPTH = 3;
+const MAX_VIEWS = 100;
+
+/** `text` itself, then each distinct text the decoders make of it, and of what they made, up to MAX_VIEW_DEPTH levels. */
+function decodedViews(text) {
+  const views = [text];
+  const seen = new Set(views);
+  let frontier = [text];
+  for (let level = 0; level < MAX_VIEW_DEPTH && frontier.length > 0 && views.length < MAX_VIEWS; level += 1) {
+    const next = [];
+    for (const view of frontier) {
+      for (const decode of VIEW_DECODERS) {
+        const decoded = decode(view);
+        if (seen.has(decoded)) continue;
+        seen.add(decoded);
+        views.push(decoded);
+        next.push(decoded);
+      }
+    }
+    frontier = next;
+  }
+  return views;
+}
+
+const collapseWhite = (text) => text.replace(/\s+/g, ' ');
+
+// A function that says whether a value is in any of `views`. Case does not matter — a service may normalise it (a GUID is quoted in lower case, an identifier in the case it is stored in),
+// and a value is not less a secret for being written in another case — and, for a value that holds white space, runs of white space are made one on both sides (a service may join
+// the lines of a value or collapse its spaces).
+function quoter(views) {
+  const lower = views.map((view) => view.toLowerCase());
+  let collapsed = null;
+  return (value) => {
+    const needle = value.toLowerCase();
+    if (lower.some((view) => view.includes(needle))) return true;
+    if (!/\s/.test(value)) return false;
+    if (collapsed === null) collapsed = lower.map(collapseWhite);
+    const spaced = collapseWhite(needle);
+    return collapsed.some((view) => view.includes(spaced));
+  };
+}
+
+// The strings to look for, in two sets: those of a SECRET value, which are never shown at all, and those of a value that is not — a plain variable's and a connection id — which are
+// replaced where a text spells them. A value is looked for as it is and trimmed (a service may trim it); one of white space alone has nothing in it to repeat, and a value that is not
+// a secret and is shorter than MIN_HIDDEN_LENGTH is left to ordinary words.
+function filledValues(settings, definitions) {
+  const secrets = new Set();
+  const others = new Set();
+  const take = (value, secret) => {
+    if (typeof value !== 'string' || value.trim() === '' || (!secret && value.trim().length < MIN_HIDDEN_LENGTH)) return;
+    for (const form of new Set([value, value.trim()])) (secret ? secrets : others).add(form);
+  };
+  for (const entry of (settings && settings.EnvironmentVariables) || []) {
+    if (entry === null || typeof entry !== 'object') continue;
+    const packageType = typeof entry.SchemaName === 'string' ? definitions.get(entry.SchemaName.toLowerCase()) : undefined;
+    take(entry.Value, isSecretVariable(entry, packageType));
+  }
+  for (const entry of (settings && settings.ConnectionReferences) || []) {
+    if (entry !== null && typeof entry === 'object') take(entry.ConnectionId, false);
+  }
+  return { secrets, others };
+}
+
+/**
+ * A function that takes what the settings file holds out of a text before anything shows it. The file may hold a secret (an environment variable of a secret type carries its secret as
+ * its value), and every text a run prints comes from the SDK, the platform, pac or a job's log, which can quote what they were given — in the shape they were given it or in another
+ * (see "Decoded views"). So nothing they say is shown without this, and the WHOLE text is read: no part of it is taken to be trusted because of how it looks. A text that begins like
+ * the SDK's own "HTTP 400 from <url>:" has said nothing about where it came from, so the one piece of text kept in front of a withheld one — the SDK's status line — is the caller's
+ * `lead`, built from the SDK error's own fields (see sdkLead), and is used only when the text really begins with it:
+ *   - a text that quotes a SECRET value, in any decoded view and in any case, is not shown at all — what takes its place says it was withheld. Complete scrubbing of another party's text cannot be
+ *     guaranteed, and what such a text is evidence of is that the service quotes its input, so the rest of it is not trusted either. The status and the code of a failure are separate
+ *     fields and stay;
+ *   - a connection id and a variable that is not a secret are replaced by `<redacted>` where the text spells them as it is (in any case); one found only in a decoded view cannot be taken out of
+ *     the text it was decoded from, so that text is withheld as well. (A non-secret value shorter than MIN_HIDDEN_LENGTH is left alone — see there.)
+ * Which variables are secrets is decided by `definitions` (isSecretVariable): a Map of lower-cased schema name to the type of the package's own definition, which the import fills in
+ * as the SDK reads it (recordStagedTypes) — looked at on every call, so a text sanitized after the package was read is judged by it. `what` names the text in the sentence that takes
+ * its place.
+ */
+function sanitizer(settings, definitions = new Map()) {
+  return function sanitize(text, what = 'text', lead = '') {
+    const whole = String(text == null ? '' : text);
+    const { secrets, others } = filledValues(settings, definitions);
+    if (secrets.size === 0 && others.size === 0) return whole;
+    const kept = lead && whole.startsWith(lead) ? lead : '';
+    const withheld = (why) => `${kept}<${what} withheld: ${why}>`;
+    if (whole.length > MAX_SANITIZED_CHARS) return withheld('it is too long to check against the settings file');
+    if ([...secrets].some(quoter(decodedViews(whole)))) return withheld('it repeated a value from the settings file');
+    if (others.size === 0) return whole;
+    // Longest first inside one alternation, so a value that contains another is taken out whole; and one pass, so what replaces a value is never searched again; in either case, as the
+    // search above is. `split` leaves the text between the values: joined by the marker it is what is shown; joined by a NUL, which stands in for a removed value without being able to
+    // complete another one, it is what is checked again in its decoded views — so the marker (a value may be a piece of the word "redacted") is never taken for a value that was left behind.
+    const alternation = [...others].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
+    const between = whole.split(new RegExp(alternation, 'i'));
+    if ([...others].some(quoter(decodedViews(between.join('\u0000'))))) return withheld('it repeated a value from the settings file');
+    return between.join(REDACTED);
+  };
+}
+
+// ConnectionError's own words for an answer that is not a success, and for a request that got none (errors/index.ts of the SDK):
+//   HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/ImportSolution: <what the service said>
+//   Transport failure reaching https://contoso.crm.dynamics.com/api/data/v9.0/ImportSolution: <what the transport said>
+// What comes before the colon is made of the request the SDK sent — the status and the URL, which are fields of the error — so it holds nothing from the file; what follows is another
+// party's text. The lead is REBUILT from the error's own `statusCode` and `url` and kept only when the message really begins with it; it is never read out of the message's text,
+// so no text — a job log's, pac's, a warning, or the rest of the message itself — can declare a piece of itself to be the SDK's.
+function sdkLead(error) {
+  if (!(error instanceof Error) || typeof error.url !== 'string' || !Number.isInteger(error.statusCode) || typeof error.message !== 'string') return '';
+  const lead = error.statusCode > 0 ? `HTTP ${error.statusCode} from ${error.url}: ` : `Transport failure reaching ${error.url}: `;
+  return error.message.startsWith(lead) ? lead : '';
+}
+
+const outExists = (outPath) => fail('OUT_EXISTS', `--out: ${outPath} already exists. Choose another file, or pass --force to replace it (a replaced file loses every value already filled in).`);
+
+// Where a run's settings file is written: checked BEFORE anything is read from the environment, so a refusal costs nothing. (The check is repeated at the
+// moment the file is installed — see writeTemplate — because the work in between takes minutes and the file can appear meanwhile.)
+function checkOutTarget(outPath, force) {
+  assertSafeOutputDir(path.dirname(outPath));
+  assertPlainFileTarget(outPath);
+  if (fs.existsSync(outPath) && !force) throw outExists(outPath);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The SDK's refusals
+// ---------------------------------------------------------------------------------------------------------------------
+
+const refusalOf = (error) => ({ code: error.code, message: String(error.message) });
+
+// What the SDK throws for a package it cannot read in this environment (api/SolutionApi.ts of the vendored SDK):
+//   SOLUTION_STAGING_FAILED      StageSolution answered that the package did not pass here (missing dependencies, validation): pac, which reads
+//                                the zip itself, can still make the template. An import is not retried: the platform has said it cannot go in.
+//   SOLUTION_STAGING_UNREADABLE  StageSolution's reply was of a shape the SDK will not guess at.
+function templateRefusal(error) {
+  return error && (error.code === 'SOLUTION_STAGING_FAILED' || error.code === 'SOLUTION_STAGING_UNREADABLE') ? refusalOf(error) : null;
+}
+
+// The features of pac's settings file that the SDK does not apply (api/SolutionApi.ts: UNAPPLIED_LISTS and readOverrides). It accepts `Workflows`, `CanvasApps` and
+// `CopilotAgents` only as EMPTY lists — which is what pac itself writes into a template, so an ordinary file passes — and refuses a `ConnectionInstance`
+// in a connection reference. A file that holds one is one pac can import and the SDK cannot, and the SDK finds it before it sends anything ("Nothing was imported").
+const PAC_LIST_FEATURES = ['Workflows', 'CanvasApps', 'CopilotAgents'];
+const FEATURE_LIST_PROBLEM = 'is a pac feature this SDK does not apply: only an empty list is accepted';
+const FEATURE_INSTANCE_PROBLEM = "is pac's connection-instance feature, which this SDK does not apply";
+const featureSentence = (where, problem) => `importSolution: deploymentSettings is not a deployment-settings file this SDK applies — deploymentSettings.${where} ${problem}. Nothing was imported.`;
+
+/**
+ * The sentences the SDK refuses `settings` with, one for each feature of pac's that the FILE holds — a non-empty list under `Workflows`, `CanvasApps` or
+ * `CopilotAgents`, or a `ConnectionInstance` in a connection reference — and none for any other fault of a file. Built here, from the file and the SDK's own
+ * wording, so that what decides whether pac is asked is the file's content, and an error is taken for this refusal only when it IS this sentence: input can put a
+ * phrase into a message (a settings key or a name the SDK quotes in another complaint) but cannot make that complaint read as this one.
+ */
+function pacOnlyFeatureMessages(settings) {
+  const sentences = [];
+  if (settings === null || typeof settings !== 'object') return sentences;
+  for (const key of PAC_LIST_FEATURES) {
+    if (Array.isArray(settings[key]) && settings[key].length > 0) sentences.push(featureSentence(key, FEATURE_LIST_PROBLEM));
+  }
+  const references = Array.isArray(settings.ConnectionReferences) ? settings.ConnectionReferences : [];
+  references.forEach((entry, index) => {
+    if (entry !== null && typeof entry === 'object' && Object.prototype.hasOwnProperty.call(entry, 'ConnectionInstance')) {
+      sentences.push(featureSentence(`ConnectionReferences[${index}].ConnectionInstance`, FEATURE_INSTANCE_PROBLEM));
+    }
+  });
+  return sentences;
+}
+
+// Why `error` is not the end of an import: `{ code, message }` when the SDK could not read the package's staging reply (SOLUTION_STAGING_UNREADABLE), or refused a
+// feature that the `settings` file holds and pac applies. Anything else — the package did not pass staging (the platform said it cannot go in there, and pac would
+// not import it either), a settings file that is merely wrong, a failed request — is a failure of the import.
+// The wording is pinned against the real bundle in tests/solution-settings-real-bundle.test.js, so a re-vendored SDK that rephrases it fails there.
+function importRefusal(error, settings) {
+  if (!error) return null;
+  if (error.code === 'SOLUTION_STAGING_UNREADABLE') return refusalOf(error);
+  if (error.code === 'INVALID_ARGUMENT' && pacOnlyFeatureMessages(settings).includes(String(error.message))) return refusalOf(error);
+  return null;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The org's HttpClient for the long-running solution actions
+// ---------------------------------------------------------------------------------------------------------------------
+
+// The sentence that sends a reader to the one place that says what became of an import whose answer was lost or not trustworthy.
+const lookUpJob = (id) => ` Look up import job ${id} (importjobs(${id}) in the Web API, or the solution history in Maker) before importing again.`;
+
+/**
+ * The az-token client of `env`, with the three solution actions given an hour to answer and sent EXACTLY ONCE.
+ * The plain client re-sends a POST that got no answer after five minutes, and one whose answer was a 401 or a transient status (429, 500, 502, 503, 504).
+ * For these actions every one of those is wrong (see ACTION_TIMEOUT_MS): a gateway answers 504 or 502 for an import the platform has accepted and is still
+ * running, and a second send is a second import of the same job, a second staging copy left behind, or a refusal that hides what the first one did. So the
+ * policy sits where the client decides to send again (`sendOnce`): the first answer is the SDK's — its status and its code survive — and an import whose
+ * outcome is unknown is looked up, not repeated. A request that never got an answer is thrown here, naming the import job when there is one.
+ * `observe.onStageReply(body)` is told the raw text of a StageSolution answer that arrived, before the SDK reads it: the package's own definitions (what type each environment
+ * variable is) are in it, and an import needs them to know what is a secret (isSecretVariable). It only listens — the answer goes on to the SDK untouched.
+ */
+function solutionHttpClient(env, deps = {}, observe = {}) {
+  const send = deps.request || makeRequest;
+  return createAzHttpClient(env, {
+    ...deps,
+    sendOnce: (method, url) => method === 'POST' && LONG_ACTION.test(new URL(url).pathname),
+    request: async (options) => {
+      const action = LONG_ACTION.exec(new URL(options.url).pathname);
+      if (!action) return send(options);
+      const res = await send({ ...options, timeout: ACTION_TIMEOUT_MS });
+      if (!res.error) {
+        if (action[1] === 'StageSolution' && observe.onStageReply) observe.onStageReply(res.body);
+        return res;
+      }
+      let job = '';
+      try {
+        const id = action[1] === 'ImportSolution' ? JSON.parse(options.body).ImportJobId : undefined;
+        job = id ? lookUpJob(id) : '';
+      } catch {
+        // The body is the SDK's own JSON; had it not parsed there would be no id to name.
+      }
+      throw new Error(`${action[1]} got no answer (${res.error}). It was not sent again: the environment may still be working on it, or may have finished.${job}`);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// pac, the fallback
+// ---------------------------------------------------------------------------------------------------------------------
+
+function pacError(code, message, refusal) {
+  const error = fail(code, message);
+  if (refusal) error.fallback = refusal;
+  return error;
+}
+
+// `pac solution create-settings` reads the zip offline and writes the settings file; here it writes into a throwaway folder, and what it wrote is
+// read back and checked before it goes anywhere, so a failed or odd run cannot leave a half-made file at --out. `packageBytes` is the package when
+// only its bytes are at hand (it was exported by the SDK); pac needs a file.
+async function templateThroughPac({ packagePath, packageBytes }, refusal, deps = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'solution-settings-'));
+  try {
+    let zip = packagePath;
+    if (!zip) {
+      zip = path.join(dir, 'solution.zip');
+      fs.writeFileSync(zip, packageBytes);
+    }
+    const file = path.join(dir, 'settings.json');
+    const label = 'pac solution create-settings';
+    const run = await runPac(['solution', 'create-settings', '--solution-zip', zip, '--settings-file', file], { label, ...(deps.pac || {}) });
+    if (!run.ok) throw pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      throw pacError('PAC_OUTPUT_UNREADABLE', `\`${label}\` exited 0 but wrote no settings file.`, refusal);
+    }
+    try {
+      return { text, settings: parseSettings(text, `The file \`${label}\` wrote`) };
+    } catch (err) {
+      throw pacError('PAC_OUTPUT_UNREADABLE', err.message, refusal);
+    }
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // The folder holds a copy of a package and a settings template: a failed removal is left for the temp cleaner, never a failure of the run.
+    }
+  }
+}
+
+async function importThroughPac({ env, packagePath, settingsPath }, redact, refusal, deps = {}) {
+  const label = 'pac solution import';
+  const run = await runPac(
+    ['solution', 'import', '--path', packagePath, '--environment', env, '--settings-file', settingsPath],
+    { label, kind: 'import', redact, ...(deps.pac || {}) }
+  );
+  if (!run.ok) throw pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The two commands
+// ---------------------------------------------------------------------------------------------------------------------
+
+const countOf = (settings, list) => (Array.isArray(settings[list]) ? settings[list].length : 0);
+
+// Writes the settings file and describes it: where, and how many entries — never what they hold.
+function writeTemplate(request, text, settings, extra) {
+  try {
+    // Without --force the file must still be absent when it is INSTALLED, not only when the run began: the export, staging or pac work in between takes minutes, and a
+    // file a maker started filling in meanwhile — or another run's — is exactly what the refusal at the start protects. The file system decides, in one step
+    // (writeFileSafe's `exclusive`), so there is no gap between a look and a write.
+    writeFileSafe(request.outPath, text, { encoding: 'utf8', exclusive: !request.force });
+  } catch (err) {
+    if (err && err.code === 'IO_ERROR' && err.reason === 'exists') throw outExists(request.outPath);
+    throw err;
+  }
+  return {
+    out: request.outPath,
+    environmentVariables: countOf(settings, 'EnvironmentVariables'),
+    connectionReferences: countOf(settings, 'ConnectionReferences'),
+    ...extra,
+  };
+}
+
+/** `template`: the settings file for a package, written to `--out`. */
+async function runTemplate(request, deps = {}) {
+  checkOutTarget(request.outPath, request.force);
+  if (request.packagePath) inspectPackage(request.packagePath, { withBytes: false });
+
+  // No environment, nothing to stage a package in: pac reads the zip, offline.
+  if (!request.env) {
+    const made = await templateThroughPac({ packagePath: request.packagePath }, null, deps);
+    return { source: 'pac', ...writeTemplate(request, made.text, made.settings) };
+  }
+
+  let exported; // the package as the SDK exported it, when it did: pac needs it should the SDK refuse to stage it
+  const outcome = await (deps.sdkFirst || sdkFirst)(request.env, {
+    refusal: templateRefusal,
+    httpClient: (env) => solutionHttpClient(env, deps.http),
+    fromSdk: async (sdk) => {
+      let base64;
+      if (request.packagePath) {
+        base64 = inspectPackage(request.packagePath, { withBytes: true }).base64;
+      } else {
+        // Unmanaged: an installed managed solution cannot be exported, and the settings are the same either way.
+        base64 = (await sdk.exportSolution({ solutionName: request.solution, managed: false })).base64;
+        exported = base64;
+      }
+      return sdk.getDeploymentSettingsTemplate({ base64 });
+    },
+    fromPac: async (refusal) => templateThroughPac(
+      request.packagePath ? { packagePath: request.packagePath } : { packageBytes: Buffer.from(exported, 'base64') },
+      refusal,
+      deps
+    ),
+  }, deps);
+
+  if (outcome.source === 'sdk') {
+    const { settings, warnings } = outcome.value;
+    return {
+      source: 'sdk',
+      ...writeTemplate(request, `${JSON.stringify(settings, null, 2)}\n`, settings, warnings && warnings.length ? { warnings } : {}),
+    };
+  }
+  return { source: 'pac', ...writeTemplate(request, outcome.value.text, outcome.value.settings), fallback: outcome.fallback };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// What became of an import
+// ---------------------------------------------------------------------------------------------------------------------
+
+// Whether `error` is the answer to the ImportSolution request itself — or the lack of one — and not a refusal made before it was sent (the settings checked, the
+// package staged): the SDK's ConnectionError names the URL it was reaching.
+function importRequestFailed(error) {
+  if (!error || error.code !== 'CONNECTION_ERROR' || typeof error.url !== 'string') return false;
+  try {
+    return /\/ImportSolution$/.test(new URL(error.url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+// An answer that does not say the import was refused: one that reached a gateway or a server that did not serve it (408, 5xx — a gateway answers 502, 503 or 504 for work the
+// platform has accepted and is running), or an authentication answer (401), which is not trusted to mean the work never started. No answer at all (status 0) is
+// reported by solutionHttpClient with its own sentence, which names the job; a status 0 without it is a failure before the request left (no token could be had), which says
+// nothing about the import.
+const outcomeUnknown = (status) => status === 401 || status === 408 || status >= 500;
+
+// The attributes in the text of one start tag — ` result="failure" errortext="…"` — by lower-case name, in either quote, their XML character references decoded.
+function xmlAttributes(tagText) {
+  const attributes = {};
+  for (const match of tagText.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+    attributes[match[1].toLowerCase()] = decodeXml(match[2] !== undefined ? match[2] : match[3]);
+  }
+  return attributes;
+}
+/**
+ * One line, cut to what a message can carry: a job's log is written for a table, and its text can hold line breaks and run long. This is the LAST thing done to a text that
+ * has been through the sanitizer, never the first: collapsing white space changes what a value that holds white space looks like, and a cut can fall inside a value — either
+ * would let a secret past a search that ran on what was left.
+ */
+function oneLine(text, max = 600) {
+  const line = String(text).replace(/\s+/g, ' ').trim();
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
+/**
+ * What an import job's log says went wrong: the COMPLETE text of the FIRST failing result's `errortext` (its character references decoded), else `its status is <the status of
+ * the document's root>`, else null. Nothing is collapsed or cut here — the caller sanitizes this whole text first and only then makes it one line (importFailure, oneLine).
+ * The log is the XML of the `data` column of the job (`importjobs(<id>)?$select=data`); a failed import's holds, abridged:
+ *   <importexportxml start="…" stop="…" progress="…" processed="true" succeeded="failure" status="…">
+ *     <solutionManifests><solutionManifest> … <result result="failure" errorcode="0x80048d19" errortext="Could not find connection '…' for API 'shared_sharepointonline'" /> …
+ *     </solutionManifest></solutionManifests> …
+ *   </importexportxml>
+ * The log is read as text, not parsed as a document: its shape varies by component, and all that is looked for is the attribute a failure's words sit in. A root that
+ * says the job succeeded is not a failure's status (the log is only read for an import that failed, but it must never be quoted against what it says itself).
+ */
+function jobLogFailure(log) {
+  const text = String(log == null ? '' : log);
+  for (const tag of text.matchAll(/<result\b([^>]*)>/gi)) {
+    const attributes = xmlAttributes(tag[1]);
+    if (/^failure$/i.test(attributes.result || '') && (attributes.errortext || '').trim() !== '') return attributes.errortext;
+  }
+  const root = /<importexportxml\b([^>]*)>/i.exec(text);
+  if (root) {
+    const attributes = xmlAttributes(root[1]);
+    const failed = attributes.succeeded === undefined || /^failure$/i.test(attributes.succeeded);
+    if (failed && (attributes.status || '').trim() !== '') return `its status is ${attributes.status}`;
+  }
+  return null;
+}
+
+/**
+ * The reason a failed import's job log gives — read once, never retried, and never a failure of its own: the log only explains a failure that is already known,
+ * so a log that cannot be read (the job does not exist, the answer is not what it should be, the environment is slow) is null and the failure stands as it was.
+ * `deps.readJobLog(env, id)` stands in for the read in a test; `deps.http` is the client's own seam; `deps.jobLogTimeoutMs` shortens the wait.
+ */
+async function readImportJobFailure(env, importJobId, deps = {}) {
+  let timer;
+  try {
+    if (deps.readJobLog) return jobLogFailure(await deps.readJobLog(env, importJobId));
+    // `sendOnce`: a read that fails is not read again, and the 401 refresh is not attempted — one request, on the failure path.
+    const client = createAzHttpClient(env, { ...(deps.http || {}), sendOnce: () => true });
+    const answer = await Promise.race([
+      client.get(webApiUrl(env, `importjobs(${importJobId})?$select=data`)),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), Number.isFinite(deps.jobLogTimeoutMs) ? deps.jobLogTimeoutMs : JOB_LOG_TIMEOUT_MS);
+      }),
+    ]);
+    const data = answer && answer.status === 200 && answer.body && typeof answer.body === 'object' ? answer.body.data : undefined;
+    return typeof data === 'string' ? jobLogFailure(data) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The error an import leaves this module with: a NEW error whose every text has been through `sanitize` — the message, the reason pac was asked, the SDK's cleanup
+ * warnings, the job log's words — so nothing the SDK, the platform or pac said reaches an output with a filled value in it. (The SDK's own error is not passed on: its `cause`
+ * holds the raw answer of the service and its attached warnings are unfiltered.) It keeps the code, the status and the reason pac was asked, and — for a failure of the SDK path —
+ * names the import job. For a request that was SENT, the job's log is read once for the real reason (the platform's own answer is often only "An unexpected error
+ * occurred"), and an outcome that is not known (see outcomeUnknown) says that the request was not repeated and where to look.
+ * Every text is sanitized WHOLE. The one thing kept in front of a text that is withheld is the SDK's own status line, and it is built from the SDK error's `statusCode` and `url`
+ * (sdkLead) — never found by looking at how a text begins, because the text of a job log, a warning or pac can begin with anything.
+ */
+async function importFailure(err, { sanitize, importJobId, env, deps }) {
+  const original = err instanceof Error ? err : new Error(String(err));
+  const failure = new Error(sanitize(original.message, 'message', sdkLead(original)));
+  if (typeof original.code === 'string') failure.code = original.code;
+  if (Number.isInteger(original.statusCode)) failure.statusCode = original.statusCode;
+  if (original.fallback) failure.fallback = { ...original.fallback, message: sanitize(original.fallback.message, 'message') };
+  const warnings = (deps.readCleanupWarnings || require('./lib/maker-sdk.js').readCleanupWarnings)(original);
+  if (warnings && warnings.length) failure.warnings = warnings.map((warning) => sanitize(warning, 'warning'));
+  // The job is the SDK's: pac mints its own and never sees this one, so a failure of the pac import (it carries the reason pac was asked) names none.
+  if (original.fallback) return failure;
+  failure.importJobId = importJobId;
+  if (!importRequestFailed(original)) return failure;
+  const reason = await readImportJobFailure(env, importJobId, deps);
+  if (reason) {
+    failure.message += ` The import job's log (importjobs(${importJobId})) says: ${oneLine(sanitize(reason, "the job log's text"))}`;
+  } else if (outcomeUnknown(original.statusCode)) {
+    failure.message += ` The request was sent once and was not sent again: the environment may have accepted it.${lookUpJob(importJobId)}`;
+  }
+  return failure;
+}
+
+/** `import`: the package into `--env`, with the settings file applied in the same import. */
+async function runImport(request, deps = {}) {
+  const settings = readSettingsFile(request.settingsPath);
+  // What the package's own definitions say each variable is: filled in as the SDK reads the package (the StageSolution reply that passes through the client below), and looked at
+  // by the sanitizer each time it is asked — see isSecretVariable for why the file's `TypeId` is not what decides whether a value is a secret.
+  const definitions = new Map();
+  const sanitize = sanitizer(settings, definitions);
+  const { base64 } = inspectPackage(request.packagePath, { withBytes: true });
+  const importJobId = deps.importJobId || crypto.randomUUID();
+  try {
+    const outcome = await (deps.sdkFirst || sdkFirst)(request.env, {
+      refusal: (error) => importRefusal(error, settings),
+      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body) }),
+      fromSdk: (sdk) => sdk.importSolution({
+        base64,
+        // pac's defaults: --force-overwrite and --activate-plugins are off. Both are required by the SDK, which no longer defaults them.
+        overwriteUnmanagedCustomizations: false,
+        publishWorkflows: false,
+        importJobId,
+        deploymentSettings: settings,
+      }),
+      fromPac: async (refusal) => importThroughPac(request, sanitize, refusal, deps),
+    }, deps);
+    if (outcome.source === 'sdk') {
+      const { appliedSettings, warnings } = outcome.value;
+      return {
+        source: 'sdk',
+        importJobId,
+        applied: appliedSettings || { environmentVariables: [], connectionReferences: [] },
+        ...(warnings && warnings.length ? { warnings: warnings.map((warning) => sanitize(warning, 'warning')) } : {}),
+      };
+    }
+    return { source: 'pac', applied: filledNames(settings), fallback: { ...outcome.fallback, message: sanitize(outcome.fallback.message, 'message') } };
+  } catch (err) {
+    throw await importFailure(err, { sanitize, importJobId, env: request.env, deps });
+  }
+}
+
+// The failure a run prints: the message, the SDK's or the PAC step's code, the HTTP status of the answer that failed it, the reason pac was asked, the import job, and
+// the warnings the SDK attached about what it could not clean up (a staged copy of the package) — each only when there is one. An import's error arrives with its
+// warnings already read and cleaned (importFailure); any other reads them here.
+function describeFailure(error, readWarnings = () => undefined) {
+  const code = error && typeof error.code === 'string' ? error.code : undefined;
+  const warnings = error && Array.isArray(error.warnings) ? error.warnings : readWarnings(error);
+  return {
+    ok: false,
+    error: String((error && error.message) || error),
+    ...(code ? { code } : {}),
+    ...(error && Number.isInteger(error.statusCode) && error.statusCode > 0 ? { status: error.statusCode } : {}),
+    ...(error && error.fallback ? { fallback: error.fallback } : {}),
+    ...(error && error.importJobId ? { importJobId: error.importJobId } : {}),
+    ...(warnings && warnings.length ? { warnings } : {}),
+  };
+}
+
+async function main() {
+  const { request, error } = readRequest(process.argv.slice(2));
+  if (error) {
+    process.stderr.write(`✗ ${error}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  // emitResult() ends the process, so the outcome is settled first and emitted outside the try: an exit inside it would be caught as a failure.
+  let outcome;
+  let failure;
+  try {
+    outcome = request.command === 'template' ? await runTemplate(request) : await runImport(request);
+  } catch (err) {
+    failure = err;
+  }
+  if (failure) {
+    const { readCleanupWarnings } = require('./lib/maker-sdk.js');
+    emitResult(false, describeFailure(failure, readCleanupWarnings), { ascii: true });
+    return;
+  }
+  emitResult(true, { ok: true, ...outcome }, { ascii: true });
+}
+
+module.exports = {
+  readRequest,
+  settingsProblem,
+  parseSettings,
+  filledNames,
+  sanitizer,
+  decodedViews,
+  isSecretVariable,
+  recordStagedTypes,
+  sdkLead,
+  oneLine,
+  inspectPackage,
+  MAX_PACKAGE_BYTES,
+  MAX_SETTINGS_BYTES,
+  MAX_SANITIZED_CHARS,
+  MIN_HIDDEN_LENGTH,
+  SECRET_TYPE_ID,
+  templateRefusal,
+  importRefusal,
+  pacOnlyFeatureMessages,
+  solutionHttpClient,
+  jobLogFailure,
+  readImportJobFailure,
+  lookUpJob,
+  runTemplate,
+  runImport,
+  describeFailure,
+};
+
+if (require.main === module) {
+  main().catch((err) => {
+    // Only the kind of failure: the message of an unexpected one is not known to be free of what the settings file holds, and this runs where no sanitizer exists.
+    process.stderr.write(`Error: solution-settings.js failed unexpectedly (${(err && err.name) || 'Error'}).\n`);
+    process.exit(1);
+  });
+}

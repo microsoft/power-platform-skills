@@ -1,0 +1,890 @@
+'use strict';
+// REAL BUNDLE and REAL PROCESSES: deployment settings, through the vendored SDK, the plugin's real az-token HttpClient (the long-action wrapper
+// included) and a fake Dataverse that answers ExportSolution, StageSolution and ImportSolution in the shapes the SDK measured. What a stub cannot
+// say: that the SDK still throws the codes this script falls back on, in the words it matches; that it still stages, deletes its staging copy and
+// sends ComponentParameters as it did; that a transport failure on the import is not repeated. Below, the script runs in a child process with a fake
+// `pac` alone on PATH (or none), and the run's every byte of output is searched for the secrets it was given.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const ss = require('../solution-settings.js');
+const { createCloud, ORG, DATAVERSE_TOKEN } = require('./helpers/fake-power-platform.js');
+const { runScript } = require('./helpers/run-with-fakes.js');
+const { VALUES, spellingsOfValue } = require('./helpers/value-spellings.js');
+
+const SECRET = 'kv-secret-value-0123456789';
+const CONNECTION_ID = 'shared-commondataser-00000000-0000-0000-0000-00000000abcd';
+const CONNECTOR = '/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps';
+const JOB = '44444444-4444-4444-8444-444444444444';
+const ZIP = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(' a solution package')]);
+// What takes the place of a text that repeated a value of the settings file.
+const WITHHELD = (what = 'text') => `<${what} withheld: it repeated a value from the settings file>`;
+
+const tempDirs = [];
+const tempDir = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'solution-settings-real-'));
+  tempDirs.push(dir);
+  return dir;
+};
+test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true }); });
+
+// What StageSolution says the package holds.
+const STAGE = {
+  variables: [
+    { schemaName: 'new_Url', defaultValue: 'https://default.example' },
+    { schemaName: 'new_Secret', type: '100000005' },
+  ],
+  references: [{ logicalName: 'new_Dataverse', connectorId: CONNECTOR }],
+};
+
+function world(solution = {}, config = {}) {
+  const cloud = createCloud({ solution: { packageBase64: ZIP.toString('base64'), stage: STAGE, ...solution }, ...config });
+  const http = { getToken: () => cloud.tokens.dataverse, request: cloud.request, sleep: async () => {} };
+  return { cloud, http };
+}
+const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const lines = (cloud) => cloud.requests.map((r) => `${r.method} ${r.path.replace(/^\/api\/data\/v9\.\d+\//, '')}`);
+
+function files(extra = {}) {
+  const dir = tempDir();
+  const pkg = path.join(dir, 'solution.zip');
+  fs.writeFileSync(pkg, ZIP);
+  const settings = path.join(dir, 'filled.json');
+  fs.writeFileSync(settings, JSON.stringify({
+    EnvironmentVariables: [{ SchemaName: 'new_Secret', Value: SECRET }, { SchemaName: 'new_Url', Value: '' }],
+    ConnectionReferences: [{ LogicalName: 'new_Dataverse', ConnectionId: CONNECTION_ID, ConnectorId: CONNECTOR }],
+    ...extra,
+  }, null, 2));
+  return { dir, pkg, settings, out: path.join(dir, 'settings.json') };
+}
+const importRequest = (f) => ({ command: 'import', env: ORG, packagePath: f.pkg, settingsPath: f.settings });
+const templateRequest = (f, extra) => ({ command: 'template', env: ORG, outPath: f.out, force: false, ...extra });
+const never = { spawn: () => { throw new Error('pac must not be run'); } };
+
+// --- template -----------------------------------------------------------------------------------------------------------------------
+
+test('REAL BUNDLE: template --solution exports the solution unmanaged, stages the package for the template, deletes the staging copy, and writes pac\'s format sorted by name with empty values', async () => {
+  const { cloud, http } = world();
+  const f = files();
+  const result = await ss.runTemplate(templateRequest(f, { solution: 'ContosoDemo' }), { http, pac: never });
+  assert.deepStrictEqual(result, { source: 'sdk', out: f.out, environmentVariables: 2, connectionReferences: 1 });
+  assert.deepStrictEqual(lines(cloud), [
+    'POST ExportSolution',
+    'POST StageSolution',
+    'DELETE stagesolutionuploads(33333333-3333-4333-8333-333333333333)',
+  ]);
+  assert.deepStrictEqual(cloud.state.exports, [{ SolutionName: 'ContosoDemo', Managed: false }]);
+  assert.deepStrictEqual(cloud.state.staged, [{ CustomizationFile: ZIP.toString('base64') }], 'what was exported is what was staged');
+  assert.deepStrictEqual(cloud.state.deletedStaging, ['33333333-3333-4333-8333-333333333333']);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(f.out, 'utf8')), {
+    EnvironmentVariables: [
+      { SchemaName: 'new_Secret', Value: '', TypeId: 100000005, IsRequired: false },
+      { SchemaName: 'new_Url', Value: '', DefaultValue: 'https://default.example', TypeId: 100000000, IsRequired: false },
+    ],
+    ConnectionReferences: [{ LogicalName: 'new_Dataverse', ConnectionId: '', ConnectorId: CONNECTOR }],
+  });
+  // Every request carried the Dataverse token and nothing else.
+  assert.ok(cloud.requests.every((r) => r.authorization === `Bearer ${DATAVERSE_TOKEN}`));
+});
+
+test('REAL BUNDLE: template --package --env stages the zip as it is on disk and exports nothing', async () => {
+  const { cloud, http } = world();
+  const f = files();
+  await ss.runTemplate(templateRequest(f, { packagePath: f.pkg }), { http, pac: never });
+  assert.deepStrictEqual(lines(cloud), ['POST StageSolution', 'DELETE stagesolutionuploads(33333333-3333-4333-8333-333333333333)']);
+  assert.deepStrictEqual(cloud.state.staged, [{ CustomizationFile: ZIP.toString('base64') }]);
+});
+
+test('REAL BUNDLE: a staging the platform fails is SOLUTION_STAGING_FAILED — pac reads the zip the SDK exported, and the SDK has still deleted its staging copy', async () => {
+  const { cloud, http } = world({ stage: { status: 'Failed', missingDependencies: [{ Message: 'The component x depends on y' }] } });
+  const f = files();
+  let pacZip;
+  const spawn = (name, args) => {
+    pacZip = fs.readFileSync(args[args.indexOf('--solution-zip') + 1]);
+    fs.writeFileSync(args[args.indexOf('--settings-file') + 1], JSON.stringify({ EnvironmentVariables: [], ConnectionReferences: [], CopilotAgents: [] }));
+    return { status: 0, stdout: 'Deployment settings file created.', stderr: '' };
+  };
+  const result = await ss.runTemplate(templateRequest(f, { solution: 'ContosoDemo' }), { http, pac: { spawn } });
+  assert.strictEqual(result.source, 'pac');
+  assert.strictEqual(result.fallback.code, 'SOLUTION_STAGING_FAILED');
+  assert.match(result.fallback.message, /did not pass StageSolution in this environment[\s\S]*The component x depends on y/);
+  assert.deepStrictEqual(pacZip, ZIP, 'pac was given the exported bytes');
+  assert.deepStrictEqual(cloud.state.deletedStaging, ['33333333-3333-4333-8333-333333333333']);
+  assert.strictEqual(fs.existsSync(f.out), true);
+});
+
+test('REAL BUNDLE: a staging reply the SDK cannot read with certainty is SOLUTION_STAGING_UNREADABLE — a template that missed an entry would be silently wrong, so pac is asked', async () => {
+  const unreadable = [
+    ['no results', json(200, {})],
+    ['an unknown status', json(200, { StageSolutionResults: { StageSolutionStatus: 'Odd', SolutionComponentsDetails: [] } })],
+    ['components that are not a list', json(200, { StageSolutionResults: { StageSolutionStatus: 'Passed', SolutionComponentsDetails: 'x' } })],
+    ['attributes of another shape', json(200, { StageSolutionResults: { StageSolutionStatus: 'Passed', SolutionComponentsDetails: [{ ComponentTypeName: 'EnvironmentVariableDefinition', Attributes: [] }] } })],
+  ];
+  for (const [what, answer] of unreadable) {
+    const { http } = world({ stage: { answer } });
+    const f = files();
+    const spawn = (name, args) => { fs.writeFileSync(args[args.indexOf('--settings-file') + 1], JSON.stringify({ EnvironmentVariables: [] })); return { status: 0, stdout: '', stderr: '' }; };
+    const result = await ss.runTemplate(templateRequest(f, { solution: 'Demo' }), { http, pac: { spawn } });
+    assert.strictEqual(result.source, 'pac', what);
+    assert.strictEqual(result.fallback.code, 'SOLUTION_STAGING_UNREADABLE', what);
+  }
+});
+
+test('REAL BUNDLE: an export that fails is a failure — the platform\'s words, CONNECTION_ERROR — pac is not asked and --out is not written', async () => {
+  const { http } = world({ exportAnswer: json(400, { error: { message: 'Solution with unique name ContosoDemo was not found.' } }) });
+  const f = files();
+  await assert.rejects(ss.runTemplate(templateRequest(f, { solution: 'ContosoDemo' }), { http, pac: never }), (err) => {
+    assert.strictEqual(err.code, 'CONNECTION_ERROR');
+    assert.match(err.message, /HTTP 400[\s\S]*was not found/);
+    return true;
+  });
+  assert.strictEqual(fs.existsSync(f.out), false);
+});
+
+test('REAL BUNDLE: a staging copy that cannot be deleted is a warning on the output — the SDK says what is left behind', async () => {
+  const { http } = world({ deleteStagingAnswer: json(500, { error: { message: 'delete failed' } }) });
+  const f = files();
+  const result = await ss.runTemplate(templateRequest(f, { solution: 'Demo' }), { http, pac: never });
+  assert.strictEqual(result.warnings.length, 1);
+  assert.match(result.warnings[0], /stagesolutionupload 33333333-3333-4333-8333-333333333333\) could not be deleted/);
+});
+
+// --- import -------------------------------------------------------------------------------------------------------------------------
+
+test('REAL BUNDLE: import stages the package to check every filled entry against it, deletes the staging copy, and sends ComponentParameters in the import itself — with pac\'s defaults', async () => {
+  const { cloud, http } = world();
+  const f = files();
+  const result = await ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB });
+  assert.deepStrictEqual(result, { source: 'sdk', importJobId: JOB, applied: { environmentVariables: ['new_Secret'], connectionReferences: ['new_Dataverse'] } });
+  assert.deepStrictEqual(lines(cloud), ['POST StageSolution', 'DELETE stagesolutionuploads(33333333-3333-4333-8333-333333333333)', 'POST ImportSolution']);
+  assert.deepStrictEqual(cloud.state.imports, [{
+    OverwriteUnmanagedCustomizations: false,
+    PublishWorkflows: false,
+    CustomizationFile: ZIP.toString('base64'),
+    ImportJobId: JOB,
+    ComponentParameters: [
+      { '@odata.type': 'Microsoft.Dynamics.CRM.environmentvariablevalue', schemaname: 'new_Secret', value: SECRET },
+      { '@odata.type': 'Microsoft.Dynamics.CRM.connectionreference', connectionreferencelogicalname: 'new_Dataverse', connectionid: CONNECTION_ID, connectorid: CONNECTOR },
+    ],
+  }]);
+  assert.ok(!JSON.stringify(result).includes(SECRET) && !JSON.stringify(result).includes(CONNECTION_ID), 'the output names entries, never values');
+});
+
+test('REAL BUNDLE: an entry is applied under the PACKAGE\'s spelling of its name, whatever case the file used', async () => {
+  const { http } = world();
+  const f = files({ EnvironmentVariables: [{ SchemaName: 'NEW_SECRET', Value: SECRET }] });
+  const result = await ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB });
+  assert.deepStrictEqual(result.applied.environmentVariables, ['new_Secret']);
+});
+
+test('REAL BUNDLE: a file that fills nothing in is a plain import — no staging, no ComponentParameters', async () => {
+  const { cloud, http } = world();
+  const f = files({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: '' }], ConnectionReferences: [{ LogicalName: 'new_Dataverse', ConnectionId: '' }] });
+  const result = await ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB });
+  assert.deepStrictEqual(lines(cloud), ['POST ImportSolution']);
+  assert.ok(!('ComponentParameters' in cloud.state.imports[0]));
+  assert.deepStrictEqual(result.applied, { environmentVariables: [], connectionReferences: [] });
+});
+
+test('REAL BUNDLE: an entry that is not in the package, or names another connector, fails the whole import before anything is imported — naming entries, never values', async () => {
+  const cases = [
+    [{ EnvironmentVariables: [{ SchemaName: 'new_Missing', Value: SECRET }] }, /'new_Missing' is not a variable of the package/],
+    [{ ConnectionReferences: [{ LogicalName: 'new_Nope', ConnectionId: CONNECTION_ID }] }, /'new_Nope' is not a connection reference of the package/],
+    [{ ConnectionReferences: [{ LogicalName: 'new_Dataverse', ConnectionId: CONNECTION_ID, ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_sql' }] }, /names connector '\/providers\/Microsoft\.PowerApps\/apis\/shared_sql'/],
+  ];
+  for (const [settings, message] of cases) {
+    const { cloud, http } = world();
+    const f = files({ EnvironmentVariables: undefined, ConnectionReferences: undefined, ...settings });
+    await assert.rejects(ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.code, 'INVALID_ARGUMENT');
+      assert.match(err.message, message);
+      assert.match(err.message, /Nothing was imported/);
+      assert.ok(!err.message.includes(SECRET) && !err.message.includes(CONNECTION_ID), err.message);
+      assert.strictEqual(err.importJobId, JOB);
+      return true;
+    });
+    assert.ok(!lines(cloud).includes('POST ImportSolution'), 'nothing was imported');
+    assert.deepStrictEqual(cloud.state.deletedStaging, ['33333333-3333-4333-8333-333333333333'], 'the staging copy is deleted although the check refused');
+  }
+});
+
+test('REAL BUNDLE: the SDK\'s refusal of a pac-only settings feature still reads as the words this script falls back on — Workflows, CanvasApps, CopilotAgents, ConnectionInstance — and nothing was sent', async () => {
+  const features = [
+    { Workflows: [{ WorkflowId: '1' }] },
+    { CanvasApps: [{ Name: 'x' }] },
+    { CopilotAgents: [{ Name: 'x' }] },
+    { ConnectionReferences: [{ LogicalName: 'new_Dataverse', ConnectionId: CONNECTION_ID, ConnectionInstance: { x: 1 } }] },
+  ];
+  for (const feature of features) {
+    const { cloud, http } = world();
+    const f = files(feature);
+    const pacCalls = [];
+    const spawn = (name, args) => { pacCalls.push(args); return { status: 0, stdout: 'Solution Imported successfully.', stderr: '' }; };
+    const result = await ss.runImport(importRequest(f), { http, pac: { spawn }, importJobId: JOB });
+    assert.strictEqual(result.source, 'pac', JSON.stringify(feature));
+    assert.strictEqual(result.fallback.code, 'INVALID_ARGUMENT');
+    assert.match(result.fallback.message, /this SDK does not apply/);
+    // The sentence the SDK threw is exactly the one this script builds from the file's own content: that equality is what sends the file to pac, so a re-vendored
+    // SDK that rewords it — or that stops refusing the feature — fails here instead of silently ending the fallback.
+    assert.ok(ss.pacOnlyFeatureMessages(JSON.parse(fs.readFileSync(f.settings, 'utf8'))).includes(result.fallback.message), `${JSON.stringify(feature)}: ${result.fallback.message}`);
+    assert.deepStrictEqual(cloud.requests, [], 'the file is checked before any request: nothing was staged, nothing imported');
+    assert.deepStrictEqual(pacCalls, [['solution', 'import', '--path', f.pkg, '--environment', ORG, '--settings-file', f.settings]]);
+  }
+});
+
+test('REAL BUNDLE: a settings key the SDK does not know is NOT a feature pac has: the import fails and pac is not asked — even when the key says "this SDK does not apply"', async () => {
+  for (const key of ['Mystery', 'this SDK does not apply']) {
+    const { cloud, http } = world();
+    const f = files({ [key]: [] });
+    await assert.rejects(ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB }), (err) => err.code === 'INVALID_ARGUMENT' && /is not part of the format/.test(err.message) && !('fallback' in err), key);
+    assert.deepStrictEqual(cloud.requests, []);
+  }
+});
+
+test('REAL BUNDLE: a package that does not pass staging is NOT retried by pac — SOLUTION_STAGING_FAILED with the missing dependencies, nothing imported', async () => {
+  const { cloud, http } = world({ stage: { status: 'Failed', missingDependencies: [{ Message: 'needs the Contoso base solution' }] } });
+  const f = files();
+  await assert.rejects(ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB }), (err) => {
+    assert.strictEqual(err.code, 'SOLUTION_STAGING_FAILED');
+    assert.match(err.message, /needs the Contoso base solution/);
+    return true;
+  });
+  assert.ok(!lines(cloud).includes('POST ImportSolution'));
+});
+
+test('REAL BUNDLE: a staging reply the SDK cannot read sends the import to pac, with the settings file as it is', async () => {
+  const { http } = world({ stage: { answer: json(200, { StageSolutionResults: { StageSolutionStatus: 'Odd' } }) } });
+  const f = files();
+  const calls = [];
+  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: (name, args) => { calls.push(args); return { status: 0, stdout: '', stderr: '' }; } }, importJobId: JOB });
+  assert.strictEqual(result.source, 'pac');
+  assert.strictEqual(result.fallback.code, 'SOLUTION_STAGING_UNREADABLE');
+  assert.strictEqual(calls.length, 1);
+});
+
+test('REAL BUNDLE: a platform error that quotes a secret or a connection id reaches no message — a secret withholds the words, a connection id or a Text value alone is replaced — and the job is named for a lookup', async () => {
+  const { http } = world({ importAnswer: json(400, { error: { message: `The connection ${CONNECTION_ID} is invalid for new_Dataverse; the value ${SECRET} is not accepted.` } }) });
+  const f = files();
+  // The file gives new_Secret no TypeId: it is the package's own definition — what StageSolution's reply says it is — that makes it a secret.
+  await assert.rejects(ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB }), (err) => {
+    assert.strictEqual(err.code, 'CONNECTION_ERROR');
+    assert.ok(!err.message.includes(SECRET) && !err.message.includes(CONNECTION_ID), err.message);
+    assert.strictEqual(err.message, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: ${WITHHELD('message')}`);
+    assert.strictEqual(err.importJobId, JOB);
+    return true;
+  });
+  // The connection id alone: replaced, and the platform's other words kept.
+  const idOnly = world({ importAnswer: json(400, { error: { message: `The connection ${CONNECTION_ID} is invalid for new_Dataverse.` } }) });
+  await assert.rejects(ss.runImport(importRequest(files()), { http: idOnly.http, pac: never, importJobId: JOB }), (err) => {
+    assert.strictEqual(err.message, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: The connection <redacted> is invalid for new_Dataverse.`);
+    return true;
+  });
+  // A connection id the platform quotes in another case (a GUID is normalised): replaced all the same.
+  const upper = world({ importAnswer: json(400, { error: { message: `The connection ${CONNECTION_ID.toUpperCase()} is invalid.` } }) });
+  await assert.rejects(ss.runImport(importRequest(files()), { http: upper.http, pac: never, importJobId: JOB }), (err) => {
+    assert.strictEqual(err.message, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: The connection <redacted> is invalid.`);
+    return true;
+  });
+  // A variable the package says is Text: its value is replaced where the platform quotes it.
+  const text = world({ importAnswer: json(400, { error: { message: 'The address https://plain.example/value is not reachable.' } }) });
+  const withText = files({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: 'https://plain.example/value' }] });
+  await assert.rejects(ss.runImport(importRequest(withText), { http: text.http, pac: never, importJobId: JOB }), (err) => {
+    assert.strictEqual(err.message, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: The address <redacted> is not reachable.`);
+    return true;
+  });
+});
+
+test('REAL BUNDLE: an import that gets no answer is never sent again — one request, an error that names the job — and so is a staging', async () => {
+  for (const [action, solution, run] of [
+    ['ImportSolution', {}, (http, f) => ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB })],
+    ['StageSolution', {}, (http, f) => ss.runTemplate(templateRequest(f, { packagePath: f.pkg }), { http, pac: never })],
+  ]) {
+    const cloud = createCloud({ solution: { packageBase64: ZIP.toString('base64'), stage: STAGE, ...solution } });
+    let hits = 0;
+    const request = async (options) => {
+      if (new URL(options.url).pathname.endsWith(`/${action}`)) {
+        hits += 1;
+        return { error: 'Request timed out' };
+      }
+      return cloud.request(options);
+    };
+    const f = files();
+    // An import with entries stages first; the staging answers, the import does not.
+    await assert.rejects(run({ getToken: () => cloud.tokens.dataverse, request, sleep: async () => {} }, f), (err) => {
+      assert.match(err.message, new RegExp(`${action} got no answer \\(Request timed out\\)\\. It was not sent again`), err.message);
+      if (action === 'ImportSolution') assert.match(err.message, new RegExp(`import job ${JOB}`));
+      return true;
+    }, action);
+    assert.strictEqual(hits, 1, `${action}: one request, not the six the plain client makes for a POST nobody answered`);
+  }
+});
+
+test('REAL BUNDLE: an import that the platform ACCEPTED and a gateway answered 5xx (or 401) is not sent a second time — one ImportSolution, the SDK\'s ConnectionError with that status, then the job named', async () => {
+  for (const status of [500, 502, 503, 504, 401]) {
+    const cloud = createCloud({ solution: { packageBase64: ZIP.toString('base64'), stage: STAGE } });
+    // The platform accepts the first ImportSolution (it is recorded), and a gateway answers it as it does for work still in progress; a second send would be answered 204.
+    const request = async (options) => {
+      const answer = await cloud.request(options);
+      return new URL(options.url).pathname.endsWith('/ImportSolution') && cloud.state.imports.length === 1 ? json(status, { error: { code: '0x80048d19', message: `answered ${status}` } }) : answer;
+    };
+    const tokenReads = [];
+    const f = files();
+    await assert.rejects(ss.runImport(importRequest(f), { http: { getToken: (env, options) => { tokenReads.push(options); return cloud.tokens.dataverse; }, request, sleep: async () => {} }, pac: never, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.code, 'CONNECTION_ERROR');
+      assert.strictEqual(err.statusCode, status);
+      assert.match(err.message, new RegExp(`^HTTP ${status} from .*/ImportSolution: answered ${status} The request was sent once and was not sent again`));
+      assert.strictEqual(err.importJobId, JOB);
+      return true;
+    }, String(status));
+    assert.strictEqual(cloud.state.imports.length, 1, `${status}: one ImportSolution, accepted once`);
+    assert.strictEqual(tokenReads.filter((options) => options && options.fresh).length, 0, `${status}: no token refresh for a second send`);
+  }
+});
+
+test('REAL BUNDLE: a failed import reads its job\'s log once through the same client, and the platform\'s own reason is in the message', async () => {
+  const log = '<importexportxml succeeded="failure" status="Import failed"><entity><result result="failure" errortext="Could not find connection \'x\' for API \'shared_sql\'"/></entity></importexportxml>';
+  const { cloud, http } = world({ importAnswer: json(400, { error: { message: 'An unexpected error occurred.' } }), jobLog: log });
+  const f = files();
+  await assert.rejects(ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB }), (err) => {
+    assert.match(err.message, /An unexpected error occurred\. The import job's log \(importjobs\(44444444-4444-4444-8444-444444444444\)\) says: Could not find connection 'x' for API 'shared_sql'$/);
+    return true;
+  });
+  assert.deepStrictEqual(cloud.state.jobReads, [JOB]);
+  const reads = cloud.requests.filter((r) => r.path.includes('/importjobs('));
+  assert.deepStrictEqual(reads.map((r) => [r.method, r.search]), [['GET', '?$select=data']]);
+});
+
+// --- real processes -----------------------------------------------------------------------------------------------------------------
+
+const STAGE_CONFIG = { solution: { packageBase64: ZIP.toString('base64'), stage: STAGE } };
+const FILLED = JSON.stringify({
+  EnvironmentVariables: [{ SchemaName: 'new_Secret', Value: SECRET }],
+  ConnectionReferences: [{ LogicalName: 'new_Dataverse', ConnectionId: CONNECTION_ID, ConnectorId: CONNECTOR }],
+});
+const inRunDir = (name) => (dir) => path.join(dir, name);
+const noSecrets = (run) => {
+  for (const text of [run.stdout, run.stderr]) {
+    assert.ok(!text.includes(SECRET), 'the secret was printed');
+    assert.ok(!text.includes(CONNECTION_ID), 'the connection id was printed');
+    assert.ok(!text.includes(DATAVERSE_TOKEN), 'a token was printed');
+  }
+};
+
+test('PROCESS: template --solution writes the settings file and prints one line naming it and the entry counts — no pac on the machine, no secret anywhere', () => {
+  const run = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json')], { platform: STAGE_CONFIG, read: ['settings.json'] });
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.strictEqual(run.lines.length, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.ok, out.source, out.environmentVariables, out.connectionReferences], [true, 'sdk', 2, 1]);
+  assert.ok(path.isAbsolute(out.out) && path.basename(out.out) === 'settings.json');
+  const written = JSON.parse(run.outputs['settings.json']);
+  assert.deepStrictEqual(written.EnvironmentVariables.map((v) => v.SchemaName), ['new_Secret', 'new_Url']);
+  assert.ok(run.outputs['settings.json'].endsWith('}\n'));
+  assert.deepStrictEqual(run.pacCalls, []);
+  noSecrets(run);
+});
+
+test('PROCESS: when the SDK refuses to stage, pac reads the exported zip and the file at --out is pac\'s own', () => {
+  const pacFile = JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'x_a', Value: '', Name: { Default: 'A' } }], ConnectionReferences: [], CopilotAgents: [] }, null, 2);
+  const run = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json')], {
+    platform: { solution: { ...STAGE_CONFIG.solution, stage: { status: 'Failed', missingDependencies: [{ Message: 'missing y' }] } } },
+    pac: { responses: [{ match: ['solution', 'create-settings'], writeFlag: '--settings-file', writeContent: pacFile, stdout: 'Deployment settings file created.\n', snapshot: ['--solution-zip'] }] },
+    read: ['settings.json'],
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.source, out.fallback.code, out.environmentVariables, out.connectionReferences], ['pac', 'SOLUTION_STAGING_FAILED', 1, 0]);
+  assert.strictEqual(run.outputs['settings.json'], pacFile, 'pac\'s bytes, as pac wrote them');
+  assert.strictEqual(run.pacCalls.length, 1);
+  assert.strictEqual(run.pacCalls[0].snapshots['--solution-zip'].bytes, ZIP.length, 'pac was given the exported package');
+  assert.deepStrictEqual(run.pacCalls[0].args.slice(0, 2), ['solution', 'create-settings']);
+});
+
+test('PROCESS: template --package without --env needs no environment at all — pac reads the zip, no request is made, no fallback is claimed', () => {
+  const run = runScript('solution-settings.js', ['template', '--package', inRunDir('solution.zip'), '--out', inRunDir('settings.json')], {
+    platform: {},
+    files: { 'solution.zip': ZIP },
+    pac: { responses: [{ match: ['solution', 'create-settings'], writeFlag: '--settings-file', writeContent: JSON.stringify({ EnvironmentVariables: [], ConnectionReferences: [] }) }] },
+    read: ['settings.json'],
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.ok, out.source, 'fallback' in out], [true, 'pac', false]);
+  assert.deepStrictEqual(run.requests, []);
+});
+
+test('PROCESS: an existing --out is not replaced without --force — exit 1, the file untouched, nothing asked of the environment — and --force replaces it', () => {
+  const run = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json')], { platform: STAGE_CONFIG, files: { 'settings.json': '{"mine":"filled in"}' }, read: ['settings.json'] });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(JSON.parse(run.lines[0]).code, 'OUT_EXISTS');
+  assert.strictEqual(run.outputs['settings.json'], '{"mine":"filled in"}');
+  assert.deepStrictEqual(run.requests, []);
+  const forced = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json'), '--force'], { platform: STAGE_CONFIG, files: { 'settings.json': '{"mine":"filled in"}' }, read: ['settings.json'] });
+  assert.strictEqual(forced.status, 0, forced.stderr);
+  assert.ok(JSON.parse(forced.outputs['settings.json']).EnvironmentVariables);
+});
+
+test('PROCESS: import applies the settings in the import, prints the job and the entries it applied — and the secret and the connection id are nowhere in what the run printed', () => {
+  const run = runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('filled.json')], {
+    platform: STAGE_CONFIG,
+    files: { 'solution.zip': ZIP, 'filled.json': FILLED },
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.strictEqual(run.lines.length, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.source, 'sdk');
+  assert.match(out.importJobId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.deepStrictEqual(out.applied, { environmentVariables: ['new_Secret'], connectionReferences: ['new_Dataverse'] });
+  assert.strictEqual(run.state.imports.length, 1);
+  assert.strictEqual(run.state.imports[0].ImportJobId, out.importJobId, 'the job the output names is the job the platform was given');
+  assert.strictEqual(run.state.imports[0].ComponentParameters[0].value, SECRET, 'the platform got the value');
+  assert.deepStrictEqual(run.pacCalls, []);
+  noSecrets(run);
+});
+
+test('PROCESS: a settings feature the SDK does not apply goes to pac — the same files, the environment pinned — and is reported as pac\'s, with the SDK\'s words', () => {
+  const run = runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('filled.json')], {
+    platform: STAGE_CONFIG,
+    files: { 'solution.zip': ZIP, 'filled.json': JSON.stringify({ ...JSON.parse(FILLED), Workflows: [{ WorkflowId: '1' }] }) },
+    pac: { responses: [{ match: ['solution', 'import'], stdout: 'Solution Imported successfully.\n', snapshot: ['--settings-file', '--path'] }] },
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.ok, out.source, out.fallback.code], [true, 'pac', 'INVALID_ARGUMENT']);
+  assert.match(out.fallback.message, /this SDK does not apply/);
+  assert.deepStrictEqual(out.applied, { environmentVariables: ['new_Secret'], connectionReferences: ['new_Dataverse'] });
+  assert.strictEqual(run.pacCalls.length, 1);
+  const [call] = run.pacCalls;
+  assert.deepStrictEqual([call.args[0], call.args[1], call.args[2] === '--path', call.args[4], call.args[5]], ['solution', 'import', true, '--environment', ORG]);
+  assert.ok(call.args.includes('--settings-file'));
+  assert.strictEqual(call.snapshots['--path'].bytes, ZIP.length);
+  assert.strictEqual(JSON.parse(call.snapshots['--settings-file'].text).Workflows.length, 1, 'pac read the file itself');
+  assert.deepStrictEqual(run.requests, [], 'the SDK refused before any request');
+  noSecrets(run);
+});
+
+test('PROCESS: a pac import that fails reports the failure without the secret pac echoed — exit 1, one ok:false line', () => {
+  const run = runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('filled.json')], {
+    platform: STAGE_CONFIG,
+    files: { 'solution.zip': ZIP, 'filled.json': JSON.stringify({ ...JSON.parse(FILLED), CanvasApps: [{ Name: 'x' }] }) },
+    pac: { responses: [{ match: ['solution', 'import'], status: 1, stderr: `Error: the value ${SECRET} and connection ${CONNECTION_ID} were refused\n` }] },
+  });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(run.lines.length, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.ok, out.code, out.fallback.code], [false, 'PAC_FAILED', 'INVALID_ARGUMENT']);
+  // The SDK refused before it staged anything, so the package's definitions were never read and the file gives new_Secret no type: it is not known to be anything but a secret.
+  assert.strictEqual(out.error, `\`pac solution import\` failed (exit 1): ${WITHHELD('text')}`);
+  noSecrets(run);
+  // pac that echoes only the connection id: the id is replaced and pac's words are kept.
+  const idOnly = runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('filled.json')], {
+    platform: STAGE_CONFIG,
+    files: { 'solution.zip': ZIP, 'filled.json': JSON.stringify({ ...JSON.parse(FILLED), CanvasApps: [{ Name: 'x' }] }) },
+    pac: { responses: [{ match: ['solution', 'import'], status: 1, stderr: `Error: connection ${CONNECTION_ID} was refused\n` }] },
+  });
+  assert.match(JSON.parse(idOnly.lines[0]).error, /failed \(exit 1\): Error: connection <redacted> was refused$/);
+  noSecrets(idOnly);
+});
+
+test('PROCESS: a platform failure of the import prints one ok:false line with the job, and never the value the platform quoted', () => {
+  const run = runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('filled.json')], {
+    platform: { ...STAGE_CONFIG, failures: [{ pathIncludes: '/ImportSolution', status: 400, body: { error: { message: `bad value ${SECRET}` } } }] },
+    files: { 'solution.zip': ZIP, 'filled.json': FILLED },
+  });
+  assert.strictEqual(run.status, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.ok, out.code], [false, 'CONNECTION_ERROR']);
+  assert.match(out.importJobId, /^[0-9a-f-]{36}$/);
+  // The package's definition says new_Secret is a secret (the file says nothing of it): the platform's words are withheld, and the line the SDK itself wrote stays.
+  assert.strictEqual(out.error, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: ${WITHHELD('message')}`);
+  assert.strictEqual(out.status, 400);
+  noSecrets(run);
+});
+
+test('PROCESS: import refuses a missing settings file, a file of the wrong shape and a non-zip package before it asks anything — exit 1, and nothing in the message is a value', () => {
+  const cases = [
+    [{ 'solution.zip': ZIP }, 'SETTINGS_UNREADABLE'],
+    [{ 'solution.zip': ZIP, 'filled.json': JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'a', Value: { v: SECRET } }] }) }, 'SETTINGS_INVALID'],
+    [{ 'solution.zip': 'plain text', 'filled.json': FILLED }, 'PACKAGE_UNREADABLE'],
+  ];
+  for (const [files, code] of cases) {
+    const run = runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('filled.json')], { platform: STAGE_CONFIG, files });
+    assert.strictEqual(run.status, 1, code);
+    assert.strictEqual(JSON.parse(run.lines[0]).code, code);
+    assert.deepStrictEqual(run.requests, [], code);
+    noSecrets(run);
+  }
+});
+
+test('PROCESS: the line is pure ASCII — a path with a non-ASCII character is written as a \\uXXXX escape and reads back as itself — on success and on failure', () => {
+  const name = 'caf\u00e9.json';
+  const ok = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir(name)], { platform: STAGE_CONFIG });
+  assert.strictEqual(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /^[\x00-\x7e\r\n]*$/, 'pure ASCII on success');
+  assert.ok(ok.stdout.includes('caf\\u00e9.json'), 'the escape, not the character');
+  assert.strictEqual(path.basename(JSON.parse(ok.lines[0]).out), name);
+  const bad = runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('p\u00e4ckage.zip'), '--settings', inRunDir('s.json')], { platform: STAGE_CONFIG, files: { 's.json': FILLED } });
+  assert.strictEqual(bad.status, 1);
+  assert.match(bad.stdout, /^[\x00-\x7e\r\n]*$/, 'pure ASCII on failure');
+  assert.ok(bad.stdout.includes('p\\u00e4ckage.zip'));
+  assert.strictEqual(JSON.parse(bad.lines[0]).code, 'PACKAGE_UNREADABLE');
+});
+
+test('PROCESS: an environment that is not a Dataverse origin, and every usage error, exit 1 on stderr with nothing on stdout', () => {
+  for (const argv of [
+    ['import', '--env', 'https://contoso.example.com', '--package', 'p.zip', '--settings', 's.json'],
+    ['template', '--env', ORG, '--out', 'o.json'],
+    ['template', '--env', ORG, '--solution', 'Demo', '--out', 'o.json', '--force', 'yes'],
+    [],
+  ]) {
+    const run = runScript('solution-settings.js', argv, { platform: STAGE_CONFIG });
+    assert.strictEqual(run.status, 1, argv.join(' '));
+    assert.strictEqual(run.stdout, '', argv.join(' '));
+    assert.match(run.stderr, /Usage:/);
+    assert.deepStrictEqual(run.requests, []);
+  }
+});
+
+test('PROCESS: a failure of the script itself prints only its kind — never its message, which is not known to be free of what the settings file holds', () => {
+  // `emitResult` — where the script ends — is made to throw with a message that names the secret.
+  const preload = path.resolve(__dirname, 'helpers', 'fake-emit-failure-preload.js');
+  const run = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json')], {
+    platform: STAGE_CONFIG,
+    env: { NODE_OPTIONS: `--require=${JSON.stringify(preload)}`, FAKE_EMIT_SECRET: SECRET },
+  });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(run.stdout, '');
+  assert.strictEqual(run.stderr, 'Error: solution-settings.js failed unexpectedly (TypeError).\n');
+});
+
+// --- an import that is sent once, and told once -----------------------------------------------------------------------------------------------
+
+// A settings file with one secret variable (TypeId 100000005, as pac and the SDK write it), and the import of it in a child process over the fake platform.
+const secretFile = (value, extra = {}) => JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Secret', Value: value, TypeId: 100000005 }], ConnectionReferences: [], ...extra });
+function importInProcess({ value = SECRET, settings, solution = {}, platform = {}, pac } = {}) {
+  return runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('filled.json')], {
+    platform: { solution: { packageBase64: ZIP.toString('base64'), stage: STAGE, ...solution }, ...platform },
+    files: { 'solution.zip': ZIP, 'filled.json': settings === undefined ? secretFile(value) : settings },
+    pac,
+  });
+}
+const importPosts = (run) => run.requests.filter((r) => r.method === 'POST' && r.path.endsWith('/ImportSolution')).length;
+// Every string in a parsed value, keys included.
+const stringsIn = (value) => (typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.entries(value).flatMap(([key, item]) => [key, ...stringsIn(item)]) : []);
+// What the run printed — stdout, stderr, and each string of the line on stdout (which is JSON, so a quote or a backslash in it is escaped) — holds none of `forbidden`.
+function assertPrintsNone(run, forbidden, what = '') {
+  const printed = [run.stdout, run.stderr, ...stringsIn(run.lines.length ? JSON.parse(run.lines[0]) : {})];
+  for (const text of printed) {
+    for (const value of forbidden) assert.ok(!text.includes(value), `${what} printed ${JSON.stringify(value)}:\n${text}`);
+  }
+}
+
+test('PROCESS: ImportSolution is sent EXACTLY ONCE whatever answers it after the platform took it — 500, 502, 503, 504 and 401 — and the failure names the status, the code and the job to look up', () => {
+  for (const status of [500, 502, 503, 504, 401]) {
+    // The fake records the import when it arrives, then answers as a gateway would: the platform HAS accepted it, and a second send would be answered 204.
+    const run = importInProcess({ solution: { importAnswer: json(status, { error: { code: '0x80048d19', message: `answered ${status}` } }) } });
+    assert.strictEqual(run.status, 1, String(status));
+    assert.strictEqual(importPosts(run), 1, `${status}: one POST, not the six the plain client makes`);
+    assert.strictEqual(run.state.imports.length, 1);
+    const out = JSON.parse(run.lines[0]);
+    assert.deepStrictEqual([out.ok, out.code, out.status], [false, 'CONNECTION_ERROR', status], 'the status and the code survive');
+    assert.strictEqual(out.importJobId, run.state.imports[0].ImportJobId, 'the job named is the job the platform was given');
+    assert.strictEqual(out.error, `HTTP ${status} from ${ORG}/api/data/v9.0/ImportSolution: answered ${status} The request was sent once and was not sent again: the environment may have accepted it. Look up import job ${out.importJobId} (importjobs(${out.importJobId}) in the Web API, or the solution history in Maker) before importing again.`);
+    assert.strictEqual(run.stderr.trim(), out.error, 'stderr says the same');
+    assert.strictEqual(run.state.jobReads.length, 1, 'the job\'s log was read once, for what it says');
+  }
+});
+
+test('PROCESS: an import whose request got no answer is not sent again either — one POST — and the failure names the job; a platform that refuses it (400) is not told to look anything up', () => {
+  const lost = importInProcess({ platform: { failures: [{ pathIncludes: '/ImportSolution', error: 'Request timed out' }] } });
+  assert.strictEqual(lost.status, 1);
+  assert.strictEqual(importPosts(lost), 1);
+  const out = JSON.parse(lost.lines[0]);
+  assert.strictEqual(out.code, 'CONNECTION_ERROR');
+  assert.ok(!('status' in out), 'no answer, no status');
+  assert.match(out.error, /ImportSolution got no answer \(Request timed out\)\. It was not sent again/);
+  assert.strictEqual(out.error.split('Look up import job').length, 2, 'the job is named once');
+  assert.match(out.importJobId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+  const refused = importInProcess({ solution: { importAnswer: json(400, { error: { message: 'the import was refused' } }) } });
+  const refusedOut = JSON.parse(refused.lines[0]);
+  assert.strictEqual(refusedOut.error, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: the import was refused`);
+  assert.strictEqual(refusedOut.status, 400);
+});
+
+test('PROCESS: ExportSolution and StageSolution are sent once too — a gateway\'s answer after the platform took the request is the failure, not a reason to send it again', () => {
+  const exported = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json')], {
+    platform: { solution: { ...STAGE_CONFIG.solution, exportAnswer: json(504, { error: { message: 'gateway timeout' } }) } },
+  });
+  assert.strictEqual(exported.status, 1);
+  assert.strictEqual(exported.state.exports.length, 1, 'one ExportSolution');
+  assert.deepStrictEqual([JSON.parse(exported.lines[0]).code, JSON.parse(exported.lines[0]).status], ['CONNECTION_ERROR', 504]);
+  const staged = runScript('solution-settings.js', ['template', '--package', inRunDir('solution.zip'), '--env', ORG, '--out', inRunDir('settings.json')], {
+    platform: { solution: { ...STAGE_CONFIG.solution, stage: { answer: json(503, { error: { message: 'service unavailable' } }) } } },
+    files: { 'solution.zip': ZIP },
+  });
+  assert.strictEqual(staged.status, 1);
+  assert.strictEqual(staged.state.staged.length, 1, 'one StageSolution');
+  assert.deepStrictEqual([JSON.parse(staged.lines[0]).code, JSON.parse(staged.lines[0]).status], ['CONNECTION_ERROR', 503]);
+});
+
+// --- nothing a settings file holds comes back out ------------------------------------------------------------------------------------------------
+
+const LONG_SECRET = 'synthetic-sensitive-value-CDR';
+const WITHHELD_WARNING = WITHHELD('warning');
+
+test('PROCESS: a cleanup warning on a FAILED import is cleaned like the message — a secret in the platform\'s answer to the staging delete reaches neither stdout nor stderr', () => {
+  const run = importInProcess({
+    value: LONG_SECRET,
+    solution: {
+      deleteStagingAnswer: json(400, { error: { message: `cleanup diagnosis contains ${LONG_SECRET}` } }),
+      importAnswer: json(400, { error: { message: 'the import was refused' } }),
+    },
+  });
+  assert.strictEqual(run.status, 1);
+  assertPrintsNone(run, [LONG_SECRET], 'failure warnings');
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual(out.warnings, [WITHHELD_WARNING], 'the warning is there, and says it was withheld');
+  assert.strictEqual(out.error, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: the import was refused`);
+  assert.deepStrictEqual([out.code, out.status], ['CONNECTION_ERROR', 400]);
+  assert.ok(out.importJobId);
+});
+
+test('PROCESS: the same warning on a SUCCESSFUL import is cleaned too', () => {
+  const run = importInProcess({ value: LONG_SECRET, solution: { deleteStagingAnswer: json(400, { error: { message: `cleanup diagnosis contains ${LONG_SECRET}` } }) } });
+  assert.strictEqual(run.status, 0, run.stderr);
+  assertPrintsNone(run, [LONG_SECRET], 'success warnings');
+  assert.deepStrictEqual(JSON.parse(run.lines[0]).warnings, [WITHHELD_WARNING]);
+  assert.strictEqual(run.state.imports[0].ComponentParameters[0].value, LONG_SECRET, 'the platform still got the value');
+});
+
+// The import in a child process over the fake platform, for ONE variable, `new_Secret`, of `value`: the file gives it `fileType` as its TypeId (none when null), the package's own
+// definition — the reply StageSolution gives — says it is of `type`, the platform answers ImportSolution with a 400 that says `message`, and the job's log says `log`.
+function importOf(value, { fileType = null, type = '100000005', message = 'An unexpected error occurred.', log } = {}) {
+  const settings = JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Secret', Value: value, ...(fileType === null ? {} : { TypeId: fileType }) }], ConnectionReferences: [] });
+  return importInProcess({
+    settings,
+    solution: { stage: { variables: [{ schemaName: 'new_Secret', type }], references: [] }, importAnswer: json(400, { error: { message } }), ...(log === undefined ? {} : { jobLog: log }) },
+  });
+}
+// A failed import's job log whose first failing result says `text`, escaped as the platform writes an attribute.
+const xmlEscaped = (text) => String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const jobLogSaying = (text) => `<importexportxml succeeded="failure"><result result="failure" errortext="${xmlEscaped(text)}"/></importexportxml>`;
+const IMPORT_URL = `${ORG}/api/data/v9.0/ImportSolution`;
+
+test('PROCESS: a secret has no length floor, and the PACKAGE says what is secret — a five-character secret that the file gives no type, or calls Text, is not printed, on stdout or stderr', () => {
+  for (const fileType of [null, 100000000, '100000000', 'secret', 100000005]) {
+    const run = importOf('PIN42', { fileType, message: "Value 'PIN42' was refused" });
+    assert.strictEqual(run.status, 1, String(fileType));
+    assert.strictEqual(importPosts(run), 1, `the real bundle got through staging and sent the import (file type ${fileType})`);
+    assertPrintsNone(run, ['PIN42'], `a short secret, file type ${fileType}`);
+    const out = JSON.parse(run.lines[0]);
+    assert.strictEqual(out.error, `HTTP 400 from ${IMPORT_URL}: ${WITHHELD('message')}`, String(fileType));
+    assert.strictEqual(run.stderr.trim(), out.error);
+    assert.strictEqual(out.status, 400);
+  }
+  // The package says Text, and the file says nothing or Text: a value of five characters is shown (it is a word as much as a value), one of six is replaced where it is quoted.
+  for (const fileType of [null, 100000000]) {
+    assert.strictEqual(JSON.parse(importOf('PIN42', { fileType, type: '100000000', message: "Value 'PIN42' was refused" }).lines[0]).error, `HTTP 400 from ${IMPORT_URL}: Value 'PIN42' was refused`, String(fileType));
+    assert.strictEqual(JSON.parse(importOf('PIN420', { fileType, type: '100000000', message: "Value 'PIN420' was refused" }).lines[0]).error, `HTTP 400 from ${IMPORT_URL}: Value '<redacted>' was refused`, String(fileType));
+  }
+  // The package says Text and the file says Secret: a maker who marks a value secret is believed.
+  const marked = importOf('PIN42', { fileType: 100000005, type: '100000000', message: "Value 'PIN42' was refused" });
+  assertPrintsNone(marked, ['PIN42'], 'a value the file marks secret');
+  assert.strictEqual(JSON.parse(marked.lines[0]).error, `HTTP 400 from ${IMPORT_URL}: ${WITHHELD('message')}`);
+});
+
+// Every spelling is a process of its own: a message that holds one spelling cannot hide that another is not recognised. The spellings are written out in helpers/value-spellings.js,
+// independently of the script, which does not list spellings: it decodes the text.
+for (const [valueName, value] of [['a value with a double quote', VALUES.quote], ['a value with every kind of character', VALUES.mixed]]) {
+  for (const [name, spelled] of spellingsOfValue(value)) {
+    test(`PROCESS: ${valueName}, quoted as ${name}, is not printed — in a run of its own`, () => {
+      const run = importOf(value, { message: `Value ${spelled} was refused` });
+      assert.strictEqual(run.status, 1);
+      assert.strictEqual(importPosts(run), 1, 'the import was sent and the platform answered');
+      assertPrintsNone(run, [value, spelled], `${valueName} as ${name}`);
+      assert.strictEqual(JSON.parse(run.lines[0]).error, `HTTP 400 from ${IMPORT_URL}: ${WITHHELD('message')}`);
+    });
+  }
+}
+
+test('PROCESS: a JSON \\u0022 for a double quote — the escape a list of spellings is likeliest to miss — does not let the secret through, in the platform\'s answer and in the job\'s log', () => {
+  const secret = 'cedar-"pine"-token';
+  const escaped = 'cedar-\\u0022pine\\u0022-token';
+  const run = importOf(secret, { message: `Value "${escaped}" was refused` });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(importPosts(run), 1);
+  assertPrintsNone(run, [secret, escaped], 'an escaped quote');
+  assert.strictEqual(JSON.parse(run.lines[0]).error, `HTTP 400 from ${IMPORT_URL}: ${WITHHELD('message')}`);
+  const inLog = importOf(secret, { log: jobLogSaying(`Value "${escaped}" was refused`) });
+  assertPrintsNone(inLog, [secret, escaped], 'an escaped quote in the job log');
+  assert.ok(JSON.parse(inLog.lines[0]).error.endsWith(`says: ${WITHHELD("the job log's text")}`));
+});
+
+test('PROCESS: the reason pac was asked and what pac says are cleaned — a secret the SDK quoted when it could not read the staging, and one pac echoed in two spellings', () => {
+  const failing = [
+    'Connected as maker@contoso.onmicrosoft.com',
+    'Microsoft PowerPlatform CLI',
+    'Version: 2.12.2+ga6b1ffa (.NET 10.0.12)',
+    '',
+    `Error: bad value ${JSON.stringify('synthetic-"secret"-CDR')} and synthetic-"secret"-CDR`,
+  ].join('\r\n');
+  const run = importInProcess({
+    value: 'synthetic-"secret"-CDR',
+    solution: { stage: { answer: json(200, { StageSolutionResults: { StageSolutionStatus: 'synthetic-"secret"-CDR', SolutionComponentsDetails: [] } }) } },
+    pac: { responses: [{ match: ['solution', 'import'], status: 1, stdout: failing }] },
+  });
+  assert.strictEqual(run.status, 1);
+  assertPrintsNone(run, ['synthetic-"secret"-CDR', 'synthetic-\\"secret\\"-CDR'], 'pac and the reason');
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.code, out.fallback.code], ['PAC_FAILED', 'SOLUTION_STAGING_UNREADABLE']);
+  assert.strictEqual(out.fallback.message, WITHHELD('message'));
+  assert.strictEqual(out.error, `\`pac solution import\` failed (exit 1): ${WITHHELD('text')}`);
+});
+
+test('PROCESS: pac\'s header is not in a failure — the Error line is, and the signed-in account, the version and the links are not', () => {
+  const failing = [
+    'Connected as maker@contoso.onmicrosoft.com',
+    'Connected to... Contoso Maker',
+    'Microsoft PowerPlatform CLI',
+    'Version: 2.12.2+ga6b1ffa (.NET 10.0.12)',
+    'Online documentation: https://aka.ms/PowerPlatformCLI',
+    'Feedback, Suggestions, Issues: https://github.com/microsoft/powerplatform-build-tools/discussions',
+    '',
+    "Error: Failed to deserialize the deployment settings. Required property 'UserEmail' not found in JSON. Path 'Workflows[0]', line 22, position 5.",
+  ].join('\r\n');
+  const run = importInProcess({
+    settings: JSON.stringify({ EnvironmentVariables: [], ConnectionReferences: [], Workflows: [{ WorkflowId: '1' }] }),
+    pac: { responses: [{ match: ['solution', 'import'], status: 1, stdout: failing }] },
+  });
+  assert.strictEqual(run.status, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.strictEqual(out.error, "`pac solution import` failed (exit 1): Error: Failed to deserialize the deployment settings. Required property 'UserEmail' not found in JSON. Path 'Workflows[0]', line 22, position 5.");
+  assertPrintsNone(run, ['maker@contoso.onmicrosoft.com', 'Contoso Maker', 'PowerPlatform CLI', '2.12.2', 'aka.ms', 'discussions'], 'the pac header');
+});
+
+// --- the rest of the contract ----------------------------------------------------------------------------------------------------------------
+
+test('PROCESS: an environment variable\'s value reaches the platform byte for byte — white space around it, a JSON document that ends in a newline, white space alone', () => {
+  for (const value of [' {\n  "feature": true\n}\n', '  leading and trailing  ', '   ', 'line one\r\nline two\n']) {
+    const run = importInProcess({ settings: JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: value }] }) });
+    assert.strictEqual(run.status, 0, `${JSON.stringify(value)}: ${run.stderr}`);
+    assert.strictEqual(run.state.imports[0].ComponentParameters[0].value, value, JSON.stringify(value));
+    assert.deepStrictEqual(JSON.parse(run.lines[0]).applied.environmentVariables, ['new_Url']);
+  }
+});
+
+test('PROCESS: template without --force does not replace a file that APPEARED while the platform was being waited for — the file is kept, the run fails OUT_EXISTS; with --force it is replaced', () => {
+  const mine = '{"EnvironmentVariables":[{"SchemaName":"new_Secret","Value":"filled in meanwhile"}]}';
+  const hooks = [{ pathIncludes: '/StageSolution', writeFile: 'settings.json', content: mine }];
+  const run = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json')], { platform: { ...STAGE_CONFIG, hooks }, read: ['settings.json'] });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(JSON.parse(run.lines[0]).code, 'OUT_EXISTS');
+  assert.match(JSON.parse(run.lines[0]).error, /already exists[\s\S]*--force/);
+  assert.strictEqual(run.outputs['settings.json'], mine, 'the file that appeared is untouched');
+  assert.ok(run.requests.some((r) => r.path.endsWith('/StageSolution')), 'the work was done: the file appeared during it');
+  const forced = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json'), '--force'], { platform: { ...STAGE_CONFIG, hooks }, read: ['settings.json'] });
+  assert.strictEqual(forced.status, 0, forced.stderr);
+  assert.ok(JSON.parse(forced.outputs['settings.json']).EnvironmentVariables.length > 0 && forced.outputs['settings.json'] !== mine);
+});
+
+test('PROCESS: an invalid file whose key holds "this SDK does not apply" is a failure — pac is not asked — while a file that holds a real feature is answered by pac', () => {
+  const phrase = 'this SDK does not apply';
+  const pac = { responses: [{ match: ['solution', 'import'], stdout: 'Solution Imported successfully.\n' }] };
+  for (const settings of [
+    JSON.stringify({ ...JSON.parse(FILLED), [phrase]: true }),
+    JSON.stringify({ ...JSON.parse(FILLED), [phrase]: true, Workflows: [{ WorkflowId: '1' }] }), // an unknown key is the SDK's first complaint, whatever else the file holds
+    JSON.stringify({ EnvironmentVariables: [{ SchemaName: phrase, Value: '' }, { SchemaName: phrase, Value: '' }] }),
+  ]) {
+    const run = importInProcess({ settings, pac });
+    assert.strictEqual(run.status, 1);
+    assert.deepStrictEqual(run.pacCalls, [], 'pac is not started');
+    const out = JSON.parse(run.lines[0]);
+    assert.strictEqual(out.code, 'INVALID_ARGUMENT');
+    assert.ok(!('fallback' in out));
+    assert.ok(out.error.includes(phrase), 'the SDK\'s complaint quotes the name, as it does for any invalid file');
+  }
+  const feature = importInProcess({ settings: JSON.stringify({ ...JSON.parse(FILLED), Workflows: [{ WorkflowId: '1' }] }), pac });
+  assert.strictEqual(feature.status, 0, feature.stderr);
+  assert.strictEqual(JSON.parse(feature.lines[0]).source, 'pac');
+  assert.strictEqual(feature.pacCalls.length, 1);
+});
+
+// What a failed import's own log looks like (abridged; every value is synthetic): the root says the job failed, and each component that failed has a `result`.
+const JOB_LOG = [
+  '<importexportxml start="639000000000000000" stop="639000000100000000" progress="100" processed="true" succeeded="failure" status="Import failed">',
+  '<solutionManifests><solutionManifest><UniqueName>ContosoDemo</UniqueName><result result="success" errorcode="0x0" errortext="" /></solutionManifest></solutionManifests>',
+  `<entities><entity name="new_ticket"><result result="failure" errorcode="0x80048d19" errortext="Could not find connection &apos;${CONNECTION_ID}&apos; for API &apos;shared_sharepointonline&apos;." /></entity></entities>`,
+  '</importexportxml>',
+].join('\n');
+
+test('PROCESS: a failed import reads its job\'s log once and prints the reason the platform logged — the connection id in it replaced — beside the answer it gave', () => {
+  const run = importInProcess({
+    settings: FILLED,
+    solution: { importAnswer: json(400, { error: { message: 'An unexpected error occurred.' } }), jobLog: JOB_LOG },
+  });
+  assert.strictEqual(run.status, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.strictEqual(out.error, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: An unexpected error occurred. The import job's log (importjobs(${out.importJobId})) says: Could not find connection '<redacted>' for API 'shared_sharepointonline'.`);
+  assert.deepStrictEqual(run.state.jobReads, [out.importJobId], 'one read, of the job the import was given');
+  assertPrintsNone(run, [CONNECTION_ID], 'the job log');
+  // The log is read for the ImportSolution request only: a refusal before it (an entry the package does not hold) reads nothing.
+  const refused = importInProcess({ settings: JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Missing', Value: SECRET }] }), solution: { jobLog: JOB_LOG } });
+  assert.strictEqual(JSON.parse(refused.lines[0]).code, 'INVALID_ARGUMENT');
+  assert.deepStrictEqual(refused.state.jobReads, []);
+});
+
+test('PROCESS: a job log that cannot be read — no such job, an error — leaves the failure as it was; a log that quotes a secret is withheld, the answer stays', () => {
+  for (const solution of [{}, { jobLogAnswer: json(500, { error: { message: 'the environment is busy' } }) }, { jobLog: '<importexportxml succeeded="success" status="Completed"></importexportxml>' }]) {
+    const run = importInProcess({ solution: { importAnswer: json(400, { error: { message: 'An unexpected error occurred.' } }), ...solution } });
+    assert.strictEqual(JSON.parse(run.lines[0]).error, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: An unexpected error occurred.`);
+    assert.strictEqual(run.state.jobReads.length, 1, 'one read, and no more after it failed');
+  }
+  const secret = importInProcess({
+    value: LONG_SECRET,
+    solution: { importAnswer: json(400, { error: { message: 'An unexpected error occurred.' } }), jobLog: `<result result="failure" errortext="bad value ${LONG_SECRET}"/>` },
+  });
+  assertPrintsNone(secret, [LONG_SECRET], 'a job log');
+  assert.ok(JSON.parse(secret.lines[0]).error.endsWith(`An unexpected error occurred. The import job's log (importjobs(${JSON.parse(secret.lines[0]).importJobId})) says: ${WITHHELD("the job log's text")}`));
+});
+
+test('PROCESS: a job log cannot declare part of its own text to be the SDK\'s status line — what looks like one is text, and a secret in it is withheld with the rest', () => {
+  const secret = 'CedarPineSecret42';
+  const run = importOf(secret, { log: jobLogSaying(`HTTP 400 from https://diagnostic.example/${secret}: rejected`) });
+  assert.strictEqual(run.status, 1);
+  assertPrintsNone(run, [secret], 'a job log that begins like the SDK\'s status line');
+  const out = JSON.parse(run.lines[0]);
+  assert.strictEqual(out.error, `${`HTTP 400 from ${IMPORT_URL}: An unexpected error occurred. The import job's log (importjobs(${out.importJobId})) says: `}${WITHHELD("the job log's text")}`);
+  // The same for a value that is not a secret: it is replaced wherever it stands, the "URL" of the lookalike included.
+  const plain = importOf('https://plain.example/value', { type: '100000000', log: jobLogSaying('HTTP 400 from https://plain.example/value: rejected') });
+  assert.ok(JSON.parse(plain.lines[0]).error.endsWith('says: HTTP 400 from <redacted>: rejected'), JSON.parse(plain.lines[0]).error);
+  // pac's own words, the same: what pac prints that looks like the SDK's line is text.
+  const viaPac = importInProcess({
+    settings: JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Secret', Value: secret }], ConnectionReferences: [], CanvasApps: [{ Name: 'x' }] }),
+    pac: { responses: [{ match: ['solution', 'import'], status: 1, stderr: `Error: HTTP 400 from https://diagnostic.example/${secret}: rejected\n` }] },
+  });
+  assert.strictEqual(viaPac.status, 1);
+  assertPrintsNone(viaPac, [secret], 'pac text that begins like the SDK\'s status line');
+  assert.strictEqual(JSON.parse(viaPac.lines[0]).error, `\`pac solution import\` failed (exit 1): ${WITHHELD('text')}`);
+});
+
+test('PROCESS: the job log\'s text is sanitized in full before it is made one line and cut — a secret across the 600th character, or made of runs of white space, is not printed in part', () => {
+  const secret = 'CedarPineSecret0123456789';
+  const across = importOf(secret, { log: jobLogSaying(`${'x'.repeat(592)}${secret} was refused`) });
+  assert.strictEqual(across.status, 1);
+  assertPrintsNone(across, [secret, secret.slice(0, 8), 'CedarPin'], 'a secret across the cut');
+  assert.ok(JSON.parse(across.lines[0]).error.endsWith(`says: ${WITHHELD("the job log's text")}`));
+  const status = importOf(secret, { log: `<importexportxml succeeded="failure" status="${'x'.repeat(592)}${secret}"/>` });
+  assertPrintsNone(status, [secret, 'CedarPin'], 'a secret across the cut, in the root status');
+  assert.ok(JSON.parse(status.lines[0]).error.endsWith(`says: ${WITHHELD("the job log's text")}`));
+  const spaced = 'Cedar  Pine Secret42';
+  const runs = importOf(spaced, { log: jobLogSaying(`Value '${spaced}' was refused`) });
+  assertPrintsNone(runs, [spaced, 'Cedar Pine Secret42', 'Secret42'], 'a secret made of runs of white space');
+  assert.ok(JSON.parse(runs.lines[0]).error.endsWith(`says: ${WITHHELD("the job log's text")}`));
+  // A text of no value of the file is made one line and cut to 600 characters, as it was.
+  const long = importOf(secret, { log: jobLogSaying(`a  b\n${'y'.repeat(700)}`) });
+  assert.ok(JSON.parse(long.lines[0]).error.endsWith(`says: a b ${'y'.repeat(596)}…`));
+});

@@ -162,6 +162,54 @@ test('a 401 whose token refresh fails stops with the token failure and re-sends 
   assert.deepStrictEqual([calls.length, acquired], [1, 2]);
 });
 
+// `deps.sendOnce(method, url)`: the caller's word that a request is sent exactly once. A solution import is one — the platform runs it to its end, so an answer that
+// comes from a gateway after it began (a 504, a dropped connection, a 401 from an expired token) says nothing about whether it ran, and a second send does the work twice.
+const IMPORT_URL = 'https://org.crm.dynamics.com/api/data/v9.2/ImportSolution';
+const onlyImport = (method, url) => method === 'POST' && /\/ImportSolution$/.test(url);
+
+test('a request the caller marks sendOnce is sent once whatever answers it — a 5xx, a 429, a 401 — and that first answer reaches the caller as it came', async () => {
+  for (const statusCode of [500, 502, 503, 504, 429, 401]) {
+    const { request, calls } = fakeTransport({ statusCode, headers: { 'retry-after': '1' }, body: JSON.stringify({ error: { code: '0x1', message: `answered ${statusCode}` } }) });
+    const tokens = [];
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: (_url, options) => { tokens.push(Boolean(options && options.fresh)); return 'TOK'; }, request, sleep: async () => {}, sendOnce: onlyImport });
+    const res = await http.post(IMPORT_URL, { CustomizationFile: 'x' });
+    assert.deepStrictEqual([res.status, res.body.error.message], [statusCode, `answered ${statusCode}`], String(statusCode));
+    assert.strictEqual(calls.length, 1, `${statusCode}: one send, not a retry`);
+    assert.deepStrictEqual(tokens, [false], `${statusCode}: no second token read`);
+  }
+});
+
+test('a sendOnce request that got NO answer — a transport failure, a timeout — is not sent again either', async () => {
+  for (const error of ['connect ECONNRESET', 'Request timed out']) {
+    const { request, calls } = fakeTransport({ error });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {}, sendOnce: onlyImport });
+    await assert.rejects(http.post(IMPORT_URL, { CustomizationFile: 'x' }), new RegExp(`^Error: Request failed: ${error}$`));
+    assert.strictEqual(calls.length, 1, error);
+  }
+});
+
+test('sendOnce is asked about each request — its method and URL — and only the requests it names lose their retries', async () => {
+  const asked = [];
+  const sendOnce = (method, url) => { asked.push([method, url]); return onlyImport(method, url); };
+  const answer = { statusCode: 503, headers: {}, body: 'busy' };
+  const once = fakeTransport(answer);
+  const other = fakeTransport(answer);
+  const slow = fakeTransport(answer);
+  const make = (transport) => createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: transport.request, sleep: async () => {}, sendOnce });
+  assert.strictEqual((await make(once).post(IMPORT_URL, {})).status, 503);
+  assert.strictEqual((await make(other).post('https://org.crm.dynamics.com/api/data/v9.2/StageSolution', {})).status, 503);
+  assert.strictEqual((await make(slow).get(IMPORT_URL)).status, 503);
+  assert.deepStrictEqual([once.calls.length, other.calls.length, slow.calls.length], [1, 6, 6], 'the same URL by another method, and another URL by the same method, keep the retry');
+  assert.deepStrictEqual(asked.slice(0, 2), [['POST', IMPORT_URL], ['POST', 'https://org.crm.dynamics.com/api/data/v9.2/StageSolution']]);
+});
+
+test('without a sendOnce policy nothing changes: the same 504 on the same POST is retried on the usual schedule', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 504, headers: {}, body: 'gateway timeout' });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  assert.strictEqual((await http.post(IMPORT_URL, {})).status, 504);
+  assert.strictEqual(calls.length, 6);
+});
+
 test('retries a transient 500 (SQL deadlock) with backoff, then succeeds', async () => {
   const { request, calls } = fakeTransport(() =>
     calls.length <= 2 ? { statusCode: 500, headers: {}, body: 'deadlock 1205' } : { statusCode: 200, headers: {}, body: '{"ok":true}' }
@@ -787,4 +835,54 @@ test('postRaw enforces the same-origin credential guard', async () => {
     /different origin/
   );
   assert.strictEqual(calls.length, 0);
+});
+
+// `sendOnce` is the caller's word that a request is sent exactly once, and it dominates EVERY way the loop sends one again — the two answers on which a record DELETE or a `$batch`
+// is re-sent in spite of their own rule included (a 429 that shows the server never started the request, and a SQL deadlock victim). Each is a thing the server can answer AFTER it
+// accepted work, so a caller that says "once" must get its first answer; a caller that does not keeps the exceptions exactly as they were.
+const REPLAYABLE = [
+  ['a record DELETE refused with 429', (http) => http.delete('https://org.crm.dynamics.com/api/data/v9.0/solutions(1)'), UNINSTALL_429],
+  ['a record DELETE that lost a SQL deadlock', (http) => http.delete('https://org.crm.dynamics.com/api/data/v9.0/workflows(1)'), DEADLOCK_500],
+  ['a $batch of conditional deletes refused with 429', (http) => postBatch(http, APP_DELETE), { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', UNINSTALL_429.body]) }],
+  ['a $batch of conditional deletes whose change set lost a SQL deadlock', (http) => postBatch(http, APP_DELETE), BATCH_DEADLOCK_500],
+  ['a $batch of column creates refused with 429', (http) => postBatch(http, COLUMNS), TABLE_LOCKED_429],
+];
+const afterwards = { statusCode: 204, headers: {}, body: '' };
+
+test('sendOnce dominates the record-DELETE and $batch exceptions too: a 429 or a SQL deadlock victim is not answered with a second send — the first answer reaches the caller as it came', async () => {
+  for (const [what, send, first] of REPLAYABLE) {
+    const slept = [];
+    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? first : afterwards));
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); }, sendOnce: () => true });
+    const res = await send(http);
+    assert.strictEqual(calls.length, 1, `${what}: sent once`);
+    assert.strictEqual(res.status, first.statusCode, `${what}: the first answer is the answer`);
+    assert.deepStrictEqual(slept, [], `${what}: and nothing waited for a second send`);
+  }
+});
+
+test('a request the caller does not name keeps those exceptions — the same answers ARE re-sent, after a wait — with no policy and with a policy that says no', async () => {
+  for (const [what, send, first] of REPLAYABLE) {
+    for (const policy of [undefined, () => false]) {
+      const slept = [];
+      const { request, calls } = fakeTransport(() => (calls.length <= 1 ? first : afterwards));
+      const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); }, ...(policy ? { sendOnce: policy } : {}) });
+      await send(http);
+      assert.strictEqual(calls.length, 2, `${what}: re-sent (${policy ? 'a policy that says no' : 'no policy'})`);
+      assert.strictEqual(slept.length, 1, `${what}: after one wait`);
+    }
+  }
+});
+
+test('sendOnce names a request by its method and URL, so a record DELETE it does not name keeps its exceptions while the one it names is sent once', async () => {
+  const named = 'https://org.crm.dynamics.com/api/data/v9.0/solutions(1)';
+  const policy = (method, url) => method === 'DELETE' && url === named;
+  const sendTo = async (url) => {
+    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? UNINSTALL_429 : afterwards));
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {}, sendOnce: policy });
+    await http.delete(url);
+    return calls.length;
+  };
+  assert.strictEqual(await sendTo(named), 1, 'the named delete: once');
+  assert.strictEqual(await sendTo('https://org.crm.dynamics.com/api/data/v9.0/solutions(2)'), 2, 'another one: its 429 exception as before');
 });

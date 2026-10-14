@@ -28,6 +28,52 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
   is unknown and what to look for. A create into `Default` says it needs no add instead of reading like a failure. Like every app the SDK
   creates, the app gets the new header and navigation setting, which `pac model create` did not write.
 
+- **`scripts/connector.js` and `scripts/solution-settings.js`.** `connector.js` lists a connector's operations, and reads
+  one operation's parameters and response or a tabular connector's table columns. `solution-settings.js template` writes
+  the deployment-settings file for a solution or a package, in `pac`'s own format, so settings files you already have keep
+  working; `solution-settings.js import` imports a package and applies the settings in the same import. Both print one
+  JSON line that says whether the bundled SDK or `pac` answered.
+
+### Changed
+
+- **Connections, connector metadata and deployment settings are read through the bundled SDK**, with your Azure CLI
+  sign-in, instead of by running `pac` (connector metadata comes back ten to twenty-five times faster). `pac` is asked only
+  where the SDK has no route or refuses: an environment in the Test cloud or any other cloud the SDK does not read
+  connections in (these go to `pac` at once, about 23 s faster per read than before), a token the service refused (401 or
+  403), a service that has been switched off, a connector definition the SDK does not project, a package the platform will not
+  stage, a settings file that uses a feature only `pac` applies, or no Azure CLI token for the Power Apps service. The output
+  says so (`connectionsSource` and `connectionsFallback` in `list-connections.js`; `source` and `fallback` in the others).
+  Any other failure is reported with the SDK's own code and is never answered by `pac`. A connector's tables are still read by
+  `pac`; a connector whose Swagger puts parameters on a path item now reads through the SDK, with them merged into each
+  operation's own.
+- **The `solution-settings.js import` defaults are `pac`'s**: nothing unmanaged is overwritten, no workflows or plug-ins
+  are activated, nothing is published afterwards. `template` does not replace an existing `--out` file unless `--force` is
+  given (`pac` replaced it silently, and every value already filled in with it) — not even one that appears while it works,
+  and it never removes a file it did not write.
+  The solution actions that can run for minutes (`ExportSolution`, `StageSolution`, `ImportSolution`) get an hour and are
+  sent exactly once: a gateway's 502, 504 or 401 for an import the platform accepted is not answered with a second import.
+  A failed import names its job and, when the request was sent, the reason the job's log gives. A token, a settings value
+  and a connection id are never printed — in an error, a warning, a job log or a message `pac` printed, however the text
+  quotes them (JSON, XML or URL escapes, white space collapsed, any case) — and a text that quotes a secret is withheld. Whether a
+  variable is a secret is the package's own definition of it, not the settings file's optional `TypeId`. A variable's value
+  is passed through exactly as written, white space included.
+- **`list-connections.js` checks the environment URL before it runs anything**, and the `pac` commands the plugin runs for
+  connections and connector metadata (`pac connection list` among them) are pinned to that environment with
+  `--environment` (without it `pac` answers for the active organization of its auth profile).
+- **`list-connections.js` prints one JSON line for every failure**, as `connector.js` and `solution-settings.js` do:
+  `{ ok: false, error, code }` in pure ASCII on stdout, the message still on stderr, exit 1. Before, a failure was a message
+  on stderr alone. `code` is there when the error has one — the SDK's errors do; a `pac` failure, a bad environment URL and a
+  connection-references read that failed do not. A usage error (no URL, an unknown flag) is still the problem on stderr alone.
+- **The `pac` fallbacks stop `pac` whole and print only why it failed.** A `pac` call that runs out of time ends `pac` and
+  everything it started, where a Windows `pac.cmd` launcher's own child used to go on running — and says "may still be
+  running" instead of "was stopped" when something `pac` started outlives it and still holds its output; a failure shows
+  `pac`'s error without its sign-in banner and version lines; and a percent-encoded SharePoint address reaches a `pac`
+  installed by the Windows MSI unchanged (any other batch launcher still refuses it, naming the cause and the way through).
+- **The Power Apps service token never appears in what the service answers**, only in the request that carries it, and a
+  `403` whose body names a refusal's code is a failure, not a reason to ask `pac`.
+- **`/genpage` no longer falls back to `pac model list-languages`.** Every `/genpage` page operation goes through the SDK
+  and needs the Azure CLI, so a failed language read now ends language detection instead of being retried with `pac`.
+
 ### Fixed
 
 - **A read that spans more than one page follows the platform's continuation link.** The link is absolute and was requested as a path under the

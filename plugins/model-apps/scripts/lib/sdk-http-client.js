@@ -257,7 +257,8 @@ function batchRetryAfterMs(res, now = Date.now()) {
 /**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
- * @param {object} [deps] - test seam: { getToken(orgUrl)->string|null, request(opts)->Promise }
+ * @param {object} [deps] - test seam: { getToken(orgUrl)->string|null, request(opts)->Promise }, and one policy a caller may set:
+ *   `sendOnce(method, url)` -> true for a request that must be sent exactly once, whatever answers it (see `once` in `call`).
  * @returns {{get,post,patch,delete,put,postRaw,patchRaw}}
  */
 function createAzHttpClient(orgUrl, deps = {}) {
@@ -280,6 +281,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
   }
   const getToken = deps.getToken || ((u, options) => getAuthToken(u, options));
   const request = deps.request || makeRequest;
+  const sendOnce = typeof deps.sendOnce === 'function' ? deps.sendOnce : () => false;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const random = deps.random || Math.random;
   const now = deps.now || Date.now;
@@ -381,7 +383,14 @@ function createAzHttpClient(orgUrl, deps = {}) {
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
     const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
     const recordDelete = method_ === 'DELETE' && !isMetadataDelete;
-    const noRetry = recordDelete || isBatch;
+    // A request the CALLER says is sent once, whatever answers it (`deps.sendOnce`): one whose repeat would do the work twice, or fail in a way that
+    // hides what the first send did — a solution import, which the platform runs to its end and which a gateway can answer 504 after it started.
+    // Every way the loop below sends a request again is closed for it: a transport failure, a transient status (429, 5xx), the 401 token refresh, and the two
+    // answers on which a record DELETE or a `$batch` is re-sent in spite of its own rule (a 429 and a SQL deadlock victim, below), each of which the server may
+    // answer AFTER it accepted the request. The first answer is handed to the SDK as it came, so its status and its code survive, and what happened to the work is
+    // the caller's to look up. The exceptions of a record DELETE and a `$batch` stay what they were for every request the caller does not name.
+    const once = sendOnce(method_, url) === true;
+    const noRetry = recordDelete || isBatch || once;
     const isWrite = method_ !== 'GET';
     // A CONDITIONAL write that got NO answer (a timeout or a dropped connection) is never re-sent.
     // It may still commit — and if it does, the re-send carries a token the first attempt already
@@ -433,7 +442,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         await sleep(backoffMs(attempt));
         continue;
       }
-      if (res.statusCode === 401 && !last) {
+      if (res.statusCode === 401 && !last && !once) {
         // The process-wide token memo is safe for ordinary repeats, but a 401 is the server telling
         // us this token was rejected. The retry must bypass that memo or it can only resend the same
         // rejected bearer value and convert a refresh path into a guaranteed second 401.
@@ -468,14 +477,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
       // replaces a column's POST gets the same treatment instead of a refusal the caller has to work around.
       const conditionalDeleteBatch = isBatch && isConditionalDeleteBatch(bodyOut);
       const columnCreateBatch = isBatch && isColumnCreateBatch(bodyOut);
-      const throttled = (recordDelete && res.statusCode === 429) || ((conditionalDeleteBatch || columnCreateBatch) && isBatchThrottled(res));
+      // `once` dominates both: a request the caller sent once is not sent again for a 429 or a deadlock either — the exceptions above are for the requests a caller
+      // has not said that of.
+      const throttled = !once && ((recordDelete && res.statusCode === 429) || ((conditionalDeleteBatch || columnCreateBatch) && isBatchThrottled(res)));
       if (throttled && !last) {
         // A batch refused operation by operation may carry the wait in that operation's own headers.
         await sleep(Math.max(retryWaitMs(res, attempt), isBatch ? batchRetryAfterMs(res, now()) : 0));
         continue;
       }
-      const deadlocked = (recordDelete && isSqlDeadlockVictim(res))
-        || (conditionalDeleteBatch && isBatchDeadlockVictim(res));
+      const deadlocked = !once && ((recordDelete && isSqlDeadlockVictim(res))
+        || (conditionalDeleteBatch && isBatchDeadlockVictim(res)));
       if (deadlocked && attempt < DEADLOCK_RESENDS) {
         await sleep(1000 * 2 ** attempt);
         continue;

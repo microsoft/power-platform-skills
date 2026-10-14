@@ -114,6 +114,15 @@ const noteTokenFailure = (resource, error) => tokenFailures.set(resource, cliFai
 function getAuthToken(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return null;
+  return readAzToken(resource, opts);
+}
+
+// The Azure CLI read behind getAuthToken (above), with one memo, one failure record and one budget. In model-apps the same
+// function also reads that plugin's Power Apps service token; this copy keeps only what getAuthToken needs. `resource` is the
+// `--resource` of `az account get-access-token`, and getAuthToken passes only a checked Dataverse origin, so nothing here accepts
+// a caller's text as a resource.
+// See: https://learn.microsoft.com/cli/azure/account#az-account-get-access-token
+function readAzToken(resource, opts = {}) {
   const exec = opts.exec || runSync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return authTokenMemo.get(resource);
@@ -149,6 +158,11 @@ function getAuthToken(envUrl, opts = {}) {
 function getAuthTokenAsync(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return Promise.resolve(null);
+  return readAzTokenAsync(resource, opts);
+}
+
+// The asynchronous twin of readAzToken, with the same memo and failure record.
+function readAzTokenAsync(resource, opts = {}) {
   const exec = opts.execFile || execFileAsync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return Promise.resolve(authTokenMemo.get(resource));

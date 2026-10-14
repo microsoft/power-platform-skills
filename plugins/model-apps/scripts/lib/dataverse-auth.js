@@ -116,6 +116,15 @@ const noteTokenFailure = (resource, error) => tokenFailures.set(resource, cliFai
 function getAuthToken(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return null;
+  return readAzToken(resource, opts);
+}
+
+// The Azure CLI read behind every token this plugin uses — a Dataverse environment's (getAuthToken, above) and the Power Apps
+// service's (getPowerAppsToken, below) — so both share one memo, one failure record and one budget. `resource` is the `--resource` of
+// `az account get-access-token`; the callers decide which resources are allowed (a Dataverse origin is checked by dataverseOrigin, the
+// Power Apps one is a constant), so nothing here accepts a caller's text as a resource.
+// See: https://learn.microsoft.com/cli/azure/account#az-account-get-access-token
+function readAzToken(resource, opts = {}) {
   const exec = opts.exec || runSync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return authTokenMemo.get(resource);
@@ -151,6 +160,11 @@ function getAuthToken(envUrl, opts = {}) {
 function getAuthTokenAsync(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return Promise.resolve(null);
+  return readAzTokenAsync(resource, opts);
+}
+
+// The asynchronous twin of readAzToken, with the same memo and failure record.
+function readAzTokenAsync(resource, opts = {}) {
   const exec = opts.execFile || execFileAsync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return Promise.resolve(authTokenMemo.get(resource));
@@ -212,6 +226,35 @@ function tokenFailureMessage(envUrl, fallback) {
   if (kind === 'timeout') return `Could not get an Azure CLI token for ${origin}: ${azTimeoutAdvice('az account get-access-token')}`;
   if (kind === 'missing') return `Could not get an Azure CLI token for ${origin}: Azure CLI (\`az\`) is not on PATH. Install it from https://aka.ms/azure-cli and run \`az login\`.`;
   return fallback;
+}
+
+// The audience of the Power Apps service — the Business Application Platform API that names an environment's runtime endpoint, and the
+// classic Power Apps API behind it, which lists connections and serves a connector's definition. It is not a Dataverse origin, so it
+// cannot go through getAuthToken (which refuses anything but one); it is a fixed constant here so no caller's text is ever a `--resource`.
+// Only lib/power-apps-service-client.js uses the token, and sends it only to the hosts it allows.
+const POWER_APPS_RESOURCE = 'https://service.powerapps.com/';
+
+/** The Azure CLI token for the Power Apps service, or null — `az` missing, slow or signed out. Same memo and `opts` as getAuthToken. */
+function getPowerAppsToken(opts = {}) {
+  return readAzToken(POWER_APPS_RESOURCE, opts);
+}
+
+/** getPowerAppsToken without blocking the event loop, so it can run beside the Dataverse token's own read. */
+function getPowerAppsTokenAsync(opts = {}) {
+  return readAzTokenAsync(POWER_APPS_RESOURCE, opts);
+}
+
+/** Why the last Power Apps token read failed — 'timeout' | 'missing' | 'failed' — or null when it did not (or none was made). */
+function powerAppsTokenFailureKind() {
+  return tokenFailures.get(POWER_APPS_RESOURCE) || null;
+}
+
+/** The sentence to say when no Power Apps token could be had: a slow or missing Azure CLI is said as such, anything else is a sign-in problem. */
+function powerAppsTokenFailureMessage() {
+  const kind = powerAppsTokenFailureKind();
+  if (kind === 'timeout') return `Could not get an Azure CLI token for the Power Apps service: ${azTimeoutAdvice('az account get-access-token')}`;
+  if (kind === 'missing') return 'Could not get an Azure CLI token for the Power Apps service: Azure CLI (`az`) is not on PATH. Install it from https://aka.ms/azure-cli and run `az login`.';
+  return `Could not get an Azure CLI token for the Power Apps service (${POWER_APPS_RESOURCE}). Run \`az login\` first.`;
 }
 
 /**
@@ -871,6 +914,11 @@ module.exports = {
   azIdentity,
   getAuthToken,
   getAuthTokenAsync,
+  getPowerAppsToken,
+  getPowerAppsTokenAsync,
+  powerAppsTokenFailureKind,
+  powerAppsTokenFailureMessage,
+  POWER_APPS_RESOURCE,
   tokenFailureKind,
   tokenFailureMessage,
   makeRequest,

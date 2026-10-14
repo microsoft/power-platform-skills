@@ -8,7 +8,9 @@
 //     uxagentprojectfile children (incl. config.json with connectorBindings).
 //   - connectionreference is its own component and is added explicitly so
 //     the bindings resolve in the target env (at import the deployer supplies each
-//     ConnectionId via `pac solution create-settings` + `pac solution import --settings-file`).
+//     ConnectionId through scripts/solution-settings.js: `template` writes the settings file and
+//     `import --settings` applies it; `pac solution create-settings` and `pac solution import
+//     --settings-file` are only its fallback).
 //     Both are custom tables whose ObjectTypeCode varies by environment, so their
 //     component types are discovered from EntityDefinitions before any mutation.
 //

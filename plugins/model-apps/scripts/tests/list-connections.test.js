@@ -83,6 +83,22 @@ test('pacFailureMessage distinguishes a missing PAC CLI (spawn error) from a com
   assert.match(failed, /Access denied/);
 });
 
+test('pacFailureMessage shows what pac said about the failure, not its header — no signed-in account, no version, no links', () => {
+  // A failed run of PAC CLI 2.12.2 prints its header and then its error.
+  const stderr = [
+    'Connected as maker@contoso.onmicrosoft.com',
+    'Connected to... Contoso Maker',
+    'Microsoft PowerPlatform CLI',
+    'Version: 2.12.2+ga6b1ffa (.NET 10.0.12)',
+    'Online documentation: https://aka.ms/PowerPlatformCLI',
+    'Feedback, Suggestions, Issues: https://github.com/microsoft/powerplatform-build-tools/discussions',
+    '',
+    'Error: The environment was not found.',
+  ].join('\r\n');
+  const message = pacFailureMessage({ status: 1, stderr, stdout: '' });
+  assert.strictEqual(message, 'pac connection list failed (exit 1): Error: The environment was not found.');
+});
+
 // --- `pac connection list` output parsing -----------------------------------
 //
 // This is the highest-risk code in the script: PAC emits three different shapes across builds,
@@ -336,7 +352,7 @@ test('pac\'s grid with ONE connection, whose name is short enough that the heade
     assert.deepEqual(parsePacConnectionList(grid), [gridConnection(7, name, 'office365')], name);
     assert.deepEqual(parsePacConnectionList(pacGrid([gridRow(7, name, 'office365')], { padLast: true, eol: '\n' })), [gridConnection(7, name, 'office365')], `${name}: padded last column, LF`);
     const run = await driveDiscovery({ pac: { status: 0, stdout: grid, stderr: '' }, refs: { status: 200, data: { value: [] } } });
-    assert.strictEqual(run.emitted[0].ok, true, `${name}: ${run.emitted[0].ok ? '' : run.emitted[0].payload.message}`);
+    assert.strictEqual(run.emitted[0].ok, true, `${name}: ${run.emitted[0].ok ? '' : run.emitted[0].payload.error}`);
     assert.deepEqual(run.emitted[0].payload.connections.map((c) => [c.connectionId, c.displayName]), [[GRID_ID(7), name]], name);
   }
   // A name with spaces in it, still short: the API path is the delimiter, not the gaps.
@@ -395,7 +411,7 @@ test('pac\'s empty grid is refused when PAC exited non-zero or wrote to stderr: 
   const failed = await driveDiscovery({ pac: { status: 1, stdout: EMPTY_GRID, stderr: 'Error: the request failed' } });
   assert.deepEqual(failed.queries, []);
   assert.strictEqual(failed.emitted[0].ok, false);
-  assert.strictEqual(failed.emitted[0].payload.message, 'pac connection list failed (exit 1): Error: the request failed');
+  assert.strictEqual(failed.emitted[0].payload.error, 'pac connection list failed (exit 1): Error: the request failed');
   const failedQuietly = await driveDiscovery({ pac: { status: 3, stdout: EMPTY_GRID, stderr: '' } });
   assert.deepEqual(failedQuietly.queries, []);
   assert.strictEqual(failedQuietly.emitted[0].ok, false, 'a non-zero exit with the header on stdout is not an empty environment');
@@ -404,7 +420,7 @@ test('pac\'s empty grid is refused when PAC exited non-zero or wrote to stderr: 
     const run = await driveDiscovery({ pac: { status: 0, stdout: EMPTY_GRID, stderr }, refs: { status: 200, data: { value: [] } } });
     assert.deepEqual(run.queries, [], JSON.stringify(stderr));
     assert.strictEqual(run.emitted[0].ok, false, JSON.stringify(stderr));
-    assert.match(run.emitted[0].payload.message, /exited 0 but wrote to stderr[\s\S]*not reported as "no connections"/, JSON.stringify(stderr));
+    assert.match(run.emitted[0].payload.error, /exited 0 but wrote to stderr[\s\S]*not reported as "no connections"/, JSON.stringify(stderr));
   }
   // The control: a quiet stderr is the clean exit PAC really gives, and the empty grid is then an empty discovery.
   for (const stderr of ['', '\r\n', undefined, null]) {
@@ -664,22 +680,36 @@ test('table cells that are not ids are not a connection', () => {
 // main() is the only place a PAC result becomes a connection-reference query and then a structured
 // result. Parser unit tests never see a zero exit with a warning turned into `{ ok: true, connections: [] }`,
 // which is the answer that sends connection setup on to create a duplicate.
+//
+// The script reads through the SDK first and falls back to PAC where the SDK refuses (lib/sdk-first.js). The tests of PAC's output below
+// are about the FALLBACK, so the SDK is stood in for by one that refuses — its refusal is what makes `main` run the PAC path — and the two
+// fields that say so (`connectionsSource`, `connectionsFallback`) are checked here, once, for every successful run of every test, then taken off
+// the payload so each test keeps comparing the payload it always compared. tests/list-connections-sdk.test.js drives the SDK's own listing.
 const ENV_URL = 'https://contoso.crm.dynamics.com';
 const SQL_API = '/providers/Microsoft.PowerApps/apis/shared_sql';
 const SQL_CONN = '/providers/Microsoft.PowerApps/apis/shared_sql/connections/sql1';
+const SDK_REFUSAL = { code: 'CONNECTIVITY_CLOUD_UNSUPPORTED', message: 'test: the SDK does not serve this environment' };
 
 function driveDiscovery({ pac, refs, refsError }) {
   const spawned = [];
   const queries = [];
   const emitted = [];
+  const sdkAsked = [];
   const real = require('../lib/dataverse-auth.js');
   const cli = loadCli(scriptPath, {
     argv: [ENV_URL],
     requires: {
       './lib/process-runner.js': {
-        spawnResultSync: (cmd, args, opts) => {
+        spawnResultTree: (cmd, args, opts) => {
           spawned.push({ cmd, args, opts });
-          return pac;
+          return Promise.resolve(pac);
+        },
+      },
+      './lib/sdk-first.js': {
+        connectivity: {},
+        sdkFirst: async (env, plan) => {
+          sdkAsked.push(env);
+          return { source: 'pac', value: await plan.fromPac(SDK_REFUSAL), fallback: SDK_REFUSAL };
         },
       },
       // Required without the `.js` suffix. emitResult sits inside main's try, so a throwing stand-in
@@ -689,6 +719,7 @@ function driveDiscovery({ pac, refs, refsError }) {
         parseArgs: real.parseArgs,
         validateFlags: real.validateFlags,
         ensureOk: real.ensureOk,
+        requireDataverseOrigin: real.requireDataverseOrigin,
         dataverseRequest: async (envUrl, method, apiPath) => {
           queries.push({ envUrl, method, apiPath });
           if (refsError) throw refsError;
@@ -698,7 +729,17 @@ function driveDiscovery({ pac, refs, refsError }) {
       },
     },
   });
-  return cli.main().then(() => ({ spawned, queries, emitted }));
+  return cli.main().then(() => {
+    assert.deepEqual(sdkAsked, [ENV_URL], 'the SDK is asked first, for the validated origin');
+    for (const run of emitted) {
+      if (!run.ok) continue;
+      assert.equal(run.payload.connectionsSource, 'pac', 'a listing PAC gave says so');
+      assert.deepEqual(run.payload.connectionsFallback, SDK_REFUSAL, 'and says why PAC was asked');
+      delete run.payload.connectionsSource;
+      delete run.payload.connectionsFallback;
+    }
+    return { spawned, queries, emitted };
+  });
 }
 
 test('CLI discovery failure is not an empty success', async () => {
@@ -710,27 +751,27 @@ test('CLI discovery failure is not an empty success', async () => {
     + `(first line: "${malformed}"). It is not reported as "no connections", which would lead connection setup to create a duplicate; run \`pac connection list\` to see what it printed.`;
 
   const refused = await driveDiscovery({ pac: { status: 0, stdout: warning, stderr: '' } });
-  assert.deepEqual(refused.spawned.map((s) => [s.cmd, s.args]), [['pac', ['connection', 'list']]]);
+  assert.deepEqual(refused.spawned.map((s) => [s.cmd, s.args]), [['pac', ['connection', 'list', '--environment', ENV_URL]]], 'pinned to the environment the script was asked about, not to pac\'s active organization');
   assert.deepEqual(refused.queries, [], 'a warning on exit 0 must not query connection references');
   assert.equal(refused.emitted.length, 1);
   assert.equal(refused.emitted[0].ok, false);
-  assert.equal(refused.emitted[0].payload.message, warningMessage);
+  assert.equal(refused.emitted[0].payload.error, warningMessage);
 
   const badTable = await driveDiscovery({ pac: { status: 0, stdout: malformed, stderr: '' } });
   assert.deepEqual(badTable.queries, []);
   assert.equal(badTable.emitted[0].ok, false);
-  assert.equal(badTable.emitted[0].payload.message, malformedMessage);
+  assert.equal(badTable.emitted[0].payload.error, malformedMessage);
 
   const nonzero = await driveDiscovery({ pac: { status: 2, stdout: '', stderr: 'Access denied' } });
   assert.deepEqual(nonzero.queries, []);
   assert.equal(nonzero.emitted[0].ok, false);
-  assert.equal(nonzero.emitted[0].payload.message, 'pac connection list failed (exit 2): Access denied');
+  assert.equal(nonzero.emitted[0].payload.error, 'pac connection list failed (exit 2): Access denied');
 
   const missing = await driveDiscovery({ pac: { error: new Error('spawn pac ENOENT'), status: null, stdout: '', stderr: '' } });
   assert.deepEqual(missing.queries, []);
   assert.equal(missing.emitted[0].ok, false);
   assert.equal(
-    missing.emitted[0].payload.message,
+    missing.emitted[0].payload.error,
     'pac connection list could not run: spawn pac ENOENT. Ensure the PAC CLI is installed and on PATH (dotnet tool install -g Microsoft.PowerApps.CLI.Tool).'
   );
 
@@ -801,7 +842,7 @@ test('CLI discovery failure is not an empty success', async () => {
   });
   assert.equal(refsDown.queries.length, 1, 'the reference read is attempted only after a readable listing');
   assert.equal(refsDown.emitted[0].ok, false);
-  assert.equal(refsDown.emitted[0].payload.message, 'List connection references failed: HTTP 500 — refs unavailable');
+  assert.equal(refsDown.emitted[0].payload.error, 'List connection references failed: HTTP 500 — refs unavailable');
 });
 
 // The same refusals, at the CLI: a failed listing must end discovery with `ok: false` before the reference
@@ -818,7 +859,7 @@ test('CLI: a diagnostic after a table header, or a failure worded like emptiness
     assert.deepEqual(run.queries, [], `${JSON.stringify(stdout)} must not query connection references`);
     assert.equal(run.emitted.length, 1);
     assert.equal(run.emitted[0].ok, false);
-    assert.match(run.emitted[0].payload.message, /could not read[\s\S]*not reported as "no connections"/);
+    assert.match(run.emitted[0].payload.error, /could not read[\s\S]*not reported as "no connections"/);
   }
   // Controls: the empty grid, with its banner, is a successful empty listing; so is JSON after the banner.
   const empty = await driveDiscovery({
@@ -853,7 +894,7 @@ test('CLI: a diagnostic before the header, or one that names an API path, is a d
     assert.deepEqual(run.queries, [], `${JSON.stringify(stdout)} must not query connection references`);
     assert.equal(run.emitted.length, 1);
     assert.equal(run.emitted[0].ok, false);
-    assert.match(run.emitted[0].payload.message, /could not read[\s\S]*unrecognized connection listing[\s\S]*not reported as "no connections"/);
+    assert.match(run.emitted[0].payload.error, /could not read[\s\S]*unrecognized connection listing[\s\S]*not reported as "no connections"/);
   }
   // The control for each: the same header with only PAC's banner before it is a real (here empty) listing.
   const empty = await driveDiscovery({
@@ -882,7 +923,7 @@ test('CLI: a real-layout listing yields its connections, and the same listing ho
     assert.deepEqual(refused.queries, [], `${what}: no reference query`);
     assert.equal(refused.emitted.length, 1, what);
     assert.equal(refused.emitted[0].ok, false, what);
-    assert.match(refused.emitted[0].payload.message, /could not read[\s\S]*not reported as "no connections"/, what);
+    assert.match(refused.emitted[0].payload.error, /could not read[\s\S]*not reported as "no connections"/, what);
   }
 });
 
@@ -908,7 +949,7 @@ test('CLI: text on stderr after a zero exit is a discovery failure, before the r
     assert.equal(run.emitted.length, 1, what);
     assert.equal(run.emitted[0].ok, false, what);
     assert.equal(
-      run.emitted[0].payload.message,
+      run.emitted[0].payload.error,
       'pac connection list printed output this script could not read — it exited 0 but wrote to stderr, so the listing on stdout cannot be trusted '
         + `(stderr line: "${shown}"). It is not reported as "no connections", which would lead connection setup to create a duplicate; run \`pac connection list\` to see what it printed.`,
       what
@@ -917,8 +958,8 @@ test('CLI: text on stderr after a zero exit is a discovery failure, before the r
   // The quoted line is bounded, so a long one does not flood the report.
   const flooded = await driveDiscovery({ pac: { status: 0, stdout: header, stderr: `Error: ${'x'.repeat(5000)}\n` } });
   assert.equal(flooded.emitted[0].ok, false);
-  assert.ok(flooded.emitted[0].payload.message.length < 800, `${flooded.emitted[0].payload.message.length} characters`);
-  assert.ok(flooded.emitted[0].payload.message.includes(`"Error: ${'x'.repeat(100)}`));
+  assert.ok(flooded.emitted[0].payload.error.length < 800, `${flooded.emitted[0].payload.error.length} characters`);
+  assert.ok(flooded.emitted[0].payload.error.includes(`"Error: ${'x'.repeat(100)}`));
   // Controls: nothing on stderr — empty, only whitespace, or absent — is the clean exit PAC really gives, and still lists.
   for (const stderr of ['', '\r\n', '  \t \r\n\r\n', undefined, null]) {
     const listed = await driveDiscovery({ pac: { status: 0, stdout: REAL_LISTING, stderr }, refs: { status: 200, data: { value: [] } } });
@@ -931,7 +972,7 @@ test('CLI: text on stderr after a zero exit is a discovery failure, before the r
   }
   // A non-zero exit keeps its own report, which already quotes stderr.
   const failed = await driveDiscovery({ pac: { status: 2, stdout: '', stderr: 'Access denied' } });
-  assert.equal(failed.emitted[0].payload.message, 'pac connection list failed (exit 2): Access denied');
+  assert.equal(failed.emitted[0].payload.error, 'pac connection list failed (exit 2): Access denied');
 });
 
 // A table header proves the output is a table, and a table with no rows is an EMPTY listing — so a header is recognised only by a COMPLETE
@@ -961,7 +1002,7 @@ test('a line with an id column and prose, or any column set PAC does not print, 
       assert.deepEqual(run.queries, [], `${label}: no connection-reference query`);
       assert.equal(run.emitted.length, 1, label);
       assert.equal(run.emitted[0].ok, false, label);
-      assert.match(run.emitted[0].payload.message, /could not read[\s\S]*not reported as "no connections"/, label);
+      assert.match(run.emitted[0].payload.error, /could not read[\s\S]*not reported as "no connections"/, label);
     }
   }
 });
@@ -990,7 +1031,7 @@ test('each column set PAC prints is still a table, with rows or none, whatever t
   for (const [what, stdout, expected] of cases) {
     assert.deepEqual(parsePacConnectionList(stdout), expected, what);
     const run = await driveDiscovery({ pac: { status: 0, stdout, stderr: '' }, refs: { status: 200, data: { value: [] } } });
-    assert.equal(run.emitted[0].ok, true, `${what}: ${run.emitted[0].ok ? '' : run.emitted[0].payload.message}`);
+    assert.equal(run.emitted[0].ok, true, `${what}: ${run.emitted[0].ok ? '' : run.emitted[0].payload.error}`);
     assert.deepEqual(run.emitted[0].payload.connections.map((c) => c.connectionId), [guid], what);
   }
   // With no rows each is an empty listing.
@@ -1052,7 +1093,7 @@ test('CLI: a bare CR does not hide a diagnostic behind the auth banner, and the 
     assert.deepEqual(run.queries, [], `${JSON.stringify(stdout)}: no connection-reference query`);
     assert.equal(run.emitted.length, 1, JSON.stringify(stdout));
     assert.equal(run.emitted[0].ok, false, JSON.stringify(stdout));
-    assert.match(run.emitted[0].payload.message, /could not read[\s\S]*not reported as "no connections"/, JSON.stringify(stdout));
+    assert.match(run.emitted[0].payload.error, /could not read[\s\S]*not reported as "no connections"/, JSON.stringify(stdout));
   }
   // The same listings with each line ended by whichever terminator, and the banner in both of its forms, still read — an empty listing
   // for a header with no rows, and the real connections for the real layout.

@@ -2,7 +2,8 @@
 'use strict';
 // list-languages: the languages an environment has provisioned, each with its culture code and text direction, and
 // the environment's base language — what the generative-page planner decides localization from. It is the planner's
-// first choice, with `pac model list-languages` as its fallback.
+// only source of them: there is no `pac model list-languages` fallback behind it, because every /genpage page operation
+// goes through the SDK and needs the Azure CLI this script reads with.
 //
 // The SDK's `getEnvironmentLanguages()` answers LCIDs only: three read-only GETs through the org client, in the order
 // base, provisioned, available — nothing cached, nothing written, no workspace used. Culture codes and the
@@ -10,13 +11,11 @@
 // has no code or direction, and is reported in `unmapped` — never guessed.
 //
 // The read is strict. An answer the SDK cannot read as a list of languages fails with `ENVIRONMENT_LANGUAGES_UNREADABLE`
-// and a failed read with its own error, so a caller never receives an English default in their place.
+// and a failure of the read with its own error, so a caller never receives an English default in their place.
 //
-// The planner takes this script as the PREFERRED source of the languages, never the only one. When it exits non-zero —
-// whatever the reason, most often the Azure CLI (missing, signed out, slow, or signed in to another tenant), which
-// `/genpage` has never needed for a page over existing tables or mock data — the planner runs
-// `pac model list-languages --environment '<envUrl>'` instead, which signs in through `pac`. So a failure here must
-// stay a LOUD one (exit 1, `ok: false`, nothing on stdout that reads as an answer) and is never the end of a run:
+// A failure is therefore a LOUD one — exit 1, `ok: false`, nothing on stdout that reads as an answer — and it ends the
+// language detection: the planner reports why and stops, and never assumes the environment is English-only. The most
+// common cause is the Azure CLI (missing, signed out, slow, or signed in to another tenant); the message says which.
 // agents/genpage-planner.md, "Detect Configured Languages".
 //
 // Like every script here it emits no telemetry of its own (the plugin's hooks do), and it never prints a token.

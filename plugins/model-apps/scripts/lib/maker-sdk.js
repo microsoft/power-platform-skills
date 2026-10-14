@@ -8,12 +8,31 @@
 // evaluated only when a page is compiled, so an instance that never compiles one pays nothing. Scripts require this module, never
 // the bundle itself, so no instance can be made without it (tests/maker-sdk.test.js scans for a direct require). A caller can
 // still pass its own `typescript` (a test's fake): an explicit option wins.
+//
+// `connectivity: true` is the one option this factory adds. The SDK's connection and connector reads (`listConnections`,
+// `listConnectorOperations`, `getConnectorOperationSchema`) need an HttpClient that signs in to the Power Apps service
+// (`powerAppsServiceClient`); a caller that asks for connectivity is given this plugin's (lib/power-apps-service-client.js), built
+// here so that no script wires a credential-carrying client by hand. It is opt-in because the client's token comes from an extra Azure
+// CLI call and only those reads use it: an instance made without it is exactly what it was, and the SDK then refuses those three
+// reads before any request (`CONNECTIVITY_NOT_CONFIGURED`). A `powerAppsServiceClient` the caller names wins, as `typescript` does. This is the only
+// client the factory gives: the SDK's reads through the Power Platform API (a Test org's, and a connector's tables) need a `powerPlatformApiClient`, and the
+// tables a `connectorRuntimeClient` too, which an Azure CLI token cannot back (lib/sdk-first.js, "No Power Platform API client").
 const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
 
-// `create` given the vendored compiler unless the options name one (a seam for the test: the bundle's own exports are read-only).
+// `create` given the vendored compiler unless the options name one, and — only for a caller that asked — the Power Apps service client
+// (a seam for the test: the bundle's own exports are read-only). The `connectivity` request itself is the factory's, never the SDK's.
 function withVendoredCompiler(create) {
-  return (options) => create({ typescript: () => loadVendoredTypeScript(), ...options });
+  return (options) => {
+    const { connectivity, ...forSdk } = options || {};
+    const made = { typescript: () => loadVendoredTypeScript(), ...forSdk };
+    if (connectivity && made.powerAppsServiceClient === undefined) {
+      // Required here, not at the top: the client pulls in the Azure CLI token code, which an instance that never reads connections does not need.
+      const { createPowerAppsServiceClient } = require('./power-apps-service-client.js');
+      made.powerAppsServiceClient = createPowerAppsServiceClient();
+    }
+    return create(made);
+  };
 }
 
 module.exports = { ...bundle, createMakerSdk: withVendoredCompiler(bundle.createMakerSdk), withVendoredCompiler };

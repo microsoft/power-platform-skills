@@ -211,97 +211,13 @@ test('the script is a CLI only when run directly, and exports the read for the r
   assert.strictEqual(typeof mod.readLanguages, 'function');
 });
 
-// --- the documents that send the planner to it ------------------------------------------------------------
+// --- the planner's example --------------------------------------------------------------------------------
+// There is no `pac model list-languages` behind the script any more (every /genpage page operation needs the Azure CLI, so a
+// fallback that avoided it bought nothing); the documents that used to promise one are the documentation streams' to rewrite, and
+// scripts/tests/pac-fallback-commands.test.js pins that no script runs the command.
 
 const PLUGIN = path.resolve(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(PLUGIN, ...parts), 'utf8');
-// Whitespace folded and a block quote's `> ` marker dropped: the documents wrap their lines and the checks below read
-// sentences.
-const squash = (text) => text.replace(/^>\s?/gm, '').replace(/\s+/g, ' ');
-// The planner's own section on language detection, up to the next `### ` heading.
-function languageSection() {
-  const planner = read('agents', 'genpage-planner.md');
-  const start = planner.indexOf('### Detect Configured Languages');
-  const end = planner.indexOf('\n### ', start + 1);
-  assert.ok(start !== -1 && end !== -1, 'the planner has a Detect Configured Languages section');
-  return planner.slice(start, end);
-}
-
-test('the planner, the genpage skill and the references run the script first — `pac model list-languages` only comes after it', () => {
-  for (const parts of [['agents', 'genpage-planner.md'], ['skills', 'genpage', 'SKILL.md'], ['references', 'localization.md'], ['references', 'rules.md'], ['references', 'plan-schema.md']]) {
-    const text = read(...parts);
-    const script = text.indexOf('list-languages.js');
-    const pac = text.indexOf('pac model list-languages');
-    assert.ok(script !== -1, `${parts.join('/')} names the script`);
-    assert.ok(pac === -1 || script < pac, `${parts.join('/')} names the script before the command that falls back on it`);
-  }
-  const section = languageSection();
-  assert.match(section, /^node "\$\{PLUGIN_ROOT\}\/scripts\/list-languages\.js" --env '<envUrl>'$/m);
-  assert.match(section, /`<LCID> <Code> \u2014 RTL: Yes\|No`/, 'the line the plan carries is unchanged');
-  assert.match(squash(read('skills', 'genpage', 'SKILL.md')), /Language detection \(`node "\$\{PLUGIN_ROOT\}\/scripts\/list-languages\.js" --env '<envUrl>'`; when that exits non-zero, `pac model list-languages --environment '<envUrl>'` \u2014 the Azure CLI is not needed here\) \u2014 only on new-page path/);
-});
-
-test('the planner falls back to `pac model list-languages` on ANY non-zero exit of the script — decided by the exit status, never by a phrase of the message', () => {
-  const section = languageSection();
-  const text = squash(section);
-  // The script first, then the rule, then `pac` as a command of its own in a fenced block.
-  const script = section.indexOf('node "${PLUGIN_ROOT}/scripts/list-languages.js"');
-  const rule = section.indexOf('**Any non-zero exit');
-  const pac = section.search(/^pac model list-languages --environment '<envUrl>'$/m);
-  assert.ok(script !== -1 && script < rule && rule < pac, `script ${script} < rule ${rule} < pac ${pac}`);
-  assert.match(section, /```powershell\r?\npac model list-languages --environment '<envUrl>'\r?\n```/);
-  assert.match(text, /decide by the exit status, never by the wording of the message/);
-  // A script that never answers is a failure too: what ends it is the shell tool giving up, not an exit status.
-  assert.match(text, /\*\*Any non-zero exit \u2014 or no answer before your shell tool gives up \u2014 means the script could not read the languages; decide by the exit status, never by the wording of the message\.\*\*/);
-  // The fallback reads the environment the script was given. Without `--environment`, `pac` answers for the active organization of its
-  // auth profile, and the plan would carry another environment's languages under this environment's URL.
-  assert.match(text, /Pass the same `<envUrl>` the script was given: without `--environment`, `pac` answers for the active organization of its auth profile, which is not necessarily the environment this plan is for/);
-  // What the rule must not be: a trigger on a phrase. The sign-in advice `Run 'az login' first` is what ONE of the
-  // client's failures says; a missing Azure CLI, a slow one and a token another tenant refuses say something else,
-  // and the planner took each of those for "any other failure", reported it and stopped.
-  assert.doesNotMatch(text, /Run 'az login' first/);
-  // And no failure turns into a request that the user sign in: this flow works without `az`.
-  assert.doesNotMatch(text, /needs_input/);
-  assert.match(text, /do not stop and do not ask the user to run `az login`/);
-  assert.match(text, /`\/genpage` has never needed `az` for a page over existing entities or mock data/);
-  // `<envUrl>` is the column `pac auth list` prints ("Environment Url"); `Org URL:` is the line of `pac org who`.
-  assert.match(text, /`<envUrl>` is the selected environment's `Environment Url` from the `pac auth list` table \(Step 2; the `Org URL:` line of `pac org who` is the same address\)/);
-});
-
-test('the planner says it fell back — in the log and in its report of the environment — and stops only when pac fails too', () => {
-  const text = squash(languageSection());
-  assert.match(text, /Then \*\*say that you did\*\*/);
-  assert.match(text, /In `workflow-log\.md`, record the script's command line with its result \(its stdout, or its stderr when stdout is empty\), and then the `pac model list-languages` line with its table, each verbatim/);
-  assert.match(text, /In your report of the environment, say so: "Languages read with `pac model list-languages`: the languages script could not read them/);
-  assert.match(text, /If `pac model list-languages` fails as well, report that and stop\. Never assume the environment is English-only/);
-  // A failed read prints its JSON on stdout; a usage error exits 1 before any read and prints nothing there.
-  assert.match(text, /A failed read prints `\{ "ok": false, "error": "\u2026", "code": "\u2026" \}` on stdout \(`code` only when the SDK gave one\); a usage error, such as an `--env` that carries a path, prints nothing there and names the flag on stderr/);
-  // The commands a log records verbatim include the fallback, as it is run: pinned to the environment.
-  assert.match(squash(read('agents', 'genpage-planner.md')), /`` `pac model list-languages --environment '<envUrl>'` `` \(the fallback below\)/);
-  // The section stops in one place only: when pac fails too. A second stop — on one code of the script, say — would keep the planner from the
-  // fallback for the very failures the fallback is for. Its words say "stop" twice: "do not stop" (for az) and "report that and stop".
-  assert.strictEqual((text.match(/\bstop\b/gi) || []).length, 2, 'no stop but the two this test names');
-  assert.match(text, /do not stop and do not ask the user to run `az login`/);
-});
-
-test('README\u2019s promise — /genpage works without az for pages over existing entities or mock data — is still true: its one az read falls back to pac', () => {
-  const readme = squash(read('README.md'));
-  assert.match(readme, /Without `az`, the `\/genpage` skill still works for pages over existing entities or mock data \u2014 it only fails when entity creation is needed\./);
-  assert.match(readme, /Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not\./);
-  // The planner's section is what makes the sentence true: without the fallback the first step of every new page needs az.
-  assert.match(squash(languageSection()), /fall back to the command that read the languages before this script, which signs in through `pac`/);
-});
-
-// Without `--environment`, `pac model list-languages` answers for the ACTIVE organization of pac's auth profile — not necessarily the environment the
-// plan is for — so a document that tells the planner to run it, or names it as the fallback, names the pinned command. (The planner's own section is
-// pinned above, where it gives the command; its later sentences refer to it by name.)
-test('every document that names the fallback names it pinned to the environment', () => {
-  for (const parts of [['skills', 'genpage', 'SKILL.md'], ['README.md'], ['references', 'localization.md'], ['references', 'plan-schema.md'], ['references', 'rules.md'], ['AGENTS.md']]) {
-    const text = read(...parts);
-    assert.ok(text.includes('pac model list-languages'), `${parts.join('/')} names the fallback`);
-    assert.deepStrictEqual(text.match(/pac model list-languages(?! --environment '<envUrl>')/g) || [], [], `${parts.join('/')} names it without --environment`);
-  }
-});
 
 test('the planner\u2019s example output is the shape — and the exact ASCII text — the script prints, field for field', () => {
   const { describeEnvironmentLanguages } = require('../lib/lcid-cultures.js');

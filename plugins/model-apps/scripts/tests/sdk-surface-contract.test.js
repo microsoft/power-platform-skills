@@ -65,6 +65,9 @@ const SKILL_SDK_SURFACE = [
   'diffArtifact',
   'disassociateRecords',
   'enrichDefaultViews',
+  // `scripts/solution-settings.js template --solution` exports the solution it makes the deployment settings of (unmanaged), then reads the
+  // package by staging it (`getDeploymentSettingsTemplate`); `import` applies the settings file in the import (`importSolution`).
+  'exportSolution',
   'fetchArtifact',
   'fetchEntityMetadata',
   'findArtifact',
@@ -73,6 +76,10 @@ const SKILL_SDK_SURFACE = [
   'getAiReadiness',
   'getArtifact',
   'getColumnVisualization',
+  // `scripts/connector.js` reads a connector's operations and one operation's schema through the Power Apps connectors API (the SDK's
+  // connectivity reads, which need the factory's `connectivity` option); `scripts/list-connections.js` lists the connections.
+  'getConnectorOperationSchema',
+  'getDeploymentSettingsTemplate',
   'getEntityPrivileges',
   // `scripts/list-languages.js` reads the environment's languages (the planner's language detection, in place of
   // `pac model list-languages`): LCIDs only — three GETs, no workspace — and maps them to culture codes itself.
@@ -82,11 +89,14 @@ const SKILL_SDK_SURFACE = [
   // saved copy it lists.
   'getManifest',
   'getSolution',
+  'importSolution',
   'initWorkspace',
   'insertStatusValue',
   // The deferred routing-description push reads the app copy's dirty flag, so it never replays an earlier
   // run's unpushed edits (sdk-build.js).
   'listArtifacts',
+  'listConnections',
+  'listConnectorOperations',
   'moveElement',
   'publishArtifact',
   // Step 8 publishes the app and every table whose default-view enrichment was saved but not yet

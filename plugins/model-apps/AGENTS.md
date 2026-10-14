@@ -31,7 +31,8 @@ Scripts`).
 
 **Requirements:**
 - **PAC CLI > 2.10.0** — for app and generative-page deploy operations (incl. the genpage `upload` connector/Custom API flags)
-- **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder); must be logged in with the
+- **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder) and, for connections and connector
+  metadata, the Power Apps service token (`https://service.powerapps.com/`); must be logged in with the
   same identity as the active `pac` profile
 
 No Dataverse Skills plugin or Python dependency.
@@ -426,8 +427,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   quotes the page's name (a page called "SQL Timeouts" matched) and pac's own words ("… try again later") — so without the marker a re-run would be a second create and a
   duplicate page, with the run reporting success. The page that was created but whose local receipt could not be saved (`pages-creation-receipt-failed`) carries it too. A create that
   failed outright and left nothing in the listing, and a listing that fails *before* the create was sent, leave nothing to duplicate: both are still retried — by the upload (3 sends) and,
-  when the error's text reads as transient, by the build — as in 2.13.0. (`pac connection list` and
-  the auth probes have their own limits or none; this bound is the genpage calls'.)
+  when the error's text reads as transient, by the build — as in 2.13.0. (The `pac` fallbacks of `list-connections.js`,
+  `connector.js` and `solution-settings.js` have fixed time limits of their own — `lib/pac-fallback.js`, and a call that runs
+  out has its whole process tree ended — and the auth probes have their own limits or none; this bound is the genpage calls'.)
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. The 16 phases
@@ -1422,13 +1424,15 @@ scripts/
   resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
   lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
-  list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
+  list-connections.js          ← Connector discovery: the maker's connections + Dataverse connection references. The connections come from the SDK first (`listConnections`, with the Power Apps service token); `pac connection list --environment <origin>` runs only where the SDK refuses the route — and at once, with no SDK and no token read, for an environment outside the Public cloud, which the SDK has no route for (see "Connections, connector metadata and deployment settings") — and the output says which answered (`connectionsSource`, `connectionsFallback`)
+  connector.js                 ← /genpage connector builder: a connector's operations, one operation's parameters and response, a tabular connector's table columns — `operations` and `schema --operation` from the SDK first (an environment outside the Public cloud goes to `pac` at once), `schema --dataset --table` and every SDK refusal through `pac model genpage`; one pure-ASCII JSON line with `source`
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
   list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
-  list-languages.js            ← /genpage planner: the environment's base language and each provisioned language (LCID, culture code, right-to-left) — the SDK's `getEnvironmentLanguages()` over the az-token client, three reads and no write, printed as one pure-ASCII JSON line. The planner's FIRST choice: when it exits non-zero, for any reason (most often the Azure CLI), the planner runs `pac model list-languages --environment '<envUrl>'` instead (as before the script existed, but pinned to the same environment), and says so
+  list-languages.js            ← /genpage planner: the environment's base language and each provisioned language (LCID, culture code, right-to-left) — the SDK's `getEnvironmentLanguages()` over the az-token client, three reads and no write, printed as one pure-ASCII JSON line. The only source: no `pac model list-languages` stands behind it, because every /genpage page operation needs the Azure CLI
   apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder will use (their text still names the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left
   list-tables.js               ← the replacement for `pac model list-tables` (the skills' text still names the `pac` command): the environment's tables — the SDK's `findTables(term)` for each comma-separated `--search` term, a few reads at a time, joined without repeats; `--exact` keeps the tables whose logical name IS a term and names the terms no table has (`missing`), from one read of every table; `--type custom|standard|all` is `pac`'s own filter, `custom` through the SDK's `customOnly` option. One pure-ASCII JSON line of `{ logicalName, displayName, schemaName, isCustom }` rows
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
+  solution-settings.js         ← Deployment settings: `template` writes the settings file of a solution or a package (pac's own format), `import` imports a package and applies the settings in the same import — the SDK first, `pac solution create-settings` / `import --settings-file` only where it refuses; ExportSolution, StageSolution and ImportSolution are each sent exactly once, every text it prints has the settings file's values taken out, and a failed import names its job and the job log's reason; one pure-ASCII JSON line with `source`
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data; --language-code)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
   write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
@@ -1454,8 +1458,8 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase; and `mapLimit`, the bounded fan-out every parallel path reuses
     provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
-    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
-    process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere, each only once `ps -o lstart= -p` shows its pid still has the start time the listing saw — a descendant that exited meanwhile can have its pid given to an unrelated process; best effort, since two processes can share a one-second start time and the moment between that read and the signal is not covered), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), the Azure CLI token for the Power Apps service (`getPowerAppsToken`: the same read for another resource, memoized apart from the Dataverse token and asked for only by the Power Apps service client and the connectivity preflight), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
+    process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked — except a launcher that only forwards to the native program beside it, the Windows MSI's two-line `pac.cmd` (`@echo off` / `"%~dp0pac.launcher.exe" %*`): it is recognised by its exact lines — `@echo off` on a line of its own, then the forwarding line, as `cmd` reads lines, so a one-line `@echo off "%~dp0x.exe" %*`, which is an `echo`, is not one — and the program beside it (`forwardedProgram`) and that program is started directly, so a `%` or a double quote reaches it unchanged; every other batch file keeps the checked route and its refusal of them); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere, each only once `ps -o lstart= -p` shows its pid still has the start time the listing saw — a descendant that exited meanwhile can have its pid given to an unrelated process; best effort, since two processes can share a one-second start time and the moment between that read and the signal is not covered), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws. `spawnResultTree` is `spawnResultSync`'s asynchronous twin (same result shape, never rejects) for a call that may have to be ended: one that outlasts its `timeout`, or writes past `maxBuffer`, has its whole tree ended through `killProcessTree` before the call settles (`ETIMEDOUT`, `ENOBUFS`), after a short wait for the pipes of what was ended; the error says whether they closed (`containment`: `confirmed`, or `unconfirmed` when a process that outlived the ended tree still holds them, with the `pid` the call was started as)
     cli-failure.js             ← how a CLI child failed (timeout / missing / failed), the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out, and the budget of one `pac model genpage` call (3 min to list or download, 10 min to upload; `POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`, 1 s to 60 min, sets all of them); `commandArg` writes an argument of a command a message tells you (or the agent) to paste so that, run from PowerShell (Windows PowerShell 5.1 or PowerShell 7) or a POSIX shell, the program gets it unchanged as one argument — bare when it is plain, single-quoted otherwise (a path from an untrusted checkout can hold `;`, `$(…)` or backticks) — or not at all when no spelling does that in every one of those shells: a quote or a line break, and the values Windows PowerShell changes on their way to a native program (a `"`, white space with a final `\`, the empty value) or both PowerShells read as the stop-parsing token (`--%`), all measured. `commandArgOrPlaceholder` then writes a placeholder and names the value outside the command
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     lcid-cultures.js           ← pure: a Windows language id (LCID) → culture code and right-to-left, from a table of Windows' own culture data (what `pac` printed; the SDK reports numbers only, and no Intl API maps an LCID); a language id with no entry stays numeric and is reported, never guessed (`list-languages.js`)
@@ -1483,8 +1487,12 @@ scripts/
     page-ownership-records.js  ← local CREATE receipts and pre-delete ownership records, scoped to app/key/id
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
-    sdk-http-client.js         ← az-token HttpClient for the vendored SDK
+    sdk-http-client.js         ← az-token HttpClient for the vendored SDK; a caller can name requests that are sent exactly once (`sendOnce(method, url)`: no retry on a transport failure, a 429 or 5xx, or a 401 refresh, and none of the replays special to a record delete and a `$batch` either) — `solution-settings.js` does for the three long solution actions
+    maker-sdk.js               ← the one way a script makes an SDK: the vendored bundle with the vendored TypeScript compiler as its page compiler; `connectivity: true` (opt-in) also gives the instance the Power Apps service client, so no script wires a credential-carrying client by hand
     throwaway-sdk.js           ← `withThrowawaySdk({ env, prefix, httpClient? }, run)`: the bundled SDK, made through `maker-sdk.js`, over a throwaway workspace folder that is removed whichever way the run ends (a constructor, a storage or a module that throws included); `run(make)` gets a `make(extra)` for more instances over the same folder and the one client (`make({ languageCode })` is a writer). The one copy of what `apps.js`, `list-tables.js` and `list-languages.js` each wrote out
+    power-apps-service-client.js ← the HttpClient for the SDK's connection and connector reads: GET only, https only, a host allowlist that is exactly the hosts the SDK's connectivity code calls, redirects never followed, the Azure CLI token for the Power Apps service read only for a request that passed and never in a message, a body, a header or a key the service answers with (it is scrubbed, in whole and by part)
+    sdk-first.js               ← the rule `list-connections.js`, `connector.js` and `solution-settings.js` share: read through the SDK, and through `pac` for the SDK's typed refusals (`sdkFirst`, `CONNECTIVITY_REFUSALS`) — an error counts only when it IS the bundle's `SdkError` (an HTTP body that carries a refusal's code does not); any other failure is thrown with the SDK's own code. An environment outside the Public cloud is judged from its host first (`connectivityCloudOf`, pinned to the bundle by a table of hosts) and answered by `pac` at once, with the code the SDK would give
+    pac-fallback.js            ← runs a `pac` fallback command through `process-runner.js` (`spawnResultTree`) within a fixed time limit (`PAC_READ_TIMEOUT_MS`, 3 minutes; `PAC_IMPORT_TIMEOUT_MS`, 60) — a call that runs out has its whole process tree ended before it is reported, and the message says "was stopped" only when the runner confirmed the pipes closed (otherwise that a process `pac` started may still be running) — reads the JSON `pac` prints after its header, and keeps pac's sign-in banner and version lines out of every failure text (`pacErrorText`)
     typescript-compiler.js     ← loads the vendored TypeScript 5.8.3 compiler (vendor/typescript/) for the SDK's page compile: lazily, once, only after its bytes match PROVENANCE.json
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
     lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
@@ -1496,7 +1504,7 @@ scripts/
     odata.js                   ← OData literal escaping helpers
     genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`); an uncertain create reports its candidates and stops without adopting one as an UPDATE. Every pac call is time-bounded (`runPac`: the process tree is ended when the budget runs out and the result is `{ status: null, timedOut: true }`); a timed-out list or download is retried once, a timed-out UPDATE is not (it may have landed, and a re-send can record the prompt twice or overwrite a later change: it is reported with the check to run — `genpage-base.js check` for the upload script, a `pac model genpage download` of the page and then a re-run of the build for the build, which keeps no base marker), nor is an UPDATE that failed (a non-zero exit, or an exit 0 with no Page ID: it too may have landed, and is reported the same way; only a refusal of pac's own arguments or input files is an ordinary error), and a timed-out CREATE is an uncertain create that is never run again (a Page ID pac had printed names the page it created, stalled before publish or placement; a create that fails after the Page ID is reported the same way and never sent again; every error that follows a create whose outcome is not known to be nothing carries `transient: false`, so the build's own retry of a halt that reads as transient cannot re-send it, while a create that failed outright and left nothing in the listing is retried, as in 2.13.0); `runPac` also takes an AbortSignal and the client's `abort()` ends the pac runs it has in flight, each with its whole process tree (through the same `killProcessTree` as a timeout), and keeps a call that is paused between two attempts from starting another (an attempt that was ended is not followed by another pause either, and an ended upload is never sent again; a verify pass ends the page reads it gave up on this way)
     genpage-base.js            ← base-marker hash, compare, and read/write (sibling dotfile of the code file; no environment URL)
-    safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename. Shared by genpage markers and later callers
+    safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename, or — with `exclusive: true` — never replace a name: the content goes to a sibling file this process created exclusively and is published with a hard link to the target name (which fails if the name exists, so the file system decides and a file that appeared meanwhile is never overwritten: `IO_ERROR` with `reason: 'exists'`; where hard links do not exist the write fails closed, `reason: 'no-hard-links'`), and only that sibling is ever removed. Shared by genpage markers and later callers
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core (checks are ordered tasks on a pool of 4)
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
@@ -2549,6 +2557,15 @@ an answer to refuse one or to lose it). It can also refuse chosen requests (`ref
 pattern and, with `nth`, only the nth such request), so a run that fails half way — the second
 `AddSolutionComponent`, say — can be driven end to end.
 
+`scripts/tests/helpers/run-with-fakes.js` (`runScript(script, argv, { platform, pac, files, read })`) is the wider
+form, for a script that reads connections, connector metadata or deployment settings. The child runs over a fake
+Dataverse, Business Application Platform and Power Apps service (`fake-power-platform.js`, installed by
+`fake-power-platform-preload.js`, which replaces the token reads and the transport and nothing else) and, when the
+test gives it a script, over a fake `pac` (`fake-pac.js`) that is the only thing on `PATH` — with none, the machine
+has no `pac`. It returns the exit status, the stdout lines, the requests the fakes saw, the state they ended in, and each
+`pac` call with the files it was handed, so a test can assert what the platform received and that a secret reached no
+output.
+
 ## Dataverse Access From Scripts
 
 **Default: go through the vendored SDK.** Anything the SDK models — tables, columns, relationships,
@@ -2923,28 +2940,25 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   a form, view or chart lookup on a table that does not exist yet answers (`resolveExistingFormId`, the plan's
   artifact probes) is the platform's answer to a read of a DATA table, which the header does not cover, so
   that handling stays. See the localized-label note above for the one effect that is not measured.
-- **The environment's languages come from the SDK, with `pac` behind it** (`scripts/list-languages.js`,
+- **The environment's languages come from the SDK** (`scripts/list-languages.js`,
   `lib/lcid-cultures.js`; `scripts/tests/list-languages*.test.js`, `lcid-cultures.test.js`).
   `getEnvironmentLanguages()` makes three reads — the organization's base language,
   `RetrieveProvisionedLanguages()`, `RetrieveAvailableLanguages()` — and touches no workspace; it is strict, so
   a response of an unexpected shape throws `ENVIRONMENT_LANGUAGES_UNREADABLE` and a failed read throws its own
-  error. The planner runs the script first: it prints one pure-ASCII JSON line with the base language and, for
+  error. The planner runs the script: it prints one pure-ASCII JSON line with the base language and, for
   each provisioned language, its LCID, culture code and whether it is right-to-left. The SDK returns numbers
   only, so the host maps them with a table of Windows' own culture data; an LCID the table does not name stays
   numeric (the base language's too), is reported in `unmapped` and on stderr, and is never given a guessed
   code or direction. The script writes nothing and emits no telemetry of its own.
-  **The script is the preferred source, not the only one.** It reads through the `az` token, and `/genpage` has
-  never needed `az` for a page over existing entities or mock data (README). So when it exits non-zero — for
-  any reason; most often the Azure CLI is missing, signed out, slow or signed in to another tenant — the
-  planner runs `pac model list-languages --environment '<envUrl>'`, as before the script existed but pinned to the
-  environment the script was given (without the flag `pac` answers for the active organization of its auth
-  profile, which is not necessarily the environment the plan is for), records both in the log and says so,
-  and stops only when `pac` fails too. The rule is the exit status, on purpose: the SDK reports a missing
-  Azure CLI, a slow one, a token another tenant refuses and a dropped connection alike, as `CONNECTION_ERROR`
-  (`statusCode` 0, or the HTTP status of a refusal), so no code tells them apart, and a rule keyed on the
-  wording of the sign-in advice (`Run 'az login' first`) is met by a signed-out Azure CLI only. The planner's section
-  and README's promise are pinned (`list-languages.test.js`), and so is the eval grader's reading of a run
-  that fell back (`phase-expectations.test.js`). The plugin's own `readProvisionedLanguages` /
+  **There is no `pac` behind it.** Before the script existed, and for a release after it, the planner ran
+  `pac model list-languages --environment '<envUrl>'` when the script exited non-zero, so that a page over existing
+  entities or mock data needed no Azure CLI. Every `/genpage` page operation now goes through the SDK and needs the
+  Azure CLI, so that fallback bought nothing and is gone. A failed read is the end of language detection: the script
+  exits 1 with an `ok: false` line carrying the SDK's code and never prints an English default in the place of an
+  answer. The SDK reports a missing Azure CLI, a slow one, a token another tenant refuses and a dropped connection
+  alike, as `CONNECTION_ERROR` (`statusCode` 0, or the HTTP status of a refusal), so no code tells them apart and a
+  caller decides by the exit status, never by the wording of a message. `pac-fallback-commands.test.js` pins that no
+  script runs the command. The plugin's own `readProvisionedLanguages` /
   `readOrgLanguageCode` (`lib/dataverse-auth.js`) stay: they run before an SDK exists (it needs the language
   at construction) and fail soft, where the SDK's read is strict.
 - **The environment's apps and tables come from the SDK** (`scripts/apps.js`, `scripts/list-tables.js`;
@@ -3082,6 +3096,245 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   closed on an answer that is no list, a link that is no link and a page that repeats. A client with no
   `getAbsolute` (a test fake) is handed the link as it is. `app-components.test.js` pins it, over a fake and
   over the real client with a paged fake Dataverse.
+- **Connections, connector metadata and deployment settings come from the SDK, with `pac` behind them only where
+  the SDK refuses** (`scripts/list-connections.js`, `connector.js`, `solution-settings.js`; `lib/sdk-first.js`,
+  `lib/power-apps-service-client.js`, `lib/pac-fallback.js`).
+  - **The rule** (`lib/sdk-first.js`). The script asks the SDK. It asks `pac` the same question only when the SDK
+    refuses with a code that says *this route does not serve this environment, cloud or input*, and the output
+    says that it did (`connectionsSource` / `connectionsFallback`, `source` / `fallback`). Any other failure is the
+    script's own, printed with the SDK's code and never answered by `pac`: an answer from somewhere else, when the
+    first source is broken, hides that it is broken. The SDK never falls back by itself; this is the one place a
+    script does. The throwaway workspace the SDK needs is removed before `pac` is asked. The refusals:
+    - connections and connector reads — `CONNECTIVITY_NOT_CONFIGURED` (an org in the Test cloud, which the SDK
+      reads only through the Power Platform API; the plugin gives the SDK no client for it, see below, so it refuses
+      before any request); `CONNECTIVITY_CLOUD_UNSUPPORTED` (an org outside the Public and Test clouds — GCC, GCC
+      High, DoD, China, a custom domain or a port — before any request); `CONNECTIVITY_ENVIRONMENT_UNVERIFIED`;
+      `CONNECTIVITY_ROUTE_DECOMMISSIONED` (HTTP 410 from the Power Apps host: a service that has been switched
+      off); `CONNECTIVITY_UNAUTHORIZED` (HTTP 401 or 403 from the Business Application Platform or the Power Apps
+      host: the token the route was given was refused — a refusal because the Azure CLI's token is the only one
+      the plugin has to give, because a tenant can refuse that client and still allow `pac`'s own, and because
+      the fallback is not silent: the output carries the code and the SDK's words, and a `pac` that cannot read
+      them either fails with its own error; a 401 or 403 from Dataverse itself, the org read, stays a failure);
+      `CONNECTOR_SWAGGER_UNSUPPORTED` (a connector definition the SDK does not project: an OpenAPI 3 document, a
+      path item with a `$ref`); and the plugin's own `POWER_APPS_TOKEN_UNAVAILABLE` (no Azure CLI token for the
+      Power Apps service, checked beside the Dataverse token before an SDK is made);
+    - `solution-settings.js template` — `SOLUTION_STAGING_FAILED`, `SOLUTION_STAGING_UNREADABLE`;
+    - `solution-settings.js import` — `SOLUTION_STAGING_UNREADABLE`, and an `INVALID_ARGUMENT` that is the SDK's
+      own sentence for a feature of `pac`'s that the settings FILE holds and the SDK does not apply (a non-empty
+      `Workflows`, `CanvasApps` or `CopilotAgents` list, a `ConnectionInstance` in a connection reference), which
+      the SDK finds before it sends anything. The feature is read from the file and the sentence is built from
+      it (`pacOnlyFeatureMessages`), so an error is taken for the refusal only when it IS that sentence — a
+      settings key or a name that merely contains the phrase "this SDK does not apply" is an ordinary failure
+      and `pac` is not asked. `solution-settings-real-bundle.test.js` pins the sentence against the real bundle.
+
+    Only what the SDK itself raised counts, and the check is on what the error *is*: an instance of the bundle's
+    `SdkError` carrying one of those codes. The SDK's `ConnectionError` keeps the HTTP response body of a failed
+    request as its `cause`, so a service that answers 403 with a body naming `CONNECTIVITY_CLOUD_UNSUPPORTED` has
+    data from the network, not a refusal, and the read fails. The one wrapped refusal is
+    `POWER_APPS_TOKEN_UNAVAILABLE`: a `ConnectionError` with status 0 (nothing was answered) whose cause is this
+    plugin's own client error with that code.
+
+    Left out on purpose, each a failure to report: `CONNECTIVITY_RESPONSE_UNREADABLE` (a service that answers in a
+    changed shape must not be papered over), `CONNECTOR_OPERATION_NOT_FOUND`, `CONNECTOR_SCHEMA_TOO_LARGE`, any
+    other `INVALID_ARGUMENT`, every `CONNECTION_ERROR` (a 404 or 5xx from a route that serves, and any status from
+    Dataverse itself) and, for an
+    import, `SOLUTION_STAGING_FAILED`: the platform said the package cannot go in there, and `pac` would not
+    import it either. A machine with no Azure CLI token for the Power Apps service is told so before any
+    request (`POWER_APPS_TOKEN_UNAVAILABLE`, answered by `pac`); a Dataverse token failure stays loud.
+
+    **An org outside the Public cloud is answered by `pac` at once.** The SDK picks a route from the org's cloud
+    (its host: `<name>.crm<N>.dynamics.com` is Public unless `N` is 9, which is GCC; `<name>.crmtest.dynamics.com` is
+    Test). A Public org is read through the classic Power Apps API — the one route an Azure CLI token answers. A
+    Test org is read only through the Power Platform API, which asks for a token that carries the Connectivity
+    permissions; the Azure CLI's token for that API carries environment-management and app-read scopes and the route
+    answers it 403, so the plugin cannot give the SDK a `powerPlatformApiClient` (nor, for a connector's tables, a
+    `connectorRuntimeClient`), and `pac`, which signs in with a client of its own, reads what the SDK has no route for
+    here. The SDK refuses such an org before it sends anything, so asking it first would only cost two Azure CLI
+    processes and a throwaway workspace before the refusal. The host is therefore
+    judged first (`connectivityCloudOf` in `lib/sdk-first.js`, a written-out copy of the SDK's own rule that
+    `connectivity-real-bundle.test.js` pins against the real bundle with a table of hosts), and `pac` is asked at
+    once with the code the SDK would have given (`CONNECTIVITY_NOT_CONFIGURED` for Test,
+    `CONNECTIVITY_CLOUD_UNSUPPORTED` for any other) — no token read, no SDK made, nothing requested. The tabular
+    reads (`connector.js schema --dataset --table`) stay with `pac` for the same reason.
+  - **The Power Apps service client** (`lib/power-apps-service-client.js`; `createMakerSdk({ connectivity: true })`
+    in `lib/maker-sdk.js` builds it, and nothing else does). The SDK's connection and connector reads take a
+    client that signs in to the Power Apps service. This one holds the credential, so it does not trust whoever
+    asks for a request: GET only (any other method is `POWER_APPS_METHOD_REFUSED`); an absolute `https` URL with no
+    port or credentials on exactly the hosts the SDK's connectivity code calls — `api.bap.microsoft.com`,
+    `test.api.bap.microsoft.com`, `api.powerapps.com` and `*.api.powerapps.com` (otherwise
+    `POWER_APPS_URL_REFUSED`, checked before the token is read); redirects never followed (a 3xx is the answer,
+    and the SDK reads it as a failure); a 60-second idle timeout; the token — the Azure CLI's for
+    `https://service.powerapps.com/`, no shell — never in a message, and never in what the service answers: every
+    string of an answer (body, headers, keys) has the token, and each distinctive part of it, taken out before the
+    SDK sees it, while the status and the typed `error.code` stay. An instance made without `connectivity` is
+    what it always was, and the SDK then refuses those reads before any request. It is the only client the plugin
+    gives the SDK, and only an org in the Public cloud reaches it (the Test-cloud host stays on the list because the
+    list is the hosts the SDK's classic route can name, not the clouds the plugin sends to it).
+  - **`list-connections.js <envUrl>`** prints what it printed — `connections[]` (`connectionId`, `connectorId`,
+    `displayName`) and `connectionReferences[]` — plus `connectionsSource: "sdk" | "pac"` and, when `pac`
+    answered, `connectionsFallback: { code, message }` (for an environment outside the Public cloud, the first thing
+    that happens: `pac` is asked before any token is read, see above). The environment is validated as a Dataverse origin first
+    (`pac` used to run before the text was checked). The `pac` path is `pac connection list --environment <origin>`
+    — pinned, because without the flag `pac` answers for the active organization of its auth profile, which can be
+    another environment (an import bound to one of its connections then failed in the platform) — through the
+    process runner that ends the whole tree of a call that runs out of time; its parsers are unchanged, and its
+    failure text keeps `pac`'s `Error:` lines and drops its banner (signed-in account, version, links).
+    A failure — of the SDK's read, of `pac`, of the connection references, a bad origin — exits 1 with one
+    pure-ASCII line, `{ ok: false, error, code }`, on stdout and the message on stderr, as the other two scripts
+    do. `code` is the error's own and is left out when it has none: the SDK's errors have one (`CONNECTION_ERROR`,
+    `CONNECTIVITY_RESPONSE_UNREADABLE`, …); a `pac` failure, a bad origin and a refused read of the connection
+    references do not. A usage error (an unknown flag, no environment URL) is the problem and the usage on stderr
+    alone — nothing on stdout, exit 1 — as it is in the other two.
+  - **`connector.js`** — `operations`, `schema --operation <id>` and `schema --dataset <ds> --table <t>`, each with
+    `--env`, `--connector-id` (the short name, or `/providers/Microsoft.PowerApps/apis/<name>`) and
+    `--connection-id` (required for every form because `pac` requires it; the SDK route does not use it). It prints
+    one pure-ASCII line: `pac`'s own JSON for the form, plus `ok`, `source` and, when `pac` answered an SDK refusal,
+    `fallback`. The tabular form is `pac`'s alone — the SDK reads a connector's tables only through the Power Platform
+    API and a connector runtime client, which the plugin cannot build on an Azure CLI token — and says
+    `source: "pac"` with no `fallback`. The SDK's answer for `schema --operation` includes a connector's path-level
+    parameters (a Swagger path item's own `parameters`, shared by its operations), merged with each operation's own,
+    the operation's winning; as the SDK documents the difference, `pac`'s answer leaves them out, so for a connector
+    that has them the SDK's list is `pac`'s plus those. Every `pac` command it runs is pinned to the environment
+    (`--environment <origin>`); the commands the agent ran before were not, and without the flag `pac` answers for
+    the active organization of its auth profile. JSON that is not the form's answer is refused rather than passed
+    on. A SharePoint dataset address that is percent-encoded (`…/sites/My%20Site`) reaches `pac` unchanged when it is
+    installed as `pac.exe` — and when it is installed by the Windows MSI, whose `pac.cmd` is a two-line forwarder to
+    `pac.launcher.exe` (`@echo off` on a line of its own, then exactly `"%~dp0pac.launcher.exe" %*`, the way `cmd`
+    reads lines — a one-line `@echo off "%~dp0x.exe" %*` is an `echo`, which starts nothing, and is not a forwarder),
+    which the process runner starts directly; a batch launcher of any other shape cannot
+    carry a `%` through `cmd.exe`, so the call is refused before `pac` starts (`PAC_REFUSED`), with the cause and
+    the way through (install `pac.exe`, or run the command yourself). A failure prints
+    `{ ok: false, error, code, fallback? }` and exits 1; `PAC_MISSING`, `PAC_TIMEOUT`,
+    `PAC_FAILED`, `PAC_REFUSED` and `PAC_OUTPUT_UNREADABLE` are the `pac` step's own codes.
+  - **`solution-settings.js`** — `template --env --solution --out [--force]` exports the solution (unmanaged: an
+    installed managed one cannot be exported, and the settings are the same) and reads the package the way the
+    platform does, staged in `--env` — nothing is imported and the staging copy is deleted;
+    `template --package <zip> --out [--env] [--force]` reads a package you already have, and without `--env`, where
+    there is nothing to stage it in, `pac solution create-settings` reads the zip offline;
+    `import --env --package --settings` imports and applies the settings in the same import. The file `template`
+    writes has `pac`'s shape — `EnvironmentVariables[]` (`SchemaName`, an empty `Value`, `DefaultValue`, `TypeId`,
+    `IsRequired`) and `ConnectionReferences[]` (`LogicalName`, an empty `ConnectionId`, `ConnectorId`) — sorted by
+    name, so a file `pac` wrote and one this wrote are read alike by both. An existing `--out` is not replaced
+    without `--force` (`pac` replaced it silently, and every value already filled in with it): the early check is
+    repeated where the file is installed, as an exclusive create (`lib/safe-fs.js`, `exclusive: true`), because the
+    export, staging or `pac` work in between takes minutes and a file a maker started filling in meanwhile must
+    survive — `OUT_EXISTS` then, the same as at the start.
+    `import` checks the file before any request (a missing file, one that is not that shape, a package that is not
+    a zip or is over 128 MiB — it is held in memory, then again as base64 — and an `--env` that is not a Dataverse
+    origin are refused; an environment variable's `Value` is text and goes through byte for byte — leading or
+    trailing white space, a JSON document ending in a newline, a value of white space alone — while a name and a
+    connection id may not begin or end with white space), checks every filled entry against the package (an entry
+    the package does not hold, or one that names another connector, fails the whole import: the platform would
+    otherwise apply it to whatever the environment holds under that name), and prints the import job id — minted
+    by the script, so that an import whose answer is lost can be looked up (on the SDK path: `pac` mints its own
+    job and is not given this one). A failed import's output has `error`, `code`, `status` (the HTTP status of the
+    answer that failed it, when there is one), `importJobId` (SDK path), `fallback` (when `pac` was asked) and
+    `warnings` (what the SDK could not clean up, such as the staged copy). When the request was SENT and failed,
+    the job's own log is read once (`importjobs(<id>)?$select=data`: the first `<result result="failure"
+    errortext="…"/>`, else the status of the log's root) and its reason is appended to the message — the platform's
+    own answer is often only "An unexpected error occurred" — and a log that cannot be read leaves the message as it
+    was. When `pac` imports because the SDK refused, `fallback.message` is the SDK's
+    own — its "Nothing was imported" is about the SDK's attempt, which stopped before any request. **`pac`'s defaults** for the flags `pac solution import` takes: a plain
+    synchronous import that overwrites no unmanaged customizations (`--force-overwrite` off, so
+    `overwriteUnmanagedCustomizations: false` — `importSolution` requires it), activates no plug-ins or workflows
+    (`--activate-plugins` off, so `publishWorkflows: false` — required too), publishes nothing afterwards and
+    skips no check; none of them is a flag here.
+  - **What is never printed.** A token, a settings value (an environment variable of a secret type holds its secret
+    in the file) and a connection id. The output names entries, never values, and the settings file is read from
+    and written to disk only. Every text a run prints — the SDK's, the platform's, `pac`'s, a job log's, and the
+    cleanup warnings of a failed run as well as a successful one — goes through one sanitizer built from the file
+    (`sanitizer`), and is read WHOLE: nothing in it is trusted for the way it begins. Three rules.
+    - *What is secret is the package's to say.* A variable is a secret when its definition in the package says so —
+      the type in the StageSolution reply the SDK reads for an import that fills anything in, recorded as it passes
+      through the plugin's client (`recordStagedTypes`) — or when the file marks it secret (`TypeId` 100000005). The
+      file's `TypeId` is informational (the SDK accepts it and ignores it; `pac` writes it and a file may leave it
+      out), so it can only add secrecy, never take it away; and a variable the package was not read for (the
+      `pac` fallback, a reply that could not be read, a name the package does not define) is not known to be
+      anything else and is treated as a secret. A secret is hidden whatever its length.
+    - *A text is looked at in every form decoding it gives.* A message that quotes a value rarely quotes it as it
+      is — a JSON error writes a quote as `\"` or `\u0022`, an XML log as `&quot;`, a URL as `%22`, and any of
+      them can sit inside another — so instead of a list of spellings the text is decoded (JSON string escapes, XML
+      character references, percent-encoding, a form's `+`) and searched in each decoded form, to three levels, with
+      runs of white space also compared as one space, and without regard to case (a service may normalise it: a GUID is
+      quoted in lower case). A text that repeats a SECRET in any of them is not shown at
+      all: it is replaced by a sentence saying it was withheld, because complete scrubbing of another party's text
+      cannot be guaranteed and a service that quotes its input is not trusted for the rest of it. The status and the
+      code stay in their own fields, and so does the SDK's own `HTTP <status> from <url>:` line — rebuilt from the
+      error's `statusCode` and `url` (`sdkLead`), never recognised from how a text begins: a job log, `pac` or a
+      warning that begins like it is just text. A text of more than 1 MiB is withheld, not cut.
+    - *A value that is not a secret* (the package says Text, say, or a connection id) is replaced by `<redacted>`
+      where a text spells it as written, and a text that spells it only in a decoded form is withheld whole (it
+      cannot be taken out of the text it was decoded from). A value of fewer than six characters that is not a secret
+      is left alone: it is a word as much as a value ("1", "true", "en"), a message with every such word blanked
+      explains nothing, and by the package's own definition there is nothing in it to protect.
+
+    A job's log is cut last: its reason is decoded, sanitized in full, and only then made one line and cut to 600
+    characters (a value that begins before the cut, or holds runs of white space, would otherwise have been changed
+    before it was looked for). What the decoders do not know stays a limit: a service that quotes only part of a
+    value, or encodes it another way (base64, a hash, a named HTML entity beyond XML's five). An
+    import's failure is rebuilt from its parts, so what the SDK attached to its own error (the raw answer,
+    unfiltered warnings) does not travel with it, and an unexpected failure of the script itself prints only its kind.
+  - **Long actions are sent exactly once.** The plugin's HTTP client sends a POST that got no answer again, after
+    five minutes, and again after a 429 or 5xx, and replays a request after a 401 with a refreshed token. For
+    `ExportSolution`, `StageSolution` and `ImportSolution` every one of those is wrong: a gateway answers 502, 504 or
+    401 for an import the platform accepted and is still running, and a second send is a second import of the same
+    job, a second staging copy, or a refusal that hides what the first did. So `solution-settings.js` gives each an
+    hour — `pac`'s own longest wait for an import — and marks each `sendOnce` (`lib/sdk-http-client.js`): the
+    first answer goes to the SDK as it came, with its status and code, and a failure that does not say how the
+    import ended (no answer, 401, 408, any 5xx) says it was sent once, was not sent again, and names the import job
+    to look up before importing again. `sendOnce` governs EVERY way the client sends again — the transport and status
+    retries, the 401 refresh, and the replays that are special to a record delete and a `$batch` (a 429, a SQL
+    deadlock): a request that is named once is sent once, whatever the answer.
+  - **`pac`'s time limit** (`lib/pac-fallback.js`): two fixed constants, in the way `PAC_PROBE_TIMEOUT_MS` bounds
+    `check-auth.js`'s `pac org who` — there is no environment variable to tune them — applied through
+    `lib/process-runner.js`. `PAC_READ_TIMEOUT_MS` (3 minutes) bounds a read: the connection list, a connector's
+    definition, the settings template of a zip — a cold start of pac's .NET runtime (about 7 s on Windows, more on
+    a busy machine) plus one service call whose answer can be a few hundred kilobytes. `PAC_IMPORT_TIMEOUT_MS`
+    (60 minutes) bounds an import: the platform imports synchronously, a large package takes many minutes, and a
+    call stopped halfway leaves the outcome unknown, so it gets pac's own longest wait (the default of
+    `--max-async-wait-time`) and its timeout message says to look at the environment's import history before
+    importing again. A call that runs out is reported as a timeout, never as a missing pac, and its process tree is
+    ended before the call settles (`spawnResultTree`, `killProcessTree`), so a Windows `pac.cmd` launcher's own child
+    does not outlive it. The message says "was stopped" only when the runner CONFIRMED it: the pipes `pac`'s
+    tree held have closed (`error.containment` is `confirmed`). A process that outlived `pac` itself — a descendant
+    in a tree that cannot be walked from a launcher that has already exited — can still hold the pipes when the short
+    wait for them ends (`unconfirmed`), and then the message says that a process `pac` started may still be running
+    (with the process id `pac` was started as, which has usually exited; the survivor's own is not known) and to end
+    any leftover `pac` process before trying again. A failure is `missing` (not on `PATH`), `timeout`,
+    `failed` or `refused` — the process runner will not hand an argument to a Windows batch launcher that it
+    cannot carry unchanged, such as a `%` in a URL-encoded SharePoint address, when `pac` is installed as a
+    launcher of any shape but the MSI's plain forwarder, and `pac` is then not started at all; the message names
+    the cause and the way through — and `pac` printing something that is not the JSON the form's answer has is
+    refused (`pacPayload`), never read as an empty answer. What `pac` printed about a failure is shown without its
+    header (`pacErrorText`: the signed-in account, the version and the links are dropped, `Error:` lines kept), and
+    redacted before it is cut to length.
+  - **Files are written without replacing another's** (`lib/safe-fs.js`). `solution-settings.js template` without
+    `--force` installs its file as an exclusive create, and it must never remove a file it cannot prove it wrote:
+    the whole content goes to a sibling file this process created exclusively (`.<name>.<pid>.<random>.tmp`), and is
+    then published with a hard link to the target name — which fails if the name exists, so the file system decides
+    and a file that appeared meanwhile is never overwritten (`IO_ERROR`, `reason: 'exists'`) — and only the sibling
+    is ever removed. A file system that has no hard links (some network and FAT shares) answers the link with an error,
+    and the write fails closed with `IO_ERROR`, `reason: 'no-hard-links'`: it is not replaced by a write that could
+    overwrite. A sibling that cannot be removed after the target was published is `reason: 'sibling-left'`.
+  - **Tests.** `power-apps-service-client.test.js` (other hosts, `http:`, a relative URL, credentials and ports,
+    every other method, a redirect, a token failure, the token's absence from every message and every answer),
+    `sdk-first.test.js` and `pac-fallback.test.js`, `maker-sdk.test.js` (the opt-in), `list-connections.test.js` and
+    `list-connections-sdk.test.js`, `connector.test.js`, `solution-settings.test.js` (the sanitizer: the classification
+    of secrets, the decoded views, each spelling in a message of its own — `helpers/value-spellings.js` writes the
+    spellings out independently of the script — the 600-character boundary and white space in a secret),
+    `sdk-http-client.test.js` (`sendOnce`, over every replay path), `safe-fs.test.js` (the exclusive create),
+    `process-runner.test.js` (the forwarder grammar, and a call ended whole with real processes, containment asserted)
+    and — against the real bundle
+    over a fake Business Application Platform, Power Apps service and Dataverse — `connectivity-real-bundle.test.js`
+    (including a table of hosts given to the real SDK, which pins `connectivityCloudOf`) and
+    `solution-settings-real-bundle.test.js`, which also run each script in a process with a fake `pac` alone
+    on `PATH` (or none), including a `pac` installed the way the Windows MSI installs it (a two-line `pac.cmd` and
+    a native launcher beside it), and put each spelling of a secret in a run of its own. The codes and wording the
+    rule leans on are pinned there, so a re-vendored SDK that
+    changes one fails there. `pac-fallback-commands.test.js` is a source scan: no script runs
+    `pac model list-languages`, and `pac connection list`, the two connector verbs and the two solution verbs
+    are written only in the one script that asks the SDK first, in the one function that runs them, which is called
+    only from its fallback (or, for the tabular form and `--package` with no `--env`, its `pac`-only path).
 - **Two layers re-send, and for a delete they add** (`scripts/tests/sdk-resend-layers.test.js` pins every
   count). The HTTP client re-sends a 429 or 5xx — except a record delete and a `$batch`, which it
   re-sends only for a deadlock (SQL 1205) or a 429. The SDK re-sends a deadlock for reads, an app
@@ -3107,11 +3360,12 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   dependency if the skill row is still there, and a model left behind blocks only a later row summary for the
   same table, by name.
 - **Changes in the same SDK release that no plugin path reaches** — read these again before a plugin change
-  reaches one. `importSolution` now requires `overwriteUnmanagedCustomizations` and `publishWorkflows` (no
-  script calls it, and `sdk-surface-contract.test.js` fails on a new call until it is listed). An Active
+  reaches one. An Active
   business process flow is edited in one conditional change set and stays Active — it needs a client with
   `postRaw`, which the plugin's has — where the build only creates a flow and toggles the state of one that
-  exists, never editing a definition.
+  exists, never editing a definition. (`importSolution`, which now requires `overwriteUnmanagedCustomizations`
+  and `publishWorkflows`, was on this list while no script called it. `solution-settings.js import` does, with
+  `pac`'s defaults for both; `sdk-surface-contract.test.js` fails on a call that is not listed.)
 - **Changes in the same release that the plugin's paths DO reach, with the outcome unchanged** — re-test them
   when one of these paths changes.
   - *Commands.* A command push writes only its own table's bar, with every check before the first write. The
