@@ -88,3 +88,43 @@ for (const [label, tile] of Object.entries(TILES)) {
     assert.strictEqual(comps.length, 1, `the tile must come back; got ${JSON.stringify(comps)}`);
   });
 }
+
+// A tile's height is its rowspan, counted in rows of the client's dashboard grid, and the client
+// draws a one-row tile as its title bar alone: no chart, no list. The platform's own dashboards give
+// chart and list tiles 9 to 24 rows, most often 12, the default chosen here. The build used to send
+// `rowspan: 1` for every tile the spec did not size, so a generated dashboard rendered as a column of
+// title bars (live-verified). This pushes the
+// payload PRODUCTION builds, through `dashboardComponent`, and reads the cells the bundle wrote:
+//   <cell id="{…}" colspan="1" rowspan="12" showlabel="true"><labels>…</labels><control …>…</control></cell>
+test('REAL BUNDLE: a tile the spec does not size is pushed 12 rows tall, and a sized one keeps its size', async () => {
+  const { dashboardComponent } = require(path.resolve(__dirname, '..', 'lib', 'sdk-build.js'));
+  const { sdk, store } = await harness();
+  const art = await sdk.createArtifact('dashboard', { name: 'Field Ops' });
+  const viewId = '{44444444-4444-4444-4444-444444444444}';
+  const tiles = [
+    { type: 'chart', name: 'By Status', targetEntity: 'cfo_workorder', viewId, visualizationId: '{55555555-5555-5555-5555-555555555555}' },
+    { type: 'list', name: 'Open', targetEntity: 'cfo_workorder', viewId },
+    { type: 'list', name: 'Recent', targetEntity: 'cfo_workorder', viewId, rowspan: 6, colspan: 2 },
+  ];
+  for (let i = 0; i < tiles.length; i++) {
+    await sdk.addElement('dashboard', art.id, '/components', dashboardComponent(tiles[i], i));
+  }
+  await sdk.pushArtifact('dashboard', art.id);
+  // Self-closing cells hold no control; drop them so each match below is one tile's cell.
+  const formxml = String(store.row && store.row.formxml).replace(/<cell\b[^>]*\/>/g, '');
+  const sizes = [...formxml.matchAll(/<cell\b([^>]*)>([\s\S]*?)<\/cell>/g)]
+    .filter((m) => /<control\b/.test(m[2]))
+    .map((m) => [/\browspan="(\d+)"/.exec(m[1]), /\bcolspan="(\d+)"/.exec(m[1])].map((a) => a && a[1]));
+  assert.deepStrictEqual(sizes, [['12', '1'], ['12', '1'], ['6', '2']],
+    `each tile's cell must carry its size, in tile order; got ${JSON.stringify(sizes)} from ${formxml}`);
+});
+
+test('dashboardComponent: every tile kind defaults to 12 rows by 1 column, and an authored size wins', () => {
+  const { dashboardComponent } = require(path.resolve(__dirname, '..', 'lib', 'sdk-build.js'));
+  for (const tile of [{ type: 'chart' }, { type: 'list' }, { type: 'iframe', url: 'https://contoso.com/map' }, { type: 'webresource', webResourceName: 'new_widget.html' }]) {
+    const c = dashboardComponent(tile, 0);
+    assert.deepStrictEqual([c.rowspan, c.colspan], [12, 1], `${tile.type} tile default size`);
+  }
+  const sized = dashboardComponent({ type: 'list', rowspan: 1, colspan: 2 }, 0);
+  assert.deepStrictEqual([sized.rowspan, sized.colspan], [1, 2], 'an authored size is kept, even a rowspan of 1');
+});

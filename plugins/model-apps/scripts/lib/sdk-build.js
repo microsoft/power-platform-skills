@@ -276,11 +276,19 @@ function dashboardTileOpts(spec, tile, result) {
 
 // Map a resolved dashboard tile (dashboardTileOpts output) to a canonical DashboardComponent for
 // addElement('dashboard', id, '/components', …). The adapter mints the cell/control ids and lays the
-// grid out from `position`; the caller supplies the classId (chart/list share the grid control id —
-// ChartGridMode disambiguates), the `<parameters>` map, and the placement. Tiles stack vertically
-// (one per row in the first section). Param keys match the Dataverse control XML; note that a chart
-// tile keys its visualization as `VisualizationId`, NOT `ChartId` — see the comment on that line,
-// and `lcid-real-bundle.test.js`, which pushes this exact payload through the real bundle.
+// tiles out in the first section, a grid two columns wide that it fills left to right: a tile wider
+// than what is left of a row starts the next one. The caller supplies the classId (chart/list share
+// the grid control id — ChartGridMode disambiguates), the `<parameters>` map, and the size. Param keys
+// match the Dataverse control XML; note that a chart tile keys its visualization as `VisualizationId`,
+// NOT `ChartId` — see the comment on that line, and `lcid-real-bundle.test.js`, which pushes this exact
+// payload through the real bundle.
+//
+// A tile's height is its rowspan, in rows of the client's dashboard grid. The client draws a one-row
+// tile as its title bar alone — no chart, no list. The platform's own dashboards give chart and list
+// tiles 9 to 24 rows, most often 12, so a tile the spec does not size gets that common height. The
+// default used to be 1, and every tile of a generated dashboard rendered as a bare title bar
+// (live-verified).
+const DEFAULT_TILE_ROWSPAN = 12;
 function dashboardComponent(t, index) {
   const parameters = {};
   if (t.type === 'chart') {
@@ -305,7 +313,7 @@ function dashboardComponent(t, index) {
   return {
     type: t.type, name: t.name || '', classId: TILE_CLASS_ID[t.type] || TILE_CLASS_ID.webresource,
     position: { tabIndex: 0, columnIndex: 0, sectionIndex: 0, rowIndex: index, cellIndex: 0 },
-    colspan: t.colspan || 1, rowspan: t.rowspan || 1, parameters,
+    colspan: t.colspan || 1, rowspan: t.rowspan || DEFAULT_TILE_ROWSPAN, parameters,
   };
 }
 

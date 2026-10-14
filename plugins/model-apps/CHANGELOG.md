@@ -216,6 +216,10 @@ where the build reads its code for certain.
 
 ### Fixed
 
+- **Dashboard tiles show their charts and lists.** A tile the spec did not size was built one row
+  tall, which the app draws as the tile's title bar alone. It now gets 12 rows, the most common
+  height on the platform's own dashboards; a tile's `rowspan` and `colspan` still win. A rebuild
+  does not resize the tiles of a dashboard that already exists.
 - **Relationships that share a schema name are caught.** A 1:N and an N:N between the same two tables
   derived the same name, so the N:N was skipped as if it existed and `--verify` passed. Validation now
   asks for an explicit `schemaName`. The build reuses an existing name only for the same type, ends and

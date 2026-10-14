@@ -244,7 +244,12 @@ works through.
 ```
 - A **chart** tile needs both a declared `chart` (the visualization) **and** a declared `view` (its
   data); a **list** tile needs a declared `view`. The target entity is derived from the view. `name`
-  defaults to the chart/view name; `colspan`/`rowspan` optional (default 1×4).
+  defaults to the chart/view name.
+- **Size (`colspan`/`rowspan`, optional): 1 column by 12 rows unless set.** The dashboard is a grid
+  two columns wide, filled in tile order, left to right: two `colspan: 1` tiles share a row, and
+  `colspan: 2` takes the full width (a list with several columns). The platform's own dashboards
+  give charts and lists 9 to 24 rows, most often 12, which is why 12 is the default; a one-row tile
+  shows only its title.
 - **View and chart names are unique only per table.** When the tile's view name is declared on more
   than one table, set the tile's `entity` to say which; the chart must be declared on that **same**
   table. Both are rejected at the spec gate otherwise — a same-named chart on another table would
