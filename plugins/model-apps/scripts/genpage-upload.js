@@ -601,7 +601,7 @@ async function deploy(context) {
       // A page that was just created is in no app's navigation, so run as an update it would be refused for that; the marker is what lets exactly this page through.
       const way = recorded
         ? `To finish it, run the same command again with --page-id ${pageId} added and nothing else changed: the base marker beside ${flags['code-file']} records that this upload created the page and did not finish it, so that run publishes it${placementWanted ? ' and places it in the app' : ''} without the check of the app's navigation an ordinary update makes — for this page only — and a page that already holds the content is published, not written again.`
-        : `The base marker that would let this tool finish it could not be written, so publish page ${pageId} in Maker, or delete it and create it again.`;
+        : `The base marker that would let this tool finish it could not be written, so publish page ${pageId} in Maker, or delete it (after asking the user — it is permanent: node scripts/genpage.js delete --env ${flags.env} --page-id ${pageId} --allow-destructive) and create it again.`;
       return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'}, but publishing it failed (${detail}) — it is not live yet. ${way}`));
     }
     let placement = null;
@@ -637,7 +637,7 @@ async function deploy(context) {
             ? `, or run the same command again with --page-id ${pageId} added and nothing else changed: the page is already published, so only its placement is made, for this page only (the base marker beside ${flags['code-file']} records that it is not done)`
             : '';
           return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'} and published, but NOT added to app ${flags['app-id']}'s navigation: ${(e && e.message) || e}. `
-            + `Add the page to the app navigation in Maker${again}.`));
+            + `Add the page to the app navigation with node scripts/genpage.js add-to-app --env ${flags.env} --app-id ${flags['app-id']} --page-id ${pageId}${again}.`));
         }
         warnings.push(`the page was written, but its tables' default views could not be added to app ${flags['app-id']}'s components, so the maker's "/" picker may not list them (${(e && e.message) || e})`);
       }

@@ -9,6 +9,7 @@ const assert = require('node:assert');
 const { makeGenpageSdk, genPagesOfSiteMap } = require('../lib/genpage-sdk.js');
 const { genPageSubArea, genPageSubAreaId } = require('../lib/genpage-subarea.js');
 const { FakeSdk, sdkError, connectionError } = require('./helpers/fake-genpage-sdk.js');
+const { ConnectionError } = require('../lib/maker-sdk.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP = '22222222-0000-4000-8000-0000000000bb';
@@ -161,13 +162,68 @@ test('removeFromApp: a removal that was saved and never published is published �
   assert.deepStrictEqual(state.published, [P2], 'and what runs no longer names the page');
 });
 
-test('removeFromApp: when the published navigation cannot be read the page is not known to be gone from it — a page the saved navigation does not name is reported, with the reason, and nothing is written', async () => {
-  const { sdk } = appWorld(oneGroup(entityEntry), { unreadable: true });
+// A removal whose app publish failed (`GENPAGE_APP_PUBLISH_FAILED`, `saved: true`) says to run it again. The re-run finds the saved navigation without the page and, if it can be read, the published one still naming
+// it. When it CANNOT be read, "not in the navigation" would be a success the app that runs contradicts, so the app is published again — what `placeInApp` does for a placement it cannot see in what runs.
+// `wasInNavigation` is null then: `false` is for a page neither layer is KNOWN to name. `provedPublished` says what the read-back could not.
+test('removeFromApp: a saved removal re-run while the published navigation cannot be read is published again — not reported as "not in the navigation" — and says it could not be proved', async () => {
+  const { sdk, state } = appWorld(oneGroup(entityEntry, pageEntry(P2, 'Two')), { published: [P1, P2], unreadable: true });
   const out = await backend(sdk).removeFromApp(APP, P1);
-  assert.strictEqual(out.wasInNavigation, false);
+  assert.deepStrictEqual([out.wasInNavigation, out.appEdited, out.published, out.provedPublished, out.removed, out.entriesLeft], [null, false, true, false, [], 2]);
+  assert.deepStrictEqual([sdk.count('updateElement'), sdk.count('pushArtifact'), sdk.count('publishArtifact')], [0, 0, 1], 'nothing to write, and the app is published');
+  assert.strictEqual(out.warnings.length, 2);
+  assert.match(out.warnings[0], new RegExp(`the published navigation of app ${APP} could not be read \\(.*sitemap-xml-unreadable.*\\), so it is not known whether page ${P1} still shows in the app that runs — the app was published so that what runs is its saved navigation, which does not name the page`));
+  assert.match(out.warnings[1], new RegExp(`app ${APP} was published, but its published navigation could not be read back to confirm that page ${P1} no longer shows`));
+  assert.deepStrictEqual(state.published, [P2], 'what runs is the saved navigation now, although it cannot be read back');
+});
+
+test('removeFromApp: an app that was never published has no published navigation to show the page — a page its saved navigation does not name is in neither layer: nothing is written or published, and nothing is "not known"', async () => {
+  const { sdk } = appWorld(oneGroup(entityEntry), { neverPublished: true });
+  const out = await backend(sdk).removeFromApp(APP, P1);
+  assert.deepStrictEqual(out, { removed: [], wasInNavigation: false, appEdited: false, published: false, entriesLeft: 1, warnings: [] });
   assert.strictEqual(writes(sdk), 0);
+});
+
+test('removeFromApp: a published navigation that cannot even be LOOKED UP — the SDK failed — is a failure before anything is written: it is not known whether the app has one, and publishing may make a draft app live', async () => {
+  const { sdk } = appWorld(oneGroup(entityEntry), { published: [] });
+  sdk.records.appmodule = () => { throw connectionError(503, 'service unavailable'); };
+  await assert.rejects(backend(sdk).removeFromApp(APP, P1), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_APP_UNREADABLE');
+    assert.strictEqual(e.outcome, 'nothing');
+    assert.strictEqual(e.transient, false);
+    assert.deepStrictEqual([e.appId, e.pageId], [APP, P1]);
+    assert.match(e.message, new RegExp(`could not read the published navigation of app ${APP}: .*service unavailable.*, so it is not known whether page ${P1} still shows in the app that runs. Nothing was changed`));
+    return true;
+  });
+  assert.strictEqual(writes(sdk), 0);
+});
+
+test('removeFromApp: a published navigation that cannot be read, with an EMPTY saved navigation, is refused like any removal that would leave an app with no entry — publishing it would put the empty navigation in what runs', async () => {
+  const { sdk } = appWorld(oneGroup(), { published: [P1], unreadable: true });
+  await assert.rejects(backend(sdk).removeFromApp(APP, P1), (e) => e.code === 'GENPAGE_NAVIGATION_WOULD_BE_EMPTY' && e.outcome === 'nothing');
+  assert.strictEqual(writes(sdk), 0);
+});
+
+// The platform keeps an app's reference to a page until a sitemap without it is PUBLISHED (sdk-teardown.js records the measurement), and a page cannot be deleted before that: the removal publishes an app that was
+// never published too — which puts the whole draft app live, as publishing always does. Nothing runs from such an app, so "the app's users see the page until it is published" is not the reason for it; the result says
+// what the publish did instead.
+test('removeFromApp: an app that was never published is published by the removal — and a warning says so, and why', async () => {
+  const { sdk, state } = appWorld(oneGroup(entityEntry, pageEntry(P1, 'One'), pageEntry(P2, 'Two')), { neverPublished: true });
+  const out = await backend(sdk).removeFromApp(APP, P1);
+  assert.deepStrictEqual([out.wasInNavigation, out.appEdited, out.published, out.provedPublished], [true, true, true, true]);
+  assert.deepStrictEqual([sdk.count('pushArtifact'), sdk.count('publishArtifact')], [1, 1]);
   assert.strictEqual(out.warnings.length, 1);
-  assert.match(out.warnings[0], new RegExp(`the published navigation of app ${APP} could not be read \\(.*sitemap-xml-unreadable.*\\), so it is not known whether page ${P1} still shows in the app that runs`));
+  assert.match(out.warnings[0], new RegExp(`app ${APP} had never been published; taking the page out published it — the platform keeps its reference to the page until a sitemap without it is published, and publishing publishes everything the app has saved`));
+  assert.deepStrictEqual(state.published, [P2]);
+  assert.strictEqual(state.neverPublished, false);
+});
+
+test('removeFromApp: whether the app was ever published is asked before the publish and is a courtesy read — when it fails the removal goes on, without the warning', async () => {
+  const { sdk } = appWorld(oneGroup(entityEntry, pageEntry(P1, 'One'), pageEntry(P2, 'Two')), { neverPublished: true });
+  const records = sdk.records.appmodule;
+  sdk.records.appmodule = (o) => { if (/^appmoduleid eq /.test(o.filter) && sdk.count('publishArtifact') === 0) throw connectionError(503, 'service unavailable'); return records(o); };
+  const out = await backend(sdk).removeFromApp(APP, P1);
+  assert.deepStrictEqual([out.wasInNavigation, out.published, out.provedPublished, out.warnings], [true, true, true, []]);
+  assert.strictEqual(sdk.count('publishArtifact'), 1);
 });
 
 test('removeFromApp: an app\'s last entry is not taken out unless that is asked for — nothing is written before the refusal, and the platform would have accepted it', async () => {
@@ -226,6 +282,7 @@ test('removeFromApp: a publish that fails says the removal WAS saved — and one
     assert.strictEqual(e.code, 'GENPAGE_APP_PUBLISH_UNPROVEN');
     assert.strictEqual(e.saved, true);
     assert.match(e.message, new RegExp(`app ${APP} was published, but its published navigation still names page ${P1}`));
+    assert.deepStrictEqual([e.appId, e.pageId], [APP, P1]);
     assert.match(e.message, /Run the same command again/);
     return true;
   });
@@ -244,7 +301,7 @@ test('removeFromApp: a published navigation that cannot be read after the publis
   assert.match(out.warnings[0], new RegExp(`app ${APP} was published, but its published navigation could not be read back to confirm that page ${P1} no longer shows \\(.*sitemap-xml-unreadable.*\\) — treat it as gone only once seen to be`));
 });
 
-test('a published navigation whose read THROWS — an SDK failure, not an unreadable sitemap — is a fact the operation reports, never a failure of what it had done: the removal, the placement and the not-in-navigation answer all go on', async () => {
+test('a published navigation whose read THROWS — an SDK failure, not an unreadable sitemap — is a fact the operation reports, never a failure of what it had done: the removal and the placement go on', async () => {
   const unavailable = () => { throw connectionError(503, 'service unavailable'); };
 
   // After a publish that worked: the removal is reported published, and not proved.
@@ -262,13 +319,6 @@ test('a published navigation whose read THROWS — an SDK failure, not an unread
   const placed = await backend(placement.sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'One' }], finishIfUnpublished: true });
   assert.deepStrictEqual([placed.appEdited, placed.provedPublished], [true, false]);
   assert.match(placed.warnings[0], /was published again, but its published navigation could not be read back to confirm that the page shows \(could not read the published navigation of app .*service unavailable/);
-
-  // Before anything is done: a page the saved navigation does not name, whose published navigation cannot be read, is "not known to still show" — not a failure.
-  const unread = appWorld(oneGroup(entityEntry), { published: [] });
-  unread.sdk.records.appmodule = unavailable;
-  const none = await backend(unread.sdk).removeFromApp(APP, P1);
-  assert.deepStrictEqual([none.wasInNavigation, none.published, writes(unread.sdk)], [false, false, 0]);
-  assert.match(none.warnings[0], /could not be read \(could not read the published navigation of app .*service unavailable.*\), so it is not known whether page/);
 
   // A page the saved navigation names, whose published navigation cannot be read: the app is published, and the placement proved when it can be.
   const saved = appWorld(oneGroup(pageEntry(P1, 'One')), { published: [] });
@@ -409,10 +459,67 @@ const deletable = (apps = [{ unique: 'contoso_sales', name: 'Sales', published: 
   return new FakeSdk({ records: world.records, onGet: world.onGet }).seedPage(page);
 };
 const GONE = { pageId: P1, name: 'Overview', deleted: true, fileRows: 6, conversationMessages: 3, historyRemoved: true, verified: true, warnings: [] };
+// A delete is asked for, never assumed: the backend deletes only when `allowDestructive` is exactly true.
+const YES = { allowDestructive: true };
+
+// What a delete removes cannot be brought back from here, and the SDK deletes a page the moment it is asked to — so the backend does not ask it to until the caller has said it means it. The refusal comes AFTER the reads
+// that decide the delete (the page is there, no app's navigation names it), so it says exactly what a confirmed run would remove, and what a confirmed run would be refused for is what an unconfirmed one says first.
+test('delete: without allowDestructive: true nothing is deleted — the refusal comes after the page was read and the apps were looked at, and says exactly what would go', async () => {
+  const sdk = deletable();
+  await assert.rejects(backend(sdk).delete(P1), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_DELETE_NOT_CONFIRMED');
+    assert.strictEqual(e.outcome, 'nothing');
+    assert.strictEqual(e.transient, false);
+    assert.deepStrictEqual([e.pageId, e.fileRows, e.conversationMessages], [P1, 6, 3]);
+    assert.match(e.message, new RegExp(`^page "Overview" \\(${P1}\\) was not deleted: deleting it removes the page, its 6 file rows and its 3 conversation messages\\. Nothing was changed; run the same command with --allow-destructive to delete them$`));
+    return true;
+  });
+  assert.strictEqual(sdk.count('deleteRemoteArtifact'), 0);
+  assert.ok(sdk.pages.has(P1));
+  assert.strictEqual(sdk.count('fetchArtifact'), 1, 'the page was read once — and not again: nothing was deleted');
+  assert.ok(sdk.count('queryRecords') > 0, 'the apps were looked at: the refusal is the last of the reads that decide a delete');
+
+  const one = deletable([{ unique: 'contoso_sales', published: [] }], {}, folderOf({ bag: { rows: { source: 'row-1' } }, files: [], conversation: [{ sender: 'user', message: 'Make it' }] }));
+  await assert.rejects(backend(one).delete(P1), (e) => /its 1 file row and its 1 conversation message\. Nothing was changed/.test(e.message));
+});
+
+test('delete: only `allowDestructive: true` — not a truthy word — confirms it', async () => {
+  for (const options of [undefined, {}, { allowDestructive: false }, { allowDestructive: 'yes' }, { allowDestructive: 1 }]) {
+    const sdk = deletable();
+    await assert.rejects(backend(sdk).delete(P1, options), (e) => e.code === 'GENPAGE_DELETE_NOT_CONFIRMED', JSON.stringify(options));
+    assert.strictEqual(sdk.count('deleteRemoteArtifact'), 0, JSON.stringify(options));
+  }
+  const confirmed = deletable();
+  assert.deepStrictEqual(await backend(confirmed).delete(P1, { allowDestructive: true }), GONE);
+});
+
+// A maker reads their own name in a refusal: pac stored `"` as `\"` in the page's row, and the name shown is the one the page was given. What the call RETURNS is the name as stored — the contract of this backend,
+// which the script that prints it unescapes (genpage.js), so that a caller that compares names still sees what is in the row.
+test('delete: the page is named in a refusal by the name it was given — pac\'s `\\"` read back — and the answer carries the name exactly as stored', async () => {
+  const stored = 'Zed \\"q\\"';
+  const sales = [{ unique: 'contoso_sales', name: 'Sales', published: [] }];
+  await assert.rejects(backend(deletable(sales, {}, folderOf({ name: stored }))).delete(P1), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_DELETE_NOT_CONFIRMED');
+    assert.ok(e.message.startsWith(`page "Zed "q"" (${P1}) was not deleted`), e.message);
+    return true;
+  });
+  const out = await backend(deletable(sales, {}, folderOf({ name: stored }))).delete(P1, YES);
+  assert.strictEqual(out.name, stored);
+});
+
+test('delete: what makes a delete impossible is said before what makes it unconfirmed — a page that is not there, an app that names it and an app that cannot be read are each the answer with no confirmation given', async () => {
+  const missing = deletable([{ unique: 'contoso_sales', published: [] }], {}, folderOf({ id: P2 }));
+  await assert.rejects(backend(missing).delete(P1), (e) => e.code === 'GENPAGE_NOT_FOUND');
+  const named = deletable([{ unique: 'contoso_sales', name: 'Sales', published: [P1] }]);
+  await assert.rejects(backend(named).delete(P1), (e) => e.code === 'GENPAGE_IN_APP');
+  const unreadable = deletable([{ unique: 'contoso_sales', published: [] }], { listFails: true });
+  await assert.rejects(backend(unreadable).delete(P1), (e) => e.code === 'GENPAGE_APPS_UNREADABLE');
+  assert.strictEqual(missing.count('deleteRemoteArtifact') + named.count('deleteRemoteArtifact') + unreadable.count('deleteRemoteArtifact'), 0);
+});
 
 test('delete: the page and its conversation are deleted, after the apps were looked at, and the page is read back as gone — what is reported as deleted is what was counted before', async () => {
   const sdk = deletable();
-  const out = await backend(sdk).delete(P1.toUpperCase());
+  const out = await backend(sdk).delete(P1.toUpperCase(), YES);
   assert.deepStrictEqual(out, GONE);
   assert.deepStrictEqual(sdk.of('deleteRemoteArtifact').map((c) => c.args), [['genPage', P1]]);
   assert.ok(!sdk.pages.has(P1), 'the page is gone from the server');
@@ -504,12 +611,12 @@ test('delete: an app that IS found to name the page is the answer even when anot
 
 test('delete: an environment whose apps do not name the page is the one case that deletes — and the answer to "an app that is not published" is the same as to any other', async () => {
   const sdk = deletable([{ unique: 'contoso_sales', published: [P2] }, { unique: 'contoso_ops', published: [], saved: [P2, P3] }]);
-  assert.deepStrictEqual(await backend(sdk).delete(P1), GONE);
+  assert.deepStrictEqual(await backend(sdk).delete(P1, YES), GONE);
 });
 
 test('delete: the SDK\'s "history not fully removed" is a warning — the page is gone, the conversation messages that remain are said, and the page is still read back', async () => {
   const sdk = deletable().script('delete', { after: sdkError('GENPAGE_HISTORY_NOT_DELETED', '2 of 3 conversation messages could not be deleted') });
-  const out = await backend(sdk).delete(P1);
+  const out = await backend(sdk).delete(P1, YES);
   assert.deepStrictEqual({ ...out, warnings: undefined }, { ...GONE, historyRemoved: false, warnings: undefined });
   assert.strictEqual(out.warnings.length, 1);
   assert.match(out.warnings[0], /page "Overview" \(.*\) was deleted, but its conversation history was not fully removed: 2 of 3 conversation messages could not be deleted/);
@@ -519,7 +626,7 @@ test('delete: the SDK\'s "history not fully removed" is a warning — the page i
 test('delete: a failure that is not that one is judged by reading the page — still there: nothing was deleted, and the SDK\'s code and error are what the caller gets', async () => {
   const refusal = connectionError(400, 'The record is referenced by 1 other components');
   const sdk = deletable().script('delete', refusal);
-  await assert.rejects(backend(sdk).delete(P1), (e) => {
+  await assert.rejects(backend(sdk).delete(P1, YES), (e) => {
     assert.strictEqual(e.code, 'CONNECTION_ERROR');
     assert.strictEqual(e.outcome, 'nothing');
     assert.strictEqual(e.pageId, P1);
@@ -532,7 +639,7 @@ test('delete: a failure that is not that one is judged by reading the page — s
 
 test('delete: a failure after which the page is gone is a delete whose answer was lost — it is reported deleted, verified, and the conversation messages that may remain are said', async () => {
   const sdk = deletable().script('delete', { lose: connectionError(0, 'socket hang up') });
-  const out = await backend(sdk).delete(P1);
+  const out = await backend(sdk).delete(P1, YES);
   assert.deepStrictEqual({ ...out, warnings: undefined }, { ...GONE, historyRemoved: false, warnings: undefined });
   assert.strictEqual(out.warnings.length, 1);
   assert.match(out.warnings[0], /the answer to deleting page "Overview" \(.*\) was lost \(.*socket hang up.*\), but the page is gone — the conversation messages are deleted after the page, so this call did not remove its 3 message\(s\), and they may remain/);
@@ -540,7 +647,7 @@ test('delete: a failure after which the page is gone is a delete whose answer wa
 
 test('delete: a failure whose outcome cannot be read is an unknown one — the caller is told to look for the page before trying again', async () => {
   const sdk = deletable().script('delete', connectionError(0, 'reset')).script('fetch', 'read', new Error('HTTP 500'));
-  await assert.rejects(backend(sdk).delete(P1), (e) => {
+  await assert.rejects(backend(sdk).delete(P1, YES), (e) => {
     assert.strictEqual(e.outcome, 'unknown');
     assert.strictEqual(e.pageId, P1);
     assert.match(e.message, /deleting page "Overview" \(.*\) failed \(.*reset.*\), and reading the page to see whether it is gone failed too \(HTTP 500\) — it is not known whether it was deleted\. Look for page .* before running this again/);
@@ -550,7 +657,7 @@ test('delete: a failure whose outcome cannot be read is an unknown one — the c
 
 test('delete: a delete that was accepted is not reported until the page is read back as gone — one that can still be read is not proven deleted', async () => {
   const sdk = deletable().script('delete', { keep: true });
-  await assert.rejects(backend(sdk).delete(P1), (e) => {
+  await assert.rejects(backend(sdk).delete(P1, YES), (e) => {
     assert.strictEqual(e.code, 'GENPAGE_DELETE_UNPROVEN');
     assert.strictEqual(e.outcome, 'unknown');
     assert.match(e.message, /the delete of page .* was accepted, but the page can still be read — it is not proven deleted/);
@@ -560,7 +667,7 @@ test('delete: a delete that was accepted is not reported until the page is read 
 
 test('delete: a read-back that fails after a delete that worked is a warning on a delete that is reported, but not as verified', async () => {
   const sdk = deletable().script('fetch', 'read', new Error('HTTP 500'));
-  const out = await backend(sdk).delete(P1);
+  const out = await backend(sdk).delete(P1, YES);
   assert.strictEqual(out.deleted, true);
   assert.strictEqual(out.verified, false);
   assert.strictEqual(out.warnings.length, 1);
@@ -594,9 +701,39 @@ test('runtimeTypes: a list with no table is refused — the SDK would answer the
   }
 });
 
-test('runtimeTypes: what the SDK refuses is the caller\'s — an unknown table or a name it would not accept — as the SDK\'s own error', async () => {
+test('runtimeTypes: what the SDK refuses is the caller\'s — a name it would not accept — as the SDK\'s own error', async () => {
   const refusal = sdkError('INVALID_ARGUMENT', 'table names must be lower case');
   await assert.rejects(backend(new FakeSdk().script('types', refusal)).runtimeTypes(['account']), (e) => e === refusal);
+});
+
+// The SDK reads each table's own metadata first, and names the table in the request that fails:
+//   HTTP 404 from https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='nosuchtable')?$select=LogicalName%2C…&$expand=Attributes(…): Could not find entity nosuchtable
+// (`code` CONNECTION_ERROR, `statusCode` 404, `url` the request's). Only a 404 of that read — the table's own, for a table that was asked for — says the table is not there; a 404 from a request BELOW a table, from another
+// path, for a table nobody asked for (one a lookup column points at) or with another status is something else, and stays the SDK's own error.
+const tableUrl = (rest) => `https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='${rest}`;
+test('runtimeTypes: a 404 of the metadata of a table that was asked for is GENPAGE_TABLE_NOT_FOUND, naming the table — any other 404 stays the SDK\'s own error', async () => {
+  const missing = new ConnectionError(tableUrl("nosuchtable')?$select=LogicalName%2CSchemaName&$expand=Attributes(%24select%3DLogicalName)"), 404, 'HTTP 404: Could not find entity nosuchtable');
+  await assert.rejects(backend(new FakeSdk().script('types', missing)).runtimeTypes(['Account', 'NoSuchTable']), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_TABLE_NOT_FOUND');
+    assert.strictEqual(e.table, 'nosuchtable');
+    assert.strictEqual(e.cause, missing);
+    assert.strictEqual(e.transient, false);
+    assert.match(e.message, /^table 'nosuchtable' does not exist in this environment, so no types were generated — a table is named by its logical name/);
+    return true;
+  });
+  const bare = new ConnectionError(tableUrl("account')"), 404, 'HTTP 404');
+  await assert.rejects(backend(new FakeSdk().script('types', bare)).runtimeTypes(['account']), (e) => e.code === 'GENPAGE_TABLE_NOT_FOUND' && e.table === 'account', 'the table\'s own read, with no query string');
+
+  const others = {
+    'a request below the table': new ConnectionError(tableUrl("nosuchtable')/Attributes?$select=LogicalName"), 404, 'HTTP 404'),
+    'a table nobody asked for': new ConnectionError(tableUrl("related')?$select=LogicalName"), 404, 'HTTP 404'),
+    'another path': new ConnectionError('https://contoso.crm.dynamics.com/api/data/v9.0/uxagentprojects(1)', 404, 'HTTP 404'),
+    'another status': new ConnectionError(tableUrl("nosuchtable')?$select=LogicalName"), 403, 'HTTP 403'),
+    'a transport failure': new ConnectionError(tableUrl("nosuchtable')?$select=LogicalName"), 0, 'socket hang up'),
+  };
+  for (const [what, error] of Object.entries(others)) {
+    await assert.rejects(backend(new FakeSdk().script('types', error)).runtimeTypes(['nosuchtable']), (e) => e === error, what);
+  }
 });
 
 const viewRecords = (views = { account: V_ACCOUNT, contact: V_CONTACT }) => ({

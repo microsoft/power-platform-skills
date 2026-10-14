@@ -148,12 +148,12 @@ function mockSdk(opts = {}) {
         const m = filter.match(/uniquename eq '([^']+)'/);
         if (m) {
           const oi = (opts.otherApps || []).findIndex((a) => a.uniquename === m[1]);
-          if (oi >= 0) return [{ appmoduleid: `app-${oi + 2}`, appmoduleidunique: `uv-${oi + 2}`, uniquename: m[1] }];
+          if (oi >= 0) return [{ appmoduleid: opts.otherApps[oi].appmoduleid || `app-${oi + 2}`, appmoduleidunique: `uv-${oi + 2}`, uniquename: m[1] }];
           return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1] }];
         }
         if (opts.failAppList) throw new Error('appmodule list failed'); // shared-check fail-closed
         const rows = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique }];
-        (opts.otherApps || []).forEach((a, i) => rows.push({ appmoduleid: `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename }));
+        (opts.otherApps || []).forEach((a, i) => rows.push({ appmoduleid: a.appmoduleid || `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename }));
         return rows;
       }
       if (e === 'appmodulecomponent') {
@@ -454,8 +454,8 @@ function mockSdk(opts = {}) {
       if (/^\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(url)) {
         if (opts.draftAppsError) return { status: 503, body: null };
         const value = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique, componentstate: 0 }];
-        (opts.otherApps || []).forEach((a, i) => value.push({ appmoduleid: `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename, componentstate: 0 }));
-        (opts.draftApps || []).forEach((d, j) => value.push({ appmoduleid: `draft-${j}`, appmoduleidunique: draftLayerKey(j), uniquename: d.uniquename, componentstate: 1 }));
+        (opts.otherApps || []).forEach((a, i) => value.push({ appmoduleid: a.appmoduleid || `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename, componentstate: 0 }));
+        (opts.draftApps || []).forEach((d, j) => value.push({ appmoduleid: d.appmoduleid || `draft-${j}`, appmoduleidunique: draftLayerKey(j), uniquename: d.uniquename, componentstate: 1 }));
         return { status: 200, body: { value } };
       }
       if (!/^\/sitemaps\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(url)) return { status: 404, body: null };
@@ -5905,6 +5905,39 @@ test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-app
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// The halt says what to run: `genpage.js remove-from-app` takes the page out of the OTHER app's navigation and publishes that app, so the page is no longer shared. The scan already holds each app's id (the rows it lists the
+// apps from), so the command is ready to run — against the environment the build runs in; an app whose id is not one the command takes is named by its unique name in the id's place. Changing another app is not the
+// build's to do, so the text says to ask first.
+const OTHER_APP_ID = 'a1111111-1111-4111-8111-111111111111';
+const detachCommand = (env, appId, pageId) => `node scripts/genpage.js remove-from-app --env ${env} --app-id ${appId} --page-id ${pageId}`;
+test('pages: the shared-across-apps halt prints the command that takes the page out of EACH other app that holds it — the id from the scan, the environment from the build — and still offers to give this app its own page', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const empty = '<SiteMap><Area><Group/></Area></SiteMap>';
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [
+      { uniquename: 'contoso_secondapp', appmoduleid: OTHER_APP_ID, sitemapxml: sitemapWithO },
+      // Holds the page in its SAVED navigation only, and its id in this fixture is not a GUID (`app-3`): the command names the app instead of printing an id it would refuse.
+      { uniquename: 'contoso_thirdapp', sitemapxml: empty, savedSitemapXml: sitemapWithO },
+    ] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://contoso.crm.dynamics.com', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => {
+        assert.strictEqual(e.code, 'pages-shared-across-apps');
+        assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_secondapp, contoso_thirdapp \\[saved, not published\\]\\)`), 'what was said before is still said');
+        assert.match(e.message, /Detach it from the other app — ask the user first, since this changes another app: /);
+        assert.ok(e.message.includes(detachCommand('https://contoso.crm.dynamics.com', OTHER_APP_ID, GP_O)), e.message);
+        assert.ok(e.message.includes(detachCommand('https://contoso.crm.dynamics.com', '<id of app contoso_thirdapp>', GP_O)), e.message);
+        assert.ok(e.message.endsWith(" (each takes the page out of that app's navigation and publishes that app, which publishes everything that app has saved; the page itself stays) — or detach it in Maker, or give this app its own page."), e.message);
+        return true;
+      });
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 // The shared-page scan is a snapshot: another maker can take a page into another app's navigation while the build runs. So the build scans
 // again right before the first page is written in place, and once more after the last. A page that became shared while a navigation target
 // was being created halts the build there, before any page is updated in place.
@@ -5942,6 +5975,8 @@ test('pages: a page another app takes in while a navigation target is created HA
         assert.match(e.message, /^generative page\(s\) became shared across apps while this build ran: /, 'raised ahead of the page step, so the runner does not wrap it');
         assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_secondapp \\[saved, not published\\]\\)`));
         assert.match(e.message, /no page this build began with has been updated in place/);
+        assert.ok(e.message.includes(`${detachCommand('https://x', '<id of app contoso_secondapp>', GP_O)} (each takes the page out`), 'the command that detaches it is printed here too');
+        assert.match(e.message, /— or detach it in Maker, or give this app its own page\.$/);
         assert.strictEqual(require('../build-model-app.js').isTransientHalt(e), false, 'another app still holds the page, so a re-run of the halt would only halt again');
         // Marked outright, not left to the text: the message quotes other apps' names, and no transient pattern may ever make the build re-run it.
         assert.strictEqual(e.transient, false, 'the halt carries transient: false itself');
@@ -5979,6 +6014,8 @@ test('pages: a page another app takes in while the pages upload is REPORTED afte
     assert.strictEqual(reported.length, 1, `one report: ${JSON.stringify(warnings)}`);
     assert.match(reported[0], new RegExp(`^generative page "Detail" ${GP_D} \\(also in contoso_secondapp \\[saved, not published\\]\\) was taken into another app's navigation`));
     assert.match(reported[0], /so its new content will show there once that app is published\./, 'an app that only SAVED the page shows it once published');
+    assert.ok(reported[0].includes(`Detach it from the other app — ask the user first, since this changes another app: ${detachCommand('https://x', '<id of app contoso_secondapp>', GP_D)} (each takes the page out`), reported[0]);
+    assert.ok(reported[0].endsWith('or detach it in Maker, or give this app its own page.'), reported[0]);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -6405,13 +6442,14 @@ test('pages: a page shared with a NEVER-PUBLISHED app\'s saved navigation HALTS 
   try {
     // The only other app has never been published: the published list has no row for it. The published scan alone read this environment as having no other app.
     for (const allowDestructive of [false, true]) {
-      const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ uniquename: 'contoso_draftapp', savedSitemapXml: s.sitemapWithO }] });
+      const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ uniquename: 'contoso_draftapp', appmoduleid: OTHER_APP_ID, savedSitemapXml: s.sitemapWithO }] });
       await assert.rejects(
         runPagesUpdate(s, sdk, { allowDestructive }),
         (e) => {
           assert.strictEqual(e.phase, 'pages');
           assert.strictEqual(e.code, 'pages-shared-across-apps');
           assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_draftapp \\[saved, not published\\]\\)`));
+          assert.ok(e.message.includes(detachCommand('https://x', OTHER_APP_ID, GP_O)), 'the id of a never-published app comes from the list of such apps');
           return true;
         },
         `allowDestructive=${allowDestructive}: cross-app mutation has no escape`

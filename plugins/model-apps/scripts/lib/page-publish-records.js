@@ -23,7 +23,7 @@
 // with the plain read and checked with the plain read (genpage.fileVersions is the one reader), because the two layers answer different numbers for a draft (fact 2) and would never compare equal.
 //
 // Everything that is not a clear "yes" is a "no", and a "no" costs one publish: no file, a file that cannot be read or is damaged, one written for another app or environment, a page with
-// no entry, an entry for other content (the spec changed, or the page's publish did not finish after it was written), an entry with no versions (a record of an earlier format, or one whose
+// no entry, an entry for other content (the spec changed, or the page's publish did not finish after it was written), an entry with no versions (one in the format an earlier build of this release wrote, or one whose
 // versions could not be read after the publish), a read of the versions that fails or cannot be taken as one consistent set, a file row that was added, removed or moved, and a publish that
 // was accepted but not seen to take effect. So the file is a cache that can only ever be wrong in one direction — a publish that did not need to happen — with one residual: what the
 // versions of the FILE rows cannot show. The page row's own fields (its name, kept in the project row, not in a file) are not covered, so a page renamed from elsewhere and published, then
@@ -36,7 +36,7 @@
 //   { "schemaVersion": 2, "environmentFingerprint": "<sha256 of the origin>", "appUniqueName": "contoso_app",
 //     "pages": { "11111111-1111-4111-8111-111111111111": { "fingerprint": "<sha256 of the content published>",
 //                                                           "files": { "22222222-2222-4222-8222-222222222222": "1234567", … } } } }
-// A file of schema version 1 (an earlier release: `"pages": { "<id>": "<sha256>" }`, no versions) is read as entries with no `files`, which never skip a publish.
+// A file of schema version 1 (the format an earlier build of this release wrote — no release shipped it: `"pages": { "<id>": "<sha256>" }`, no versions) is read as entries with no `files`, which never skip a publish.
 // Written atomically (a crash leaves the old file or the new one), so a half-written file is never read as a record.
 const fs = require('node:fs');
 const path = require('node:path');

@@ -603,6 +603,20 @@ test('fetchAppsForPages: the page of a never-published app is found when it is t
   assert.deepStrictEqual(layerKeysRead, [layerKey(1)], 'only the published layer of the published app — the pending layer key is never taken for a never-published app');
 });
 
+// The id of an app is what a command that acts on it takes (genpage.js remove-from-app --app-id), and the scan keys its answers by unique name: so the ids the rows it already read carry — the published
+// list, and the list of never-published apps — are handed on, by lower-cased unique name, at no request of their own.
+test('fetchAppsForPages: the scan carries the id of every app it read, published or never published, by lower-cased unique name — the app being built, which it does not read, is not among them', async () => {
+  const { sdk } = scanEnv([
+    { name: 'App-Self', published: withPage() },
+    { name: 'App-B', published: withPage(GP_OVERVIEW) },
+    { name: 'app-c', published: withPage(), saved: withPage(GP_OVERVIEW) },
+  ], { drafts: [{ name: 'App-Draft', saved: withPage(GP_OVERVIEW) }] });
+  const r = await fetchAppsForPages(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-self' });
+  assert.deepStrictEqual([...r.appIds].sort(), [['app-b', 'app-1'], ['app-c', 'app-2'], ['app-draft', 'draft-0']]);
+  const none = await fetchAppsForPages(sdk, []);
+  assert.deepStrictEqual([none.ok, none.appIds.size], [true, 0], 'no page asked for: nothing is read, and no id is known');
+});
+
 test('fetchAppsForPages: the list of never-published apps is ONE request however many there are, and each draft costs its sitemap component read and nothing else', async () => {
   for (const drafts of [0, 1, 4]) {
     const list = Array.from({ length: drafts }, (_, j) => ({ name: `app-draft-${j}`, saved: j === drafts - 1 ? withPage(GP_OVERVIEW) : withPage(GP_DETAIL) }));

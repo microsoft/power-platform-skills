@@ -539,8 +539,8 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     to detach it from the nav (the page record stays deployed; rebuild finalizes the sitemap).
   - `pages-shared-across-apps` — the page appears in another app's sitemap, published or only saved (not yet
     published — an app that was never published counts). Detach it from that app — ask the user first, since this
-    changes another app. The halt names the app, and `scripts/apps.js list --env <envUrl> --search <name>` gives its `id`;
-    `node "${PLUGIN_ROOT}/scripts/genpage.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>`
+    changes another app. The halt names the app and prints the command with the app's `id` filled in (`<id of app …>` stands where the id could not be read, and
+    `scripts/apps.js list --env <envUrl> --search <name>` gives it); `node "${PLUGIN_ROOT}/scripts/genpage.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>`
     takes the page out of that app's navigation and publishes that app (everything it has saved goes live with
     it; the page itself stays). Or detach it in Maker. `--allow-destructive` does **not** bypass this halt.
     The build checks again right before it updates pages in place, so a page another app takes in while the build runs halts it

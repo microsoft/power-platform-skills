@@ -158,7 +158,7 @@ const { collectionRows, currentLayerRow, savedPageRows } = require('./lib/app-co
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { odataLit } = require('./lib/odata.js');
 const { genPageSubArea } = require('./lib/genpage-subarea.js');
-const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
+const { makeGenpageSdk, unescapePacName } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 
 const USAGE = [
@@ -401,10 +401,11 @@ async function readPages(sdk, ids) {
     throw new Refusal('PAGE_NOT_FOUND',
       `Not a generative page in this environment: ${missing.join(', ')}. --page-id takes the id of a page that exists (the page's id, not the app's).`);
   }
-  // A page whose name cannot be read still shows in the navigation, under its id.
+  // A page whose name cannot be read still shows in the navigation, under its id. A page an earlier release created through pac holds `\"` for every `"` of its name, and the entry's title is the name
+  // the page was given (`unescapePacName` says why), as the build and the download read it.
   return wanted.map((id) => {
     const { name } = currentLayerRow(rowsById.get(id));
-    return { id, title: (typeof name === 'string' && name) || id };
+    return { id, title: (typeof name === 'string' && name) ? unescapePacName(name) : id };
   });
 }
 

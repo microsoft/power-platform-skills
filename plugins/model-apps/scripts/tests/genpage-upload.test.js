@@ -733,7 +733,8 @@ test('a page written but left out of the app is a failure that carries its id; a
   assert.strictEqual(r.payload.pageId, NEW_ID, 'the id must still be reported so the operator can place it');
   assert.strictEqual(r.payload.appId, APP);
   assert.match(r.payload.error, new RegExp(`page ${NEW_ID} was created and published, but NOT added to app ${APP}'s navigation: app .* could not be read`));
-  assert.match(r.payload.error, /Add the page to the app navigation in Maker/);
+  assert.match(r.payload.error, new RegExp(`Add the page to the app navigation with node scripts/genpage\\.js add-to-app --env \\S+ --app-id ${APP} --page-id ${NEW_ID}(?:, or run the same command again with --page-id |\\.$)`), 'the verb that places a page, ready to run, not Maker');
+  assert.doesNotMatch(r.payload.error, /in Maker/);
   assert.strictEqual(readMarker(file).pageId, NEW_ID, 'the page exists, so its base is recorded all the same');
 
   const pinning = environment({ placement: () => { throw new Error('the layer could not be read'); } });
@@ -793,6 +794,17 @@ const adviceFor = (r) => {
   assert.ok(found, `the failure names the way on: ${r.payload.error}`);
   return ['--page-id', found[1]];
 };
+
+// A create whose publish failed is finished by running it again with --page-id, which the base marker lets through — and when the marker itself could not be written there is nothing to let it through, so
+// what is left is a page that exists and is not live. The two ways out are verbs of scripts/genpage.js now, the second after asking the user and with the confirmation the script requires.
+test('a create whose publish failed AND whose base marker could not be written has no way on by itself — it says to publish the page in Maker, or delete it with the verb that does, after asking', async () => {
+  const file = codeFile();
+  const genpage = environment({ onCreate: () => ({ publish: { kind: 'failed', detail: 'the publish timed out' } }) });
+  const r = await run(createArgs(file, NAMED), genpage, { base: { ...realBase, writeMarker() { throw new Error('disk full'); } } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.payload.pageId, NEW_ID);
+  assert.match(r.payload.error, new RegExp(`could not be written, so publish page ${NEW_ID} in Maker, or delete it \\(after asking the user — it is permanent: node scripts/genpage\\.js delete --env \\S+ --page-id ${NEW_ID} --allow-destructive\\) and create it again\\.$`));
+});
 
 test('RUNNING the advice for a create that published nothing — with no app — publishes exactly that page, and the marker no longer says it is unfinished', async () => {
   const file = codeFile();
@@ -937,7 +949,8 @@ test('a create that could not be placed leaves the page unfinished too — and t
   const first = await run(args, genpage);
   assert.strictEqual(first.ok, false);
   assert.match(first.payload.error, new RegExp(`page ${NEW_ID} was created and published, but NOT added to app ${APP}'s navigation: the app could not be saved`));
-  assert.match(first.payload.error, /Add the page to the app navigation in Maker, or run the same command again with --page-id /);
+  assert.match(first.payload.error, new RegExp(`Add the page to the app navigation with node scripts/genpage\\.js add-to-app --env \\S+ --app-id ${APP} --page-id ${NEW_ID}, or run the same command again with --page-id `));
+  assert.doesNotMatch(first.payload.error, /in Maker/);
   assert.strictEqual(readMarker(file).unfinished, 'place');
 
   placementFails = false;

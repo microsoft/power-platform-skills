@@ -49,13 +49,24 @@ test('REAL BUNDLE: describe counts the rows of a page\'s folder and the messages
 test('REAL BUNDLE: delete removes the page — its project row, the rows of its folder and the messages of its conversation — and nothing of any other page, and says what it removed', async () => {
   await inWorld(async ({ server, genpage }) => {
     const before = { files: server.filesOf(APP_EXISTING_PAGE_ID).length, messages: server.messagesOf(APP_EXISTING_PAGE_ID).length };
-    const out = await genpage.delete(OTHER);
+
+    // Not confirmed: the page and the apps were read, the refusal says what a delete would take, and not one DELETE was sent.
+    await assert.rejects(genpage.delete(OTHER), (e) => {
+      assert.strictEqual(e.code, 'GENPAGE_DELETE_NOT_CONFIRMED');
+      assert.deepStrictEqual([e.outcome, e.pageId, e.fileRows, e.conversationMessages], ['nothing', OTHER, 4, 2]);
+      assert.match(e.message, /deleting it removes the page, its 4 file rows and its 2 conversation messages\. Nothing was changed; run the same command with --allow-destructive to delete them/);
+      return true;
+    });
+    assert.deepStrictEqual(deletes(server), []);
+    assert.deepStrictEqual([server.filesOf(OTHER).length, server.messagesOf(OTHER).length], [4, 2], 'the page is whole');
+
+    const out = await genpage.delete(OTHER, { allowDestructive: true });
     assert.deepStrictEqual(out, { pageId: OTHER, name: 'Other', deleted: true, fileRows: 4, conversationMessages: 2, historyRemoved: true, verified: true, warnings: [] });
     assert.ok(!server.state.projects.has(OTHER));
     assert.deepStrictEqual([server.filesOf(OTHER).length, server.messagesOf(OTHER).length], [0, 0], 'the folder\'s rows and the conversation are gone');
     assert.deepStrictEqual({ files: server.filesOf(APP_EXISTING_PAGE_ID).length, messages: server.messagesOf(APP_EXISTING_PAGE_ID).length }, before, 'the other page is as it was');
     await assert.rejects(genpage.read(OTHER), (e) => e.code === 'GENPAGE_NOT_FOUND');
-    await assert.rejects(genpage.delete(OTHER), (e) => e.code === 'GENPAGE_NOT_FOUND', 'a second delete finds nothing to delete');
+    await assert.rejects(genpage.delete(OTHER, { allowDestructive: true }), (e) => e.code === 'GENPAGE_NOT_FOUND', 'a second delete finds nothing to delete');
   });
 });
 
@@ -76,7 +87,7 @@ test('REAL BUNDLE: a page the app\'s published navigation names is not deleted �
 test('REAL BUNDLE: a page an app only SAVED into its navigation is not deleted either — the refusal says it is saved and not published; once taken out of the app the delete goes through', async () => {
   await inWorld(async ({ server, app, genpage }) => {
     // The placement is saved, and the publish that would have shown it fails: the page is in the app's saved navigation alone.
-    await assert.rejects(genpage.placeInApp(APP_ID, { pages: [{ pageId: OTHER, title: 'Other' }], finishIfUnpublished: true }), (e) => e.code === 'GENPAGE_APP_PUBLISH_FAILED' && e.saved === true);
+    await assert.rejects(genpage.placeInApp(APP_ID, { pages: [{ pageId: OTHER, title: 'Other' }], finishIfUnpublished: true }), (e) => e.code === 'GENPAGE_APP_PUBLISH_FAILED' && e.saved === true && e.appId === APP_ID && e.pageId === OTHER);
     assert.ok(namesPage(app.state.xml, OTHER) && !namesPage(app.state.publishedXml, OTHER));
     await assert.rejects(genpage.delete(OTHER), (e) => {
       assert.strictEqual(e.code, 'GENPAGE_IN_APP');
@@ -89,7 +100,7 @@ test('REAL BUNDLE: a page an app only SAVED into its navigation is not deleted e
     // Taking it out of the app (its saved navigation does not name it any more, and the published one never did) leaves the delete free to go.
     const removed = await genpage.removeFromApp(APP_ID, OTHER);
     assert.deepStrictEqual([removed.wasInNavigation, removed.appEdited], [true, true]);
-    assert.strictEqual((await genpage.delete(OTHER)).deleted, true);
+    assert.strictEqual((await genpage.delete(OTHER, { allowDestructive: true })).deleted, true);
   }, { appOptions: { publishFailures: 1 } });
 });
 
@@ -109,7 +120,7 @@ test('REAL BUNDLE: removeFromApp takes the page out of the saved AND the publish
     assert.ok(server.state.projects.has(OTHER), 'the page itself stays');
 
     assert.deepStrictEqual(await genpage.removeFromApp(APP_ID, OTHER), { removed: [], wasInNavigation: false, appEdited: false, published: false, entriesLeft: 1, warnings: [] }, 'a second removal finds nothing to do');
-    assert.strictEqual((await genpage.delete(OTHER)).deleted, true);
+    assert.strictEqual((await genpage.delete(OTHER, { allowDestructive: true })).deleted, true);
     assert.ok(!server.state.projects.has(OTHER));
     assert.ok(server.state.projects.has(APP_EXISTING_PAGE_ID));
   });
@@ -184,9 +195,15 @@ test('REAL BUNDLE: runtimeTypes types a table named twice, or in another letter 
   });
 });
 
-test('REAL BUNDLE: runtimeTypes of a table the environment does not have is the SDK\'s own 404; an empty list is refused before any request', async () => {
+test('REAL BUNDLE: runtimeTypes of a table the environment does not have is GENPAGE_TABLE_NOT_FOUND, naming the table — the SDK\'s 404 of that table\'s own metadata read, kept as its cause; an empty list is refused before any request', async () => {
   await inWorld(async ({ server, genpage }) => {
-    await assert.rejects(genpage.runtimeTypes(['nosuchtable']), (e) => e.code === 'CONNECTION_ERROR' && e.statusCode === 404);
+    await assert.rejects(genpage.runtimeTypes(['account', 'nosuchtable']), (e) => {
+      assert.strictEqual(e.code, 'GENPAGE_TABLE_NOT_FOUND');
+      assert.strictEqual(e.table, 'nosuchtable');
+      assert.deepStrictEqual([e.cause.code, e.cause.statusCode], ['CONNECTION_ERROR', 404], 'the SDK\'s own error is the cause');
+      assert.match(e.cause.url, /\/EntityDefinitions\(LogicalName='nosuchtable'\)\?/, 'the request it names is the table\'s own metadata');
+      return true;
+    });
     const sent = server.requests.length;
     await assert.rejects(genpage.runtimeTypes([]), (e) => e.code === 'GENPAGE_DATA_SOURCES_REQUIRED');
     assert.strictEqual(server.requests.length, sent, 'no request');

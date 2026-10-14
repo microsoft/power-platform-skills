@@ -286,11 +286,12 @@ function currentSitemapRows(rows) {
 // is { ok:false }, and a draft app whose layer or sitemap cannot be resolved is `unreadable` — except one whose component read succeeds and finds no sitemap
 // component AND whose name no sitemap in the saved layer carries, which has no navigation and holds no page.
 //   -> { ok:true, byId: Map<id, appUniqueName[]> (an app holding the id in either layer), savedOnly: Map<id, appUniqueName[]> (the
-//        apps that hold it ONLY in the saved layer), unreadable: appUniqueName[] } | { ok:false, error }
+//        apps that hold it ONLY in the saved layer), unreadable: appUniqueName[], appIds: Map<lower-cased appUniqueName, appmoduleid> (the id of every app
+//        the scan read, from the rows it lists the apps from: a command that acts on an app takes its id, and this scan keys its answers by unique name) } | { ok:false, error }
 async function fetchAppsForPages(sdk, pageIds, opts) {
   opts = opts || {};
   const want = new Set(Array.from(pageIds || []).map((x) => String(x).toLowerCase()));
-  if (!want.size) return { ok: true, byId: new Map(), savedOnly: new Map(), unreadable: [] };
+  if (!want.size) return { ok: true, byId: new Map(), savedOnly: new Map(), unreadable: [], appIds: new Map() };
 
   const self = opts.excludeAppUnique ? String(opts.excludeAppUnique).toLowerCase() : null;
   let apps;
@@ -334,6 +335,9 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   const byId     = new Map();
   const savedOnly = new Map();
   const unreadable = [];
+  // The id of each app this scan reads, by lower-cased unique name. Both lists the scan starts from carry it, so it costs no request.
+  const appIds = new Map();
+  for (const a of others) if (a.appmoduleid) appIds.set(String(a.uniquename).toLowerCase(), guidKey(a.appmoduleid));
   // `app` references `id` — once, whichever layer says so. A set of apps per id, kept as the arrays the callers print.
   const reference = (map, id, app) => {
     const arr = map.get(id) || [];
@@ -365,6 +369,7 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   unreadable.push(...drafts.unreadable);
   const unlinked = [];
   for (const d of drafts.apps) {
+    appIds.set(String(d.name).toLowerCase(), d.appId);
     let components;
     try { components = await appComponentRows(sdk, d.layerKey, 62, { top: 1 }); } catch {
       unreadable.push(d.name);
@@ -413,7 +418,7 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
     }
   }
 
-  return { ok: true, byId, savedOnly, unreadable };
+  return { ok: true, byId, savedOnly, unreadable, appIds };
 }
 
 // The apps that have NEVER been published. The published `appmodule` list that fetchAppsForPages walks has no row for an app that is only saved in the maker, though its navigation is
@@ -422,7 +427,7 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
 // An app that has a published row — matched by `appmoduleid`, which a pending edit leaves alone, unlike the layer key `appmoduleidunique` — is read through its published layer and skipped
 // here, as is `self`. What is left exists only as a draft, and its one current layer (the only row, or the authored one: currentLayerRows) carries the layer key its components hang off.
 // FAIL-CLOSED: a list that cannot be read, or a row with no id, is { ok:false } — what the rows leave out cannot be known; a draft app whose layer cannot be told is named in `unreadable`.
-//   -> { ok:true, apps:[{ name, layerKey }], unreadable:[name] } | { ok:false, reason }
+//   -> { ok:true, apps:[{ name, layerKey, appId }], unreadable:[name] } | { ok:false, reason }
 async function draftOnlyApps(sdk, published, self) {
   if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'no Dataverse client to read it' };
   let rows;
@@ -448,7 +453,7 @@ async function draftOnlyApps(sdk, published, self) {
     if (name.toLowerCase() === self) continue;
     const current = currentLayerRows(group);
     if (current.length !== 1 || !GUID_36.test(guidKey(current[0].appmoduleidunique))) unreadable.push(name);
-    else apps.push({ name, layerKey: guidKey(current[0].appmoduleidunique) });
+    else apps.push({ name, layerKey: guidKey(current[0].appmoduleidunique), appId: id });
   }
   return { ok: true, apps, unreadable };
 }

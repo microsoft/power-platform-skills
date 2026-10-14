@@ -786,8 +786,8 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 }
 
 // Read the page tree a download writes (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
-// pages[] entries with codeFile paths relative to `outDir`. The same layout is what an earlier release's
-// `pac model genpage download` wrote, so a folder downloaded then is read the same way.
+// pages[] entries with codeFile paths relative to `outDir`. The same layout is what scripts/genpage.js download writes (both through
+// lib/genpage-sdk.js `pageFolderFiles`) and what an earlier release's `pac model genpage download` wrote, so a folder downloaded by either is read the same way.
 //
 // `unreadable` collects pages whose config.json EXISTS but could not be parsed. That distinction is
 // load-bearing: a MISSING config is genuinely optional, but a present-and-unparseable one means the
@@ -813,7 +813,8 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     // bindings and never recorded as unreadable, so it slipped past the --allow-lossy-download gate
     // this very function exists to feed.
     try {
-      // MEASURED: the config.json an earlier release's `pac model genpage download` wrote starts `ef bb bf`. Node's
+      // MEASURED: the config.json an earlier release's `pac model genpage download` wrote starts `ef bb bf` (this release's downloads write none — the SDK keeps the stored
+      // text — but a folder downloaded then is still read). Node's
       // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
       // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
@@ -844,7 +845,7 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     }
     // The model that generated the page, as config.json records it. It has to come back with the page:
     // a rebuild that re-uploads a page without its model must not lose the one the page was generated with (an
-    // upload through `pac` stored whatever `--model` it was sent, so one without it wiped the id to "" — live-measured).
+    // upload through `pac` (what an earlier release used) stored whatever `--model` it was sent, so one without it wiped the id to "" — live-measured).
     // Only an id the spec can hold is carried (see above).
     const recordedModel = typeof config.model === 'string' ? config.model.trim() : '';
     const model = PAGE_MODEL_RE.test(recordedModel) ? recordedModel : undefined;

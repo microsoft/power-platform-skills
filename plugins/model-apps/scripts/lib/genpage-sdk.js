@@ -77,6 +77,20 @@ function genpageError(message, props = {}) {
 }
 
 const messageOf = (error) => String((error && error.message) || error);
+
+// The table an SDK failure says is not there, or null when it does not say so. The SDK reads each table's own metadata first and names the table in the request that fails:
+//   HTTP 404 from https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='nosuchtable')?$select=LogicalName%2CSchemaName%2C…&$expand=Attributes(…): Could not find entity nosuchtable
+// The error carries `code` CONNECTION_ERROR, `statusCode` 404 and `url`, the request's, and that is what is read — never the message, which is the platform's own words and changes with its version. Only a 404 of the
+// table's OWN read — the URL ends at `(LogicalName='<table>')`, before any query string — for a table that was ASKED for means the table is not there: a 404 from a request below it
+// (`…(LogicalName='account')/Attributes/…`), from another path, or for a table nobody asked for (one a lookup column points at) is something else — a column read that raced a change, a proxy, a table the caller
+// cannot see — and is left as the SDK's own error, as is any other status.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api (a table's definition is read at EntityDefinitions(LogicalName='…'))
+function missingTableOf(error, askedFor) {
+  if (!error || error.statusCode !== 404 || typeof error.url !== 'string') return null;
+  const named = /\/EntityDefinitions\(LogicalName='([A-Za-z0-9_]+)'\)(?:\?|$)/.exec(error.url);
+  const table = named ? named[1].toLowerCase() : null;
+  return table !== null && askedFor.includes(table) ? table : null;
+}
 // The SDK's own code of a failure, for a result that reports the failure by value: the listings never throw, and a caller that prints the failure says which kind it was.
 const codeOf = (error) => (error && typeof error.code === 'string' && error.code ? { code: error.code } : {});
 
@@ -285,26 +299,36 @@ function genPagesOfSiteMap(siteMap) {
   return pages;
 }
 
+// The unique name of an app's PUBLISHED form (its appmodule row), or null when it has none — never published, or not there. It throws what the SDK's read throws.
+async function publishedFormOf(sdk, appId) {
+  const rows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${String(appId).toLowerCase()}`, top: 1 });
+  return (rows && rows[0] && rows[0].uniquename) || null;
+}
+
 // The pages the PUBLISHED navigation of an app names — what runs: appmodule -> its sitemap component -> the sitemap XML, as the build and verify read it — as
-// { ok: true, pages: [{ pageId, name }] }, `name` the navigation title. `{ ok: false, error }` when it cannot be read: an app that was never published has no
-// published navigation and says so, rather than answering as if it were empty. It throws what the SDK's reads throw.
+// { ok: true, pages: [{ pageId, name }] }, `name` the navigation title. `{ ok: false, error, reason }` when it cannot be read — `reason` the part of `error` that says why, for a caller that words it
+// itself — and `neverPublished: true` when the app has no published form at all: that is a fact (nothing runs from it, so no published navigation names anything) and not a read that failed, and it says so
+// rather than answering as if the app were empty. It throws what the SDK's reads throw.
 async function publishedNavigationOf(sdk, appId) {
   const { fetchSitemap, sitemapGenPages } = require('./sitemap-pages.js');
-  const rows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${String(appId).toLowerCase()}`, top: 1 });
-  const unique = rows && rows[0] && rows[0].uniquename;
-  if (!unique) return { ok: false, error: `app ${appId} has no published form — it was never published, or does not exist` };
+  const unique = await publishedFormOf(sdk, appId);
+  if (!unique) return { ok: false, neverPublished: true, error: `app ${appId} has no published form — it was never published, or does not exist`, reason: 'no published form' };
   const sitemap = await fetchSitemap(sdk, String(unique));
-  if (!sitemap.ok) return { ok: false, error: `could not read the published navigation of app ${appId} (${sitemap.reason}${sitemap.detail ? `: ${sitemap.detail}` : ''})` };
+  if (!sitemap.ok) {
+    const reason = `${sitemap.reason}${sitemap.detail ? `: ${sitemap.detail}` : ''}`;
+    return { ok: false, error: `could not read the published navigation of app ${appId} (${reason})`, reason };
+  }
   return { ok: true, pages: sitemapGenPages(sitemap.xml).map((p) => ({ pageId: p.pageId, name: p.title })) };
 }
 
-// `publishedNavigationOf` that never throws: `{ ok: true, pages }`, or `{ ok: false, error }` for an app that has no published navigation and for a read the SDK failed. A caller that
-// PROVES a publish by reading what runs reads through this, because an answer it could not get means "not proven" — a fact it reports — and not a failure of the work it had just done.
+// `publishedNavigationOf` that never throws: `{ ok: true, pages }`, or `{ ok: false, error, reason }` for an app that has no published navigation (`neverPublished`), for a navigation that cannot be read
+// although the app has a published form, and — `lookupFailed: true` — for a read the SDK failed before it could even tell which of those it is. A caller that PROVES a publish by reading what runs reads through
+// this, because an answer it could not get means "not proven" — a fact it reports — and not a failure of the work it had just done.
 async function publishedPagesOf(sdk, appId) {
   try {
     return await publishedNavigationOf(sdk, appId);
   } catch (error) {
-    return { ok: false, error: `could not read the published navigation of app ${appId}: ${messageOf(error)}` };
+    return { ok: false, lookupFailed: true, error: `could not read the published navigation of app ${appId}: ${messageOf(error)}`, reason: messageOf(error) };
   }
 }
 
@@ -915,8 +939,17 @@ function makeGenpageSdk(env, deps = {}) {
 
       if (edited) await pushApp(sdk, appId, warnings);
       const published = await publish(sdk, 'app', appId, undefined);
+      // The failures below name the app and the page(s) the caller asked for, as `removeFromApp`'s do, so a caller that prints one can go on from it.
+      const asked = wantedPages.map((p) => String(p.pageId));
+      const who = { appId, ...(asked.length === 1 ? { pageId: asked[0] } : asked.length > 1 ? { pageIds: asked } : {}) };
       if (published.kind === 'failed') {
-        throw genpageError(`the navigation of app ${appId} was saved, but publishing the app failed (${published.detail}) — the pages are in the app's saved navigation and show once it is published`, { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true });
+        // What the failed publish left saved is what THIS call saved: the navigation when it added a page — or when it completes a placement an earlier run saved, which leaves nothing to edit — and the default views
+        // of the tables when it pinned any. A call that only pinned views, for a page the navigation already names, has not touched the navigation.
+        const navigation = added.length > 0 || pin.length === 0;
+        const saved = navigation && pin.length > 0 ? `the navigation of app ${appId} and the default views of the tables the pages read were saved`
+          : navigation ? `the navigation of app ${appId} was saved`
+            : `the default views of the tables the pages read were saved in app ${appId}`;
+        throw genpageError(`${saved}, but publishing the app failed (${published.detail}) — ${navigation ? "the pages are in the app's saved navigation and show once it is published" : 'they take effect once the app is published'}`, { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true, ...who });
       }
       const result = { added: added.map((p) => String(p.pageId)), alreadyPlaced, pinnedViews: pin, warnings, appEdited: edited };
       if (!finishing) return result;
@@ -933,7 +966,7 @@ function makeGenpageSdk(env, deps = {}) {
       const showing = new Set(shown.pages.map((p) => String(p.pageId).toLowerCase()));
       const missing = wantedPages.map((p) => String(p.pageId)).filter((id) => !showing.has(id.toLowerCase()));
       if (missing.length) {
-        throw genpageError(`app ${appId} was published, but its published navigation does not show ${missing.length === 1 ? 'page' : 'pages'} ${missing.join(', ')} yet (it is not listed) — the placement is saved in the app's navigation, and shows once the app's publish has taken effect. Run the same command again to check, or publish the app in Maker`, { code: 'GENPAGE_APP_PUBLISH_UNPROVEN', saved: true });
+        throw genpageError(`app ${appId} was published, but its published navigation does not show ${missing.length === 1 ? 'page' : 'pages'} ${missing.join(', ')} yet (it is not listed) — the placement is saved in the app's navigation, and shows once the app's publish has taken effect. Run the same command again to check, or publish the app in Maker`, { code: 'GENPAGE_APP_PUBLISH_UNPROVEN', saved: true, ...who });
       }
       return { ...result, provedPublished: true };
     },
@@ -945,11 +978,18 @@ function makeGenpageSdk(env, deps = {}) {
     // An EXISTING app accepts a navigation with no entry at all when it is updated (measured; the platform refuses one only when a sitemap is CREATED), so nothing but this check stops it, and it is a
     // judgement and not a rule of the platform: an app whose last entry is taken out opens on nothing, which is rarely what "remove this page" meant. So it is refused before anything is written
     // (`GENPAGE_NAVIGATION_WOULD_BE_EMPTY`) unless the caller says `allowEmpty`, a deliberate choice of the same kind as the build's `--allow-destructive` for a spec that empties a navigation.
-    // One app edit at most, as for `placeInApp`: the app is read, the entries are taken out, it is pushed and published, and the PUBLISHED navigation is read back — the app's users see the page until the app is
-    // published, so a removal that was saved and not published is not one. A page the SAVED navigation does not name has nothing to write; but when the PUBLISHED navigation still names it (a maker saved
-    // the removal and never published it) the app is published, so that "removed" is true of what runs, and a page neither layer names is reported as not in the navigation, with nothing written or published.
-    // Returns { removed: [{ area, group, count }], wasInNavigation, appEdited, published, entriesLeft, provedPublished?, warnings } — `entriesLeft` is how many entries of any kind the saved navigation has once the page is out. It throws, with the page still in the app, when the app cannot be read, the edit is refused,
-    // or the check above fails — and with `saved: true` when the removal was saved and the app's publish failed (`GENPAGE_APP_PUBLISH_FAILED`) or its published navigation still names the page (`GENPAGE_APP_PUBLISH_UNPROVEN`).
+    // One app edit at most, as for `placeInApp`: the app is read, the entries are taken out, it is pushed and published, and the PUBLISHED navigation is read back. The publish is not optional. The app's users see the page
+    // until the app is published, so a removal that was saved and not published is not one — and the platform keeps an app's reference to a page until a sitemap without it is published (sdk-teardown.js records the
+    // measurement), so the page cannot be deleted before that, which is what a removal is usually for. That holds for an app that was NEVER published as well: nothing runs from it, but the removal publishes it all the same —
+    // everything the app has saved goes live — and a warning says so.
+    // A page the SAVED navigation does not name has nothing to write, and what follows depends on what is KNOWN of the published layer. It names the page (a maker saved the removal and never published it, or an earlier run saved
+    // it and its publish failed): the app is published, so that "removed" is true of what runs. It does not, or the app was never published: neither layer names the page — reported as not in the navigation
+    // (`wasInNavigation: false`), nothing written or published. The app has a published form whose navigation cannot be read: the saved removal may be the one that was never published, and "not in the navigation" would be a
+    // success the app that runs may contradict, so the app is published (as `placeInApp` does for a placement it cannot see in what runs), `wasInNavigation` is null — not known — and `provedPublished` is false unless the
+    // read-back works. A lookup the SDK failed before it could tell whether the app has a published form at all is `GENPAGE_APP_UNREADABLE`, with nothing changed: publishing on a guess could make a draft app live.
+    // Returns { removed: [{ area, group, count }], wasInNavigation: true | false | null, appEdited, published, entriesLeft, provedPublished?, warnings } — `published` is whether this run published the app, `entriesLeft` how many entries of any
+    // kind the saved navigation has once the page is out. It throws, with the page still in the app, when the app cannot be read, the edit is refused, or the check above fails — and with `saved: true` when the removal was saved
+    // and the app's publish failed (`GENPAGE_APP_PUBLISH_FAILED`) or its published navigation still names the page (`GENPAGE_APP_PUBLISH_UNPROVEN`).
     async removeFromApp(appId, pageId, options = {}) {
       const app = guidOf(appId, 'app');
       const page = guidOf(pageId, 'page');
@@ -970,17 +1010,37 @@ function makeGenpageSdk(env, deps = {}) {
         if (kept.length !== subAreas.length) edits.push({ a, g, kept, area: area.title, group: group.title, count: subAreas.length - kept.length });
       }));
       const removed = edits.map(({ area, group, count }) => ({ area, group, count }));
-      // The app is published exactly when the page was in one of its navigations — a page neither layer names touches nothing — so one flag answers for both.
-      const answer = (wasInNavigation) => ({ removed, wasInNavigation, appEdited: edits.length > 0, published: wasInNavigation, entriesLeft: left, warnings });
+      // `wasInNavigation` is true when a layer named the page, false when neither does — and that has to be KNOWN: a published navigation that could not be read does not "not name" the page — and null for a page
+      // the saved navigation does not name while the published one could not be read. `published` is whether THIS run published the app.
+      const answer = (wasInNavigation, published) => ({ removed, wasInNavigation, appEdited: edits.length > 0, published, entriesLeft: left, warnings });
+      let wasInNavigation = true;
+      let unreadableBefore = null;
 
       if (!edits.length) {
         const shown = await publishedPagesOf(sdk, app);
-        const live = shown.ok && shown.pages.some((p) => String(p.pageId).toLowerCase() === page);
-        if (!shown.ok) warnings.push(`the published navigation of app ${app} could not be read (${shown.error}), so it is not known whether page ${page} still shows in the app that runs`);
-        if (!live) return answer(false);
+        // Neither layer names the page, and that is known: the published navigation was read and does not, or the app has none because it was never published (nothing runs from it).
+        if (shown.ok ? !shown.pages.some((p) => String(p.pageId).toLowerCase() === page) : shown.neverPublished === true) return answer(false, false);
+        if (!shown.ok) {
+          // The SDK failed before it could tell whether the app has a published form at all: publishing on that would make a draft app live, and "not in the navigation" would be a guess, so nothing is done.
+          if (shown.lookupFailed) {
+            throw genpageError(`${shown.error}, so it is not known whether page ${page} still shows in the app that runs. Nothing was changed; run the same command again once the app can be read`, { code: 'GENPAGE_APP_UNREADABLE', outcome: 'nothing', appId: app, pageId: page });
+          }
+          // The app HAS a published form whose navigation cannot be read. A removal that was saved and whose publish failed (GENPAGE_APP_PUBLISH_FAILED says to run it again) looks exactly like this on the re-run: the saved
+          // navigation is without the page and the one that runs may still name it. Reporting "not in the navigation" would be a success the app that runs may contradict, so the app is published — what
+          // `placeInApp` does for a placement it cannot see in what runs — and the read-back says whether that could be proved.
+          wasInNavigation = null;
+          unreadableBefore = shown.reason;
+        }
       }
       if (left === 0 && options.allowEmpty !== true) {
         throw genpageError(`taking page ${page} out of app ${app} would leave its navigation with no entry: the platform accepts that on an app that exists, but the app would open on nothing. Nothing was changed. Add the entry that should replace it first, or — if an app with an empty navigation is what is meant — ask for it explicitly (genpage.js remove-from-app --allow-empty-navigation)`, { code: 'GENPAGE_NAVIGATION_WOULD_BE_EMPTY', outcome: 'nothing', appId: app, pageId: page });
+      }
+      // Whether the app has ever been published, asked BEFORE the publish (afterwards every app has): it is only for the note below, so a read that fails does not stop the removal.
+      let neverPublished = false;
+      if (edits.length) {
+        try {
+          neverPublished = (await publishedFormOf(sdk, app)) === null;
+        } catch { /* the removal goes on without the note */ }
       }
       for (const { a, g, kept } of edits) await sdk.updateElement('app', app, `/siteMap/areas/${a}/groups/${g}/subAreas`, kept);
       if (edits.length) await pushApp(sdk, app, warnings);
@@ -989,7 +1049,13 @@ function makeGenpageSdk(env, deps = {}) {
         const saved = edits.length ? `taken out of the saved navigation of app ${app}` : `already out of the saved navigation of app ${app}`;
         throw genpageError(`page ${page} was ${saved}, but publishing the app failed (${published.detail}) — it still shows in the app that runs until the app is published`, { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true, appId: app, pageId: page });
       }
-      const result = answer(true);
+      const result = answer(wasInNavigation, true);
+      if (neverPublished) {
+        warnings.push(`app ${app} had never been published; taking the page out published it — the platform keeps its reference to the page until a sitemap without it is published, and publishing publishes everything the app has saved`);
+      }
+      if (unreadableBefore !== null) {
+        warnings.push(`the published navigation of app ${app} could not be read (${unreadableBefore}), so it is not known whether page ${page} still shows in the app that runs — the app was published so that what runs is its saved navigation, which does not name the page`);
+      }
       // What runs is the published navigation, so that is what confirms the removal (see `placeInApp`: PublishXml is asynchronous, so a page still listed is not a failed publish, and not a finished removal either).
       const shown = await publishedPagesOf(sdk, app);
       if (!shown.ok) {
@@ -1013,24 +1079,32 @@ function makeGenpageSdk(env, deps = {}) {
     // DELETE a page: the project row (its file rows go with it) and then the conversation messages that point at it — the SDK's own delete, which removes them in that order so that a page the platform refuses
     // loses nothing. What this adds is what the SDK cannot know:
     //   1. The page is read first (`GENPAGE_NOT_FOUND` when it is not there), and what it held is what is reported as deleted.
-    //   2. No app's navigation may name it. Dataverse refuses to delete a page an app's sitemap still references (HTTP 400, "referenced by N other components"; see sdk-teardown.js), without saying WHICH app,
-    //      and whether it counts a placement that is only saved is not established — so the apps are looked up here with the scan the build uses for shared pages (every app's published AND saved navigation,
+    //   2. No app's navigation may name it. Dataverse refuses to delete a page an app's sitemap still references (HTTP 400, "referenced by N other components"; see sdk-teardown.js), without saying WHICH app —
+    //      and an app's saved navigation counts as much as its published one, as sdk-teardown.js measured — so the apps are looked up here with the scan the build uses for shared pages (every app's published AND saved navigation,
     //      apps that were never published included) and named, so the caller can take the page out of each with `removeFromApp` first (`GENPAGE_IN_APP`, nothing deleted). The scan fails closed:
     //      an app whose navigation cannot be read could be the one that holds the page (`GENPAGE_APPS_UNREADABLE`, nothing deleted).
-    //   3. What the delete did is settled by reading the page again. A failure that is not the SDK's "history not fully removed" is judged by that read: the page still there means nothing was deleted
+    //   3. Nothing is deleted unless the caller says it means it: `options.allowDestructive` must be exactly `true` (the plugin's word for a destructive run, as in the build and teardown), or the answer is
+    //      `GENPAGE_DELETE_NOT_CONFIRMED`, which says what a confirmed run would remove — the page, its file rows, its conversation messages. It comes AFTER 1 and 2, the reads that decide the delete, so it is only
+    //      said of a delete that would otherwise have gone ahead, and the SDK (which deletes the moment it is asked) is not asked before.
+    //   4. What the delete did is settled by reading the page again. A failure that is not the SDK's "history not fully removed" is judged by that read: the page still there means nothing was deleted
     //      (`outcome: 'nothing'`); the page gone means the delete landed and its answer was lost — the conversation messages are deleted AFTER the project, so those were not touched, and it is said;
     //      a page that cannot be read leaves it unknown (`outcome: 'unknown'`, with the id to look for).
     // Returns { pageId, name, deleted: true, fileRows, conversationMessages, historyRemoved, verified, warnings }: `historyRemoved` is false when some of the conversation messages remain (a warning names the SDK's
     // words), `verified` that the page was read back as gone.
-    async delete(pageId) {
+    async delete(pageId, options = {}) {
       const id = guidOf(pageId, 'page');
       const sdk = await getSdk();
       const page = describeOf(await presentPage(sdk, id), id);
-      const who = label(page.name, id);
+      const who = label(unescapePacName(page.name), id);
       const apps = await appsNaming(sdk, id);
       if (apps.length) {
         const text = apps.map((a) => `${a.name ? `${JSON.stringify(a.name)} (${a.uniqueName}${a.appId ? `, id ${a.appId}` : ''})` : a.uniqueName}${a.savedOnly ? ' [saved, not published]' : ''}`).join(', ');
         throw genpageError(`page ${who} was not deleted: ${apps.length === 1 ? 'the navigation of this app names it' : `the navigation of these ${apps.length} apps names it`} — ${text}. Dataverse refuses to delete a page an app still names, and an app left pointing at a deleted page shows an error where the page was. Take the page out of ${apps.length === 1 ? 'that app' : 'each of them'} first (genpage.js remove-from-app), then delete it.`, { code: 'GENPAGE_IN_APP', outcome: 'nothing', pageId: id, apps });
+      }
+      if (!(options && options.allowDestructive === true)) {
+        const rows = `${page.fileRows} file ${page.fileRows === 1 ? 'row' : 'rows'}`;
+        const messages = `${page.conversationMessages} conversation ${page.conversationMessages === 1 ? 'message' : 'messages'}`;
+        throw genpageError(`page ${who} was not deleted: deleting it removes the page, its ${rows} and its ${messages}. Nothing was changed; run the same command with --allow-destructive to delete them`, { code: 'GENPAGE_DELETE_NOT_CONFIRMED', outcome: 'nothing', pageId: id, fileRows: page.fileRows, conversationMessages: page.conversationMessages });
       }
       const warnings = [];
       let historyRemoved = true;
@@ -1065,7 +1139,13 @@ function makeGenpageSdk(env, deps = {}) {
       const tables = [...new Set(dataSourcesOf(dataSources) || [])];
       if (!tables.length) throw genpageError('runtimeTypes needs at least one table', { code: 'GENPAGE_DATA_SOURCES_REQUIRED', outcome: 'nothing' });
       const sdk = await getSdk();
-      return sdk.generateGenPageRuntimeTypes(tables, options && options.detail ? { detail: options.detail } : undefined);
+      try {
+        return await sdk.generateGenPageRuntimeTypes(tables, options && options.detail ? { detail: options.detail } : undefined);
+      } catch (error) {
+        const missing = missingTableOf(error, tables);
+        if (missing === null) throw error;
+        throw genpageError(`table '${missing}' does not exist in this environment, so no types were generated — a table is named by its logical name (e.g. 'account', or 'contoso_project' for a custom table with its publisher prefix), not by its display name`, { code: 'GENPAGE_TABLE_NOT_FOUND', table: missing, cause: error });
+      }
     },
 
     // The default public view of each table, which `placeInApp` pins into an app and a script that creates an app around a page pins at the create — one definition (`defaultViewsOf`) for both.

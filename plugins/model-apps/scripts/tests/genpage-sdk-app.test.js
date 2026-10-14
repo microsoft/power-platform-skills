@@ -207,9 +207,39 @@ test('placeInApp: an app that cannot be read, a push that is not saved, and a pu
   await assert.rejects(backend(unpublished).placeInApp(APP, { pages: [{ pageId: P1 }] }), (e) => {
     assert.strictEqual(e.code, 'GENPAGE_APP_PUBLISH_FAILED');
     assert.strictEqual(e.saved, true);
+    assert.deepStrictEqual([e.appId, e.pageId, e.pageIds], [APP, P1, undefined], 'the failure says which app and which page — a caller that prints it can go on from it');
     assert.match(e.message, /saved, but publishing the app failed \(PublishXml refused\)/);
     return true;
   });
+  const several = placing(appArtifact()).script('publish', { publish: { kind: 'failed', error: new Error('PublishXml refused') } });
+  await assert.rejects(backend(several).placeInApp(APP, { pages: [{ pageId: P1 }, { pageId: P2 }] }), (e) => e.appId === APP && e.pageId === undefined && JSON.stringify(e.pageIds) === JSON.stringify([P1, P2]));
+});
+
+// What a failed publish says was SAVED is what this call saved: the navigation when it added a page (or finished a placement an earlier run saved), the default views of the tables when it pinned any —
+// and a call that only pinned views, for a page the navigation already names, has not touched the navigation.
+test('placeInApp: a publish that fails says what was saved — views only is not "the navigation" — and the unproven publish carries the ids too', async () => {
+  const placed = appArtifact();
+  placed.siteMap.areas[0].groups[0].subAreas.push({ id: 'sub_p', type: 'GenPage', genPageId: P1, title: 'Overview' });
+  const refuse = (sdk) => sdk.script('publish', { publish: { kind: 'failed', error: new Error('PublishXml refused') } });
+
+  const viewsOnly = refuse(placing(placed, viewRecords()));
+  await assert.rejects(backend(viewsOnly).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], dataSources: ['account'] }), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_APP_PUBLISH_FAILED');
+    assert.match(e.message, new RegExp(`^the default views of the tables the pages read were saved in app ${APP}, but publishing the app failed \\(PublishXml refused\\) — they take effect once the app is published$`));
+    assert.doesNotMatch(e.message, /navigation/, 'the navigation was not touched');
+    assert.deepStrictEqual([e.saved, e.appId, e.pageId], [true, APP, P1]);
+    return true;
+  });
+
+  const both = refuse(placing(appArtifact(), viewRecords()));
+  await assert.rejects(backend(both).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], dataSources: ['account'] }), (e) => e.code === 'GENPAGE_APP_PUBLISH_FAILED'
+    && new RegExp(`^the navigation of app ${APP} and the default views of the tables the pages read were saved, but publishing the app failed \\(PublishXml refused\\) — the pages are in the app's saved navigation and show once it is published$`).test(e.message));
+
+  const navigationOnly = refuse(placing(appArtifact()));
+  await assert.rejects(backend(navigationOnly).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }] }), (e) => new RegExp(`^the navigation of app ${APP} was saved, but publishing the app failed \\(PublishXml refused\\) — the pages are in the app's saved navigation`).test(e.message));
+
+  const slow = savedButUnpublished({ takesEffect: false });
+  await assert.rejects(backend(slow.sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], finish: true }), (e) => e.code === 'GENPAGE_APP_PUBLISH_UNPROVEN' && e.appId === APP && e.pageId === P1);
 });
 
 // ── placeInApp: completing a placement an earlier run began (`finish`) ──────────────────────────────────────────────────────────────
@@ -273,7 +303,8 @@ test('placeInApp finish: a published navigation that cannot be read contradicts 
 
   const failing = savedButUnpublished();
   failing.sdk.script('publish', { publish: { kind: 'failed', error: new Error('PublishXml refused') } });
-  await assert.rejects(backend(failing.sdk).placeInApp(APP, { pages: [{ pageId: P1 }], finish: true }), (e) => e.code === 'GENPAGE_APP_PUBLISH_FAILED' && e.saved === true && /PublishXml refused/.test(e.message));
+  await assert.rejects(backend(failing.sdk).placeInApp(APP, { pages: [{ pageId: P1 }], finish: true }), (e) => e.code === 'GENPAGE_APP_PUBLISH_FAILED' && e.saved === true && /PublishXml refused/.test(e.message)
+    && new RegExp(`^the navigation of app ${APP} was saved, but publishing the app failed`).test(e.message), 'a placement saved earlier and finished now: what is left unpublished is the navigation, though nothing was edited');
   assert.strictEqual(failing.sdk.of('queryRecords').filter((c) => c.args[0] === 'appmodule').length, 0, 'a publish that failed proves nothing and is not read back');
 });
 

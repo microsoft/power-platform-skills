@@ -39,7 +39,7 @@ Both skills can create one:
 `node "${PLUGIN_ROOT}/scripts/genpage.js" types …` prints `{ "ok": false, "error", "code" }` and exits 1 when it cannot write the schema — read `error` first.
 
 - Verify entity names are logical names (singular, lowercase: `"account"` not `"Account"`)
-- A table the environment does not have is the SDK's own 404 — ensure the entities exist in your environment and check for typos in entity logical names
+- A table the environment does not have prints `"code": "GENPAGE_TABLE_NOT_FOUND"` with the `table` it names — check the logical name (not the display name; a custom table has its publisher prefix) and that the environment is the one that holds the table.
 - The type generator signs in with the Azure CLI, like every page operation: `az` missing, signed out, too slow, or signed in to another tenant than the `pac` profile fails with a connection error — run `node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac` to see which
 - Try one entity at a time to isolate the issue
 - The output file's name is checked before the environment is asked: a link, or a folder, at that name is refused

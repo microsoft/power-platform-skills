@@ -2173,6 +2173,18 @@ function collectOwedPublishes(byTarget, owed) {
   return byTarget;
 }
 
+// The commands the build's messages give for a page, as scripts/genpage.js takes them (`node scripts/…` from the plugin's folder, as the other commands the build names are written). Each takes the environment
+// the build runs in. `app` is { id, note } for a verb that takes `--app-id` (and nothing for one that does not): the id when it is a GUID — the verb refuses anything else — and otherwise `<note>`, in angle
+// brackets, which still says whose id goes there.
+function genpageCommand(verb, { env, pageId, app, flags = '' }) {
+  const appPart = app === undefined ? '' : ` --app-id ${FORM_GUID_RE.test(String(app.id || '')) ? String(app.id).toLowerCase() : `<${app.note}>`}`;
+  return `node scripts/genpage.js ${verb} --env ${env || '<envUrl>'}${appPart} --page-id ${pageId}${flags}`;
+}
+
+// What to do about a page another app also holds, in the words of the halts and the report of the pages phase: take it out of that app's navigation (`genpage.js remove-from-app` also publishes that app, which publishes
+// everything that app has saved, so the user is asked first), or detach it in Maker, or give this app a page of its own. `commands` are the lines `genpageCommand` made, one per app that holds the page.
+const detachAdvice = (commands) => `Detach it from the other app — ask the user first, since this changes another app: ${commands.join('; ')} (each takes the page out of that app's navigation and publishes that app, which publishes everything that app has saved; the page itself stays) — or detach it in Maker, or give this app its own page.`;
+
 // Every caller enters here; the phases run in runSdkBuildPhases. This wrapper only carries what the
 // deferred publishes (default-view enrichment, reconciled views and forms) still owe out of a halt:
 // `owedPublishes`, and `owedPaid` when this run's publish phase completed — which pays what an earlier
@@ -5642,13 +5654,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
           : '';
         const recovery = unproven.map((c) => {
           const name = JSON.stringify(c.storedName || c.requestedName || '(unreadable name)');
+          // The page verbs of scripts/genpage.js, ready to run: this app's id is known by now (the pages phase halts without the app), and the environment is the one the build runs in.
+          const place = genpageCommand('add-to-app', { env: opts.env, pageId: c.manifestId, app: { id: result.created.app, note: "this app's id" } });
           if (inSavedNav.has(String(c.manifestId).toLowerCase())) {
-            return `page ${c.manifestId} (${name}) is only in this app's saved but unpublished navigation: publish the app in the maker, then re-run. The build updates a page only when the app's published navigation or a local creation record proves it is this app's, so that other apps' navigation is checked before an update`;
+            return `page ${c.manifestId} (${name}) is only in this app's saved but unpublished navigation: publish the app — ${place} publishes it, since the page is already in its saved navigation — then re-run. The build updates a page only when the app's published navigation or a local creation record proves it is this app's, so that other apps' navigation is checked before an update`;
           }
           const proofText = c.hasCreationReceipt
             ? 'its local creation record does not corroborate the stored name'
             : 'this workspace holds no record that this app created it in this environment';
-          return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation in the maker, publish the app and re-run; if not, remove the stale id from the manifest/spec (or delete the page) and re-run`;
+          const removal = genpageCommand('delete', { env: opts.env, pageId: c.manifestId, flags: ' --allow-destructive' });
+          return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation with ${place} (it publishes the app and proves the page in what runs) and re-run; if not, remove the stale id from the manifest/spec (or delete the page, after asking the user — it is permanent: ${removal}) and re-run`;
         });
         throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
       }
@@ -5737,10 +5752,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const scanShared = async (ids) => {
         const scan = await fetchAppsForPages(provision, ids, { excludeAppUnique: appUnique });
         if (!scan.ok || scan.unreadable.length) return { scan, entries: null };
-        // An app that has the page ONLY in its saved navigation is named as such: nothing in its published app shows the page yet.
+        // An app that has the page ONLY in its saved navigation is named as such: nothing in its published app shows the page yet. `detach` is the command that takes the page out of each app that holds it.
         return { scan, entries: Array.from(scan.byId, ([id, apps]) => {
           const savedOnly = (scan.savedOnly && scan.savedOnly.get(id)) || [];
-          return { id, published: apps.some((app) => !savedOnly.includes(app)), text: `${id} (also in ${apps.map((app) => (savedOnly.includes(app) ? `${app} [saved, not published]` : app)).join(', ')})` };
+          return {
+            id,
+            published: apps.some((app) => !savedOnly.includes(app)),
+            text: `${id} (also in ${apps.map((app) => (savedOnly.includes(app) ? `${app} [saved, not published]` : app)).join(', ')})`,
+            detach: apps.map((app) => genpageCommand('remove-from-app', { env: opts.env, pageId: id, app: { id: scan.appIds && scan.appIds.get(String(app).toLowerCase()), note: `id of app ${app}` } })),
+          };
         }) };
       };
       const sharedPagesNow = async (ids) => {
@@ -5753,7 +5773,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (updateIds.length) {
         const shared = await sharedPagesNow(updateIds);
         if (shared.length) {
-          throw new BuildHalt(`generative page(s) shared across apps: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). Detach it in Maker, or give this app its own page.`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
+          throw new BuildHalt(`generative page(s) shared across apps: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
         }
       }
 
@@ -6075,7 +6095,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return;
         }
         for (const s of entries) {
-          report(`generative page "${updatedInPlace.get(String(s.id).toLowerCase()) || s.id}" ${s.text} was taken into another app's navigation while this build was updating it, so its new content ${s.published ? 'shows there too' : 'will show there once that app is published'}. Detach it in Maker, or give this app its own page.`);
+          report(`generative page "${updatedInPlace.get(String(s.id).toLowerCase()) || s.id}" ${s.text} was taken into another app's navigation while this build was updating it, so its new content ${s.published ? 'shows there too' : 'will show there once that app is published'}. ${detachAdvice(s.detach)}`);
         }
       };
       // Read once, here: the pages the loop below updates are the ones `keyToId` holds, and the cross-page navigation step above has minted its targets by now.
@@ -6092,7 +6112,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             checkedBeforeWritingInPlace = true;
             const shared = await sharedPagesNow(Array.from(writesInPlace, (k) => keyToId.get(k)));
             if (shared.length) {
-              throw Object.assign(new BuildHalt(`generative page(s) became shared across apps while this build ran: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content); no page this build began with has been updated in place. Detach it in Maker, or give this app its own page.`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false }), { transient: false });
+              throw Object.assign(new BuildHalt(`generative page(s) became shared across apps while this build ran: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content); no page this build began with has been updated in place. ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false }), { transient: false });
             }
           }
           await runner.run('pages', `page "${p.name}"`, async () => {

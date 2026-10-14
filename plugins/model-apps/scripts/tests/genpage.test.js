@@ -94,6 +94,8 @@ const BAD_COMMAND_LINES = [
   [['delete', '--env', ENV, '--page-id', P1, '--app-id', APP], /unknown flag\(s\): --app-id/, 'delete'],
   [['delete', '--env', ENV, '--page-id', P1, '--yes'], /unknown flag\(s\): --yes/, 'delete'],
   [['delete', '--env', ENV, '--page-id', P1, '--force'], /unknown flag\(s\): --force/, 'delete'],
+  [['delete', '--env', ENV, '--page-id', P1, '--allow-destructive', 'yes'], /--allow-destructive takes no value \(got 'yes'\)/, 'delete'],
+  [['remove-from-app', '--env', ENV, '--app-id', APP, '--page-id', P1, '--allow-destructive'], /unknown flag\(s\): --allow-destructive/, 'remove-from-app'],
 ];
 
 test('a mistake in the command line is a usage error — named, before any backend is made, any request sent, or any result emitted', async () => {
@@ -122,7 +124,8 @@ test('parseCommand throws a UsageError that names the command, and returns the c
   assert.deepStrictEqual(parseCommand(['add-to-app', '--env', ENV, '--app-id', APP, '--page-id', P1, '--title', 'My page']).args, { appId: APP, pageId: P1, title: 'My page' });
   assert.deepStrictEqual(parseCommand(['remove-from-app', '--env', ENV, '--app-id', APP, '--page-id', P1]).args, { appId: APP, pageId: P1, allowEmpty: false });
   assert.strictEqual(parseCommand(['remove-from-app', '--env', ENV, '--app-id', APP, '--page-id', P1, '--allow-empty-navigation']).args.allowEmpty, true);
-  assert.deepStrictEqual(parseCommand(['delete', `--env=${ENV}`, `--page-id=${P1}`]).args, { pageId: P1 });
+  assert.deepStrictEqual(parseCommand(['delete', `--env=${ENV}`, `--page-id=${P1}`]).args, { pageId: P1, allowDestructive: false });
+  assert.deepStrictEqual(parseCommand(['delete', `--env=${ENV}`, `--page-id=${P1}`, '--allow-destructive']).args, { pageId: P1, allowDestructive: true });
 });
 
 // ── what main does around a verb ────────────────────────────────────────────────────────────────────────────────────
@@ -189,12 +192,12 @@ test('a failure prints the message, the SDK\'s or the script\'s code, and what t
 
 // ── list ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('list: every page of the environment, drafts included, sorted by name (any letter case) and then id — the name the page\'s own row holds', async () => {
+test('list: every page of the environment, drafts included, sorted by name (any letter case) and then id — the name the page was given: pac stored `"` as `\\"` in the page\'s row, and the list reads it back', async () => {
   const genpage = fakeGenpage({ pages: [pageOf(P3, { name: 'beta' }), pageOf(P2, { name: 'Alpha' }), pageOf(P1, { name: 'alpha' }), pageOf('11111111-0000-4000-8000-000000000004', { name: 'Zed \\"q\\"' })] });
   const payload = ok(await run(['list', '--env', ENV], genpage));
   assert.deepStrictEqual(payload, {
     ok: true, scope: 'environment', count: 4,
-    pages: [{ pageId: P1, name: 'alpha' }, { pageId: P2, name: 'Alpha' }, { pageId: P3, name: 'beta' }, { pageId: '11111111-0000-4000-8000-000000000004', name: 'Zed \\"q\\"' }],
+    pages: [{ pageId: P1, name: 'alpha' }, { pageId: P2, name: 'Alpha' }, { pageId: P3, name: 'beta' }, { pageId: '11111111-0000-4000-8000-000000000004', name: 'Zed "q"' }],
   });
   assert.deepStrictEqual(genpage.calls.map((c) => c.method), ['enumerateEnv'], 'the environment\'s list, and nothing about an app');
   // pac's --include-unpublished is accepted and changes nothing here: this list always has the drafts.
@@ -227,6 +230,15 @@ test('list --app-id: the pages the app\'s PUBLISHED navigation names, in navigat
     ],
   });
   assert.deepStrictEqual(genpage.of('enumeratePages').map((c) => c.args), [[APP, { includeUnpublished: false }]], 'the published layer, by the app id in lower case');
+});
+
+// pac stores every `"` of a page name as `\"` (live-measured: `Say "hi" now` became `Say \"hi\" now`, in the page's row and in a navigation title pac writes), and every other reader of a stored name reads it back: the
+// build, teardown, the download of an app. A name shown as stored would not be the name those use for the same page — and "look for the page before creating it again" compares names.
+test('list --app-id: a page name pac stored with `\\"` is shown as the name it was given — and the entry\'s title is what the navigation holds, as stored', async () => {
+  const stored = 'Say \\"hi\\" now';
+  const genpage = fakeGenpage({ pages: [pageOf(P1, { name: stored })], appPages: { [APP]: [{ pageId: P1, name: stored }] } });
+  const payload = ok(await run(['list', '--env', ENV, '--app-id', APP], genpage));
+  assert.deepStrictEqual(payload.pages, [{ pageId: P1, name: 'Say "hi" now', title: stored }]);
 });
 
 test('list --app-id --include-unpublished: the app\'s SAVED navigation, and the layer says so', async () => {
@@ -277,6 +289,13 @@ test('download: <output>/<page id>/{page.tsx, config.json, prompt.txt}, with the
   assert.ok(!fs.existsSync(path.join(root, P2, 'prompt.txt')), 'a page with no prompt has no prompt.txt, which a rebuild reads as "no prompt supplied"');
   assert.deepStrictEqual(fs.readdirSync(path.join(root, P1)).sort(), ['config.json', 'page.tsx', 'prompt.txt'], 'no page.js, no temp file left behind');
   assert.deepStrictEqual(genpage.of('read').map((c) => c.args), [[P1], [P2]]);
+});
+
+test('download: the name reported is the one the page was given — pac\'s `\\"` read back — and a page with no name stays without one', async () => {
+  const out = scratch('dlname');
+  const payload = ok(await run(downloadArgs(out, P1, P2), fakeGenpage({ pages: [pageOf(P1, { name: 'Say \\"hi\\" now' }), pageOf(P2, { name: null })] })));
+  assert.strictEqual(payload.pages[0].name, 'Say "hi" now');
+  assert.strictEqual(payload.pages[1].name, null, 'a missing name is not turned into the text "null"');
 });
 
 test('download: a conversation of several prompts is the transcript a rebuild reads — pac\'s own words — and an existing file is replaced and said to be, an identical one is not', async () => {
@@ -370,6 +389,19 @@ test('download: a link at the output folder, or at a page\'s folder, is refused'
   assert.deepStrictEqual(fs.readdirSync(outside), []);
 });
 
+// A link whose target is missing is still a link. The pre-flight looked at a page's folder only `if (fs.existsSync(directory))`, and existsSync FOLLOWS the link: a dangling one answered "no folder", was not
+// inspected, and was refused only at the write of ITS page — after the pages before it had been written, which is what the all-or-nothing pre-flight exists to prevent.
+test('download: a DANGLING link at the folder of a LATER page is refused before the first page is written too — the earlier download of the first page stays as it was', async () => {
+  const real = scratch('dangling');
+  fs.mkdirSync(path.join(real, P1));
+  fs.writeFileSync(path.join(real, P1, 'page.tsx'), 'the earlier download\n');
+  fs.symlinkSync(path.join(real, 'missing-target'), path.join(real, P2), process.platform === 'win32' ? 'junction' : 'dir');
+  const payload = failed(await run(downloadArgs(real, P1, P2), fakeGenpage({ pages: [pageOf(P1), pageOf(P2)] })));
+  assert.strictEqual(payload.code, 'UNSAFE_OUTPUT');
+  assert.strictEqual(read(real, P1, 'page.tsx').toString('utf8'), 'the earlier download\n', 'the first page was not rewritten: the refusal came before any write');
+  assert.ok(!fs.existsSync(path.join(real, 'missing-target')), 'and nothing was made where the link points');
+});
+
 test('download: a link at the folder of a LATER page is refused before the first page is written — the pages before it are not left half done', async () => {
   const outside = scratch('outsidelater');
   const real = scratch('realdirlater');
@@ -428,6 +460,45 @@ test('types: the output name is checked BEFORE the environment is asked — a di
   assert.deepStrictEqual(fs.readdirSync(outside), []);
 });
 
+test('types: a DANGLING linked folder is refused before the environment is asked, like a linked one — a link whose target is missing is still a link', async () => {
+  const parent = scratch('typesdangling');
+  const linked = path.join(parent, 'linked');
+  fs.symlinkSync(path.join(parent, 'missing-target'), linked, process.platform === 'win32' ? 'junction' : 'dir');
+  const genpage = fakeGenpage();
+  assert.strictEqual(failed(await run(typesArgs(path.join(linked, 'T.ts')), genpage)).code, 'UNSAFE_OUTPUT');
+  assert.strictEqual(genpage.of('runtimeTypes').length, 0, 'the SDK was not asked');
+  assert.ok(!fs.existsSync(path.join(parent, 'missing-target')), 'and nothing was made where the link points');
+});
+
+// An entry that cannot be inspected is a reason to look at it, not to skip it: where `lstat` of the output folder fails with anything but "not there" (here: access refused), the pre-flight must refuse it
+// before the environment is asked, as it refuses any other output folder it cannot use — and not read the failure as an absent folder to be made later.
+test('types: an output folder that cannot be inspected is refused before the environment is asked — it is not "not there"', async () => {
+  const parent = path.join(scratch('typesnoaccess'), 'out');
+  fs.mkdirSync(parent);
+  const lstat = fs.lstatSync;
+  fs.lstatSync = (target, ...rest) => {
+    if (path.resolve(String(target)) === path.resolve(parent)) throw Object.assign(new Error(`EACCES: permission denied, lstat '${target}'`), { code: 'EACCES' });
+    return lstat(target, ...rest);
+  };
+  const genpage = fakeGenpage();
+  try {
+    const payload = failed(await run(typesArgs(path.join(parent, 'T.ts')), genpage));
+    assert.strictEqual(payload.code, 'UNSAFE_OUTPUT');
+    assert.match(payload.error, /could not be inspected \(EACCES\)/);
+  } finally {
+    fs.lstatSync = lstat;
+  }
+  assert.strictEqual(genpage.of('runtimeTypes').length, 0, 'the SDK was not asked');
+});
+
+test('types: a table the environment does not have is its own failure — GENPAGE_TABLE_NOT_FOUND, naming the table, no file made', async () => {
+  const file = path.join(scratch('typesmissing'), 'sub', 'T.ts');
+  const missing = Object.assign(new Error('table \'nosuchtable\' does not exist in this environment, so no types were generated'), { code: 'GENPAGE_TABLE_NOT_FOUND', table: 'nosuchtable', transient: false });
+  const payload = failed(await run(typesArgs(file), fakeGenpage({ types: () => { throw missing; } })));
+  assert.deepStrictEqual(payload, { ok: false, error: missing.message, code: 'GENPAGE_TABLE_NOT_FOUND', table: 'nosuchtable' });
+  assert.ok(!fs.existsSync(file) && !fs.existsSync(path.dirname(file)), 'neither the file nor its folder');
+});
+
 test('types: a failure of the SDK is the failure — its code, no file made', async () => {
   const file = path.join(scratch('typesfail'), 'sub', 'T.ts');
   const refusal = Object.assign(new Error('HTTP 404 from the metadata endpoint'), { code: 'CONNECTION_ERROR', statusCode: 404 });
@@ -459,6 +530,16 @@ test('add-to-app: --title is the entry\'s title instead of the page\'s name', as
   const payload = ok(await run(addArgs('--title', 'Sales pipeline'), genpage));
   assert.strictEqual(payload.title, 'Sales pipeline');
   assert.strictEqual(genpage.of('placeInApp')[0].args[1].pages[0].title, 'Sales pipeline');
+});
+
+test('add-to-app: a page pac created is titled with the name it was given — its `\\"` read back, as the build reads it — and a --title is used exactly as typed', async () => {
+  const genpage = fakeGenpage({ pages: [pageOf(P1, { name: 'Say \\"hi\\" now' })] });
+  const payload = ok(await run(addArgs(), genpage));
+  assert.strictEqual(genpage.of('placeInApp')[0].args[1].pages[0].title, 'Say "hi" now', 'the entry the app\'s users open');
+  assert.strictEqual(payload.title, 'Say "hi" now');
+  const typed = fakeGenpage({ pages: [pageOf(P1, { name: 'Say \\"hi\\" now' })] });
+  assert.strictEqual(ok(await run(addArgs('--title', 'A \\"typed\\" title'), typed)).title, 'A \\"typed\\" title');
+  assert.strictEqual(typed.of('placeInApp')[0].args[1].pages[0].title, 'A \\"typed\\" title', 'what the user typed is never rewritten');
 });
 
 test('add-to-app: a page the navigation already names is left alone — it says so, the title is not claimed, and --title is said to be ignored', async () => {
@@ -540,12 +621,26 @@ test('remove-from-app: the refusal to empty a navigation, and a removal that was
 
 // ── delete ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('delete: exactly what was deleted — the page, the rows of its folder, the messages of its conversation — and that the page was read back as gone', async () => {
-  const genpage = fakeGenpage({ pages: [pageOf(P1, { name: 'Overview', fileRows: 5, conversation: [{ sender: 'user', message: 'a' }, { sender: 'agent', message: 'b' }] })] });
-  const payload = ok(await run(['delete', '--env', ENV, '--page-id', P1.toUpperCase()], genpage));
-  assert.deepStrictEqual(payload, { ok: true, deleted: { pageId: P1, name: 'Overview', fileRows: 5, conversationMessages: 2 }, historyRemoved: true, verified: true });
-  assert.deepStrictEqual(genpage.of('delete').map((c) => c.args), [[P1]]);
+test('delete: exactly what was deleted — the page, the rows of its folder, the messages of its conversation — and that the page was read back as gone; the name is the one the page was given', async () => {
+  const genpage = fakeGenpage({ pages: [pageOf(P1, { name: 'Say \\"hi\\" now', fileRows: 5, conversation: [{ sender: 'user', message: 'a' }, { sender: 'agent', message: 'b' }] })] });
+  const payload = ok(await run(['delete', '--env', ENV, '--page-id', P1.toUpperCase(), '--allow-destructive'], genpage));
+  assert.deepStrictEqual(payload, { ok: true, deleted: { pageId: P1, name: 'Say "hi" now', fileRows: 5, conversationMessages: 2 }, historyRemoved: true, verified: true });
+  assert.deepStrictEqual(genpage.of('delete').map((c) => c.args), [[P1, { allowDestructive: true }]]);
   assert.ok(!genpage.pages.has(P1));
+});
+
+// A delete is asked for in so many words. The backend refuses without `allowDestructive` — after the reads that decide the delete, so the refusal says what would go — and this script passes it on only when
+// `--allow-destructive` was given: a refusal is a result (exit 1, one line), never a usage error, because the command line was a good one.
+test('delete: without --allow-destructive the backend is asked not to delete — its refusal is the failure, with what would go, and the page is still there', async () => {
+  const genpage = fakeGenpage({ pages: [pageOf(P1, { name: 'Overview', fileRows: 5, conversation: [{ sender: 'user', message: 'a' }, { sender: 'agent', message: 'b' }] })] });
+  const seen = await run(['delete', '--env', ENV, '--page-id', P1], genpage);
+  assert.deepStrictEqual(seen.usage, [], 'a refusal, not a usage error');
+  const payload = failed(seen);
+  assert.deepStrictEqual([payload.code, payload.outcome, payload.pageId, payload.fileRows, payload.conversationMessages], ['GENPAGE_DELETE_NOT_CONFIRMED', 'nothing', P1, 5, 2]);
+  assert.match(payload.error, /deleting it removes the page, its 5 file rows and its 2 conversation messages\. Nothing was changed; run the same command with --allow-destructive to delete them$/);
+  assert.deepStrictEqual(genpage.of('delete').map((c) => c.args), [[P1, { allowDestructive: false }]]);
+  assert.ok(genpage.pages.has(P1), 'nothing was deleted');
+  assert.strictEqual(seen.result.disposedWhenEmitted, 1);
 });
 
 test('delete: a history that was not fully removed is a warning on a delete that happened, and the flag says so', async () => {
@@ -568,10 +663,13 @@ test('delete: a page an app names is the failure the backend describes — the a
   assert.strictEqual(failed(await run(['delete', '--env', ENV, '--page-id', P1], fakeGenpage())).code, 'GENPAGE_NOT_FOUND');
 });
 
-test('delete asks for no confirmation and takes no flag that would skip one — the skill that runs it asks, and suppressing that question never authorizes a delete', async () => {
+test('delete takes --allow-destructive, a switch, and no other flag that would skip a question — the skill that runs it asks the user, and suppressing that question never authorizes a delete', async () => {
   for (const flag of ['--yes', '--force', '--confirm', '--no-confirm', '--quiet']) {
     const seen = await run(['delete', '--env', ENV, '--page-id', P1, flag], fakeGenpage({ pages: [pageOf(P1)] }));
     assert.match(seen.usage[0].message, /unknown flag/, flag);
     assert.strictEqual(seen.genpage.of('delete').length, 0, flag);
   }
+  const switched = await run(['delete', '--env', ENV, '--page-id', P1, '--allow-destructive', 'yes'], fakeGenpage({ pages: [pageOf(P1)] }));
+  assert.match(switched.usage[0].message, /--allow-destructive takes no value \(got 'yes'\)/);
+  assert.strictEqual(switched.genpage.of('delete').length, 0);
 });

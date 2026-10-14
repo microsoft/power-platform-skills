@@ -493,6 +493,19 @@ const KIND_HANDLERS = {
       if (!sitemapReadable) errors.push(`app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`);
       return { items, kept, candidates: [...items, ...kept, ...absent], ...(errors.length ? { readError: errors.join('; ') } : {}) };
     },
+    // Is the page REALLY gone? A "not found" from the delete is not proof, for the reason the app handler gives above: deleteStep tolerates it as "already gone" unless the handler can check, and for a page that is still there that would consume
+    // its creation receipt and its pending record — what a later teardown finds the page by — and leave the page, with its conversation messages, behind. The SDK sends this DELETE without `MSCRM.IncludeUnpublished`, and its own notes say a by-id request on a
+    // page that was never published answers 404 without it. Measured live, the platform DELETED such a row instead (afterwards the saved layer no longer held it and its messages were gone), so this is
+    // insurance against an answer the platform has not been seen to give, not a path known to be taken. The question goes to the SAVED layer — the layer `resolve` found the page in (see savedPageRows) — and
+    // a read that fails answers "not proven": "cannot prove it is gone" must not license consuming a record that stands for a page that may still exist.
+    async confirmAbsent(sdk, item) {
+      try {
+        const found = await savedPageRows(sdk.dataverse, [item.id], { label: 'the generative page' });
+        return !found.has(String(item.id).toLowerCase());
+      } catch {
+        return false;
+      }
+    },
     // The page goes through the SDK's own delete (`deleteRemoteArtifact('genPage')`): the project row, whose `uxagentprojectfile`
     // children go with it — the uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
     // Delete=Cascade, verified end to end: one DELETE of a real page removed the project and all four of its file rows, none

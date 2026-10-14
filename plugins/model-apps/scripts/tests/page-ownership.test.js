@@ -139,7 +139,15 @@ function sdkForPages(opts = {}) {
     },
     deleteAppCascade: async () => { state.app = false; return { success: true, deleted: [], failures: [] }; },
     // A page is deleted through the SDK's own delete (the project row, then the conversation history that points at it): the row is what `entity` names.
-    deleteRemoteArtifact: async (kind, id) => { assert.equal(kind, 'genPage'); state.deletes.push({ entity: 'uxagentproject', id }); },
+    //   deleteAnswers404: true    the DELETE answers "not found" and the page stays — what a by-id request that cannot see a draft-only row would do
+    //   deleteAnswers404: 'gone'  the DELETE answers "not found" because the page IS gone (a cascade race, a maker who deleted it meanwhile)
+    deleteRemoteArtifact: async (kind, id) => {
+      assert.equal(kind, 'genPage');
+      state.deletes.push({ entity: 'uxagentproject', id });
+      if (!opts.deleteAnswers404) return;
+      if (opts.deleteAnswers404 === 'gone') rows.splice(rows.findIndex((r) => r.uxagentprojectid === id), 1);
+      throw Object.assign(new Error(`HTTP 404 from DELETE /uxagentprojects(${id}): Does Not Exist`), { code: 'CONNECTION_ERROR', statusCode: 404 });
+    },
     deleteWebResource: async (id) => { state.resources.push(id); },
     deleteSolution: async () => {},
     createWebResource: async () => ({ id: 'manifest-id' }),
@@ -156,6 +164,8 @@ function sdkForPages(opts = {}) {
         if (url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
           state.pageReads.push(url);
           if (opts.nameError) throw new Error('Contoso page row read unavailable');
+          // The read that follows a delete (`state.deletes` is not empty yet): the one that says whether a page is gone.
+          if (opts.readBackError && state.deletes.length) throw new Error('Contoso page row read-back unavailable');
           if (Object.prototype.hasOwnProperty.call(opts, 'pageResponse')) return { status: 200, body: { value: opts.pageResponse } };
           return { status: 200, body: { value: savedRows(url.match(/uxagentprojectid eq [0-9a-f-]{36}/gi).map((clause) => clause.slice('uxagentprojectid eq '.length).toLowerCase())) } };
         }
@@ -273,7 +283,9 @@ for (const draft of ['saved', 'unreadable']) {
     }), (e) => {
       assert.equal(e.code, 'pages-identity-conflict');
       if (draft === 'saved') {
-        assert.match(e.message, /only in this app's saved but unpublished navigation: publish the app in the maker, then re-run/);
+        // The page is in the saved navigation already, so what is left is publishing the app — which the verb that places a page does for a placement saved and never published.
+        assert.match(e.message, new RegExp(`only in this app's saved but unpublished navigation: publish the app — node scripts/genpage\\.js add-to-app --env ${ENV} --app-id ${APP} --page-id ${OWN} publishes it, since the page is already in its saved navigation — then re-run\\.`));
+        assert.doesNotMatch(e.message, /in the maker/, 'the maker is not sent to Maker for what the verb does');
         assert.doesNotMatch(e.message, /add it to the app's navigation/, 'it is already there');
       } else {
         assert.match(e.message, /saved but unpublished navigation could not be read/);
@@ -468,6 +480,51 @@ test('a page with a pending edit is judged by its current row — the authored o
   assert.deepEqual(written.state.deletes, [{ entity: 'uxagentproject', id: OWN }]);
 });
 
+// ── A "not found" from the DELETE of a page is not proof that the page is gone ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// The SDK's delete sends DELETE /uxagentprojects(<id>) with no MSCRM.IncludeUnpublished header, and its own notes say a by-id request on a page that was never published answers 404 without it. Measured live,
+// the platform DELETED such a row (afterwards the saved layer no longer held it and its messages were gone), so a "not found" for a draft-only page is insurance and not a known path. deleteStep reads a not-found
+// answer as "already gone" for any handler that cannot check; for a page that consumed the receipt and the pending record and reported the page deleted while it stayed, with its conversation messages.
+test('a "not found" from the DELETE of a page the saved layer still holds is not a delete — the step fails, and the receipt and the pending record stay', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  recordPagePending(workspaceDir, 'contoso_pages', 'later', OTHER, 'Later', ENV, sha256('x'));
+  const { sdk, state } = sdkForPages({
+    candidates: manifest(OWN).pages,
+    membership: [],
+    rows: [{ uxagentprojectid: OWN, name: 'Overview', draftOnly: true }, { uxagentprojectid: OTHER, name: 'Later', draftOnly: true }],
+    deleteAnswers404: true,
+  });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, false, 'a page that is still there is not a clean teardown');
+  assert.deepEqual(r.deleted.genpage || [], [], 'and it is not reported deleted');
+  assert.match(r.errors.map((e) => e.message).join('\n'), /404/, 'the platform\'s own answer is what the failure says');
+  assert.deepEqual(readPageOwnership(workspaceDir, 'contoso_pages', ENV).created.map((x) => x.pageId), [OWN], 'its receipt is kept');
+  assert.equal(readPendingCreations(workspaceDir, 'contoso_pages', ENV).size, 1, 'and so is the pending record of the other');
+  assert.ok(state.pageReads.length >= 2, 'the saved layer was read again after the delete');
+  assert.equal(state.reads.filter((read) => read.entity === 'uxagentproject').length, 0, 'and never through the published-only collection');
+});
+
+test('a "not found" from the DELETE of a page that IS gone — the saved layer no longer holds it — is a delete, and the receipt is consumed', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview', draftOnly: true }], deleteAnswers404: 'gone' });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(r.deleted.genpage, [OWN]);
+  assert.deepEqual(readPageOwnership(workspaceDir, 'contoso_pages', ENV), { created: [], teardown: [] });
+  assert.equal(state.deletes.length, 1);
+});
+
+test('a "not found" from the DELETE of a page whose read-back FAILS is not counted as deleted either — it cannot be proven gone', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  const { sdk } = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview', draftOnly: true }], deleteAnswers404: 'gone', readBackError: true });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, false, 'a page that cannot be proven gone fails the step: "cannot prove it is gone" must not license consuming its receipt');
+  assert.deepEqual(r.deleted.genpage || [], []);
+  assert.equal(readPageOwnership(workspaceDir, 'contoso_pages', ENV).created.length, 1, 'the receipt stays');
+});
+
 // ── A receipt corroborates a page by the name the build proved, not only by the spec's current name ──────────────────────────────────────────────────────────────────────────────────────────
 // A page the build adopted but did not use (its key is bound to another page) keeps the name the earlier create sent. When the spec renamed the entry since, the page still holds the receipt's name and
 // not the spec's — and the build had told the user that teardown deletes it.
@@ -509,8 +566,10 @@ test('an environment A creation receipt cannot authorize an off-sitemap build up
     assert.equal(e.code, 'pages-identity-conflict');
     assert.ok(e.message.includes(OWN));
     assert.match(e.message, /this workspace holds no record that this app created it/);
-    assert.match(e.message, /add it to the app's navigation in the maker, publish the app and re-run/);
-    assert.match(e.message, /remove the stale id from the manifest\/spec/);
+    // The two ways on, each as a command: place the page (which publishes the app and proves the page in what runs), or delete it — after asking, and with the confirmation the script requires.
+    assert.ok(e.message.includes(`if it is this app's page, add it to the app's navigation with node scripts/genpage.js add-to-app --env ${OTHER_ENV} --app-id ${APP} --page-id ${OWN} (it publishes the app and proves the page in what runs) and re-run`), e.message);
+    assert.ok(e.message.includes(`if not, remove the stale id from the manifest/spec (or delete the page, after asking the user — it is permanent: node scripts/genpage.js delete --env ${OTHER_ENV} --page-id ${OWN} --allow-destructive) and re-run`), e.message);
+    assert.doesNotMatch(e.message, /in the maker/, 'the maker is not sent to Maker for what a verb does');
     return true;
   });
   assert.deepEqual(writes(genpage), []);

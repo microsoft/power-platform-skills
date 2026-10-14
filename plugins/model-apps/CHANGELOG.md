@@ -8,14 +8,13 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 ## [Unreleased] — 2.15.0
 
 Generative pages, the environment's apps and tables, connections, connector metadata and deployment settings go
-through the bundled SDK instead of `pac`. `pac` is left for signing in and choosing the environment, and the fallbacks
-where the SDK refuses. A page can be created before the app that will hold it.
+through the bundled SDK instead of `pac`. `pac` is left for signing in and choosing the environment, a connector's tables,
+and the fallbacks where the SDK refuses. A page can be created before the app that will hold it.
 
 ### Added
 
-- **`scripts/apps.js` and `scripts/list-tables.js`: the environment's apps and tables through the bundled SDK, for the skills to use in
-  place of `pac model list`, `pac model list-tables` and `pac model create`** (the skill text still names the `pac` commands; it moves onto
-  these scripts separately). `apps.js list` prints every model-driven app, drafts included, with its id, name, unique name, description and
+- **`scripts/apps.js` and `scripts/list-tables.js`: the environment's apps and tables through the bundled SDK, which the skills use in
+  place of `pac model list`, `pac model list-tables` and `pac model create`.** `apps.js list` prints every model-driven app, drafts included, with its id, name, unique name, description and
   two facts, apart: whether it is published (users can open it) and whether it has unpublished changes. `pac model list` printed
   "(Saved - Not Published)" after a name, which is neither: it marks an app that was never published through a publish, so a managed app
   an import brought in carried it although it is live, and a published app with a saved edit did not. `list-tables.js` prints the tables a
@@ -33,16 +32,18 @@ where the SDK refuses. A page can be created before the app that will hold it.
   knows (a push the SDK saved wrote both rows) and what to look for. A create into `Default` says it needs no add instead of reading like a
   failure. Like every app the SDK creates, the app gets the new header and navigation setting, which `pac model create` did not write.
 - **`scripts/genpage.js`: the page verbs the skills ran through `pac model genpage` — `list`, `download`, `types` (the type generator),
-  `add-to-app` — and two they had no verb for, `remove-from-app` and `delete`** (the skill text still names the `pac` commands; it moves
-  onto this script separately). One pure-ASCII JSON line per command and exit 0 or 1; a mistake in the command line is a usage error with
+  `add-to-app` — and two they had no verb for, `remove-from-app` and `delete`.** One pure-ASCII JSON line per command and exit 0 or 1; a mistake in the command line is a usage error with
   nothing on stdout. `download` reads every page before it writes, so a page that cannot be read leaves the folder as it was, and writes the
   page's own bytes (`page.tsx`, `config.json`, `prompt.txt`: no byte order mark and no line break appended, which `pac` added — the base
   marker hashes a page alike either way); `--app-id` is optional. `types` is the SDK's RuntimeTypes generator, so its file is not byte for
-  byte `pac`'s: a self-contained module, without the system and derived read-only columns `pac` typed, in the maker portal's column order.
+  byte `pac`'s: a self-contained module, without the system and derived read-only columns `pac` typed, in the maker portal's column order;
+  a table the environment does not have is `GENPAGE_TABLE_NOT_FOUND`, naming it. `list` and `add-to-app` show and title a page with the name it was given (a page `pac` created holds `\"` for a `"`).
   `add-to-app` puts the page in an app's navigation with the default views of its tables, titled in the environment's base language,
-  publishes the app and checks the page shows in it; run again, it finishes a placement that was saved and never published.
-  `remove-from-app` takes the entry out, publishes the app and checks the page is gone from it, and refuses to leave an app with no
-  navigation entry unless `--allow-empty-navigation` says that is meant. `delete` removes a page and its conversation, and refuses while
+  publishes the app and checks the page shows in it; run again, it finishes a placement that was saved and never published, and pins a view the app lacks.
+  `remove-from-app` takes the entry out, publishes the app and checks the page is gone from it — an app that was never published is published too, with a warning,
+  since the platform keeps its reference to the page until a sitemap without it is published — and refuses to leave an app with no
+  navigation entry unless `--allow-empty-navigation` says that is meant. `delete` says what it would remove — the page, its file rows, its conversation messages — and removes
+  it, with its conversation, only when `--allow-destructive` says that is meant, and refuses while
   any app's navigation — published or saved — names the page, naming the apps, since Dataverse refuses without saying which.
 - **`apps.js create` pins the default public view of each table the pages read into the app it creates** (as `pac model genpage upload
   --app-id` did), and **`genpage-base.js record` takes a page with no app** (`--app-id` is optional): a page made before its app is
@@ -125,7 +126,7 @@ where the SDK refuses. A page can be created before the app that will hold it.
   exactly the recorded set at the recorded versions. A new or changed page, a page saved by a run whose publish failed or was not
   proven (a renamed one included), a page whose files were changed or published from another workspace, machine or Maker since
   (their versions moved, even when the content was put back as a draft), a file row added or removed, a read of the versions that
-  fails, a record of an earlier release (it has no versions) and a missing or damaged record all publish. What the versions cannot
+  fails, and a missing or damaged record all publish. What the versions cannot
   show is the page row's own fields — its name is not in a file — so a page renamed and published from elsewhere, then renamed back
   as a draft, is not seen. That residual is new in 2.15.0: 2.14.0 re-uploaded and re-published every page of a full rebuild (through
   `pac`), paying the publish of every page each time; an unchanged rebuild now costs one read of the files' versions and no page
@@ -149,7 +150,8 @@ where the SDK refuses. A page can be created before the app that will hold it.
   when a page cannot be read; **teardown** also removes a deleted page's conversation history. Teardown reads the pages in the
   saved layer, so a page that was created and never published (a build killed after the create, a publish that was refused and
   never finished) is found and deleted with its conversation, where a read of the published layer only called it "not found", left
-  it and its history behind and dropped its receipt. A receipt corroborates a page by the name it recorded as well as by the
+  it and its history behind and dropped its receipt. A "not found" from a page's delete is not taken for "gone" either: the saved layer is read
+  back first, so a page the platform still holds fails the step and keeps its receipt. A receipt corroborates a page by the name it recorded as well as by the
   spec's current name, so a page the build adopted but did not use is deleted even when the spec has been renamed since.
 - **A page write says what it did, and nothing more.** "Nothing was written" is said only when the SDK refused the write
   before it sent anything, or the service answered it with a 4xx; any other failure at or after the send — a full disk once

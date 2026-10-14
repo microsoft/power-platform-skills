@@ -149,6 +149,8 @@ async function run(argv, w = world(), hooks = {}, deps = {}) {
     // The page backend (lib/genpage-sdk.js), which the create asks for the tables each page reads and the default public view of each: a stand-in that answers from the world and records its reads
     // in order with the rest. `disposals` counts how often it was disposed, and `backends` how often one was made, with the options it was made with.
     './lib/genpage-sdk.js': {
+      // A pure function of a stored name, not part of the backend: the real one.
+      unescapePacName: require('../lib/genpage-sdk.js').unescapePacName,
       makeGenpageSdk: (env, backendDeps) => {
         backends.push({ env, deps: backendDeps });
         return {
@@ -622,6 +624,15 @@ test('a page whose stored name is empty is titled with its id; one with quotes a
   const w = world({ pages: { [PAGE_A]: '', [PAGE_B]: 'Say "Hi" & <more>' } });
   const r = await run(['create', '--env', ENV, '--name', 'Odd', '--solution', 'ContosoCore', '--page-id', `${PAGE_A},${PAGE_B}`], w);
   assert.deepStrictEqual(r.def.siteMap.areas[0].groups[0].subAreas.map((s) => s.title), [PAGE_A, 'Say "Hi" & <more>']);
+});
+
+// pac stored every `"` of a page name as `\"` (see unescapePacName), so a page an earlier release created reads `Say \"Hi\" now` from its row; the entry the app's users open is titled with the name the page was given.
+test('a page an earlier release created through pac is titled with the name it was given — its `\\"` read back — and the payload says the same', async () => {
+  const w = world({ pages: { [PAGE_A]: 'Say \\"Hi\\" now' } });
+  const r = await run(['create', '--env', ENV, '--name', 'Quoted', '--solution', 'ContosoCore', '--page-id', PAGE_A], w);
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  assert.deepStrictEqual(r.def.siteMap.areas[0].groups[0].subAreas.map((s) => s.title), ['Say "Hi" now']);
+  assert.deepStrictEqual(r.payload.navigation.pages, [{ pageId: PAGE_A, title: 'Say "Hi" now' }]);
 });
 
 test('--unique-name and --description are used as given, and --name is trimmed', async () => {

@@ -21,7 +21,8 @@
 //   appPages        { [appId]: [{ pageId, name }] } | (appId, options) => { ok, pages, … }: what `enumeratePages` answers
 //   placement       (appId, options) => result | throw: what `placeInApp` answers; default an app edit that added every page asked for
 //   removal         (appId, pageId, options) => result | throw: what `removeFromApp` answers; default a removal of one entry that left one
-//   deletion        (id) => result | throw: what `delete` answers; default the page removed from `pages` and reported as deleted (`fileRows`, from the page, default 4)
+//   deletion        (id, options) => result | throw: what `delete` answers; default the page removed from `pages` and reported as deleted (`fileRows`, from the page, default 4) — and, as the real backend does,
+//                   a `GENPAGE_DELETE_NOT_CONFIRMED` refusal that deletes nothing unless `options.allowDestructive` is exactly true
 //   types           a string, or (dataSources, options) => string | throw: what `runtimeTypes` answers; default `// types of <tables>`
 //   language        what `baseLanguage` answers (default 1033); `languageError`: an Error it throws instead
 //   left            the folders `dispose` answers it could not remove, as the real backend's `{ left }` (default none)
@@ -150,13 +151,17 @@ function fakeGenpage(options = {}) {
       return { removed: [{ area: 'Main', group: 'Pages', count: 1 }], wasInNavigation: true, appEdited: true, published: true, entriesLeft: 1, provedPublished: true, warnings: [] };
     },
 
-    async delete(id) {
-      record('delete', [id]);
-      if (options.deletion) return options.deletion(id);
+    async delete(id, opts) {
+      record('delete', [id, opts]);
+      if (options.deletion) return options.deletion(id, opts);
       const page = found(id);
       if (!page) throw fail('GENPAGE_NOT_FOUND', `page ${id} does not exist in this environment`);
+      const fileRows = page.fileRows === undefined ? 4 : page.fileRows;
+      if (!(opts && opts.allowDestructive === true)) {
+        throw fail('GENPAGE_DELETE_NOT_CONFIRMED', `page "${page.name}" (${page.id.toLowerCase()}) was not deleted: deleting it removes the page, its ${fileRows} file rows and its ${page.conversation.length} conversation messages. Nothing was changed; run the same command with --allow-destructive to delete them`, { outcome: 'nothing', pageId: page.id.toLowerCase(), fileRows, conversationMessages: page.conversation.length });
+      }
       pages.delete(String(id).toLowerCase());
-      return { pageId: page.id.toLowerCase(), name: page.name, deleted: true, fileRows: page.fileRows === undefined ? 4 : page.fileRows, conversationMessages: page.conversation.length, historyRemoved: true, verified: true, warnings: [] };
+      return { pageId: page.id.toLowerCase(), name: page.name, deleted: true, fileRows, conversationMessages: page.conversation.length, historyRemoved: true, verified: true, warnings: [] };
     },
 
     async runtimeTypes(dataSources, opts) {

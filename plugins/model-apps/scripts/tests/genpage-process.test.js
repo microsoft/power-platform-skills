@@ -132,6 +132,18 @@ test('PROCESS types: the SDK\'s module is written as it came — a blank first l
   workspacesGone(r);
 });
 
+test('PROCESS types: a table the environment does not have is exit 1 — one ASCII line with GENPAGE_TABLE_NOT_FOUND and the table, the words on stderr — and no file is made', () => {
+  const file = path.join(scratch('typesmissing'), 'generated', 'RuntimeTypes.ts');
+  const r = run(['types', '--env', ENV, '--data-sources', 'account,NoSuchTable', '--output-file', file], { pages: PAGES });
+  assert.strictEqual(r.status, 1);
+  const payload = result(r);
+  assert.deepStrictEqual([payload.ok, payload.code, payload.table], [false, 'GENPAGE_TABLE_NOT_FOUND', 'nosuchtable']);
+  assert.match(payload.error, /^table 'nosuchtable' does not exist in this environment, so no types were generated/);
+  assert.ok(r.stderr.includes("table 'nosuchtable' does not exist"), 'the message is on stderr too');
+  assert.ok(!fs.existsSync(file) && !fs.existsSync(path.dirname(file)), 'neither the file nor its folder');
+  workspacesGone(r);
+});
+
 test('PROCESS add-to-app: the page joins the app\'s navigation, its table\'s default view is pinned, the app is published and the page is proved in what runs', () => {
   const r = run(['add-to-app', '--env', ENV, '--app-id', APP_ID, '--page-id', P2], { pages: PAGES, app: true });
   assert.strictEqual(r.status, 0, r.stderr);
@@ -174,6 +186,15 @@ test('PROCESS add-to-app: a page the navigation already names still has the defa
   assert.deepStrictEqual([payload.added, payload.alreadyPlaced, payload.appEdited, payload.published, payload.pinnedViews], [false, true, true, true, [APP_VIEW_ID]]);
   assert.deepStrictEqual(r.log.app.views, [APP_VIEW_ID]);
   assert.strictEqual(r.log.app.publishAttempts, 1);
+});
+
+test('PROCESS add-to-app: a publish that fails is exit 1 — the failure line says the placement WAS saved, and names the app and the page — and running it again finishes it', () => {
+  const failed = run(['add-to-app', '--env', ENV, '--app-id', APP_ID, '--page-id', P2], { pages: PAGES, app: { publishFailures: 1 } });
+  assert.strictEqual(failed.status, 1);
+  const payload = result(failed);
+  assert.deepStrictEqual([payload.ok, payload.code, payload.saved, payload.appId, payload.pageId], [false, 'GENPAGE_APP_PUBLISH_FAILED', true, APP_ID, P2]);
+  assert.ok(names(failed.log.app.xml, P2) && !names(failed.log.app.publishedXml, P2), 'saved in the app, and not in what runs');
+  workspacesGone(failed);
 });
 
 test('PROCESS add-to-app: a navigation that was saved and never published is published — the placement an earlier run could not finish', () => {
@@ -221,7 +242,7 @@ test('PROCESS remove-from-app: the page leaves both layers of the app, its neigh
   workspacesGone(r);
 });
 
-test('PROCESS delete: a page an app names is refused — exit 1, the app is named, not one delete is sent — and a page no app names is deleted with its rows and its conversation', () => {
+test('PROCESS delete: a page an app names is refused — exit 1, the app is named, not one delete is sent — a page no app names is refused until --allow-destructive says it is meant, and is then deleted with its rows and its conversation', () => {
   const refused = run(['delete', '--env', ENV, '--page-id', APP_EXISTING_PAGE_ID], { pages: PAGES, app: true });
   assert.strictEqual(refused.status, 1);
   const payload = result(refused);
@@ -232,7 +253,19 @@ test('PROCESS delete: a page an app names is refused — exit 1, the app is name
   assert.strictEqual(refused.log.pages.length, 3);
   workspacesGone(refused);
 
-  const deleted = run(['delete', '--env', ENV, '--page-id', P2.toUpperCase()], { pages: PAGES, app: true });
+  // Not confirmed: after the app scan, so the refusal says what a confirmed run would remove — one ASCII line, exit 1, and nothing deleted or written.
+  const unconfirmed = run(['delete', '--env', ENV, '--page-id', P2.toUpperCase()], { pages: PAGES, app: true });
+  assert.strictEqual(unconfirmed.status, 1);
+  const notConfirmed = result(unconfirmed);
+  assert.deepStrictEqual([notConfirmed.ok, notConfirmed.code, notConfirmed.outcome, notConfirmed.pageId, notConfirmed.fileRows, notConfirmed.conversationMessages], [false, 'GENPAGE_DELETE_NOT_CONFIRMED', 'nothing', P2, 4, 2]);
+  assert.match(notConfirmed.error, /^page "alpha" \(bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\) was not deleted: deleting it removes the page, its 4 file rows and its 2 conversation messages\. Nothing was changed; run the same command with --allow-destructive to delete them$/);
+  assert.ok(unconfirmed.stderr.includes('--allow-destructive'), 'and the words are on stderr');
+  assert.deepStrictEqual(unconfirmed.log.writes, [], 'nothing was written');
+  assert.strictEqual(unconfirmed.log.pages.length, 3);
+  assert.strictEqual(unconfirmed.log.messages, 6);
+  workspacesGone(unconfirmed);
+
+  const deleted = run(['delete', '--env', ENV, '--page-id', P2.toUpperCase(), '--allow-destructive'], { pages: PAGES, app: true });
   assert.strictEqual(deleted.status, 0, deleted.stderr);
   assert.deepStrictEqual(result(deleted), { ok: true, deleted: { pageId: P2, name: 'alpha', fileRows: 4, conversationMessages: 2 }, historyRemoved: true, verified: true });
   assert.deepStrictEqual(deleted.log.pages.map((p) => p.id).sort(), [P1, APP_EXISTING_PAGE_ID].sort());

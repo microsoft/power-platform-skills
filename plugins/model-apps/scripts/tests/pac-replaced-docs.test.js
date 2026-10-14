@@ -172,7 +172,7 @@ const CONTRACT = {
       types: ['env', 'data-sources', 'output-file', 'detail'],
       'add-to-app': ['env', 'app-id', 'page-id', 'title'],
       'remove-from-app': ['env', 'app-id', 'page-id', 'allow-empty-navigation'],
-      delete: ['env', 'page-id'],
+      delete: ['env', 'page-id', 'allow-destructive'],
     },
   },
 };
@@ -409,12 +409,13 @@ test('the genpage skill generates the types with genpage.js, and a failure of it
   const phase4 = skill.split('### Phase 4: Generate RuntimeTypes (Conditional)')[1].split('### Phase 4.5')[0];
   assert.match(phase4, /`genpage\.js types` is the SDK's type generator — the maker portal's own — read from the environment now:/);
   assert.match(phase4, /node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" types ` --env '<org-url>' ` --data-sources 'entity1,entity2' ` --output-file '<working-dir>\/RuntimeTypes\.ts'/);
-  assert.match(phase4, /It prints `\{ "ok": true, "outputFile", "dataSources", "detail", "bytes" \}`\. A failure \(exit 1, `"ok": false` with the SDK's `code` — for example a table the environment does not have\) ends the phase: report why, and never guess column names\./);
+  assert.match(phase4, /It prints `\{ "ok": true, "outputFile", "dataSources", "detail", "bytes" \}`\. A failure \(exit 1, `"ok": false` with a `code` — for example `GENPAGE_TABLE_NOT_FOUND`, which names the `table` the environment does not have\) ends the phase: report why, and never guess column names\./);
   assert.match(skill, /Pages themselves are written, read and deleted through the SDK with the same az token, and so are the type generator and the page listing and download \(`scripts\/genpage\.js`\)\./);
   assert.match(squash(doc('skills', 'app-builder', 'SKILL.md')), /node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" types --env <envUrl> --data-sources "<entity1,entity2,…>" --output-file <working-dir>\/RuntimeTypes\.ts/);
   assert.match(squash(doc('skills', 'app-builder', 'SKILL.md')), /The script prints `\{ "ok": true, "outputFile", "dataSources", "detail", "bytes" \}`; a failure \(exit 1, `"ok": false`\) stops the step — report why, since the page workers must not guess column names\./);
   assert.match(squash(doc('references', 'authoring-flow.md')), /\*\*Type generation\*\* — `genpage\.js types` → `RuntimeTypes\.ts`\./);
   assert.match(squash(doc('references', 'troubleshooting.md')), /`node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" types …` prints `\{ "ok": false, "error", "code" \}` and exits 1 when it cannot write the schema/);
+  assert.match(squash(doc('references', 'troubleshooting.md')), /A table the environment does not have prints `"code": "GENPAGE_TABLE_NOT_FOUND"` with the `table` it names — check the logical name \(not the display name; a custom table has its publisher prefix\) and that the environment is the one that holds the table\./);
 });
 
 // What the edit flow says the download writes is what genpage.js writes — the folder's files come from pageFolderFiles (genpage.test.js reads the bytes it puts on disk) — and what it says the
@@ -459,20 +460,21 @@ test('the edit flow lists, downloads and types with genpage.js, and what it says
 });
 
 // The page verbs genpage.js did not replace but ADDED: where a document sent the maker to Maker — to put a page in an app, to take it out of one, to delete it — it now names the verb. Each of them
-// changes an app or deletes a page, so the text says to ask first; delete asks for nothing itself (genpage.test.js: "the skill that runs it asks").
+// changes an app or deletes a page, so the text says to ask first; delete is refused until `--allow-destructive` says it is meant, and what it would remove is what the refusal says
+// (genpage.test.js: "without --allow-destructive the backend is asked not to delete").
 test('the new page verbs are offered where the text used to send the maker to Maker: add a page to an app, take it out of one, delete it — after asking', () => {
   const skill = squash(doc('skills', 'genpage', 'SKILL.md'));
   assert.match(skill, /List the environment's pages: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" list --env '<org-url>'` prints every page of the environment, drafts included, as `\{ "pageId", "name" \}`, and a failed read \(exit 1, `"ok": false`\) is never "the page is not there"\./);
   assert.match(skill, /add it to the app's navigation with `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" add-to-app --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>'` \(it publishes the app and proves the page shows in the published navigation\)/);
-  assert.match(skill, /Or delete the page and re-run the create: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" delete --env '<org-url>' --page-id '<page-id>'` removes the page and its conversation for good, so ask the user first — an unattended run stops instead, since suppressing a prompt never authorizes a delete — and it is refused while an app's navigation names the page \(the refusal names the apps; `genpage\.js remove-from-app` takes the page out of each\)\./);
+  assert.match(skill, /Or delete the page and re-run the create: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" delete --env '<org-url>' --page-id '<page-id>'` first says what it would remove — the page, its file rows and its conversation messages — and deletes nothing; ask the user, and only if they agree run it again with `--allow-destructive`, which removes them for good — an unattended run stops at that refusal instead, since suppressing a prompt never authorizes a delete — and it is refused while an app's navigation names the page \(the refusal names the apps; `genpage\.js remove-from-app` takes the page out of each\)\./);
   assert.match(skill, /run `genpage-base\.js record --page-id '<page-id>' --file '<working-dir>\/<file>\.tsx'` with no `--app-id` \(no app holds the page yet, so the marker records the page alone, and the first update that names the new app records the app\) and go on with step 2 of "A new app" below/);
   assert.doesNotMatch(skill, /Look for the page in Maker|in Maker, or `pac|add it to the app's navigation \(in Maker/, 'the maker is not sent to Maker for what a verb does');
 
   const appBuilder = squash(doc('skills', 'app-builder', 'SKILL.md'));
-  assert.match(appBuilder, /Detach it from that app — ask the user first, since this changes another app\. The halt names the app, and `scripts\/apps\.js list --env <envUrl> --search <name>` gives its `id`; `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>` takes the page out of that app's navigation and publishes that app \(everything it has saved goes live with it; the page itself stays\)\. Or detach it in Maker\. `--allow-destructive` does \*\*not\*\* bypass this halt\./);
+  assert.match(appBuilder, /Detach it from that app — ask the user first, since this changes another app\. The halt names the app and prints the command with the app's `id` filled in \(`<id of app …>` stands where the id could not be read, and `scripts\/apps\.js list --env <envUrl> --search <name>` gives it\); `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>` takes the page out of that app's navigation and publishes that app \(everything it has saved goes live with it; the page itself stays\)\. Or detach it in Maker\. `--allow-destructive` does \*\*not\*\* bypass this halt\./);
   const schema = squash(doc('references', 'app-spec-schema.md'));
-  assert.match(schema, /add it to the app's navigation with `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" add-to-app --env <envUrl> --app-id <this app's id> --page-id <page id>` \(it publishes the app and proves the page in what runs\) and re-run; otherwise remove the stale id from the manifest\/spec \(or delete the page with `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" delete --env <envUrl> --page-id <page id>`, after asking the user — it is permanent\) and re-run\./);
-  assert.match(schema, /Detach it from that app first — ask the user, since this changes another app: the halt names the app, `scripts\/apps\.js list --env <envUrl> --search <name>` gives its `id`, and `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>` takes the page out of its navigation and publishes it \(everything that app has saved goes live with it; the page itself stays\) — or detach it in Maker\./);
+  assert.match(schema, /add it to the app's navigation with `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" add-to-app --env <envUrl> --app-id <this app's id> --page-id <page id>` \(it publishes the app and proves the page in what runs\) and re-run; otherwise remove the stale id from the manifest\/spec \(or delete the page with `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" delete --env <envUrl> --page-id <page id>`, which says what it would remove and deletes nothing until it is run again with `--allow-destructive` — ask the user first, it is permanent\) and re-run\./);
+  assert.match(schema, /Detach it from that app first — ask the user, since this changes another app: the halt names the app and prints the command with the app's `id` filled in \(`<id of app …>` stands where the id could not be read, and `scripts\/apps\.js list --env <envUrl> --search <name>` gives it\), and `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage\.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>` takes the page out of its navigation and publishes it \(everything that app has saved goes live with it; the page itself stays\) — or detach it in Maker\./);
   assert.match(squash(doc('docs', 'app-builder-capabilities.md')), /`pages-shared-across-apps` \(`--allow-destructive` does NOT bypass; detach the page from the other app with `scripts\/genpage\.js remove-from-app`, or in Maker\)/);
   assert.doesNotMatch(`${appBuilder} ${schema}`, /Detach it in Maker\.? `--allow-destructive`|add it to the app's navigation in the maker, publish the app and re-run/, 'neither document still sends the maker to Maker alone');
 });
