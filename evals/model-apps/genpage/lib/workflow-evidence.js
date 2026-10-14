@@ -9,11 +9,24 @@ const currentContract = (fixture) => (fixture.contractVersion || fixture.manifes
 const isUpload = (command) => /\bgenpage-upload\.js\b|\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+upload\b/i.test(command);
 const isAuth = (command) => /\bcheck-auth\.js\b/.test(command);
 const isDiscovery = (command) => /\blist-connections\.js\b/.test(command);
+// The verb a script that takes one (apps.js, genpage.js) is run with: the first positional argument after the script's own path, read the
+// way the script reads its argv — lib/dataverse-auth.js parseArgs, which commandInfo mirrors: `--flag value` takes the next token. Both
+// scripts accept their flags before the verb (`apps.js --env <url> create …`), so a pattern that wants the verb right after the path would
+// miss a write. A token keeps no markdown backticks; the path may be quoted, relative, absolute or Windows-style.
+function scriptVerb(command, script) {
+  const positional = commandInfo({ command }).positional.map((token) => token.replace(/^`+|`+$/g, ''));
+  const at = positional.findIndex((token) => token === script || token.endsWith(`/${script}`) || token.endsWith(`\\${script}`));
+  return at === -1 ? null : positional[at + 1] || null;
+}
+// What each of them writes with: apps.js creates an app; genpage.js changes an app or deletes a page (`list`, `download` and `types` only
+// read, and write local files).
+const APP_WRITES = new Set(['create']);
+const PAGE_WRITES = new Set(['add-to-app', 'remove-from-app', 'delete']);
 const isMutation = (command) => isUpload(command)
   || /\b(?:provision-entities|create-table|add-column|create-relationship|create-record|create-connection-reference|add-page-to-solution|provision-solution)\.js\b/.test(command)
-  || /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b|\bapps\.js['"]?\s+create\b|\b(?:create-connection|auth-switch)\b/.test(command)
-  // The page verbs of genpage.js that change an app or delete a page (`list`, `download` and `types` only read, and write local files).
-  || /\bgenpage\.js['"]?\s+(?:add-to-app|remove-from-app|delete)\b/.test(command)
+  || /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b|\b(?:create-connection|auth-switch)\b/.test(command)
+  || APP_WRITES.has(scriptVerb(command, 'apps.js'))
+  || PAGE_WRITES.has(scriptVerb(command, 'genpage.js'))
   || /\b(?:Task|Dispatched)\s+genpage-entity-builder\b|\bgenpage-entity-builder\s+invoked\b/i.test(command);
 const isGeneration = (command) => /\b(?:Task|Write|Edit|Generate)\b[^\n]*(?:genpage-page-builder|\.tsx\b)/i.test(command);
 

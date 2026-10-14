@@ -97,6 +97,12 @@ test('genpage.js add-to-app, remove-from-app and delete are mutations; list, dow
   }
   for (const verb of ['list', 'download', 'types']) {
     assert.equal(isMutation(`node scripts/genpage.js ${verb} --env https://contoso.crm.dynamics.com`), false, verb);
+    assert.equal(isMutation(`node scripts/genpage.js --env https://contoso.crm.dynamics.com ${verb}`), false, `${verb} (flags first)`);
+  }
+  // The script reads its flags before the verb as well, so a write is one whichever comes first.
+  for (const verb of ['add-to-app', 'remove-from-app', 'delete']) {
+    assert.ok(isMutation(`node scripts/genpage.js --env https://contoso.crm.dynamics.com ${verb} --app-id 1 --page-id 2`), `${verb} (flags first)`);
+    assert.ok(isMutation(`node 'D:/repo/plugins/model-apps/scripts/genpage.js' --env=https://contoso.crm.dynamics.com ${verb} --page-id 2`), `${verb} (flags first, = form, quoted path)`);
   }
   // An upload is still one; a script that only reads the auth state is not.
   assert.ok(isMutation('node scripts/genpage-upload.js --env https://contoso.crm.dynamics.com --code-file p.tsx'));
@@ -130,5 +136,39 @@ test('a refusal that went on to add, remove or delete a page is not a refusal', 
   }
   for (const verb of ['list', 'types']) {
     assert.ok(!refusalProblems(refused(`${halted}- \`node scripts/genpage.js ${verb} --env https://contoso.crm.dynamics.com\`\n`)).includes(problem), verb);
+  }
+});
+
+test('apps.js create is a mutation whether its flags come before or after the verb; apps.js list is not', () => {
+  const writes = [
+    'node scripts/apps.js create --env https://contoso.crm.dynamics.com --name X --solution Default --page-id 1',
+    'node scripts/apps.js --env https://contoso.crm.dynamics.com create --name X --solution Default --page-id 1',
+    "node 'D:/repo/plugins/model-apps/scripts/apps.js' --env 'https://contoso.crm.dynamics.com' create --name 'Account Metrics' --solution Default --page-id 1",
+    'node D:\\repo\\plugins\\model-apps\\scripts\\apps.js --solution Default create --name X --page-id 1',
+    'pac model create --name X',
+  ];
+  for (const command of writes) assert.ok(isMutation(command), command);
+  const reads = [
+    'node scripts/apps.js list --env https://contoso.crm.dynamics.com',
+    'node scripts/apps.js --env https://contoso.crm.dynamics.com list --search create',
+    'node scripts/myapps.js create --name X',
+  ];
+  for (const command of reads) assert.equal(isMutation(command), false, command);
+});
+
+test('a write whose flags come first still needs the latest successful auth gate, is matched to its event, and breaks a refusal', () => {
+  const gate = (ok) => `- \`node check-auth.js --require-pac\` → returned \`{ ok: ${ok}, ... }\`\n`;
+  for (const command of [
+    'node scripts/apps.js --env https://contoso.crm.dynamics.com create --name X --solution Default --page-id 1',
+    'node scripts/genpage.js --env https://contoso.crm.dynamics.com delete --page-id 2 --allow-destructive',
+  ]) {
+    const line = `- \`${command}\`\n`;
+    assert.deepEqual(authGateProblems({ workflowLog: gate(true) + line }), [], command);
+    assert.match(authGateProblems({ workflowLog: gate(false) + line }).join('\n'), /mutation attempted without the latest successful auth gate/, command);
+    const fixture = (events) => ({ contractVersion: 2, workflowLog: line, events });
+    assert.deepEqual(unassociatedCallProblems(fixture([{ command, result: { ok: true } }])), [], command);
+    assert.equal(unassociatedCallProblems(fixture([])).length, 1, command);
+    const refused = { manifest: { expectedOutcome: 'refused', refusal: { stage: 'auth' } }, files: [], workflowLog: gate(false) + line };
+    assert.ok(refusalProblems(refused).includes('refused workflow generated a page or attempted a mutation'), command);
   }
 });
