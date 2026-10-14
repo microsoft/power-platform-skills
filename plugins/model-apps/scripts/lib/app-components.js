@@ -30,34 +30,56 @@ function requireGuid(id, label) {
   return key;
 }
 
-async function collectionRows(client, path, label) {
+// Reads a collection page by page: { "value": [ ... ], "@odata.nextLink": "<URL>" }. A refusal, an answer that is no list, a link that is no link and a page
+// that repeats are each an error, never a shorter list: the callers prove things from the rows that come back, and a missing row cannot be told from a missing page.
+//   path     below the API root, e.g. `/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid`
+//   label    what is being read, for a message
+//   options.code  the `code` of the error thrown (default APP_COMPONENTS_UNVERIFIED), for a caller whose own callers know another vocabulary
+async function collectionRows(client, path, label, { code = 'APP_COMPONENTS_UNVERIFIED' } = {}) {
   const rows = [];
   const seen = new Set();
   while (path) {
-    if (seen.has(path)) throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: repeated @odata.nextLink`);
+    if (seen.has(path)) throw componentError(code, `${label}: repeated @odata.nextLink`);
     seen.add(path);
-    const response = await client.get(path);
+    // The continuation the platform gives is ABSOLUTE and on the same origin:
+    //   "@odata.nextLink": "https://contoso.crm.dynamics.com/api/data/v9.0/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=...&$skiptoken=..."
+    // The SDK client's `get` puts the API root in front of whatever it is given, which would make that
+    // `/api/data/v9.0/https://contoso.crm.dynamics.com/api/data/v9.0/...` (HTTP 404), so such a link goes through its `getAbsolute` — which also refuses a link to another origin.
+    // A client without it (a test fake) is handed the link as it was.
+    const absolute = /^https?:/i.test(path);
+    const response = absolute && typeof client.getAbsolute === 'function' ? await client.getAbsolute(path) : await client.get(path);
     if (!response || response.status < 200 || response.status >= 300) {
-      throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: HTTP ${response && response.status}`, response && response.status);
+      // The platform's own words, as the SDK reports its reads: { "error": { "code": "0x80040220", "message": "The user is not a member of the organization." } }
+      const errorBody = response && response.body;
+      const reason = errorBody && errorBody.error && typeof errorBody.error.message === 'string' ? errorBody.error.message : '';
+      const url = !absolute && typeof client.apiUrl === 'function' ? client.apiUrl(path) : path;
+      throw componentError(code, `${label}: HTTP ${response && response.status} from ${url}${reason ? `: ${reason}` : ''}`, response && response.status);
     }
     // Dataverse collections are { value: [...], "@odata.nextLink": "<API URL>" }; an absent/malformed
     // value or continuation is not an empty collection, and cannot prove a complete membership read.
     const body = response.body;
-    if (!body || !Array.isArray(body.value)) throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: no readable result set`);
+    if (!body || !Array.isArray(body.value)) throw componentError(code, `${label}: no readable result set`);
     rows.push(...body.value);
     const next = body['@odata.nextLink'];
     if (next !== undefined && (typeof next !== 'string' || !next)) {
-      throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: malformed @odata.nextLink`);
+      throw componentError(code, `${label}: malformed @odata.nextLink`);
     }
     path = next;
   }
   return rows;
 }
 
-// The rows of ONE app that are its current layer: the only row, or — when a pending edit makes the platform answer with both layers — the authored one (componentstate 1).
-// Anything other than exactly one is for the caller to refuse: it does not say which layer is current.
+// The rows of ONE record that are its current layer: the only row, or — when a pending edit makes the platform answer with both layers — the authored one
+// (componentstate 1, Unpublished: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appmodule). Anything other than exactly
+// one is for the caller to refuse: it does not say which layer is current.
 function currentLayerRows(rows) {
   return rows.length === 1 ? rows : rows.filter((row) => row && Number(row.componentstate) === 1);
+}
+
+// The one row a LISTING shows for a record: its current layer when the rows say which it is, else the first row. A list shows what it cannot place exactly rather
+// than hide it, where currentLayerRows leaves the doubt to a caller that must not guess. `rows` are the rows of ONE record.
+function currentLayerRow(rows) {
+  return currentLayerRows(rows)[0] || rows[0];
 }
 
 async function currentAppLayer(client, appId) {
@@ -529,7 +551,7 @@ async function appEntityComponentsFor(sdk, appUnique, wanted) {
 }
 
 module.exports = {
-  currentAppLayer, currentLayerRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
+  currentAppLayer, currentLayerRows, currentLayerRow, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
   publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings,
   resolveMainForms, readMainFormMembership, appMainFormsFor, appEntityComponentsFor,
   APP_COMPONENT_ENTITY_SOURCES, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,

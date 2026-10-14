@@ -10,7 +10,9 @@
 //   published:false  creates an app as a never-published draft that a later publish covers, saving a publish
 //                    round trip per create. A draft is not in the PUBLISHED projection that every app-existence
 //                    probe in the plugin reads (a by-id read answers 404, a by-name query finds nothing), so
-//                    the plugin creates its apps published.
+//                    the build creates its apps published. `apps.js create` is the one script that creates a draft
+//                    (without --publish): after a create that worked it looks the app up by nothing, and a create
+//                    that failed reads it back by its unique name through RetrieveUnpublishedMultiple, which sees a draft.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -155,7 +157,10 @@ test('`published: false` leaves a never-published draft that the by-name lookup 
   assert.deepStrictEqual(listed.map((app) => app.id), [created.id], 'only the draft-aware listing finds it, which is what teardown uses');
 });
 
-test('the plugin creates every app published: its app definition leaves `published` unset and no script sets it to false', () => {
+test('the build creates every app published: its app definition leaves `published` unset, and the one script that sets it to false is apps.js', () => {
   assert.ok(!('published' in appDefinition()), 'appDef must not carry `published`');
-  assert.deepStrictEqual(scriptsMatching(/\bpublished\s*:\s*false\b/), [], 'a script creates a draft app, which its own probes cannot see');
+  // `apps.js create` leaves an app unpublished unless it is given --publish, as `pac model create` did. It can: after a create that worked it never
+  // looks the app up — the ids it needs are minted before the first write — and the read-back of one that failed is draft-aware
+  // (RetrieveUnpublishedMultiple), where the build's own probes could not see a draft.
+  assert.deepStrictEqual(scriptsMatching(/\bpublished\s*:\s*false\b/), ['apps.js'], 'no other script creates a draft app, which its own probes cannot see');
 });

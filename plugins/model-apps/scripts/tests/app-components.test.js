@@ -2,10 +2,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
-  currentAppLayer, tableRefs, tableComponentIds, pinAppTables, resolveMainForms,
-  readMainFormMembership, appEntityComponentsFor,
+  currentAppLayer, currentLayerRow, tableRefs, tableComponentIds, pinAppTables, resolveMainForms,
+  readMainFormMembership, appEntityComponentsFor, collectionRows,
 } = require('../lib/app-components.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+const { createFakeAppsOrg } = require('./helpers/fake-apps-org.js');
 
 const APP = '11111111-0000-4000-8000-000000000001';
 const PUBLISHED = '11111111-0000-4000-8000-000000000002';
@@ -39,6 +45,21 @@ test('currentAppLayer is inconclusive for unreadable, missing or ambiguous layer
     assert.equal(read.ok, false, JSON.stringify(result));
     assert.ok(read.reason);
   }
+});
+
+test('currentLayerRow is the authored layer whichever of a record\u2019s rows comes first, and the first row when none is authored — the one rule a listing shows, written once', () => {
+  const rows = (...states) => states.map((componentstate, i) => ({ name: `row ${i}`, componentstate }));
+  const name = (list) => currentLayerRow(list).name;
+  assert.equal(name(rows(0)), 'row 0', 'the only row, published');
+  assert.equal(name(rows(1)), 'row 0', 'the only row, authored');
+  assert.equal(name(rows(0, 1)), 'row 1', 'authored last');
+  assert.equal(name(rows(1, 0)), 'row 0', 'authored first');
+  assert.equal(name(rows(0, 1, 0)), 'row 1', 'authored between two published rows');
+  assert.equal(name(rows(0, 0)), 'row 0', 'none authored: the first row, so a record is shown rather than hidden');
+  assert.equal(name(rows(0, 1, 1)), 'row 1', 'the first AUTHORED row, not the first row');
+  assert.equal(name(rows(2, 3)), 'row 0', 'states other than the two layers do not make a row current');
+  assert.equal(currentLayerRow([null, { name: 'authored', componentstate: 1 }]).name, 'authored', 'a hole in the list is skipped');
+  assert.equal(currentLayerRow([]), undefined, 'no rows, no current one');
 });
 
 test('tableRefs resolves MetadataId and EntitySetName together, deduplicating logical names', async () => {
@@ -84,6 +105,98 @@ test('component pagination refuses a repeated nextLink, malformed rows and later
     async (url) => url === '/later' ? response([], 429) : response([], 200, { '@odata.nextLink': '/later' }),
   ]) {
     await assert.rejects(tableComponentIds({ get }, CURRENT));
+  }
+});
+
+// --- collectionRows: the continuation the platform really gives is ABSOLUTE ------------------------------------------------------------
+//   "@odata.nextLink": "https://contoso.crm.dynamics.com/api/data/v9.0/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?...&$skiptoken=..."
+// and the SDK client's `get` puts the API root in front of whatever it is given.
+
+const ORIGIN = 'https://contoso.crm.dynamics.com';
+const FIRST = '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,componentstate';
+const NEXT = `${ORIGIN}/api/data/v9.0${FIRST}&$skiptoken=1`;
+
+test('collectionRows follows an absolute @odata.nextLink through the client\'s getAbsolute, never through get, which would put the API root in front of it', async () => {
+  const calls = [];
+  const client = {
+    get: async (url) => { calls.push(['get', url]); return response([{ n: 1 }], 200, { '@odata.nextLink': NEXT }); },
+    getAbsolute: async (url) => { calls.push(['getAbsolute', url]); return response([{ n: 2 }]); },
+  };
+  assert.deepEqual(await collectionRows(client, FIRST, 'rows'), [{ n: 1 }, { n: 2 }]);
+  assert.deepEqual(calls, [['get', FIRST], ['getAbsolute', NEXT]]);
+});
+
+test('collectionRows hands an absolute link to get as it is when the client has no getAbsolute, and a relative link always to get', async () => {
+  const calls = [];
+  const plain = {
+    get: async (url) => {
+      calls.push(url);
+      if (calls.length === 1) return response([1], 200, { '@odata.nextLink': NEXT });
+      return calls.length === 2 ? response([2], 200, { '@odata.nextLink': '/relative-next' }) : response([3]);
+    },
+  };
+  assert.deepEqual(await collectionRows(plain, FIRST, 'rows'), [1, 2, 3]);
+  assert.deepEqual(calls, [FIRST, NEXT, '/relative-next']);
+
+  const seen = [];
+  const both = {
+    get: async (url) => { seen.push(url); return seen.length === 1 ? response([1], 200, { '@odata.nextLink': '/relative-next' }) : response([2]); },
+    getAbsolute: async () => { throw new Error('not for a relative link'); },
+  };
+  assert.deepEqual(await collectionRows(both, FIRST, 'rows'), [1, 2]);
+  assert.deepEqual(seen, [FIRST, '/relative-next']);
+});
+
+test('collectionRows reports a refused page with the label, the status, the URL and the platform\'s own words — and the code it was asked for', async () => {
+  const refused = { status: 403, body: { error: { code: '0x80040220', message: 'The user is not a member of the organization.' } } };
+  const client = { get: async () => refused, apiUrl: (p) => `${ORIGIN}/api/data/v9.0${p}` };
+  await assert.rejects(collectionRows(client, FIRST, 'the apps'), (error) => {
+    assert.equal(error.code, 'APP_COMPONENTS_UNVERIFIED', 'the default');
+    assert.equal(error.statusCode, 403);
+    assert.equal(error.message, `the apps: HTTP 403 from ${ORIGIN}/api/data/v9.0${FIRST}: The user is not a member of the organization.`);
+    return true;
+  });
+  await assert.rejects(collectionRows(client, FIRST, 'the apps', { code: 'CONNECTION_ERROR' }), (error) => error.code === 'CONNECTION_ERROR' && error.statusCode === 403);
+  // No platform message and no apiUrl on the client: the status and the path, and nothing invented.
+  await assert.rejects(collectionRows({ get: async () => ({ status: 500, body: null }) }, FIRST, 'the apps'), (error) => error.message === `the apps: HTTP 500 from ${FIRST}` && error.statusCode === 500);
+  // A refused ABSOLUTE page names that link, as it is.
+  const later = { get: async () => response([], 200, { '@odata.nextLink': NEXT }), getAbsolute: async () => refused, apiUrl: () => { throw new Error('an absolute link has no API root to add'); } };
+  await assert.rejects(collectionRows(later, FIRST, 'the apps'), (error) => error.message === `the apps: HTTP 403 from ${NEXT}: The user is not a member of the organization.`);
+});
+
+test('collectionRows fails closed, with the code it was asked for: an answer that is no list, a link that is no link, a page that repeats', async () => {
+  // A reader that follows a repeated link never ends, so the fake gives up after a few reads rather than hang the run.
+  const bounded = (get) => { let reads = 0; return async (url) => { reads += 1; if (reads > 10) throw new Error('followed a repeated link'); return get(url); }; };
+  const cases = [
+    ['no readable result set', async () => ({ status: 200, body: { oops: true } })],
+    ['no readable result set', async () => ({ status: 200, body: { value: 'nope' } })],
+    ['malformed @odata.nextLink', async () => response([], 200, { '@odata.nextLink': 7 })],
+    ['malformed @odata.nextLink', async () => response([], 200, { '@odata.nextLink': '' })],
+    ['repeated @odata.nextLink', async () => response([], 200, { '@odata.nextLink': FIRST })],
+    ['repeated @odata.nextLink', async (url) => response([], 200, { '@odata.nextLink': url === FIRST ? NEXT : FIRST })],
+  ];
+  for (const [message, get] of cases) {
+    for (const [options, code] of [[undefined, 'APP_COMPONENTS_UNVERIFIED'], [{ code: 'CONNECTION_ERROR' }, 'CONNECTION_ERROR']]) {
+      await assert.rejects(collectionRows({ get: bounded(get) }, FIRST, 'rows', options), (error) => error.message === `rows: ${message}` && error.code === code, `${message} / ${code}`);
+    }
+  }
+});
+
+test('collectionRows over the SDK\'s real client reads every page of a collection that pages with an absolute link — no request carries the API root twice', async () => {
+  const apps = Array.from({ length: 7 }, (_, i) => ({ appmoduleid: `00000000-0000-4000-8000-00000000000${i}`, name: `App ${i}`, uniquename: `app_${i}`, componentstate: 0 }));
+  const org = createFakeAppsOrg({ apps, pageSize: 3 });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-rows-'));
+  try {
+    const httpClient = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: org.request, sleep: async () => {} });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: ORIGIN, httpClient });
+    const first = '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,uniquename,description,componentstate';
+    const rows = await collectionRows(sdk.dataverse, first, 'apps');
+    assert.deepEqual(rows.map((row) => row.name), apps.map((app) => app.name), 'every page was read');
+    assert.deepEqual(org.requests.map((r) => r.path.replace(/^.*\$skiptoken=/, '#')), [first, '#3', '#6']);
+    assert.ok(org.requests.every((r) => !r.path.includes('https://')), 'no request path holds a second URL');
+    assert.deepEqual(org.unexpected, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

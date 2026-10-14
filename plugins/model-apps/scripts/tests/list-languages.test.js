@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 const realAuth = require('../lib/dataverse-auth.js');
+const { withThrowawaySdk } = require('../lib/throwaway-sdk.js');
 
 const SCRIPT = path.resolve(__dirname, '..', 'list-languages.js');
 const ENV = 'https://contoso.crm.dynamics.com';
@@ -29,25 +30,31 @@ async function run(argv, answer = { baseLanguage: 1033, provisioned: [1033], ava
         throw exit;
       },
     },
-    './lib/sdk-http-client.js': {
-      createAzHttpClient: (env) => {
-        events.push({ type: 'client', env });
-        return { marker: 'az-client', env };
-      },
-    },
-    './lib/maker-sdk.js': {
-      createNodeWorkspaceStorage: (dir) => ({ dir }),
-      createMakerSdk: (cfg) => {
-        events.push({ type: 'sdk', cfg });
-        // Only the one method the script may call: any other (initWorkspace, a workspace read) is a TypeError.
-        return {
-          getEnvironmentLanguages: async () => {
-            events.push({ type: 'getEnvironmentLanguages' });
-            if (typeof answer === 'function') return answer();
-            return answer;
+    // The throwaway-workspace lifecycle is the real one (lib/throwaway-sdk.js); only the SDK and the client it makes are stubs.
+    './lib/throwaway-sdk.js': {
+      withThrowawaySdk: (options, runWith) => withThrowawaySdk({
+        ...options,
+        deps: {
+          createAzHttpClient: (env) => {
+            events.push({ type: 'client', env });
+            return { marker: 'az-client', env };
           },
-        };
-      },
+          makerSdk: {
+            createNodeWorkspaceStorage: (dir) => ({ dir }),
+            createMakerSdk: (cfg) => {
+              events.push({ type: 'sdk', cfg });
+              // Only the one method the script may call: any other (initWorkspace, a workspace read) is a TypeError.
+              return {
+                getEnvironmentLanguages: async () => {
+                  events.push({ type: 'getEnvironmentLanguages' });
+                  if (typeof answer === 'function') return answer();
+                  return answer;
+                },
+              };
+            },
+          },
+        },
+      }, runWith),
     },
   };
   const cli = loadCli(SCRIPT, { requires, argv });

@@ -5,6 +5,35 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [Unreleased] — 2.15.0
+
+### Added
+
+- **`scripts/apps.js` and `scripts/list-tables.js`: the environment's apps and tables through the bundled SDK, for the skills to use in
+  place of `pac model list`, `pac model list-tables` and `pac model create`** (the skill text still names the `pac` commands; it moves onto
+  these scripts separately). `apps.js list` prints every model-driven app, drafts included, with its id, name, unique name, description and
+  two facts, apart: whether it is published (users can open it) and whether it has unpublished changes. `pac model list` printed
+  "(Saved - Not Published)" after a name, which is neither: it marks an app that was never published through a publish, so a managed app
+  an import brought in carried it although it is live, and a published app with a saved edit did not. `list-tables.js` prints the tables a
+  comma-separated `--search` names — the same tables as `pac model list-tables`, each read taking a third to a seventh of the time — with
+  `--exact`, only those whose logical name is a term, from one read of the table list, listing the terms that have no table, and with
+  `--type custom|standard|all` (as `pac` had it) only the custom or the standard ones, which keeps a listing for the dominant-prefix step short.
+- **`scripts/apps.js create` makes an app that opens on generative pages, in place of `pac model create`.** It takes the pages
+  (`--page-id`, required: Dataverse refuses an app whose navigation group is empty, and an empty group is what `pac model create` made),
+  as one area "Main" and one group "Pages" with a sub-area per page named for the page, adds the app and its sitemap to the solution, and
+  publishes only with `--publish`. Every check — no page, a page or a solution that does not exist, a managed solution, a unique name
+  already taken — refuses before anything is written, and says why. The navigation's titles are written in the environment's base language
+  and the app's icon is the system's default one. A run that fails after it began reads the platform back and says what is actually left —
+  the app, its sitemap, whether the app is published, which of the two joined the solution — or, when it cannot read that, that the outcome
+  is unknown and what to look for. A create into `Default` says it needs no add instead of reading like a failure. Like every app the SDK
+  creates, the app gets the new header and navigation setting, which `pac model create` did not write.
+
+### Fixed
+
+- **A read that spans more than one page follows the platform's continuation link.** The link is absolute and was requested as a path under the
+  API root (HTTP 404), so a result longer than one page — an app's components, the saved sitemaps, the apps never published — was reported as
+  unverifiable instead of read. A refused read now names the URL and carries the platform's own message.
+
 ## [2.14.0]
 
 The Notes timeline renders, a related-records grid can be placed where you want it, lookups are labelled with the table

@@ -40,11 +40,8 @@
 // Exit codes: 0 read; 1 usage error (stderr names the flag, stdout stays empty) or a failure to read — stdout then holds
 //   { "ok": false, "error": "<message>", "code": "<SDK error code, when it has one>" } and stderr the message.
 
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
-const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { describeEnvironmentLanguages } = require('./lib/lcid-cultures.js');
 
 const USAGE = 'Usage: node scripts/list-languages.js --env <envUrl>';
@@ -55,26 +52,8 @@ const USAGE = 'Usage: node scripts/list-languages.js --env <envUrl>';
  * @param {object} [httpClient] - the SDK's HttpClient; the az-token one for `env` when omitted (a test seam)
  */
 async function readLanguages(env, httpClient) {
-  // `createMakerSdk` requires a workspace storage although this read never touches it (the SDK's design: "no
-  // workspace, no cache"). So the storage points at a throwaway directory that is removed whichever way the read
-  // ends — the same shape ai-preflight.js has, which the temp-workspace lifecycle scan in sdk-async-surface.test.js
-  // holds every such script to.
-  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'list-languages-'));
-  try {
-    const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
-    const sdk = createMakerSdk({
-      workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
-      instanceUrl: env,
-      httpClient: httpClient || createAzHttpClient(env),
-    });
-    return describeEnvironmentLanguages(await sdk.getEnvironmentLanguages());
-  } finally {
-    try {
-      fs.rmSync(workspaceDir, { recursive: true, force: true });
-    } catch {
-      // Cleanup of a directory nothing was written to must not turn a successful read into a failure.
-    }
-  }
+  // The SDK needs a workspace although this read never touches it; the throwaway one is lib/throwaway-sdk.js's.
+  return withThrowawaySdk({ env, httpClient, prefix: 'list-languages-' }, async (make) => describeEnvironmentLanguages(await make().getEnvironmentLanguages()));
 }
 
 async function main() {
