@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Validates that no two plugins share a telemetry instrumentation key or
- * event_stream_name.
+ * Validates that telemetry keys are not reused outside a sanctioned shared
+ * tenant group, and that non-exempt event_stream_name values remain unique.
  *
  * WHY: Plugins adopt the shared 1DS telemetry by copying the routing-agnostic
- * library, but each plugin must provision its OWN ikey.json (its own
+ * library, but each plugin normally must provision its OWN ikey.json (its own
  * instrumentation key(s), collector routing, and event_stream_name). The most
  * common adoption mistake is lifting an existing adopter's ikey.json wholesale
  * (e.g. copying power-pages' file), which silently mis-attributes the new
@@ -13,14 +13,14 @@
  * against this (see the root AGENTS.md "Shared Telemetry" section), but only a
  * deterministic CI check can actually prevent the copy-paste collision. This
  * script turns that prose invariant into an enforced one: a PR that reuses
- * another plugin's key or stream name fails.
+ * another plugin's key outside SHARED_KEY_GROUPS or a non-exempt stream fails.
  *
  * ikey.json comes in two shapes, both of which are inspected here:
  *   Tier 1 (flat):    { "instrumentationKey": "...", "collector_url": "...", "event_stream_name": "..." }
  *   Tier 2 (regions): { "regions": { "us": { "instrumentation_key": "...", "collector_url": "..." }, ... }, "event_stream_name": "..." }
  * A single plugin legitimately reuses one key across regions (power-pages shares
  * one key for us/eu), so keys are de-duplicated PER PLUGIN — only reuse across
- * two different plugins is an error.
+ * different plugins is an error unless every owner belongs to the same group.
  */
 
 const fs = require('fs');
@@ -66,8 +66,14 @@ function isPlaceholder(value) {
 // name is accepted by the collector and then dropped. Plugins sharing it must make
 // their rows separable in the payload — each sets its own `clientType` and puts its
 // `pluginName` in `customDimensions` (see each plugin's telemetry envelope builder).
-// Instrumentation keys are still never shareable; only the stream name is exempt.
+// Key sharing is governed separately by SHARED_KEY_GROUPS, not by this stream exemption.
 const SHARED_INGESTION_STREAMS = new Set(['event']);
+
+// The same team owns model-apps, pcf and their shared 1DS tenant. Both send the
+// Power Apps client `event` shape, with rows separable by clientType/pluginName.
+// pcf's ikey.json is a verbatim model-apps copy enforced by validate-plugin-copies.js.
+// Adding another group is a deliberate, reviewed change, never an adoption default.
+const SHARED_KEY_GROUPS = [new Set(['model-apps', 'pcf'])];
 
 function toPosix(relativePath) {
   return relativePath.replace(/\\/g, '/');
@@ -159,9 +165,12 @@ for (const filePath of findIkeyFiles(PLUGINS_DIR)) {
   }
 }
 
-function collectCollisions(owners, label, redact) {
+function collectCollisions(owners, label, redact, sharedGroups = []) {
   for (const [value, byPlugin] of owners) {
     if (byPlugin.size < 2) continue; // reused within a single plugin is allowed
+    // A sanctioned pair plus any outsider must still fail: membership of some
+    // owners is not enough; one group must contain ALL owners of this key.
+    if (sharedGroups.some(group => [...byPlugin.keys()].every(plugin => group.has(plugin)))) continue;
 
     const locations = [];
     for (const [pluginName, where] of byPlugin) {
@@ -182,7 +191,7 @@ function redactKey(value) {
   return value.length > 12 ? `${value.slice(0, 12)}...` : value;
 }
 
-collectCollisions(keyOwners, 'Instrumentation key', redactKey);
+collectCollisions(keyOwners, 'Instrumentation key', redactKey, SHARED_KEY_GROUPS);
 collectCollisions(streamOwners, 'event_stream_name', null);
 
 if (errors.length > 0) {
@@ -191,10 +200,10 @@ if (errors.length > 0) {
     console.log(`- ${error}`);
   }
   console.log(
-    '\nEach plugin must provision its own instrumentation key(s) and event_stream_name. ' +
-      'Do not copy another plugin\'s ikey.json; start from the placeholder shared/telemetry/ikey.json.'
+    '\nEach plugin must provision its own instrumentation key(s) unless all key owners belong to one SHARED_KEY_GROUPS entry. ' +
+      'Non-exempt event stream names must remain unique. New adopters start from the placeholder shared/telemetry/ikey.json.'
   );
   process.exit(1);
 }
 
-console.log('All plugin telemetry instrumentation keys and event stream names are unique.');
+console.log('All plugin telemetry instrumentation keys and event stream names satisfy the sharing policy.');

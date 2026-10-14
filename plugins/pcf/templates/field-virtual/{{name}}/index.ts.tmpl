@@ -1,0 +1,61 @@
+import * as React from "react";
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import { {{name}}View } from "./{{name}}View";
+import "./css/{{name}}.css";
+
+export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutputs> {
+    private notifyOutputChanged: (() => void) | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
+    private value = "";
+
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+    ): void {
+        this.context = context;
+        this.notifyOutputChanged = notifyOutputChanged;
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
+        this.context = context;
+        const parameter = context.parameters.sampleProperty;
+        const readable = parameter?.security?.readable ?? true;
+        const editable = parameter?.security?.editable ?? true;
+        this.value = parameter?.raw == null ? "" : String(parameter.raw);
+
+        return React.createElement({{name}}View, {
+            cssClass: "{{cssClass}}",
+            inputClass: "{{cssInputClass}}",
+            messageClass: "{{cssMessageClass}}",
+            label: {{displayNameJson}},
+            value: this.value,
+            disabled: context.mode.isControlDisabled || !readable,
+            readOnly: !editable,
+            hidden: !readable,
+            message: readable ? "" : this.getString("{{name}}_PermissionDenied"),
+            onChange: this.onChange,
+        });
+    }
+
+    public getOutputs(): IOutputs {
+        return {
+            sampleProperty: this.value,
+        };
+    }
+
+    public destroy(): void {
+        this.notifyOutputChanged = null;
+        this.context = null;
+    }
+
+    private readonly onChange = (next: string): void => {
+        if (next === this.value) return;
+        this.value = next;
+        this.notifyOutputChanged?.();
+    };
+
+    private getString(key: string): string {
+        return this.context?.resources?.getString(key) || key;
+    }
+}

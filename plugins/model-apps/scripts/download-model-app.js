@@ -22,9 +22,11 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
+const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
+const { mapLimit } = require('./lib/entity-provision.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -185,13 +187,70 @@ function adoptDeployedName(rel, deployed, auto, publisherPrefix, prefixUnknown, 
   }
 }
 
-async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixUnknown = false } = {}) {
+// Per-table relationship reads overlap because they are independent network fetches, but the
+// TABLE-ORDER processing that dedupes, warns and chooses the surviving N:N owner stays sequential so
+// the emitted notes and winners do not depend on response timing.
+//
+// A failed read is captured as `{ error }` (the caught value itself) rather than as text, so the
+// ordered pass below words the note from it exactly as the sequential loop did — including for a
+// rejection that is not an Error, where `e && e.message` reads as undefined — and never mistakes a
+// falsy rejection for "no failure".
+async function readRelationshipMetadataForTable(sdk, logical) {
+  let rows = null;
+  let rowsFailure = null;
+  try {
+    // `dataverse.get` RESOLVES on a non-2xx rather than throwing, so the status must be checked
+    // explicitly — a bare try/catch would turn a 403 into "this table has no relationships".
+    const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/ManyToOneRelationships`
+      + '?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship');
+    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+    rows = ((res.body && res.body.value) || []).filter((r) => r && r.IsCustomRelationship);
+  } catch (e) {
+    rowsFailure = { error: e };
+  }
+
+  if (rows === null) rows = [];
+  // Properly-cased lookup SchemaName + label. Best-effort: on failure the relationship still
+  // round-trips using the lowercase logical name, which produces the same Dataverse column.
+  // Skipped entirely when there is no relationship to label, so a table whose 1:N read failed
+  // does not also pay for an attribute read whose result nothing would consume.
+  const lookups = new Map();
+  if (rows.length) {
+    try {
+      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata`
+        + '?$select=LogicalName,SchemaName,DisplayName,Targets');
+      for (const a of ((res && res.body && res.body.value) || [])) lookups.set(String(a.LogicalName || '').toLowerCase(), a);
+    } catch { /* fall back to the relationship's own ReferencingAttribute */ }
+  }
+
+  let manyToManyRows = [];
+  let manyToManyFailure = null;
+  try {
+    // Many-to-many. Both ends must be in the app: the intersect table is created by the platform,
+    // so there is nothing to declare for a partner table a rebuild target would not have.
+    // Attempted INDEPENDENTLY of the 1:N read above: a failed 1:N read says nothing about whether
+    // N:N metadata is readable.
+    const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/ManyToManyRelationships`
+      + '?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IsCustomRelationship');
+    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+    manyToManyRows = ((res.body && res.body.value) || []).filter((x) => x && x.IsCustomRelationship);
+  } catch (e) {
+    manyToManyFailure = { error: e };
+  }
+  return { logical, rows, rowsFailure, lookups, manyToManyRows, manyToManyFailure };
+}
+
+async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixUnknown = false, entities = [], concurrency } = {}) {
+  concurrency = validatedDownloadConcurrency(concurrency);
   const inApp = new Set((logicals || []).map((l) => String(l).toLowerCase()));
   const lc = (s) => String(s || '').toLowerCase();
   const relationships = [];
   const skipped = [];
   const seen = new Set(); // relationship SchemaName (lower) — a 1:N read from both ends, and every N:N, appears twice
   const parentOk = new Map(); // logical -> can a rebuild target be relied on to have this table?
+  // The Dataverse Label of each stock parent, from the SAME read that decides whether it is stock — so
+  // knowing what a rebuild would label a lookup to it costs no request. See `omitsDefaultLabel` below.
+  const stockLabels = new Map(); // logical -> raw DisplayName
   const note = (name, entity, reason) => {
     skipped.push({ name, entity, reason });
     if (typeof warn === 'function') warn(`relationship '${name}' on '${entity}' is not carried into the spec: ${reason}`);
@@ -210,44 +269,47 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
     if (parentOk.has(key)) return parentOk.get(key);
     let state = 'unknown';
     try {
-      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}?$select=IsCustomEntity`);
+      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}?$select=IsCustomEntity,DisplayName`);
       if (res && res.status >= 200 && res.status < 300 && res.body) {
         state = res.body.IsCustomEntity === false ? 'rebuildable' : 'custom';
+        if (res.body.DisplayName) stockLabels.set(key, res.body.DisplayName);
       }
     } catch { state = 'unknown'; }
     parentOk.set(key, state);
     return state;
   };
 
-  for (const logical of logicals || []) {
-    let rows = null;
-    try {
-      // `dataverse.get` RESOLVES on a non-2xx rather than throwing, so the status must be checked
-      // explicitly — a bare try/catch would turn a 403 into "this table has no relationships".
-      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/ManyToOneRelationships`
-        + '?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship');
-      if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
-      rows = ((res.body && res.body.value) || []).filter((r) => r && r.IsCustomRelationship);
-    } catch (e) {
+  // ADO 6691205: may this lookup's label be left out of the downloaded spec? Only when a rebuild writes (or
+  // repairs it to) the same label for a lookup that sets none, so the downloaded spec stays minimal and a
+  // rebuild reproduces the label. A label that differs is carried, as ever, and so is every label when there
+  // is nothing to compare it with (no downloaded tables passed, or a stock parent whose label was not read):
+  // omitting is a claim about what a rebuild writes.
+  //   * a parent IN the app: its downloaded displayName, string or map, compared whole;
+  //   * a STOCK parent: its label in the one language the lookup's label is written in, because that is the
+  //     language a rebuild writes it in;
+  //   * the OLD DEFAULT an earlier build left on the column — the parent's logical name — is omitted too. It is an
+  //     identifier, never a label anyone chose, and an explicit label is never repaired on a
+  //     rebuild: writing it out would carry the defect through download -> edit -> rebuild for good,
+  //     where leaving it out lets the rebuild repair it (the data-model phase's lookup label repair). The
+  //     lookup's own name is NOT one: that is what the SDK left on a form FIELD it could not resolve, and no
+  //     build ever wrote it on a column, so a column carrying it is somebody's label and is carried.
+  const omitsDefaultLabel = (referenced, lookupLabel, rawLookupLabel) => {
+    if (isOldLookupColumnLabel({ referenced }, lookupLabel)) return true;
+    const lookupLanguages = Object.keys(labelsByLcid(rawLookupLabel));
+    const stockRaw = stockLabels.get(lc(referenced));
+    const live = stockRaw && lookupLanguages.length === 1 ? labelsByLcid(stockRaw)[lookupLanguages[0]] : undefined;
+    const would = lookupLabelFor({ entities }, { referenced }, { liveReferencedLabel: live });
+    return (would.source === 'table' || would.source === 'environment') && sameLabel(lookupLabel, would.label);
+  };
+
+  const captured = await mapLimit(logicals || [], concurrency, (logical) => readRelationshipMetadataForTable(sdk, logical), { firstInOrder: true });
+  for (const { logical, rows, rowsFailure, lookups, manyToManyRows, manyToManyFailure } of captured) {
+    if (rowsFailure) {
       // Report rather than swallow: "no relationships" and "the query failed" must not look alike.
       // `rows` stays null so the 1:N block below is skipped, but the N:N read still runs — an
       // earlier version `continue`d here, which meant a failed 1:N read ALSO skipped the N:N read
       // silently, leaving any N:N both unreconstructed and unmentioned.
-      note('(all)', lc(logical), `their metadata could not be read (${e && e.message})`);
-    }
-
-    if (rows === null) rows = [];
-    // Properly-cased lookup SchemaName + label. Best-effort: on failure the relationship still
-    // round-trips using the lowercase logical name, which produces the same Dataverse column.
-    // Skipped entirely when there is no relationship to label, so a table whose 1:N read failed
-    // does not also pay for an attribute read whose result nothing would consume.
-    const lookups = new Map();
-    if (rows.length) {
-      try {
-        const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata`
-          + '?$select=LogicalName,SchemaName,DisplayName,Targets');
-        for (const a of ((res && res.body && res.body.value) || [])) lookups.set(lc(a.LogicalName), a);
-      } catch { /* fall back to the relationship's own ReferencingAttribute */ }
+      note('(all)', lc(logical), `their metadata could not be read (${rowsFailure.error && rowsFailure.error.message})`);
     }
 
     // POLYMORPHIC lookups. One lookup column that targets several tables surfaces as SEVERAL
@@ -285,7 +347,7 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
       const a = lookups.get(attr);
       const lookup = { schemaName: (a && a.SchemaName) || r.ReferencingAttribute };
       const displayName = a && labelFromDataverse(a.DisplayName);
-      if (displayName) lookup.displayName = displayName;
+      if (displayName && !omitsDefaultLabel(referenced, displayName, a.DisplayName)) lookup.displayName = displayName;
       // Keep the deployed name whenever it is not the one this prefix would generate. Omitting a
       // foreign name used to rename it onto the generated default; the rebuild then created under
       // that name, the CREATE failed because the lookup already existed, and the name search found
@@ -301,15 +363,11 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
       relationships.push(rel);
     }
 
-    // Many-to-many. Both ends must be in the app: the intersect table is created by the platform,
-    // so there is nothing to declare for a partner table a rebuild target would not have.
-    // Attempted INDEPENDENTLY of the 1:N read above: a failed 1:N read says nothing about whether
-    // N:N metadata is readable.
+    // The N:N rows were read above; the processing stays inside the same try as before, so a failed
+    // read — or anything thrown while processing — is still reported as the N:N metadata being unreadable.
     try {
-      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/ManyToManyRelationships`
-        + '?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IsCustomRelationship');
-      if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
-      for (const r of ((res.body && res.body.value) || []).filter((x) => x && x.IsCustomRelationship)) {
+      if (manyToManyFailure) throw manyToManyFailure.error;
+      for (const r of manyToManyRows) {
         const key = lc(r.SchemaName);
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1449,7 +1507,74 @@ function metadataEntityPath(logical) {
   return `EntityDefinitions(LogicalName='${String(logical).replace(/'/g, "''")}')`;
 }
 
-async function readEntityWithDescriptions(sdk, logical) {
+function validatedDownloadConcurrency(concurrency) {
+  if (concurrency === undefined) return 4;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error(`concurrency must be a positive integer (got ${JSON.stringify(concurrency)})`);
+  }
+  return concurrency;
+}
+
+// The SDK already fans a single table metadata fetch out across several concurrent reads. Keep the
+// TABLE loop ordered so the download never multiplies that environment-sized load; only the
+// post-hydration auxiliary reads below overlap, and their MERGE still runs in the original fixed
+// order so the emitted metadata stays byte-identical to the sequential download.
+async function readEntityAuxMetadata(sdk, logical, concurrency) {
+  const entityPath = `/${metadataEntityPath(logical)}`;
+  const tasks = [
+    async () => {
+      try {
+        const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description,DisplayName,DisplayCollectionName`);
+        if (res && res.status >= 200 && res.status < 300 && res.body) {
+          return { kind: 'entityLabels', body: res.body };
+        }
+        return { kind: 'entityLabels', failed: `HTTP ${res && res.status}` };
+      } catch (err) {
+        return { kind: 'entityLabels', failed: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
+      }
+    },
+    async () => {
+      try {
+        const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName`);
+        if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+        if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
+        return { kind: 'attributeLabels', rows: res.body.value };
+      } catch (err) {
+        return { kind: 'attributeLabels', failed: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
+      }
+    },
+    async () => {
+      try {
+        const res = await sdk.dataverse.get(`${entityPath}/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsBaseCurrency`);
+        if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+          return {
+            kind: 'moneyFlags',
+            baseCurrency: new Set(res.body.value
+              .filter((r) => r && r.LogicalName && r.IsBaseCurrency === true)
+              .map((r) => String(r.LogicalName).toLowerCase())),
+          };
+        }
+      } catch { /* best-effort: absent IsBaseCurrency keeps the column, which is the safe direction */ }
+      return { kind: 'moneyFlags', baseCurrency: new Set() };
+    },
+    async () => {
+      try {
+        const { byLogical, failed } = await readOptionSets(sdk, logical);
+        return { kind: 'optionSets', byLogical, failed: failed || null };
+      } catch (err) {
+        return {
+          kind: 'optionSets',
+          byLogical: new Map(),
+          failed: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed',
+        };
+      }
+    },
+  ];
+  return mapLimit(tasks, concurrency, (task) => task(), { firstInOrder: true });
+}
+
+async function readEntityWithDescriptions(sdk, logical, { concurrency } = {}) {
+  concurrency = validatedDownloadConcurrency(concurrency);
   const meta = { ...(await sdk.fetchEntityMetadata(logical)) };
   // The SDK's fetchEntityMetadata projection is enough for identity but carries NO descriptions —
   // measured against a live org, its entity keys are logicalName/schemaName/displayName/
@@ -1468,26 +1593,21 @@ async function readEntityWithDescriptions(sdk, logical) {
   // NOTE `dataverse.get` RESOLVES with `{ status, headers, body }` on a non-2xx rather than throwing
   // (a 404 returns status 404), so the status MUST be checked explicitly. A try/catch alone would
   // reintroduce exactly the silence this replaces.
-  const entityPath = `/${metadataEntityPath(logical)}`;
-  try {
+  const [entityLabels, attributeLabels, moneyFlags, optionSets] = await readEntityAuxMetadata(sdk, logical, concurrency);
+  if (entityLabels.body) {
     // DisplayName / DisplayCollectionName are read alongside Description so a table labelled in more
     // than one language round-trips (AB#6686428). The SDK's own `fetchEntityMetadata` projection
     // flattens `displayName` to ONE string, which is enough for identity but silently loses every
     // other language — a rebuild from such a spec would recreate the table English-only.
-    const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description,DisplayName,DisplayCollectionName`);
-    if (res && res.status >= 200 && res.status < 300 && res.body) {
-      meta.Description = res.body.Description;
-      meta.DisplayName = res.body.DisplayName;
-      meta.DisplayCollectionName = res.body.DisplayCollectionName;
-    } else {
-      // A non-2xx is NOT "this table has no extra languages" — it is "we could not look". Recorded so
-      // the caller can say so; see the catch below for why silence here is the wrong default.
-      meta.labelReadFailed = `HTTP ${res && res.status}`;
-    }
-  } catch (err) {
-    meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
+    meta.Description = entityLabels.body.Description;
+    meta.DisplayName = entityLabels.body.DisplayName;
+    meta.DisplayCollectionName = entityLabels.body.DisplayCollectionName;
+  } else if (entityLabels.failed) {
+    // A non-2xx is NOT "this table has no extra languages" — it is "we could not look". Recorded so
+    // the caller can say so; see the catch below for why silence here is the wrong default.
+    meta.labelReadFailed = entityLabels.failed;
   }
-  try {
+  if (attributeLabels.rows) {
     // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
     // `targets` (lookup target tables) and `attributeType`, which this projection does not, and
     // entityFromMetadata/other callers rely on them.
@@ -1503,73 +1623,50 @@ async function readEntityWithDescriptions(sdk, logical) {
     // `AttributeOf` rides along for the same filter and is the STRONGER signal: it names the
     // attribute a shadow belongs to, and a POLYMORPHIC lookup's shadows report `IsLogical: false`
     // (live-measured), so `IsLogical` alone cannot see them.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName`);
-    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
-    if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
-    const rows = res.body.value;
-    const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r]));
+    const byLogical = new Map(attributeLabels.rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r]));
     meta.attributes = (meta.attributes || []).map((a) => {
       const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
       const row = byLogical.get(key);
       return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeOf: row.AttributeOf, AttributeTypeName: row.AttributeTypeName } : a;
     });
-  } catch (err) {
+  } else if (attributeLabels.failed && !meta.labelReadFailed) {
     // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded
     // above, because the first reason is the more useful one to show and both describe the same
     // outcome for the operator: this table came back single-language.
-    if (!meta.labelReadFailed) {
-      meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
-    }
+    meta.labelReadFailed = attributeLabels.failed;
   }
-  try {
-    // Base-currency twins. `IsBaseCurrency` lives on MoneyAttributeMetadata, not on the base
-    // attribute type, so it needs its own CAST read — the same shape the option-set reads below use.
-    //
-    // This is the only unambiguous way to recognise the `<money>_base` column Dataverse generates
-    // beside every Money column. It reports no `AttributeOf`, is not logical, and is
-    // `IsCustomAttribute: true`, so nothing else in the projection distinguishes it from a column the
-    // author wrote — and emitting it made a rebuild try to create a column the platform owns.
-    //
-    // Best-effort on purpose: a failure leaves `IsBaseCurrency` absent on every attribute, and the
-    // filter KEEPS an attribute whose flag it could not read. The cost of a failed read is the twin
-    // reappearing, never a real column disappearing.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsBaseCurrency`);
-    if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
-      const baseCurrency = new Set(res.body.value
-        .filter((r) => r && r.LogicalName && r.IsBaseCurrency === true)
-        .map((r) => String(r.LogicalName).toLowerCase()));
-      if (baseCurrency.size) {
-        meta.attributes = (meta.attributes || []).map((a) => {
-          const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
-          return baseCurrency.has(key) ? { ...a, IsBaseCurrency: true } : a;
-        });
-      }
-    }
-  } catch {
-    /* best-effort: absent IsBaseCurrency keeps the column, which is the safe direction */
-  }
-  try {
-    // Choice / MultiChoice option sets (#564). A SEPARATE read from the attribute one above, and it
-    // has to be: `OptionSet` can only be `$expand`ed through a type CAST, which the heterogeneous
-    // `Attributes` collection cannot carry (see OPTION_SET_CASTS). Without it every Choice column
-    // downloads WITHOUT a type, and a rebuild into a FRESH environment creates it as single-line
-    // Text while a rebuild into the ORIGINAL environment silently reuses the real column — an
-    // asymmetry that is much harder to notice than an outright failure.
-    const { byLogical, failed } = await readOptionSets(sdk, logical);
-    // Merged onto the attribute list, never replacing it: the SDK's own projection supplies
-    // `attributeType`/`targets`, and the cast read returns ONLY picklist attributes.
+  // Base-currency twins. `IsBaseCurrency` lives on MoneyAttributeMetadata, not on the base
+  // attribute type, so it needs its own CAST read — the same shape the option-set reads below use.
+  //
+  // This is the only unambiguous way to recognise the `<money>_base` column Dataverse generates
+  // beside every Money column. It reports no `AttributeOf`, is not logical, and is
+  // `IsCustomAttribute: true`, so nothing else in the projection distinguishes it from a column the
+  // author wrote — and emitting it made a rebuild try to create a column the platform owns.
+  //
+  // Best-effort on purpose: a failure leaves `IsBaseCurrency` absent on every attribute, and the
+  // filter KEEPS an attribute whose flag it could not read. The cost of a failed read is the twin
+  // reappearing, never a real column disappearing.
+  if (moneyFlags.baseCurrency && moneyFlags.baseCurrency.size) {
     meta.attributes = (meta.attributes || []).map((a) => {
-      const os = byLogical.get(String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase());
-      return os ? { ...a, optionSet: os } : a;
+      const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
+      return moneyFlags.baseCurrency.has(key) ? { ...a, IsBaseCurrency: true } : a;
     });
-    // A cast that failed is recorded WITHOUT discarding what the other one returned.
-    if (failed) meta.optionSetReadFailed = failed;
-  } catch (err) {
-    // Recorded, not swallowed. "This table has no Choice columns" and "the option-set read returned
-    // 403" are indistinguishable from the emitted spec — both yield untyped columns — so the reason
-    // has to travel back with the metadata or the caller reports a degrade it cannot explain.
-    meta.optionSetReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
   }
+  // Choice / MultiChoice option sets (#564). A SEPARATE read from the attribute one above, and it
+  // has to be: `OptionSet` can only be `$expand`ed through a type CAST, which the heterogeneous
+  // `Attributes` collection cannot carry (see OPTION_SET_CASTS). Without it every Choice column
+  // downloads WITHOUT a type, and a rebuild into a FRESH environment creates it as single-line
+  // Text while a rebuild into the ORIGINAL environment silently reuses the real column — an
+  // asymmetry that is much harder to notice than an outright failure.
+  //
+  // Merged onto the attribute list, never replacing it: the SDK's own projection supplies
+  // `attributeType`/`targets`, and the cast read returns ONLY picklist attributes.
+  meta.attributes = (meta.attributes || []).map((a) => {
+    const os = optionSets.byLogical.get(String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase());
+    return os ? { ...a, optionSet: os } : a;
+  });
+  // A cast that failed is recorded WITHOUT discarding what the other one returned.
+  if (optionSets.failed) meta.optionSetReadFailed = optionSets.failed;
   return meta;
 }
 
@@ -1871,7 +1968,8 @@ function installDownloadedPages(stagingRoot, pagesRoot) {
   }
 }
 
-async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false }) {
+async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false, concurrency }) {
+  concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
   assertSafeOutputDir(outDir);
@@ -2109,7 +2207,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // the confusing downstream error the explicit branch below exists to avoid. Bucket it by origin
     // exactly like the no-primary-name case, so the user is told the table AND the reason.
     try {
-      const meta = await readEntityWithDescriptions(sdk, logical);
+      const meta = await readEntityWithDescriptions(sdk, logical, { concurrency });
       if (meta && meta.labelReadFailed) labelReadFailures.set(logical, meta.labelReadFailed);
       if (meta && meta.optionSetReadFailed) optionSetReadFailures.set(logical, meta.optionSetReadFailed);
       collectGlobalChoices(meta, globalChoiceDecls);
@@ -2279,7 +2377,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   try {
     const rel = await readRelationships(sdk, allLogicals, solution.publisherPrefix, (m) => {
       process.stderr.write(`WARNING: ${m}\n`);
-    }, { prefixUnknown });
+    }, { prefixUnknown, entities, concurrency });
     relationships = rel.relationships;
     relationshipsSkipped = rel.skipped;
   } catch (e) {

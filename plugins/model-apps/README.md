@@ -27,12 +27,18 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
 
-After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
+After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed. (Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not.)
 
 Each Azure CLI call (a token, `az account show`) may take up to **60 seconds** — a busy machine can
 take most of that just to start `az`. A call that runs out of time is reported as a timeout (the
 pre-flight's `az_timeout`), never as a missing or signed-out CLI. To allow longer, set
 `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS` in milliseconds (1000–900000), for example `120000`.
+
+Each `pac` call for generative pages is time-bounded too: **3 minutes** to list or download pages, **10 minutes** to
+upload one. A call that runs out of time is stopped together with everything it started, and the message says what to
+do; a page create whose outcome is unknown is never sent again. To allow longer, set
+`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` in milliseconds (1000–3600000); it applies to every `pac model genpage` call (list,
+download and upload).
 
 ## Feature flags (experimental & in-progress)
 
@@ -81,6 +87,8 @@ capability error. The env var name is always `GENPAGE_ENABLE_` plus the flag nam
 a matching env var is set.
 
 ## Skills
+
+PCF code components ship in the separate preview [pcf plugin](../pcf/README.md).
 
 The plugin provides two authoring skills: `/app-builder` builds a whole model-driven app, and
 `/genpage` builds standalone generative pages for an existing app. **They are independent — you can

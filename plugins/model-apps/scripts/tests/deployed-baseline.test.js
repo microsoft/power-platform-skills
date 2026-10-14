@@ -160,3 +160,70 @@ test('a baseline the migrator cannot read is no baseline, not a crash', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A page's `__contentSha` is the source an apply SENT, and the build's Griffel check judges the next source against it (sdk-build.js griffelStanding). So it must describe what the apply
+// looked at — not the file as it is when the baseline is written, which a maker can have saved over while the build ran (the baseline is written when the build ends).
+const { sha256 } = require('../lib/hash.js');
+const twoPages = () => ({ ...spec(), pages: [
+  { key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'pages/home.tsx' } },
+  { key: 'about', name: 'About', source: { kind: 'tsx', codeFile: 'pages/about.tsx' } },
+  { key: 'idea', name: 'Idea', source: { kind: 'intent' } },
+] });
+function twoPageFolder(dir, home, about) {
+  fs.mkdirSync(path.join(dir, 'pages'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pages', 'home.tsx'), home);
+  fs.writeFileSync(path.join(dir, 'pages', 'about.tsx'), about);
+}
+const shaOf = (baseline, key) => baseline.pages.find((p) => p.key === key).__contentSha;
+
+test('a page the apply sent is recorded as the source it sent, not as the file is when the baseline is written', () => {
+  const dir = tmp();
+  try {
+    const ws = path.join(dir, '.maker-workspace');
+    const identity = { appDir: dir, environment: ENV, appUniqueName: 'new_a' };
+    twoPageFolder(dir, 'export default () => "home as sent";', 'export default () => "about as sent";');
+    const sent = { home: sha256('export default () => "home as sent";'), about: sha256('export default () => "about as sent";') };
+    // The maker saves both pages while the build runs; the baseline is written afterwards.
+    twoPageFolder(dir, 'export default () => "home saved during the build";', 'export default () => "about saved during the build";');
+    writeBaseline(ws, twoPages(), { ...identity, created: { pageSourceShas: sent, pages: { home: A, about: B } } });
+    const recorded = readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' });
+    assert.strictEqual(shaOf(recorded, 'home'), sent.home, 'the record is the source that was sent');
+    assert.strictEqual(shaOf(recorded, 'about'), sent.about);
+    assert.ok(!('__contentSha' in recorded.pages.find((p) => p.key === 'idea')), 'an intent page has no source to record');
+    // Without a measurement — a download, whose files ARE the deployed state, or a caller that measured nothing — the files are hashed as they are.
+    writeBaseline(ws, twoPages(), { ...identity, fromSpec: true });
+    const hashed = readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' });
+    assert.strictEqual(shaOf(hashed, 'home'), sha256('export default () => "home saved during the build";'));
+    writeBaseline(ws, twoPages(), { ...identity, created: { pages: { home: A } } });
+    assert.strictEqual(shaOf(readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' }), 'about'), sha256('export default () => "about saved during the build";'), 'a result with no pageSourceShas is hashed from the files too');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A changed-only run sends only the pages it selects. A page it did not send keeps the record it had — what was last sent is still what is deployed — and, with no earlier record to keep,
+// falls back to the file as it is (as before; no record at all would be no stricter: the next build reads it as "unrecorded" and goes on with a warning).
+test('a page the apply did not send keeps the record it had, and without one is recorded as the file is', () => {
+  const dir = tmp();
+  try {
+    const ws = path.join(dir, '.maker-workspace');
+    const identity = { appDir: dir, environment: ENV, appUniqueName: 'new_a' };
+    twoPageFolder(dir, 'export default () => "home v1";', 'export default () => "about v1";');
+    writeBaseline(ws, twoPages(), identity);
+    const earlier = readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' });
+    twoPageFolder(dir, 'export default () => "home v2, sent";', 'export default () => "about v2, saved but never sent";');
+    const sentHome = sha256('export default () => "home v2, sent";');
+    writeBaseline(ws, twoPages(), { ...identity, created: { pageSourceShas: { home: sentHome } }, previous: earlier });
+    const after = readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' });
+    assert.strictEqual(shaOf(after, 'home'), sentHome, 'the page that was sent: what was sent');
+    assert.strictEqual(shaOf(after, 'about'), sha256('export default () => "about v1";'), 'the page that was not: the record it had, whatever the file says now');
+    writeBaseline(ws, twoPages(), { ...identity, created: { pageSourceShas: { home: sentHome } } });
+    assert.strictEqual(shaOf(readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' }), 'about'), sha256('export default () => "about v2, saved but never sent";'), 'with no earlier record: the file as it is');
+    // A record that was not a hash is not carried over as one: the file as it is.
+    const damaged = { ...earlier, pages: earlier.pages.map((p) => (p.key === 'about' ? { ...p, __contentSha: 42 } : p)) };
+    writeBaseline(ws, twoPages(), { ...identity, created: { pageSourceShas: { home: sentHome } }, previous: damaged });
+    assert.strictEqual(shaOf(readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' }), 'about'), sha256('export default () => "about v2, saved but never sent";'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

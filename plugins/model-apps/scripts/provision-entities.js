@@ -9,8 +9,8 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
-const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
-const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
+const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, relationshipsInCreateOrder } = require('./lib/entity-provision.js');
+const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 
@@ -63,6 +63,9 @@ function computeTotal(input, opts) {
   // entities + columns + status reasons + alternate keys
   for (const e of input.entities || []) {
     total += 1; // table
+    // primary name column length step — MUST match provisionDataModel's condition (entity-provision.js) and buildPlan below:
+    // one narrated step (run, or skipped with the reason) whenever the input gives the name column a length.
+    if (askedPrimaryNameLength(e) !== undefined) total += 1;
     // quick-create enable step — MUST match provisionDataModel's condition (entity-provision.js) and
     // buildPlan below, or [n/total] drifts. This CLI's input has no forms[], so quickCreateEnabledFor
     // fires only on an explicit entities[].quickCreate === true.
@@ -112,7 +115,9 @@ function buildPlan(input, opts) {
     }
   }
   
-  for (const rel of input.relationships || []) {
+  // In the order the apply creates them — a lookup labelled in several languages goes first — so the plan lists
+  // the steps in the order the run takes them (lib/entity-provision.js relationshipsInCreateOrder).
+  for (const rel of relationshipsInCreateOrder(input)) {
     if (rel.type === 'OneToMany') {
       plan.push(`relationship 1:N ${rel.referenced}->${rel.referencing}`);
     } else if (rel.type === 'ManyToMany') {
@@ -120,6 +125,11 @@ function buildPlan(input, opts) {
     }
   }
   
+  // After the relationships: where provisionDataModel sets the length of a table it creates (computeTotal counts the step too).
+  for (const e of input.entities || []) {
+    if (askedPrimaryNameLength(e) !== undefined) plan.push(`primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}`);
+  }
+
   if (opts.sampleData && input.sampleData) {
     for (const [entityKey, records] of Object.entries(input.sampleData)) {
       if (Array.isArray(records) && records.length > 0) {

@@ -155,6 +155,104 @@ test('an unavailable optional served-form reader is a named skip, never a verifi
   assert.strictEqual(check({ facts: broken }).status, 'fail');
 });
 
+test('the all-present reader renders the Notes timeline and placed sub-grids, so verify proves them offline', async () => {
+  // Verify checks the timeline and a placed grid on any layout, and the reader has to answer with the form a matching
+  // environment holds — the timeline as the compiler writes it, each grid where the spec places it — or a spec that
+  // uses either fails offline on a gap in this fixture rather than on a finding about the spec.
+  const named = (schemaName, displayName, columns = []) => ({ schemaName, displayName, pluralName: `${displayName}s`, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns });
+  const placedSpec = () => ({
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'T', description: '' },
+    entities: [
+      named('new_order', 'Order', [{ schemaName: 'new_status', displayName: 'Status', type: 'Text' }, { schemaName: 'new_remark', displayName: 'Remark', type: 'Memo' }]),
+      named('new_line', 'Line'),
+      named('new_part', 'Part'),
+      named('new_bin', 'Bin'),
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'new_order', referencing: 'new_line', lookup: { schemaName: 'new_orderid', displayName: 'Order' } },
+      { type: 'OneToMany', referenced: 'new_part', referencing: 'new_bin', lookup: { schemaName: 'new_partid', displayName: 'Part' } },
+    ],
+    forms: [
+      { entity: 'new_order', name: 'Order', notes: true, subgrids: [{ childEntity: 'new_line', after: 'sec_head' }],
+        tabs: [{ name: 'tab_main', label: 'Main', sections: [
+          { name: 'sec_head', label: 'Head', columns: 1, fields: ['new_name', 'new_status'] },
+          { name: 'sec_tail', label: 'Tail', columns: 1, fields: ['new_remark'] },
+        ] }] },
+      { entity: 'new_part', name: 'Part', notes: true, subgrids: [{ childEntity: 'new_bin', before: 'section_general' }] },
+    ],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ entity: 'new_order', title: 'Orders' }, { entity: 'new_part', title: 'Parts' }] }] }] },
+  });
+  const kindsOf = (facts, kind) => facts.verify.checks.filter((c) => c.kind === kind);
+
+  const placed = placedSpec();
+  const facts = await stageFacts(placed);
+  assert.strictEqual(facts.author.validate.ok, true, JSON.stringify(facts.author.validate.errors));
+  assert.strictEqual(facts.verify.ok, true, JSON.stringify(facts.verify.missing));
+  // An explicit layout and an auto layout both: the timeline and the grid are proven on each.
+  assert.strictEqual(kindsOf(facts, 'form-timeline').length, 2);
+  assert.strictEqual(kindsOf(facts, 'form-subgrid').length, 2);
+  assert.strictEqual(facts.verify.requiredChecks['form-timeline'], 2, 'the timeline check cannot silently stop running');
+  assert.strictEqual(facts.verify.requiredChecks['form-subgrid'], 2, 'the placement check cannot silently stop running');
+  const required = ASSERTIONS.get('verify: every required check kind actually ran');
+  assert.strictEqual(required({ facts }).status, 'pass');
+  const dropped = structuredClone(facts);
+  dropped.verify.checks = dropped.verify.checks.filter((c) => c.kind !== 'form-subgrid');
+  assert.strictEqual(required({ facts: dropped }).status, 'fail');
+
+  // The reader renders what the compiler writes, not a form that passes by construction: a form still carrying the
+  // timeline an older build wrote, or a grid left where it was appended, fails the same verify.
+  const stale = makeAllPresentReader(placed);
+  const render = stale.formTopology;
+  stale.formTopology = async (entity, id) => String(await render(entity, id))
+    .replace(/id="notescontrol"/g, 'id="0f0f0f0f-0000-4000-8000-000000000001"').replace(/rowspan="23"/g, 'rowspan="1"');
+  const oldTimeline = await stageFacts(placed, { verifyReader: stale });
+  assert.strictEqual(oldTimeline.verify.ok, false);
+  assert.strictEqual(kindsOf(oldTimeline, 'form-timeline').filter((c) => !c.present).length, 2);
+
+  const elsewhere = placedSpec();
+  elsewhere.forms[0].subgrids = [{ childEntity: 'new_line', after: 'sec_tail' }];
+  elsewhere.forms[1].subgrids = [{ childEntity: 'new_bin', after: 'section_general' }];
+  const moved = await stageFacts(placed, { verifyReader: makeAllPresentReader(elsewhere) });
+  assert.strictEqual(moved.verify.ok, false);
+  assert.strictEqual(kindsOf(moved, 'form-subgrid').filter((c) => !c.present).length, 2, JSON.stringify(kindsOf(moved, 'form-subgrid')));
+});
+
+test('the all-present reader keeps the Notes section the form asks for beside a layout section of the same name', async () => {
+  // A layout may declare a section named `section_notes` (a natural name for note fields) and the compiler's own Notes
+  // section carries that name too. The two are told apart by place in the column — a lookup by name would find the
+  // layout's for both and drop the compiler's whenever a grid is placed in that column, so verify would fail
+  // form-timeline offline on a gap in this fixture rather than on a finding about the spec.
+  const named = (schemaName, displayName, columns = []) => ({ schemaName, displayName, pluralName: `${displayName}s`, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns });
+  const orderSpec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'T', description: '' },
+    entities: [named('new_order', 'Order', [{ schemaName: 'new_remark', displayName: 'Remark', type: 'Memo' }]), named('new_line', 'Line')],
+    relationships: [{ type: 'OneToMany', referenced: 'new_order', referencing: 'new_line', lookup: { schemaName: 'new_orderid', displayName: 'Order' } }],
+    forms: [{ entity: 'new_order', name: 'Order', notes: true, subgrids: [{ childEntity: 'new_line', after: 'sec_head' }],
+      tabs: [{ name: 'tab_main', label: 'Main', sections: [
+        { name: 'sec_head', label: 'Head', columns: 1, fields: ['new_name'] },
+        { name: 'section_notes', label: 'Remarks', columns: 1, fields: ['new_remark'] },
+      ] }] }],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ entity: 'new_order', title: 'Orders' }] }] }] },
+  };
+  const facts = await stageFacts(orderSpec);
+  assert.strictEqual(facts.author.validate.ok, true, JSON.stringify(facts.author.validate.errors));
+  const timeline = facts.verify.checks.filter((c) => c.kind === 'form-timeline');
+  assert.deepStrictEqual(timeline.map((c) => c.present), [true], JSON.stringify(timeline));
+  assert.deepStrictEqual(facts.verify.checks.filter((c) => c.kind === 'form-subgrid').map((c) => c.present), [true]);
+  assert.strictEqual(facts.verify.ok, true, JSON.stringify(facts.verify.missing));
+
+  // The reader's form holds BOTH sections: the layout's, with its field, and the compiler's, with the timeline.
+  const xml = String(await makeAllPresentReader(orderSpec).formTopology('new_order', 'Order'));
+  const sections = xml.match(/<section\b[\s\S]*?<\/section>/g).filter((s) => /name="section_notes"/.test(s));
+  assert.strictEqual(sections.length, 2);
+  assert.ok(sections[0].includes('datafieldname="new_remark"') && !sections[0].includes('notescontrol'), 'the layout\u2019s section first');
+  assert.ok(sections[1].includes('id="notescontrol"') && !sections[1].includes('datafieldname'), 'then the Notes section the compiler adds');
+});
+
 test('stageFacts.teardown plans a reverse-of-build delete ending at the solution, web resources after tables', async () => {
   const f = await stageFacts(spec);
   const kinds = f.teardown.kinds;

@@ -54,6 +54,12 @@ async function collectionRows(client, path, label) {
   return rows;
 }
 
+// The rows of ONE app that are its current layer: the only row, or — when a pending edit makes the platform answer with both layers — the authored one (componentstate 1).
+// Anything other than exactly one is for the caller to refuse: it does not say which layer is current.
+function currentLayerRows(rows) {
+  return rows.length === 1 ? rows : rows.filter((row) => row && Number(row.componentstate) === 1);
+}
+
 async function currentAppLayer(client, appId) {
   try {
     const rows = await collectionRows(client,
@@ -61,7 +67,7 @@ async function currentAppLayer(client, appId) {
       `current layer of app '${appId}'`);
     // Measured: a pending write creates a NEW layer key; the published key still addresses the old
     // rows. Never union the layers or cache this key across AddAppComponents or PublishXml.
-    const current = rows.length === 1 ? rows : rows.filter((row) => row && Number(row.componentstate) === 1);
+    const current = currentLayerRows(rows);
     if (current.length !== 1 || !current[0] || !FORM_GUID_RE.test(guidKey(current[0].appmoduleidunique))) {
       return { ok: false, reason: `no single current layer among ${rows.length} app row(s)` };
     }
@@ -523,7 +529,7 @@ async function appEntityComponentsFor(sdk, appUnique, wanted) {
 }
 
 module.exports = {
-  currentAppLayer, publishedAppLayer, appComponentRows, tableRefs, tableComponentIds, pinAppTables,
+  currentAppLayer, currentLayerRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
   publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings,
   resolveMainForms, readMainFormMembership, appMainFormsFor, appEntityComponentsFor,
   APP_COMPONENT_ENTITY_SOURCES, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,

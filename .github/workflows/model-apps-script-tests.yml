@@ -28,13 +28,33 @@ on:
             - "shared/skills/**"
             # The telemetry region router is a verbatim copy of power-pages' (same drift test).
             - "plugins/power-pages/scripts/lib/telemetry/region/**"
+            # pcf copies model-apps/shared files. A PR that edits only pcf's copy still runs
+            # model-apps' sync test and points back to the shared root validator.
+            - "scripts/validate-plugin-copies.js"
+            - "plugins/pcf/scripts/lib/process-runner.js"
+            - "plugins/pcf/scripts/lib/sdk-http-client.js"
+            - "plugins/pcf/scripts/lib/odata.js"
+            - "plugins/pcf/scripts/lib/source-literals.js"
+            - "plugins/pcf/scripts/lib/interaction-mode.js"
+            - "plugins/pcf/scripts/lib/nearest-name.js"
+            - "plugins/pcf/scripts/lib/utf8-stream.js"
+            - "plugins/pcf/scripts/lib/cli-failure.js"
+            - "plugins/pcf/scripts/lib/telemetry/ikey.json"
+            - "plugins/pcf/scripts/lib/dataverse-auth.js"
+            - "plugins/pcf/scripts/check-auth.js"
+            - "plugins/pcf/scripts/resolve-interaction-mode.js"
+            - "plugins/pcf/scripts/vendor/cds-maker-sdk.cjs"
+            - "plugins/pcf/scripts/vendor/PROVENANCE.json"
+            - "plugins/pcf/scripts/vendor/.gitattributes"
+            - "plugins/pcf/skills/report-issue/report-issue-workflow.md"
+            - "plugins/pcf/skills/report-issue/SKILL.md"
             - ".github/workflows/model-apps-script-tests.yml"
 
 # The jobs only read the checkout; the token needs nothing more, whatever the repository default is.
 permissions:
     contents: read
 
-# A new push to the same PR supersedes the run in flight: without this, all seven jobs of the old run
+# A new push to the same PR supersedes the run in flight: without this, all eight jobs of the old run
 # kept going to completion for a result nobody reads.
 concurrency:
     group: model-apps-script-tests-${{ github.event.pull_request.number || github.ref }}
@@ -131,3 +151,58 @@ jobs:
                   node evals/model-apps/genpage/run-layer-1.js
                   node evals/model-apps/genpage/run-layer-2.js
                   node evals/model-apps/app-builder/run-app-builder.js
+
+    # The source scanner that decides which `pageId: "PAGEREF_<key>"` literals are real navigation calls has
+    # no parser of its own, so its tests ask real parsers: a sweep puts generated pages in front of TypeScript
+    # (and Babel) and checks every token the lexer rewrites, and a differential runs the released lexer on the
+    # same valid pages to show that no page it resolved is refused now. Those tests skip themselves where the
+    # parsers are not installed — which is every job above — so a change that broke one of them would pass
+    # CI. This job installs them for the test run only, outside the plugin (which ships no dependencies), at
+    # exact versions, so a new parser release can never turn a green run red without a commit.
+    test-model-apps-lexer-oracles:
+        name: test-model-apps-lexer-oracles
+        runs-on: ubuntu-latest
+        # The sweeps and the differential take a few minutes on top of the suite.
+        timeout-minutes: 30
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: setup-node
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: 20
+
+            # `--ignore-scripts` because neither package needs an install script, and `--prefix` under
+            # RUNNER_TEMP so that nothing lands in the plugin's tree. The version check fails the job if a
+            # range or a different package was installed, which would make the sweeps' counts mean something else.
+            - name: install-pinned-parsers
+              shell: bash
+              run: |
+                  mkdir -p "$RUNNER_TEMP/parser-oracles"
+                  npm install --prefix "$RUNNER_TEMP/parser-oracles" --no-save --ignore-scripts --no-audit --no-fund typescript@5.8.3 @babel/parser@7.29.7
+                  test "$(node -p "require('$RUNNER_TEMP/parser-oracles/node_modules/typescript/package.json').version")" = "5.8.3"
+                  test "$(node -p "require('$RUNNER_TEMP/parser-oracles/node_modules/@babel/parser/package.json').version")" = "7.29.7"
+                  echo "TYPESCRIPT_ORACLE_PATH=$RUNNER_TEMP/parser-oracles/node_modules/typescript" >> "$GITHUB_ENV"
+                  echo "BABEL_ORACLE_PATH=$RUNNER_TEMP/parser-oracles/node_modules/@babel/parser" >> "$GITHUB_ENV"
+
+            # The 2.13.0 release (the commit that released it), as a directory of its own: the lexer differential imports
+            # its lexer by path and compares the two on the same pages, and the data-model A/B runs its code and its SDK
+            # bundle over the same stub to show that a new table is created with the request 2.13.0 sent. The checkout is
+            # shallow, so the commit is fetched by its hash; only the plugin's scripts are extracted.
+            - name: fetch-released-scripts
+              shell: bash
+              run: |
+                  git fetch --no-tags --depth=1 origin 5ef4e4f84c3c719d0db17a66e0cb349c63220639
+                  mkdir -p "$RUNNER_TEMP/model-apps-2.13.0"
+                  git archive FETCH_HEAD plugins/model-apps/scripts | tar -x -C "$RUNNER_TEMP/model-apps-2.13.0"
+                  echo "BASE_LIB_PATH=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts/lib" >> "$GITHUB_ENV"
+                  echo "MODEL_APPS_RELEASED_SCRIPTS=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts" >> "$GITHUB_ENV"
+
+            # The same command as the matrix job, with those paths set: the oracle and A/B tests run instead of skipping.
+            - name: run-model-apps-script-tests-with-parsers
+              shell: bash
+              working-directory: plugins/model-apps
+              run: node scripts/run-tests.js

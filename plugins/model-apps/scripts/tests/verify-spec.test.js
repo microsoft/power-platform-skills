@@ -1357,6 +1357,23 @@ test('verifySpec: an override row that appears late is retried, not reported as 
   assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
 });
 
+test('verifySpec: an override row that stays absent is read three times before it is called absent — the budget the build\u2019s own proof shares', async () => {
+  // The build re-proves a feature after its publish with the same reads (AI_PROOF_BUDGET), so the two cannot disagree
+  // about one row for want of a second look. Counted per setting: every feature the build writes is checked.
+  const reads = new Map();
+  const base = aiRead({});
+  const read = {
+    ...base,
+    queryRecords: async (set, o) => {
+      if (set === 'appsetting') reads.set(o.filter, (reads.get(o.filter) || 0) + 1);
+      return base.queryRecords(set, o);
+    },
+  };
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  assert.strictEqual(r.ok, false);
+  assert.ok(reads.size > 0 && [...reads.values()].every((n) => n === 3), JSON.stringify([...reads]));
+});
+
 test('verifySpec: the AI check is reader-gated and absent-spec-safe (existing callers unaffected)', async () => {
   // No ai block at all -> no ai checks.
   const noAi = await verifyAi(AI_BASE, aiRead(ALL_SETTINGS_ON));

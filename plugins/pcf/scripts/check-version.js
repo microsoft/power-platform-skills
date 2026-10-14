@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+
+/**
+ * Plugin version check. Compares the local plugin manifest version against
+ * origin/main and prints an update notice if the remote version is newer.
+ * Exits silently if versions match or on any error.
+ *
+ * Usage: node check-version.js
+ * Functions are also exported for testing.
+ */
+
+// git is resolved to an absolute path on PATH: this runs from the user's project directory.
+const { runSync } = require('./lib/process-runner.js');
+const path = require('path');
+const fs = require('fs');
+
+const PLUGIN_MANIFEST_PATHS = [
+  '.plugin/plugin.json',
+  '.claude-plugin/plugin.json',
+];
+
+function compareSemver(localVersion, remoteVersion) {
+  const localParts = localVersion.split('.').map(Number);
+  const remoteParts = remoteVersion.split('.').map(Number);
+  for (let index = 0; index < 3; index++) {
+    if ((remoteParts[index] || 0) > (localParts[index] || 0)) return 1;
+    if ((remoteParts[index] || 0) < (localParts[index] || 0)) return -1;
+  }
+  return 0;
+}
+
+function detectHost(env = process.env) {
+  return env.COPILOT_CLI === '1' ? 'copilot' : 'claude';
+}
+
+function formatUpdateMessage(
+  pluginName,
+  localVersion,
+  remoteVersion,
+  marketplaceName,
+  host = detectHost()
+) {
+  const qualifiedName = marketplaceName ? `${pluginName}@${marketplaceName}` : pluginName;
+  let message = `\nPlugin update available: ${pluginName} ${localVersion} -> ${remoteVersion}.\n`;
+  if (marketplaceName) {
+    message += `Run:\n  ${host} plugin marketplace update ${marketplaceName}\n  ${host} plugin update ${qualifiedName}`;
+  } else {
+    message += `Run: ${host} plugin update ${qualifiedName}`;
+  }
+  return message;
+}
+
+function firstExistingPath(root, relativePaths) {
+  for (const relativePath of relativePaths) {
+    const filePath = path.join(root, relativePath);
+    if (fs.existsSync(filePath)) return filePath;
+  }
+  return null;
+}
+
+function readMarketplaceName() {
+  return null;
+}
+
+function readJsonFromGit(ref, relativePaths, cwd) {
+  for (const relativePath of relativePaths) {
+    try {
+      const content = runSync('git', ['show', `${ref}:${relativePath}`], {
+        cwd,
+        encoding: 'utf8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      return JSON.parse(content);
+    } catch {
+      // Open Plugins and legacy installs use different manifest paths.
+    }
+  }
+  return null;
+}
+
+module.exports = { compareSemver, detectHost, formatUpdateMessage, readMarketplaceName };
+
+if (require.main === module) {
+  try {
+    const pluginRoot = path.resolve(__dirname, '..');
+    const pluginJsonPath = firstExistingPath(pluginRoot, PLUGIN_MANIFEST_PATHS);
+    if (!pluginJsonPath) process.exit(0);
+
+    const localPlugin = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
+    const localVersion = localPlugin.version;
+    if (!localVersion) process.exit(0);
+
+    // Every git call is anchored to the plugin directory. The skills run this script from the
+    // USER's project directory, so a git command without `cwd` operated on the user's repository:
+    // it fetched their `origin main` at every skill start (network, and a possible credential
+    // prompt) and then compared against a manifest path that does not exist there, so the notice
+    // could never fire. A marketplace install is a plain copy, not a clone, so `rev-parse` fails
+    // there and the script exits silently, as it does on any other error.
+    // The plugin's path inside the repository, as git itself computes it (e.g. "plugins/pcf/").
+    // Deriving it with path.relative(gitRoot, pluginRoot) broke whenever the two spelled the same folder
+    // differently: git reports the long Windows name (C:/Users/runneradmin/...) while __dirname can carry
+    // the 8.3 short name (C:\Users\RUNNER~1\...), so the relative path pointed outside the repository
+    // and the check silently found nothing.
+    const prefix = runSync('git', ['rev-parse', '--show-prefix'], {
+      cwd: pluginRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) => `${prefix}${manifestPath}`);
+
+    try {
+      runSync('git', ['fetch', 'origin', 'main', '--quiet'], {
+        cwd: pluginRoot,
+        encoding: 'utf8',
+        timeout: 10000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      // A cached origin/main is sufficient when the network is unavailable.
+    }
+
+    const remotePlugin = readJsonFromGit('origin/main', remoteManifestPaths, pluginRoot);
+    if (!remotePlugin?.version) process.exit(0);
+
+    if (compareSemver(localVersion, remotePlugin.version) > 0) {
+      const pluginName = localPlugin.name || 'pcf';
+      const marketplaceName = readMarketplaceName();
+      console.log(
+        formatUpdateMessage(pluginName, localVersion, remotePlugin.version, marketplaceName)
+      );
+    }
+  } catch {
+    // Version checks must never block skill execution.
+  }
+}

@@ -463,6 +463,11 @@ test('execution oracle: a rewrite changes only the calls JavaScript makes with a
     ['computed optional member', `Xrm.Navigation?.["navigateTo"]?.(${obj})`, true, true],
     ['computed escaped member', `Xrm.Navigation["navigate\\u0054o"](${obj})`, true, true],
     ['computed optional member, parenthesised argument', `Xrm.Navigation?.['navigateTo']?.((${obj}))`, true, true],
+    // After `return` an expression starts on the same line, so the parenthesised callee is the call; after a line break the statement is `return;`, and the call after it never runs.
+    // `await` is a keyword only in an async function, which the lexer cannot tell: the call is made there and left alone here, and the token is reported.
+    ['return, parenthesised callee', `function f() { return (navigateTo)(${obj}); } f();`, true, true],
+    ['return, a line break, parenthesised callee', `function f() { return\n(navigateTo)(${obj}); } f();`, false, false],
+    ['await in an async function, parenthesised callee', `async function f() { await (navigateTo)(${obj}); } f();`, true, false],
   ];
   for (const term of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
     // The key is `pageType` once the continuation is read; the value is "PAGEREF_detail", but spelled across the line

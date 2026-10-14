@@ -154,6 +154,127 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   Existing fields are not list-reordered. Verify checks form-wide cell/control ID uniqueness,
   including auto forms, but not field order or anchor adjacency. See the
   [form-layout contract](references/app-spec-schema.md).
+  **The Notes timeline** (#680, `lib/form-timeline.js` — one definition shared by the compiler, the
+  build's repair and verify) is written in the shape Dynamics renders: the fixed control id
+  `notescontrol` in a 23-row cell with `auto="false"` (its `auto`/spelled-out `showlabel`/`colspan`/
+  `rowspan` ride in the cell's bag), over the 22 empty spacer rows the cell spans. The old shape — a
+  generated control id in a one-row cell — is published and never rendered. What platform forms share is
+  the id, `showlabel="false"` and a cell of N rows followed by N−1 empty rows — N is 5, 20, 23 on different
+  forms, `auto="false"` is on some and not others, `colspan` is 1 or 2 — so the helpers take ANY N of two or
+  more as in shape: 23 and `auto` are what a NEW host is written with, never what an existing one is held to.
+  A rebuild repairs the engine's own host (the `section_notes` section holding the timeline control)
+  **in place** on every layout: one atomic rows write, same section, position and cell identity, and only
+  what is missing — the id, a span of one row, rows under the span (to the span the maker chose; extra rows
+  are never deleted); `auto` is written only with the conversion of an old cell, never alone. The repair
+  (`repairTimelineHost`) runs **last** of the passes that touch a form's fields — after the prune and the
+  `fieldOptions.after` moves — because it rewrites only the host's own rows and refuses a host that holds
+  another control: run first, it would refuse an old host whose stray field the same build then prunes, and
+  the form would stay old until a second build. The topology
+  pass does not narrow that host below its timeline's `colspan` (a widened timeline is the maker's width).
+  It never edits a maker's timeline elsewhere and never writes a second `notescontrol` — a form that
+  already has a control by that id gets no new host (the explicit-layout topology pass and the auto-layout
+  path share `timelineCreationBlocked`), and a host whose id cannot be renamed for that reason, or that
+  still holds another control once the prune and moves are done, is left whole and reported in
+  `skipped.layout`. That is one rule (`timelineRefusal`) applied to two different trees, not one decision
+  that both reach alike: the build judges the form as its field passes have left it, `--verify` the form as
+  published, BEFORE them. So verify predicts what the passes take out of the host (`notesHostInspector`
+  in `verify-spec.js`: a field an explicit layout declares in another section; one a `fieldOptions.after`
+  anchor places beside an anchor that is not in a section the build owns — an anchor that sits in the host
+  but is itself anchored is moved out first, because anchored fields are placed in dependency order, and
+  the field follows it; one an explicit layout with prune on does not list — `formRemovals`, the destructive
+  gate's own function) and hands the rule those cells as `leaving`. What a pass does is predicted only for
+  a field the form has ONE cell of. Each pass acts on a single cell of a field — the first it finds once the
+  topology pass has reordered tabs and sections (`planOrderMoves`), and the prune removes one cell of a
+  field per run — so for a field the form carries twice that a pass would act on (or one anchored, directly
+  or down a chain of anchors, to a field it carries twice with a cell in a section the build owns; the
+  reason names that field, not an anchor of one cell on the way to it) verify cannot know which cell a
+  build acts on. It says so (`unsure`), in every shape of its advice — the taken-id one included, since
+  freeing the id does not decide that cell: no promised repair (a full build repairs the timeline
+  *unless* it leaves the cell, which verify cannot tell), no certain refusal, and no sending the maker off
+  to do what the build may do itself. Only a pruned duplicate becomes predictable by itself (the prune
+  removes one cell per run, so verify is exact once one is left); one a declaration or an anchor places can
+  stay unpredictable build after build, since a build that acts on the cell already in place leaves the
+  others — the maker moves them, as the advice says. A field that no pass touches stays whichever cell is
+  acted on, one cell of it or several, so that is still said plainly. It is a prediction from the spec and the
+  published form, not the build: it also cannot see a removal that was not authorized or that the build
+  holds back, or a `fieldOptions` move skipped for a row-span or an overflowing row. Where it and a build
+  differ the build's report is the authority — the cases in `form-timeline-real-bundle.test.js` run both on
+  each shape, including forms whose published section order is not the build's, so a change to which
+  fields a pass takes out is made in the pass and the prediction together. An `auto` form that asks for
+  Notes and has no host gets one on rebuild (`addTimelineHost`, before the sub-grids: it has no topology
+  pass to add it). Fields never go into an
+  engine host: the no-section fallback skips hosts (`firstFieldSectionRowsPointer` — quick views use it
+  too), a `fieldOptions.after` anchor inside one is refused, and the narrowing re-flow never runs on one (it
+  would delete the spacer rows as "beyond the new count").
+  Verify's `form-timeline` check needs ONE timeline that renders (id `notescontrol`, a cell spanning
+  more than one row) on any form the spec gives Notes — and, for the engine's own host, the N−1 rows under
+  its span, since the build converges them; a maker's timeline is judged by id and span alone. So an
+  old-shape form fails it until rebuilt — and its detail says what a build WILL do about that form
+  (`timelineVerifyProblem`): "run a full build" where the build repairs or adds it, what the maker must do
+  first where it declines (another control holds `notescontrol`; the host holds a control no pass of the
+  build takes out — a maker's own control, or a field no rule of the spec moves or removes, which the maker
+  moves out of the section; on an `auto` layout, which declares no section for a field and prunes none,
+  that is any field already on the form that no `fieldOptions` anchor places). A field the build itself
+  prunes or places elsewhere is not the maker's to move:
+  the advice stays "run a full build" and names what the build takes out first, a removal with the
+  `--allow-destructive` it needs. A field it cannot predict is neither: where a full build would repair the
+  timeline the advice says it does so unless it leaves that field, which verify cannot tell; where the
+  advice is something else first (a control that stays, a taken id) it says verify cannot tell whether the
+  build takes the field out first — and, either way, what to do if the build's report says the timeline
+  was left as it is. Always a
+  FULL build: a `--changed-only` run of an unchanged spec is a no-op ("nothing to apply"), so a form an older
+  version left — which no change to the spec reaches — is never repaired by it.
+  Download does not reconstruct `forms[]` (see `hydrate-spec.js`), so `notes`/`hasNotes` are authored
+  and there is no form read-back to adapt.
+  **Where a sub-grid's section goes** (AB#6651699, `lib/form-subgrid-placement.js` — the pure rules the
+  spec gate, build, verify and wireframe all read): `forms[].subgrids[]` takes `after`/`before` (a
+  section of the declared layout), `tab`, `column`. An `after`/`before` grid sits in its anchor's tab and
+  form-column DIRECTLY beside it (`columnSequence` builds the order — grids that share an anchor keep
+  declared order, each directly beside the one declared before it — and `neighbourOf` names the token a
+  grid must touch); a `tab`(+`column`) grid is a question of MEMBERSHIP, created at the end of that column
+  and, once in it, left wherever it is within it. The names are what `formLayoutNames` (app-spec.js)
+  derives — an auto layout is `tab_general` holding `section_general`, pinned to the compiler by a test —
+  and `subgridPlacementProblems` is the one function behind both the spec gate and the lint (a key a
+  sub-grid entry does not read is only a warning — `subgridUnknownKeys` — because entries written before
+  the placement keys existed may carry extras the build never read). A form holds ONE grid per
+  relationship, so `subgridDuplicateProblems` (gate and lint, one function) refuses a relationship listed
+  twice when an entry places the grid — those keys are new, so no spec that built is turned away — and only
+  warns for a repeat that places nothing (the build has always ignored the extra entry); verify fails the
+  later entry rather than pass it. A grid with
+  NO key takes the original path exactly (end of the first tab's first column, never moved): a test
+  records its writes. The build (`addSubgrids` → `placeGridSection`) runs after the
+  topology pass, using the tab/section matches that pass recorded (`reconcileFormTopology` returns
+  `{ sectionTargets, tabIndexOf }`) — so an anchor matched by label under another name is still the
+  anchor. Grids with no anchor are appended first, in declared order, as they always were; the anchored
+  ones follow — `after` grids in declared order, `before` grids in reverse — each put directly beside the
+  nearest token toward its anchor already on the form (`anchoredPosition`), which is where a NEW form
+  puts it: a new grid is added there in one write, an existing one is MOVED (same section, one
+  `moveElement`, within a column or across form-columns), and one already directly beside it writes
+  nothing. ONLY THE GRID MOVES: `planOrderMoves`, the fewest-moves planner the topology pass uses, is
+  deliberately not used here — it moves whichever section is cheapest, and on the layout every released
+  build left behind (`notes: true` + a grid: the grid BEHIND the Notes section) that is an authored
+  section or the timeline, leaving the Notes section mid-form; a section in between (the Notes section, a
+  maker's own) is simply left behind the grid. Only the engine's own `section_grid_*` host is ever moved;
+  a grid a maker put in a section of their own is reported in `skipped.layout` — unless it is already
+  where the spec puts it, which is neither written nor reported — as is an anchor/tab the
+  deployed form lacks (the grid is then added at the end of the first tab, never lost). Adding or moving
+  a section shifts the indices of the sections behind it, so everything that holds a section across
+  `addSubgrids` is kept by what it is, not where it is: `shiftSectionTargets` corrects the topology pass's
+  recorded targets, and a field being ADDED is queued with its section's id and name
+  (`queuedSectionPointer` finds it again through `findSectionById`, then by name and place) — an index goes
+  stale when a grid section is inserted ahead of it or taken out of the column, and the field would land
+  in the grid's section or halt the forms phase on a pointer that addresses nothing; a section gone
+  altogether sends the field to the first field section, reported. Quick views go to the first FIELD
+  section too, never a grid's. Verify's
+  `form-subgrid` check judges each placed grid
+  against the DEPLOYED form with the same `neighbourOf` — directly beside its neighbour, anything between
+  them named — (`RelationshipName` is element text — `parseFormTopology` reads it), on explicit and auto
+  layouts; a failing detail says to run a full build where the build moves the grid, and what the maker
+  must do where it is in a maker's own section. The wireframe and the offline eval reader read a compiled
+  column by PLACE (`columnItems`; `columnSequence` tokens carry `at`), never by name — a layout may declare
+  a section named `section_notes` too. A grid is as wide as its form-column, so a full-width grid wants a
+  one-column tab (documented,
+  not engineered). Download does not reconstruct `forms[]`, so placement is authored too.
   **Which form a table opens with** (AB#6736948, `lib/form-order.js`) is decided by the table's Main
   Form Set order — each Main form's formxml `<DisplayConditions Order>` — not by `systemform.isdefault`
   (measured: moving the flag reorders nothing, and a table's three new forms, all at the same order,
@@ -232,10 +353,81 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   download. Every `pageInput.data` key must also be produced by an incoming `navigatesTo[].data`
   edge. See `references/app-spec-schema.md` → *the input contract*.
   The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
-  identity conflicts, read failures). The cross-app shared-page scan (`fetchAppsForPages`) enumerates every app via the vendored SDK's
+  identity conflicts, read failures) and, before any page is created or updated, on a page that would ship a Griffel
+  shorthand (`pages-griffel-shorthand`: a page it creates, or one whose source changed since the last recorded apply — a page it
+  sends again as it is gets a warning; see "Griffel shorthands"). The cross-app shared-page scan (`fetchAppsForPages`) enumerates every app via the vendored SDK's
   `@odata.nextLink` pagination (`queryRecords({ paginate:true })`), so it verifies EVERY app in the
   environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still
-  fails **closed** rather than scanning a partial list. Classic `dashboards[]` are opt-in.
+  fails **closed** rather than scanning a partial list. It reads each other app's PUBLISHED sitemap and also its
+  SAVED (current, unpublished) one: a page another app has saved into its navigation but not published still
+  halts the update (`pages-shared-across-apps`, naming the app `[saved, not published]`). The scan is a snapshot: another maker
+  can take a page into another app's navigation while the build runs, and nothing reaches far enough to stop it — the lease is
+  this workspace's, Dataverse offers no write conditional on another app's sitemap, and the update goes through `pac`, which
+  takes no precondition. So a build that writes pages in place takes the scan twice more, over the pages it began with and now
+  overwrites (one this run created, a navigation target included, was not there to share and is left out): right before the
+  first of them is written, where a page that became shared halts the build before any page it began with is updated in place
+  (`pages-shared-across-apps`, "became shared across apps while this build ran", `transient: false`); and after the last — or
+  after the loop stops early, since what it wrote is written — where a page taken in while the uploads ran is reported as a
+  warning naming the page and the app (one that only saved it shows the new content once that app is published; a scan that
+  fails there is a warning too: nothing is left to refuse). Each scan reads every other app's navigation (three requests per
+  other app, and three more), which is why it is not taken before every page. The saved layer of
+  every other app is **one** extra request — the `sitemap` collection's `RetrieveUnpublishedMultiple`, joined to each app by the
+  sitemap id its published read found, with the same current-row rule `navigationProof` uses — and it is fail-closed too: a
+  read that fails as a whole halts as `pages-shared-check-failed`, and an app whose saved row is missing, ambiguous or
+  malformed is listed unreadable. An app that was **never published** has no row in the published app list, so the scan lists those
+  as well — one request, the `appmodule` collection's `RetrieveUnpublishedMultiple` (`draftOnlyApps`) — and joins each one's saved
+  sitemap from the same saved-layer read, by the sitemap id its layer's sitemap component names (one more read per such app); it has
+  no published layer, so whatever it holds is saved only. That list is fail-closed like the others: a read that fails halts as
+  `pages-shared-check-failed`, and a never-published app whose layer, sitemap component or saved sitemap cannot be read is listed
+  unreadable. A never-published app whose component read **succeeds** and finds **no sitemap component** is not yet shown to have no navigation: the
+  vendored SDK links an app to its sitemap **by name** — it looks the sitemap up with `sitemapnameunique eq '<the app's unique name>'` and takes one for the app only
+  while that column holds the app's name, and `ensureSitemapInSolution` (sdk-build.js) resolves it the same way — so such an app may hold a sitemap, and pages in it, that no component row links to it.
+  The saved-layer read the scan makes anyway (it asks for `sitemapnameunique` too — no further request) shows whether it does: a sitemap of that name is joined
+  like any draft app's (case-insensitively, as Dataverse compares names), several sitemaps of the name leave the app unreadable, and **none** means the app has no
+  navigation at all and holds no page, so it is skipped — one draft app saved with only a name must not stop every page update in the environment (a read that
+  *fails*, or a component that names no sitemap, proves nothing and is still unreadable; so is a *published* app with no sitemap
+  component, which is not changed here). A single-app environment reads no other app's navigation: it pays the one small request for the list of
+  never-published apps, and nothing more when there are none (one saved-layer read as well when a never-published app has no sitemap component, to rule out a sitemap linked by
+  name). Classic `dashboards[]` are opt-in.
+  **Every `pac model genpage` call is time-bounded** (`lib/genpage-cli.js` `runPac`): 3 minutes to list or download and
+  10 minutes to upload by default, or `POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` (1 s to 60 min; one value sets all three). When
+  the time is up the whole process tree is ended — a page upload once stalled for 17 minutes with no CPU and no network — and the call is
+  reported as `timedOut`, which no exit code is. What happens next follows from what the call can have done. pac's upload writes the
+  page, records the prompt and the agent message (two more requests), prints `Page ID`, then publishes, so a stopped upload has done
+  anywhere from nothing to all but its last step. A timed-out list or download is read-only, so it is retried once. A timed-out
+  **update** is **not** retried, though it names a page that exists: a re-send can record the prompt a second time (a call stalled in the
+  publish has already written everything) and goes out minutes after the caller's own checks, so it can overwrite a change saved in
+  between. It is reported as one that *may have landed*, and what it sends you to look at depends on the caller (`upload()`'s `caller`):
+  the upload script's message names `genpage-base.js check` (the deployed page against the file and the base marker beside it), and a
+  re-run goes back through the script's own guards. The **build** keeps no base marker, so that check could only answer "unknown", and
+  every page's code file is a staging copy its cleanup deletes, so the command would fail on a missing file: the build's message
+  tells you to read the deployed page with `pac model genpage download` (the call the build already uses, for that page id — and to open the `page.tsx` in the folder named for the id, which pac writes in its own letter case) and then run
+  the build again, which sends the page once more to the same id — nothing new is created, but if the stalled send did land, the page's
+  history now records its prompt a second time, and anything saved to the page in Maker since is replaced by the app folder's version.
+  The error carries `transient: false`, so the build's own retry of transient halts never re-sends it. An **update** that **fails** — a non-zero exit, or an
+  exit 0 with no `Page ID` — is handled the same way, for the same reason (pac can fail in the publish, after everything else is written): it is **not** retried,
+  it is reported as one that *may have landed*, with what pac had printed (a `Page ID` means the page and its messages were written and the failure came in the
+  publish) and the same caller-specific check, and it carries `transient: false`. Only a non-zero exit that pac reports for its own arguments or input files
+  (`isDeterministic`) is an ordinary error, because pac checks those before it sends anything — and only when pac printed no `Page ID`:
+  after the Page ID its one remaining step is the publish, whose error carries the server's own text, so a Page ID proves the page
+  was written whatever the words. An update answered with another page's id also carries
+  `transient: false`. That covers the halt an upload causes; a transient halt *later* in the same run (a 503 on a later read or
+  write, say) still re-runs the whole build, which sends each page this run sent once more — as each rebuild does — so the page's
+  history then records the prompt once more. A timed-out **create** is an
+  uncertain create and is never run again, because a second create is how a duplicate is
+  made. A `Page ID` pac had already printed names the page it created, whether the call then stalled or **failed** (exited non-zero): it is reported as
+  *created as `<id>`, stalled (or failed) before publish or placement*, the create is **not** sent again however the environment's listing looks (the page need
+  not be in it yet), and the way on is to place it (`pac model genpage add`, or Maker) and then update it, or to delete it and re-run the
+  create — never "update it" outright (refused: not in the app's navigation) and never a bare re-run. With no id printed, the
+  env-wide id diff reports any page already visible — a create that failed and left a candidate gets the same way on, not "re-run it as an update with `--page-id`" — and a page that
+  is not visible *yet* proves nothing: a create that stalled with nothing visible, or whose listing cannot be read, is reported as uncertain with the advice to wait and list
+  `pac model genpage list --environment <envUrl> --include-unpublished` before anything is created again. **Every error that follows a create whose outcome is not known to be nothing carries
+  `transient: false`** (`neverRetriedError`) — a stall, a printed Page ID, a candidate in the listing, a listing that cannot be read: the build re-runs a phase when a halt reads as transient (`isTransientHalt`, build-model-app.js), and it reads the halt's *text* — which
+  quotes the page's name (a page called "SQL Timeouts" matched) and pac's own words ("… try again later") — so without the marker a re-run would be a second create and a
+  duplicate page, with the run reporting success. The page that was created but whose local receipt could not be saved (`pages-creation-receipt-failed`) carries it too. A create that
+  failed outright and left nothing in the listing, and a listing that fails *before* the create was sent, leave nothing to duplicate: both are still retried — by the upload (3 sends) and,
+  when the error's text reads as transient, by the build — as in 2.13.0. (`pac connection list` and
+  the auth probes have their own limits or none; this bound is the genpage calls'.)
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. The 16 phases
@@ -255,14 +447,73 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   exposes no created-model id to this caller, so same-name AI models are reported and kept.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
-  publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
-  existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
-  The bulk publish is ONE `PublishXml` envelope (`publishArtifacts`) for every table and the app, and
-  with `--publish` the default-view enrichment defers its own publish to it. A build that halts before
-  it hands what is still owed to the CLI, which keeps each attempt's debt across transient retries until
-  a publish phase pays it, and settles the rest per target once no retry follows (`settleOwedPublishes`)
-  — so a halted build leaves those views live, as it did before the batching. A default-view push
-  refused by a concurrent edit fails the enrichment step, as any refused push does.
+  publish; without it the edit/finalize paths — reconciling an existing form/view, form events,
+  quick-views, existing-app sitemap, page finalize — still publish their one artifact so the change
+  takes effect, and with or without it the lookup-label repair publishes the tables whose columns it
+  relabelled). The bulk publish is ONE `PublishXml` envelope (`publishArtifacts`) for every table and
+  the app, and with `--publish` the default-view enrichment, the reconcile of an existing view or form,
+  form-event wiring and quick-view placement all defer their own publish to it: an entity publish ships
+  every pending customization on that table, so one per artifact only repeated it, at ~2-2.5 s each.
+  The tables the reconcile, form-event and quick-view paths touched are also published together once,
+  in one envelope at the start of the app step, before anything publishes the app
+  (`publishReconciledTables`). Measured live: a `PublishXml` naming only the app, sent after an existing
+  form's save and before its table's publish, leaves the form's label changes unpublished for good, while
+  the structure saved with them goes live. The enrichment's default views (columns only) wait for the
+  bulk publish. A table whose early publish the SDK refuses stops the build before the app is written
+  (`reconciled-publish-failed`), since the app's publish would strand its labels; the halt carries what
+  is owed, so the CLI's retry, or its settle once no retry follows, publishes the table without the app.
+  A deferred publish is recorded as owed, and a build that halts before the publish phase hands what is
+  still owed to the CLI, which keeps each attempt's debt across transient retries until a publish phase
+  pays it, and settles the rest per target once no retry follows (`settleOwedPublishes`) — so a halted
+  build leaves those views and forms live, as it did before the batching. The record also keeps the NAME
+  of every view and form deferred onto a table (`view Open Tickets`, `form Ticket events`; the CLI
+  unions them across attempts), and `default views of <table>` when that table's default-view
+  enrichment saved its generated Active/Inactive pair — whether the enrichment makes the record or joins
+  one an authored view's reconcile already made — because one artifact stands for its whole table in the
+  envelope: when that publish fails or cannot be confirmed, the warning names what is saved but not
+  live, as the per-artifact publish it replaced did, rather than the table's Main form. That warning
+  also names the views, forms and charts the run created on the table (and a chart whose description it
+  wrote), each name once: a first build creates them all and defers no publish for them, so its record
+  would otherwise name only the default views and the line would read as if only the generated pair
+  were not live. Those names are labels only and stay out of the owed record, which is what a halted
+  build publishes, so the warning after a halt names what was deferred. Settling covers
+  a halt the build THROWS. A process killed outright (Ctrl-C, a crash, a closed terminal) settles
+  nothing, so what a reconcile had saved stays saved but unpublished until the next build, which
+  publishes it (a clean workspace copy is still published, below): no marker outlives the process, the
+  default-view enrichment has the same exposure, and the app-builder skill's recovery guidance says to
+  re-run. A default-view push refused by a concurrent edit fails the enrichment step, as any refused
+  push does.
+  **An unchanged rebuild writes almost nothing, and no write is skipped on a guess.** An existing view
+  or form is pushed only when the SDK reports that its workspace copy differs from its last-synced
+  snapshot (`diffArtifact`, `lib/unsynced-edits.js`): an edit this run made, or one an interrupted run
+  left in the workspace — which a plain fetch keeps while the server has not moved, so comparing what
+  this run computed with what it fetched would call it unchanged and never push it. An SDK without the
+  method, or a diff that fails, pushes as before. A clean copy is the UNPUBLISHED layer, so it says
+  nothing about what is published: without `--publish` the reconcile still publishes its artifact even
+  when it skipped the push, since an earlier run may have saved and stopped. The reconcile of a reused
+  component also re-asserts its solution membership, and one read answers all of them
+  (`lib/solution-membership.js`: a single paginated `solutioncomponent` query for the component types
+  the build adds plus the solution's tables, made at first use, so a build that reuses nothing and
+  deploys no pages never makes it). A component the read proves present is not added again — views,
+  forms, charts, business rules, the process flow, the app, its sitemap, the page manifest and persona
+  roles. There are two proofs: a row of the component's own, or, for a view, chart or form ONLY, its
+  table being held by the solution with ALL its subcomponents (`rootcomponentbehavior` 0). A table the
+  build creates is held that way, and the platform does not list such a table's views, forms and
+  charts one by one — an explicit `AddSolutionComponent` for one leaves no row — so a rebuild that
+  looked only for rows sent those adds every time (measured live: 10 of the 19 an unchanged rebuild
+  sent). The table's MetadataId, which is the `objectid` of its row, is read once per table, only for a
+  component without a row and only when the solution holds some table that way, through the raw client
+  the build already uses for table metadata (`tableRefs`). A table held at 1 (its own metadata only) or
+  2 (shell only) proves nothing, and neither does a row with no behavior: those components need rows of
+  their own, and are added without one. Anything the read does not prove (the read or the table lookup
+  failed, the solution is a built-in one) is added exactly as before. A component this run creates is
+  added directly, except the page manifest: it is persisted through the same check after every page
+  create and once more at the end, so a first build that deploys pages makes the read too — and still
+  adds the manifest, which the solution does not hold yet. What an unchanged rebuild still sends: the
+  phase-8 envelope; the SDK's own default-view enrichment (it pushes both generated views of each table
+  it enriches); the default-form promotion of a table the build owns (`isdefault`); the existing app's
+  sitemap push with its component pins and publish; the AI-feature setting writes; and each persona
+  role's privilege replace and app association.
   **The modern ("new look") shell is opt-in via `app.newLook`.** It is a per-app SETTING
   (`NewLookAlwaysOn`, written through the SDK's `saveSettingValue` scoped to app + solution), NOT an
   app-module column — `navigationtype` is Single/Multi *session* and unrelated, which is the reason
@@ -377,6 +628,178 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `app-spec.js`; `references/localization.md` is about generated **page** code, a separate concern.
   Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
   would keep passing against a bundle that ignored the option.
+  **A label-bearing metadata read must not run ahead of a create that may carry a localized label**
+  (AB#6686428). Measured, order-controlled: a broad read that returns labels (`findTables`,
+  `findColumns`, `fetchEntityMetadata`) made right before `createTable` / `createColumn` /
+  `createRelationship` leaves Dataverse with only the base-language label of a multi-language one, with
+  no error. That is why the existence probes are narrow keyed reads without labels, and why a probe that
+  cannot answer halts, or assumes absent, instead of falling back to the broad read when a label is
+  localized (`findExistingTable`, `relationshipExists`). The view-filter **pre-flight**
+  (`preflightViewLabels`, `lib/sdk-build.js`) reads option labels and whole global choices before the
+  first write, and those reads were never measured to be exempt — so a spec that carries ANY localized
+  label (`localizedLabelLcidsInSpec`: a map on a table, primary column, column, inline option, alternate
+  key or lookup; which of them the environment lacks cannot be known without more reads) does not run it.
+  The views phase, which follows every create, makes the check instead, so a label that names no option
+  still stops the build before any view is written; what is lost is only the guarantee that nothing had
+  been written yet. Offline lint and validation, and the dry run (it creates nothing, so no create
+  follows its reads), are unchanged. Lookup labels keep the same discipline: the parent-label read sits
+  right before a single-language create, the relationships whose lookup label is localized are created
+  before any other (`relationshipsInCreateOrder`, `lib/entity-provision.js`) so that none follows such a
+  read whatever order the spec declares them in, and the repair's reads come after every create. Lifting
+  the skip needs a live measurement of these reads ahead of a localized create in a two-language environment.
+  The vendored SDK now sends `Consistency: Strong` on every metadata read (see "Newer SDK behaviors" below);
+  whether that changes this effect has not been measured, so every rule above stands until a live
+  two-language rebuild says otherwise.
+  **A lookup column's label defaults to the PARENT table's name** (ADO 6691205). An omitted
+  `relationships[].lookup.displayName` reached the SDK as `lookupDisplayName: undefined`, which the
+  vendored SDK fills with the referenced table's **logical name** (`label(opts.lookupDisplayName ??
+  opts.referencedEntity)`), so the column — and every form cell the SDK derives from it — read
+  `new_project`. One rule, `lookupLabelFor` (`lib/app-spec.js`), now serves the build, the form cell,
+  the previews, `app-spec-doc`, `schema-facts` and the download: the explicit label → the declared
+  parent's `displayName` (string or LCID map, kept as the map) → the display name the **environment**
+  reports for a parent the spec cannot name → a humanized table name. A parent the spec cannot name is a
+  table it does not declare, **or one it declares WITHOUT a `displayName` that the build did not create**
+  — `existing: true`, or found already there by the data-model phase — because the environment's name is
+  then the only one it has (an `existing: true` `incident` is "Case", `systemuser` "User", not a
+  humanized "Incident"/"Systemuser"). `lookupParentNeedsEnvironment` (`lib/app-spec.js`) decides who asks;
+  the read is `readTableLabel` (`lib/lookup-labels.js`), and a label that is only the table's own
+  identifier — what a build writes for a table with no `displayName` — is ignored. A parent that sets a
+  `displayName`, and one the build creates itself without one, are never read. Offline surfaces cannot read
+  the environment, so they show the humanized name wherever the build would read one — the plan adds "or the
+  label from the environment if `<parent>` is already there" for a declared parent with no `displayName`
+  that the build may find already present.
+  The build has no general column-label reconcile, so the **rebuild repair** is its own pass
+  (`reconcileLookupLabelsPass`, `lib/entity-provision.js`; opt-in through `reconcileLookupLabels`, which
+  only `sdk-build.js` sets, because `provision-entities.js` counts its own steps). It acts only when the
+  spec omits the label AND the live label is exactly the old default — for a **column**, the lower-case
+  logical name of the parent (what the SDK labels the column with; `isOldLookupColumnLabel`),
+  **case-sensitive** (a correct "Contact" is not one, so it costs no read and a maker's "Contact" is never
+  overwritten; neither is a column that carries the lookup's own name — no build ever wrote that on a
+  column) — in a single language that is the
+  **build's own** (an old default in another language is left alone, with a warning: the write would add
+  the build's language beside it, leaving two languages of which one is still an identifier, and every
+  later rebuild would skip the column) — and writes **one language** (the authoring LCID) through
+  `updateColumn`'s merge, never a map. It converges to the same label a fresh build writes, the
+  environment's name included. A column's label is part of its table's definition, which Microsoft documents as
+  reaching model-driven apps only once the table is published, so the pass then publishes every table it relabelled,
+  in one `<entities>` PublishXml, with or without `--publish` — in the data-model phase, before anything can publish
+  the app; a failed publish is a warning that names the tables. Nothing else in the build is sure to publish them:
+  its other table publishes follow from what the spec puts on a table (a form, view, chart or icon, or its enriched
+  default views), and a downloaded spec carries no forms, views, charts or table icons and marks every table
+  `existing: true`, whose default views the build leaves alone. No metadata read can confirm that publish: measured
+  live, `RetrieveEntity` returns the new label right after the PUT even with `RetrieveAsIfPublished=false`, so a
+  live check of it has to trace the request. The labels are read **once per child table**
+  (`Attributes?$select=LogicalName,DisplayName&$filter=LogicalName eq '…' or …`, the read the SDK itself makes for
+  column hints), for the lookups the run did not just create, and a failed read is warned about once per table.
+  `lib/lookup-cell-labels.js` applies the same rule to
+  the form cell that stored the old label (the SDK takes a cell's label from the column only when the
+  cell has none), whose old default is the parent's lower-case logical name **or the lookup's own** — what the
+  SDK labels a field with when it cannot resolve the column at push (`isOldLookupFieldLabel`); it is a separate
+  module so `entity-provision.js` and `artifact-intent.js` do not
+  require each other. A cell that still holds the old default follows the column's CURRENT label — the
+  repaired one, or a maker's. Every cell of the lookup is held to that rule on its own label: a form can hold a
+  field more than once (`findFieldCellLocations`), and a first cell that is right, or a maker's, says nothing
+  about a second one an older build left. A label-bearing metadata read immediately before a labelled create makes Dataverse
+  keep only the base-language label, which is why the existence probe stays narrow for a localized
+  label, the live parent-label read sits right before the plain create only (a localized lookup is created
+  before any relationship that needs one), and repair reads run
+  after every create. Download leaves `lookup.displayName` out when it equals what a rebuild would
+  write **or is the old default** (the parent's logical name): an explicit label is never repaired, so
+  writing the identifier out would carry the defect through download → edit → rebuild, where leaving it
+  out hands it to the repair. Any other label is written as it is. Pinned by
+  `scripts/tests/lookup-label-default.test.js` (its REAL BUNDLE tests drive the `createRelationship`
+  body, the `updateColumn` PUT and a pushed form cell through the vendored bundle) and
+  `scripts/tests/lookup-label-download.test.js`.
+  **Choice labels in view filters resolve against the ENVIRONMENT** (ADO 6691114,
+  `lib/view-filter-labels.js`). The spec alone (`choiceValueMap`, 100000000 + index) is right only for an
+  option set this build created. A view on a table the spec reuses without declaring the column
+  (`{ "schemaName": "account", "existing": true }` filtered on `industrycode`, a LOCAL option set — or a
+  column bound to a system global choice) sent the LABEL as the condition value; lint passed, and Dataverse
+  rejected the saved view MID-BUILD, after the tables and columns were written, leaving a half-built app.
+  A declared global choice that already existed with other values did too (`createGlobalOptionSet` REUSES an
+  existing set unchanged). A column bound to a global choice the spec does NOT declare is a lint ERROR
+  (`spec-lint.js`, "references unknown globalChoice") — the build would create it with no options — so it is
+  not a case the resolver serves, and lint adds no second word about it. (That check is lint's only:
+  `validateAppSpec`, which the build runs, does not repeat it.)
+  `readChoiceAttributes` reads a table's option sets (four narrow cast reads — Picklist,
+  MultiSelectPicklist, State, Status — expanding `OptionSet`, which a global-bound column fills as a local one
+  does) once per reader, and a build has up to two: one for the pre-flight and a fresh one for the views phase
+  (the data model has been written since), so a table is read **at most twice per build** — and not at all for
+  a table no label names — and a label matches in any language, an ambiguous alias refused. It is deliberately not
+  `fetchEntityMetadata`: that costs about eleven requests, WRITES the workspace (a dry run must not) and keeps
+  only the caller's language. The label is judged twice, on purpose:
+  - **Before the build writes anything** (`preflightViewLabels`, `lib/sdk-build.js`, run by any apply that
+    includes `solution` or `data-model` — so the staged flow's data run too — **unless the spec carries a
+    localized label**, see the AB#6686428 note above) through
+    `checkViewFilterLabelsBeforeBuild`. Before the build runs the environment cannot hold what the build is
+    about to create, so each label is judged by whichever side is AUTHORITATIVE and only a DEFINITE answer
+    halts: a column the environment already has (its options are final), or a column the spec declares and the
+    environment lacks (the spec's inline options — or, bound to a declared global choice, the environment's
+    copy when `readGlobalChoiceOptions` finds the set, since it is reused unchanged, else the spec's). A
+    status reason the build inserts, a table it creates, a read that failed or was partial, and a label that
+    the spec's own number stands in for (see the views phase) are NOT problems
+    here — a false halt would stop a good build — and are the views phase's to judge. What the environment
+    already held and resolved is handed on as final — a column's own options, and the values of the
+    existing global choice a column the build creates will be bound to — so a failed read in the views phase
+    cannot make it fall back to the spec's 100000000 + index.
+  - **In the views phase, once the data model exists** (`resolveViewLabelsOrHalt`, a fresh reader): the final
+    answer and the values. For a column bound to a declared global choice whose own options could not be read,
+    the **set itself** is read (`readGlobalChoiceOptions`), because that is what the column is bound to — which
+    is how a spec with a localized label, having no pre-flight to hand a value on, still resolves it. The spec's
+    own options answer only where the environment cannot (table not there yet, failed read), for a declared
+    Choice column — a FALLBACK, right only for an option set this build created, so the build **warns**
+    whenever it uses it. An undeclared column whose table cannot be read is used as written, with a warning.
+    **Where the spec numbers the options** — a column with inline `options[]`, or one bound to a global choice
+    that `globalChoices[]` declares — and the environment has options for the column (or the set) but none
+    labelled as the filter says (a maker renamed "Gold" to "Gold Tier", or a localized option's translation never
+    reached the environment), the spec's own number is used, **with a warning**, when the environment has an
+    option with that number (`specNumberStands`). That is what the build did before labels were resolved against
+    the environment, so halting the apps it built would be a regression — and for a declared global choice a
+    maker's rename would make `build --apply --verify` fail on every run with nobody having touched the spec.
+    That the option on the number is the one the label named is an ASSUMPTION, so the warning says so and says
+    how to take the choice out of the build's hands (use the option's integer value). It is **never made against
+    the environment's own evidence**: the number is refused, and the label is a problem — the build halts, before
+    it writes anything where the pre-flight can see it — when the environment has no option on the spec's number
+    (a set from another publisher's range has none, so it halts too), or when the option on it goes by the name of
+    another option of the spec (in any of its languages), or when the environment carries a label of this spec only
+    on other numbers **and that shows the numbering moved**: the label is the filter's own option's (any alias, in any
+    language), or it sits on a number the spec gives another option — options the author inserted or reordered after
+    the column was built, since a rebuild never changes an existing column's options; a column made elsewhere; a set
+    another app created in another order. A label on a number the spec does not use at all is an option a maker added
+    or re-made (one added in the Default solution takes another publisher's range, one deleted and re-created takes
+    the next free number): every number the spec has is where it was, so it is not held against the spec — a maker who
+    adds an option and renames another does not stop a build the numbers still serve, as they served 2.13.0. That
+    check compares labels without regard to case (a label still **resolves** by its exact text only), since an
+    environment that differs from the spec in case alone must not hide a different numbering. **A refusal says why**:
+    the problem line adds *The spec numbers "Gold" 100000001, but the environment shows another numbering ("Bronze" is
+    numbered 100000003 there, 100000002 in the spec), so that number is not used.* — in the halt, in the dry run's
+    reason, in `--verify`'s detail and in the line for a view that already exists. What the rule cannot see is the
+    residual: where nothing the environment carries contradicts the number — every option renamed, a column made
+    elsewhere in another order with options the spec lacks and the filtered option renamed, or options the author
+    removed from the spec so that later ones now sit past its numbers — the number is the one earlier builds used (so
+    never a different value than 2.13.0 sent), and the warning, which names the option the number landed on, is the
+    only trace; `--verify` passes such a view, as it did under 2.13.0. A label two options share resolves the same
+    way, to the one the spec numbers, when the spec's number is one of them.
+  Both halt with `BuildHalt` code `view-filter-label-unresolved` (phase `preflight` for the pre-flight's halt,
+  `views` for the views phase's, `recoverable: false`,
+  `transient = false`), naming each view, column and the valid labels, and only a view the build would CREATE
+  can halt it: `reconcileView` never reapplies an existing view's filters, so for one the build only says — as a
+  warning — that its filters are left as they are and verify will report the label. The dry run
+  (`annotateLivePlan`) asks the pre-flight's question and reports such a view as `? unknown` — with
+  `wouldHalt` on the plan item, so the summary counts it as "would stop the build" and not as "could not be
+  read", which it was not — and says (as a warning, once) what the apply will say: for a view it leaves as `create`
+  or `reuse` because the spec's number stands in for a renamed option, the assumption it will warn of; for an
+  existing view whose label names no option, which stays `reuse`, that its filters are left as they are and verify
+  will report it; `--verify`
+  expects the resolved value through the reader-gated `choiceAttributes` capability (`verify-model-app.js`),
+  and a label whose option metadata could not be READ is reported as **unresolved**, with the reason, never as
+  a missing filter — unless the deployed view has no condition on that column with that operator at all, which
+  is a missing filter whatever the options are (a deployed value equal to the build's fallback still verifies);
+  and `lint-app-spec` says offline that a label is "checked against the environment at build time" when the
+  spec alone cannot prove it. Sample-data labels still resolve from the spec alone. Pinned by
+  `scripts/tests/view-filter-labels.test.js`, which includes REAL BUNDLE reads of a global-bound column's
+  option set and of a global option set, a build test per gap, tests that no write precedes the
+  pre-flight's halt, and tests that no label-bearing read precedes a create of a localized spec.
   `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
   check `verify-model-app.js` runs standalone). Recovery from a halted build is a full rerun (idempotent).
   **`--changed-only`** (Preview, off by default) is a fail-closed SAFE partial apply: after a FRESH
@@ -405,7 +828,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `entities[]`. `scripts/lib/app-components.js` is the one home for component inventory, pin/proof
   and layer reads. It resolves `MetadataId,EntitySetName` before any app write, pins only missing
   tables right after app identity exists on both create and reuse, then re-resolves the CURRENT
-  layer and proves the rows. An SDK create already publishes, so a fresh app's new pins are
+  layer and proves the rows. An SDK create already publishes (the build keeps it that way — see
+  "Newer SDK behaviors" under `## Building & Testing`), so a fresh app's new pins are
   published again even without `--publish`; an existing app's normal finalizer/publish includes
   them. Dropping a table from the list never unpins it.
   **`app.mainForms` is a name-based Main-form allow-list for sitemap Entity tables.** Names resolve
@@ -460,8 +884,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   deletion; names alone do not. Navigation is either layer: the published sitemap, and the saved but
   unpublished one when the published layer leaves a page unproven (`navigationProof`, the layer a download reads);
   when that saved layer cannot be read and a page stays unproven, the app is left intact for a re-run. The BUILD
-  binds a page by its published navigation or a receipt only, because its shared-page scan reads other apps'
-  published navigation; a page only in the saved layer halts with advice to publish the app first. The verified ownership set is persisted locally before app deletion,
+  binds a page by its published navigation or a receipt only; a page only in the saved layer halts with advice to
+  publish the app first (the build's shared-page scan reads OTHER apps' saved navigation as well — see above). The verified ownership set is persisted locally before app deletion,
   so a page-less retry still has proof after the app is gone. Unreadable proof or a failed record write
   leaves the app intact. Proven pages still undeleted, including dependency-blocked pages, keep the
   manifest, solution and local teardown record and make the run fail. Records are consumed only for
@@ -480,7 +904,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **`scripts/lib/sdk-http-client.js` must implement `postRaw`**: the SDK will not fall back to two
   sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
   that file for the wire contract, why a `$batch` is sent once unless its answer proves nothing in it
-  ran — a SQL deadlock or a 429 — and why a conditional write that gets no answer is never re-sent).
+  ran — a SQL deadlock or a 429 for conditional deletes, a 429 for a change set that only creates columns — and why a conditional write that gets no answer is never re-sent).
+  The SDK re-sends an app delete itself when the platform's search-index insert race refuses it (HTTP
+  400, SQL 547) — an answer this client never re-sends — so the two layers add and never multiply
+  (counts pinned in `scripts/tests/sdk-resend-layers.test.js`).
   Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
   drives a mock and would stay green through a regression here.
@@ -626,13 +1053,23 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dropped and counted in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
-  builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
+  builds. It works through a throwaway SDK workspace, never the folder's `.maker-workspace` (which belongs to
+  the environment it was first opened for): every read it makes goes to the server, so it verifies any
+  environment the app is deployed to and creates or binds nothing in the folder. It only READS the build's
+  baseline, `last-applied.json`, from `--workspace`, and only when that baseline describes this
+  environment. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
   id) AND, best-effort, **content** so an *unapplied edit* is caught (not just a missing artifact): a
   view's **column set** (parsed from `layoutxml`; every spec column must be deployed — an extra deployed
   column passes by design, so a column REMOVED from the spec, which the additive `reconcileView` leaves
   in place, is not flagged), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
-  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. **Dashboards** are
+  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. A view filter's
+  Choice label is expected as the value the **environment** gives it, which needs the reader's
+  `choiceAttributes` (one memoized read per table per pass); without it the spec-only expectation
+  applies. A label whose option metadata could not be read is reported as **unresolved** with the
+  reason — never as a missing filter, which would call a correct view wrong because a read failed (a
+  deployed value equal to the build's own fallback still verifies) — unless the view has no condition on
+  that column with that operator at all: that filter is missing, and is said to be. **Dashboards** are
   checked too (#586): each declared dashboard must exist. A name can also match another app's
   dashboard, so when it matches several, verify checks the one the app's solution holds — the one the
   build reuses (`dashboardsInSolution`, shared with the build and teardown) — and fails only when the
@@ -688,10 +1125,31 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   no AI features while reporting success. The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
   — buckets are read off the result object, so one a future SDK adds is reported verbatim rather than
   silently dropped — and `--verify` fails on any of them. **An app-scope setting WRITE is a no-op until
-  the app is published** (live-measured: the write reports `notPersisted` and `appsettings` holds no row
-  at all, while publishing and re-issuing the same call applies every feature). This is not read lag, so
+  the app is published** (live-measured: the write reported `notPersisted` and `appsettings` held no row
+  at all, while publishing and re-issuing the same call applied every feature). This is not read lag, so
   re-*proving* after publish cannot fix it — the build **re-issues** the write after publish for anything
-  the first attempt did not apply, `skipped` INCLUDED. On a fresh app nothing persists pre-publish, so
+  the first attempt did not apply, `skipped` INCLUDED. (The SDK now also proves a write against the app's
+  UNPUBLISHED layer — `appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()` — so a row it
+  saved but that is not published yet comes back `applied` with `pendingPublish` instead of
+  `notPersisted`. That is still not in force: `--verify` and the runtime read the published row. So
+  `rebucketPendingPublish` in `lib/ai-app-settings.js` moves it out of `applied` into a `pendingPublish`
+  bucket of the plugin's own, and the post-publish pass gives it the publish — not a second write, since
+  its row is already saved: with `--publish` the publish phase has put it in force and the pass only
+  PROVES it, otherwise the pass fetches and publishes the app first. A feature the SDK did not save at all
+  is still re-issued after that publish, and the re-issue's result is filed the same way: a publish that
+  failed, or could not be confirmed, leaves the row in the unpublished layer, and the SDK then answers
+  `applied` + `pendingPublish` again. Whatever the proof does not find in the published layer is reported
+  `NOT YET PUBLISHED` (and listed under `pendingPublish` in `--json`), never `applied`. That proof reads
+  an absent row up to three times, 500 ms apart — the budget `--verify` has (`AI_PROOF_BUDGET`, one value
+  in `lib/ai-app-settings.js`; `sdk-build.test.js` and `verify-spec.test.js` pin both sides) — because a
+  publish can answer before its row is readable, and a single read
+  reported that lag as `NOT YET PUBLISHED` in a run whose own `--verify` passed. A check that could not run
+  (the app, the definition or the row could not be read) says so first in the warning — "the check after
+  the publish could not run: …" — ahead of what the SDK said, so a failed read is never taken for a look that
+  found nothing. Without the move,
+  a build with no `--publish` would end with unpublished rows that `--verify` fails on. Pinned in
+  `ai-app-features-real-bundle.test.js`, `sdk-build.test.js` and `sdk-build-publish-batch.test.js` — the
+  batched publish tells the pass whether the app's own publish went through.) On a fresh app nothing persists pre-publish, so
   the gate diagnosis fires for every feature that has one; abandoning those would leave `--verify`
   failing on a row the build declined to write a second time, and a reported customer environment ran a
   working app at `NLGridSearchSetting = 2` with `EnableNLGridSearch` off. Anything still `skipped` after
@@ -737,6 +1195,167 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `findExistingColumns`, `relationshipExists`, `artifactIdentityQuery`) rather than a parallel
   implementation, so the plan cannot disagree with what the apply then does; it is read-only, and
   `--no-live-plan` restores the offline, spec-only listing.
+- **Bounded parallelism in the read-heavy and publish-heavy paths.** Each item below has tests that count
+  requests and prove the overlap (`verify-parallel-checks`, `verify-page-code-batch`,
+  `download-parallel-reads`, `teardown-publish-once`, `table-columns-in-create`, and the check-auth tests),
+  and each keeps a one-at-a-time form (`concurrency: 1`, `inlineColumns: false`) that is the oracle its
+  output is compared with byte for byte. Every fan-out is
+  `mapLimit` (`lib/entity-provision.js`; its `firstInOrder` option makes the thrown error the
+  lowest-numbered task's, deterministically), never an unbounded `Promise.all`, and each request still
+  retries its own 429s (`lib/sdk-http-client.js`) — so a throttled environment slows the pass down rather
+  than being hit by a burst.
+  - **Verify** (`lib/verify-spec.js`) runs its checks as ordered tasks on a pool of 4
+    (`verifySpec(spec, read, { concurrency })`). Each task reports into its own buffer and the report is
+    the buffers joined in listing order, so it is the same whichever read answers first; a failure stops
+    anything new from starting and the failure first in report order is the one thrown. A failed pass does
+    not wait for the page checks' early reads (a hung `pac` run would turn a fast failure into a hang): the
+    early read and the check that consumes it both stop waiting once a check listed BEFORE the page check has
+    failed. A failure in a check listed after it does not end the wait — the page check's own failure is the
+    lower-numbered one and must be the one thrown, as when the checks ran one at a time. A read the pass gave
+    up on is ended before the pass returns or throws: `verifySpec` calls the reader's `endPageReads()`, which
+    ends every `pac` run in flight with its whole process tree (`killProcessTree` — `pac` can be a `.cmd`
+    shim, and Node's own kill reaches only the `cmd.exe`), starts no new run — a listing paused between two
+    attempts included: the pac client's `abort()` makes every run of a call that began before it answer
+    "ended" without starting anything — and makes no download folder until the next pass begins, and waits
+    (bounded) for the downloads in flight to remove their `verify-page-*` folders — the verify CLI exits the
+    moment the pass does. Reads that several
+    checks share are single-flight: the root business unit (`resolveRoleBusinessUnit` caches the *lookup*
+    in flight — caching only its answer made every concurrent caller but the first report its role
+    missing), a table's and a role's privileges, the sitemap, the resolved Main forms. The reader sends the
+    first read of each table alone, so the SDK resolves its `EntitySetName` once instead of once per
+    overlapping read. The page checks' slow reads (the `pac` listing, the manifest) start with the pass,
+    and the code of every page whose navigation is checked comes from `readerFor().pageCodes`: one
+    `pac model genpage download --page-id a,b,c` per chunk of 25 ids instead of one run per page. A page the
+    batch cannot answer (a failed batch, an id with no directory in the output) is asked for by itself, so
+    one bad page costs its own miss, never its neighbours'.
+  - **check-auth** starts `az account show` and (with `--env`) the Dataverse token read together, and
+    WhoAmI as soon as the token is ready, so it overlaps the `pac` probe. The verdict order is unchanged
+    (account → token timeout → pac → no environment → WhoAmI), and an early verdict cancels the probes
+    still running — on Windows the token read's whole process tree (the `cmd.exe` that runs `az.cmd`, and
+    the Python process it starts), through `killProcessTree` in `lib/process-runner.js`, because Node's own
+    abort signals only the `cmd.exe` wrapper. The early WhoAmI is sent with `refreshOn401: false`: a 401
+    would otherwise refresh the token with a synchronous `az` call (seconds, with every other probe's timer
+    frozen), so a 401 on the early request is re-sent at WhoAmI's old place, after `pac`, where that refresh
+    costs nothing.
+  - **Download** overlaps each table's auxiliary reads (entity and attribute labels, the money
+    base-currency flags, option sets) and the per-table relationship reads, bounded at 4
+    (`runDownload({ concurrency })`; `1` is the sequential oracle), and merges them in the original fixed
+    order, so the written spec, pages and stderr are byte-identical. Tables themselves are still read one
+    at a time (the SDK's `fetchEntityMetadata` already fans out), and dashboards are not overlapped.
+  - **Teardown** saves the default-view resets with `publish: false` and publishes ONCE, in one
+    `publishArtifacts` envelope, at a barrier after the last reset and before the relationship deletes. A
+    failed envelope is retried table by table with `publishArtifact` (the SDK fails every target of an
+    envelope with one shared error), and a table that still cannot be published is named in a warning —
+    teardown does not fail on it. A single table keeps the one-table publish.
+  - **Data model** (`provisionDataModel`): a NEW table is created exactly as the previous release created it — one
+    request that carries only its primary name attribute — and its ordinary columns (Text, Memo, the number types,
+    Money, DateTime, Boolean, Choice and MultiChoice with inline options, AutoNumber; at most 25) then follow in ONE
+    atomic change set instead of one request each: the SDK's `createColumns`, an OData `$batch` of POSTs to the table's
+    `Attributes` collection. Dataverse runs the operations in order and, if one fails, rolls back the ones already done
+    ([change sets](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api#change-sets)),
+    so a refused change set has created nothing, and the build then creates the columns one by one as it always did,
+    with a warning that says why (the platform's own message when its answer carries one). The same fallback covers a
+    transport that cannot send a change set — the SDK refuses before sending anything when its HTTP client has no
+    `postRaw` (`DataverseClient.supportsAtomicBatch`; `lib/sdk-http-client.js` has it) — and a change set whose answer
+    was lost or could not be read (a transport failure, a server error, an unreadable success), which may have
+    committed: the table is read once, and when it has EVERY column the change set is taken as committed and its
+    columns are narrated as created, with their ids, after a warning that the answer was lost; otherwise each column
+    already there answers "already exists" and is skipped, so a lost answer costs requests, never a column or a
+    duplicate. A refusal (any 4xx) is not followed by that read. The HTTP client sends the change set again
+    only when its answer is a 429 — the platform refused it, so nothing in it committed (the change set is atomic), as it can while the table
+    just created is still held by its customization lock — on the schedule of any other throttled write (six attempts,
+    1 s / 2 s / 4 s / 8 s / 8 s with jitter, longer when `Retry-After` asks, `isColumnCreateBatch` in
+    `lib/sdk-http-client.js`). It never sends it again after another transient status or a lost answer (a change set can
+    commit behind those), so such a refusal costs one request and then the per-column path's own 429 retries, never a
+    burst; a change set still refused with a 429 once the attempts are spent falls back the same way, with a warning
+    that says the table was throttled rather than that the request failed. The columns are not put in
+    the table's own create request, which Dataverse also accepts (an `Attributes` array beside the primary name
+    attribute, [Create columns](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-column-definitions-using-web-api#create-columns)):
+    a table create that carries columns is not a request the previous release ever sent, and an environment can treat it
+    differently (see the next bullet). The SDK builds each operation's body with the same function `createColumn` uses,
+    so a column's body is its per-column body — `table-columns-in-create.test.js` compares them column by column and,
+    where `MODEL_APPS_RELEASED_SCRIPTS` names the `scripts` directory of the previous release (the CI job that installs
+    the parser oracles sets it), with the requests the
+    released code itself posts — and each operation carries the solution header (the one on the outer `$batch` request is
+    ignored by the platform). Customer, File, Image, Calculated, Rollup and global-choice columns, columns past 25, and
+    every column of a table that already exists, or that was found after its create (the answer to the create was lost,
+    so nothing shows what it holds), keep the one-request-per-column path. A column also stays out of the change set
+    when its name is one the platform would create twice — the primary name, `<table>id`, a companion of a column of the
+    table (a Money column's `<name>_base` twin, a Choice, MultiChoice or Boolean column's `<name>name` shadow, reserved
+    even when that column takes the per-column path itself), or a repeat of an earlier name in any case — because
+    Dataverse then refuses the WHOLE change set
+    ([0x80060304](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes),
+    "Attribute {0} already exists for entity {1}.") where the one-by-one path meets the collision in one
+    column's own request and skips it. A column whose name EXTENDS the name of a column that takes the
+    per-column path (Customer, File, Image, Calculated, Rollup, global-choice) stays out as well, and the
+    build does not try to list what the platform makes beside such a column: `<name>name`, `<name>yominame`
+    and `<name>idtype` beside a Customer column (measured), `<name>_name` beside a
+    [File column](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/file-column-data#file-name-column),
+    `<name>id`, `<name>_timestamp` and `<name>_url` beside an
+    [Image column](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/image-column-data#download-url),
+    `<name>_date` and `<name>_state` beside a
+    [rollup column](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/define-rollup-fields).
+    Such a column is made AFTER the change set, so a twin inside it would be made before its owner and the
+    owner's own create would answer "already exists" — a skip — dropping the owner without a word, where one by
+    one the owner comes first and the twin is the skip. The twin is made in spec order after the change set, as
+    before; a longer name that merely starts like its neighbour's costs one request. The mirror rule keeps the order
+    the spec's for the columns that DO go in the change set: one by one the first column to name something creates
+    it and the next is skipped, so when a twin is listed BEFORE its owner the twin is the column kept — and the
+    change set, which runs before every per-column create, would reverse that. A column therefore stays out of the
+    change set when an earlier column has a name that extends its own — every name a column's creation can take
+    (a companion listed for it, or one the platform makes that the build does not know) is named after the column —
+    and is made after that column, in spec order; where an earlier column merely starts like a later one's name that costs one
+    request. One narrow
+    read of the table's `Attributes` (ids and names, no labels) then confirms the columns and returns the ids
+    `createColumn` would have (a change set answers none), keyed by the column object, never by its name: a second
+    column of exactly the same name is a repeat, skipped as already existing and never given the first one's id. A
+    column the read does not show — unreadable, lagging, or ignored by the platform — is created the per-column way,
+    where an already-exists answer is a skip. A table whose create answer was lost and that is found afterwards
+    is given no change set. Used only when the SDK has `createColumns` and a raw Dataverse client is there to read the
+    columns back (`inlineEnabled`); otherwise every column takes the per-column path.
+  - **Primary name column length.** Every table create sends the primary name attribute's `MaxLength` explicitly: the
+    spec's `primaryAttribute.maxLength` (a whole number from 1 to 850, one rule — `primaryNameLengthProblem` in
+    `lib/app-spec.js` — applied by `validateAppSpec` AND by the provision-entities input gate that `/genpage` and
+    `/app-builder` pass through), else 100 — what the previous release always sent (it is the SDK's own default for the
+    option), for a plain and an auto-numbered name column alike. So a spec without a length posts the previous release's
+    table request byte for byte and gets its result on every environment. What an environment makes of the length asked
+    of a create that carries only the primary name attribute was measured on two: one keeps it (100 → 100); the other
+    makes a plain text name column 850 characters long whatever length is asked (100 and 120 both came back 850) but
+    keeps the length asked of an auto-numbered one (100 → 100), and keeps the length asked in a create that also carries
+    other columns (120 → 120) — which is why the columns are not put in the table's create: no one length asked of such
+    a create matches the previous release on both environments. More than 850 is refused (HTTP 400, "The maximum length
+    of Primary attribute '…' is 4000. The maximum allowed limit is 850." — measured in a create that carried other
+    columns), and a PUT of the finished column — the SDK's `updateColumn`, with `MSCRM.MergeLabels: true` — is honored
+    (850 → 120 → 850). So when the spec gives a length and THIS build created the table, it reads the length back with
+    one typed `…/Attributes(LogicalName='…')/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength` GET and
+    calls `updateColumn` only when it differs — LAST in the data-model phase, once every table, column, status reason,
+    alternate key and relationship has been created, and inside a `finally`, so that a phase that halts after creating a
+    table still sets that table's length (a re-run finds the table and leaves an existing table's name column alone; a
+    length that cannot be set while the phase is halting is warned about as one a re-run will not set either).
+    Last, because `updateColumn` starts by reading the column WITH its labels, and a label-bearing metadata read ahead of
+    a labelled create is what strips non-base languages (measured; see `findExistingColumns`): within one attempt, nothing
+    labelled is created after it. The build's automatic retry of a transient halt (a 429, a lock) runs the phase again as a
+    second attempt: the attempt that created the table has already set its length (the `finally` runs after a halt too), and
+    the retry finds the table and keeps its name column as it finds it, so the length is set once — but what the retry
+    creates comes after the first attempt's read, and the loss was measured only for a create straight after the read, so
+    whether it reaches across the pause between two attempts is not known (`table-columns-in-create.test.js` pins what
+    each attempt does). That is one narrated `primary column length` step, planned (after the relationships) and counted
+    only when the spec gives a length (`planFor`, and the provision-entities plan and total): `ok … -> N` when it set the
+    length, or a skip — `(already N)`, `(table exists — kept)` or `(table found after its create — kept at N, asked M)` —
+    or a FAILED step naming the table, the length asked and the length the platform made (for a read as well as an
+    update), with a warning, that never stops the build. There is no read for the default: a spec without a length
+    leaves the column as the environment made it, which is what the previous release did. A rebuild leaves an existing
+    table's name column alone, like every column's `maxLength`, because it must not shorten a column that may hold data
+    or undo a length widened in Maker. A table found after the answer to its create was lost (or that another maker
+    created first) is treated as not made by this build, since nothing shows that it was not made by someone else, so
+    its column is never written — but it is read, once, and a length that differs from the spec's, or cannot be read, is
+    a warning (`reportFoundPrimaryNameLength`). And a build that stops on `TABLE_METADATA_NOT_VISIBLE` out of the create
+    warns that the length asked may not have been applied (some environments make a name column created this way 850
+    characters long), since the re-run that follows treats the table as an existing one — except for an auto-numbered
+    name column, which keeps its length, and for 850, which the column comes out as either way. The
+    build reads only `schemaName`, `displayName`, `autoNumberFormat`, `required` and `maxLength` from
+    `primaryAttribute`; any other key inside it is still accepted and ignored (unlike the table level, it has
+    no key allow-list).
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
@@ -799,7 +1418,7 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes); a CLI too slow to answer is `az_timeout`/`pac_timeout`
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (the az probes, the token read + WhoAmI and pac overlap; the verdict order is fixed); a CLI too slow to answer is `az_timeout`/`pac_timeout`
   check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
   resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
   lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
@@ -807,6 +1426,7 @@ scripts/
   list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
   list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
+  list-languages.js            ← /genpage planner: the environment's base language and each provisioned language (LCID, culture code, right-to-left) — the SDK's `getEnvironmentLanguages()` over the az-token client, three reads and no write, printed as one pure-ASCII JSON line. The planner's FIRST choice: when it exits non-zero, for any reason (most often the Azure CLI), the planner runs `pac model list-languages --environment '<envUrl>'` instead (as before the script existed, but pinned to the same environment), and says so
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data; --language-code)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
@@ -823,33 +1443,40 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
-  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in, and keeps the page's name, model and bindings unless given; refuses no-base / deployed-changed / deployed-unreadable unless --overwrite-deployed)
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in, and keeps the page's name, model and bindings unless given; refuses a create whose `makeStyles` writes a Griffel shorthand (`griffel-shorthand`, before anything is read) and an update that ADDS one the deployed page did not already have — one it already had goes ahead with a warning — and, for an update, no-base / deployed-changed / deployed-unreadable unless --overwrite-deployed)
   genpage-base.js              ← /genpage: record or check the deployed-page base marker next to a page.tsx (#673)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named and, for an edit, carries the exact approved change list
   check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
+  check-griffel-styles.js      ← /genpage and /app-builder: a page's `makeStyles` calls hold none of the ten shorthands Griffel's runtime drops (lib/griffel-styles.js; see "Griffel shorthands" below)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
-    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
-    provision-input.js         ← Input validation for entity provisioning
-    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`), plus the CLI arg contract (parseArgs/validateFlags)
-    process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked)
-    cli-failure.js             ← how a CLI child failed (timeout / missing / failed) and the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out
+    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase; and `mapLimit`, the bounded fan-out every parallel path reuses
+    provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
+    process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere, each only once `ps -o lstart= -p` shows its pid still has the start time the listing saw — a descendant that exited meanwhile can have its pid given to an unrelated process; best effort, since two processes can share a one-second start time and the moment between that read and the signal is not covered), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws
+    cli-failure.js             ← how a CLI child failed (timeout / missing / failed), the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out, and the budget of one `pac model genpage` call (3 min to list or download, 10 min to upload; `POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`, 1 s to 60 min, sets all of them); `commandArg` writes an argument of a command a message tells you (or the agent) to paste so that, run from PowerShell (Windows PowerShell 5.1 or PowerShell 7) or a POSIX shell, the program gets it unchanged as one argument — bare when it is plain, single-quoted otherwise (a path from an untrusted checkout can hold `;`, `$(…)` or backticks) — or not at all when no spelling does that in every one of those shells: a quote or a line break, and the values Windows PowerShell changes on their way to a native program (a `"`, white space with a final `\`, the empty value) or both PowerShells read as the stop-parsing token (`--%`), all measured. `commandArgOrPlaceholder` then writes a placeholder and names the value outside the command
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
+    lcid-cultures.js           ← pure: a Windows language id (LCID) → culture code and right-to-left, from a table of Windows' own culture data (what `pac` printed; the SDK reports numbers only, and no Intl API maps an LCID); a language id with no entry stays numeric and is reported, never guessed (`list-languages.js`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
     app-components.js          ← shared current/published app layers, component inventory, hidden-table pin/proof, Main-form resolution/membership and push directives
+    solution-membership.js     ← one read of a solution's components (the types the build adds, plus its tables: a table held with all its subcomponents vouches for its views, forms and charts, which have no rows of their own), so a rebuild adds just what the solution is not PROVEN to hold; every doubt reads as "add"
+    unsynced-edits.js          ← the SDK's own dirty tracking (`diffArtifact`) as the one proof that a reconcile has nothing to push; every doubt reads as "push"
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
+    form-timeline.js           ← pure: the shape Dynamics renders the Notes timeline in (control id, tall cell, spacer rows), what a deployed one lacks, and how to read it in the SDK tree and in published FormXML (shared by the compiler, the build's repair and verify)
+    form-subgrid-placement.js  ← pure: where a form's sub-grid sections go (`tab`/`column`/`after`/`before`) — resolving a placement against the declared layout, the order of a column's sections and grids, finding a grid's section in either tree shape (shared by the spec gate, build, verify and the wireframe)
     form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
     form-container-match.js    ← how an authored tab/section is matched to a deployed one, and the moves that put them in the layout's order (shared by build and verify)
     ai-app-settings.js         ← single source of truth for the per-app AI feature contract
     interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
     page-structure.js          ← the one structural gate a generated page must pass (empty, truncated, prose, elided), shared by genpage-worker-output.js and promote-intent-pages.js
+    griffel-styles.js          ← the ten shorthands Griffel's runtime drops, found as keys of a `makeStyles` style object (any depth, code only — the plugin's own lexer), with their longhands and where each sits (`within`: its slot, selectors and at-rules); shared by check-griffel-styles.js, `genpage-upload.js` (refuses a create, and an update's NEW keys — `griffelProblemsNotIn` tells them from the deployed page's) and the build's pages-phase scan (halts a new or changed page, warns for one it sends as it is), whose texts (`describeGriffelRefusal` / `describeGriffelWarning`) say what each way out does to the page; and the tests
     page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
     app-source-path.js         ← shared lexical + realpath confinement for app source reads/uploads and hashes
     page-ownership-records.js  ← local CREATE receipts and pre-delete ownership records, scoped to app/key/id
@@ -857,16 +1484,18 @@ scripts/
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
+    lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
+    view-filter-labels.js      ← resolves a view filter's Choice labels against the environment's option metadata; the build's pre-flight (skipped for a spec with a localized label) and views-phase gate, the dry run, verify and lint all use it
     spec-shape.js              ← shared structural normalization for both authoring gates
     surface-resolver.js        ← pure: resolve personas[].jobs[].surfaces[] to the spec artifacts that satisfy them
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
                                   (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
-    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`); an uncertain create reports its candidates and stops without adopting one as an UPDATE
+    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`); an uncertain create reports its candidates and stops without adopting one as an UPDATE. Every pac call is time-bounded (`runPac`: the process tree is ended when the budget runs out and the result is `{ status: null, timedOut: true }`); a timed-out list or download is retried once, a timed-out UPDATE is not (it may have landed, and a re-send can record the prompt twice or overwrite a later change: it is reported with the check to run — `genpage-base.js check` for the upload script, a `pac model genpage download` of the page and then a re-run of the build for the build, which keeps no base marker), nor is an UPDATE that failed (a non-zero exit, or an exit 0 with no Page ID: it too may have landed, and is reported the same way; only a refusal of pac's own arguments or input files is an ordinary error), and a timed-out CREATE is an uncertain create that is never run again (a Page ID pac had printed names the page it created, stalled before publish or placement; a create that fails after the Page ID is reported the same way and never sent again; every error that follows a create whose outcome is not known to be nothing carries `transient: false`, so the build's own retry of a halt that reads as transient cannot re-send it, while a create that failed outright and left nothing in the listing is retried, as in 2.13.0); `runPac` also takes an AbortSignal and the client's `abort()` ends the pac runs it has in flight, each with its whole process tree (through the same `killProcessTree` as a timeout), and keeps a call that is paused between two attempts from starting another (an attempt that was ended is not followed by another pause either, and an ended upload is never sent again; a verify pass ends the page reads it gave up on this way)
     genpage-base.js            ← base-marker hash, compare, and read/write (sibling dotfile of the code file; no environment URL)
     safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename. Shared by genpage markers and later callers
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
-    verify-spec.js             ← spec-vs-deployed reconciliation core
+    verify-spec.js             ← spec-vs-deployed reconciliation core (checks are ordered tasks on a pool of 4)
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
     app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design)
@@ -874,20 +1503,21 @@ scripts/
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
-    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof from either app layer) + cross-app scan
+    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof from either app layer) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries)
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
-    deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there
+    deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there, each page with the hash of the source the pages phase read and sent (what the build's Griffel check compares a later source with)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
     system-solutions.js        ← built-in system solutions (Active/Default/Basic) — shared by download recovery + teardown skip
     phase-diff.js              ← pure spec-diff → changed build phases (advisory diff foundation)
-    content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
+    content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only); `recordedContentSha` reads a page's recorded hash back (the build's pages phase compares it with the page's source to tell an unchanged page from a changed one)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
     apply-snapshot-store.js    ← changed-only: atomic snapshot write (writeFileAtomic, also the baseline's) + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
+    workspace-binding.js       ← a persistent `.maker-workspace` belongs to the environment it was first opened for (only `--apply` opens it; a dry run uses a temporary workspace): turns the SDK's `WORKSPACE_ORG_MISMATCH`, and a manifest the JSON parser rejects, into the build's halt (both environments as origins, the safe remedies — the teardown one only for another environment that was built in, with the folder printed on its own line; a folder that was only opened gets no build-there/teardown advice; a folder with no usable environment is moved aside, not deleted; never clears or re-binds) and into the dry run's warning
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
@@ -943,6 +1573,21 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 ### Genux Pages
 
 Generative pages (genux) are React 17 + TypeScript single-file components that run inside model-driven Power Apps. They use Fluent UI V9 for styling and the DataAPI for Dataverse data access. Each page is a single `.tsx` file with `export default GeneratedComponent`.
+
+### Griffel shorthands
+
+Fluent UI V9 styles are Griffel's, and Griffel's runtime silently drops ten shorthands from a `makeStyles` style object — `all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`, `borderInline`, `borderInlineStart`, `borderInlineEnd` (`UNSUPPORTED_CSS_PROPERTIES` in `@griffel/core`; it skips the key and logs a console error). A page that writes one type-checks, transpiles, deploys and renders without it (AB#6691124); the guard used to be a grep for `borderWidth`, one of the ten. `scripts/check-griffel-styles.js --file <page.tsx>` is the gate now (the rule is `lib/griffel-styles.js`): one JSON line, exit 0 clean / 3 problems / 1 usage or an unreadable file, each finding with its line, column and the longhands to write (and where it sits, `within`, and what it is set to, `value`, which `genpage-upload.js` compares with the deployed page).
+
+- **What it reads.** Every key of every slot's style object at any depth (`':hover'`, `'@media …'`, nested selectors; quoted, spaced, computed-from-a-string and escaped keys; `{ borderColor }` shorthand members; objects written inline in a spread), in code only — the plugin's own lexer (`source-literals.js`) masks strings, comments, templates, regexes and JSX text, so the same names there, and in an inline `style={{ … }}`, are not keys. Slot names are not properties, and an `animationName`'s keyframes are serialized as written, so neither is reported. `makeStyles` is found under its own name, an `import { makeStyles as ms }` alias and a `Fluent.makeStyles` namespace import from `@fluentui/react-components`, `@griffel/react` or `@griffel/core`.
+- **`makeResetStyles` is not checked, on purpose.** The work item names it, but `resolveStyleRules` is the only code that consults the unsupported set, and `makeResetStyles` goes through `resolveResetStyleRules`, which writes every key as given (`@griffel/core` 1.19 and 1.20: `makeStyles` drops `borderColor`, `makeResetStyles` emits `border-color:red;`). Refusing a page that works would be a false reject. To check it too, add `['makeResetStyles', { slots: false }]` to `STYLE_FUNCTIONS`.
+- **A style object the check cannot see is a problem, never a pass.** `makeStyles(styles)`, a slot or a selector given a variable (`root: base`, `':hover': hover`), and a spread of anything but an object written inline (`...base`, `...helper()`, `...(a || { … })`) are each `unread-style-object` — the keys behind them may be any of the ten — and the gates treat it as they treat a call the check cannot read: refused on a create or a change, warned for a page sent again as it is. So is a getter that runs, whatever key it defines (`get root() { return … }`, `get color() { … }`, with or without a space after `get`): Griffel calls it as it reads the key and a spread as it copies its object — even one whose value a later definition then replaces — and its body is code the check does not read, which may return anything and rewrite or delete what Griffel reads after it; a getter that never runs (replaced in its own object before anything reads it, or inherited under an own key) is not reported, and nor is one whose object never reaches Griffel (in a value a later definition replaces, in a prototype a spread does not copy, in an animation's keyframes), though a spread or Griffel may run it — its own object is all it can change there. Code that writes shared state (`Object.prototype.borderWidth = …`, a property of an import, a variable) changes what every object holds, as a statement anywhere else in the page could; no check of the style objects can see it, and this one does not follow it, wherever it runs (a getter's body, a Proxy's trap or a `toString` Griffel calls on a fallback value, a template's substitution) — the gate checks what a page asks Griffel for, not code written to get past it. So is a computed key the check cannot read as one string (`[key]`, `['border' + 'Width']`), which may name one of the ten or a selector — unless it is a template whose text before its first `${` no one of the ten begins with (`--${name}`, `& .${className}`, `@media (min-width: ${width}px)`), in which case its start tells what it is, and the object under one that starts as Griffel's nested keys do (`:`, `[`, `>`, `&`, `@`) is read. What a spread or a prototype (`__proto__: { … }`) brings into an object is read at that object's level — slots beside slots — and the object is resolved as JavaScript resolves it: a key's last definition is the property, own keys hide inherited ones, a spread copies only its object's own keys, and a key is the string JavaScript makes of it (a CR LF or a lone CR written in a template is one LF, however the file ends its lines; U+2028 and U+2029 stay as written), so a definition that provably never reaches Griffel is not checked, while one that may (a spread a condition chooses, a key computed at run time) is. A function member ends where its body closes, not at a comma of its type parameters or return type. Read in full: an object literal, or object literals chosen by a condition (`c && { … }`, `c ? { … } : { … }`), through parentheses, a non-null `!` and `as`/`satisfies` with a type the check reads — `as const`, or a type name with or without type arguments (no page wrote a cast in `makeStyles` at all); a keyword or literal type (`number`, `null`, `this`, …) ends at its word, so a `<` after it is a comparison; any other type leaves the value unread, so a type is never read as a value — for a slot, a selector, a spread and the call's own argument alike. Each `<` is matched to its `>` once per page (matchAngles), so a page of casts is read in linear time. Past 64 levels of nesting a value is unread and an object is reported as nested too deep, so a pathological page gets an answer rather than an exhausted stack. A number is read as a key (`{ 0: { … } }` is a slot), and a slot called `animationName` is a slot: only an `animationName` inside a style object holds keyframes. Spread without reading, alone or chosen by a condition, only as a value import from a Griffel module that the page never declares again (a read after `=` or `typeof` is not a declaration; an arrow parameter is), and only by the helper's own export names (`STYLE_HELPERS`: Griffel's 23 `shorthands` helpers and Fluent's 17 `typographyStyles` entries — never a name they inherit, since `shorthands.constructor(x)` is `Object(x)` and hands x back unexpanded; and `shorthands.transition` only where it builds its own array — any number of arguments but one, none of them a spread, or one array, string or number written in place — since given one array it returns what that array's own `reduce` returns): Fluent's `shorthands.*(…)` (it writes the longhands) and `typographyStyles.*` (font longhands only). Measured before the rule: no page among the samples, eval fixtures and pages generated on real environments (59 distinct) wrote a style object anywhere but inline, computed a key or wrote a getter, and the only spreads were `shorthands.*(…)`.
+- **Lexer uncertainty fails closed**, as in the navigation oracle: a call that reaches the first place the lexer guessed what a `/` or `<` is — or a `makeStyles(` in the text after it, which a wrong guess may have blanked — comes back as an `unverifiable-style-call` problem with the remedy; a call that never closes is `unbalanced-style-call`. No committed page hits a guess (`source-literals.test.js`), so this costs a realistic page nothing.
+- **What the gates hold a page to.** The check is held against what a run is about to *ship*. A page deployed by an earlier release of the plugin — whose only guard was a grep for `borderWidth`, so `borderColor` under `:hover` passed — can already carry a key Griffel drops, and it renders without it today. Sending the same bytes again ships nothing new, and refusing them would stop a rebuild (or a one-line edit) over a defect the maker did not touch, with only one way through: edit the page, and writing the longhands *changes how it renders* (those declarations never applied; deleting the key keeps today's look). So every refusal and warning says both: *deleting a key changes nothing on screen; writing the longhands makes the style start to render*.
+  - **The build** holds no copy of what is deployed (and never downloads a page just for this), so it decides from the page's standing, in the pre-write scan, for each page the run uploads. A page that does not exist yet (`keyToId` has no id for it: it is *created*) and a page that exists but whose source no longer hashes to the `__contentSha` that `last-applied.json` recorded for it at the last apply (*changed*) are held to the check — `pages-griffel-shorthand`, before anything is written. A page whose source hashes to that record (*unchanged*), or that has no record (*unrecorded*), is sent as it is, and the build warns (`opts.warn`) with file:line:column and both remedies. The record is `last-applied.json` read as `opts.baselineSpec` — written by every successful full or changed-only apply and by download, and returned only for this app **in this environment** (`readBaseline`; a snapshot written before it carried those stamps is no baseline), the same hashes the changed-only flow compares. For a page an apply sent, the hash recorded is of the source the pages phase *read and checked* (`created.pageSourceShas`), not of the file when the baseline is written as the build ends: a page a maker saved while the build ran reads as *changed* on the next build, where re-hashing the files would have recorded the edit as applied and let a new key through on a warning. What is sent is what was checked: every page, a navigation source or not, goes to pac from a staging copy of the bytes the scan read (`writeStagingFile`), never from its own file, so a save made after the check does not ship until a build has checked it. A page a changed-only run did not send keeps the record it had (with none, the hash of its file as it is). *Unrecorded* — a new, moved or cleared workspace, another environment, or an apply that predates the record — fails **open** on purpose: the release before this check built such pages with the CSS silently dropped, so refusing one now would regress a rebuild that used to complete. The cost is that an edit that adds a key to an unrecorded page is warned about, not stopped, until a build has recorded it; a page that does not exist is always held, record or not.
+  - **`genpage-upload.js`** has the deployed page in hand (an update downloads it for its base check), so it refuses only what that page did not already have. A create is refused outright. For an update each key is told from the deployed page's by `griffelProblemsNotIn`: the same key set to the same value in the same place (`within`: its slot, selectors and at-rules), or failing that the same key and value anywhere that nothing else has claimed — so a renamed slot or a moved rule is not new — and each deployed key is spent once, so a second `borderColor` where there was one is. A key given **another value** is new too: Griffel drops the new value as it dropped the old one, so the page would show none of the change the maker meant (a value is compared as written — a quoted string by its text, whichever quotes, anything else as its source text with the white space collapsed — and nothing is evaluated, so `tokens.colorBrandStroke1` is that text). A file that *is* the deployed page (a BOM or final CRLF aside) is a re-send, and none of it is new. A key the deployed page already had goes ahead, with a `warnings` entry in the result; a new one is refused, and `--overwrite-deployed` is no way past that (it is about edits made to the deployed page, not about what the file writes). The deployed page can be unreadable only under `--overwrite-deployed`; nothing then says what it had, so the update goes ahead with a warning, as an unrecorded build page does.
+  - **A call the checker cannot read** is not CSS Griffel drops, and is not said to be: the message says the check could not read the page's styles, quotes the call, and says what to change in the code (parenthesise the operand, end the statement, or move the call above it). It is never "already there" — what it hides cannot be compared with anything — unless the file is the deployed page itself. And the checker command a message suggests quotes a path that has white space.
+  - **`check-griffel-styles.js`** has no notion of what is deployed: it reports every key it finds, a page's old ones included. For a page that already had one, deleting it is the edit that preserves the page (`/genpage`'s edit flow says so).
+- **Who runs it.** Three places, so no path to an upload skips it. The orchestrators run it per page, before any transpile or upload, for quick feedback: `/genpage` (single page, multi-page, edit flow, and the §7.5 fix after a browser verify) and `/app-builder` (before `promote-intent-pages.js`, and for a page edited by hand before a rebuild). The page-builder worker has no shell, so its Step 2.6 gives it the rule and a Grep self-review instead. And the code **enforces** it where pages are uploaded, whatever the instructions did or did not get run: `genpage-upload.js` reads the code file first and refuses a create with `code: "griffel-shorthand"` (file, line, column, longhands and what each way out does in `error`, the same list in `problems`; before any listing or download; a file it cannot read is refused) and, for an update, any key the deployed page did not already have (above), and the build's pages phase halts as `pages-griffel-shorthand` in its pre-write scan, before any page is created or updated, for each page that run uploads that is new or changed (a changed-only run checks only the pages it selects; a full build checks every implemented page). Both send `pac` what they checked, never the file again: the upload script reads the code file once and uploads a copy of those bytes (an update lists the environment and downloads the deployed page first — seconds in which the file can be saved), and its base marker records their hash; the build sends every page from a staging copy of the bytes its scan read, and records their hash. `genpage-upload.js` refuses `--compiled-code-file`, since `pac` would deploy that JavaScript instead of the checked TypeScript. Both build their text with `describeGriffelRefusal` / `describeGriffelWarning`, so one defect has one wording. It is deliberately not part of `genpage-worker-output.js` / `promote-intent-pages.js`: their failure sends the page back for a full rewrite, and this one is fixed by a targeted edit. The one rule text is the same in `references/rules.md`, the genpage skill and edit flow, the page-builder agent and the app-builder skill, and `genpage-dispatch-contract.test.js` fails if any drops it or the command (and if `verify-flow.md` or the app-builder edit step drops the check).
 
 ### DataAPI
 
@@ -1134,13 +1779,21 @@ rejected a complete page saved with CRLF endings.
   generated page may use them, and they are accepted in one place only. A parenthesised **callee** must wrap
   exactly the callee (`navigateTo` or a member chain ending in it: `(Xrm.Navigation.navigateTo)(…)`) AND its `(`
   must follow a token on an **allowlist** — the start of the source; `;` `{` `(` `[` `,` `:`; a ternary `?`;
-  an operator ending in `=` (`=` `==` `===` `!=` `!==` `+=` `<=` `>=` …); `=>`; `&&` `||` `??`. It is an
+  an operator ending in `=` (`=` `==` `===` `!=` `!==` `+=` `<=` `>=` …); `=>`; `&&` `||` `??`; and the keyword
+  `return` (`return (navigateTo)({ … })`) on the line of the `(` — a line break between them makes `return;` a
+  statement of its own — as the whole word (white space, the start of the source or one of `;` `{` `)` `:` right
+  before it, so no `xreturn` and no `\u0061return`; `}` is not one, because `\u{61}return` ends in it) and not
+  after a `.` (a member named `return`). It is an
   allowlist because the tokens that END a callable operand are many and easy to miss — `!` (a non-null
   assertion), `>` (a generic instantiation), a back-tick (a tagged template), `}` (a function expression, which
   a block's `}` cannot be told from), a name or keyword, `)`, `]`, `.`, `?.`, `++` — and each makes
   `(navigateTo)(…)` an argument list: `factory!(navigateTo)(…)`, `factory<unknown>(navigateTo)(…)`,
   ``tag`x`(navigateTo)(…)`` and `function () { return f; }(navigateTo)(…)` hand the object to whatever
-  `factory`, `tag` or the function returns. (A denylist of those tokens missed four of them.) A callee group at
+  `factory`, `tag` or the function returns. (A denylist of those tokens missed four of them.) `await` and
+  `yield` are **not** on it, although `await (navigateTo)(…)` is a navigation in an async function: outside
+  one — and in an arrow that is not async, inside an async function — `await` is a name, and the object goes
+  to what `await(navigateTo)` returns; the lexer cannot tell where it stands (the oracle test
+  in `pageref-resolver.test.js` holds TypeScript's reading and the execution of both). A callee group at
   the start of a template expression, after its opening back-tick, is refused for the same reason. A
   parenthesised **argument** is closed straight after the object (type-only casts may precede the `)`), and the
   argument must then end at a `,` or the call's `)`: `navigateTo(({ … }))` is a call;
@@ -1218,7 +1871,9 @@ rejected a complete page saved with CRLF endings.
   `<T extends /` opens type parameters, whose constraint is read as an expression where it starts no type
   (`parseTypeParameter`), here a regex — `let f: <T extends />;…[/]/>(a: T) => T` is a function type — and the lexer
   does not always know which of the two it is in, so `extends` and a `/` is the guess `generic`, read as the element
-  (`/=` is another token, and type parameters in both). A lexer that searched for a parameter list and a later `=>` took the
+  (`/=` is another token, and type parameters in both) — unless the regex that the `/` would begin does not end on its line,
+  which no type-parameter list has (TS1161: TypeScript's scanner ends a regex at a line break, `regexEnd`), so `<Flag extends />`
+  with no other `/` after it on the line is the element's for certain. A lexer that searched for a parameter list and a later `=>` took the
   JSX text `(a): Title` in `isVisible(<div data-active={e}>(a): Title</div>) ? (() => /navigateTo(…)/.test(t)) : …`
   for parameters, and read the regex after the next arrow as code: a call, whose token was rewritten. Three
   things go beyond the three-token rule, and a test checks each against TypeScript's parser when
@@ -1358,6 +2013,20 @@ rejected a complete page saved with CRLF endings.
   it reads no `/`, `<` or back-tick (no regex, no JSX, no template: every quote is a string and every parenthesis code), so `<span>(@username)</span>` and
   `<p>(x = 5)</p>` are read as before; once it reads one, the expression may hold a `)` of its own — a regex's, JSX text's, a nested template's — and
   with no arrow after the `)` it found, the list is the guess (`interface I { <T>(a = /[)]/); m: '</T>…' }` ended the list at the `)` in the regex's class).
+  Three things are read exactly instead, because TypeScript reads each one way (`initializerReading` and the scan's loop), and none of them needs a parser:
+  the first token of the first default, where it is a `/` — nothing is there to divide, so it begins a regex, which ends at its own `/` on its line (`(a = /x/)`,
+  `(a = /[)]/)`; a line break before the closing `/` is TS1161, and no program that parses has it) — or a `<` that the arrow rule above leaves an element, which is read to its
+  closing tag (`(a = <b>c</b>)`); a `/` after a name or a number, which divides in an expression (`(a = b/(c))`, `(score = 3/5)`), unless a `{` has been read, which may open a function body, where a
+  statement starts and a `/` after a `)` may begin a regex; and a template with no `${`, which holds only its own text. The `=` must be an initializer's, so no `<` stands before it (it may be a
+  type parameter's `=` default, where a `<` opens a function type); an `=` that `</` follows is no default in any signature or function type (TS1109, TS1110), so `(Tip: use <code>=</code>)` is the
+  element's alone. A second default, a regex or an element that is not a default's first token (`(a = f(/x/))`, `(a = <b>c</b> / 2)`), a `/` after a bracket, a `)` or a comment of either kind, and a template
+  with a `${` stay the guess. A comment is trivia to TypeScript, so after one the last token is the one before it, and a `/` after one is a regex or a division by that token: a block comment ends in a `/`, which is no
+  word (`1 + /* c */ /[)]/`), and a line comment ends in whatever its text does — a name, a number, a `$` — which is no operand: in `a = 1 + // fallback` and a line break, `/[)]/)` is a regex whose `)` is not the
+  one that ends the list, and a scan that took the `/` for a division ended the list there and read the string of the type after it as code. The scan of a list does not find its comments one by one, so a `/` after a comment of either
+  kind is the guess there (`slashFollowsAnOperand`); the reading of the text after a signature opens its comments itself and judges a `/` by the token before them (below) — the same misread hid the closing tag of
+  `interface I { <T>(x); m(a = 1 + // c` LF `/[</T>;navigateTo(…)//]/): void }` in a regex, and read what followed as code. The character before a line break is in a line
+  comment only if a `//` stands before it on its line (`lineMayEndInComment`), so a `/` after a name or a number on a line that holds no `//` still divides (on a line of its own after a comment's line, too); the `//` of a
+  string, which a line may begin inside of, is not told from a comment, nor is a line that begins beyond the window: each is the guess too, the safe side.
   A list that can hold no parameters is
   the element's alone, with a `:` after it or without: its first token a number, a string, a template, a `#` or an operator
   (`<li>(1): First</li>`) is TS1003 in every signature and function type (`parameterListMayStart`; a character beyond ASCII and a
@@ -1374,7 +2043,11 @@ rejected a complete page saved with CRLF endings.
   type after `is` is read the same way (`this field` fails, `this is string` does not); a type reference's first type argument is read the same way
   (`see<a href` fails at `href`); a name after a generic function type's first type parameter is TS1005 unless the first word is a modifier, which
   TypeScript parses there whatever it is (`<private x>`); and a type that is one name and a `,` lets the next parameter be read as the first was
-  (`(Type: string, <a href="/x">docs</a>)` fails at the `<`). Tests measure the classes over every keyword TypeScript has, every keyword before every
+  (`(Type: string, <a href="/x">docs</a>)` fails at the `<`). Four more types fail at their own second token, each measured over every keyword after it: a number
+  literal and a name that is not a conditional's `extends` (`(Size: 10 MB max, <a href="/x">upgrade</a>)`: TS1005; the number may be negative or have a fraction, and white space or a comment follows it);
+  an object type whose first member is a name and then a `.` or an operator no member has (`(Name: {user.name}, <a href={profile}>edit</a>)`: TS1131, a line break and a comment
+  before it as well; a `.` and a digit is a numeric name, so it is no failure); `new`, which a `(` or a `<` must follow (`(Mode: new <a href="/x">beta</a>)`, and after the `<` the type parameters are read
+  as above); and `import`, which a `(` must follow (`(Hint: import <a href="/x">docs</a>)`). Tests measure the classes over every keyword TypeScript has, every keyword before every
   other one, and every two-word type start and second parameter with the endings that could complete it. One place settles even those: **directly after the head of a type alias, `type Name =` at a
   statement start** (after any `export` and `declare`), where `type Name` — two names side by side — cannot be
   an expression, so a `<` is a function type's type parameters, for certain, whatever follows it
@@ -1394,7 +2067,14 @@ rejected a complete page saved with CRLF endings.
   U+0085, U+00A0 or the like). Where anything else follows on the line — a name, a `<`, a `(`, a `{`, a comment with
   no line break — no signature stands there and it is an element, for certain, and so it is where a closing tag
   follows (`</` is one token in a `.tsx` file): `<b>(optional)</b>`, `<p>({t("label")})</p>`,
-  `<span>(total: {count})</span>` are decided by that token alone. *Where the member may end there, the text after
+  `<span>(total: {count})</span>` are decided by that token alone. **Where no member of a type can begin at the head, there
+  is no signature at all**: right after an `=` or a compound assignment (`+=`, `||=`, …), an `=>`, a `(`, a `[` or a `:`
+  (`NO_MEMBER_BEFORE`) a call or construct signature, a method and an index signature cannot stand, and a function type needs the `=>` that
+  this shape lacks, so `<Name>(…)` that neither `=>` nor `:` follows is an element, for certain, whatever its text holds (`const help = <p>(optional);` and
+  a line break, then `foo( // note` and a line break, then `/docs</p>;`). After a `,`, a `;`, a `{`, a `}`, a `)`, a `?` or a keyword a member may begin — `return <T>(x)` is a method named `return`,
+  `m? <T>(x)` is a method with an optional mark, and TypeScript parses both, so neither a keyword nor a `?` is in the set — and the text is read as
+  follows. (The set was measured against TypeScript's parser over every place a token can stand: no program has type parameters with no
+  arrow and no `:` after a token of it, and a program has them after each token the rule reads that is left out: `source-literals.test.js`.) *Where the member may end there, the text after
   `<Name>` is read as the children of an element up to its closing tag*, as (3) reads it up to an arrow (`readChildren`
   with a closing name): the nested elements are followed, each closed by its own closing tag, a nested tag's attribute
   containers and spreads are skipped, and an expression container that holds strings and balanced braces is skipped
@@ -1409,13 +2089,49 @@ rejected a complete page saved with CRLF endings.
   reading too, no type reads `</` as code, and the element is the only reading: certain (`<b>(optional)</b>`, `<span>(total: {count})</span>`,
   `<p>({t("label")})</p>`, nested children). What opens one: a back-tick (a template with a `${`, which opens code that is not read, may), a `//` or a `/*`,
   a `/` that no word or number stands before and that so may start a regex (a keyword that an expression follows is no such word: `return`, `typeof`, and
-  `implements`, whose heritage clause takes one, as in a computed name `[class C implements /…/ {}]`), and a quote that starts a string closing on its line and
+  `implements`, whose heritage clause takes one, as in a computed name `[class C implements /…/ {}]`; and a `/` after the comments that the text opened is judged by the token before them, which a type reads as trivia:
+  `b // c` and a line break, then `/d`, divides, and `1 + // c` and a line break, then `/[</T>…]/`, does not — and a `)` or `]` before the `/` divides, since a regex follows a `)` only after the head of a statement, which has a block, whose braces
+  are not read: `slashFollowsAnOperand`), and a quote that starts a string closing on its line and
   covers the closing tag (a quote right after a word that is no keyword, an apostrophe or an inch mark, opens none; a keyword is a reserved word, a contextual one,
-  or a modifier, which TypeScript takes before a quoted member name: `public'…'`). Where the text up to the first
-  such opener cannot be the members of a type, though — two names on a line, a name and a `/`, a name and a quote (`<p>(a), see https://x.y</p>`: TS1005 in a type),
-  a template or a regex where a member would begin (``<p>(a); `x ${y} </p>``: TS1131; after a member's colon a template is a type and stays possible) —
-  no type holds the closing tag in anything, nothing that follows can hide it, and it is an element (`typeMembersFail`; a word that may be a modifier or any other
-  character leaves it undecided). Where one is open at the closing tag, or the reading cannot say (a container or a tag it
+  or a modifier, which TypeScript takes before a quoted member name: `public'…'`). A nested tag is an element's or, to a type, something else: the type arguments of a name (`Array<b>`), a comparison (`a<b>c`), the type parameters of
+  a signature or of a method (`<b>(y): T`, `<U extends A>(y): T`, `m<b>(y)`), where the text after its `>` is code and what looks like its closing tag is inside a string, a template or a comment that the text opened before it. So a
+  string, a template or a comment that the text of a nested element opens — and the run of comments that a `/` is judged by — and that is still open at the closing tag of that element is read **both ways** (`scanChildren`, run
+  twice by `readChildren`): as an element, where it ends there and the code goes on after the closing tag (`m(a = <b>'x</b> + '</T>…')`: the string that holds the closing tag begins after the element; `m(a = <b>x // y</b> +` and a line
+  break, then `/[</T>…]/`: the regex does), and as code, where it goes on past it (`m: Array<b> = '</b>' + '</T>…'`, `<b>(y): '</b>'; q: '</T>…'`): the closing tag of the head is hidden if either reading hides it. A tag that no type has
+  (`tagMayBeCode`) is an element to every reading: there is only the first, the region is cut at its closing tag, and its text is JSX text, which opens nothing (`jsxText`: a URL, an apostrophe or a back-tick in the text of a link is
+  text). That is a tag in which every word has a value (`<a href="/x">`; and `<button type="button">`, `<label for="x">`, `<Link as="span">`, where the word that has a value is an attribute's even when it spells a keyword: the only `=`
+  in a list of type parameters is a default, which its name owns; and one whose attributes stand each on a line of their own, as a formatter lays a tag out, has every `=` on the line of its word), an attribute that `extends` does not introduce (`<b d>`), a dotted name with an attribute, and a fragment where no empty list can stand. **Every other tag may be code,
+  by the words in it**: a keyword of TypeScript's, other than `extends`, in a word that has no value is a modifier of a type parameter (`<public U>`, `<in out U>`, `<readonly U>`: `parseTypeParameter` takes them all, and only the checker
+  objects), an operator of a comparison or a tagged template with type arguments (`x <a in b> y`, `x <typeof U> …`, `x <new b> …`, `x <A.B as T> …`), or a type operator in type arguments (`Array<keyof X>`) — and so is a dotted or dashed word
+  that has one — **or by the lines it takes**: a line break between a word and its `=` (`href` and a line break, then `="/x"`), or before a `get` or a `set` that has a value (`get="/x"`). A line break ends a member of a type, so where the tag stands
+  in one, `m: A = x <a` ends its initializer at the break, `href` is a member of its own, and `="/x"> '</a>' + '</T>…'` is that member's initializer, with the string that holds the closing tag in it (a name and a `=` on one line are no member,
+  TS1131, but `get` and `set` begin one before the parser looks at what follows, so `get="/x"` on a line of its own is a property with an initializer: `isTypeMemberStart`). And a fragment is an empty list of type parameters or arguments right after a name,
+  a `)`, a `]`, a `}`, a `!`, a quote, a number or a `.` (`f(x)<> || …`, `a[0]<>`, `'s'<>`, `{}<>`, `1.<>`: the parser accepts an empty list there and the checker
+  rejects it) or right before a `(` or a back-tick (`<>(y)`, `m<>(y)`, `` x <>`t` ``), and after a line break when the line before it may end in a comment, whose last character may be any (`f // note:` and a line break, then `<> || …` is `f<> || …`:
+  `lineMayEndInComment`) (`fragmentMayBeList`); after a `,`, a `;`, an operator or nothing, on a line that has no comment before it, it is a fragment, for certain. The keywords are TypeScript's own list (`TS_KEYWORDS`), and the
+  sweeps draw their tags from every keyword it has, joined to names, dots, dashes and values, **including the tags the rule calls no code** — a rule that is wrong about a word can only be met that way (`nestedTagPages`; the sweep of
+  the valued keywords keeps the precision of the rest). A tag that a type may have and an element may too (`<b>`, `<U extends A>`, `<A.B>`, `<public U>`) is read both ways, and a tag that is not read leaves it possible; two such places
+  in one text are taken for hidden, as the second reading depends on the choice made at the first. A place is a region that the text of a nested element opened and that is still open at that element's closing tag, **told by where the region starts**,
+  not by where it ends: two `//` comments on one line, each opened in the text of an element of its own (`m(a = <b>//</b> - <i>//</i> ??` and a template that starts on the next line), end at the same line break and are two places (`skipFrom`; `nestedPairPages`). A tag inside a string, a template or a
+  comment that the type's own text opens is no element's to the type (`'a <b>' + \`</b>\` + '</T>…'` holds `<b>` and `</b>` in two literals): it opens and closes in the element reading and counts for nothing in the depth
+  that those rules use (a ghost, `realDepth`); and a tag inside a region that the text of a nested element opened is a ghost in the reading where that element is code, which pairs the quotes after it as a type does
+  (`m: Array<b> = '<>' + '</>' + '</b></T>…'`: the element reading cuts the second string at `</>`, the type reads three strings), so where one stands the text is read both ways too (`tagged`). Where the text up to such an opener cannot be the members of a type, though — two names on a line,
+  a name and a `/`, a sign, a `.` or a quote (`<p>(a), see https://x.y</p>`, `<p>(a); well-known // c </p>`, `<p>(a), it's // c </p>`: TS1005 in a type), a `:` after a type
+  (`Docs: https://x.y`), a `/` where a type must follow a `:` (`https://x.y` and a line break, then `/b`: TS1110), a template or a regex where a member would begin (``<p>(a); `x ${y} </p>``: TS1131;
+  after a member's colon a template is a type and stays possible) —
+  no type holds the closing tag in anything, nothing that follows can hide it, and it is an element (`typeMembersFail`, asked at each opener from where it stopped, through the comments between them). It is a small
+  reader of where a member is — its start, a name, a `:`, a type, an initializer; the next line of a name and the next line of a type are different places (`PROSE_*`) — and what it reads is TypeScript's: a number is one name by
+  the scanner's rule (`1e-5`, `.5`, `0x1F`; a hex, octal or binary literal ends at its last digit, so `0x1Fin` is `0x1F` and the operator `in`, where a word right after a decimal literal is TS1351), a keyword is a name where a member begins
+  unless it may be a modifier (which a `:` after it makes a name too), a word after a `.`, `typeof` or `infer` is a name, whatever it spells (`A.new`, `typeof new`, `infer keyof`; but `typeof import` is an import type, whose `(` has no line-break rule: `typeof import` and a line break, then `('./m')`, is a type, `typeofImport`), after `keyof`, `readonly` or `unique` it is a type, of which a
+  keyword is the name (`keyof new`), and a word that starts a type a word may follow (`asserts b`) is not read; a word written with an escape (`a\u0061b` is ONE name) is not read; a `(…)` or `[…]` that closes is one thing (a signature's parameters,
+  a computed name, a parenthesised type, an array), `<T>` is type parameters only where a parameter list follows, a type goes on with `.`, `|` and `&`, and two operands of an initializer side by side are an error unless a keyword is one
+  of them. A name or a keyword that a `(` follows opens a parameter list, whose first parameters are read as a head's are (`parameterListMayStart`, `parameterSyntaxFails`): a `/` right after the `(` and its comments is TS1138, a number,
+  a string or an operator there is TS1003, and two names are TS1005 — so `foo( // note` and a line break, then `/docs` is no type's, and neither is `m(see docs) // note` (the `(` of an import type is no parameter list, and is not read as one: `typeof import`). A name, a number, a string or a signature with a `=` right after it on its line
+  is no member (TS1131; TS1005 after a signature): the initializer that a property signature may have — the parser accepts it and the checker rejects it — follows a `?`, a type, a computed name, `get` or `set`, or a line break
+  (`m? = 1`, `m: A = 1`, `[m] = 1`), and `m = 1` is TS1131. A `[`, a name and a `,` or a `:` are an index signature for certain (`isUnambiguouslyIndexSignature`) — unless `get` or `set` stands before the `[`, which then begins an accessor's computed name,
+  an expression that a regex may hold (`get [a, /[</T>…]/]()`: `parseContextualModifier` takes the keyword first, whatever its line) — and neither a parameter nor a type starts with a `/` (TS1138, TS1110):
+  `[ a, // note` and a line break, then `/path` is no type's, where `[ // note` and a `/` is a computed name that a regex may follow, and neither is `Total: [ // note` and a line break, then `/docs`, where the `[` after a `:` opens a tuple. Each place has the characters that fail there, **measured over every ASCII character against TypeScript's parser**, and the sweeps in `tests/source-literals.test.js` put every claim back to TypeScript. What it cannot
+  follow — a `[` that nothing closes on its line, an initializer after a `?`, a type or a computed name, a conditional type, an expression, a decorator, a `{` — leaves the rest undecided, and the closing tag may be hidden there. Where one is open at the closing tag, or the reading cannot say (a container or a tag it
   does not read, a window of 2,000 characters, a spent budget), both programs compile and the text up to the decision
   is the same: the guess `generic`, and the element is read. A type of *k* signatures reads the rest of the type for
   each, up to the window, so a pass has a budget of characters to read (`READING_BUDGET_PER_CHAR` for each character of
@@ -1438,7 +2154,7 @@ rejected a complete page saved with CRLF endings.
   | `jsx-type-arguments` | a JSX element whose type arguments hold a string, template, object or function type: TypeScript's rules apply there and the tag is scanned by a JSX attribute's | `<Component<"quote\"\<LF>/*"> …/>` |
   | `jsx-attribute` | a JSX attribute value whose quote does not follow its `=` at once (white space or a comment stands between them) and whose text holds a backslash: TypeScript scans it as a JavaScript string, with escapes, and other compilers as a JSX string, with none, so the two end it at different quotes and read different calls after it | `<C x= '\'/>;navigateTo(…);//' />` |
   | `jsx-open` | a `<` where an element may start that is not read as one (a space after it, or a name beyond ASCII: in code, in JSX text and as an attribute's value), or a closing tag that holds anything but trivia, comments and a name (dotted, or namespaced) before its `>`, so that where it ends is not known | `< div>x</div>`, `<A x=< B/>>…</A>`, `<A></A b>` |
-  | `generic` | `<Name>` and a parameter list followed by `:`, which is the call signature of a type or JSX text that starts with a parenthesis (both compile; a list that can hold no parameters, `<li>(1): First</li>`, is the element's alone); or one followed by no return type, where a string, a template, a comment or a regex after it could hold its closing tag, or its text cannot be read to the end of an element, or the pass's budget of readings is spent (a signature with no return type is otherwise code, for certain, and JSX text that starts with a parenthesis an element: `callSignatureOrElement`); or a parameter list too long to scan (2,000 characters), or one with no arrow after it in which something may start an expression (`expressionMayStart`: an `=`, a `[` other than `[]`, an `@`, `import`, `extends` before what starts no type, and `get` or `set` before an accessor's name) and a `/`, a `<` or a back-tick follows, or a template whose substitutions do not close or hold a `<` after an expression start (`templateSkipIsWhole`), or `<T extends` and a `/` (an element where an expression starts, type parameters with a regex constraint in a type) — except directly after `type Name =`, where it is certainly a type. A `=>` after the list is a generic function type for certain when the element reading of the text up to the arrow cannot parse (`elementFailsAt`: a `>` or `}` in the text, a container that starts with a name, a number or a quoted name and a colon, two names, a bracket, a call or a quoted name and a call and a colon, a `<` and a character that cannot start a tag, …), and a guess, read as a type, when it may: the arrow inside the attribute string of a nested tag (TypeScript scans a JSX attribute string with no escapes), a closing tag, a fragment, a spread, a comment, an attribute value that does not follow its `=` at once, a character beyond ASCII where a token could start or end in a tag, or a container that holds a brace, a quote, a back-tick, a `/`, a backslash or a `<` and none of the shapes `elementFailsAt` knows; a `<` followed by `await` or `yield`, which are identifiers or not by the function around them | `interface I { <T>(x: T): T }`, `interface I { <T>(x); m: '</T>' }`, `<span>(required): Name</span>`, `<p>(a), b/c</p>`, `const f: <T>({ a = {} }: P) => T = g`, `const f: <T>(x: { 'a'?(y: T): T }) => T = g`, `async function p() { <await extends X>t</await> }` |
+  | `generic` | `<Name>` and a parameter list followed by `:`, which is the call signature of a type or JSX text that starts with a parenthesis (both compile; a list that can hold no parameters, `<li>(1): First</li>`, is the element's alone); or one followed by no return type, where a string, a template, a comment or a regex after it could hold its closing tag, or its text cannot be read to the end of an element, or the pass's budget of readings is spent (a signature with no return type is otherwise code, for certain, and JSX text that starts with a parenthesis an element: `callSignatureOrElement`); or a parameter list too long to scan (2,000 characters), or one with no arrow after it in which something may start an expression (`expressionMayStart`: an `=`, a `[` other than `[]`, an `@`, `import`, `extends` before what starts no type, and `get` or `set` before an accessor's name) and a `/`, a `<` or a back-tick follows that the scan does not read exactly (a first default's regex or element, a `/` after a name or a number that is no line comment's last word, a template with no `${`: `initializerReading`), or a template whose substitutions do not close or hold a `<` after an expression start (`templateSkipIsWhole`), or `<T extends` and a `/` that begins a regex which its line ends (an element where an expression starts, type parameters with a regex constraint in a type) — except directly after `type Name =`, where it is certainly a type. A `=>` after the list is a generic function type for certain when the element reading of the text up to the arrow cannot parse (`elementFailsAt`: a `>` or `}` in the text, a container that starts with a name, a number or a quoted name and a colon, two names, a bracket, a call or a quoted name and a call and a colon, a `<` and a character that cannot start a tag, …), and a guess, read as a type, when it may: the arrow inside the attribute string of a nested tag (TypeScript scans a JSX attribute string with no escapes), a closing tag, a fragment, a spread, a comment, an attribute value that does not follow its `=` at once, a character beyond ASCII where a token could start or end in a tag, or a container that holds a brace, a quote, a back-tick, a `/`, a backslash or a `<` and none of the shapes `elementFailsAt` knows; a `<` followed by `await` or `yield`, which are identifiers or not by the function around them | `interface I { <T>(x: T): T }`, `interface I { <T>(x); m: '</T>' }`, `<span>(required): Name</span>`, `<p>(a), b/c</p>`, `const f: <T>({ a = {} }: P) => T = g`, `const f: <T>(x: { 'a'?(y: T): T }) => T = g`, `async function p() { <await extends X>t</await> }` |
   | `fallback` | a quote with no closing quote on its line, read as an ordinary character; a `/` after a character that begins nothing in code | `const a = 'unterminated`, `# / 2 / 3` |
 
   Names alone in a tag's type arguments (`<DataGridRow<Row>`, `<Select<string | number>`) are certain: the scan
@@ -1475,8 +2191,23 @@ rejected a complete page saved with CRLF endings.
   with members or an element stands, followed by every ending that ends a member or goes on to another, and by a decoy —
   a string, a template, a comment or a regex that holds the closing tag of its head and the text of a call, and a type that
   holds the closing tag in a string as the text of a call signature's parameter, in a member name quoted after `public`, or in
-  a regex after `implements`)
-  — each read token by token against TypeScript's parser — and a differential fuzz
+  a regex after `implements`), a label and a list that no signature has (`(Size: 10 MB max, <a>…</a>)`, an object type that is none,
+  `new`, `import`, an `=` and a closing tag: TypeScript rejects each in a call signature, a construct signature and a function type,
+  and the element is certain) and a parameter list whose default is a regex, an element, a template or a division (read exactly where the
+  scan can say where the list ends, a guess for the rest, and never a misread token), a regex or a division after a line comment (one that ends in a name, a number, a `$`,
+  a letter beyond ASCII or a sign, and every line break TypeScript has, in the scan of a list, behind `>=`, `in` and the other tokens that leave a `<` undecided, and in the reading of the text after a signature), JSX text of several lines with a `//` in one and a
+  `/` at the start of a later one (a URL on a line of its own, a label and a URL, a name and a note, with `;`, `,` and a line break after the `)`: read for certain wherever no type has the text, and the lines of every class that no type has —
+  a bracket, a quote, a tag, an operator, a number, a modifier, a postfix, a line that goes on over a line break or after a type — are certain too; a closing tag in the comment, in an element and as the members of a type, a guess; and
+  the same lines in an expression of a type, where a regex after the comment may hold the closing tag), a member named by a number with a signed exponent (`1e-5` is one name), the text of a nested element in a default value or
+  a computed name (what it opens ends with it, unless the element may be code), a literal that holds the tags of an element (in one string, or `<b>` in one and `</b>` in the next), the text of a nested element drawn from quotes, back-ticks,
+  comment openers and tags, a nested tag that no element has (type arguments, a comparison, the type parameters of a signature or a method, in front of a string that holds its closing tag: read both ways, and
+  the closing tag of the head hidden) — drawn from every keyword TypeScript has, joined to names, dots, dashes and values, spread over lines (a line break of every kind before an `=` or a valued `get`; a formatter's layout), with fragments after every operand, after a comment of every ending and before a parenthesis, **the tags that the rule calls no code included**
+  (`nestedTagPages`) — two or three nested elements whose texts open regions that end at one place (`nestedPairPages`), a keyword that is the name of an attribute with a value (certain: nothing is refused),
+  strings and elements that hold fragments, tags with attributes and closing tags after such a tag (the quotes pair differently in the two readings), links and other tags with attributes in a
+  hint (certain: their text is text), and a parenthesised callee after `return`
+  — each read token by token against TypeScript's parser — and every claim of `typeMembersFail` that a text is no type's members, put to TypeScript's parser (every text of up to three tokens of a vocabulary of the pieces of a
+  member and what is rejected there, seeded draws of more, runs of valid members mutated at one or two places, every keyword of TypeScript in each place a word may stand, after each of the words that start a type or a member, after a `.`,
+  `typeof`, `infer`, `keyof`, `readonly` and `unique`, and a number of every spelling with a word, a quote or a `/` right after it, a `/` after every operand that ends in a bracket, import types and accessor names of every spelling, and tuples: `tests/helpers/type-member-texts.js`) — and a differential fuzz
   (`tests/jsx-element-reading.test.js`; `JSX_FUZZ_SCALE` multiplies it) checks every verdict of the element
   reading of a head and of a function type against it, and puts the text after a parameter list that neither an arrow
   nor a colon follows into a type and into an element, where TypeScript says which parse: a type that parses is never
@@ -1496,8 +2227,15 @@ rejected a complete page saved with CRLF endings.
   programs share the text up to the decision and compile differently, shown by a pair in the test — and a page
   in no class, or a class that no page meets, fails it. Where `BASE_LIB_PATH` points at the `scripts/lib` of an
   earlier lexer, the pages are read by that one too, and the test counts what each resolves and the data each
-  rewrites. When a change makes the lexer refuse a shape it resolved, this is where it shows: add the shape to
-  the generator, and either fix the rule or record the class with the pair that justifies it.
+  rewrites. What that asks of the base depends on it: one from before the lexer was hardened misreads shapes the
+  corpus holds, and the net must see at least 100 of its decoys rewritten (and none of this lexer's); the previous
+  release reads every page of the corpus right, so it rewrites none and nothing is demanded of its count — the
+  comparison is then the pages this lexer resolves and the base does not (at least 100), and the pages it refuses that
+  the base resolves, of which there must be none: a page that 2.13.0 resolved and this lexer refuses is a regression, and the test fails on it. When a change makes the lexer refuse a shape it resolved, this is where it shows: add the shape to
+  the generator, and fix the rule. **The oracle tests skip themselves where the variable is not set** (`TYPESCRIPT_ORACLE_PATH`, `BABEL_ORACLE_PATH`, `BASE_LIB_PATH`) **and fail where it is set and the package or the lexer cannot be loaded**
+  (`tests/helpers/typescript-oracle.js` throws), so a wrong path or a renamed file cannot turn the job green without running them. The CI job `test-model-apps-lexer-oracles` (`.github/workflows/model-apps-script-tests.yml`) installs
+  TypeScript 5.8.3 and `@babel/parser` 7.29.7 under `$RUNNER_TEMP` — outside the plugin, which ships no dependency, with `--ignore-scripts`, at exact versions — fetches the lexer of the 2.13.0 release by its commit hash, sets
+  the three variables, and runs `node scripts/run-tests.js`. A new TypeScript release can change what a sweep judges: raise the pin in the same change, and run the sweeps.
 - **The residual net does not depend on the lexer, and has no exemption.** After forward resolution the
   RESOLVED source is read again — the copy can read differently from the source, because each token became a
   longer page id, which can move a `(` out of the look-behind — as plain text: any `PAGEREF_` token left in it
@@ -1592,7 +2330,11 @@ Residual limits, accepted deliberately:
   the `<` and the `>` is a list of types); a generic call signature with a return type in an object type, which is JSX
   text that starts with a parenthesis and a colon in an expression, a call signature with no return type whose type holds
   its own closing tag in a string, a template or a comment, which is an element that ends there, and JSX text that starts with a parenthesis and then holds a `//`, a `/*` or a
-  template after a separator, which is the comment or the template of a type's members that holds the closing tag (`generic`); and a `/` on a later line than its operand
+  template after a separator, which is the comment or the template of a type's members that holds the closing tag, and JSX text that starts with a parenthesis and holds a default whose
+  regex, element, division or template the scan does not read (`(a = f(/x/))`, `(a = <b>c</b> / 2)`, ``(a = `${b}`)``: the `)` it finds may be one of that expression's), and a `/` that a line comment stands before
+  (`(a = 1 + // c` and a line break, then `/[)]/)`: the comment may end in a word, and the regex is no division), and JSX text of lines with a `//` in one and a `/` at the
+  start of a later one, where the members of a type could hold the closing tag in the comment (the next bullet), and
+  `<T extends />` with another `/` after it on its line (`generic`); and a `/` on a later line than its operand
   (`newline`). A `/` or `<` that follows a `/` is no class of its own: where the lexer read the regex (flags included), the element or
   the division itself, it knows what ended there (`ends` in `lexInto`), and the page resolves — and so does a cast it proves (`castKeywordIsCertain`). What stays the `angle` guess among casts is a limit of the walk back over the type, not a place where two programs share
   their text — TypeScript reads each of these one way: a type that begins with `keyof`, `typeof`, `unique` or `readonly`, or is parenthesised; a `>>` that touches a cast's closer (`x as A<B>> / 2`); a chain past `CAST_CHAIN_LIMIT`; and, as the `newline` guess, a line break after a cast type that ends in a name or a `]`.
@@ -1600,6 +2342,33 @@ Residual limits, accepted deliberately:
   is the same kind of place (`operator`: `a >= <T extends X>(y: T): T</T>` is an element,
   `let x: A<number>= <T extends X>(y: T): T => y` an arrow); no generated page has it, so a pair of programs stands
   for it. Each says which it is and what to change in the report, and nearly every other page that compiles resolves.
+- **JSX text of lines, one with a `//` in it and a later one that starts with a `/`, is read for certain wherever no type has the text, and is a guess where the reading of a type's members cannot show it.** `<p>(a);` and a line break,
+  then `https://contoso.com`, a line break and `/docs`, is the text of an element, and the same text could be the members of a type — a name, a `:`, a comment, then a `/` where a type must be, which no type has (TS1110). The lexer
+  reads the text after a signature's `)` as those members (`typeMembersFail`, above), and a `/` after the comments that the text opened follows the token before them (`slashFollowsAnOperand`), so a URL, a label and a URL, a name
+  and a note, and every line of the classes below resolve: a line that begins with a bracket, a quote, a tag or an operator (`(x) // c`, `[x] https://x.y`, `'x': https://x.y`, `<b/> // c`, `|| // c`), has a number for its name
+  or ends in a postfix (`1.5 https://x.y`, `x! // c`, `f() // c`, `x = 1 https://x.y`), starts with a modifier (`readonly https://x.y`, `in // note`, `default // note`: where a member begins these are names, and a `/` after one is
+  TS1131), or goes on over a line break or after a type (`m` and a line break, then `&"x"`; `a: A.B, // c`). The base took the last word of the comment for the token before the `/`, which is right for these pages and wrong for others
+  (the misreads that this lexer refuses). **Where a member of a type may begin at the head, a few lines are still refused after the guess `generic`, though only the element compiles, and the base may have resolved them**: a line
+  whose last token before the `//` is a `[` that nothing closes on its line (`[ // note` and a line break, then `/path`), an initializer's `=` after a `?`, a type, a computed name or in a parameter list (`m? = // note`,
+  `m: A = // note`, `f(a = // note`, `[ x = // note`), or an operator in such an expression (`m: A = b + // note`). A regex may begin at the `/` of the next line, and the closing tag may be inside it; both programs compile
+  (the pairs of `valid-page-differential.test.js` are the proof), and 2.13.0 takes the word that ends the comment for the token before the `/`, which resolves the page of the element and rewrites the data of the other. Their
+  shape cannot be told apart without a parser: `return <p>(a);` and a line break, then `[ // note`, is the same text in an interface that has a method named `return` and in a function that returns an element, and `return <T>(x)` and
+  `m? <T>(x)` are why no place that a member may begin is excluded (above). A line that ends in a `[` after a `:` or a type is none of them, since a tuple's or an indexed access's first type is no `/` (`Total: [ // note`: TS1110), and is certain
+  in every place. A rule over the regex that the next line's `/` would open could win more of these pages back — where it ends at the closing tag's own `/` (or the regex does not close on its line) and what follows the tag cannot be an operand, only the element compiles — and no rule reads that
+  today. After an `=`, a `(`, a `[`, a `:` or an `=>` the same lines are certain (`NO_MEMBER_BEFORE`),
+  and these lines are certain in every place: a name, a keyword or a signature and a `(` that is not closed on its line (`foo( // note`, `if ( // c`, `m(see docs) // c`: TS1138 at the `/`, TS1003 or TS1005 in the list), and a name, a number, a
+  string or a signature with a `=` right after it on its line (`x = // note`, `1.5 = 1 // c`: TS1131). What the reading does not follow — a conditional type, an expression, a decorator, a `{` — leaves the type undecided, and the
+  page is refused only where an opener after it (a `/` after an operator or an open bracket, a quote, a back-tick) could hold the closing tag. `valid-page-differential.test.js` with `BASE_LIB_PATH` fails on a page of its corpus that
+  2.13.0 resolves and this lexer refuses, and it reports how many pages of the member-position lines 2.13.0 resolves (they are not in that corpus: they are the class above). Put the call before the text, or write the line with one name before the `//`.
+- **Shapes of type parameters among a type's members are read as the element they are not, exactly as 2.13.0 reads them** (the same output in 2.13.0 and in this lexer, measured over every keyword TypeScript has): type parameters
+  that start with a modifier — a variance modifier (`<in U>(y): void`, `<out U>`, `<in out U>`, also with no return type) or one that only the checker rejects (`<public U>(y): void`, `private`, `protected`, `readonly`, `static`, `abstract`,
+  `async`, `declare`, `override`, `accessor`) — and an empty list (`<>(y): void`, `new <>(y)`), wherever a member of an interface or an object type begins (a page is refused at an earlier call signature that was guessed at; a `const` is refused too, a guess); and a method named by `delete`,
+  `typeof`, `void` or `instanceof` (`delete<U>(y): void`, `typeof<U>()`), where the other 79 keywords are refused. A `<` after a keyword, or a head that starts with a reserved word, a modifier or `>`, is the tag of an element to the lexer, and a type reads it
+  as type parameters. Where a string, a template or a comment later in the same type holds a closing tag with the name, a `;` and the text of a navigation call (`<in U>(y): void; a: '</U>;navigateTo(…);//'`), the element ends there and the call
+  in the string is read as code and rewritten. Where nothing closes the element, the rest of the page is its text, which is read as code where it has a container: a typed API interface (`interface Api { list<T>(): Promise<T[]>; delete<T>(url: string): Promise<T>; }`)
+  followed by a handler builds as it should, since the handler's container is code in the swallowed text, and a `{…navigateTo({ pageType: "generative", pageId: "PAGEREF_x" })…}` in a later comment or template literal is
+  rewritten, though it is data — so this is not a failure that is always loud. No page in the committed corpus has these shapes, and telling a type's members from an expression is what the lexer has no parser to do. (The same words in a
+  *nested* tag, `m(p = x <a in b> '</a>' + '</T>…')` or `m: Array<keyof X>`, are read both ways: `tagMayBeCode`.)
 - **A JSX attribute string after trivia is a guess when its text holds a backslash** (`jsx-attribute`): TypeScript
   reads a quote that does not follow its `=` at once as a JavaScript string, with escapes, and Babel and esbuild
   read a JSX string with none, so a page whose string ends at different quotes in the two does different things
@@ -1659,6 +2428,7 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   `event` stream. `disabled: true` is the repo-wide hard-off (no POST,
   no local log). **Provision a fresh key; never copy another plugin's `ikey.json`**
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
+  The sole exception is pcf, which ships a verbatim copy of this `ikey.json` (the same tenant); a key rotation must update both, as the copy check enforces.
 - **Wire shape:** these tenants ingest **only** the `event` stream, into the Power Apps client
   `event` table; any other stream name is accepted by the collector and then dropped. So
   `resolver.js` also exports `formatEnvelope`, which mirrors mobile-apps' envelope:
@@ -1750,6 +2520,12 @@ component types, the temp-workspace cleanup) rather than regex-matching the sour
 `vm.compileFunction`, **not** `vm.runInNewContext`: a new VM context is a separate realm with its own
 `Array`/`Object` prototypes, so every array the script builds would fail `assert.deepStrictEqual`
 against a host array with "same structure but not reference-equal".
+
+**Testing a CLI in a real process:** what only a process shows — its exit status, the one line on stdout and
+that line's bytes — is tested by spawning the script. `scripts/tests/helpers/fake-org-languages-preload.js`
+(`node --require …`) swaps the az-token client for a fake Dataverse that answers the three language reads, so
+`list-languages.test.js` runs the real script, bundle and `emitResult` with no Azure CLI and no network; with
+the PATH emptied, the same test shows what a machine with no `az` gets.
 
 ## Dataverse Access From Scripts
 
@@ -1854,6 +2630,12 @@ reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and
 skill relies on behaviors that must survive. The test files below lock them — run all against every
 rebuilt bundle.
 
+**pcf copy sync.** The pcf plugin copies selected model-apps helpers and the vendored SDK bundle
+because plugin installs are isolated. `scripts/validate-plugin-copies.js` is the source of truth for
+that list and enforces it in both suites plus the every-PR metadata workflow. If you change one of
+those sources, copy the corresponding file into `plugins/pcf` in the same PR; re-vendor in model-apps
+first, then copy the resulting SDK bundle.
+
 **Re-vendor from a COMMIT, and check the recorded provenance.** `scripts/_vendor-build/build.js`
 writes `scripts/vendor/PROVENANCE.json` next to the bundle: the upstream SHA and subject, whether
 that package had uncommitted changes, and the bundle's own sha256. Two things make this
@@ -1893,6 +2675,41 @@ plugin must NOT precompute classId), sub-grid relationship/target/view serializa
 `PushResult`** signal `requireSuccessfulPush` halts on. The mock-based `sdk-build.test.js` covers the
 engine ORCHESTRATION (call order, idempotency, phase selection); this covers what a mock cannot.
 
+`scripts/tests/form-timeline-real-bundle.test.js` (with `form-timeline.test.js` for the pure helpers) — the
+**Notes timeline shape** against the real bundle: the exact FormXML a new host serializes to (control id
+`notescontrol`, a 23-row `auto="false"` cell, 22 empty rows, no duplicate control id), the engine's own
+create path, the in-place repair of an old-shape host on an explicit and an auto layout (same section,
+position and cell identity; ONE atomic write; a second rebuild mutates nothing), hosts of the heights and
+widths platform forms use (a 5-, 20- or 23-row cell, with or without `auto`, a widened timeline) that a
+rebuild leaves alone and verify accepts, a host that only lacks rows being topped up to its own height, the
+refusals (a maker's own timeline, a taken `notescontrol`, a host with a field added), the **order** of the
+repair (a field the layout dropped, or one a `fieldOptions` anchor moves, leaves the old host first so the
+SAME build repairs it), and what `--verify` reports — with the advice that follows from the reason — before
+the build as well as after it: for each way a field leaves the host or stays in it (including a chain of
+anchors, one anchored to another that is itself moved out, up to three links), the advice has to be what a
+real build then does (`verify before the build and the build itself agree about …`); for a field the form has
+twice (sections the build orders differently from the published form, a pruned field removed one cell per
+run, a chain of anchors that reaches one, a taken `notescontrol` beside one) verify says it cannot tell, and
+what the build then does is pinned both ways. `form-timeline.test.js` pins each rule of
+verify's `notesHostInspector` on its own, one inspector asked about every cell as `--verify` does. It shares
+`tests/helpers/form-store-harness.js` — the SDK over a stub HTTP client that stores one systemform row.
+
+`scripts/tests/form-subgrid-placement-real-bundle.test.js` (with `form-subgrid-placement.test.js` for the pure
+rules, the spec gate and lint parity, verify over hand-built FormXML, the wireframe and the plan) — **sub-grid
+placement** against the real bundle: where a new grid lands (between sections, before/after an anchor, in a tab
+or form-column, on an auto layout), a rebuild moving the grid an older build appended into place (one move OF
+THE GRID, the same section id, a second rebuild writes nothing), **the form the released builds deployed**
+(`notes: true` + a grid behind the Notes section, the old timeline: every placement ends in the order a new
+form gets, the timeline repaired in place, nothing but the grid moving), a section between a grid and its
+anchor left behind the grid, the refusals (a grid in a maker's section — reported only when it is NOT already
+in place — an anchor the deployed form lacks),
+the sweep of an emptied same-named section still resolving after a grid shifted the indices, **fields the
+build adds** landing in their own section whichever way a grid shifts the sections around it (an auto
+form, a section the spec adds, a grid added in front, leaving the column, moving down past it or up from
+behind it — each of which wrote the field into the grid's section or halted the forms phase when the field
+was queued by index — and a section that is gone altogether), and a recorded
+**regression guard** — a spec without placement keys writes exactly what it always did.
+
 `scripts/tests/vendor-sdk-smoke.test.js` — the **behavior/return-shape** `CONTRACT:` tests (drive the
 public `createMakerSdk` factory — the `MakerSdk`/`AppAdapter` classes are no longer bundle exports):
 - **Raw OData filters pass through, single-encoded** — the skill builds raw `$filter` strings
@@ -1921,6 +2738,11 @@ artifacts, 2xx statuses, green build. The test therefore does two things: a **so
 fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a deliberate one with
 `sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
 list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
+The same file pins the **throwaway-workspace lifecycle**: a CLI that makes a temporary workspace must
+build its SDK behind a `try` whose own `catch` or `finally` removes it (`cleanup()`, `dispose()` or
+`rmSync`), or a failed construction strands the directory. The guard is read from the syntax tree — the
+first `try` after the `mkdtempSync`, in the same function — so a cleanup elsewhere in the file neither
+satisfies the check nor breaks it by changing shape.
 
 `scripts/tests/workspace-projection-real-bundle.test.js` — the **upgrade** guard. The SDK refuses to
 push a workspace copy stamped with another parser version (`ARTIFACT_PROJECTION_STALE`), so a
@@ -1942,6 +2764,238 @@ to look at the change in Maker and put into the spec what should stay, then make
 re-download is no substitute: it captures no forms, views or charts, and an interrupted first build
 can leave them before the app exists.)
 
+**Newer SDK behaviors the plugin adopts, and the options it leaves off.** Each is pinned against the
+real bundle, because a stub stays green through a change in the SDK's own rule.
+
+- **A workspace belongs to its environment** (`scripts/tests/workspace-binding.test.js`). The SDK
+  records the environment a workspace was first opened for in `manifest.json` and refuses an SDK for
+  another one (`WORKSPACE_ORG_MISMATCH`) before it reads or writes anything. Only `build-model-app.js
+  --apply` opens the app folder's workspace — a dry run, download, `ai-preflight`, the `provision-*`
+  scripts, teardown and the standalone verify use throwaway ones (verify reads only the build's
+  `last-applied.json` from the folder, so it verifies any environment the app is deployed to and never
+  binds a fresh folder). A **dry run** works in a temporary workspace inside the SDK's own temp dir and
+  creates nothing in the app folder: opening binds, a preview builds nothing, and a folder it bound to the
+  environment it only previewed would refuse the environment the operator meant (a preview against the wrong
+  environment followed by `--apply` against the right one would be told the folder's saved copies belong to
+  the wrong environment, though nothing was built there). Every read its live plan makes goes to the server, so it
+  needs nothing from the folder; the folder is only ASKED, read-only, which environment it belongs to
+  (`getManifest`: it parses `manifest.json` and no saved copy, and writes nothing), and the answer is a `⚠` note on stderr
+  (`workspaceBindingNote`) that an `--apply` would stop — the preview itself, its plan and its "No spec
+  changes since the last apply" advisory (read from the baseline file) are unchanged. The question is not
+  a listing of the app artifacts, which would check the environment just as well: listing also parses every
+  artifact's saved copy and its metadata (to flag unpushed edits), so a corrupt copy in a folder that belongs to
+  THIS environment would throw the very error a corrupt manifest does and be reported as one. A saved copy says
+  nothing about which environment a folder belongs to, so the preview reads none and says nothing about one (an
+  `--apply` opens such a folder; the SDK meets the copy when it first reads it). A link or a file where
+  the folder should be is still refused; a folder that is not there is just one with no workspace. So
+  `--apply` is the one entry point that turns the refusal into a halt (`lib/workspace-binding.js`) that
+  names both environments as normalized origins, never the manifest's own text, and offers the safe ways
+  forward: build against the environment the workspace belongs to, use a fresh app folder or `--workspace`,
+  or — only when that environment's copy of the app is no longer wanted — tear it down there with
+  `--clear-workspace`. The folder is printed on a line of its own and the teardown command takes it as
+  `--workspace <the folder printed above>`, never embedding it: teardown otherwise clears the folder beside
+  its spec, and no quoting of a path is right for every shell (inside double quotes PowerShell and POSIX
+  shells still expand `$name`, so a folder named `$work` would point the delete elsewhere; single quotes are
+  not quotes in cmd.exe), so the halt says to pass it quoted for the operator's shell. Teardown already keeps
+  the folder while a page-ownership receipt remains. A folder that holds **nothing a build saved** (the SDK's
+  manifest listing no artifact, and its empty folders, and nothing else — `holdsNothing`, which is
+  conservative: any other file, a link or an unreadable entry counts as saved work) was only ever opened —
+  by a preview of an earlier release, or a build that stopped at its start — so nothing was built in that
+  environment: the halt says so and offers neither `--env <that environment>` nor the teardown, only
+  deleting or moving the folder aside, or a fresh one. A manifest the JSON parser rejects would otherwise
+  surface the parser's own "Unterminated string in JSON at position N" (no path, no advice); it is
+  recognized by the error's name (enough, because opening a workspace and asking it for its manifest parse
+  `manifest.json` and no other file, so a corrupt saved copy is never mistaken for it), never echoed (newer
+  Node versions quote the file), and halts with
+  `WORKSPACE_MANIFEST_INVALID` as the folder with no usable environment does: move it aside — rename it, do
+  not delete it, it can hold page-ownership receipts and the baseline a new workspace does not get back.
+  The plugin never clears or re-binds a workspace for the operator — the SDK's own remedy,
+  `cleanWorkspace()`, discards its saved copies, metadata and baselines, a copy can hold an edit that was
+  never pushed, and the receipts and baseline beside them are the other environment's — and no script
+  calls it. Not even an empty folder is cleared automatically: the check and the act cannot be made atomic
+  against a build that starts in that folder in between.
+  The SDK compares the recorded URL as text (trimmed, lower-cased, trailing slashes dropped), and `--env`
+  takes an https origin and nothing more, so the one spelling of the SAME environment a run of this
+  plugin can meet is the `.api.` host (`<org>.api.crm.dynamics.com` against `<org>.crm.dynamics.com`).
+  The plugin does not fold the two — the baseline, the receipts, the token and the HTTP client's origin
+  guard all key on the host it was given — so the halt says it is the same environment (never "another"),
+  gives the host to re-run with, and offers no teardown, whose target would be the run's own
+  environment. A manifest another tool wrote with a path or port has no `--env` that matches it, and
+  gets a fresh folder only. Handing the SDK one canonical origin would prevent neither: it already
+  ignores case and trailing slashes, and the plugin does not treat the two hosts as one.
+- **`createRecovery: 'adoptExact'` on the SDK that creates forms** (`provisionSdk` in
+  `build-model-app.js`; `scripts/tests/form-create-recovery-real-bundle.test.js`). The HTTP client
+  re-sends a create whose answer never arrived, and the platform answers the re-send 412 because the SDK
+  mints the `formid`. The SDK then reads that row and adopts it only when it is exactly what was sent (a
+  Main form with the same XML, name, table and type). The push comes back `{ saved: false,
+  adoptedExisting: true }` having written nothing, so `pushFailed` (`lib/entity-provision.js`) does not
+  count it as a failure and `reportPartialPush` says it happened. An inexact row, a Quick Create form,
+  or an environment that answers a replayed create with 404 halts as before, now with the SDK's reason.
+  The header-carrying `sdk` does not get the option: it does no workspace I/O, so it never creates forms.
+- **An AI override saved but not yet published is `pendingPublish`** — see the AI features note above.
+- **A form or dashboard is read and written only as its own kind**
+  (`scripts/tests/form-kind-real-bundle.test.js`, `form-order-real-bundle.test.js`,
+  `sdk-resend-layers.test.js`). A fetch and a push decode the row's `type` from a read they already make — a
+  fetch's `RetrieveUnpublished()` selects it, a push's content-token read selects `formid,type` — so the check
+  costs no request; only a delete adds one, a `RetrieveUnpublished()?$select=type` before it, because it reads
+  nothing else first (forms are types 2, 6, 7 and 11, dashboards 0 and 10). The SDK refuses
+  another kind — or a row whose type it cannot read — with `SYSTEMFORM_KIND_MISMATCH`, naming the kind it
+  found; a push that would change an existing form's type is refused `FORM_TYPE_IMMUTABLE` (the plugin never
+  changes one). A fetch refused this way stores nothing, a push of a copy whose row has since become another
+  kind writes nothing, and teardown reports a refused delete as the step's failure in the SDK's own words,
+  never as "already gone". Download's dashboard read reports a sitemap dashboard subarea whose id is a form as
+  unreadable and leaves it out, so the usual gate stops the run. The plugin's own pin checks
+  (`resolveExistingFormId`, `findPinnedDashboard` — a type-0 dashboard only) refuse a wrong pin first, so this
+  is the second line. A fake Dataverse that stores a systemform must answer its `type` (a Main form is 2),
+  honour `$select` and leave a null column out, as the platform does; otherwise every form read in a
+  real-bundle test is refused.
+- **An app header write is never unconditional** (`scripts/tests/app-ai-description-real-bundle.test.js`). The
+  SDK writes the app's name, description and routing description conditioned on the appmodule ROW token a
+  fetch read, even when its own read of the header fails (the header PATCH carries `name`, `description` and,
+  when one is supplied, `aiappdescription`; the icon is written at create only). A header edit made while it
+  holds no token throws `APP_UPDATE_NO_ETAG` before anything is written (it used to send the PATCH plain,
+  which overwrote another writer's header). The plugin edits an existing app's header only on a copy it has
+  just fetched, and only the routing description — every other header field is written at create — so the
+  build does not meet the refusal; a sitemap-only push needs no header token at all. If a push ever did meet
+  it, `pushAppHeader` resets the copy and the next run, whose fetch reads a token, saves the edit.
+- **Metadata reads ask for the latest definition** (`scripts/tests/sdk-uptake-contract.test.js`). The SDK
+  sends `Consistency: Strong` on every read of `/EntityDefinitions`, `/RelationshipDefinitions` and
+  `/GlobalOptionSetDefinitions` — about 10% more per read — and on no other path, so a read right after a
+  metadata write is not served the definition from before it, and a schema write drops the cached
+  definitions of the tables it changes. The plugin's HTTP client passes a caller's headers through, so the
+  header reaches the wire. The plugin still carries three waits for the metadata-read lag (`lib/entity-provision.js`),
+  and keeps them, because it is not measured whether `Consistency: Strong` leaves any lag: `readTextColumnLength`
+  asks a 404 on the attribute of a table created a moment ago again, twice; `confirmInlineColumns` re-reads the
+  attribute collection of a new table, up to three reads in all; and the relationship create, told that its
+  name is already used while no read shows the row, reads twice more (about 2 s, then 4 s) before it calls the
+  name unidentified. They are candidates for removal once a live run shows no lag. The `MetadataCache` 400 that
+  a form, view or chart lookup on a table that does not exist yet answers (`resolveExistingFormId`, the plan's
+  artifact probes) is the platform's answer to a read of a DATA table, which the header does not cover, so
+  that handling stays. See the localized-label note above for the one effect that is not measured.
+- **The environment's languages come from the SDK, with `pac` behind it** (`scripts/list-languages.js`,
+  `lib/lcid-cultures.js`; `scripts/tests/list-languages*.test.js`, `lcid-cultures.test.js`).
+  `getEnvironmentLanguages()` makes three reads — the organization's base language,
+  `RetrieveProvisionedLanguages()`, `RetrieveAvailableLanguages()` — and touches no workspace; it is strict, so
+  a response of an unexpected shape throws `ENVIRONMENT_LANGUAGES_UNREADABLE` and a failed read throws its own
+  error. The planner runs the script first: it prints one pure-ASCII JSON line with the base language and, for
+  each provisioned language, its LCID, culture code and whether it is right-to-left. The SDK returns numbers
+  only, so the host maps them with a table of Windows' own culture data; an LCID the table does not name stays
+  numeric (the base language's too), is reported in `unmapped` and on stderr, and is never given a guessed
+  code or direction. The script writes nothing and emits no telemetry of its own.
+  **The script is the preferred source, not the only one.** It reads through the `az` token, and `/genpage` has
+  never needed `az` for a page over existing entities or mock data (README). So when it exits non-zero — for
+  any reason; most often the Azure CLI is missing, signed out, slow or signed in to another tenant — the
+  planner runs `pac model list-languages --environment '<envUrl>'`, as before the script existed but pinned to the
+  environment the script was given (without the flag `pac` answers for the active organization of its auth
+  profile, which is not necessarily the environment the plan is for), records both in the log and says so,
+  and stops only when `pac` fails too. The rule is the exit status, on purpose: the SDK reports a missing
+  Azure CLI, a slow one, a token another tenant refuses and a dropped connection alike, as `CONNECTION_ERROR`
+  (`statusCode` 0, or the HTTP status of a refusal), so no code tells them apart, and a rule keyed on the
+  wording of the sign-in advice (`Run 'az login' first`) is met by a signed-out Azure CLI only. The planner's section
+  and README's promise are pinned (`list-languages.test.js`), and so is the eval grader's reading of a run
+  that fell back (`phase-expectations.test.js`). The plugin's own `readProvisionedLanguages` /
+  `readOrgLanguageCode` (`lib/dataverse-auth.js`) stay: they run before an SDK exists (it needs the language
+  at construction) and fail soft, where the SDK's read is strict.
+- **Two layers re-send, and for a delete they add** (`scripts/tests/sdk-resend-layers.test.js` pins every
+  count). The HTTP client re-sends a 429 or 5xx — except a record delete and a `$batch`, which it
+  re-sends only for a deadlock (SQL 1205) or a 429. The SDK re-sends a deadlock for reads, an app
+  create, `PublishXml`, a form create, a view create, a publisher create and each delete of a row-summary
+  removal (there a 400 quoting SQL's "chosen as the deadlock victim" counts too), and re-sends an app delete
+  that hits the platform's search-index insert race (HTTP 400, SQL 547). An app delete's two triggers are
+  different answers, so a race, then a deadlock, then success is three change sets, and a persistent one of
+  either is four — never four times four. A POST's deadlock is a 500 the client has already re-sent by
+  the time the SDK sees it, so one deadlock costs one re-send in all; only a deadlock that never
+  clears multiplies, bounded by the client's six attempts times the SDK's four (24 requests, measured
+  on a form create and on a view create). A row-summary delete is re-sent by both layers for a 500/1205
+  (one that clears costs one re-send; one that never clears at most 16, the client's four times the SDK's
+  four), and by the SDK alone for the 400 form.
+- **A row-summary removal settles each delete** (`sdk-resend-layers.test.js`). The skill row is deleted first
+  and alone, then the AI model — only when it is the one `configureRowSummary` made (named
+  `<table> row summary`, built from the row-summary template). A delete is re-sent while it loses a deadlock
+  and, when its answer is lost or odd, settled by reading the row back. A model another component still
+  uses is refused by the platform (HTTP 400, `0x8004f01f`) and KEPT, which is success — a removal that threw
+  there would fail the teardown step of every table whose model another component had adopted. What the SDK
+  cannot settle throws `ROW_SUMMARY_REMOVAL_UNCONFIRMED` (the skill-row delete's outcome unknown, naming our
+  model) or `ROW_SUMMARY_MODEL_NOT_DELETED` (the model left behind, naming it). Teardown's `aiSummary` step
+  still treats every failure as best-effort and does not surface these: the table delete that follows reports the
+  dependency if the skill row is still there, and a model left behind blocks only a later row summary for the
+  same table, by name.
+- **Changes in the same SDK release that no plugin path reaches** — read these again before a plugin change
+  reaches one. `importSolution` now requires `overwriteUnmanagedCustomizations` and `publishWorkflows` (no
+  script calls it, and `sdk-surface-contract.test.js` fails on a new call until it is listed). An Active
+  business process flow is edited in one conditional change set and stays Active — it needs a client with
+  `postRaw`, which the plugin's has — where the build only creates a flow and toggles the state of one that
+  exists, never editing a definition.
+- **Changes in the same release that the plugin's paths DO reach, with the outcome unchanged** — re-test them
+  when one of these paths changes.
+  - *Commands.* A command push writes only its own table's bar, with every check before the first write. The
+    build's commands phase is a command push (`createArtifact('command')`, then `pushArtifact`), so the
+    anchoring, the table-id resolution and the write plan run on it; the requests are the same two as before
+    — one table-id read, one write — and a bar that exists is skipped (`command-real-bundle.test.js`).
+  - *The app-publish token bracket costs requests.* Every `publishArtifact('app')` — the app shell's rewrite of
+    an existing app, the pages finalizer, the AI re-confirm step, and phase 8's envelope when it carries the
+    app; a typical build makes two or three — now reads the app before the publish and again after it, to adopt
+    the tokens the publish rotated when its content is unchanged and its whole token vector was proven, so
+    that a header edit right after needs no fetch. That is about **10 more GETs per app publish** (probed over
+    a fake app after a fetch: none on the previous bundle, ten on this one). The adoption is of no use to the
+    plugin, which fetches before every header or sitemap write because a pages run changes the live app
+    between its first fetch and its finalize, and no step of it was a workaround for a token a publish
+    rotated. The bracket is best-effort: a failed or throttled read leaves the app un-rebaselined and never
+    fails the publish.
+  - *Component proofs.* An app create or update that pins tables reads the app's current layer at most once for
+    its component proofs — the table proof and, when the spec lists the Main forms of a table, the Main-form
+    proof — where each proof read it for itself (one read fewer when both run; the same requests when only the
+    table proof does). An ambiguous layer fails closed (`APP_COMPONENTS_UNVERIFIED`): a create unwinds, an
+    update reports a warning. The plugin's own component reader (`lib/app-components.js`) is separate.
+  - *Unchanged pushes.* A push of an unchanged artifact skips its artifact write and reads less from the
+    workspace. The plugin's own push-if-changed decision (`hasUnsyncedEdits`, which asks the SDK's
+    `diffArtifact`: the copy against its snapshot) is made before the push and is unaffected
+    (`rebuild-writes-real-bundle.test.js`).
+- **Left off: `readConcurrency`**, which overlaps a generative page's file downloads and
+  `fetchSolution`'s component reads. The plugin makes neither read — pages go through
+  `pac model genpage`, and no script fetches a solution — so the option would change nothing.
+  `scripts/tests/sdk-opt-ins.test.js` fails if a script starts to make one of those reads without
+  passing it.
+- **Left off: creating the app as a draft (`published: false`), so the final publish covers it.** A
+  draft is not in the published projection: a by-id read answers 404 and `findArtifact('app')` finds
+  nothing, and so does every other probe the build, verify and download make — the collision gate, the
+  sitemap and navigation reads of the pages phase, the app-shell "does it exist" check. A failed first
+  build would leave an app its own re-run cannot see, the pages phase right after the create would find
+  no sitemap, and a build without `--publish` would never publish it. The app is created published;
+  `scripts/tests/sdk-opt-ins.test.js` pins the SDK facts this rests on and that no script passes
+  `published: false`.
+
+
+`scripts/tests/rebuild-writes-real-bundle.test.js` — the **unchanged-rebuild write budget**, against the
+real bundle and a stateful fake Dataverse (`tests/helpers/fake-dataverse.js`), so what is asserted is
+what reaches the wire, not which SDK methods a mock saw. Every test name starts `rebuild writes:`. A
+first build followed by a rebuild of the same spec with `--publish` must send only the phase-8
+envelope; every change a reconcile makes (a view column or description, a form field, a form event
+handler) must still be pushed exactly once and end up published; an edit an interrupted run left in the
+workspace must still be pushed; an edit a maker made in Dataverse since the last build (a column
+removed from a view, a description changed, a field removed from a form) must be pushed back — the
+workspace copy is clean but the server has moved — and one made while the workspace also holds an
+interrupted run's edit must halt (`LOCAL_EDITS_WOULD_BE_LOST`) without writing; without `--publish`
+each reconcile must still publish its artifact; a build that halts after a reconcile must hand its
+caller the publish it owes; a phase-8 publish that fails or cannot be confirmed must name the views and
+forms it carried — the enriched default views of a table included — on the publish phase and on the halt
+path alike, and on the publish phase also the views, forms and charts the run created (a first
+build's, a rebuild's additions, a chart whose description it wrote), each once and never as a bare id,
+with the requests it sends unchanged, while a first build that halts owes nothing for what it merely
+created; a build killed between its reconcile and its publish must leave a re-run able to publish
+the edit without writing it again; and the membership read must happen once, follow paging, and fall
+back to adding everything when it fails. A table the solution holds with ALL its subcomponents must
+vouch for its views, forms and charts (which have no rows of their own, so the rebuild adds none of
+them), and nothing else: a table held at 1 or 2, another table's components, a failed table lookup and
+a table the maker has since re-segmented must all still get their adds. The fake models only views,
+charts, forms, solution components and `PublishXml` — it throws, naming the request, on anything else
+— and it answers the way the platform does: table rows carry the `rootcomponentbehavior` and the
+table's MetadataId, the subcomponents of a whole table get no row, and `$select` is honoured.
+`unpublished()` answers "was every saved change published?".
+`rebuild-writes-reuse-sites.test.js` and the `rebuild writes:` tests in `sdk-build.test.js` pin each
+reuse site (rule, flow, role, app, sitemap, page manifest) the same way; `solution-membership.test.js`
+and `unsynced-edits.test.js` pin the two helpers' contracts, every doubt of which reads as "add" and
+"push".
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.

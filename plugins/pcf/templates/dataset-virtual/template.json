@@ -1,0 +1,9 @@
+{
+  "id": "dataset-virtual",
+  "kind": "dataset",
+  "controlType": "virtual",
+  "dependencySet": "virtual",
+  "hosts": ["model"],
+  "title": "Virtual dataset control",
+  "description": "A React virtual PCF dataset control for model-driven apps."
+}

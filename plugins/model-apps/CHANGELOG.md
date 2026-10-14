@@ -5,7 +5,161 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.13.0
+## [2.14.0]
+
+The Notes timeline renders, a related-records grid can be placed where you want it, lookups are labelled with the table
+they point to, and view filters resolve choice labels against the environment. Generative pages are checked for style
+shorthands their styling engine drops, their `pac` calls are time-bounded, and more navigation-call shapes build while a
+few that were misread are now refused. The bundled SDK is current, an unchanged rebuild sends a fraction of the writes it
+used to, builds send fewer requests, and verify, download and `check-auth` do more of their work in parallel.
+
+### Added
+
+- **`subgrids[]` placement** (AB#6651699). An entry takes `tab`, `column`, `after` and `before`, to put a related-records
+  grid between sections, in a tab of its own, or in a form column. A rebuild moves a grid an earlier release appended
+  after the Notes section so it sits beside its section; only the grid moves, and fields the same build adds still land
+  in their own sections. `--verify` checks the placement, and the wireframe and the plan show it. Listing a table twice
+  in `subgrids[]` is an error when an entry places it, and a warning otherwise (only one grid per relationship is built).
+- **`primaryAttribute.maxLength`** (a whole number from 1 to 850) sets a new table's name column; it was ignored before.
+  Without it the table is created exactly as before, asking 100 characters for the name column, so the name column comes
+  out as it did before on every environment. An existing table's name column is never changed; a length the platform did
+  not apply is set as the last step of the data model, or reported as a failed step.
+
+### Changed
+
+- **The bundled cds-maker-sdk is current.** Through it:
+  - a Main form create whose answer was lost on the network is recognised when the retry is answered 412, and adopted
+    when it is exactly what the build sent, instead of halting with "already exists" until the workspace is reset (other
+    form types, and a retry answered otherwise, still halt as before);
+  - a form, publisher or view create that a database deadlock rolled back is re-sent by the SDK as well, beyond the
+    build's own re-sends, and so is an app delete that met the platform's search-index race;
+  - a form or dashboard id that belongs to the other kind of record is refused when it is read, written or deleted, with
+    a message that says what it found, and a push can no longer change a form's type;
+  - the routing description of an existing app is saved only on top of the version the build read, so a failed read can
+    no longer overwrite someone else's change (the app's name, description and icon are set when it is created);
+  - reads of tables, columns, relationships and choices ask Dataverse for its latest definition (`Consistency: Strong`),
+    which costs each such read about 10% more;
+  - removing a row summary whose AI model another component still uses keeps the model and succeeds.
+- **`/genpage` finds the environment's languages with a plugin script.** Instead of `pac model list-languages` it reads
+  the base language and every provisioned language with your Azure CLI sign-in and reports each language's code and
+  whether it is written right-to-left; a language the plugin does not recognise keeps its number and is flagged, never
+  guessed. Without a usable Azure CLI sign-in, `/genpage` falls back to `pac model list-languages`, now pinned to the
+  environment it plans for with `--environment` (2.13.0 asked pac's active environment), and says so.
+- **An app folder stays with the environment it was built against.** A build from a folder built against another
+  environment stops before writing anything, names both environments and lists the ways forward, including the folder a
+  teardown would clear. The same environment under its `.api.` host name is reported as such, with the host to run again
+  with. A dry run never takes over the folder, and verifying an app on its own (`verify-model-app.js`) no longer opens the
+  app folder's workspace, so it can check any environment the app is deployed to and leaves the folder untouched.
+- **AI features saved before the app is published** are published and then proved, instead of written twice; one still
+  not in force is reported `NOT YET PUBLISHED`, never applied.
+- **An unchanged rebuild sends far fewer writes.** Views and forms the spec authors are no longer re-sent when they have
+  not changed, the solution's membership is read once so only the components it lacks are added, and with `--publish` the
+  tables a rebuild touched are published together instead of once per view and form (on a sample app with every
+  artifact type: 25 writes instead of 59, 3 publishes instead of 10; the generated default views, the default form, app
+  settings, role privileges and the app's navigation are still written on every rebuild). The tables of the existing
+  views and forms a rebuild reconciles are published before the app is, because publishing the app first would leave
+  any new labels on them unpublished; if that publish is refused, the build stops before writing the app (and runs again
+  at once when the refusal is transient). When a publish fails or cannot be confirmed, the warning names the views,
+  forms and charts on each table that are saved but not live — the generated default views and what a first build
+  created included — instead of a bare form, view or chart id.
+- **Faster runs.** Verify runs its checks four at a time and downloads page code in one `pac` run per 25 pages;
+  `check-auth --env` runs its probes together; download reads each table's labels, option sets and relationships in
+  parallel (the files it writes are the ones a read of one table at a time writes); teardown publishes all default-view
+  resets once; a new table's ordinary columns (up to 25) are created in one request after the table instead of one
+  request each, column for column as before — if the platform refuses that request nothing is created by it and the
+  build creates them one by one, with a warning that says why; a request refused because the table is still busy (HTTP
+  429) is sent again first, and one whose answer was lost is checked against the table before anything is created again.
+  A verify that fails ends any `pac` run it started and removes its temporary download folder.
+- **Generative-page `pac` calls are time-bounded, and a page upload whose outcome is unknown is not retried.** A `pac model genpage`
+  call (list, download, upload) that outlives its budget (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`) is stopped together
+  with everything it started — on Linux and macOS each process only after its start time is read again, which makes ending an
+  unrelated process that took over the id of one that exited far less likely (not impossible). A timed-out update says it may
+  have landed and how to check; so does an update that fails, which is no longer retried — `pac` can fail while publishing,
+  after it has written the page and recorded its prompt, so a retry could record the prompt a second time — unless `pac`
+  refused its own arguments or files. A timed-out create says the page may exist, or that it was created as `<id>` when `pac`
+  printed the id, and how to finish it. A create whose outcome is not known to be nothing — it timed out, failed after
+  `pac` printed its id, or left a page in the listing — is never sent again, not even by the build's own retry of a
+  transient failure; a create that failed outright and left nothing behind is retried as before.
+- **Updating a generative page also checks the other apps' unpublished navigation** — each app's saved navigation and
+  apps that were never published, including a sitemap linked to an app by its name. A page one of them holds stops the
+  update and names the app; a never-published app with no navigation does not. The check runs again right before the
+  first page is written in place and once after the last: a page another app takes in while the build runs stops it
+  before any page it began with is updated in place, or, if it lands while the pages upload, is reported with the app that holds it.
+  A page the build itself created is left out of both.
+- **The record of what a build applied is the page source it read and checked**, so a page saved while a build runs is
+  checked by the next build instead of being found unchanged.
+- **More pages with a hint in parentheses resolve their navigation calls.** JSX text in parentheses that holds an `=`, a
+  `[` or an `@` followed by a `/`, a `<` or a back-tick — `<p>(a = b/c)</p>`, ``<p>(x = y, `code`)</p>``,
+  `<p>(@user/repo)</p>` — or that has a link on the next line, is read as the element it is in, so the navigation call
+  after it resolves where 2.13.0 refused the page; such text no longer needs the expression container 2.13.0 suggested.
+  `return (navigateTo)({ … })` builds too.
+- **A few pages that 2.13.0 resolved are now refused, naming the guess `generic`.** This happens where such a hint stands
+  where a member of a type could also begin — after `return`, `?` or another keyword, or after a separator — and one of
+  its lines ends unfinished before a `//` note (an open bracket, an `=` or an operator), with a later line that starts
+  with `/`: the text up to that `/` can also start a type whose regular expression holds the element's closing tag.
+  2.13.0 took the end of the note for the token before the `/`; the build now refuses instead of guessing. Moving the
+  navigation call before the hint, or ending the line with a word before the `//`, avoids the refusal. The same applies
+  to an element whose text holds a nested element with a quote, a back-tick or `//`, followed by a string that holds the
+  element's closing tag.
+
+### Fixed
+
+- **The Notes timeline renders** ([#680]). It is written the way Dynamics shows it — control id `notescontrol` in a tall
+  cell over the empty rows it spans — instead of a one-row cell that published but never appeared. A full build (not
+  `--changed-only`) repairs an older Notes section in place, after taking out of it any field the layout removes or places
+  elsewhere; a timeline you resized is left alone, and a section still holding a control the build does not move is left
+  and reported. `--verify` fails a form whose timeline would not render and says what to do: run a full build where the
+  build takes the stray fields out itself, which control to move in the maker where it does not — and where it cannot
+  tell (a field placed on the form more than once, or anchored to one) it says so.
+- **Lookup columns are labelled with the parent table's display name** (AB#6691205). A relationship with no
+  `lookup.displayName` now labels the lookup column — and the form field that carries it — "Project" instead of the
+  logical name `new_project`: from the declared parent table, else from the environment (an `existing: true` `incident`
+  is "Case"), in every language the label is written in. A rebuild relabels a column or form field still carrying the old
+  default — each cell of a field the form holds more than once; it never changes a label you set. A download leaves out a
+  label equal to that default.
+- **View filters resolve choice labels against the environment** (AB#6691114), including a column of an existing table
+  the spec does not declare (`account.industrycode`) and a global choice that already existed, instead of being sent to
+  Dataverse as text or as the spec's own position number. A label that matches no option stops the build, listing the
+  valid ones, before any view is written (and before anything is written where the environment already shows it; a spec
+  with a localized label is checked after its tables and columns are written). An option a maker renamed still resolves
+  to the spec's number, as in 2.13.0, now with a warning; the build stops instead where the environment shows the options
+  are numbered otherwise — for example options inserted into the spec after the column was built, which 2.13.0 silently
+  bound to whichever option held that number — and says why. A view that already exists keeps its filters; where 2.13.0
+  built one on an option the environment numbers otherwise, `--verify` now reports it.
+- **Quick View sections stay one column**, as Quick Create sections already did. A field-heavy Quick View section got two
+  columns, which the platform refuses for this form type, and the build failed part-way.
+- **A page keyed like a Windows device name** (`con`, `nul`, `aux`, `com1`, …) is handed to `pac` as a file: the build's
+  copy of each page it uploads is named `page-<key>.tsx`, which Windows never reads as a device, where 2.13.0 named a
+  navigation page's copy `<key>.tsx`.
+- **Generative pages are checked for the style shorthands Griffel drops** (AB#6691124): `all`, `borderColor`,
+  `borderStyle`, `borderWidth`, `borderBlock*` and `borderInline*` in `makeStyles`, which deployed silently without their
+  style. A build stops before the pages phase writes anything for a page it creates or whose source changed since the
+  last recorded build, and only warns for a page it sends again unchanged; `/genpage` refuses a create, or an update that
+  adds such a key or changes its value. `node scripts/check-griffel-styles.js --file <page.tsx>` lists each key and the
+  longhands to write. A style object the check cannot see — passed in (`makeStyles(styles)`), given to a slot or a
+  selector as a variable, or spread in (`...base`) — is reported too, and so are a key computed from an expression
+  (`[key]: …`) and a getter that runs on a style object (`get color() { … }`), whose code the check does not read;
+  all are held like a call the check cannot read, and Fluent's own `shorthands.*(…)` helpers and
+  `typographyStyles.*` entries may be spread (`shorthands.transition` with one argument only as an array, a string or
+  a number written in place). What is uploaded is what was checked: the build sends every page from a copy of
+  the bytes it checked, and `genpage-upload.js` reads the page once and uploads a copy of those bytes, so a save to the
+  file while either runs is not sent unchecked. `genpage-upload.js` no longer takes `--compiled-code-file`, whose
+  JavaScript `pac` would deploy instead of the checked page.
+- **A `PAGEREF_` token in a string, template or regular expression of a page's types is no longer rewritten** in shapes
+  2.13.0 misread: a nested element in a parameter default or a computed name whose text holds a quote, a back-tick or
+  `//` (two on one line included); a regular expression on the line after a `//` note that follows an open bracket, an
+  `=` or an operator in a type; and an accessor whose computed name holds one (`get [a, // note`, a line break, then
+  `/…/]()`). Such a page is now refused, naming the guess, instead of being deployed with the string changed.
+- **Connector discovery reads `pac connection list` as `pac` prints it**: an environment with no connections reads as
+  empty, and output the reader does not recognise is refused instead of being read as empty.
+- **`dataverse-request.js` keeps its path under the Web API root** ([#705]). A path whose `..` segments — written
+  plainly, percent-encoded or joined by an encoded slash — would leave `/api/data/v9.2/` is refused before a token is
+  read.
+
+[#680]: https://github.com/microsoft/power-platform-skills/issues/680
+[#705]: https://github.com/microsoft/power-platform-skills/issues/705
+
+## [2.13.0]
 
 An app's hidden tables and its list of Main forms now survive a download and rebuild, and
 relationships that share a name are caught. A generative page edited in the maker portal is no longer

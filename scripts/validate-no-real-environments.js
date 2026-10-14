@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Fails the build when model-apps source, docs, or eval fixtures reference a REAL
+// Fails the build when model-apps and pcf source, docs, or eval fixtures reference a REAL
 // Dataverse environment, tenant, or user account instead of a placeholder.
 //
 // WHY THIS EXISTS
@@ -14,14 +14,14 @@
 // regression path, and it is not something review reliably catches by eye.
 //
 // WHAT IT CHECKS
-// Two independent rules, both scoped to the model-apps plugin and its evals:
+// Two independent rules, both scoped to the model-apps and pcf plugins and their evals:
 //   1. Shape rule — every Dataverse host (`<sub>.crm*.dynamics.com`) and every
 //      `<tenant>.onmicrosoft.com` must look like a placeholder.
 //   2. Token rule — specific identifiers that were previously committed and removed
 //      are permanently banned, so the exact same environments cannot come back.
 //
 // KNOWN GAP (deliberate, not an oversight)
-// The scan is limited to `plugins/model-apps/**` and `evals/model-apps/**`. Other
+// The scan is limited to `plugins/model-apps/**`, `evals/model-apps/**`, `plugins/pcf/**`, and `evals/pcf/**`. Other
 // plugins have their own pre-existing references of this class (for example real
 // `org<8hex>` orgs cited in power-pages provenance comments). Widening the scan
 // today would fail the build on those pre-existing hits, which would either block
@@ -42,7 +42,9 @@ const path = require('node:path');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
-const SCAN_PATHS = ['plugins/model-apps', 'evals/model-apps'];
+const SCAN_PATHS = ['plugins/model-apps',
+  'plugins/pcf', 'evals/model-apps',
+  'evals/pcf'];
 
 // Subdomain roots that are unambiguously fictional. Microsoft documentation uses
 // Contoso/Fabrikam as its standard sample organizations, so they read as obviously

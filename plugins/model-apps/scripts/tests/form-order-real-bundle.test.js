@@ -12,11 +12,26 @@ const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const FORM_ID = '11111111-1111-1111-1111-111111111111';
 const ROLE_A = '22222222-2222-2222-2222-222222222222';
 const ROLE_B = '33333333-3333-3333-3333-333333333333';
+// systemform.type of a Main form. The SDK reads the type of every form it reads or writes by id and refuses a row of
+// another kind (a dashboard is 0), or one that answers no type, so the row must carry it as the platform's does.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform#BKMK_Type
+const FORM_TYPE_MAIN = 2;
 
 const tempDirs = [];
 test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true }); });
 
-async function freshSdk(initialXml) {
+// The columns a `$select` names, as the platform answers them: a column that was not selected is not in the body
+// (the SDK's own checks run on the columns it asked for, so a read that forgets `type` must see it missing here too),
+// and `RetrieveUnpublished()` leaves out a selected column whose value is null.
+function selectedColumns(url, row) {
+  const select = /[?&]\$select=([^&]*)/.exec(String(url));
+  const present = Object.entries(row).filter(([column, value]) => value !== null || column.startsWith('@'));
+  if (!select) return Object.fromEntries(present);
+  const wanted = new Set(decodeURIComponent(select[1]).split(',').map((c) => c.trim()));
+  return Object.fromEntries(present.filter(([column]) => wanted.has(column) || column.startsWith('@')));
+}
+
+async function freshSdk(initialXml, { type = FORM_TYPE_MAIN } = {}) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'form-order-sdk-'));
   tempDirs.push(dir);
@@ -26,7 +41,8 @@ async function freshSdk(initialXml) {
     get: async (url) => {
       calls.push({ verb: 'get', url: String(url) });
       if (/RetrieveUnpublished\(\)/.test(url)) {
-        return { status: 200, headers: {}, body: { formid: FORM_ID, formxml: state.formxml, '@odata.etag': state.etag } };
+        const row = { formid: FORM_ID, formxml: state.formxml, type, '@odata.etag': state.etag };
+        return { status: 200, headers: {}, body: selectedColumns(url, row) };
       }
       if (/\/systemforms\(/.test(url)) {
         return { status: 200, headers: {}, body: { formid: FORM_ID, '@odata.etag': state.etag } };
@@ -102,6 +118,33 @@ test('forms without DisplayConditions refuse order-only writes, while everyone+f
   assert.match(xml, /<DisplayConditions\b[^>]*Order="1"[^>]*FallbackForm="true"[^>]*>/);
   assert.match(xml, /<Everyone\s*\/>/);
   assert.strictEqual(withoutDisplayConditions(xml), withoutDisplayConditions(original), 'adding DisplayConditions leaves the existing form body unchanged');
+});
+
+// A form's id is all the forms phase hands the SDK, and `systemforms` also holds every dashboard (type 0) and the
+// form kinds the SDK does not model. Reading or rewriting such a row as a form would project it through the Main-form
+// grammar and write the re-serialized document back, so the SDK refuses a row of another kind — from the `type` the
+// read already selects — before it parses or writes anything. The plugin checks a pinned id first (resolveExistingFormId);
+// this is the second line, for an id that changed kind or was passed by mistake.
+test('a dashboard\u2019s id is refused as a form: nothing is read into a form, nothing is written', async () => {
+  const live = '<form><tabs><tab name="general" /></tabs><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+  const dashboard = await freshSdk(live, { type: 0 });
+  await assert.rejects(dashboard.sdk.getFormSecurityRoles(FORM_ID), (e) => e.code === 'SYSTEMFORM_KIND_MISMATCH' && /it is a dashboard \(type 0\)/.test(e.message));
+  await assert.rejects(dashboard.sdk.setFormSecurityRoles(FORM_ID, { order: 2 }), (e) => e.code === 'SYSTEMFORM_KIND_MISMATCH' && /Nothing was written/.test(e.message));
+  assert.strictEqual(dashboard.calls.some((c) => c.verb === 'patch'), false, 'no PATCH reached the row');
+  assert.strictEqual(dashboard.state.formxml, live, 'the row is as it was');
+
+  // A kind the SDK does not model reads the same: a task flow form (type 9) is no Main form either.
+  const taskFlow = await freshSdk(live, { type: 9 });
+  await assert.rejects(taskFlow.sdk.setFormSecurityRoles(FORM_ID, { order: 2 }), (e) => e.code === 'SYSTEMFORM_KIND_MISMATCH' && /task flow form \(type 9\)/.test(e.message));
+  assert.strictEqual(taskFlow.calls.some((c) => c.verb === 'patch'), false);
+});
+
+test('a row whose type cannot be read is refused too, never taken for a Main form', async () => {
+  const live = '<form><tabs><tab name="general" /></tabs><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+  const untyped = await freshSdk(live, { type: null });
+  await assert.rejects(untyped.sdk.getFormSecurityRoles(FORM_ID), (e) => e.code === 'SYSTEMFORM_KIND_MISMATCH' && /type could not be read/.test(e.message));
+  await assert.rejects(untyped.sdk.setFormSecurityRoles(FORM_ID, { order: 2 }), (e) => e.code === 'SYSTEMFORM_KIND_MISMATCH');
+  assert.strictEqual(untyped.calls.some((c) => c.verb === 'patch'), false);
 });
 
 // The build places a Main form it creates on a table whose order it does not set IN ITS CREATE

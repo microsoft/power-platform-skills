@@ -404,6 +404,8 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
   // primary can be auto-numbered (the number IS the record identity — recommended for orders/cases):
   // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },
+  // and its length can be set (1–850 characters; when omitted the build asks for 100, as before) — see "Primary column length" below:
+  // "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject", "maxLength": 120 },
   "columns": [
     { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"],
       "description": "How urgently the ticket needs attention." },   // RECOMMENDED — see below
@@ -457,6 +459,32 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
   (above) instead of adding a separate column, so the generated number is the record identity.
+- **Primary column length — `primaryAttribute.maxLength`** (optional; a whole number from 1 to 850, the
+  most Dataverse allows for a table's name column — more is refused by Dataverse, so
+  anything else is rejected at validation, for `/genpage` and `/app-builder` input as well). Without it
+  the build asks for **100** characters, the length it has always asked for, whether the name column is
+  text or auto-numbered (`autoNumberFormat`). The table is created as before, with its name column alone
+  (its other columns follow in a request of their own), and what an environment makes of the 100 asked can
+  differ — some keep it, and some make a plain text name column 850 characters long whatever length is asked
+  (100 and 120 both came back 850) while keeping the length asked of an auto-numbered one — and the build
+  leaves a name column without `maxLength` as the environment made it, as before. A length you give is
+  applied **when the table is created**: once everything else in the data model has been created (or as far as
+  a build that stops got), the build
+  reads the name column back and, where the environment did not keep the length, updates it to the value you
+  gave.
+  The length is fixed at that point: a rebuild never changes the name column of a table that already exists —
+  neither to this value nor back to the default — because shortening a column that holds data can fail or
+  lose text, and a rebuild must not undo a length someone widened in Maker. Like every column's
+  `maxLength`, it is not reconciled afterwards; to change it on an existing table, change it in Maker. If
+  the length cannot be set after the create, the build reports a failed `primary column length` step that
+  names the table, the length asked and the length the platform made, and goes on — or, when the data model
+  stopped first, says so, and that a re-run leaves the column as it is. One exception to
+  "applied when the table is created": a table the build finds **after** its create — the answer to the
+  create was lost, or another maker created the table first — is not written to, because nothing shows that
+  this build made it. The build reads its name column's length once instead, and warns when it is not the
+  length the spec asks for (or cannot be read). A build that stops because the table was created but cannot
+  be read back yet (`TABLE_METADATA_NOT_VISIBLE`) warns that the length may not have been applied, since a
+  re-run leaves an existing table's name column alone.
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
 
@@ -551,6 +579,38 @@ list with "reach for it when…" guidance.
   "lookup": { "schemaName": "new_CustomerId", "displayName": "Customer" } }
 ```
 - `referenced` = the "one" (parent); `referencing` = the "many" (child, gets the lookup column).
+- **`lookup.displayName`** labels the lookup column — in the table's column list, in views, and on the
+  form field that carries it. Omit it and the lookup is labelled like the table it points at, as the
+  maker portal does ("Project" for a lookup to `new_project`), in this order:
+  1. the `displayName` you set — a plain string, or a language-code map — which always wins;
+  2. the referenced table's own `displayName` when `entities[]` declares it. A language-code map
+     stays a map, so the column carries one label per language;
+  3. for a parent whose name the spec cannot give — a table it does not declare (`account`, `contact`,
+     `systemuser`…), or one it declares **without** a `displayName` that the build did not create (an
+     `"existing": true` `incident` is "Case", not "Incident"): the display name the environment reports for
+     it, read when the lookup is created;
+  4. a humanized form of the table's name (`contoso_ProjectPhase` → "Project Phase"), only when
+     nothing above applies — an offline surface, a read that failed, or a table the spec declares
+     with no `displayName` and the build creates.
+
+  Offline surfaces (the plan, the previews, `app-spec.md`) never ask the environment, so wherever
+  step 3 applies they show step 4; the column itself is labelled by step 3. Where the build may find a
+  declared parent that has no `displayName` already there, the plan says so ("`Project`, or the label from
+  the environment if `new_project` is already there"). Relationships whose lookup label is a language-code map
+  are created before the others, in the order the plan lists them.
+- **A rebuild repairs only the old default.** Builds used to label an omitted `lookup.displayName`
+  with the parent's *logical name* (`new_project`), and a form field the SDK could not resolve the
+  column for with the lookup's own logical name (`new_projectid`). A rebuild relabels such a lookup column — and
+  the form field the build's auto layout labelled with it — to the default above only when the spec omits
+  `lookup.displayName` **and** the deployed label is exactly the old default (case counts, so a correct
+  "Contact" is never mistaken for one): for the column, the parent's lower-case logical name in a single
+  language, which is the one the build writes; for a form field, that name or the lookup's own lower-case
+  logical name. A column labelled with the lookup's own name was labelled by a person, so it is kept. An old
+  default in
+  another language is left alone, with a warning: a write in the build's language would leave two, one
+  of them still the identifier. A label a maker chose in the designer is never touched, and neither
+  is one the spec sets explicitly. A form field that still holds the old default follows the column's
+  current label, whatever that is.
 - The relationship's schema name defaults to `<referenced>_<referencing>` and **must differ**
   from `lookup.schemaName` (Dataverse rejects a collision — `lintAppSpec` flags this, so
 `scripts/lint-app-spec.js` catches it before you deploy; note the build itself does **not**
@@ -580,7 +640,10 @@ run the lint, so an unlinted spec hits the failure at build time instead).
 
 **What a download reconstructs.** `download-model-app.js` rebuilds `relationships[]` from live
 metadata, keeping the lookup's deployed casing (`new_CustomerId`, not `new_customerid`) and its
-label. It emits an explicit `schemaName` whenever the deployed name is not the one this
+label. The label is left out when it is the default a rebuild would write (the parent
+table's display name) or the old default an earlier build left on it (the parent's logical name, which
+a rebuild repairs — an explicit label is never repaired, so writing the identifier out would keep it for
+good), so a downloaded spec stays minimal; a label that differs is written out as it is. It emits an explicit `schemaName` whenever the deployed name is not the one this
 solution's prefix would generate, including a name that uses another publisher's prefix. Omitting
 that name would make a rebuild into the **same** environment create under a different name and
 fail on the lookup that already exists. A foreign-prefix name is a lint warning: a new environment
@@ -613,7 +676,7 @@ why they need naming here at all.
   // optional rich filters (beyond the default active-records condition):
   "filters": [
     { "attr": "ownerid", "op": "eq-userid" },                       // "my" records — no value
-    { "attr": "new_priority", "op": "not-in", "values": ["Low"] },  // multi-value (Choice labels resolve to ints)
+    { "attr": "new_priority", "op": "not-in", "values": ["Low"] },  // multi-value (Choice labels resolve to option values)
     { "attr": "new_duedate", "op": "this-week" }                    // relative-date — no value
   ] }
 ```
@@ -626,9 +689,83 @@ why they need naming here at all.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
-  Choice **labels** in `value`/`values` resolve to option ints. This is what "My Open Orders"
+  Choice **labels** in `value`/`values` resolve to option values, as described next. This is what "My Open Orders"
   (`ownerid eq-userid` + `new_status not-in [Completed, Cancelled]`) and "Completed This Week"
   (`new_status eq Completed` + `modifiedon this-week`) need — no post-build FetchXML patching.
+- **A Choice label in a filter is resolved against the environment, not guessed.** `value` (or `values[]`)
+  of `eq`/`ne`/`neq`/`in`/`not-in`, and of `contain-values`/`not-contain-values` on a multi-select,
+  may name an option by its label — in any language the option has — or by its integer value. Only
+  the environment knows the numbers. A filter on a column of a table you reuse (`account.industrycode`, a
+  local option set — or a column bound to a system global choice) needs no column declared for it: the label
+  is resolved from the environment, where an unresolved label used to reach Dataverse as text and be rejected
+  part-way through the build. A declared global choice that already existed with other values than the spec
+  lists holds the environment's numbers too. (A column bound to a global choice that `globalChoices[]` does
+  not declare is a lint error, and stays one.) So the build reads the column's options from the environment
+  (a table is read at most twice per build — once before anything is written, once in the views phase, see
+  below) and resolves the label there. Only where the environment cannot say — the
+  table is not there yet, or the read failed — does a declared Choice column fall back to the options the spec
+  declares (inline, or a declared `globalChoices[]`, numbered from 100000000), and the build then warns, since
+  that numbering is right only for an option set this build created. (A column bound to a declared global
+  choice is first resolved from the global choice itself, which the build reads by name; the spec's numbering
+  is the last resort.) The rules:
+  - an **integer** — or a comma-separated list of integers, the form a multi-select takes — is an option
+    value and is used as written, with no read;
+  - a label that matches **no option stops the build**, naming the view, the column and the valid labels (the
+    first 25, then a count). It is never sent as a value. Every unresolved label of every view is reported in
+    the one halt. The one exception is a column whose options **your spec numbers** — `options[]` on the
+    column, or a global choice that `globalChoices[]` declares (100000000 + index): where the environment has
+    no option with that label but has an option on the number your spec gives it — a maker renamed "Gold" to
+    "Gold Tier", or a translation never reached the environment — the build uses that number and warns that
+    it is taking that option to be the one you meant. It never does so where the environment shows the
+    numbering is not yours: an option on that number that goes by the name of another option of yours, or a
+    label of your spec that the environment carries only on other numbers *and that shows the numbering moved* —
+    the label is one of the labels of the option you filter on (in any language), or it sits on a number your spec gives
+    another option (you inserted or reordered options after the column was built — a rebuild does not change an
+    existing column's options — or another app created the column or the global choice in another order). A label
+    on a number your spec does not use at all is an option a maker added or re-made elsewhere, and does not count
+    against your numbers. Those, and any label with no option on its number, still stop the build, and the
+    message says why your number was not used (*The spec numbers "Gold" 100000001, but the environment shows
+    another numbering ("Bronze" is numbered 100000003 there, 100000002 in the spec), so that number is not
+    used.*). That check ignores the case of a label; resolving a label still takes its exact text. Where
+    nothing the environment carries contradicts your number — every option renamed, say — the build uses it,
+    as it always did, and the warning is the only trace: use the option's integer value to take the choice out of
+    the build's hands;
+  - a label that names **more than one option** (the same text on two options, in different languages) stops
+    the build too — use the integer of the one you mean — unless the number your spec gives that label is
+    one of those options (a maker added a second option with the same text): the build then uses that one
+    and warns;
+  - on a column the spec does not declare that the environment says is not a Choice column (a text filter),
+    the value is used as written; if the environment cannot be read, the value is used as written with a
+    warning, since it cannot be told apart;
+  - a view that already exists keeps its filters (below), so an unresolvable label on it does not stop
+    the build — `verify-model-app` reports it.
+- **It stops before the build writes anything, where it can.** An apply that writes the solution or the data
+  model first checks every label the environment can already answer, so a typo is reported while nothing has
+  been written — not after the tables and columns have been. That covers a column the environment already has
+  (its options are final: the build leaves an existing column alone), a column the spec declares and the
+  environment lacks (the build creates it from the spec's options — or, bound to a declared global choice
+  that already exists, from the environment's copy of it), and the data stage of a staged build. A label that
+  depends on what the build is about to create — a status reason it inserts, a column of a table it makes —
+  cannot be known yet, so it is checked again in the views phase, once the data model exists, and no view is
+  written on a label that fails there. **A spec with a localized label** (any `displayName`, option or
+  lookup label written as a language-code map) is checked **only** in the views phase: reading option
+  labels ahead of creating a multi-language label can leave Dataverse with only its base-language
+  version, and a typo in a filter is not worth that risk. The check still comes before any view is written;
+  it comes after the tables and columns instead of before them.
+- **The checks around it.** The dry run (build without `--apply`) asks the same question and reports a view
+  the build would create whose label cannot be resolved as `? unknown`, with the reason, and counts it in its
+  summary as one that *would stop the build* rather than one it could not read. It also says, as a warning,
+  what the apply will say: the assumption made for a renamed option, once; and for a view that already exists,
+  which stays `reuse`, that its filters are left as they are and `verify-model-app` will report a label that
+  names no option.
+  `verify-model-app` expects the value the environment gives the label, so a view the build resolved live
+  verifies, and a label that resolves to nothing fails `view-filters` with the valid labels. A label whose
+  options verify could not read is reported as unresolved, with the reason, rather than as a missing filter —
+  unless the view has no condition on that column at all, which is reported as missing.
+  `lint-app-spec`
+  is offline and can only check what the spec declares: it says nothing for a label the spec's own options
+  prove, and warns that the label is *checked against the environment at build time* for a label that is not
+  among the declared options and for a column the spec does not declare.
 - **Default-view enrichment (automatic):** the auto-generated **"Active &lt;Entity&gt;"** and
   **"Inactive &lt;Entity&gt;"** system views ship with only the primary column. The build enriches
   them with the primary column plus up to 6 meaningful declared columns (in declared order, skipping
@@ -660,7 +797,7 @@ why they need naming here at all.
   "notes": true,                                   // optional — add a Notes section
   "autoSubgrids": true,                            // optional — a sub-grid for every child relationship
   "deactivateOtherMainForms": true,                // optional — see below (own custom tables only)
-  "subgrids": [ { "childEntity": "new_ticket", "view": "Active Tickets", "label": "Tickets" } ] }
+  "subgrids": [ { "childEntity": "new_ticket", "view": "Active Tickets", "label": "Tickets" } ] }  // + optional tab / column / after / before — see "Where a sub-grid goes"
 
 // explicit layout: author tabs -> sections -> columns(1-4) -> fields
 { "entity": "new_project", "type": "main", "name": "Project",
@@ -717,15 +854,124 @@ why they need naming here at all.
 ```
 - **`formType`** is `Main` (default), `QuickCreate`, or `QuickView`. A `QuickCreate` form is a
   simplified create form on the same entity (no sub-grids, no Notes; events allowed). A `QuickView`
-  form is read-only (no sub-grids, no events). Sub-grids/Notes are Main-form only.
+  form is read-only (no sub-grids, no events). Sub-grids/Notes are Main-form only. Every section on a
+  `QuickCreate` or `QuickView` form is one column: the platform refuses a wider one, so an authored
+  `columns` above 1 is built as 1, and the auto layout stays one column however many fields it holds.
+- **`notes`** *(optional, boolean, Main forms only)* — or **`hasNotes: true`** on the table — adds the Notes
+  section: `section_notes`, labelled "Notes", at the end of the first tab's first form-column, holding the
+  form's **Timeline** control. The timeline is written in the shape Dynamics renders: the fixed control id
+  `notescontrol` in a 23-row cell (`auto="false"`) over the 22 empty rows it spans. A timeline under a
+  generated id in a one-row cell is published but never shown, which is how earlier versions wrote it, so a
+  rebuild **repairs** such a section **in place** — the same section, position and cell — on an `auto` or an
+  explicit layout, and adds the section to an `auto` form that has none.
+  The height is yours to change: a timeline cell of N rows followed by the N−1 rows it spans is the shape
+  every platform form uses (N is 5 on one form and 20 on another; a new host is written at 23), so a Notes
+  section you resized in the maker is already in shape and a rebuild writes nothing — likewise one you
+  widened with the timeline, or one without `auto="false"`, which only some platform timelines carry. A
+  rebuild only adds rows the span is missing, to the span you chose, and never deletes the rows a resize left.
+  It never edits a timeline you added yourself and never writes a second `notescontrol`: where the form
+  already has a control with that id, no Notes section is added; an old section whose id cannot be renamed
+  for the same reason is left as it is; and so is one that still holds a control of yours after the build
+  has pruned the fields your layout dropped and moved the ones your layout declares in another section or a
+  `fieldOptions[].after` places elsewhere (move them out of it, or delete the section, in the maker, then
+  run a full build). Those fields never stand in the way: the repair is the last step, so a stray field the
+  same build removes is gone by then. Each refusal is reported in the build result (`skipped.layout`).
+  `--verify` fails the form (`form-timeline`) until it carries a timeline that renders — under
+  `notescontrol`, in a cell spanning more than one row, and for the Notes section the build owns, with the
+  rows its span needs under it — and says what to do about it: run a full build where the build repairs or
+  adds the timeline, what to change in the maker first where it will not. Verify reads the form as
+  published, before the build's own passes have run, so for the fields in an old Notes section it
+  **predicts** what the build will take out: the fields your layout declares in another section, the ones a
+  `fieldOptions[].after` places beside an anchor in an ordinary section (an anchor that sits in the Notes
+  section but is itself anchored is moved out first, and the field follows it), and — on an explicit layout
+  with `prune` on — the ones it does not list. For those it says to run a full build and names what the
+  build takes out first (a removal needs `--allow-destructive`), and it asks you to move out of the section
+  only a control no rule of your spec moves or removes — a field no rule moves (on an `auto` layout, any
+  field already on the form that no `fieldOptions[].after` places), or a control of your own. A field the
+  form carries **more than once** is not predicted when a rule would act on it, and neither is one anchored
+  — directly or down a chain of anchors — to a field the form carries more than once with a cell in the
+  Notes section or a sub-grid's: a build acts on one cell of a field, and which one depends on how it
+  arranges the sections. For the cell in the Notes section verify says it cannot tell whether the build
+  takes it out — a full build repairs the timeline unless it leaves that cell — and what to do if the
+  build's report says the timeline was left as it is: it neither promises the repair nor sends you to the
+  maker for what the build may do itself, and it says so while another control holds `notescontrol` too.
+  A repeated field that no rule moves is predicted: it stays, and is named. Nor can it see what only
+  happens while the build runs — a removal that was not authorized, a move skipped because the rows it
+  would split carry a row-span — so when the build's own report says the
+  timeline was left as it is, follow the report. Use a **full** build (without `--changed-only`) to pick up
+  an older Notes section: `--changed-only` skips a spec that has not changed, and this fix needs no change
+  to the spec. A download does not reconstruct `forms[]`, so `notes` is authored, not read back.
 - **`quickViews[]`** (on a host form) embed a `QuickView` form via a lookup: `lookup` is the lookup
   column on the host, `targetEntity` the related entity, `form` the **name** of a `QuickView` form
   declared in `forms[]` (lint-enforced). Optional `label`, `section`, `displayAsCard`. The control
-  renders from plain formxml, so it persists on a plain push.
+  renders from plain formxml, so it persists on a plain push. It is added to the host's first
+  **field** section — never a sub-grid's section or the Notes section, which hold nothing else.
 - A sub-grid needs a matching `OneToMany` **or** `ManyToMany` between the form's entity and
   `childEntity` (lint-enforced); the builder resolves the relationship name either way. Each sub-grid
   renders in its **own 1-column, full-width section**; its title defaults to the child entity's
   `pluralName` (then `displayName`), with `subgrids[].label` overriding.
+- **Where a sub-grid goes** *(Main forms only)*. With no placement keys a grid's section is added at the
+  end of the first tab's first form-column and never moved — as before. Four optional keys on a
+  `subgrids[]` entry say where it goes instead:
+
+  | Key | What it names | Effect |
+  |---|---|---|
+  | `after` | a **section** this form's layout declares | the grid's section goes **directly after** it, in that section's tab and form-column — nothing between them (not the Notes section a build appends to the end of the first tab) |
+  | `before` | the same | directly before it. Give one of `after` / `before`, not both |
+  | `tab` | a **tab** this form's layout declares | the grid goes in that tab — at the end of it when the build adds or moves the grid. With `after` / `before` it must be the tab the section is in |
+  | `column` | a form-column of the tab, counting from `0` | the grid goes in that form-column of the tab (the first tab when `tab` is not given). With `after` / `before` it must be the section's form-column |
+
+  Names are the ones the layout declares — `tabs[].name` and `sections[].name`, compared case-insensitively;
+  the name a tab or section gets when it declares none counts too. An `auto` layout has one tab,
+  `tab_general`, holding one section, `section_general`, so it can place a grid before or after that
+  section. Grids that share an anchor stay in the order they are declared. An unknown name, `after` with
+  `before`, a `column` the tab does not have, or a section in another tab or form-column than the one
+  named is an error in both `validateAppSpec` and the lint — each says what the form declares instead.
+  Placement on a form that is not a Main form is refused with the sub-grid itself. A key a sub-grid
+  entry does not read (`afterSection`, `Tab`) is ignored with a warning naming the key it probably meant.
+  A form holds **one grid per relationship**, so list each child table once: a table listed twice with a
+  placement key on either entry is an error (only one entry could say where the grid goes), and listed
+  twice with no placement it is a warning — the build adds one grid and ignores the rest, as it always has.
+
+  ```jsonc
+  // a full-width related-records grid between two sections: Summary, then Tasks, then Resolution
+  { "entity": "new_ticket", "name": "Ticket",
+    "tabs": [ { "name": "tab_main", "label": "General", "sections": [
+      { "name": "sec_summary",    "label": "Summary",    "columns": 2, "fields": ["new_name", "new_priority"] },
+      { "name": "sec_resolution", "label": "Resolution", "columns": 2, "fields": ["new_resolution", "new_closedon"] } ] } ],
+    "subgrids": [ { "childEntity": "new_task", "after": "sec_summary" } ] }
+
+  // a grid in its own tab, and one in the second form-column of a two-column tab
+  { "entity": "new_ticket", "name": "Ticket",
+    "tabs": [ { "name": "tab_main", "label": "General", "columns": [
+                { "width": "60%", "sections": [ { "name": "sec_left",  "label": "Left",  "columns": 1, "fields": ["new_name"] } ] },
+                { "width": "40%", "sections": [ { "name": "sec_right", "label": "Right", "columns": 1, "fields": ["new_priority"] } ] } ] },
+              { "name": "tab_related", "label": "Related", "sections": [ { "name": "sec_history", "label": "History", "columns": 1, "fields": ["new_notes"] } ] } ],
+    "subgrids": [ { "childEntity": "new_task",    "tab": "tab_related" },
+                  { "childEntity": "new_comment", "tab": "tab_main", "column": 1 } ] }
+  ```
+
+  **Width.** A grid's section is one form-column wide and fills the form-column it is in. In a tab with
+  several form-columns it is therefore as wide as its own column; to give a grid the full width of the
+  form, put it in a tab of **one** form-column (a tab with `sections[]` and no `columns[]` is one).
+  `column` has no other effect — the layout stays yours to shape.
+
+  **Rebuilding converges.** A rebuild puts the build's own grid section where the spec places it, and a
+  rebuilt form ends in the order a new one gets. A grid an earlier version appended to the end of the form —
+  behind the Notes section — moves, the same section with its control and anything you set on it, to sit
+  directly after (or before) its section; one already directly beside it
+  writes nothing. **Only the grid moves.** None of your sections, and not the Notes section, is moved to make
+  room, so a section you added between the grid and its section simply ends up behind the grid. With only
+  `tab` (and `column`) a grid already in that tab (and form-column) stays where it is within it. A grid in a
+  section you made yourself is never moved — the build reports it in `skipped.layout` (unless it is
+  already where the spec places it, which needs neither a move nor a report), as it does a name the
+  deployed form no longer has (a grid not yet on the form is then added at the end of the first tab, not
+  lost; one already there stays where it is). `--verify`
+  checks each placed grid (`form-subgrid`): it must be on the form, in the tab and form-column the spec
+  names, and directly beside the section it is placed by (or beside the grid placed there ahead of it) — what
+  sits between them is named. A grid an earlier version left elsewhere needs a **full** build to be moved —
+  `--changed-only` skips a spec that has not changed — and the failing check says so. A download does not
+  reconstruct `forms[]`, so placement is authored, not read back.
 - **`deactivateOtherMainForms`** (optional, default `false`, Main forms only): after promoting this
   form as the entity default, deactivate every OTHER active main form on the entity — i.e. hide the
   blank stock "Information" form so only this form ships active. **Destructive**, so it is OFF by
@@ -759,7 +1005,9 @@ why they need naming here at all.
   `"enabled": false` really does deploy a disabled handler. `enabled` and `passExecutionContext` must
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
-  The build fetches the pushed form, injects the handlers, then publishes it.
+  The build fetches the pushed form and injects the handlers; they go live when the form is published
+  (with `--publish`, in the one publish of the tables the build changed, made before it publishes the app; without it,
+  as soon as they are wired).
 
 ### Which form a table opens with — `isDefault` and `entities[].mainFormOrder`
 
@@ -1147,8 +1395,7 @@ custom control), but the spec validator emits a warning.
      whether an id is still live. An unplaced id needs a local creation receipt for this app/key/id
      and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
      never requests a replacement CREATE. The build takes this app's PUBLISHED navigation as proof: a page
-     that is only in its saved but unpublished navigation halts with advice to publish the app first, so
-     other apps' navigation is checked before the page is updated. If it is this app's page, add it to the
+     that is only in its saved but unpublished navigation halts with advice to publish the app first. If it is this app's page, add it to the
      app's navigation in the maker, publish the app and re-run; otherwise remove the stale id from the manifest/spec (or delete the
      page) and re-run. A read failure HALTs (`pages-existence-failed`).
      An uncertain CLI CREATE stops and reports each new candidate's id, stored name and `createdon`.
@@ -1209,10 +1456,21 @@ custom control), but the spec validator emits a warning.
     detected across two keys, or an off-sitemap id lacks a corroborated local creation receipt. Manual resolution required.
   - `pages-manifest-corrupt` — the manifest web resource cannot be parsed (two keys mapping to the
     same id). Fix or delete the manifest and rebuild.
-  - `pages-shared-across-apps` — a page appears in another app's sitemap. Detach it in Maker first.
-    `--allow-destructive` does NOT bypass this halt.
+  - `pages-shared-across-apps` — a page appears in another app's sitemap, published or only saved (not yet
+    published — an app that was never published counts). Detach it in Maker first. `--allow-destructive` does NOT bypass this halt. If another app's
+    saved navigation, or the list of apps that were never published, cannot be read, the build halts as `pages-shared-check-failed` instead of assuming it is clear.
+    The check runs again right before the first page is updated in place, so a page another app takes in while the build runs halts it there too ("became shared
+    across apps while this build ran"); one taken in while the pages upload is written by then, and is reported after the uploads as a warning naming the app.
   - `pages-removed` — a page is live in the env but no longer in the spec. Re-add it to the spec, or
     pass `--allow-destructive` to detach it from the nav (`SubArea` removed; page record left deployed).
+  - `pages-griffel-shorthand` — a page that this run uploads has a `makeStyles` key Griffel drops at runtime
+    (`all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock*`, `borderInline*`), and is **new** (no deployed page) or
+    **changed** (its source no longer hashes to the `__contentSha` that `last-applied.json` recorded for it at the last apply to this
+    app in this environment — the record a successful full or changed-only apply, or a download, writes; for a page it is the hash of the source the build read and sent, and a failed or partial build records nothing). Raised from the pre-write scan, so nothing is created or updated; the message gives the page, each
+    key's line and column, the longhands, and what each way out does: deleting a key changes nothing on screen (Griffel never
+    applied it), writing the longhands makes the style start to render. A page that already exists and is sent again as recorded —
+    or has no record in this workspace — is sent as it is and the build **warns** with the same detail instead: it ships nothing
+    new. A call the check cannot read is reported as that (with what to change in the code), not as CSS Griffel drops.
 - **Offline evaluation.** The app-builder eval harness (`evals/model-apps/app-builder/`) grades
   page-stage structural facts from the spec offline (navigation graph resolution, intent-vs-tsx
   completeness). See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md).

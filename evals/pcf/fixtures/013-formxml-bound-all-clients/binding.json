@@ -1,0 +1,18 @@
+{
+  "controlName": "new_Contoso.Controls.StarRating",
+  "column": "new_rating",
+  "clients": [
+    "web",
+    "phone",
+    "tablet"
+  ],
+  "parameters": {
+    "value": {
+      "column": "new_rating"
+    },
+    "max": {
+      "static": "5",
+      "type": "Whole.None"
+    }
+  }
+}

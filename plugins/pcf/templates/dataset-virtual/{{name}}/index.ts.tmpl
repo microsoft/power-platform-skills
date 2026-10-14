@@ -1,0 +1,93 @@
+import * as React from "react";
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import { {{name}}View } from "./{{name}}View";
+import "./css/{{name}}.css";
+
+type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
+
+export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutputs> {
+    private context: ComponentFramework.Context<IInputs> | null = null;
+    private dataSet: ComponentFramework.PropertyTypes.DataSet | null = null;
+    private pagingRequestPending = false;
+    private pagingCompletionVersion = 0;
+
+    public init(): void {
+        // Virtual controls render by returning React elements from updateView; the host owns the root.
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
+        this.context = context;
+        this.dataSet = context.parameters.sampleDataSet || null;
+        // Paging guarantees a completion update, not an intermediate loading update.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
+        if (this.pagingRequestPending && (this.dataSet?.loading !== true || this.dataSet?.error === true)) {
+            this.clearPagingRequest();
+        }
+        return React.createElement({{name}}View, {
+            cssClass: "{{cssClass}}",
+            messageClass: "{{cssMessageClass}}",
+            dataSet: this.dataSet,
+            busy: this.pagingRequestPending || this.dataSet?.loading === true,
+            pagingCompletionVersion: this.pagingCompletionVersion,
+            actionHeader: this.stringResource("Action_Header_Key", "Actions"),
+            openRecordLabel: this.stringResource("Open_Record_Label_Key", "Open {0}"),
+            onNextPage: this.loadNextPage,
+            onPreviousPage: this.loadPreviousPage,
+            onOpenRecord: this.openRecord,
+        });
+    }
+
+    public getOutputs(): IOutputs {
+        return {};
+    }
+
+    public destroy(): void {
+        this.context = null;
+        this.dataSet = null;
+        this.pagingRequestPending = false;
+        this.pagingCompletionVersion = 0;
+    }
+
+    private readonly loadNextPage = (): void => {
+        this.requestPage("next");
+    };
+
+    private readonly loadPreviousPage = (): void => {
+        this.requestPage("previous");
+    };
+
+    private requestPage(direction: "next" | "previous"): void {
+        if (!this.dataSet || this.pagingRequestPending || this.dataSet.loading === true) return;
+        const paging = this.dataSet.paging;
+        const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
+        if (!canLoad) return;
+
+        // Paging methods return void; completion is delivered by a later updateView after the
+        // framework finishes loading the page, so the lock cannot be released on a microtask.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
+        this.pagingRequestPending = true;
+        try {
+            if (direction === "next") paging.loadNextPage();
+            else paging.loadPreviousPage();
+        } catch (error) {
+            this.clearPagingRequest();
+            throw error;
+        }
+    }
+
+    private clearPagingRequest(): void {
+        this.pagingRequestPending = false;
+        this.pagingCompletionVersion += 1;
+    }
+
+    private readonly openRecord = (record: DataSetRecord): void => {
+        // Model-driven dataset controls should let the host open the row so navigation matches the
+        // app shell instead of constructing URLs in the control.
+        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/opendatasetitem
+        this.dataSet?.openDatasetItem(record.getNamedReference());
+    };
+
+    private stringResource(key: string, fallback: string): string {
+        return this.context?.resources?.getString(key) || fallback;
+    }
+}

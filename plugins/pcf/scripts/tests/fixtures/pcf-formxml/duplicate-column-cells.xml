@@ -1,0 +1,6 @@
+<form>
+  <tabs><tab><columns><column><sections><section><rows><row>
+    <cell><control id="new_rating_a" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}" datafieldname="new_rating" uniqueid="{55555555-5555-4555-8555-555555555551}" /></cell>
+    <cell><control id="new_rating_b" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}" datafieldname="new_rating" uniqueid="{55555555-5555-4555-8555-555555555552}" /></cell>
+  </row></rows></section></sections></column></columns></tab></tabs>
+</form>

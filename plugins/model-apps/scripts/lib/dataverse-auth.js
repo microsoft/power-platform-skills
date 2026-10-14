@@ -8,7 +8,7 @@
 // about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
 const { normalizeLanguageCode } = require('./app-spec.js');
 const { nearestName } = require('./nearest-name.js');
-const { execFileAsync, runSync } = require('./process-runner.js');
+const { execFileAsync, runSync, killProcessTree } = require('./process-runner.js');
 const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./cli-failure.js');
 
 // Dataverse environment hosts, one family per cloud (the same families power-pages accepts in
@@ -47,6 +47,54 @@ function requireDataverseOrigin(value) {
     );
   }
   return origin;
+}
+
+// Every path handed to `dataverseRequest` must stay under this root. `dataverse-request.js` is an
+// escape hatch an agent drives with free text, so a path such as "../../../XRMServices/…" must not
+// reach another endpoint with the user's token. The origin cannot move: the validated origin is
+// followed by `/api/…`, so everything the caller adds is path, query or fragment (an absolute URL
+// passed as the path stays text under the root). The path can move, in two places:
+//   1. The client. `makeRequest` sends the WHATWG-parsed `pathname`, and the parser resolves `.` and
+//      `..` segments, their percent-encoded spellings (`%2e%2e`, `.%2E`) and, for https, `\` as `/`.
+//      See https://url.spec.whatwg.org/#double-dot-path-segment
+//   2. The server. Measured on a live environment: Dataverse decodes `%2F` and `%5C` (either case)
+//      into separators once, then resolves dot segments again:
+//        "..%2Fv9.0%2FWhoAmI"  → served /api/data/v9.0/WhoAmI (200)
+//        "..%5Cv9.0%5CWhoAmI"  → served /api/data/v9.0/WhoAmI (200)
+//        "%252e%252e/…"        → 404 (decoded once only)
+//      `%u002f`, an overlong `%c0%af` and a fullwidth solidus were not read as separators, and a `..`
+//      followed by `%00`, `%09`, `%20` or `;` was not read as `..` (400 or 404, never the parent).
+// So both readings are checked. A leading slash stays allowed: Dataverse answers
+// `/api/data/v9.2//WhoAmI` like `/api/data/v9.2/WhoAmI`. A query is not checked, because no
+// endpoint resolves dot segments inside one.
+const WEB_API_ROOT = '/api/data/v9.2/';
+
+/**
+ * The request URL for a path under the Dataverse Web API root; throws when the path, as the client
+ * sends it or as the server then decodes it, would leave that root.
+ * @param {string} origin - a value returned by requireDataverseOrigin
+ * @param {string} apiPath - e.g. "EntityDefinitions(LogicalName='account')"
+ * @returns {string} e.g. "https://contoso.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='account')"
+ */
+function webApiUrl(origin, apiPath) {
+  if (typeof apiPath !== 'string') {
+    throw new Error(`A Dataverse Web API path must be text (got ${apiPath === null ? 'null' : typeof apiPath}).`);
+  }
+  const url = `${origin}${WEB_API_ROOT}${apiPath}`;
+  const sent = new URL(url);
+  const served = new URL(origin + sent.pathname.replace(/%2f|%5c/gi, '/')).pathname;
+  const escaped = !sent.pathname.startsWith(WEB_API_ROOT) ? sent.pathname
+    : !served.startsWith(WEB_API_ROOT) ? served
+      : null;
+  if (escaped !== null) {
+    throw new Error(
+      `The path '${apiPath}' leaves the Dataverse Web API root ${WEB_API_ROOT} (it resolves to '${escaped}'). `
+        + `Pass a path relative to that root, for example "EntityDefinitions(LogicalName='account')". `
+        + "A '..' segment cannot step out of it, whether written plainly, percent-encoded (%2e%2e) or "
+        + 'joined by an encoded slash (%2F, %5C).'
+    );
+  }
+  return url;
 }
 
 /**
@@ -93,6 +141,13 @@ function getAuthToken(envUrl, opts = {}) {
   }
 }
 
+// `opts.signal` (an AbortSignal) lets a caller that started this read beside other probes cancel it when
+// one of them already decides the run (check-auth: an `az account show` verdict ends it before the token
+// matters). The abort ends the child's whole PROCESS TREE (killProcessTree): on Windows `az` is a batch shim
+// run under cmd.exe, and the signal Node would send on its own reaches only that wrapper, leaving `az`'s Python
+// process running after this one exits — which is why the signal is NOT handed to the child's start. A cancelled
+// read resolves null WITHOUT noting a failure: nothing was wrong with the Azure CLI, and a remembered 'failed'
+// would be reported later as if it were.
 function getAuthTokenAsync(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return Promise.resolve(null);
@@ -100,14 +155,21 @@ function getAuthTokenAsync(envUrl, opts = {}) {
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return Promise.resolve(authTokenMemo.get(resource));
   }
+  if (opts.signal && opts.signal.aborted) return Promise.resolve(null);
   return new Promise((resolve) => {
+    let child = null;
+    let settled = false;
+    const stop = () => (opts.killTree || killProcessTree)(child);
+    const stopListening = () => { settled = true; if (opts.signal) opts.signal.removeEventListener('abort', stop); };
     try {
-      exec(
+      child = exec(
         'az',
         ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
         { encoding: 'utf8', timeout: azTimeoutMs(), windowsHide: true },
         (error, stdout) => {
+          stopListening();
           if (error) {
+            if (opts.signal && opts.signal.aborted) { resolve(null); return; }
             if (opts.fresh) authTokenMemo.delete(resource);
             noteTokenFailure(resource, error);
             resolve(null);
@@ -122,7 +184,9 @@ function getAuthTokenAsync(envUrl, opts = {}) {
           resolve(token);
         }
       );
+      if (opts.signal && !settled) opts.signal.addEventListener('abort', stop, { once: true });
     } catch (e) {
+      stopListening();
       if (opts.fresh) authTokenMemo.delete(resource);
       noteTokenFailure(resource, e);
       resolve(null);
@@ -379,14 +443,19 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
  * @param {boolean} [opts.includeHeaders=false] - Include response headers in result
  * @param {object} [opts.extraHeaders={}] - Extra request headers (e.g. Prefer)
  * @param {number} [opts.timeout=60000]
+ * @param {boolean} [opts.refreshOn401=true] - On a 401, replace the token (`getAuthToken(.., { fresh: true })` is a
+ *   SYNCHRONOUS Azure CLI call: seconds on a cold Windows process, with the whole event loop — every other probe's
+ *   timers included — frozen) and send again. `false` hands the 401 back as it is, for a caller that is running
+ *   other work alongside and will decide where to retry (check-auth's early WhoAmI).
  * @returns {Promise<{status: number, data: any, headers?: object}>}
  */
 async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {}) {
-  // The validated origin, never the caller's text, is what the token is requested for and sent to.
+  // The validated origin, never the caller's text, is what the token is requested for and sent to,
+  // and the path is checked against the Web API root before a token is even read.
   const cleanUrl = requireDataverseOrigin(envUrl);
-  const url = `${cleanUrl}/api/data/v9.2/${apiPath}`;
+  const url = webApiUrl(cleanUrl, apiPath);
   const bodyStr = body == null ? null : typeof body === 'string' ? body : JSON.stringify(body);
-  const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null } = opts;
+  const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null, refreshOn401 = true } = opts;
   // Test seams, matching `preflightAuth`'s injection style. Without them the token-reuse behaviour
   // below could only be exercised against a live Azure CLI and a real org.
   const acquireToken = opts.getToken || getAuthToken;
@@ -428,7 +497,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
       throw new Error(`Request failed: ${res.error}`);
     }
 
-    if (res.statusCode === 401 && attempt < maxRetries) {
+    if (res.statusCode === 401 && refreshOn401 && attempt < maxRetries) {
       token = acquireToken(cleanUrl, { fresh: true });
       if (!token) throw new Error(tokenFailureMessage(cleanUrl, "Token refresh failed. Run 'az login' again."));
       continue;
@@ -740,16 +809,30 @@ function readJsonArg(raw) {
 }
 
 /**
+ * `JSON.stringify` with every character above U+007E written as a `\uXXXX` escape: the same document to any JSON
+ * parser, but bytes a console code page cannot garble. Windows PowerShell 5.1 decodes a child's stdout with the OEM
+ * code page, so a raw U+2014 em dash reaches the reader as "ΓÇö" (UTF-8 bytes E2 80 94 read as code page 437).
+ * Each UTF-16 unit is escaped on its own, which is how JSON writes a character outside the BMP too
+ * (https://www.rfc-editor.org/rfc/rfc8259#section-7: a surrogate pair of two escapes).
+ */
+function asciiJson(value) {
+  return JSON.stringify(value).replace(/[^\x00-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
  * Writes a result to stdout and exits.
  *   ok=true → JSON payload to stdout, exit 0
  *   ok=false + Error → message to stderr, exit 1
  *   ok=false + object → JSON payload to stdout (caller can parse partial-failure
  *                       details like `errors: [...]`), short note to stderr, exit 1
  *   ok=false + string → string to stderr, exit 1
+ * `options.ascii` writes the stdout JSON through `asciiJson`, for a script whose output an agent reads off a console.
+ * (stderr is for people and is never escaped.)
  */
-function emitResult(ok, payload) {
+function emitResult(ok, payload, options = {}) {
+  const toJson = options && options.ascii ? asciiJson : JSON.stringify;
   if (ok) {
-    process.stdout.write(JSON.stringify(payload) + '\n');
+    process.stdout.write(toJson(payload) + '\n');
     process.exit(0);
   }
   if (payload instanceof Error) {
@@ -757,7 +840,7 @@ function emitResult(ok, payload) {
   } else if (payload !== null && typeof payload === 'object') {
     // Structured failure. Emit the payload to stdout so callers can parse it, and exit 1 so shells
     // still treat it as a failure.
-    process.stdout.write(JSON.stringify(payload) + '\n');
+    process.stdout.write(toJson(payload) + '\n');
     if (Array.isArray(payload.errors)) {
       // A genuine PARTIAL failure (bulk insert with some rows rejected): the count is the useful
       // summary and the detail is per-row on stdout.
@@ -781,6 +864,7 @@ function emitResult(ok, payload) {
 module.exports = {
   dataverseOrigin,
   requireDataverseOrigin,
+  webApiUrl,
   preflightAuth,
   azIdentity,
   getAuthToken,

@@ -94,9 +94,24 @@ complete visual record for the deployment summary.
 
 ## 7.5 Fix and Re-deploy
 
-If issues are found: fix the code, re-deploy using the **update form** from
-Phase 6 — `node "${PLUGIN_ROOT}/scripts/genpage-upload.js"` with `--page-id` and
-no `--add-to-sitemap`. Per the "Prompt semantics" rule, the prompt for this
+If issues are found: fix the code, check it, and re-deploy using the **update form**
+from Phase 6 — `node "${PLUGIN_ROOT}/scripts/genpage-upload.js"` with `--page-id` and
+no `--add-to-sitemap`. A fix is new code, and new code can write a CSS shorthand that Griffel
+drops at runtime (the page then deploys without its border, color or reset — the rule is
+`references/rules.md` Common Pitfalls 5, and Phase 5b step 9 runs the same gate), so check the
+fixed page before the re-deploy:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<file>.tsx'
+```
+
+Do not upload until it exits 0: fix what it reports (each key's line, column and longhands)
+and run it again. `genpage-upload.js` makes the same check and refuses a page that adds a key the
+deployed page did not already have, or gives one it had another value (`griffel-shorthand`), so skipping this step costs a refused
+upload, not a shipped defect. A key the page already had before your fix, set the same, is reported as well:
+delete it to keep the page looking as it does, or write the longhands to make the style start to
+render (a visible change, so only when it is wanted).
+Per the "Prompt semantics" rule, the prompt for this
 re-deploy describes the fix delta only — e.g.
 `"Fix sort handler on Name column; correct accidental DataGrid type prop"` —
 not a re-statement of the full page description. Write it to a file and pass

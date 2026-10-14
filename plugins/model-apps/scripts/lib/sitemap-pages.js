@@ -7,7 +7,7 @@
 // existence check — a page can exist env-wide yet not be in this app's sitemap (see genpage-cli.enumerateEnv).
 
 const { odataLit } = require('./odata.js');
-const { appComponentRows, currentAppLayer } = require('./app-components.js');
+const { appComponentRows, currentAppLayer, collectionRows, currentLayerRows } = require('./app-components.js');
 const { subAreaTargetKey } = require('./sitemap-merge.js');
 
 // Match a <SubArea …> START TAG carrying a GenPageId, capturing the id and (optionally) the Title.
@@ -165,7 +165,7 @@ function isMalformed(xml) {
 //
 // componenttype 62 == sitemap:
 //   https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appmodulecomponent
-async function fetchSitemap(sdk, appUnique, { currentLayer } = {}) {
+async function fetchSitemap(sdk, appUnique, { currentLayer, includeSitemapId } = {}) {
   let app;
   if (currentLayer !== undefined) {
     // Download supplies the SAME current layer as its table/form inventory. Default callers
@@ -207,10 +207,7 @@ async function fetchSitemap(sdk, appUnique, { currentLayer } = {}) {
       if (!response || response.status < 200 || response.status >= 300) throw new Error(`current sitemap read returned HTTP ${response && response.status}`);
       const rows = response.body && response.body.value;
       if (!Array.isArray(rows)) throw new Error('current sitemap read returned no readable result set');
-      // A projection can return { value: [{ componentstate: 0, sitemapxml: "old" },
-      // { componentstate: 1, sitemapxml: "draft" }] }; only the authored row is current.
-      sms = rows.length <= 1 ? rows : rows.filter((row) => row && Number(row.componentstate) === 1);
-      if (sms.length > 1 || (rows.length > 1 && sms.length !== 1)) throw new Error('current sitemap read returned no single current row');
+      sms = currentSitemapRows(rows);
     } else {
       sms = await sdk.queryRecords('sitemap', {
         select: ['sitemapxml'],
@@ -230,7 +227,22 @@ async function fetchSitemap(sdk, appUnique, { currentLayer } = {}) {
   // sitemap accepted as { ok:true, ids:[] } would cause the build to treat all pages as absent and recreate them.
   if (isMalformed(String(xml))) return { ok: false, reason: 'malformed' };
 
-  return { ok: true, xml: String(xml), ids: sitemapGenPageIds(String(xml)) };
+  // `sitemapId` (opt-in, so the default result keeps its shape) is the id the read resolved, normalized as guidKey does, for a caller that
+  // has to match this app's sitemap to a row it read elsewhere (fetchAppsForPages joins the saved layer by it).
+  return { ok: true, xml: String(xml), ids: sitemapGenPageIds(String(xml)), ...(includeSitemapId ? { sitemapId: guidKey(smId) } : {}) };
+}
+
+const guidKey = (id) => String(id || '').replace(/^\{|\}$/g, '').toLowerCase();
+
+// The one CURRENT row among the rows RetrieveUnpublishedMultiple returned for a sitemap. With a pending edit the platform can answer with
+// both layers —
+//   { value: [{ componentstate: 0, sitemapxml: "old" }, { componentstate: 1, sitemapxml: "draft" }] }
+// — and only the authored row (componentstate 1) is current. Two rows that do not name exactly one current row are ambiguous, and throw.
+// Returns [] for no rows, so the caller decides what an absent row means.
+function currentSitemapRows(rows) {
+  const current = rows.length <= 1 ? rows : rows.filter((row) => row && Number(row.componentstate) === 1);
+  if (current.length > 1 || (rows.length > 1 && current.length !== 1)) throw new Error('current sitemap read returned no single current row');
+  return current;
 }
 
 // Env-wide MEMBERSHIP scan (Imp5): which apps' sitemaps reference each id in `pageIds`. GROUNDED by a live
@@ -239,8 +251,24 @@ async function fetchSitemap(sdk, appUnique, { currentLayer } = {}) {
 // ONLY inside the sitemap XML (`GenPageId="…"`), with NO direct genpage→apps join. The ONLY way to find a
 // page shared across apps is to scan every OTHER app's sitemap XML for the id.
 //
-// Cost: O(number of apps) — one appmodule list + one sitemap read per OTHER app. `excludeAppUnique` skips the
-// app being built (self can't share with itself), so a SINGLE-APP environment reads ZERO other sitemaps.
+// Cost: O(number of apps) — one appmodule list + one PUBLISHED sitemap read per OTHER app, plus ONE read of every sitemap's SAVED layer (below), plus ONE
+// request for the apps that were never published and one component read for each of those (further below; its saved sitemap rides the one saved-layer read).
+// `excludeAppUnique` skips the app being built (self can't share with itself), so a SINGLE-APP environment reads ZERO other sitemaps: it costs the one small
+// list of apps that were never published, and nothing more when there are none (with a never-published app whose layer has no sitemap component, one saved-layer read as well).
+//
+// TWO LAYERS. A page another app has saved into its navigation but not published belongs to that app as much as a published one: the maker can
+// publish at any moment, and an UPDATE now rewrites a page that app is about to show. So an app counts for an id when its published sitemap OR its saved
+// (current, unpublished) sitemap has it. The saved layer is read for ALL other apps in ONE request, however many there are — the `sitemap` collection's
+// RetrieveUnpublishedMultiple, which is composable with $select
+// (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrieveunpublishedmultiple) — and joined to each app by the
+// sitemap id its published read resolved. It is the reader, and the current-row rule (currentSitemapRows), that navigationProof applies to this
+// app's own saved layer. A draft that REMOVES a page does not clear it: the published layer is what that app's users see until the maker publishes.
+//
+// NEVER-PUBLISHED APPS. An app that was created in the maker and saved but never published has no row in the published list above, so none of that app's
+// navigation was read — yet a page it holds is its page, and publishing it would show the page there. draftOnlyApps lists such apps (one request), and each
+// one's saved sitemap is joined from the same one saved-layer read, by the sitemap id its layer's sitemap component names — or, for an app whose layer has no such
+// component, by the sitemap whose unique name is the app's (the vendored SDK links an app to its sitemap by that name). It has no published layer, so
+// whatever it holds is "saved only".
 //
 // COMPLETE ENUMERATION (`paginate: true`): the vendored SDK's queryRecords now follows the OData
 // `@odata.nextLink` to completion, so the appmodule list is the FULL set even past the ~5000-row server
@@ -252,11 +280,17 @@ async function fetchSitemap(sdk, appUnique, { currentLayer } = {}) {
 //
 // FAIL-CLOSED on the enumeration itself: a failed appmodule list → { ok:false } (caller refuses to proceed
 // without full visibility). BEST-EFFORT per app: an app whose sitemap we cannot read is recorded in `unreadable`
-// and skipped (one bad app doesn't block the whole env — the caller warns about partial coverage).
+// and skipped (one bad app doesn't block the whole env — the caller warns about partial coverage). The saved layer
+// is held to the same rule: a read that fails as a whole is { ok:false } (no app's draft is then known), and an app
+// whose saved sitemap is missing, ambiguous or malformed is recorded in `unreadable`. So is the list of never-published apps: one that cannot be read
+// is { ok:false }, and a draft app whose layer or sitemap cannot be resolved is `unreadable` — except one whose component read succeeds and finds no sitemap
+// component AND whose name no sitemap in the saved layer carries, which has no navigation and holds no page.
+//   -> { ok:true, byId: Map<id, appUniqueName[]> (an app holding the id in either layer), savedOnly: Map<id, appUniqueName[]> (the
+//        apps that hold it ONLY in the saved layer), unreadable: appUniqueName[] } | { ok:false, error }
 async function fetchAppsForPages(sdk, pageIds, opts) {
   opts = opts || {};
   const want = new Set(Array.from(pageIds || []).map((x) => String(x).toLowerCase()));
-  if (!want.size) return { ok: true, byId: new Map(), unreadable: [] };
+  if (!want.size) return { ok: true, byId: new Map(), savedOnly: new Map(), unreadable: [] };
 
   const self = opts.excludeAppUnique ? String(opts.excludeAppUnique).toLowerCase() : null;
   let apps;
@@ -292,26 +326,172 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
     (a) => a && a.uniquename && String(a.uniquename).toLowerCase() !== self,
   );
 
+  // The apps that were never published, which the list above cannot show. One small request, and in a single-app environment normally the only one beyond the
+  // list itself. Fail-closed as a whole, before any sitemap is read: with no answer there is no knowing which apps the scan has not seen.
+  const drafts = await draftOnlyApps(sdk, apps, self);
+  if (!drafts.ok) return { ok: false, error: `could not list the apps that have never been published: ${drafts.reason}` };
+
   const byId     = new Map();
+  const savedOnly = new Map();
   const unreadable = [];
+  // `app` references `id` — once, whichever layer says so. A set of apps per id, kept as the arrays the callers print.
+  const reference = (map, id, app) => {
+    const arr = map.get(id) || [];
+    if (!arr.includes(app)) arr.push(app);
+    map.set(id, arr);
+  };
+  // Each app whose sitemap is to be joined to the saved layer below: a published app whose PUBLISHED sitemap read, and a never-published app whose sitemap component was
+  // found — with the sitemap id and the page ids its PUBLISHED layer holds (a never-published app has none).
+  const readable = [];
 
   for (const a of others) {
     // Reuse the discriminated fetchSitemap reader (DRY) — any ok:false goes into unreadable.
-    const r = await fetchSitemap(sdk, a.uniquename);
+    const r = await fetchSitemap(sdk, a.uniquename, { includeSitemapId: true });
     if (!r.ok) {
       // Best-effort: record for caller to surface partial-coverage warning; do NOT throw.
       unreadable.push(a.uniquename);
       continue;
     }
-    for (const id of r.ids) {
-      if (!want.has(id)) continue;
-      const arr = byId.get(id) || [];
-      arr.push(a.uniquename);
-      byId.set(id, arr);
+    readable.push({ app: a.uniquename, sitemapId: r.sitemapId, ids: new Set(r.ids) });
+    for (const id of r.ids) if (want.has(id)) reference(byId, id, a.uniquename);
+  }
+
+  // A never-published app's sitemap is the one its layer's sitemap component names — the read fetchSitemap makes for any layer key (componenttype 62). A read that FAILS,
+  // or one that answers with a component it cannot name, proves nothing about the app: it is unreadable, and the caller halts. A read that SUCCEEDS and finds no sitemap
+  // component does not show that the app has no navigation, though: the vendored SDK ties an app to its sitemap by NAME — it looks the sitemap up with `sitemapnameunique eq
+  // '<the app's unique name>'` and takes one for the app only while that column holds the app's name, and ensureSitemapInSolution (sdk-build.js) resolves it the same way — so
+  // such an app may hold a sitemap, and pages in it, that no component row links to it. The saved-layer read below shows whether it does (`unlinked`); an app with no sitemap of
+  // its name has no navigation at all — one saved in the maker with only a name, say — so it holds no page, and one such app must not stop every page update in the environment.
+  unreadable.push(...drafts.unreadable);
+  const unlinked = [];
+  for (const d of drafts.apps) {
+    let components;
+    try { components = await appComponentRows(sdk, d.layerKey, 62, { top: 1 }); } catch {
+      unreadable.push(d.name);
+      continue;
+    }
+    if (!components.length) {
+      unlinked.push(d);
+      continue;
+    }
+    const sitemapId = guidKey(components[0].objectid);
+    if (!sitemapId) {
+      unreadable.push(d.name);
+      continue;
+    }
+    readable.push({ app: d.name, sitemapId, ids: new Set() });
+  }
+
+  // The SAVED layer of every readable app, in one request — which also shows the sitemap of an app that is linked to it by name only. A single-app environment with no draft app
+  // has no other app, so it reads nothing here; one with a draft app that has no sitemap component reads it once, to rule such a sitemap out.
+  if (readable.length || unlinked.length) {
+    const saved = await savedSitemaps(sdk);
+    // Fail-closed as a whole: with no answer there is nothing known about ANY app's draft, so none can be ruled out.
+    if (!saved.ok) return { ok: false, error: `could not read the other apps' saved (unpublished) navigation: ${saved.reason}` };
+    for (const d of unlinked) {
+      const ids = saved.idsByName.get(String(d.name).toLowerCase());
+      if (!ids) continue; // no sitemap carries the app's name: it has no navigation
+      // More than one sitemap claiming the name leaves it unknown which is the app's, and either may hold the page.
+      if (ids.size !== 1) {
+        unreadable.push(d.name);
+        continue;
+      }
+      readable.push({ app: d.name, sitemapId: [...ids][0], ids: new Set() });
+    }
+    for (const a of readable) {
+      const layer = savedLayerIds(saved.byId.get(a.sitemapId));
+      // Fail-closed per app, as the published read is: a saved layer that is missing, ambiguous or malformed cannot prove the app does not hold the page.
+      if (!layer.ok) {
+        if (!unreadable.includes(a.app)) unreadable.push(a.app);
+        continue;
+      }
+      for (const id of layer.ids) {
+        if (!want.has(id)) continue;
+        reference(byId, id, a.app);
+        if (!a.ids.has(id)) reference(savedOnly, id, a.app);
+      }
     }
   }
 
-  return { ok: true, byId, unreadable };
+  return { ok: true, byId, savedOnly, unreadable };
+}
+
+// The apps that have NEVER been published. The published `appmodule` list that fetchAppsForPages walks has no row for an app that is only saved in the maker, though its navigation is
+// saved all the same. The same collection's RetrieveUnpublishedMultiple answers with the CURRENT layer of every app, drafts included, in one request (paged) however many there are:
+//   { "value": [ { "appmoduleid": "…", "appmoduleidunique": "…", "uniquename": "contoso_draft", "componentstate": 1 }, … ] }
+// An app that has a published row — matched by `appmoduleid`, which a pending edit leaves alone, unlike the layer key `appmoduleidunique` — is read through its published layer and skipped
+// here, as is `self`. What is left exists only as a draft, and its one current layer (the only row, or the authored one: currentLayerRows) carries the layer key its components hang off.
+// FAIL-CLOSED: a list that cannot be read, or a row with no id, is { ok:false } — what the rows leave out cannot be known; a draft app whose layer cannot be told is named in `unreadable`.
+//   -> { ok:true, apps:[{ name, layerKey }], unreadable:[name] } | { ok:false, reason }
+async function draftOnlyApps(sdk, published, self) {
+  if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'no Dataverse client to read it' };
+  let rows;
+  try {
+    rows = await collectionRows(sdk.dataverse, '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,uniquename,componentstate', 'apps that have never been published');
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+  const havePublishedRow = new Set(published.map((app) => guidKey(app && app.appmoduleid)));
+  const byApp = new Map();
+  for (const row of rows) {
+    const id = row && guidKey(row.appmoduleid);
+    if (!id) return { ok: false, reason: 'a row came back with no appmoduleid' };
+    if (havePublishedRow.has(id)) continue;
+    if (!byApp.has(id)) byApp.set(id, []);
+    byApp.get(id).push(row);
+  }
+  const apps = [];
+  const unreadable = [];
+  for (const [id, group] of byApp) {
+    const named = group.find((row) => typeof row.uniquename === 'string' && row.uniquename.trim());
+    const name = named ? named.uniquename : id;
+    if (name.toLowerCase() === self) continue;
+    const current = currentLayerRows(group);
+    if (current.length !== 1 || !GUID_36.test(guidKey(current[0].appmoduleidunique))) unreadable.push(name);
+    else apps.push({ name, layerKey: guidKey(current[0].appmoduleidunique) });
+  }
+  return { ok: true, apps, unreadable };
+}
+
+// Every sitemap's CURRENT layer in ONE request: { ok:true, byId: Map<sitemapid, row[]>, idsByName: Map<lower-cased sitemapnameunique, Set<sitemapid>> } or { ok:false, reason }. The rows
+// of one sitemap are all those the platform returned for its id (currentSitemapRows picks the current one), grouped here so the caller reads each app's by its own id. `idsByName` is
+// the same rows seen by the unique name the vendored SDK ties an app to its sitemap by (see fetchAppsForPages): a row looks like
+//   { "sitemapid": "5111e0f2-…", "sitemapnameunique": "contoso_orders", "componentstate": 1, "sitemapxml": "<SiteMap>…" }
+// and names are lower-cased because Dataverse compares them without regard to case.
+// The read pages with @odata.nextLink like every other collection read in app-components.js (collectionRows): a repeated link, a failed page or a
+// body that is no result set is a failure, never a shorter list.
+async function savedSitemaps(sdk) {
+  if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'no Dataverse client to read it' };
+  let rows;
+  try {
+    rows = await collectionRows(sdk.dataverse, '/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapxml,componentstate,sitemapnameunique', 'saved sitemaps');
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+  const byId = new Map();
+  const idsByName = new Map();
+  for (const row of rows) {
+    const id = row && guidKey(row.sitemapid);
+    if (!id) continue;
+    if (!byId.has(id)) byId.set(id, []);
+    byId.get(id).push(row);
+    const name = typeof row.sitemapnameunique === 'string' ? row.sitemapnameunique.trim().toLowerCase() : '';
+    if (name) {
+      if (!idsByName.has(name)) idsByName.set(name, new Set());
+      idsByName.get(name).add(id);
+    }
+  }
+  return { ok: true, byId, idsByName };
+}
+
+// The genpage ids in one app's saved layer — { ok:true, ids } — or { ok:false } when its rows cannot be trusted: none came back for its sitemap, they do
+// not name one current row, or the current one has no XML or malformed XML (the same structural check a published sitemap must pass).
+function savedLayerIds(rows) {
+  let current;
+  try { [current] = currentSitemapRows(rows || []); } catch { return { ok: false }; }
+  const xml = current && current.sitemapxml;
+  if (!xml || isMalformed(String(xml))) return { ok: false };
+  return { ok: true, ids: sitemapGenPageIds(String(xml)) };
 }
 
 // This app's navigation as OWNERSHIP PROOF for page ids. `published` is a fetchSitemap result for the

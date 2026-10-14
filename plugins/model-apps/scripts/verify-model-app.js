@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 // verify-model-app: reconcile an App Spec against the DEPLOYED app and report any missing artifacts
-// (entities/columns/views/charts/forms/sitemap subareas + icons). Read-only WITH RESPECT TO DATAVERSE
-// (it only READS the org — no create/update/delete), though it does write a local SDK workspace/cache
-// directory (--workspace, default <spec-dir>/.maker-workspace). Exit non-zero if anything declared is
-// missing — catches silent partial builds.
+// (entities/columns/views/charts/forms/sitemap subareas + icons). Read-only: it only READS the org — no
+// create/update/delete — and writes nothing into the app folder. Its SDK works in a throwaway temporary
+// workspace, removed when the run ends, so it never opens the folder's persistent `.maker-workspace` (which belongs
+// to the environment it was first opened for, and is the build's). `--workspace` (default
+// <spec-dir>/.maker-workspace) names only where the build's baseline, `last-applied.json`, is READ from.
+// Exit non-zero if anything declared is missing — catches silent partial builds.
 //
 // Usage: node verify-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--workspace <dir>]
 
@@ -23,28 +25,39 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
+const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
 
-// A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
-// verify checks must be the server's: read through the build's own workspace, a copy holding unpushed edits — or
-// one another writer changed mid-read — was what got verified, and a forced refresh there could discard a
-// concurrent writer's edit. A fresh workspace has no local copy to read, discard or race with, and a fresh SDK no
-// cached read to hand back. One per read, not per run: a second read of the same dashboard must not come from
-// the first one's cache. The HTTP client — and with it the Azure CLI token — is shared: `opts.httpClient` (the
-// run's own), else one made on the first read. A client per read ran `az account get-access-token` once per
-// dashboard. `opts.makeClient` is a test seam.
+// An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
+//
+// For the run's own reads: every one of them goes to the server (queries, catalog and relationship reads,
+// the privilege and setting reads), so nothing in the app folder's workspace could answer them, and opening it
+// would only tie a read-only verify to the environment that workspace was first opened for (the SDK refuses a
+// workspace for another one, WORKSPACE_ORG_MISMATCH) — a folder built in one environment and imported into another
+// could not be verified there — and bind a folder that has no workspace yet to whichever environment verified first.
+//
+// For a dashboard read (readerFor's dashboardComponents) the tiles verify checks must be the server's: read
+// through the build's own workspace, a copy holding unpushed edits — or one another writer changed mid-read — was
+// what got verified, and a forced refresh there could discard a concurrent writer's edit. A fresh workspace has no
+// local copy to read, discard or race with, and a fresh SDK no cached read to hand back. One per read, not per run:
+// a second read of the same dashboard must not come from the first one's cache.
+async function throwawaySdk(env, httpClient, prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dispose = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+  try {
+    return { sdk: await makeProvision(env, dir, httpClient), dispose };
+  } catch (e) {
+    dispose();
+    throw e;
+  }
+}
+
+// The reader for ONE dashboard read: a throwaway SDK (throwawaySdk), deleted after it. The HTTP client — and with it
+// the Azure CLI token — is shared: `opts.httpClient` (the run's own), else one made on the first read. A client per
+// read ran `az account get-access-token` once per dashboard. `opts.makeClient` is a test seam.
 function isolatedReaderFor(env, opts = {}) {
   let client = opts.httpClient || null;
   const makeClient = opts.makeClient || createAzHttpClient;
-  return async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dashboard-'));
-    try {
-      const sdk = await makeProvision(env, dir, client || (client = makeClient(env)));
-      return { sdk, dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
-    } catch (e) {
-      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
-      throw e;
-    }
-  };
+  return async () => throwawaySdk(env, client || (client = makeClient(env)), 'verify-dashboard-');
 }
 
 async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
@@ -106,8 +119,53 @@ async function appRoleIdsFor(sdk, appUnique) {
   }
 }
 
+// Page ids per `pac model genpage download` run in readerFor's pageCodes. pac takes them as ONE comma-joined
+// argument: 25 GUIDs are under a kilobyte, far below the command-line limit of the pac.cmd shim on Windows,
+// and an app with more pages than that is rare — so an app's pages go in one run, an unusual one in a few.
+const PAGE_DOWNLOAD_CHUNK = 25;
+
+// The longest readerFor's endPageReads waits for the downloads it has just ended to remove their folders. Killing pac
+// answers them at once; this only bounds a reader whose pac client cannot end its runs.
+const PAGE_READS_END_WAIT_MS = 10000;
+
+// The SDK resolves a table's EntitySetName with one metadata GET before the table's first record read, and
+// remembers only the ANSWER — so reads of one table that start together each ask for it. Verify's checks
+// overlap, and many of them read the same table (every view reads `savedquery`, every persona `role`), so
+// the first read of each table goes by itself and the others start when its answer is cached: the same
+// requests as when the checks ran one after another, not one extra per overlapping read.
+//
+// A first read that FAILS cached nothing, so the next waiting read becomes the first and the failure is
+// never shared — each check still reports the outcome of its own read. Everything but `queryRecords`
+// is the SDK's own, bound to it.
+function singleFlightFirstReads(sdk) {
+  if (!sdk || typeof sdk.queryRecords !== 'function') return sdk;
+  const cached = new Set();
+  const firstReads = new Map();
+  const queryRecords = async (set, query) => {
+    const table = String(set);
+    while (!cached.has(table)) {
+      const inFlight = firstReads.get(table);
+      if (!inFlight) {
+        const read = sdk.queryRecords(set, query);
+        firstReads.set(table, Promise.resolve(read).then(() => { cached.add(table); }, () => {}).then(() => { firstReads.delete(table); }));
+        return read;
+      }
+      await inFlight;
+    }
+    return sdk.queryRecords(set, query);
+  };
+  return new Proxy(sdk, {
+    get(target, prop) {
+      if (prop === 'queryRecords') return queryRecords;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
+  sdk = singleFlightFirstReads(sdk);
   const genpageCli = opts.genpageCli;
   const workspaceDir = opts.workspaceDir;
   const { fetchSitemap: _fetchSitemap, sitemapGenPageIds: _sitemapGenPageIds } = require('./lib/sitemap-pages.js');
@@ -141,7 +199,10 @@ function readerFor(sdk, appUnique, opts) {
   // keeping the first scan would report a table created between passes as missing, and a rejected
   // scan would fail every later pass. verifySpec calls beginVerificationPass at the start of each.
   let catalogP;
-  const beginVerificationPass = () => { catalogP = null; };
+  // Set once verifySpec has ended this reader's page reads (endPageReads, below): nothing that runs pac, or makes a temporary
+  // download folder, starts again until the next pass begins.
+  let pageReadsEnded = false;
+  const beginVerificationPass = () => { catalogP = null; pageReadsEnded = false; };
   const catalog = () => {
     if (!catalogP) {
       catalogP = Promise.resolve().then(() => sdk.findTables('')).catch((err) => {
@@ -168,6 +229,12 @@ function readerFor(sdk, appUnique, opts) {
     // 404 the SDK emits on an environment where the preview is not provisioned, which verify-spec
     // interprets (it must stay distinguishable from the legitimate 'None' answer).
     columnVisualization: async (logical, columnLogical) => sdk.getColumnVisualization(String(logical).toLowerCase(), String(columnLogical).toLowerCase()),
+    // choiceAttributes(entity, { languageCode }): the table's choice columns with every option and every
+    // language of its labels — what the build resolves a view filter's option LABEL against, so verify expects
+    // the value the build wrote (lib/view-filter-labels.js). Raw client like the relationship reads below, for
+    // the reason that module gives. It never throws: a read that fails answers { state: 'error' }, which verify
+    // reports as a label it could not resolve.
+    choiceAttributes: (logical, o) => readChoiceAttributes(sdk.dataverse, logical, o || {}),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
     // entityRelationships(childLogical): detailed rows for the relationship check. ManyToOne is
     // the 1:N seen from the child; ManyToMany is read from entity1. A failed read throws so
@@ -398,7 +465,24 @@ function readerFor(sdk, appUnique, opts) {
   // for a page-bearing spec (Imp7/C6: missing methods → unableToRun).
   if (genpageCli) {
     let existenceP;
+    let existenceRunning = false;
     let manifestP;
+    // The downloads in flight, each as the promise of the WHOLE call: the temporary folder it made is removed when that
+    // settles, which is what endPageReads waits for.
+    const downloading = new Set();
+    const tracked = (work) => {
+      const call = work();
+      downloading.add(call);
+      const forget = () => downloading.delete(call);
+      call.then(forget, forget);
+      return call;
+    };
+    const PAGE_READS_ENDED = 'the page reads were ended: the verification pass no longer needs them';
+    // The folder is removed the moment its download ends, and a download that was just ended — pac killed — can still be
+    // letting go of it for a moment (Windows answers EBUSY/EPERM while a handle is open), so removal is retried briefly.
+    const removeDownloadDir = (dir) => {
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* leave the temp dir */ }
+    };
 
     // MEMBERSHIP: the app's live sitemap page ids. Fail-closed: throw when the sitemap is unreadable.
     // verifySpec catches reader-incapacity via the method-presence check, not a try/catch here; a throw
@@ -411,10 +495,15 @@ function readerFor(sdk, appUnique, opts) {
 
     // EXISTENCE: env-wide generative-page id set. Memoized (one enumerateEnv per verify run). Throw on
     // failure — fail-closed: an unknown environment means we cannot tell deployed from absent.
-    base.existenceIds = () => (existenceP || (existenceP = (async () => {
-      const e = await genpageCli.enumerateEnv();
-      if (!e.ok) throw new Error(e.error);
-      return e.ids;
+    base.existenceIds = () => existenceP || (pageReadsEnded ? Promise.reject(new Error(PAGE_READS_ENDED)) : (existenceP = (async () => {
+      existenceRunning = true;
+      try {
+        const e = await genpageCli.enumerateEnv();
+        if (!e.ok) throw new Error(e.error);
+        return e.ids;
+      } finally {
+        existenceRunning = false;
+      }
     })()));
 
     // IDENTITY: the durable page manifest web resource. Returns null when absent OR corrupt — verifySpec
@@ -431,10 +520,13 @@ function readerFor(sdk, appUnique, opts) {
     // pageCode(id): download THAT page by id (pageIds:[id]) into a per-id cached directory. Caches result
     // so repeated calls for the same id never re-download. Fail-closed: a download failure rejects (throws)
     // so the caller receives a page-code miss rather than silently receiving empty code.
-    base.pageCode = async (pageId) => {
+    base.pageCode = (pageId) => tracked(async () => {
       const key = String(pageId).toLowerCase();
       if (codeById.has(key)) return codeById.get(key);
       const id = await appId();
+      // Checked after the wait for the app id, right before the folder is made and pac started: a pass that ended these
+      // reads while this one waited must not have a download begin behind it.
+      if (pageReadsEnded) throw new Error(PAGE_READS_ENDED);
       // A fixed name under the workspace (verify-pages/<id>) is a place a link can be left.
       // pac follows links, and removing that name would delete through the link. The download
       // therefore goes to a private temp directory this call creates and always removes.
@@ -451,7 +543,82 @@ function readerFor(sdk, appUnique, opts) {
         codeById.set(key, code);
         return code;
       } finally {
-        try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
+        removeDownloadDir(outDir);
+      }
+    });
+
+    // pageCodes(ids): the code of SEVERAL pages from one pac download per chunk of ids, where pageCode(id) runs
+    // pac once per page — a process start, an auth and a round trip each, seconds apiece. Answers a Map of
+    // lower-cased id -> `{ code }` or `{ error }`: what pageCode(id) would have returned or thrown, so a caller
+    // reports every page exactly as it always has.
+    //
+    // pac writes each page of a multi-id download to <outDir>/<pageId>/page.tsx (the layout download-model-app
+    // reads too), so a page is found by the NAME of its directory, matched case-insensitively. A page that
+    // cannot be answered from the batch — a lone page, a batch pac failed, or an id with no directory in a batch
+    // that succeeded — is asked for by itself, the way it always was: one bad page then costs its own miss,
+    // never its neighbours', and nothing is guessed from another page's files.
+    const downloadPageCodes = (ids) => tracked(async () => {
+      // The app id first, then the folder: a pass that ended these reads while the id was being read has nothing to download for.
+      let id;
+      try { id = await appId(); } catch { return null; }
+      if (pageReadsEnded) return null;
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-page-'));
+      try {
+        await genpageCli.download({ appId: id, outputDir: outDir, pageIds: ids });
+        const codeByDir = new Map();
+        for (const entry of fs.readdirSync(outDir)) {
+          const dir = path.join(outDir, entry);
+          if (!fs.statSync(dir).isDirectory()) continue;
+          const tsx = path.join(dir, 'page.tsx');
+          codeByDir.set(entry.toLowerCase(), fs.existsSync(tsx) ? fs.readFileSync(tsx, 'utf8') : '');
+        }
+        return codeByDir;
+      } catch {
+        return null;
+      } finally {
+        removeDownloadDir(outDir);
+      }
+    });
+    base.pageCodes = async (pageIds) => {
+      const answers = new Map();
+      const wanted = [];
+      for (const id of pageIds || []) {
+        const key = String(id).toLowerCase();
+        if (answers.has(key) || wanted.some((w) => w.key === key)) continue;
+        if (codeById.has(key)) answers.set(key, { code: codeById.get(key) });
+        else wanted.push({ id, key });
+      }
+      for (let i = 0; i < wanted.length; i += PAGE_DOWNLOAD_CHUNK) {
+        const chunk = wanted.slice(i, i + PAGE_DOWNLOAD_CHUNK);
+        const fetched = chunk.length > 1 ? await downloadPageCodes(chunk.map((c) => c.id)) : null;
+        for (const { id, key } of chunk) {
+          if (fetched && fetched.has(key)) {
+            codeById.set(key, fetched.get(key));
+            answers.set(key, { code: fetched.get(key) });
+            continue;
+          }
+          try { answers.set(key, { code: await base.pageCode(id) }); } catch (error) { answers.set(key, { error }); }
+        }
+      }
+      return answers;
+    };
+
+    // Ends the page reads that run pac, for a verify pass that has stopped needing their answers (verifySpec calls this when
+    // it gave up on them): every pac run still in flight is ended, process tree and all; no new one starts, and no download
+    // folder is made, until the next pass begins; and it answers once the downloads that were in flight have removed their
+    // folders — so a verify CLI that exits right after has left neither a pac nor a `verify-page-*` folder behind. The wait is
+    // bounded, and never throws: it may delay the end of a pass for a moment, not hold it.
+    base.endPageReads = async () => {
+      pageReadsEnded = true;
+      // A listing that was cut short is not the answer to remember for a later pass.
+      if (existenceRunning) existenceP = undefined;
+      if (typeof genpageCli.abort === 'function') genpageCli.abort();
+      let timer;
+      const bound = new Promise((resolve) => { timer = setTimeout(resolve, Number.isInteger(opts.endWaitMs) ? opts.endWaitMs : PAGE_READS_END_WAIT_MS); });
+      try {
+        await Promise.race([Promise.allSettled([...downloading]), bound]);
+      } finally {
+        clearTimeout(timer);
       }
     };
   }
@@ -489,21 +656,33 @@ async function main() {
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  // Before the SDK. A link planted as the workspace root is refused here so the factory
-  // is never called; a real directory is allowed.
+  // Only the build's baseline is READ from here, so nothing is created: a folder that does not exist (or cannot be
+  // inspected) is simply one with no baseline. A LINK at the folder is still refused, as everywhere else the plugin
+  // takes a workspace — the baseline would be read from wherever the link points.
   try {
-    assertSafeOutputDir(workspaceDir, { create: true, fs });
+    assertSafeOutputDir(workspaceDir, { fs });
   } catch (err) {
-    emitResult(false, err instanceof Error ? err : new Error(String(err)));
-    return;
+    if (!(err && err.reason === 'uninspectable')) {
+      emitResult(false, err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
   }
   const httpClient = createAzHttpClient(env);
-  const sdk = await makeProvision(env, workspaceDir, httpClient);
-  const genpageCli = makeGenpageCli(env);
-  // The spec's baseline for this environment and app, when the workspace has one: an icon the build
-  // kept because it was changed in the designer since then is not a failure (AB#6726727).
-  const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec });
+  // The SDK works in a throwaway workspace (see throwawaySdk), never the app folder's `.maker-workspace`: verify
+  // must run against any environment the app is deployed to, whichever one that folder was built against.
+  const session = await throwawaySdk(env, httpClient, 'verify-');
+  let r;
+  try {
+    const genpageCli = makeGenpageCli(env);
+    // The spec's baseline for this environment and app, when the workspace has one: an icon the build
+    // kept because it was changed in the designer since then is not a failure (AB#6726727). It is keyed by
+    // environment, so a folder built against another one yields none.
+    const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
+    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec });
+  } finally {
+    // Before the result is printed: emitResult ends the process, so a cleanup placed after it never ran.
+    session.dispose();
+  }
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
