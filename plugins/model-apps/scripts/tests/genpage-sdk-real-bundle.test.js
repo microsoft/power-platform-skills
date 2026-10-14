@@ -220,6 +220,44 @@ test('REAL BUNDLE: a page that does not compile is refused BEFORE anything is wr
   });
 });
 
+// The SDK compiles a page when it writes it — TypeScript's `transpileModule`, with a checker only to resolve the page's enum names — so the compile is a transpile, not a type check. The page-builder's
+// Step 2.6 says so (genpage-dispatch-contract.test.js pins the sentence): a worker that took a clean compile for a type check would ship unchecked types with false confidence. What the compile
+// refuses is a page the runtime could not load.
+const TYPE_ERRORS = [
+  "import * as React from 'react';",
+  "import type { account } from './RuntimeTypes';",
+  "const count: number = 'three';",
+  'const flag: boolean = 42;',
+  'export default function Page() {',
+  '  const row = {} as account;',
+  '  return <div>{count}{String(flag)}{row.nosuchcolumn}</div>;',
+  '}',
+  '',
+].join('\n');
+
+test('REAL BUNDLE: the compile is a transpile, not a type check — a page with type errors and a column its table does not have is written and compiled; one that does not parse, has no default export or imports a value RuntimeTypes lacks is refused', async () => {
+  const server = makeServer();
+  await withBackend(server, async (genpage) => {
+    const out = await genpage.create({ name: 'Typos', source: TYPE_ERRORS, dataSources: 'account', prompt: 'p', agentMessage: 'r' });
+    const held = snapshot(server, out.pageId);
+    assert.strictEqual(held.files[PAGE_TSX], TYPE_ERRORS, 'stored as written');
+    // The compiled output is JavaScript with the wrong types simply gone and the missing column still read.
+    assert.ok(held.files[PAGE_COMPILED].includes("var count = 'three';") && held.files[PAGE_COMPILED].includes('var flag = 42;') && held.files[PAGE_COMPILED].includes('row.nosuchcolumn'));
+    assert.deepStrictEqual(await genpage.update(out.pageId, { source: TYPE_ERRORS.replace("'three'", "'four'"), prompt: 'p2', agentMessage: 'r2' }).then((u) => [u.unchanged === true, u.publish.kind]), [false, 'verified'], 'an update compiles it the same way');
+
+    const refused = {
+      'one that does not parse': 'export default function () { return <div>; }',
+      'one with no default export': "import * as React from 'react';\nexport function Page() { return <div>Hello</div>; }\n",
+      'one that imports a value RuntimeTypes does not hold': "import * as React from 'react';\nimport { nosuchenum } from './RuntimeTypes';\nexport default function Page() { return <div>{String(nosuchenum)}</div>; }\n",
+    };
+    const before = server.writes().length;
+    for (const [what, source] of Object.entries(refused)) {
+      await assert.rejects(genpage.create({ name: 'Bad', source, dataSources: 'account', prompt: 'p' }), (e) => e.code === 'VALIDATION_ERROR' && e.outcome === 'nothing', what);
+    }
+    assert.strictEqual(server.writes().length, before, 'and not one request changed anything');
+  });
+});
+
 test('REAL BUNDLE: bytes that are not UTF-8 are refused before the SDK sends a single request', async () => {
   const server = makeServer();
   await withBackend(server, async (genpage) => {

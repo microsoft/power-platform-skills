@@ -704,20 +704,59 @@ test('prefix resolved names: fail on prefix mismatch', () => {
   assert.match(result.reason, /cr_widget/);
 });
 
-// ---------- Phase 4 generate-types ----------
+// ---------- Phase 4 type generator: genpage.js types, and the pac verb an older capture records ----------
 
-test('Phase 4 generate-types skipped: pass when log only mentions "not run"', () => {
+test('Phase 4 type generator skipped: pass when the log only mentions "not run"', () => {
   const check = PHASE_EXPECTATIONS.get('Phase 4: RuntimeTypes generation is SKIPPED (mock data)');
-  const log = `## Phase 4\n- pac model genpage generate-types not run (mock data)`;
-  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
-  assert.equal(result.status, 'pass');
+  for (const log of [
+    `## Phase 4\n- genpage.js types not run (mock data)`,
+    `## Phase 4\n- pac model genpage generate-types not run (mock data)`,
+  ]) {
+    assert.equal(check({ fixture: fix({ workflowLog: log }), eval: evalStub() }).status, 'pass', log);
+  }
 });
 
-test('Phase 4 generate-types skipped: fail when actually invoked', () => {
+test('Phase 4 type generator skipped: fail when it was run, by the script — also with a quoted path — or by the pac verb of an older capture', () => {
   const check = PHASE_EXPECTATIONS.get('Phase 4: RuntimeTypes generation is SKIPPED (mock data)');
-  const log = `pac model genpage generate-types --data-sources 'account' --output-file RuntimeTypes.ts`;
-  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
-  assert.equal(result.status, 'fail');
+  for (const log of [
+    `node genpage.js types --env https://contoso.crm.dynamics.com --data-sources 'account' --output-file RuntimeTypes.ts`,
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'RuntimeTypes.ts'\``,
+    `pac model genpage generate-types --data-sources 'account' --output-file RuntimeTypes.ts`,
+  ]) {
+    assert.equal(check({ fixture: fix({ workflowLog: log }), eval: evalStub() }).status, 'fail', log);
+  }
+});
+
+test('Phase 4 type generator run: genpage.js types for account — also with a quoted path — or the pac verb of an older capture; another table, or the listing, is not it', () => {
+  const check = PHASE_EXPECTATIONS.get("Phase 4: genpage.js types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run");
+  const run = (workflowLog) => check({ fixture: fix({ workflowLog }), eval: evalStub() });
+  for (const log of [
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/x/RuntimeTypes.ts'\``,
+    `node "\${PLUGIN_ROOT}/scripts/genpage.js" types --env https://contoso.crm.dynamics.com --data-sources "account" --output-file RuntimeTypes.ts`,
+    `pac model genpage generate-types --data-sources 'account' --output-file RuntimeTypes.ts`,
+  ]) assert.equal(run(log).status, 'pass', log);
+  assert.match(run(`node genpage.js types --env https://contoso.crm.dynamics.com --data-sources 'contact' --output-file RuntimeTypes.ts`).reason, /missing --data-sources account/);
+  for (const log of [
+    `node genpage.js list --env https://contoso.crm.dynamics.com --app-id 1 # --data-sources 'account'`,
+    'RuntimeTypes.ts written by hand',
+  ]) assert.match(run(log).reason, /was not invoked/, log);
+});
+
+// ---------- Edit flow: the page listing and the page download are genpage.js, and a capture made before it records the pac verbs ----------
+
+test('Edit Phase 2 (eval 3): genpage.js download — also with a quoted path — or the pac verb of an older capture; a listing is not a download', () => {
+  const check = PHASE_EXPECTATIONS.get('Edit Phase 2: genpage.js download produces <working-dir>/<page-id>/ with page.tsx, config.json, prompt.txt');
+  const run = (workflowLog) => check({ fixture: fix({ workflowLog }), eval: evalStub(3) });
+  for (const line of [
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' download --env 'https://contoso.crm.dynamics.com' --app-id 1 --page-id 2 --output-directory 'D:/work/x'\``,
+    `- \`node "\${PLUGIN_ROOT}/scripts/genpage.js" download --env https://contoso.crm.dynamics.com --page-id 2 --output-directory D:/work/x\``,
+    '- `pac model genpage download --app-id 1 --page-id 2 --output-directory D:/work/x`',
+  ]) assert.equal(run(line).status, 'pass', line);
+  for (const line of [
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' list --env 'https://contoso.crm.dynamics.com' --app-id 1\``,
+    '- `pac model genpage list --app-id 1`',
+    '- the page code was recalled from memory',
+  ]) assert.equal(run(line).status, 'fail', line);
 });
 
 // ---------- Phase 6 upload flags ----------
@@ -788,6 +827,7 @@ test('Edit Phase 1a (eval 3): apps.js list — also with a quoted script path �
   ]) assert.equal(run(line).status, 'pass', line);
   for (const line of [
     '- `pac model genpage list --app-id 11111111-2222-3333-4444-555555555555` → 2 pages',
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' list --env 'https://contoso.crm.dynamics.com' --app-id 11111111-2222-3333-4444-555555555555\` → 2 pages`,
     `- \`node 'D:/repo/plugins/model-apps/scripts/apps.js' create --env 'https://contoso.crm.dynamics.com' --name X --solution Default --page-id 1\``,
     '- apps recalled from memory',
   ]) assert.equal(run(line).status, 'fail', line);

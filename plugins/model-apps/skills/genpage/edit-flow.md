@@ -6,9 +6,9 @@ to `genpage-edit-planner`, then applies the edit inline.
 
 > **⚠️ CRITICAL — do NOT hallucinate app or page names.** App names and page
 > names are discovered by running `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` and
-> `pac model genpage list --app-id '<id>'`. Never guess them from the repo, the conversation context,
-> sample app names, or anywhere else. Always run the commands first, then
-> present what the commands returned to the user.
+> `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>' --app-id '<id>'`. Never guess them
+> from the repo, the conversation context, sample app names, or anywhere else. Always run the
+> commands first, then present what the commands returned to the user.
 
 > **⚠️ Unattended runs cannot select a target.** This flow **overwrites an
 > existing page**, and every selection step below is an `AskUserQuestion`. Under
@@ -70,11 +70,17 @@ Record the selected `<app-id>`.
 ### 1b. Discover existing pages in the selected app
 
 ```powershell
-pac model genpage list --app-id '<app-id>'
+node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>' --app-id '<app-id>'
 ```
 
-This returns the list of generative pages already deployed in the selected app,
-including **Page ID** and display name.
+The script prints `{ "ok": true, "scope": "app", "appId", "layer": "published", "count": N, "pages": [ { "pageId",
+"name", "title" } ] }` — the generative pages in the selected app's navigation, in navigation order. `name` is the
+page's own name and `title` the navigation entry's (renaming a page leaves its title as it was): present the
+`name`. `layer` says which navigation was read: `published` is what the app runs, and `--include-unpublished`
+reads the saved one the app designer holds (`layer: "saved"`) — the way to see a page that was added and not yet
+published, or the pages of an app that was never published. An entry whose page is not in the environment has
+`name: null` and `"exists": false`: do not offer it. If the script fails (exit 1), report why and stop — a failed
+read is never "no pages".
 
 Behavior by page count:
 - **0 pages:** Tell the user "This app has no generative pages to edit. Did
@@ -96,19 +102,31 @@ No `AskUserQuestion` here — this is a status update before the next phase.
 ## Edit Phase 2: Download Existing Page
 
 ```powershell
-pac model genpage download `
+node "${PLUGIN_ROOT}/scripts/genpage.js" download `
+  --env '<envUrl>' `
   --app-id '<app-id>' `
   --page-id '<page-id>' `
   --output-directory '<working-dir>'
 ```
 
 The download creates a `<working-dir>/<page-id>/` folder with fixed filenames:
-`page.tsx` (source), `config.json` (entity list + model), `prompt.txt` (original
-prompt). Downstream phases operate on `<working-dir>/<page-id>/page.tsx` for
-editing and uploading, and read `config.json.dataSources` plus
+`page.tsx` (source), `config.json` (entity list + model + bindings), `prompt.txt` (the page's prompt, or
+its conversation when it has several; left out for a page that has none). Downstream phases operate on
+`<working-dir>/<page-id>/page.tsx` for editing and uploading, and read `config.json.dataSources` plus
 `config.json.connectorBindings` in Phase 3.
 
-Record that download as the base later uploads are measured against. `pac model genpage download` writes a BOM and a final CRLF; the marker hashes the page with those stripped, so a later download of the same page matches.
+The script prints `{ "ok": true, "outputDirectory", "pages": [ { "pageId", "name", "directory", "files",
+"replaced", "removed" } ] }`. `replaced` names the files that already held other bytes and were overwritten —
+a `page.tsx` you had edited, when you download the page again — and `removed` a `prompt.txt` an earlier
+download left that this page does not have; both are left out when empty. The page is read before anything
+is written, so a page that cannot be read (exit 1, `"ok": false`) leaves the folder as it was. With `--app-id`
+the page must be in that app's saved navigation, or nothing is downloaded (`GENPAGE_NOT_IN_APP`).
+
+`page.tsx` is the page's text exactly as the environment stores it: the download adds no byte order mark and
+no line break at the end (a download an earlier release made with `pac` added both). Record that download as the
+base later uploads are measured against. The marker hashes the page with any byte order mark removed, every line
+ending read as LF and the final blank lines dropped, so a later download of the same page — or an earlier
+release's copy of it — matches.
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-base.js" record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<page-id>/page.tsx'
@@ -144,12 +162,15 @@ Read `<working-dir>/<page-id>/config.json`. If `dataSources` is non-empty, the
 page uses Dataverse entities — generate the schema:
 
 ```powershell
-pac model genpage generate-types `
+node "${PLUGIN_ROOT}/scripts/genpage.js" types `
+  --env '<envUrl>' `
   --data-sources 'entity1,entity2' `
   --output-file '<working-dir>/RuntimeTypes.ts'
 ```
 
-Pass the exact entity list from `config.json.dataSources`. If `dataSources` is an
+Pass the exact entity list from `config.json.dataSources`. The script prints `{ "ok": true, "outputFile",
+"dataSources", "detail", "bytes" }`; a failure (exit 1, `"ok": false`) means there are no verified column names:
+report why, and make no edit that needs them. If `dataSources` is an
 empty array, the page is mock-data only — skip this phase.
 
 Also read `config.json.connectorBindings` and `config.json.actionBindings`.

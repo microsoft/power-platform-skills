@@ -36,11 +36,13 @@ Both skills can create one:
 
 ## Schema Generation Fails
 
+`node "${PLUGIN_ROOT}/scripts/genpage.js" types …` prints `{ "ok": false, "error", "code" }` and exits 1 when it cannot write the schema — read `error` first.
+
 - Verify entity names are logical names (singular, lowercase: `"account"` not `"Account"`)
-- Check authentication: `pac auth list`
+- A table the environment does not have is the SDK's own 404 — ensure the entities exist in your environment and check for typos in entity logical names
+- The type generator signs in with the Azure CLI, like every page operation: `az` missing, signed out, too slow, or signed in to another tenant than the `pac` profile fails with a connection error — run `node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac` to see which
 - Try one entity at a time to isolate the issue
-- Ensure the entities exist in your environment
-- Check for typos in entity logical names
+- The output file's name is checked before the environment is asked: a link, or a folder, at that name is refused
 
 ---
 
@@ -58,7 +60,7 @@ Both skills can create one:
 - Check `.tsx` file exists and has no syntax errors (a page that does not compile is refused before anything is written)
 - Verify `--data-sources` matches entities used in code
 - Ensure schema was generated for entity-based pages
-- If updating, ensure `--page-id` is correct (get from `pac model genpage list`)
+- If updating, ensure `--page-id` is correct (get it from `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>' --app-id '<app-id>'`)
 
 ---
 
@@ -78,7 +80,7 @@ Dialog: **"Failed to load generative page"**, carrying a Dataverse OData error s
 
 > A binary operator with incompatible types was detected. Found operand types 'Edm.Guid' and 'Edm.String' for operator kind 'Equal'.
 
-The page itself deployed correctly — this is a **runtime data** failure, so `pac model genpage list` and the sitemap both still look right. Diagnose from the failing request, never from the dialog:
+The page itself deployed correctly — this is a **runtime data** failure, so `genpage.js list` and the sitemap both still look right. Diagnose from the failing request, never from the dialog:
 
 - **Capture the query first**: F12 → Network → filter `api/data` → find the 4xx response. Copy its `$filter` (or the request body for an `Execute`/action call). That one string decides which cause below applies; the dialog alone cannot distinguish them.
 
@@ -102,10 +104,10 @@ See: <https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webap
 
 ## RuntimeTypes Issues
 
-- Generate schema BEFORE uploading: `pac model genpage generate-types --data-sources "entity1" --output-file RuntimeTypes.ts`
+- Generate schema BEFORE uploading: `node "${PLUGIN_ROOT}/scripts/genpage.js" types --env '<envUrl>' --data-sources 'entity1' --output-file '<working-dir>/RuntimeTypes.ts'`
 - Keep `RuntimeTypes.ts` in the same directory as the `.tsx` file
 - Regenerate schema if Dataverse metadata has changed
-- If column names don't match, re-run `generate-types` — never guess column names
+- If column names don't match, re-run `genpage.js types` — never guess column names
 
 ---
 

@@ -30,10 +30,11 @@ the few surfaces it does not model, which use `dataverseRequest()` (see `## Data
 Scripts`).
 
 **Requirements:**
-- **PAC CLI > 2.10.0** — for sign-in and environment discovery (`pac auth`, `pac org who`), for the fallbacks of
-  `list-connections.js`, `connector.js` and `solution-settings.js` (run only when the SDK refuses their route), and for
-  the type generator the `/genpage` skill runs (`pac model genpage generate-types`). Generative pages themselves are
-  written, read and deleted through the SDK with the `az` token, not through `pac`.
+- **PAC CLI > 2.10.0** — for sign-in and environment discovery (`pac auth`, `pac org who`, and `pac help` for the version
+  check), for the fallbacks of `list-connections.js`, `connector.js` and `solution-settings.js` (run only when the SDK
+  refuses their route), and for `pac model genpage list-connector-tables`, which lists a connector's tables and has no
+  script. Generative pages themselves — written, read, listed, downloaded, put in an app, taken out of one and deleted — and
+  their type generator are the SDK's, with the `az` token, not `pac`'s (`scripts/genpage-upload.js`, `scripts/genpage.js`).
 - **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder) and, for connections and connector
   metadata, the Power Apps service token (`https://service.powerapps.com/`); must be logged in with the
   same identity as the active `pac` profile
@@ -132,7 +133,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/build-model-app.js` → `scripts/lib/sdk-build.js`** — the deterministic, **idempotent**
   build engine, run after approval. Runs in two engine invocations (staged flow): (1) `--stage data
   --apply` materializes tables + columns + relationships (solution·data-model only; sample-data
-  deferred) so `generate-types` can emit `RuntimeTypes.ts`; (2) a full `--apply` build (re-discovers
+  deferred) so `genpage.js types` can emit `RuntimeTypes.ts`; (2) a full `--apply` build (re-discovers
   the data model, then ui · app · publish) finalizes everything idempotently. `--stage
   <data|ui|app|publish>` selects phases by stage name; **apply-safe only for `data`** — the full
   build (run 2) is always a complete idempotent run. Discovers existing tables/columns/relationships via the SDK
@@ -1519,8 +1520,8 @@ scripts/
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
   list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
   list-languages.js            ← /genpage planner: the environment's base language and each provisioned language (LCID, culture code, right-to-left) — the SDK's `getEnvironmentLanguages()` over the az-token client, three reads and no write, printed as one pure-ASCII JSON line. The only source: no `pac model list-languages` stands behind it, because every /genpage page operation needs the Azure CLI
-  apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder will use (their text still names the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. The default public view of each table the pages read (the tables come from each page's own configuration, the views from the page backend: the definition `placeInApp` pins with) joins the app's components in the create itself — `components.views` of the app the SDK creates, written by the same AddAppComponents that adds the sitemap — as `pac model genpage upload --app-id` pinned them; the output says what was pinned (`dataSources`, `pinnedViews`), a table with no default public view or a page held as raw files is named in `warnings`, and a page that cannot be read refuses the create before the first write. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left of this create (its rows are recognised by their ids, and a row that holds the unique name under another id is named apart)
-  list-tables.js               ← the replacement for `pac model list-tables` (the skills' text still names the `pac` command): the environment's tables — the SDK's `findTables(term)` for each comma-separated `--search` term, a few reads at a time, joined without repeats; `--exact` keeps the tables whose logical name IS a term and names the terms no table has (`missing`), from one read of every table; `--type custom|standard|all` is `pac`'s own filter, `custom` through the SDK's `customOnly` option. One pure-ASCII JSON line of `{ logicalName, displayName, schemaName, isCustom }` rows
+  apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder run (`pac-replaced-docs.test.js` pins that their text names this script, not the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. The default public view of each table the pages read (the tables come from each page's own configuration, the views from the page backend: the definition `placeInApp` pins with) joins the app's components in the create itself — `components.views` of the app the SDK creates, written by the same AddAppComponents that adds the sitemap — as `pac model genpage upload --app-id` pinned them; the output says what was pinned (`dataSources`, `pinnedViews`), a table with no default public view or a page held as raw files is named in `warnings`, and a page that cannot be read refuses the create before the first write. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left of this create (its rows are recognised by their ids, and a row that holds the unique name under another id is named apart)
+  list-tables.js               ← the replacement for `pac model list-tables` (the skills' and agents' text runs this script: `pac-replaced-docs.test.js`): the environment's tables — the SDK's `findTables(term)` for each comma-separated `--search` term, a few reads at a time, joined without repeats; `--exact` keeps the tables whose logical name IS a term and names the terms no table has (`missing`), from one read of every table; `--type custom|standard|all` is `pac`'s own filter, `custom` through the SDK's `customOnly` option. One pure-ASCII JSON line of `{ logicalName, displayName, schemaName, isCustom }` rows
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
   solution-settings.js         ← Deployment settings: `template` writes the settings file of a solution or a package (pac's own format), `import` imports a package and applies the settings in the same import — the SDK first, `pac solution create-settings` / `import --settings-file` only where it refuses; ExportSolution, StageSolution and ImportSolution are each sent exactly once, every text it prints has the settings file's values taken out, and a failed import names its job and the job log's reason; one pure-ASCII JSON line with `source`
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data; --language-code)
@@ -1722,6 +1723,7 @@ What the skills ran through `pac model genpage` — the listing, the download, t
 - **`add-to-app`** asks the backend's `placeInApp` with `finishIfUnpublished`, so it is safe to run again: a page both layers name is left alone, one that was saved and never published is published, and the page is proved in the PUBLISHED navigation. The navigation's titles are written in the environment's base language (`baseLanguage()`, as `apps.js` writes them): a title in a language the environment has not provisioned does not show.
 - **`remove-from-app`** refuses to leave an app's navigation with no entry unless `--allow-empty-navigation` is given — a judgement of the same kind as the build's `--allow-destructive`, since the platform accepts such an app. It never touches the page or the views.
 - **`delete`** is refused while any app's navigation — published or saved, every app of the environment — names the page, and the refusal names the apps (`GENPAGE_IN_APP`); an app whose navigation cannot be read could hold the page, so that is a refusal too. There is no confirmation flag: the skill that runs it asks the user, and suppressing that question never authorizes a delete. It reports what was deleted (`fileRows`, `conversationMessages`) and that the page was read back as gone (`verified`); a history that could not be fully removed is a warning on a delete that happened (`historyRemoved: false`).
+- **The documents** run these commands, and `pac-replaced-docs.test.js` holds every command one gives for `genpage.js` to this table (the script's own `VERBS`: the commands and their flags) and the text around it to what the script does: the edit flow lists and downloads with `list` and `download` (the folder's files, no `page.js`, no byte order mark or line break added, `replaced` and `removed`, a `prompt.txt` only for a page that has a prompt), the type generator is `types`, and the three verbs that change an app or delete a page are offered where a document used to send the maker to Maker — an uncertain create (`add-to-app`, `delete`), the build's `pages-shared-across-apps` halt (`remove-from-app`) and its unproven-page halt (`add-to-app`, `delete`) — each with the instruction to ask the user first, since `delete` asks for nothing itself and an unattended run never deletes.
 
 ## Feature Flags
 
@@ -2801,7 +2803,11 @@ reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and
 `PROVENANCE.json`), loaded by `scripts/lib/typescript-compiler.js` and passed to the SDK as
 `MakerSdkOptions.typescript`. The SDK compiles a page's source itself on every push that changes it — TypeScript's
 `transpileModule` plus its checker, to resolve enum names — and accepts only the minor version the maker portal compiles
-with (5.8; another is refused with `GENPAGE_COMPILER_VERSION`), so a page is stored as the portal would store it. The
+with (5.8; another is refused with `GENPAGE_COMPILER_VERSION`), so a page is stored as the portal would store it. That compile is a
+transpile, not a type check: a page with type errors, or a reference to a column its table does not have, compiles and deploys, and only
+a page that does not parse, has no default export or imports a value `RuntimeTypes` does not hold is refused
+(`genpage-sdk-real-bundle.test.js` runs it against the real bundle). The page-builder's Step 2.6 says so, and
+`genpage-dispatch-contract.test.js` pins the sentence and scans every instruction for a claim that the compile type-checks. The
 SDK's bundle holds no TypeScript (`_vendor-build/build.js` keeps it `external`), and a plugin install has no
 `node_modules`, so the plugin ships the official `typescript@5.8.3` `lib/typescript.js` — only that file: the compile
 reads no `.d.ts` — minified by esbuild as a SCRIPT (as a module esbuild renames the top-level `var ts`) and
@@ -3092,15 +3098,18 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   answer. The SDK reports a missing Azure CLI, a slow one, a token another tenant refuses and a dropped connection
   alike, as `CONNECTION_ERROR` (`statusCode` 0, or the HTTP status of a refusal), so no code tells them apart and a
   caller decides by the exit status, never by the wording of a message. `pac-fallback-commands.test.js` pins that no
-  script runs the command. The plugin's own `readProvisionedLanguages` /
+  script runs the command, and `pac-replaced-docs.test.js` that no document names it (README's account of `az` — needed for
+  every page operation, and no `pac` fallback for the languages — is pinned in `list-languages.test.js`). The plugin's own `readProvisionedLanguages` /
   `readOrgLanguageCode` (`lib/dataverse-auth.js`) stay: they run before an SDK exists (it needs the language
   at construction) and fail soft, where the SDK's read is strict.
 - **The environment's apps and tables come from the SDK** (`scripts/apps.js`, `scripts/list-tables.js`;
   `scripts/tests/apps.test.js`, `apps-real-bundle.test.js`, `list-tables.test.js`,
   `list-tables-real-bundle.test.js`, `pac-replaced-commands.test.js`). They are the replacements for
   `pac model list`, `pac model create` and `pac model list-tables`: no production script runs any of the
-  three (a source scan pins it), while the skills', agents' and references' text still names them until it
-  moves onto these scripts. Each prints one pure-ASCII JSON line, writes a usage error to stderr alone (exit
+  three (a source scan pins it), and no skill, agent, reference, README or doc names them either
+  (`pac-replaced-docs.test.js`: an allowlist of the `pac` commands a document may still name — `pac auth`, `pac org who`,
+  `pac help` and `pac model genpage list-connector-tables` — and, for the eight scripts that replaced a `pac` command, a table of
+  the subcommands and flags each document may give them, checked against the scripts' own). Each prints one pure-ASCII JSON line, writes a usage error to stderr alone (exit
   1, stdout empty), and reports a failure as `{ ok: false, code, error }` with the SDK's own code and message — `code` is the
   SDK's when it has one: a failure that is the script's own, such as a list that fails because the platform answered a row with
   no id, prints `{ ok: false, error }` and no `code`. The

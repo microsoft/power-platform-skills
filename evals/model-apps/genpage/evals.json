@@ -62,7 +62,7 @@
         "Phase 1 (Planner): list-tables.js --search 'account' --exact is run and the result is matched by exact logical name",
         "Phase 1 (Planner): Account entity is detected as existing; plan records no entity creation required",
         "Phase 2: Entity-builder is SKIPPED (no entities to create)",
-        "Phase 4: pac model genpage generate-types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run",
+        "Phase 4: genpage.js types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run",
         "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
         "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
         "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
@@ -111,11 +111,11 @@
         "Phase 1 (Planner): User indicates 'edit existing'; planner returns { action: 'edit' }, skipping Phases 2-8 of the create flow",
         "Edit Phase 1a: apps.js list is run to discover available apps — orchestrator does NOT guess or invent app names",
         "Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output",
-        "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
-        "Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output",
+        "Edit Phase 1b: After app selection, genpage.js list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
+        "Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from genpage.js list output",
         "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops",
         "Edit Phase 1c: Selection is restated to the user before proceeding to download",
-        "Edit Phase 2: pac model genpage download produces <working-dir>/<page-id>/ with page.tsx, page.js, config.json, prompt.txt",
+        "Edit Phase 2: genpage.js download produces <working-dir>/<page-id>/ with page.tsx, config.json, prompt.txt",
         "Edit Phase 3: config.json is read; since dataSources contains 'contact', RuntimeTypes.ts is generated",
         "Edit Phase 4: genpage-edit-planner agent is invoked via Task tool",
         "Edit Phase 4: edit-planner reads page.tsx, config.json, and prompt.txt from the <page-id>/ folder",
@@ -143,7 +143,7 @@
       "expectations": [
         "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing",
         "Phase 2: Entity-builder is SKIPPED",
-        "Phase 4: pac model genpage generate-types --data-sources 'incident,contact' is run",
+        "Phase 4: genpage.js types --data-sources 'incident,contact' is run",
         "Phase 5 (Page Builder): Wizard sample (2-wizard-multi-step.tsx) is read",
         "Phase 5 (Page Builder): Generated code includes step state management (current step tracking) and Next/Back navigation",
         "Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission",
@@ -221,7 +221,7 @@
         "Phase 2b (Entity Builder): User is asked about sample data via AskUserQuestion",
         "Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js input JSON; parent references use $parent/match convention for dependency resolution",
         "Phase 2b (Entity Builder): Actual logical names are reported back (may be normalized by Dataverse); a transaction log at <working-dir>/genpage-entity-creation-log.md captures each successful operation",
-        "Phase 4: pac model genpage generate-types is run with the created entity names",
+        "Phase 4: genpage.js types is run with the created entity names",
         "Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts",
         "Phase 6: Upload includes --data-sources with both created entity names"
       ]
@@ -244,7 +244,7 @@
         "Phase 1 (Planner): Plan records 'create new app' decision",
         "Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment",
         "Phase 6 (new app): apps.js create --name 'Account Metrics' --solution '<Solution from plan>' --page-id <first page> --publish is run after the first page's upload; --solution is ALWAYS passed (apps.js create refuses a call without it)",
-        "Phase 6 (new app): The first page is created with no --app-id, and the app-id apps.js create returns is stored for the pages that follow",
+        "Phase 6 (new app): The first page is created with no --app-id and no --add-to-sitemap, before the app exists",
         "Phase 6: Every upload after the app is created uses the newly created app-id"
       ]
     },
@@ -311,7 +311,7 @@
         "Phase 1 (Planner): Plan includes 3 pages in the Pages table with distinct file names and purposes",
         "Phase 1 (Planner): Per-Page Specifications section has an entry for each of the 3 pages",
         "Phase 5a: Orchestrator validates the plan — at least one page, unique filenames, each page has a matching Per-Page Specifications subsection",
-        "Phase 4: pac model genpage generate-types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated",
+        "Phase 4: genpage.js types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated",
         "Phase 5c (multi-page): Three genpage-page-builder agents are invoked via Task tool in a SINGLE message (parallel execution, not sequential). The single-page fast path (5b) is NOT taken because N>1.",
         "Phase 5c: Each builder receives a distinct target filename — no two builders target the same file",
         "Phase 5c: Each builder reads the same genpage-plan.md but extracts only its own page specification",
@@ -417,7 +417,7 @@
         "Phase 2b (Entity Builder): Status picklist has 4 options starting at 100000000",
         "Phase 2b (Entity Builder): Solution is specified via provision-entities.js input JSON; verified through ## Environment → Solution: declaration",
         "Phase 2b (Entity Builder): Transaction log (genpage-entity-creation-log.md) records each create with its returned metadataId",
-        "Phase 4: pac model genpage generate-types picks up the enum registrations",
+        "Phase 4: genpage.js types picks up the enum registrations",
         "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",
         "Phase 5 (Page Builder): Generated .tsx uses dataApi.getChoices() or reads FormattedValue annotations for choice display names"
       ]
@@ -496,14 +496,14 @@
       "data": {
         "question_answers": {
           "new_or_edit": "Edit existing",
-          "app_and_page": "user selects Operations Hub, then the Seattle Weather page, from the apps.js list / pac model genpage list output",
+          "app_and_page": "user selects Operations Hub, then the Seattle Weather page, from the apps.js list / genpage.js list output",
           "changes": "Bind current conditions to the MSN Weather connector; preserve the five-day forecast"
         }
       },
       "expectations": [
         "Phase 1 (Planner): User indicates 'edit existing'; planner returns { action: 'edit' }, skipping Phases 2-8 of the create flow",
         "Edit Phase 1a: apps.js list is run to discover available apps — orchestrator does NOT guess or invent app names",
-        "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
+        "Edit Phase 1b: After app selection, genpage.js list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
         "Edit Phase 4: genpage-edit-planner agent is invoked via Task tool",
         "Edit Phase 4: genpage-edit-plan.md is written to the working directory root (not inside <page-id>/)",
         "Edit Phase 3.5 (connector edit): genpage-connector-builder is dispatched with Mode: edit and the existing bindings, runs list-connections.js, and writes connectors.json as a bare JSON array",

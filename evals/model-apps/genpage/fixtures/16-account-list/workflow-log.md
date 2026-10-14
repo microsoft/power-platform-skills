@@ -68,7 +68,7 @@ working directory, so file arguments are relative to it.
 - SKIPPED app creation: existing app Sales Hub (11111111-2222-3333-4444-555555555555) selected
 
 ## Phase 4 — RuntimeTypes
-- `pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'`
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'`
 - Read RuntimeTypes.ts: verified accountid, name, accountnumber, telephone1, address1_city and the `_primarycontactid_value` foreign key (display name comes from its FormattedValue annotation; `primarycontactidname` is not selectable)
 
 ## Phase 4.5 — Connector bindings

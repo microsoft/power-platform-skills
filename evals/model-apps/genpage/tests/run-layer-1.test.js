@@ -40,7 +40,7 @@ function mockEval2Artifacts() {
 - Solution selection question SKIPPED (code-only flow)
 - EnterPlanMode → approved
 ## Phase 2 — SKIPPED (mock data)
-## Phase 4 — pac model genpage generate-types not run (mock data)
+## Phase 4 — genpage.js types not run (mock data)
 ## Phase 5b — single-page fast path, inlined build
 - Data mode: mock
 - read verified-icons.txt

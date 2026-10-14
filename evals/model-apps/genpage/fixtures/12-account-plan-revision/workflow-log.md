@@ -77,7 +77,7 @@ Commands run from the working directory; `scripts\` is `${PLUGIN_ROOT}\scripts`.
 - SKIPPED: existing app Contoso Sales (11111111-1111-4111-8111-111111111111)
 
 ## Phase 4 — RuntimeTypes
-- `pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-filter-list/RuntimeTypes.ts'` → RuntimeTypes.ts written
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-filter-list/RuntimeTypes.ts'` → RuntimeTypes.ts written
 - Read RuntimeTypes.ts: account columns accountid, name, accountnumber, industrycode, address1_city, address1_country, telephone1, emailaddress1, statecode verified
 
 ## Phase 4.5 — Connector bindings

@@ -466,11 +466,11 @@ consolidated pre-flight:
 node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
 ```
 
-`/genpage` signs in and chooses the environment with `pac`, runs the type generator
-(`pac model genpage generate-types`) and falls back to it for connections, connector metadata and
-deployment settings — so pass `--require-pac` to keep a missing pac login a hard blocker (the
-app-builder skill omits the flag — its build path only needs the az token). Pages themselves are
-written through the SDK with the same az token.
+`/genpage` signs in and chooses the environment with `pac` and falls back to it for connections,
+connector metadata and deployment settings — so pass `--require-pac` to keep a missing pac login a
+hard blocker (the app-builder skill omits the flag — its build path only needs the az token). Pages
+themselves are written, read and deleted through the SDK with the same az token, and so are the type
+generator and the page listing and download (`scripts/genpage.js`).
 It returns a single JSON object:
 
 ```json
@@ -557,11 +557,19 @@ the `Solution` line is informational only for this phase.
 
 ### Phase 4: Generate RuntimeTypes (Conditional)
 
-If any page uses Dataverse entities, generate the TypeScript schema:
+If any page uses Dataverse entities, generate the TypeScript schema. `genpage.js types` is the SDK's
+type generator — the maker portal's own — read from the environment now:
 
 ```powershell
-pac model genpage generate-types --data-sources 'entity1,entity2,...' --output-file '<working-dir>/RuntimeTypes.ts'
+node "${PLUGIN_ROOT}/scripts/genpage.js" types `
+  --env '<org-url>' `
+  --data-sources 'entity1,entity2' `
+  --output-file '<working-dir>/RuntimeTypes.ts'
 ```
+
+It prints `{ "ok": true, "outputFile", "dataSources", "detail", "bytes" }`. A failure (exit 1, `"ok": false`
+with the SDK's `code` — for example a table the environment does not have) ends the phase: report why,
+and never guess column names.
 
 > **Windows + Bash**: Always use forward slashes in file paths (e.g., `D:/temp/RuntimeTypes.ts`).
 
@@ -1060,7 +1068,7 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
 
 - **`"outcome": "nothing"`** — nothing was written (the SDK refused before it sent anything, or the service rejected the whole change set): fix what the message names and run the command again.
 - **An update with `"outcome": "unknown"`** "MAY HAVE LANDED" and is not sent again. Compare the deployed page with your file first: `node "${PLUGIN_ROOT}/scripts/genpage-base.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'`. `"contentSame": true` means the update landed: do not upload it again — run `genpage-base.js record` for that page and file so the marker matches what is deployed, and confirm in Maker that the page shows your change and is published. `"deployed": "unchanged"` means it did not land, and re-running the update is safe. `"deployed": "changed"` with `"contentSame": false` means someone else saved the page: treat it as the `deployed-changed` refusal above, with its choice and its `Choice:` line.
-- **A create with `"outcome": "unknown"`** is an *uncertain* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page. Look for the page in Maker, or list the environment's pages (`pac model genpage list --environment '<org-url>' --include-unpublished`). If it is there, add it to the app's navigation (in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create. If no page of yours appears after a few minutes, the create is re-run. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for. The first page of a new app has no app yet to be added to: once it is found, go on with step 2 of "A new app" below (`apps.js create --page-id`), and run `genpage-base.js record` with the new app's id before the update in step 4, which is refused `no-base` without a marker.
+- **A create with `"outcome": "unknown"`** is an *uncertain* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page. List the environment's pages: `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<org-url>'` prints every page of the environment, drafts included, as `{ "pageId", "name" }`, and a failed read (exit 1, `"ok": false`) is never "the page is not there". If it is there, add it to the app's navigation with `node "${PLUGIN_ROOT}/scripts/genpage.js" add-to-app --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>'` (it publishes the app and proves the page shows in the published navigation), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create: `node "${PLUGIN_ROOT}/scripts/genpage.js" delete --env '<org-url>' --page-id '<page-id>'` removes the page and its conversation for good, so ask the user first — an unattended run stops instead, since suppressing a prompt never authorizes a delete — and it is refused while an app's navigation names the page (the refusal names the apps; `genpage.js remove-from-app` takes the page out of each). If no page of yours appears after a few minutes, the create is re-run. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for. The first page of a new app has no app yet to be added to: once it is found, run `genpage-base.js record --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` with no `--app-id` (no app holds the page yet, so the marker records the page alone, and the first update that names the new app records the app) and go on with step 2 of "A new app" below (`apps.js create --page-id`).
 - **A create that wrote the page but did not publish or place it** is not an unknown outcome: its result carries the `pageId`, and the way on is "A create that did not finish" above.
 
 #### A new app: the first page, then the app, then the rest
@@ -1079,9 +1087,8 @@ Phase 3 created nothing, because the platform refuses an app whose navigation is
      --publish
    ```
 
-   It makes the app with one area `Main`, one group `Pages` and a sub-area for the page, titled with the page's name; the app and its sitemap join the solution (a system solution such as `Default` already holds every component, so the result says `systemSolution: true` and an empty `inSolution` — a create into `Default` needs no add and did not fail). **`--publish` is mandatory:** without it the new app stays in draft and the genux runtime URL errors with "app not published". It prints `{ "ok": true, "appId", "uniqueName", "published", "unpublishedChanges", "solution", "navigation", … }` — store `appId` for the rest of the run; a `warnings` entry says when the environment could not take the app's new header and navigation setting, and the app was made all the same.
-3. **The remaining pages.** Upload each with `--app-id '<appId>'` and `--add-to-sitemap` (the create above): each becomes a sub-area of the new app.
-4. **The first page's tables.** Upload the first page again as an update that names the app — the update form above with `--app-id '<appId>'` and `--page-id '<first-page-id>'`, a `prompt.txt` that says `Pin the page's tables into the new app` and an `agent-message.txt` that says `Added the page's table views to the app`, and no `--data-sources` (the page keeps its own) — so that the default views of the tables it reads join the app's components (the maker's "/" picker lists a page's tables from them) and the base marker records the app. The file is unchanged, so the page is published, not rewritten, and no turn is recorded. A page that Phase 6.5 re-uploads gets the same from that update, so skip this step for it.
+   It makes the app with one area `Main`, one group `Pages` and a sub-area for the page, titled with the page's name; the app and its sitemap join the solution (a system solution such as `Default` already holds every component, so the result says `systemSolution: true` and an empty `inSolution` — a create into `Default` needs no add and did not fail). **`--publish` is mandatory:** without it the new app stays in draft and the genux runtime URL errors with "app not published". It prints `{ "ok": true, "appId", "uniqueName", "published", "unpublishedChanges", "solution", "navigation", "dataSources", "pinnedViews", … }` — store `appId` for the rest of the run. The create also pins the default public view of each table the page reads into the app's components, so that the maker's "/" picker lists the page's tables (`dataSources` are the tables, `pinnedViews` the views); a `warnings` entry says when a table has no default public view to pin, or when the environment could not take the app's new header and navigation setting, and the app was made all the same.
+3. **The remaining pages.** Upload each with `--app-id '<appId>'` and `--add-to-sitemap` (the create above): each becomes a sub-area of the new app, and the default views of the tables it reads join the app's components with it.
 
 **A create of the app that failed** exits 1 and prints `{ "ok": false, "code", "error", "written", … }`; `code` and `error` are the SDK's own. `"written": false` means nothing was made: fix what the message names and run it again. `"written": true` means the app or its sitemap exists (`appId`, `sitemapId`, `left`, `published` and `unpublishedChanges` say which and in what state): its unique name is taken, so run it again with `--unique-name '<name>'`, or remove the leftovers first — the error says how. `"written": null` means the platform could not be read back, so the outcome is unknown: look in the environment for what `lookFor` names (the unique name, the app id and the sitemap id the create used) before running it again. `stage` says how far it got, and `inSolution` which of the app and its sitemap joined the solution.
 
@@ -1235,6 +1242,6 @@ For the edit flow (triggered when the `genpage-planner` returns
 `{ "action": "edit" }`), see [edit-flow.md](edit-flow.md) in this folder.
 
 The edit flow has its own 8 phases (Edit Phase 1-8): discover and select target
-app + page via `apps.js list` + `pac model genpage list`, download, generate
-RuntimeTypes if needed, invoke `genpage-edit-planner`, apply the edit inline,
+app + page via `apps.js list` + `genpage.js list`, download (`genpage.js download`), generate
+RuntimeTypes (`genpage.js types`) if needed, invoke `genpage-edit-planner`, apply the edit inline,
 deploy, verify, summarize.

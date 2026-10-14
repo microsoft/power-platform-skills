@@ -517,14 +517,14 @@ test('the genpage skill gives the advice for a page write whose answer was lost,
   assert.doesNotMatch(skill, /pac\.cmd|pac stores each one|upload --help|requires a pac build|PowerPlatform-Scale-AdminTools/, 'the genpage skill still carries a rule of the pac upload');
 });
 
-// Measured against the PAC CLI: `pac model genpage transpile` accepted a `string` assigned to a
-// `number` and a selected column that does not exist, exited 0 and wrote JavaScript. So no instruction
-// may present it as a type check — a worker that believes it is one ships unchecked types with false
-// confidence — and the page-builder, the one place that names the command, must say what it is not.
+// Measured against the SDK's page compile (genpage-sdk-real-bundle.test.js, "the compile is a transpile"): the compile the upload runs — TypeScript's `transpileModule`, in the bundled SDK —
+// accepted a `string` assigned to a `number` and a selected column that does not exist, and wrote JavaScript. It refuses only a page that does not parse, has no default export or imports a value
+// from RuntimeTypes that it does not hold. So no instruction may present the compile as a type check — a worker that believes it is one ships unchecked types with false confidence — and the
+// page-builder, the one place that explains the compile, must say what it is not.
 //
-// The claim can be worded many ways ("to type-check the page", "a clean transpile means it is
+// The claim can be worded many ways ("to type-check the page", "a clean compile means it is
 // type-safe", "catches type errors", "fails on type errors", "type errors are caught during
-// transpilation"), and one exact phrase in four files would miss all of them. So
+// compilation"), and one exact phrase in four files would miss all of them. So
 // every agent, skill and reference document is read CLAUSE by clause, and a clause fails when it
 // ATTRIBUTES a type guarantee to transpiling that no negation governs. It is a tripwire, not a parser: a
 // correct sentence it flags is reworded with the checker as its subject, or with the denial stated
@@ -605,10 +605,10 @@ const BRIDGE = /^(?:a|an|the|any|its|their|this|that|there|page|pages|code|file|
 // Clause boundaries: `;`, a `:` that is not a URL's, a spaced dash, a comma before a conjunction, and the
 // conjunctions that start a new statement.
 const CLAUSE_BREAK = /\s*(?:;|:(?!\/\/)|\s[—–]\s|,(?=\s*(?:and|but|then|so|yet|while|whereas|although|though|however)\b)|(?<=\S)\s+(?=(?:and|but|then|whereas|although|though)\s))\s*/i;
-// Who a claim can belong to: `t` transpiling (the whole command is one mention), `x` a checker the reader
+// Who a claim can belong to: `t` the compile — transpiling or compiling, whatever the document calls the step the upload runs — `x` a checker the reader
 // runs itself — named, or a generic "type-check script" — and `r` the reader.
 const ACTOR = new RegExp([
-  String.raw`(?<t>\x60pac model genpage transpile\x60|transpil\w*)`,
+  String.raw`(?<t>transpil\w*|\bcompil(?:e|es|ed|ing|ation)\b)`,
   String.raw`(?<x>\x60?\btsc\b\x60?|\bTypeScript compiler\b|\btype[- ]?checker\b|\x60npm run [^\x60]*\x60|\btype[- ]?check(?:ing)? (?:script|command|step|task|job)\b)`,
   String.raw`(?<r>\b(?:you|yourself|we)\b)`,
 ].join('|'), 'gi');
@@ -722,7 +722,7 @@ function transpileTypeClaims(markdown) {
 
 test('the transpile claim detector catches reworded claims and allows negated ones', () => {
   for (const claim of [
-    'Run `pac model genpage transpile` to type-check the page before deploy.',
+    'Run the compile to type-check the page before deploy.',
     'A clean transpile means the page is type-safe.',
     'Transpilation catches type errors early.',
     'The transpile step validates the types of every prop.',
@@ -749,7 +749,7 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Type-check the page by transpiling it.',
     'To type-check the page, run the transpile.',
     'To type-check the page, transpile it.',
-    'Type-check the page with `pac model genpage transpile`.',
+    'Type-check the page with the compile.',
     'Type-check in the transpile step.',
     'Transpile runs `tsc` to type-check the page.',
     // A step that FAILS on type errors, and the passive of catching them, are the same guarantee.
@@ -763,7 +763,7 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpiling runs `tsc`, which means the page is type-checked by `tsc`.',
     // A purpose with "for", a non-zero exit, and a checker step that transpiling itself includes.
     'For type-checking, transpile the page.',
-    '`pac model genpage transpile` exits non-zero on type errors.',
+    'The compile exits non-zero on type errors.',
     'Transpile returns a non-zero exit code for type errors.',
     'Run the transpile. It exits non-zero on type errors.',
     'Run the transpile. It returns non-zero on type errors.',
@@ -800,17 +800,24 @@ test('the transpile claim detector catches reworded claims and allows negated on
     '- Transpile does not bundle anything\n- Transpile type-checks the page',
     '| Transpile does not bundle | Transpile type-checks the page |',
     '## Transpile does not bundle\nTranspile type-checks the page.',
+    // The step the upload runs is the compile, whatever a document calls it: the same claims about it are the same guarantee.
+    'A clean compile means the page is type-safe.',
+    'The compile step fails on type errors.',
+    'Type errors are caught during compilation.',
+    'Compilation validates the types of every prop.',
+    'The SDK compile type-checks the page.',
+    'Run the compile. It type-checks the page.',
   ]) {
     assert.ok(transpileTypeClaims(claim).length > 0, `must be caught: ${claim}`);
   }
   for (const fine of [
-    '`pac model genpage transpile` only transpiles the page: it does not type-check it.',
+    'The compile only transpiles the page: it does not type-check it.',
     'A clean transpile is not proof that the types are correct.',
     'A clean transpile is therefore no proof that the page is type-safe.',
     'A transpile that succeeds does not mean the page is type-safe.',
     'Transpile never type-checks.',
     'Transpile cannot type-check.',
-    'It passes TypeScript and `pac model genpage transpile`, then logs a runtime error.',
+    'It passes TypeScript and the compile, then logs a runtime error.',
     'Run the type check separately, before you upload the page.',
     'Transpile first, then type-check separately with `tsc`.',
     'Transpile the page and use `tsc` to type-check it.',
@@ -834,7 +841,7 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile does not minify, bundle or type-check the page.',
     'Transpile does not bundle it or type-check it.',
     // The truth about the exit code, a generic checker step, and a "for" purpose served by a checker.
-    '`pac model genpage transpile` exits 0 even with type errors.',
+    'The compile exits 0 even with type errors.',
     "After transpiling, run the project's type-check script.",
     'For type-checking, use `tsc`.',
     'Run the transpile. That means you must type-check it yourself.',
@@ -863,10 +870,10 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile the page, then run `tsc`. It type-checks every prop.',
     'Transpile before invoking the type checker.',
     // A type error named as a SUBJECT is the opposite of a claim.
-    '`pac model genpage transpile` only transpiles the page: a type error still transpiles and writes JavaScript.',
+    'The compile only transpiles the page: a type error still compiles and writes JavaScript.',
     '- Transpile the page.\n- It does not type-check it.',
     // A sentence that continues with something other than `it` making the claim is about something else.
-    '`pac model genpage transpile` only transpiles the page. That is what the type check in Step 5 is for.',
+    'The compile only transpiles the page. That is what the type check in Step 5 is for.',
     'Transpile the page; it is important to type-check it too.',
     // After a heading, `It` is whatever the heading names.
     'Transpile the page.\n\n## The type checker\nIt type-checks every prop.',
@@ -883,6 +890,12 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile the page and the type check runs separately.',
     // Fenced code is commands, not claims.
     '```\ntranspile && npm run typecheck\n```',
+    // The compile is a transpile: it parses the page, and says so when it does not check its types.
+    'A clean compile is no proof that the page is type-safe.',
+    'The compile does not type-check the page; run `tsc` for that.',
+    'The upload compiles the page and refuses one that does not parse; it does not type-check it.',
+    'Compile the page, then type-check separately with `tsc`.',
+    'After compiling, the page is type-checked by `tsc`.',
   ]) {
     assert.deepEqual(transpileTypeClaims(fine), [], `must be allowed: ${fine}`);
   }
@@ -922,12 +935,17 @@ test('every claim family is caught directly and as a continuation, so the two vo
   for (const c of CAUGHT) assert.ok(transpileTypeClaims(`Type errors are ${c} during transpilation.`).length > 0, `must be caught: ${c}`);
 });
 
-test('no genpage instruction presents transpilation as a type check', () => {
+test('no genpage instruction presents the compile or the transpile as a type check — and the page-builder says what the upload\'s compile is', () => {
   for (const file of mdFiles()) {
-    assert.deepEqual(transpileTypeClaims(readDoc(file)), [], `${rel(file)} must not present transpilation as a type check`);
+    assert.deepEqual(transpileTypeClaims(readDoc(file)), [], `${rel(file)} must not present the compile as a type check`);
   }
-  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
-  assert.match(builder, /genpage transpile`\s+only transpiles the page: it does not type-check it/, 'the page-builder must say transpilation is not a type check');
+  // The point the page-builder's Step 2.6 makes: the upload's compile (TypeScript's `transpileModule` in the bundled SDK) is a transpile, a clean one is no proof the page is type-safe,
+  // and the Griffel shorthands still compile. genpage-sdk-real-bundle.test.js runs the real compile on a page with type errors, so a re-vendored SDK that began to type-check fails there first.
+  const builder = squash(readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md')));
+  assert.match(builder, /The upload compiles the page with the TypeScript the bundled SDK carries, and that compile is a transpile \(`transpileModule`\), not a type check: it refuses a page that does not parse or has no default export, but a type error, or a reference to a column that does not exist, still compiles and writes JavaScript, and it does not execute `makeStyles`\./, 'the page-builder must say the upload\'s compile is a transpile, not a type check');
+  assert.match(builder, /A clean compile is therefore no proof that the page is type-safe, and unsupported Griffel shorthands can compile and then log runtime errors in the browser\./, 'and that a clean compile does not mean the page is type-safe');
+  // No instruction still names the pac verb whose place the upload's compile took.
+  for (const file of mdFiles()) assert.doesNotMatch(readDoc(file), /genpage\s+transpile/, `${rel(file)} still names the pac transpile`);
 });
 
 // --- App Spec schema split -------------------------------------------------

@@ -74,7 +74,7 @@ captured agent session. Every command below has an associated result, in order, 
 - Nothing is created in this phase: the platform refuses an app whose navigation is empty, so `apps.js create` needs the first page's id. The app is made in Phase 6, right after the first page is deployed
 
 ## Phase 4 — RuntimeTypes
-- `pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-metrics-dashboard/RuntimeTypes.ts'`
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-metrics-dashboard/RuntimeTypes.ts'` → {"ok":true,"outputFile":"D:/work/account-metrics-dashboard/RuntimeTypes.ts","dataSources":["account"],"detail":"none","bytes":18432}
 - Read RuntimeTypes.ts: verified account columns accountid, name, industrycode (choice), revenue, numberofemployees, address1_city, createdon, statecode
 
 ## Phase 4.5 — Connector bindings
@@ -117,15 +117,9 @@ captured agent session. Every command below has an associated result, in order, 
 2. The app, from that page
    - Command: `node 'D:/repo/plugins/model-apps/scripts/apps.js' create --env 'https://contoso.crm.dynamics.com' --name 'Account Metrics' --solution 'ContosoCore' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa' --publish`
    - `Solution: ContosoCore` from ## Environment, passed verbatim as the unique name; `--publish` so the app is not left in draft
-   - Result: app-id = 44444444-5555-4666-8777-888888888888, published true, in solution ContosoCore (app and sitemap), navigation Main / Pages / "Account Metrics Dashboard"
+   - Result: app-id = 44444444-5555-4666-8777-888888888888, published true, in solution ContosoCore (app and sitemap), navigation Main / Pages / "Account Metrics Dashboard"; the create pinned the default public view of the page's table (dataSources ["account"], one pinnedViews id)
    - Stored appId 44444444-5555-4666-8777-888888888888 for the rest of the run
-3. The remaining pages: none (a single-page plan)
-4. The first page's tables
-   - Wrote pin-prompt.txt ("Pin the page's tables into the new app") and pin-agent-message.txt with the file-writing tool
-   - Command: `node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '44444444-5555-4666-8777-888888888888' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa' --code-file 'account-metrics.tsx' --prompt-file 'pin-prompt.txt' --agent-message-file 'pin-agent-message.txt'`
-   - --app-id is the appId stored from step 2; no --data-sources, so the page keeps its own; the file is unchanged, so the page is published, not rewritten
-   - Prompt scope: delta only (update)
-   - Result: page-id = 66666666-7777-4888-8999-aaaaaaaaaaaa, appId = 44444444-5555-4666-8777-888888888888, status = success ({"ok":true,"updated":true,"unchanged":true})
+3. The remaining pages: none (a single-page plan), so no upload follows the app's create: the first page's tables are already pinned by it
 
 ## Phase 6.5 / 6.7
 - Phase 6.5 not applicable (single page, no PAGEREF_ tokens)

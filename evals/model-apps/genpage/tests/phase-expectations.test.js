@@ -128,11 +128,11 @@ test('eval 4: the entity-builder is skipped when every table exists', () => {
   assertFail(grade(text, { ...base, genpagePlan: committed('7-job-candidates-new-entities').genpagePlan }), /plan schedules entity creation/);
 });
 
-test('eval 4: generate-types runs with exactly incident and contact', () => {
-  const text = "Phase 4: pac model genpage generate-types --data-sources 'incident,contact' is run";
+test('eval 4: genpage.js types runs with exactly incident and contact', () => {
+  const text = "Phase 4: genpage.js types --data-sources 'incident,contact' is run";
   assertPass(grade(text, committed('4-case-wizard')));
   assertFail(grade(text, mutated('4-case-wizard', 'workflowLog', "generate-types --data-sources 'incident,contact'", "generate-types --data-sources 'incident'")),
-    /no generate-types run has --data-sources incident,contact \(saw incident\)/);
+    /no genpage\.js types run has --data-sources incident,contact \(saw incident\)/);
   assertFail(grade(text, mutated('4-case-wizard', 'workflowLog', 'pac model genpage generate-types', 'generate types')), /was not run/);
 });
 
@@ -168,7 +168,7 @@ test('eval 5: task exists and the plan maps the three kanban columns to status v
     /does not map the columns to task statuscode\/statecode/);
 });
 
-test('eval 5: status values identified after generate-types match the generated RuntimeTypes.ts', () => {
+test('eval 5: status values identified after the type generator match the generated RuntimeTypes.ts', () => {
   const text = 'Phase 4: RuntimeTypes.ts is read — status field enum values are identified for column mapping';
   assertPass(grade(text, committed('5-kanban-task-board')));
   assertFail(grade(text, mutated('5-kanban-task-board', 'workflowLog', '`"In Progress" = 3`', '`"In Progress" = 2`')),
@@ -290,13 +290,13 @@ test('eval 7: the transaction log records every planned create and the names are
   assertFail(grade(text, { ...committed(E7), entityCreationLog: null }), /no genpage-entity-creation-log\.md/);
 });
 
-test('eval 7: generate-types and the upload use the created table names', () => {
-  const types = 'Phase 4: pac model genpage generate-types is run with the created entity names';
+test('eval 7: genpage.js types and the upload use the created table names', () => {
+  const types = 'Phase 4: genpage.js types is run with the created entity names';
   const upload = 'Phase 6: Upload includes --data-sources with both created entity names';
   assertPass(grade(types, committed(E7)));
   assertPass(grade(upload, committed(E7)));
   assertFail(grade(types, mutated(E7, 'workflowLog', "generate-types --data-sources 'cr_candidate,cr_jobrequisition'", "generate-types --data-sources 'cr_candidate'")),
-    /no generate-types run has --data-sources cr_jobrequisition,cr_candidate/);
+    /no genpage\.js types run has --data-sources cr_jobrequisition,cr_candidate/);
   assertFail(grade(upload, mutated(E7, 'workflowLog', "page.tsx --data-sources 'cr_candidate,cr_jobrequisition'", "page.tsx --data-sources 'cr_candidate'")),
     /--data-sources is cr_candidate, expected cr_jobrequisition,cr_candidate/);
 });
@@ -346,15 +346,15 @@ test('eval 11: pages are only built from a plan that passes the Phase 5a gate', 
   assertPass(grade(text, { ...invalid, files: [] }));
 });
 
-test('eval 11: generate-types runs once for contact and appointment into one RuntimeTypes.ts', () => {
-  const text = "Phase 4: pac model genpage generate-types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated";
+test('eval 11: genpage.js types runs once for contact and appointment into one RuntimeTypes.ts', () => {
+  const text = "Phase 4: genpage.js types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated";
   assertPass(grade(text, committed(E11)));
   assertPass(grade(text, committed(E11_REAL)));
   const base = committed(E11);
   assertFail(grade(text, { ...base, workflowLog: `${base.workflowLog}\n- pac model genpage generate-types --data-sources 'contact' --output-file other/RuntimeTypes.ts\n` }),
     /ran 2 time\(s\), expected once/);
   assertFail(grade(text, mutated(E11, 'workflowLog', "--data-sources 'contact,appointment' --output-file recruitment-pages/RuntimeTypes.ts", "--data-sources 'contact' --output-file recruitment-pages/RuntimeTypes.ts")),
-    /no generate-types run has --data-sources contact,appointment/);
+    /no genpage\.js types run has --data-sources contact,appointment/);
   assertFail(grade(text, mutated(E11, 'workflowLog', '--output-file recruitment-pages/RuntimeTypes.ts', '--output-file recruitment-pages/Types.ts')), /wrote Types\.ts/);
 });
 
@@ -649,12 +649,12 @@ test('eval 15: every create in the transaction log carries its metadata id', () 
   assertPass(grade(text, mutated(E15, 'entityCreationLog', '| cr_ticket | Due Date | cr_DueDate | cr_duedate | n/a |', '| cr_ticket | Due Date | cr_DueDate | cr_duedate | 0f8fad5b-d9cb-469f-a165-70867728950e |')));
 });
 
-test('eval 15: generate-types picks up an enum registration for every planned choice column', () => {
-  const text = 'Phase 4: pac model genpage generate-types picks up the enum registrations';
+test('eval 15: genpage.js types picks up an enum registration for every planned choice column', () => {
+  const text = 'Phase 4: genpage.js types picks up the enum registrations';
   assertPass(grade(text, committed(E15)));
   assertFail(grade(text, mutated(E15, 'runtimeTypes', '"cr_ticket-cr_status": cr_ticket_cr_status,', '')), /EnumRegistrations has no ticket-status entry/);
   assertFail(grade(text, mutated(E15, 'runtimeTypes', '"Closed" = 100000003,', '"Closed" = 100000004,')), /values 100000000,100000001,100000002,100000004 differ/);
-  assertFail(grade(text, mutated(E15, 'workflowLog', 'generate-types --data-sources "cr_ticket"', 'generate-types --data-sources "contact"')), /no generate-types run has --data-sources cr_ticket/);
+  assertFail(grade(text, mutated(E15, 'workflowLog', 'generate-types --data-sources "cr_ticket"', 'generate-types --data-sources "contact"')), /no genpage\.js types run has --data-sources cr_ticket/);
   assertSkip(grade(text, { ...committed(E15), runtimeTypes: null }), /RuntimeTypes\.ts was not captured/);
 });
 
@@ -663,10 +663,10 @@ test('eval 15: generate-types picks up an enum registration for every planned ch
 const E19 = '19-add-weather-connector';
 
 test('eval 19: the edited page comes from a genpage list of the selected app', () => {
-  const text = 'Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names';
+  const text = 'Edit Phase 1b: After app selection, genpage.js list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names';
   assertPass(grade(text, committed(E19)));
   assertFail(grade(text, mutated(E19, 'workflowLog', 'pac model genpage list --app-id aa112233-1122-1122-1122-aabbccdd1234', 'pac model genpage list --app-id cc334455-3344-3344-3344-ccddeeff3456')),
-    /pac model genpage list --app-id aa112233-1122-1122-1122-aabbccdd1234 was not run/);
+    /genpage\.js list --app-id aa112233-1122-1122-1122-aabbccdd1234 was not run/);
   assertFail(grade(text, mutated(E19, 'workflowLog', '  - Seattle Weather — `bb223344-2233-2233-2233-bbccddee2345`', '  - Seattle Weather')),
     /page bb223344-2233-2233-2233-bbccddee2345 does not appear in the recorded genpage list output/);
   assertFail(grade(text, mutated(E19, 'workflowLog', '- `pac model list` → 2 apps found:', '- apps recalled from memory:')), /before the app was discovered/);
@@ -932,7 +932,7 @@ test('eval 16: account exists, so the plan uses the no-creation sentence and lis
   assertFail(grade(sentinel, mutated(E16, 'genpagePlan', 'No entity creation required — all entities already exist.', 'No entity creation needed.')), /exact no-entity sentence/);
   assertFail(grade(sentinel, withEvents(E16, (ev) => { event(ev, 'list-tables').command = event(ev, 'list-tables').command.replace("--search 'account'", "--search 'contact'"); return ev; })), /no list-tables --search covered account/);
   assertFail(grade(existing, mutated(E16, 'genpagePlan', '## Existing Entities\naccount', '## Existing Entities\ncontact')), /lists contact, not account/);
-  assertFail(grade(existing, withEvents(E16, (ev) => { event(ev, 'generate-types').command = "pac model genpage generate-types --data-sources 'account,contact' --output-file 'RuntimeTypes.ts'"; return ev; })), /generate-types used contact, which ## Existing Entities does not list/);
+  assertFail(grade(existing, withEvents(E16, (ev) => { event(ev, 'generate-types').command = "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account,contact' --output-file 'RuntimeTypes.ts'"; return ev; })), /genpage\.js types used contact, which ## Existing Entities does not list/);
 });
 
 // --- Evals 3 and 8: the app listing, and the app create, through apps.js -------------------------
@@ -942,7 +942,7 @@ test('eval 16: account exists, so the plan uses the no-creation sentence and lis
 
 test('eval 3: apps and pages are offered from the app and page listings, and the restated choice precedes download', () => {
   const apps = 'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output';
-  const pages = 'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output';
+  const pages = 'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from genpage.js list output';
   const restated = 'Edit Phase 1c: Selection is restated to the user before proceeding to download';
   assertPass(grade(apps, committed(E3)));
   assertPass(grade(pages, committed(E3)));
@@ -955,6 +955,15 @@ test('eval 3: apps and pages are offered from the app and page listings, and the
   // The run downloaded a page that was listed but never offered.
   assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'download').command = event(ev, 'download').command.replace('22222222-3333-4444-5555-666666666666', '33333333-4444-5555-6666-777777777777'); return ev; })),
     /continued with \(33333333-4444-5555-6666-777777777777\) was not among the offered pages/);
+  // genpage.js list is read as data (`pages`, each with its pageId and name), as apps.js list is: the offered name is the listed one, and an offered page is one the listing holds.
+  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'list-pages').result.pages[0].name = 'Contacts Desk'; return ev; })),
+    /offers 22222222-3333-4444-5555-666666666666 without its listed name "Contacts Desk"/);
+  assertFail(grade(pages, withEvents(E3, (ev) => { const listing = event(ev, 'list-pages').result; listing.pages = listing.pages.filter((page) => page.name !== 'Contacts Directory'); return ev; })),
+    /offers 22222222-3333-4444-5555-666666666666, which the listing does not contain/);
+  // A listing that failed to read lists no page, and no page can be presented from it.
+  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'list-pages').result = { ok: false, error: 'the read failed', code: 'CONNECTION_ERROR' }; return ev; })),
+    /the page listing recorded no pages to present/);
+  assertFail(grade(pages, withEvents(E3, (ev) => ev.filter((e) => e.id !== 'list-pages'))), /the page listing command was not run/);
   assertFail(grade(restated, mutated(E3, 'workflowLog', '- "Editing **Contacts Directory** (22222222-3333-4444-5555-666666666666) in app **Sales Hub** (11111111-2222-3333-4444-555555555555). Continuing to download the existing page code…"', '- Continuing.')),
     /no restatement of the selected app and page/);
 });
@@ -985,7 +994,7 @@ test('eval 8: apps.js list returns zero apps, the create-or-cancel question is a
 
 test('eval 8: the app is built from the first page — apps.js create after the first upload, then every upload names the app', () => {
   const made = "Phase 6 (new app): apps.js create --name 'Account Metrics' --solution '<Solution from plan>' --page-id <first page> --publish is run after the first page's upload; --solution is ALWAYS passed (apps.js create refuses a call without it)";
-  const first = 'Phase 6 (new app): The first page is created with no --app-id, and the app-id apps.js create returns is stored for the pages that follow';
+  const first = 'Phase 6 (new app): The first page is created with no --app-id and no --add-to-sitemap, before the app exists';
   const used = 'Phase 6: Every upload after the app is created uses the newly created app-id';
   for (const text of [made, first, used]) assertPass(grade(text, committed(E8)));
 
@@ -1013,11 +1022,23 @@ test('eval 8: the app is built from the first page — apps.js create after the 
   assertFail(grade(first, withEvents(E8, firstUpload('--code-file', "--app-id '44444444-5555-4666-8777-888888888888' --code-file"))), /first page's upload passed --app-id 44444444/);
   assertFail(grade(first, withEvents(E8, firstUpload('--agent-message-file', '--add-to-sitemap --agent-message-file'))), /passed --add-to-sitemap/);
 
-  // The appId apps.js create printed is the one the pages after it name.
-  const pin = (from, to) => (ev) => { event(ev, 'pin-upload').command = event(ev, 'pin-upload').command.replace(from, to); return ev; };
-  const otherApp = pin("--app-id '44444444-5555-4666-8777-888888888888'", "--app-id '11111111-2222-3333-4444-555555555555'");
-  assertFail(grade(first, withEvents(E8, otherApp)), /no upload after apps\.js create used the returned appId 44444444/);
-  assertFail(grade(used, withEvents(E8, otherApp)), /--app-id 11111111-2222-3333-4444-555555555555 is not the created app/);
-  assertFail(grade(used, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'pin-upload'))), /no upload followed apps\.js create/);
-  assertFail(grade(used, withEvents(E8, (ev) => { event(ev, 'pin-upload').result.appId = '11111111-2222-3333-4444-555555555555'; return ev; })), /upload result names app 11111111/);
+  // The create pins the first page's tables into the app itself, so an app of one page is complete with it: no upload follows, and "every upload after the app is created" holds of none.
+  // A page that does follow — the second page of a plan — names the app that apps.js create printed, and nothing else.
+  const second = (flags, result = {}) => (ev) => {
+    ev.splice(ev.findIndex((e) => e.id === 'app-create') + 1, 0, {
+      id: 'second-upload',
+      command: `node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --code-file 'account-detail.tsx' --name-file 'page-name.txt' --data-sources 'account' --prompt-file 'prompt.txt' --model 'claude-sonnet-4.5' --agent-message-file 'agent-message.txt'${flags}`,
+      result: { ok: true, pageId: '99999999-aaaa-4bbb-8ccc-dddddddddddd', updated: false, ...result },
+      exitCode: 0,
+    });
+    return ev;
+  };
+  const named = " --app-id '44444444-5555-4666-8777-888888888888' --add-to-sitemap";
+  assertPass(grade(used, withEvents(E8, second(named, { appId: '44444444-5555-4666-8777-888888888888' }))));
+  assertPass(grade(first, withEvents(E8, second(named))));
+  assertFail(grade(used, withEvents(E8, second(" --app-id '11111111-2222-3333-4444-555555555555' --add-to-sitemap"))), /--app-id 11111111-2222-3333-4444-555555555555 is not the created app/);
+  assertFail(grade(used, withEvents(E8, second(''))), /--app-id missing is not the created app/);
+  assertFail(grade(used, withEvents(E8, second(named, { appId: '11111111-2222-3333-4444-555555555555' }))), /upload result names app 11111111/);
+  // The old way — uploading the first page again to pin its tables — is still an upload that names the app, so it still passes: it is needless, not wrong.
+  assertPass(grade(used, withEvents(E8, second(" --app-id '44444444-5555-4666-8777-888888888888' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa'", { appId: '44444444-5555-4666-8777-888888888888', updated: true, unchanged: true }))));
 });

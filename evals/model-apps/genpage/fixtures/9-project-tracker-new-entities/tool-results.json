@@ -251,10 +251,10 @@
   },
   {
     "id": "generate-types",
-    "command": "pac model genpage generate-types --data-sources 'cr_project,cr_milestone' --output-file 'D:/work/project-tracker/RuntimeTypes.ts'",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'cr_project,cr_milestone' --output-file 'D:/work/project-tracker/RuntimeTypes.ts'",
     "artifact": "RuntimeTypes.ts",
     "exitCode": 0,
-    "result": "Types written to D:/work/project-tracker/RuntimeTypes.ts"
+    "result": { "ok": true, "outputFile": "D:/work/project-tracker/RuntimeTypes.ts", "dataSources": ["cr_project", "cr_milestone"], "detail": "none", "bytes": 14870 }
   },
   { "id": "gate-custom-api", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api", "exitCode": 1, "result": "disabled" },
   { "id": "gate-telemetry", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-telemetry", "exitCode": 1, "result": "disabled" },

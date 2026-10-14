@@ -209,7 +209,7 @@ connector bindings." sentinel).]
 | `## Environment` | Orchestrator | URL, app decision, languages |
 | `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique, and use only letters, digits, `.`, `-` and `_` (kebab-case, e.g. `project-overview.tsx`). Exactly one Pages table with a File column: `check-page-files.js` refuses a plan with a second, one quoted in `## User Requirements` included |
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
-| `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
+| `## Existing Entities` | Orchestrator (for `genpage.js types --data-sources`) | Comma-separated logical names |
 | `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields`; REST/action bindings must include discovered `Parameters` and `Response` |
 | `## Custom API Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No custom API bindings." when empty; names must match existing Dataverse Custom APIs (`customapi.uniquename`); entity-bound rows carry the bound table (else `(Global)`); every row carries its discovered `Parameters` kinds |
 | `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |

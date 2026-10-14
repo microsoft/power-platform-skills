@@ -48,7 +48,7 @@ top-level page.tsx is the edited `<working-dir>/<page-id>/page.tsx` that was upl
 - AskUserQuestion: Which app contains the page you want to edit? (options are the app name + app-id from that output: "Sales Hub" — 11111111-2222-3333-4444-555555555555; "Customer Service Hub" — 44444444-5555-6666-7777-888888888888; Other) → Sales Hub (the user confirmed app-id 11111111-2222-3333-4444-555555555555)
 
 ### 1b. Page discovery
-- `pac model genpage list --app-id '11111111-2222-3333-4444-555555555555'` → 2 generative pages (non-zero, so the edit can continue):
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' list --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555'` → `{"ok":true,"scope":"app","layer":"published","count":2,…}`: 2 generative pages in the app's published navigation (non-zero, so the edit can continue):
   - Contacts Directory — 22222222-3333-4444-5555-666666666666
   - Pipeline Snapshot — 33333333-4444-5555-6666-777777777777
 - AskUserQuestion: Which page do you want to edit? (options are the page names + page-id GUIDs from that output) → Contacts Directory (the user confirmed page-id 22222222-3333-4444-5555-666666666666)
@@ -57,12 +57,12 @@ top-level page.tsx is the edited `<working-dir>/<page-id>/page.tsx` that was upl
 - "Editing **Contacts Directory** (22222222-3333-4444-5555-666666666666) in app **Sales Hub** (11111111-2222-3333-4444-555555555555). Continuing to download the existing page code…"
 
 ## Edit Phase 2 — Download
-- `pac model genpage download --app-id '11111111-2222-3333-4444-555555555555' --page-id '22222222-3333-4444-5555-666666666666' --output-directory 'D:/work/contacts-search-sort'`
-- Produced D:/work/contacts-search-sort/22222222-3333-4444-5555-666666666666/ with page.tsx, page.js, config.json, prompt.txt (snapshot kept in before/)
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' download --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555' --page-id '22222222-3333-4444-5555-666666666666' --output-directory 'D:/work/contacts-search-sort'`
+- Produced D:/work/contacts-search-sort/22222222-3333-4444-5555-666666666666/ with page.tsx, config.json, prompt.txt (snapshot kept in before/)
 
 ## Edit Phase 3 — RuntimeTypes and bindings
 - Read 22222222-3333-4444-5555-666666666666/config.json: `dataSources` = ["contact"], model claude-sonnet-4-6; no `connectorBindings`, no `actionBindings`
-- dataSources contains contact → `pac model genpage generate-types --data-sources 'contact' --output-file 'D:/work/contacts-search-sort/RuntimeTypes.ts'`
+- dataSources contains contact → `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'contact' --output-file 'D:/work/contacts-search-sort/RuntimeTypes.ts'`
 - Read RuntimeTypes.ts: verified contactid, fullname, jobtitle, emailaddress1, telephone1 and the `_parentcustomerid_value` foreign key (Company Name lookup, account or contact; its label comes from the FormattedValue annotation)
 - Connector action: preserve (no bindings) — genpage-connector-builder not dispatched, no connectors.json, `--connectors` will be omitted
 - Custom API action: preserve (no bindings) — genpage-customapi-builder not dispatched, no actions.json, `--actions` will be omitted

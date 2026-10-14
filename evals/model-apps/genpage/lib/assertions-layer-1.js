@@ -43,6 +43,10 @@ function pass() { return { status: 'pass', reason: '' }; }
 const UPLOAD_CMD = /pac\s+model\s+genpage\s+upload|genpage-upload\.js/;
 const uploadLinesOf = (log) => String(log || '').split('\n').filter((l) => UPLOAD_CMD.test(l));
 
+// A run of the type generator in a log line: the script (`genpage.js types --…`) or the verb it replaced (`generate-types --…`, which a capture made before the script records, with or without the
+// `pac model genpage` before it). A flag must follow, so prose such as "genpage.js types not run" is no invocation.
+const TYPES_RUN = /(?:\bgenerate-types|\bgenpage\.js['"]?\s+types)\s+--/;
+
 // What the log records about an upload's PROMPT, whichever transport carried it: the inline quoted
 // value, or — for the file transport, where there is no inline value to read — the `Prompt scope:`
 // line the skill requires alongside the command.
@@ -840,21 +844,21 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    // Match an actual invocation (generate-types followed by a --flag), not
-    // descriptive prose like "generate-types not run".
-    if (/generate-types\s+--/.test(log)) return fail('generate-types invoked on mock-data eval');
+    // Match an actual invocation (the type generator followed by a --flag), not
+    // descriptive prose like "genpage.js types not run".
+    if (TYPES_RUN.test(log)) return fail('the type generator (genpage.js types) was invoked on a mock-data eval');
     return pass();
   }
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 4: pac model genpage generate-types --data-sources \'account\' --output-file <working-dir>/RuntimeTypes.ts is run',
+  'Phase 4: genpage.js types --data-sources \'account\' --output-file <working-dir>/RuntimeTypes.ts is run',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/generate-types\s+--/.test(log)) return fail('generate-types not invoked');
+    if (!TYPES_RUN.test(log)) return fail('the type generator (genpage.js types) was not invoked');
     if (!/--data-sources\s+['"]?account['"]?/.test(log)) {
-      return fail('generate-types missing --data-sources account');
+      return fail('genpage.js types missing --data-sources account');
     }
     return pass();
   }
@@ -1012,11 +1016,12 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 2: pac model genpage download produces <working-dir>/<page-id>/ with page.tsx, page.js, config.json, prompt.txt',
+  'Edit Phase 2: genpage.js download produces <working-dir>/<page-id>/ with page.tsx, config.json, prompt.txt',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+download/.test(log)) return fail('pac model genpage download not invoked');
+    // scripts/genpage.js download, or `pac model genpage download` in a capture made before it (see GENPAGE_DOWNLOAD).
+    if (!evidence.GENPAGE_DOWNLOAD.test(log)) return fail('genpage.js download (or pac model genpage download) not invoked');
     return pass();
   }
 );
@@ -1471,10 +1476,10 @@ function exactAbsence(search, name) {
 
 function generateTypesProblems(fixture, names, { exact = false } = {}) {
   const calls = generateTypesCalls(fixture);
-  if (!calls.length) return ['pac model genpage generate-types was not run'];
+  if (!calls.length) return ['genpage.js types was not run'];
   if (!names.length) return ['no entity names to generate types for'];
   const covers = (c) => (exact ? sameSet(c.sources, names) : containsAll(c.sources, names));
-  if (!calls.some(covers)) return [`no generate-types run has --data-sources ${listText(names)} (saw ${calls.map((c) => listText(c.sources)).join('; ')})`];
+  if (!calls.some(covers)) return [`no genpage.js types run has --data-sources ${listText(names)} (saw ${calls.map((c) => listText(c.sources)).join('; ')})`];
   return [];
 }
 
@@ -1673,7 +1678,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  "Phase 4: pac model genpage generate-types --data-sources 'incident,contact' is run",
+  "Phase 4: genpage.js types --data-sources 'incident,contact' is run",
   ({ fixture }) => resultOf(generateTypesProblems(fixture, ['incident', 'contact'], { exact: true }))
 );
 
@@ -1715,7 +1720,7 @@ PHASE_EXPECTATIONS.set(
   'Phase 4: RuntimeTypes.ts is read — status field enum values are identified for column mapping',
   ({ fixture }) => {
     const calls = generateTypesCalls(fixture);
-    if (!calls.length) return fail('pac model genpage generate-types was not run');
+    if (!calls.length) return fail('genpage.js types was not run');
     // What the log records AFTER the command line, e.g.
     //   - Critical finding: planner's statuscode mapping was incorrect. RuntimeTypes shows:
     //     - `"Not Started" = 2` → To Do column
@@ -1890,7 +1895,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 4: pac model genpage generate-types is run with the created entity names',
+  'Phase 4: genpage.js types is run with the created entity names',
   ({ fixture }) => resultOf(generateTypesProblems(fixture, createdTableNames(fixture)))
 );
 
@@ -1972,14 +1977,14 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  "Phase 4: pac model genpage generate-types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated",
+  "Phase 4: genpage.js types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated",
   ({ fixture }) => {
     const calls = generateTypesCalls(fixture);
-    if (calls.length !== 1) return fail(`generate-types ran ${calls.length} time(s), expected once`);
+    if (calls.length !== 1) return fail(`genpage.js types ran ${calls.length} time(s), expected once`);
     const problems = generateTypesProblems(fixture, ['contact', 'appointment'], { exact: true });
     if (problems.length) return fail(problems[0]);
     const output = fileName(calls[0].flags['output-file']);
-    return output === 'RuntimeTypes.ts' ? pass() : fail(`generate-types wrote ${output || 'no --output-file'}, not RuntimeTypes.ts`);
+    return output === 'RuntimeTypes.ts' ? pass() : fail(`genpage.js types wrote ${output || 'no --output-file'}, not RuntimeTypes.ts`);
   }
 );
 
@@ -2029,9 +2034,9 @@ PHASE_EXPECTATIONS.set(
   'Phase 5c: Each builder reads the same RuntimeTypes.ts for column verification',
   ({ fixture }) => {
     const calls = generateTypesCalls(fixture);
-    if (!calls.length) return fail('pac model genpage generate-types was not run');
+    if (!calls.length) return fail('genpage.js types was not run');
     const outputs = new Set(calls.map((c) => String(c.flags['output-file'] || '').replace(/\\/g, '/').toLowerCase()));
-    if (outputs.size !== 1) return fail(`builders could read different schemas: generate-types wrote ${[...outputs].join(', ')}`);
+    if (outputs.size !== 1) return fail(`builders could read different schemas: genpage.js types wrote ${[...outputs].join(', ')}`);
     // Every Dataverse page resolves its types from the one sibling module the run generated.
     const rows = pageRowsOf(fixture.genpagePlan);
     const dataverse = rows.filter((r) => !/mock/i.test(r.entities));
@@ -2263,7 +2268,7 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 15 -----------------------------------------------------------------------------------
 
 // A choice column as Dataverse holds it after provisioning, read from the RuntimeTypes.ts that
-// generate-types wrote from the live schema — the plan and the input JSON only say what was asked.
+// the type generator wrote from the live schema — the plan and the input JSON only say what was asked.
 function picklistResult(fixture, tableSuffix, columnSuffix, { labels = null, count }) {
   if (!fixture.runtimeTypes) return skip('RuntimeTypes.ts was not captured');
   const found = choiceEnum(fixture.runtimeTypes, tableSuffix, columnSuffix);
@@ -2375,7 +2380,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 4: pac model genpage generate-types picks up the enum registrations',
+  'Phase 4: genpage.js types picks up the enum registrations',
   ({ fixture }) => {
     const problems = generateTypesProblems(fixture, createdTableNames(fixture));
     if (problems.length) return fail(problems[0]);
@@ -2398,21 +2403,21 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 19 -----------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names',
+  'Edit Phase 1b: After app selection, genpage.js list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names',
   ({ fixture }) => {
     if (!fixture.workflowLog) return fail('no workflow-log.md');
     const calls = workflowCalls(fixture);
     const at = (pattern) => calls.findIndex((c) => pattern.test(c.command));
-    const download = commandCalls(fixture, /\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+download\b/)[0];
-    if (!download) return fail('pac model genpage download was not run, so no page was selected');
+    const download = commandCalls(fixture, evidence.GENPAGE_DOWNLOAD)[0];
+    if (!download) return fail('genpage.js download was not run, so no page was selected');
     const app = String(download.flags['app-id'] || '').toLowerCase();
     const page = String(download.flags['page-id'] || '').toLowerCase();
     const lists = commandCalls(fixture, GENPAGE_LIST).filter((c) => String(c.flags['app-id'] || '').toLowerCase() === app);
-    if (!lists.length) return fail(`pac model genpage list --app-id ${app || '<selected>'} was not run`);
+    if (!lists.length) return fail(`genpage.js list --app-id ${app || '<selected>'} was not run`);
     // The edited page must come from that listing's recorded output, not from a guess. The call's
     // text also carries the selection that followed it (`- User selected "Seattle Weather"
     // (\`bb22…\`)`), which restates the id and so cannot count as the listing:
-    //   - `pac model genpage list --app-id aa11…` → 2 pages found:
+    //   - `genpage.js list --app-id aa11…` → 2 pages found:   (`pac model genpage list --app-id aa11…` in a capture made before the script)
     //     - Seattle Weather — `bb223344-2233-2233-2233-bbccddee2345`
     const listed = (c) => c.text.split(/\r?\n/).some((line) => !/\bselect/i.test(line) && line.toLowerCase().includes(page));
     if (!page || !lists.some(listed)) return fail(`page ${page || '(none)'} does not appear in the recorded genpage list output`);
@@ -2455,7 +2460,7 @@ PHASE_EXPECTATIONS.set(
 // plan presentations) in workflow-log.md, so checks read commands through workflowCalls/commandCalls
 // and the conversation through conversationSteps or the log lines.
 
-const GENPAGE_DOWNLOAD = /\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+download\b/;
+const GENPAGE_DOWNLOAD = evidence.GENPAGE_DOWNLOAD;
 const PAGE_FILES_GATE = /\bcheck-page-files\.js\b/;
 const WORKER_STAMP = /\bgenpage-worker-output\.js\b[^\n]*--stamp\b/;
 const PAGE_BUILDER = /\b(?:Task|Dispatched)\s+genpage-page-builder\b/;
@@ -2481,7 +2486,7 @@ function answerOf(step) {
   return arrow ? arrow[1].trim() : null;
 }
 
-// The app and page the edit flow actually downloaded (`pac model genpage download --app-id --page-id`).
+// The app and page the edit flow actually downloaded (`genpage.js download --app-id --page-id`, or `pac model genpage download` in a capture made before the script).
 function downloadTarget(fixture) {
   const entry = commandCalls(fixture, GENPAGE_DOWNLOAD)[0];
   if (!entry) return null;
@@ -2576,7 +2581,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output',
+  'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from genpage.js list output',
   ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: GENPAGE_LIST, noun: 'page', selected: downloadTarget(fixture)?.page }))
 );
 
@@ -2584,7 +2589,7 @@ PHASE_EXPECTATIONS.set(
   'Edit Phase 1c: Selection is restated to the user before proceeding to download',
   ({ fixture }) => {
     const target = downloadTarget(fixture);
-    if (!target) return fail('pac model genpage download was not run, so nothing was selected');
+    if (!target) return fail('genpage.js download was not run, so nothing was selected');
     // e.g. `- "Editing **Contacts Directory** (2222…) in app **Sales Hub** (1111…). Continuing to download…"`
     // — a statement (not a question) naming both selected ids, after the page was chosen and before
     // the download command.
@@ -2603,7 +2608,7 @@ PHASE_EXPECTATIONS.set(
   "Edit Phase 3: config.json is read; since dataSources contains 'contact', RuntimeTypes.ts is generated",
   ({ fixture }) => {
     const target = downloadTarget(fixture);
-    if (!target) return fail('pac model genpage download was not run');
+    if (!target) return fail('genpage.js download was not run');
     const configText = artifactOrNull(fixture, 'before/config.json');
     if (configText === null) return skip('the downloaded config.json was not captured');
     let config;
@@ -2613,9 +2618,9 @@ PHASE_EXPECTATIONS.set(
     if (!/\bconfig\.json\b/.test(headingSection(fixture.workflowLog, /^#{2,3}\s+Edit Phase 3\b/i) || '')) return fail('Edit Phase 3 does not record reading config.json');
     const types = generateTypesCalls(fixture);
     const run = types.find((c) => sameSet(c.sources, sources));
-    if (!run) return fail(`generate-types was not run with config.json's dataSources ${listText(sources)} (saw ${types.map((c) => listText(c.sources)).join('; ') || 'none'})`);
-    if (callIndex(fixture, run) < callIndex(fixture, target.entry)) return fail('generate-types ran before the page was downloaded');
-    return fileName(run.flags['output-file']) === 'RuntimeTypes.ts' ? pass() : fail('generate-types did not write RuntimeTypes.ts');
+    if (!run) return fail(`genpage.js types was not run with config.json's dataSources ${listText(sources)} (saw ${types.map((c) => listText(c.sources)).join('; ') || 'none'})`);
+    if (callIndex(fixture, run) < callIndex(fixture, target.entry)) return fail('genpage.js types ran before the page was downloaded');
+    return fileName(run.flags['output-file']) === 'RuntimeTypes.ts' ? pass() : fail('genpage.js types did not write RuntimeTypes.ts');
   }
 );
 
@@ -2625,7 +2630,7 @@ PHASE_EXPECTATIONS.set(
     const plan = fixture.genpageEditPlan;
     if (!plan) return fail('no genpage-edit-plan.md');
     const target = downloadTarget(fixture);
-    if (!target) return fail('pac model genpage download was not run');
+    if (!target) return fail('genpage.js download was not run');
     const prompt = artifactOrNull(fixture, 'before/prompt.txt');
     const configText = artifactOrNull(fixture, 'before/config.json');
     if (prompt === null || configText === null) return skip('the downloaded <page-id>/ snapshot was not captured');
@@ -2771,8 +2776,8 @@ PHASE_EXPECTATIONS.set(
 
 // A new app is built around its first page (SKILL.md Phase 6, "A new app: the first page, then the app, then the rest"):
 //   1. genpage-upload.js with no --app-id creates the first page,
-//   2. apps.js create --name … --solution … --page-id <that page> --publish makes the app and prints its appId,
-//   3. every page after it carries --app-id <appId> (a create adds --add-to-sitemap; the first page is updated once to pin its tables).
+//   2. apps.js create --name … --solution … --page-id <that page> --publish makes the app and prints its appId — and pins the page's tables into it itself,
+//   3. every page after it carries --app-id <appId> (a create adds --add-to-sitemap); a one-page app has none.
 // Only the script is accepted here: `pac model create` is the command it replaced, and a run that still ran it did not follow the skill.
 const isAppsCreate = (entry) => /\bapps\.js['"]?\s+create\b/.test(entry.call.command);
 
@@ -2815,18 +2820,16 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 6 (new app): The first page is created with no --app-id, and the app-id apps.js create returns is stored for the pages that follow',
+  'Phase 6 (new app): The first page is created with no --app-id and no --add-to-sitemap, before the app exists',
   ({ fixture }) => {
     const run = newAppRun(fixture);
     if (run.problem) return fail(run.problem);
-    const { first, uploads, appId } = run;
+    const { first } = run;
     if (!first) return fail('no first page was uploaded');
     if (callIndex(fixture, first) > run.createAt) return fail('the first page was uploaded after the app was created');
     // There is no app yet to name or to place the page in.
     if (first.flags['app-id']) return fail(`the first page's upload passed --app-id ${first.flags['app-id']}, but the app did not exist yet`);
     if (first.flags['add-to-sitemap']) return fail("the first page's upload passed --add-to-sitemap, but there was no app to add it to");
-    const later = uploads.filter((u) => callIndex(fixture, u) > run.createAt);
-    if (!later.some((u) => String(u.flags['app-id'] || '').toLowerCase() === appId)) return fail(`no upload after apps.js create used the returned appId ${appId}`);
     return pass();
   }
 );
@@ -2838,7 +2841,8 @@ PHASE_EXPECTATIONS.set(
     if (run.problem) return fail(run.problem);
     const { uploads, appId } = run;
     const later = uploads.filter((u) => callIndex(fixture, u) > run.createAt);
-    if (!later.length) return fail('no upload followed apps.js create, so the new app was never used');
+    // apps.js create pins the first page's tables into the app itself, so an app of one page is complete with it and has no upload to make after it: "every upload after" holds of none.
+    if (!later.length) return pass();
     const other = later.find((u) => String(u.flags['app-id'] || '').toLowerCase() !== appId);
     if (other) return fail(`${other.file || 'upload'}: --app-id ${other.flags['app-id'] || 'missing'} is not the created app ${appId}`);
     const result = later.map((u) => (u.call.historical ? null : resultObject(u.call))).find((r) => r?.appId && String(r.appId).toLowerCase() !== appId);
@@ -3263,10 +3267,10 @@ PHASE_EXPECTATIONS.set(
     const existing = existingEntities(fixture.genpagePlan);
     if (!existing.includes('account')) return fail(`## Existing Entities lists ${listText(existing)}, not account`);
     const calls = generateTypesCalls(fixture);
-    if (!calls.length) return fail('pac model genpage generate-types was not run');
+    if (!calls.length) return fail('genpage.js types was not run');
     const unlisted = calls.flatMap((c) => c.sources).filter((s) => !existing.includes(s));
-    if (unlisted.length) return fail(`generate-types used ${unlisted.join(', ')}, which ## Existing Entities does not list`);
-    return calls.some((c) => c.sources.includes('account')) ? pass() : fail('generate-types was not run for account');
+    if (unlisted.length) return fail(`genpage.js types used ${unlisted.join(', ')}, which ## Existing Entities does not list`);
+    return calls.some((c) => c.sources.includes('account')) ? pass() : fail('genpage.js types was not run for account');
   }
 );
 

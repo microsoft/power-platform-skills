@@ -70,8 +70,8 @@ phases (and other agents) read it.
                   └────────────┬───────────┘
                                │
                        apps.js list
-                       pac model genpage list
-                       pac model genpage download
+                       genpage.js list
+                       genpage.js download
                                │
                                v
                   ┌────────────────────────┐
@@ -106,7 +106,7 @@ Every `/genpage` run creates a kebab-case working directory with this layout:
   genpage.d.ts              <-- Phase 0.5  (ambient Xrm + window cache types)
   genpage-plan.md           <-- Phase 1    (planner writes; contract for later)
   entity-creation-log.md    <-- Phase 2b   (if entities created)
-  RuntimeTypes.ts           <-- Phase 4    (pac model genpage generate-types)
+  RuntimeTypes.ts           <-- Phase 4    (genpage.js types)
   <page>.tsx                <-- Phase 5    (page-builder writes; one per page)
   workflow-log.md           <-- written incrementally across all phases
 ```
@@ -126,7 +126,7 @@ Key sections the orchestrator and other agents rely on:
 |---------|---------|---------|
 | `## Environment` (Solution + Publisher Prefix) | entity-builder | Solution scoping + prefix construction |
 | `## Entity Creation Required` | orchestrator (Phase 2 gate) + entity-builder | Whether to invoke entity-builder; what to create |
-| `## Existing Entities` | orchestrator (Phase 4) | Which entities feed `pac model genpage generate-types` |
+| `## Existing Entities` | orchestrator (Phase 4) | Which entities feed `genpage.js types` |
 | `## Pages` | orchestrator (Phase 5) | How many builders to dispatch; target filenames |
 | `## Per-Page Specifications` | each page-builder | Each builder reads ONLY its own page's spec |
 | `## Relevant Samples` | each page-builder | Closest-match sample to read for structural reference |
@@ -166,8 +166,8 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
                              │
                              v
               ┌────────────────────────────┐   STAGE: generate-pages  (main loop + agents)
-              │ Generate pages             │   pac model genpage generate-types → RuntimeTypes.ts
-              │  generate-types +          │   write-page-plan.js projects the spec into
+              │ Generate pages             │   genpage.js types → RuntimeTypes.ts
+              │  genpage.js types +        │   write-page-plan.js projects the spec into
               │  write-page-plan.js +      │   app-builder-page-plan.md (NOT genpage-plan.md —
               │  page-builder agents       │   that name is /genpage's own state)
               │  (Task — parallel)         │   PAGEREF_<key> for cross-page nav; the durable

@@ -29,7 +29,7 @@ import {
 } from '@fluentui/react-icons';
 import * as d3 from 'd3';
 
-// Columns verified against RuntimeTypes.ts (generate-types --data-sources 'account').
+// Columns verified against RuntimeTypes.ts (genpage.js types --data-sources 'account').
 type AccountRow = TableRow<{
     readonly accountid: string;
     name?: string;

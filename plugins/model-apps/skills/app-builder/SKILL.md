@@ -110,7 +110,7 @@ Rules:
 - A **traditional `dashboards[]`** is emitted **only on explicit request** (e.g. "use a classic dashboard").
 - A generative page is authored as a **design intent** (`source: { kind: "intent" }`,
   `schemaVersion: 2`) during Phase 1 — its `.tsx` is written in **Phase 1.5 — Generate pages**, after
-  plan approval and after the data pre-build creates the tables so `pac model genpage generate-types`
+  plan approval and after the data pre-build creates the tables so `genpage.js types`
   can emit `RuntimeTypes.ts`. See [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Pages*.
 - The build's `pages` phase writes each page through the SDK and never places it in the sitemap
   itself — the SDK is the **single sitemap writer**, so a page's nav entry comes from a
@@ -268,7 +268,7 @@ unless destructive authority was supplied independently.
 
 After plan-mode approval (before the full build):
 
-1. **Data pre-build** — schema-only build so `generate-types` can resolve real column names:
+1. **Data pre-build** — schema-only build so `genpage.js types` can resolve real column names:
    ```bash
    node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
      --env <envUrl> --spec @<working-dir>/app-spec.json --stage data --apply
@@ -279,10 +279,12 @@ After plan-mode approval (before the full build):
 
 2. **Types** — generate Dataverse type bindings for the entities the pages read:
    ```bash
-   pac model genpage generate-types --data-sources "<entity1,entity2,…>" --output-file <working-dir>/RuntimeTypes.ts
+   node "${PLUGIN_ROOT}/scripts/genpage.js" types --env <envUrl> --data-sources "<entity1,entity2,…>" --output-file <working-dir>/RuntimeTypes.ts
    ```
    `--data-sources` is the union of every intent page's `dataSources`. Skip this step entirely when
-   every intent page is mock-only. On Windows use forward slashes in the path.
+   every intent page is mock-only. On Windows use forward slashes in the path. The script prints
+   `{ "ok": true, "outputFile", "dataSources", "detail", "bytes" }`; a failure (exit 1, `"ok": false`)
+   stops the step — report why, since the page workers must not guess column names.
 
 3. **Page plan (adapter)** — the page worker's input contract is a *plan document*, not an App Spec,
    so project the spec into one. This also echoes the per-page dispatch parameters:
@@ -536,7 +538,11 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
   - `pages-removed` — a live page was dropped from the spec. Re-add it, or pass `--allow-destructive`
     to detach it from the nav (the page record stays deployed; rebuild finalizes the sitemap).
   - `pages-shared-across-apps` — the page appears in another app's sitemap, published or only saved (not yet
-    published — an app that was never published counts). Detach it in Maker. `--allow-destructive` does **not** bypass this halt.
+    published — an app that was never published counts). Detach it from that app — ask the user first, since this
+    changes another app. The halt names the app, and `scripts/apps.js list --env <envUrl> --search <name>` gives its `id`;
+    `node "${PLUGIN_ROOT}/scripts/genpage.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>`
+    takes the page out of that app's navigation and publishes that app (everything it has saved goes live with
+    it; the page itself stays). Or detach it in Maker. `--allow-destructive` does **not** bypass this halt.
     The build checks again right before it updates pages in place, so a page another app takes in while the build runs halts it
     there too ("became shared across apps while this build ran"); one taken in while the pages upload is reported after them as a
     warning naming the app, since it is written by then.

@@ -1,7 +1,7 @@
 {
   "contractVersion": 2,
   "provenance": "synthetic",
-  "description": "Constructed trace of a compliant attended edit run for eval 3, not an agent capture. The user routes to Edit existing, picks the Sales Hub app and its contacts page from apps.js list / pac model genpage list output, and the edit planner's approved genpage-edit-plan.md adds a SearchBox and header sorting with a Company name default. before/ is the downloaded <page-id>/ snapshot; the top-level page.tsx is the edited <working-dir>/<page-id>/page.tsx. The update upload uses --page-id without --add-to-sitemap, file transport and a delta-only prompt; bindings are preserved by omission.",
+  "description": "Constructed trace of a compliant attended edit run for eval 3, not an agent capture. The user routes to Edit existing, picks the Sales Hub app and its contacts page from apps.js list / genpage.js list output, and the edit planner's approved genpage-edit-plan.md adds a SearchBox and header sorting with a Company name default. before/ is the downloaded <page-id>/ snapshot; the top-level page.tsx is the edited <working-dir>/<page-id>/page.tsx. The update upload uses --page-id without --add-to-sitemap, file transport and a delta-only prompt; bindings are preserved by omission.",
   "contracts": [
     "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan (Steps 1-2, on edit jump to the Edit Flow)",
     "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 1: Discover and Select Target App + Page",

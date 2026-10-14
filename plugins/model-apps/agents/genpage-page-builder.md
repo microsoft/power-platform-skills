@@ -137,12 +137,13 @@ import has been Grep-validated against the verified list.
 
 ## Step 2.6 — Runtime-only Griffel validation
 
-`pac model genpage transpile` only transpiles the page: it does not type-check it
-(a type error, or a reference to a column that does not exist, still transpiles
-and writes JavaScript), and it does not execute `makeStyles`. A clean transpile is
-therefore no proof that the page is type-safe, and unsupported Griffel shorthands
-can compile and then log runtime errors in the browser. Before returning, review
-every `makeStyles` object you wrote against this rule:
+The upload compiles the page with the TypeScript the bundled SDK carries, and that
+compile is a transpile (`transpileModule`), not a type check: it refuses a page that
+does not parse or has no default export, but a type error, or a reference to a column
+that does not exist, still compiles and writes JavaScript, and it does not execute
+`makeStyles`. A clean compile is therefore no proof that the page is type-safe, and
+unsupported Griffel shorthands can compile and then log runtime errors in the
+browser. Before returning, review every `makeStyles` object you wrote against this rule:
 
 Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
 runtime: the page type-checks, transpiles and deploys, then renders without the

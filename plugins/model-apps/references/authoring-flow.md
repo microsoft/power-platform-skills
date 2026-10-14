@@ -855,7 +855,7 @@ Plan-mode approval is the **single build approval**. After the user approves, pr
 1. **Data pre-build** — `build-model-app.js --stage data --apply` (solution + data-model only;
    no rows — sample data is created in the full build). Only `--stage data` is apply-safe; do not
    apply any other stage in isolation.
-2. **Type generation** — `pac model genpage generate-types` → `RuntimeTypes.ts`.
+2. **Type generation** — `genpage.js types` → `RuntimeTypes.ts`.
 3. **Page generation** — headless `page-builder` worker (via `Task`) fills each intent page's
    `.tsx`; all-or-nothing transition `source: intent → { kind: "tsx", codeFile }`.
 

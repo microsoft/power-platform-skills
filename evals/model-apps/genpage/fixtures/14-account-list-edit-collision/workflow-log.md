@@ -69,7 +69,7 @@ working-directory file before Phase 6.5 rewrote it in place).
 - SKIPPED: existing app Contoso Sales (11111111-1111-4111-8111-111111111111)
 
 ## Phase 4 — RuntimeTypes
-- `pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-tracking/RuntimeTypes.ts'` → RuntimeTypes.ts written
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-tracking/RuntimeTypes.ts'` → RuntimeTypes.ts written
 - Read RuntimeTypes.ts: account columns accountid, name, accountnumber, telephone1, emailaddress1, websiteurl, address1_line1, address1_city, address1_stateorprovince, address1_postalcode, address1_country, description, modifiedon verified
 
 ## Phase 4.5 — Connector bindings

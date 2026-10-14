@@ -122,7 +122,7 @@ of step with the fixtures.
 | `25-solution-package/` | 25 | Current synthetic | green | Every deployed page, dynamic component types, app-first writes, read-back and invalid-id refusal |
 | `3-contacts-edit-search-sort/` | 3 | Current synthetic | green | Edit flow: discovered app/page, download snapshot in `before/`, inline edit adding SearchBox + header sorting, `--page-id` delta upload without `--add-to-sitemap` |
 | `6-traffic-analytics-mock/` | 6 | Current synthetic | green | Clean, minimal mock-data analytics with D3 only; no entity work; upload omits `--data-sources` |
-| `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, first page uploaded with no app, then `apps.js create --solution --page-id --publish`, then the page updated with the new app-id to pin its tables |
+| `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, first page uploaded with no app, then `apps.js create --solution --page-id --publish`, which pins the page's tables itself, so no upload follows |
 | `9-project-tracker-new-entities/` | 9 | Current synthetic | green | Two new related tables, auth gate, dependency-ordered provisioning, `$parent`/match sample data, both tables as data sources |
 | `12-account-plan-revision/` | 12 | Current synthetic | green | First plan rejected, revised plan re-presented and approved; page has both search box and filter toolbar |
 | `14-account-list-edit-collision/` | 14 | Current synthetic | green | Colliding file names refused by the Phase 5a gate, re-plan, two parallel builders, Phase 6.5 navigation fix-up |

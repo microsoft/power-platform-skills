@@ -92,8 +92,8 @@
   },
   {
     "id": "generate-types",
-    "command": "pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-metrics-dashboard/RuntimeTypes.ts'",
-    "result": { "outputFile": "D:/work/account-metrics-dashboard/RuntimeTypes.ts", "tables": ["account"] },
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-metrics-dashboard/RuntimeTypes.ts'",
+    "result": { "ok": true, "outputFile": "D:/work/account-metrics-dashboard/RuntimeTypes.ts", "dataSources": ["account"], "detail": "none", "bytes": 18432 },
     "exitCode": 0
   },
   { "id": "gate-custom-api", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api", "result": "disabled", "exitCode": 1 },
@@ -142,15 +142,10 @@
       "inSolution": ["app", "sitemap"],
       "sitemapId": "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
       "languageCode": 1033,
-      "navigation": { "area": "Main", "group": "Pages", "pages": [{ "pageId": "66666666-7777-4888-8999-aaaaaaaaaaaa", "title": "Account Metrics Dashboard" }] }
+      "navigation": { "area": "Main", "group": "Pages", "pages": [{ "pageId": "66666666-7777-4888-8999-aaaaaaaaaaaa", "title": "Account Metrics Dashboard" }] },
+      "dataSources": ["account"],
+      "pinnedViews": ["88888888-9999-4aaa-8bbb-cccccccccccc"]
     },
-    "exitCode": 0
-  },
-  { "id": "write-pin-text", "command": "Write pin-prompt.txt, pin-agent-message.txt", "artifacts": ["pin-prompt.txt", "pin-agent-message.txt"] },
-  {
-    "id": "pin-upload",
-    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '44444444-5555-4666-8777-888888888888' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa' --code-file 'account-metrics.tsx' --prompt-file 'pin-prompt.txt' --agent-message-file 'pin-agent-message.txt'",
-    "result": { "ok": true, "pageId": "66666666-7777-4888-8999-aaaaaaaaaaaa", "appId": "44444444-5555-4666-8777-888888888888", "updated": true, "unchanged": true },
     "exitCode": 0
   },
   { "id": "ask-verify", "command": "AskUserQuestion: Would you like to verify the page(s) in the browser using Playwright?", "result": { "answer": "Skip verification" } }

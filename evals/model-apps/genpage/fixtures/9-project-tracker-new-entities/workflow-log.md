@@ -106,7 +106,7 @@ working directory, so file arguments are relative to it.
 - SKIPPED app creation: existing app Contoso Operations Hub (11111111-2222-3333-4444-555555555555) selected; `apps.js create` not called
 
 ## Phase 4 — RuntimeTypes
-- `pac model genpage generate-types --data-sources 'cr_project,cr_milestone' --output-file 'D:/work/project-tracker/RuntimeTypes.ts'`
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'cr_project,cr_milestone' --output-file 'D:/work/project-tracker/RuntimeTypes.ts'`
 - Read RuntimeTypes.ts: verified cr_projectid, cr_name, cr_manager, cr_startdate, cr_targetdate, cr_budget, cr_status (enum Planning/Active/On Hold/Completed = 100000000-100000003) on cr_project; cr_milestoneid, cr_name, cr_duedate, cr_percentcomplete, cr_status (enum Not Started/In Progress/Completed/Blocked = 100000000-100000003) and the `_cr_project_value` foreign key on cr_milestone (display name comes from its FormattedValue annotation; `cr_projectname` is not selectable)
 
 ## Phase 4.5 — Connector bindings

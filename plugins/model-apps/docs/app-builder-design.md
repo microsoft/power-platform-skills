@@ -111,13 +111,13 @@ author        (main loop)      design-only App Spec, consent, plan-mode approval
    │
 data pre-build (engine, run 1)  build --stage data --apply   → tables exist (for type-gen)
    │
-generate-pages (main loop)      generate-types + page-builder agents → fill page source (.tsx)
+generate-pages (main loop)      genpage.js types + page-builder agents → fill page source (.tsx)
    │
 full build     (engine, run 2)  build --apply (FULL, idempotent) → ui + app + publish + verify
 ```
 
-- **Two engine invocations only.** Run 1 materializes tables so `pac model genpage
-  generate-types` can emit `RuntimeTypes.ts`. Run 2 is a **full** build: it re-discovers the
+- **Two engine invocations only.** Run 1 materializes tables so `genpage.js
+  types` can emit `RuntimeTypes.ts`. Run 2 is a **full** build: it re-discovers the
   tables (rehydrating `result.created.entities`), then builds web-resources/views/charts/forms/
   commands/dashboards, creates the app, uploads pages, resolves `PAGEREF_`, finalizes the
   sitemap, publishes (opt-in), and verifies.
@@ -268,7 +268,7 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
 
 After run 1 (tables exist), the **main loop**:
 
-1. runs `pac model genpage generate-types` → `RuntimeTypes.ts`;
+1. runs `genpage.js types` → `RuntimeTypes.ts`;
 2. for each intent page, dispatches the **`page-builder`** worker with a **generated per-page
    build contract** (see below), `RuntimeTypes.ts`, the **page design contract** (§10), and the
    **navigation graph** (targets + `data` shapes);
@@ -300,11 +300,11 @@ Reuse `/genpage`'s navigation contract (`references/rules.md` 299–356): naviga
 
 **Source stays symbolic.** Code-gen emits `PAGEREF_<page-key>` and the **canonical `.tsx` is never
 mutated** with a GUID (mutation would bake environment-specific ids into source and break
-cross-env deploy / recreate — reviewer C4, SDK **T5** opaque-identity). Because the page backend takes a
+cross-env deploy / recreate, and a page's id is an opaque identity its source should not carry). Because the page backend takes a
 page's **text** (`genpage-sdk.js`, `create()` / `update()`), the resolver holds each resolved copy **in
 memory**; the canonical source is left untouched.
 
-**Deployment protocol (safe recovery — new Critical from R2).** The listing must fail closed: the first
+**Deployment protocol (safe recovery).** The listing must fail closed: the first
 page backend (a PAC wrapper) turned any failure into `[]`, which the engine treated as "no pages" — risking
 duplicates and orphans. `enumerateEnv` answers `{ ok:false }` on a failure (`genpage-sdk.js`). The `app`
 stage:

@@ -7,7 +7,7 @@
 // prose: commands come from workflowCalls (a contract-2 fixture's ordered tool-results.json, or the
 // command lines of a historical workflow-log.md), entity definitions from the plan's
 // `## Entity Creation Required`, transactions from genpage-entity-creation-log.md, and choice enums
-// from the RuntimeTypes.ts that `pac model genpage generate-types` wrote from the LIVE schema.
+// from the RuntimeTypes.ts the type generator (`genpage.js types`, or `pac model genpage generate-types` in a capture made before the script) wrote from the LIVE schema.
 //
 // Nothing here executes evidence: command text is tokenized by commandInfo, never evaluated.
 
@@ -25,8 +25,12 @@ const CREATE_APP = new RegExp(`${PAC}create\\b|\\bapps\\.js['"]?\\s+create\\b`);
 // Language discovery is the plugin's own `scripts/list-languages.js` — the only source since the `pac model list-languages` fallback was removed (every /genpage page operation needs the
 // Azure CLI the script reads with). `pac model list-languages` is the command the captures made before that script record, and still counts as the planner having looked.
 const LIST_LANGUAGES = new RegExp(`${PAC}list-languages\\b|\\blist-languages\\.js\\b`);
-const GENERATE_TYPES = new RegExp(`${PAC}genpage\\s+generate-types\\b`);
-const GENPAGE_LIST = new RegExp(`${PAC}genpage\\s+list\\b`);
+// The type generator, the page listing and the page download are `scripts/genpage.js types | list | download`; a capture made before the script records `pac model genpage generate-types | list |
+// download`, and is still read: each pattern accepts both. A script path is usually quoted (`node 'D:/repo/…/genpage.js' types`), so the pattern allows a closing quote between `genpage.js` and
+// its command. None may read a verb that merely starts with its own (`pac model genpage list-connector-tables` is no `list`), hence the lookahead.
+const GENERATE_TYPES = new RegExp(`${PAC}genpage\\s+generate-types\\b|\\bgenpage\\.js['"]?\\s+types(?![\\w-])`);
+const GENPAGE_LIST = new RegExp(`${PAC}genpage\\s+list(?![\\w-])|\\bgenpage\\.js['"]?\\s+list(?![\\w-])`);
+const GENPAGE_DOWNLOAD = new RegExp(`${PAC}genpage\\s+download\\b|\\bgenpage\\.js['"]?\\s+download(?![\\w-])`);
 const PROVISION = /\bprovision-entities\.js\b/;
 // The pre-SDK entity-builder created each table, column, relationship and row with its own script.
 const LEGACY_PROVISION = /\b(?:create-table|add-column|create-relationship|create-record)\.js\b/;
@@ -57,7 +61,7 @@ const suffixOf = (name) => String(name).toLowerCase().replace(/^[a-z0-9]+_/, '')
 function commandCalls(fixture, pattern) {
   return workflowCalls(fixture).filter((call) => pattern.test(call.command)).map((call) => {
     // A historical log wraps the command in a Markdown code span and keeps going after it:
-    //   - Command: `pac model genpage generate-types --data-sources "task" --output-file "D:/x/RuntimeTypes.ts"`
+    //   - Command: `genpage.js types --env https://contoso.crm.dynamics.com --data-sources "task" --output-file "D:/x/RuntimeTypes.ts"`   (or `pac model genpage generate-types --data-sources …` in an older capture)
     //   `node …/provision-entities.js --env https://… --input @…/provision-input.json --apply --sample-data`
     // The closing backtick would otherwise glue onto the last token (`--sample-data\`` is then no
     // flag at all), so drop the span delimiters before tokenizing. Recorded argv is used untouched.
@@ -209,7 +213,7 @@ function createdTableNames(fixture) {
   return prefix ? planEntityBlocks(fixture.genpagePlan).map((b) => `${prefix}_${b.suffix}`) : [];
 }
 
-// RuntimeTypes.ts as `pac model genpage generate-types` writes it:
+// RuntimeTypes.ts as the type generator writes it (`genpage.js types`, and `pac model genpage generate-types` before it — the registrations and enums are the same):
 //   export interface EnumRegistrations extends BaseEnumRegistrations {
 //       "cr_ticket-cr_priority": cr_ticket_cr_priority,
 //   }
@@ -240,13 +244,14 @@ function choiceEnum(source, tableSuffix, columnSuffix) {
   return null;
 }
 
-// The rows of an app or page listing — apps from `scripts/apps.js list` (or `pac model list` in an older capture), pages from `pac model genpage list` — as
-// { id, name }. Four recorded shapes:
+// The rows of an app or page listing — apps from `scripts/apps.js list` (or `pac model list` in an older capture), pages from `scripts/genpage.js list` (or `pac model genpage list`) — as
+// { id, name }. Five recorded shapes:
 //   App ID                                Display Name   Unique Name        (raw PAC table)
 //   11111111-2222-3333-4444-555555555555  Sales Hub      SalesHub
 //   - Sales Hub — 11111111-2222-3333-4444-555555555555 (SalesHub)          (log bullet)
 //   { "apps": [ { "appId": "…", "displayName": "…" } ] }                     (structured result of an older capture)
 //   { "ok": true, "count": 1, "apps": [ { "id": "…", "name": "Sales Hub", "uniqueName": "sales_hub_1a2b3c4d", "published": true, "unpublishedChanges": false } ] }   (apps.js list)
+//   { "ok": true, "scope": "app", "appId": "…", "layer": "published", "count": 1, "pages": [ { "pageId": "…", "name": "Seattle Weather", "title": "Weather" } ] }   (genpage.js list --app-id)
 const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 function listingRows(call) {
   const rows = [];
@@ -285,7 +290,7 @@ function conversationSteps(fixture) {
 }
 
 module.exports = {
-  LIST_TABLES, LIST_LANGUAGES, LIST_APPS, CREATE_APP, GENPAGE_LIST, NOT_FOUND, GUID_RE,
+  LIST_TABLES, LIST_LANGUAGES, LIST_APPS, CREATE_APP, GENPAGE_LIST, GENPAGE_DOWNLOAD, GENERATE_TYPES, NOT_FOUND, GUID_RE,
   csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, tableAbsent, searchFailed, generateTypesCalls, uploadCalls,
   provisionCalls, legacyProvisionCalls, planPrefix, planSolution, planEntityBlocks, existingEntities, entityLog,
   createdTableNames, runtimeEnums, choiceEnum, parseOptions, listingRows, conversationSteps,

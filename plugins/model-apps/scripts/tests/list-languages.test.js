@@ -266,18 +266,22 @@ test('no document names a fallback for the languages: the planner, the skill, th
 
 // README's account of `az`: it is what every Dataverse call authenticates with, generative pages included (they are written through the SDK, not through `pac model genpage`), and the language read has no
 // `pac` fallback — so a deploy needs `az`, and a machine without it gets the reason, never an English default. The README that said /genpage worked without `az` for a page over existing entities or
-// mock data was true only while a `pac` fallback stood behind the language read and `pac` wrote the pages; neither is so now.
-test('README says az is needed for every Dataverse call, pages included, and that the language read has no pac fallback', () => {
+// mock data was true only while a `pac` fallback stood behind the language read and `pac` wrote the pages; neither is so now. Its account of what `pac` is still for — sign-in, the environment, the
+// version, three scripts' fallbacks and a connector's tables — is pinned here too, since a README that still gave `pac` the type generator would send an agent to a command that is gone.
+test('README says az is needed for every Dataverse call, pages included, that the language read has no pac fallback, and what pac is still for', () => {
   const readme = squash(read('README.md'));
   assert.match(readme, /\| \[Azure CLI\]\([^)]*\) \(`az`\) \| Every Dataverse call — tables, apps, languages, entity creation and generative pages — and the Power Apps service token that reading connections and connector metadata uses \|/);
   assert.match(readme, /`az` is what every Dataverse call authenticates with — listing tables, apps and languages, entity creation, and the generative pages themselves, which are written, read and deleted through the bundled SDK, not through `pac model genpage`/);
   assert.match(readme, /\*\*Deploying a page needs `az`\*\*, and so does detecting the environment's languages: there is no `pac` fallback for either, so a missing or signed-out `az` ends language detection with the reason, never with an English default\./);
-  assert.match(readme, /`pac` signs you in and chooses the environment, runs the type generator, and answers the connection, connector and deployment-settings reads only where the SDK cannot/);
+  assert.match(readme, /`pac` signs you in and chooses the environment, and answers the connection, connector and deployment-settings reads only where the SDK cannot \(the script's output says so: `connectionsSource`, or `source` with a `fallback`\); it also lists a connector's tables, which no script does yet\. The type generator, the page listing and download, and putting a page in an app, taking it out and deleting it are the SDK's too \(`scripts\/genpage\.js`\), so they need `az` and no `pac`\./);
   // The promise the old paragraph made, and the fallback that backed it, are gone.
   assert.doesNotMatch(readme, /Without `az`, the `\/genpage` skill still works|falls back to `pac model list-languages`|uses `az` when it is signed in/);
-  // The prerequisites table names what `pac` is still for, not the commands the scripts replaced.
-  assert.match(readme, /\| \[PAC CLI\]\([^)]*\) > 2\.10\.0 \| Signing in and choosing the environment \(`pac auth`, `pac org who`\), the `\/genpage` type generator \(`pac model genpage generate-types`\), and the fallbacks of the connection, connector and deployment-settings scripts \|/);
-  assert.doesNotMatch(readme, /Schema generation, app creation, table listing, deployment/);
+  // The prerequisites table names what `pac` is still for — sign-in, the environment and the version, the three fallbacks, and the one list no script does — not the commands the scripts replaced.
+  assert.match(readme, /\| \[PAC CLI\]\([^)]*\) > 2\.10\.0 \| Signing in, choosing the environment and reading the CLI version \(`pac auth`, `pac org who`, `pac help`\); the fallbacks of the connection, connector and deployment-settings scripts; and listing a connector's tables, which has no script \(`pac model genpage list-connector-tables`\) \|/);
+  assert.doesNotMatch(readme, /Schema generation, app creation, table listing, deployment|type generator \(`pac model genpage generate-types`\)|runs `pac model genpage generate-types`|schema generation \(`generate-types`\)/);
+  // The steps and the technology list say the same: the schema is `genpage.js types`, and pac is sign-in, the environment and the fallbacks.
+  assert.match(readme, /6\. \*\*Generate schema\*\* — runs `scripts\/genpage\.js types` \(the SDK's type generator\) for Dataverse entity pages/);
+  assert.match(readme, /- \*\*PAC CLI\*\* — sign-in and environment choice, and the fallbacks of the connection, connector and deployment-settings scripts; pages, their schema and their listing, download and removal go through the bundled SDK/);
 });
 
 // --- end to end: the real script in a real process ---------------------------------------------------------

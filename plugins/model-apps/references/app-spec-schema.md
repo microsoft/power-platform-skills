@@ -1397,8 +1397,9 @@ custom control), but the spec validator emits a warning.
      and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
      never requests a replacement CREATE. The build takes this app's PUBLISHED navigation as proof: a page
      that is only in its saved but unpublished navigation halts with advice to publish the app first. If it is this app's page, add it to the
-     app's navigation in the maker, publish the app and re-run; otherwise remove the stale id from the manifest/spec (or delete the
-     page) and re-run. A read failure HALTs (`pages-existence-failed`).
+     app's navigation with `node "${PLUGIN_ROOT}/scripts/genpage.js" add-to-app --env <envUrl> --app-id <this app's id> --page-id <page id>` (it publishes the app and proves the page in what runs)
+     and re-run; otherwise remove the stale id from the manifest/spec (or delete the page with `node "${PLUGIN_ROOT}/scripts/genpage.js" delete --env <envUrl> --page-id <page id>`,
+     after asking the user — it is permanent) and re-run. A read failure HALTs (`pages-existence-failed`).
      A create's identity is written down before the create is sent (a `pending` record in the build
      workspace), so a create whose answer was lost is settled by the next build and never repeated as a
      second page: the page found under the name the create sent is adopted (a creation receipt is written)
@@ -1461,7 +1462,10 @@ custom control), but the spec validator emits a warning.
   - `pages-manifest-corrupt` — the manifest web resource cannot be parsed (two keys mapping to the
     same id). Fix or delete the manifest and rebuild.
   - `pages-shared-across-apps` — a page appears in another app's sitemap, published or only saved (not yet
-    published — an app that was never published counts). Detach it in Maker first. `--allow-destructive` does NOT bypass this halt. If another app's
+    published — an app that was never published counts). Detach it from that app first — ask the user, since this changes another app: the halt names the app,
+    `scripts/apps.js list --env <envUrl> --search <name>` gives its `id`, and `node "${PLUGIN_ROOT}/scripts/genpage.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>`
+    takes the page out of its navigation and publishes it (everything that app has saved goes live with it; the page itself stays) — or detach it in Maker.
+    `--allow-destructive` does NOT bypass this halt. If another app's
     saved navigation, or the list of apps that were never published, cannot be read, the build halts as `pages-shared-check-failed` instead of assuming it is clear.
     The check runs again right before the first page is updated in place, so a page another app takes in while the build runs halts it there too ("became shared
     across apps while this build ran"); one taken in while the pages upload is written by then, and is reported after the uploads as a warning naming the app.

@@ -54,9 +54,9 @@
   },
   {
     "id": "generate-types",
-    "command": "pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'",
     "exitCode": 0,
-    "result": "Types written to D:/work/account-records/RuntimeTypes.ts"
+    "result": { "ok": true, "outputFile": "D:/work/account-records/RuntimeTypes.ts", "dataSources": ["account"], "detail": "none", "bytes": 18432 }
   },
   { "id": "gate-custom-api", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api", "exitCode": 1, "result": "disabled" },
   { "id": "gate-telemetry", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-telemetry", "exitCode": 1, "result": "disabled" },
