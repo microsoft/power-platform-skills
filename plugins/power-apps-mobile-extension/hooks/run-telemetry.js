@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { runNative } = require("../scripts/lib/telemetry/lib/native-exec");
 const { PLUGIN_NAME, STREAM_NAME, TRACKED_SKILLS, sanitizeData } = require("../scripts/lib/telemetry/schema");
 const { readConfig, enabled } = require("../scripts/lib/telemetry/config");
 const { fireAndForget } = require("../scripts/lib/telemetry/dispatcher");
@@ -43,12 +43,9 @@ function invocation(mode, payload) {
     input.pluginName || input.plugin_name || payload.pluginName || payload.plugin_name);
 }
 
-function pacExec(executable, args, options) {
+function pacExec(executable, args, options, dependencies) {
   if (executable !== "pac" || !["auth who", "--version"].includes(args.join(" "))) throw new Error("Unsupported PAC command");
-  if (process.platform === "win32") {
-    return execFileSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "pac " + args.join(" ")], options);
-  }
-  return execFileSync(executable, args, options);
+  return runNative(executable, args, options, dependencies);
 }
 
 function handle(mode, payload, options = {}) {

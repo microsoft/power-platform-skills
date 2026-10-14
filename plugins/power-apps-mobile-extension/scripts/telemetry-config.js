@@ -24,7 +24,7 @@ function run(action = "status", options = {}) {
   } else {
     lines.push("Telemetry transmission: ON (default). Sending requires a supported, resolved destination.");
   }
-  lines.push(`Transmission choice after the release gate: ${preference === "off" ? "OFF" : "ON"}.`);
+  lines.push(`Transmission choice after the release gate: ${active && preference !== "off" ? "ON" : "OFF"}.`);
   lines.push(`Environment override: ${telemetryOptOutEnvVarName(PLUGIN_NAME)}=1 or true forces transmission OFF, even after the on command.`);
   lines.push("When enabled, events include skill/plugin, OS/Node, agent/PAC versions, session/correlation IDs and available organization, tenant and Entra user object IDs.");
   lines.push("No prompts, arguments, source code, paths, credentials, free-text errors, outcomes, durations or build targets are recorded.");

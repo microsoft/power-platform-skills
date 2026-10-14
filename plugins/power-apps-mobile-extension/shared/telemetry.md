@@ -153,8 +153,10 @@ when the canonical source changes; the shared telemetry CI suite checks parity.
 PAM directly uses its agent, PAC auth, session, user preference and local-log helpers.
 PAM owns the wrappers, strict schema, routing and transport; never replace the
 PAM dispatcher with the generic dispatcher without retaining nested validation.
-On Windows the PAC wrapper invokes only fixed `pac auth who` / `pac --version`
-commands through the command processor; no user content enters a shell command.
+The PAC wrapper delegates fixed `pac auth who` / `pac --version` commands to
+`runNative`, which resolves native executables from absolute PATH entries and
+runs without a shell. Windows `.cmd` and `.bat` shims are not executed; missing
+native PAC executables result in omitted PAC metadata, not installation or sign-in.
 
 From the repository root:
 

@@ -47,6 +47,38 @@ test("ships enabled with the agreed stream and only ROW/EU endpoints", () => {
   assert.equal(config.regions.eu.collector_url, "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/");
 });
 
+test("PAC wrapper uses absolute native executables without a shell", () => {
+  const script = String.raw`
+    const assert = require("node:assert/strict");
+    const childProcess = require("node:child_process");
+    const calls = [];
+    childProcess.execFileSync = (...args) => { calls.push(args); return "metadata"; };
+    const { pacExec } = require(${JSON.stringify(path.resolve(__dirname, "../../hooks/run-telemetry"))});
+    const executable = "C:\\trusted-tools\\pac.exe";
+    const dependencies = {
+      platform: "win32", env: { PATH: ";.;relative;C:\\trusted-tools", PATHEXT: ".CMD;.BAT" },
+      exists: candidate => candidate === executable,
+    };
+    for (const args of [["auth", "who"], ["--version"]]) {
+      assert.equal(pacExec("pac", args, { timeout: 1000 }, dependencies), "metadata");
+      const call = calls.at(-1);
+      assert.equal(call[0], executable);
+      assert.deepEqual(call[1], args);
+      assert.equal(call[2].shell, false);
+      assert.equal(call[2].windowsHide, true);
+      assert.equal(call[2].timeout, 1000);
+    }
+    assert.throws(() => pacExec("pac", ["auth", "create"], {}, dependencies));
+    assert.throws(() => pacExec("cmd.exe", ["--version"], {}, dependencies));
+    assert.throws(() => pacExec("pac", ["--version"], {}, {
+      ...dependencies, exists: () => false,
+    }), { code: "ENOENT" });
+    assert.equal(calls.length, 2);
+  `;
+  const result = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 3000 });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("tracks exactly the 12 workflow skills, never the telemetry control", () => {
   const skillsDir = path.resolve(__dirname, "../../skills");
   assert.deepEqual([...TRACKED_SKILLS].sort(), fs.readdirSync(skillsDir).filter(name => name !== "telemetry").sort());
@@ -366,7 +398,10 @@ test("control reports enabled, opted-out and hard-disabled states without changi
   assert.match(control("off", fixtureData).output, /logging continues/);
   assert.match(control("on", { ...fixtureData, env: { ...fixtureData.env, [telemetryOptOutEnvVarName(PLUGIN_NAME)]: "1" } }).output, /transmission: OFF/);
   const disabledFixture = fixture(context, true);
-  assert.match(control("on", disabledFixture).output, /HARD-DISABLED/);
+  const disabledOutput = control("on", disabledFixture).output;
+  assert.match(disabledOutput, /HARD-DISABLED/);
+  assert.match(disabledOutput, /Transmission choice after the release gate: OFF/);
+  assert.doesNotMatch(disabledOutput, /Transmission choice after the release gate: ON/);
   assert.equal(JSON.parse(fs.readFileSync(disabledFixture.configPath, "utf8")).disabled, true);
   assert.ok(!fs.existsSync(path.join(fixtureData.directory, "telemetry")));
 });
