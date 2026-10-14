@@ -17,6 +17,7 @@ const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./hash.js');
 const { resolveAppSource } = require('./app-source-path.js');
 const { readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, creationIds } = require('./page-ownership-records.js');
+const { readPublishedPages, writePublishedPages } = require('./page-publish-records.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
@@ -103,7 +104,7 @@ const {
   cellFitsInRow,
   rowsFromCells,
 } = require('./artifact-intent.js');
-const { makeGenpageSdk, suppliedButBlank, unescapePacName, sourceText } = require('./genpage-sdk.js');
+const { makeGenpageSdk, suppliedButBlank, unescapePacName, sourceText, holdsWhatWasSent, describeDivergence } = require('./genpage-sdk.js');
 const { genPageSubArea } = require('./genpage-subarea.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
@@ -5532,17 +5533,22 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // that stopped between its write and its publish) is found by it, where a read of the PUBLISHED rows would not see it at all.
       const listedNames = new Map((enumd.pages || []).map((p) => [String(p.pageId).toLowerCase(), p.name]));
 
-      // PENDING CREATIONS. Every create is recorded (recordPagePending) under the id it will use BEFORE it is sent. A create whose answer never arrived, and
-      // whose page could not be read back either, leaves the page in the environment with nothing local that names it: the page list shows it, nothing links
-      // it to its spec entry, and this build would create ANOTHER page for the entry. So each record is settled here, before anything is created:
-      //   the page is there, under the name the create sent  -> ADOPTED. The id was minted by this build and the page holds the name this build gave it,
-      //                                                          so a creation receipt is written (the same proof a create that was answered leaves), the
-      //                                                          record is consumed, and the page is updated like any page this build created.
-      //   the page is there, under another name              -> a CONFLICT. A pending record is intent, not ownership: on its own it authorizes nothing —
-      //                                                          not an update, not a delete — and a page that is not what was sent is not adopted.
-      //   the page is not there                              -> the create is sent again under the SAME id: a send that is still in flight collides on it,
-      //                                                          so one page can result.
+      // PENDING CREATIONS. Every create is recorded (recordPagePending) under the id it will use, with the name and the source it sends, BEFORE it is sent. A create whose
+      // answer never arrived, and whose page could not be read back either, leaves the page in the environment with nothing local that names it: the page list shows it,
+      // nothing links it to its spec entry, and this build would create ANOTHER page for the entry. So each record is settled here, before anything is created:
+      //   the page is there, and holds what a create under the id sent — its name and its source  -> ADOPTED. The id was minted by this build and the page holds what this build
+      //                                                          sent under it, so a creation receipt is written (the same proof a create that was answered leaves),
+      //                                                          the record is consumed, and the page is updated like any page this build created — which is also how
+      //                                                          what an earlier create sent (another model or name, say) is brought to what this build asks for.
+      //   the page is there, and holds something else                                              -> a CONFLICT. A pending record is intent, not ownership: it authorizes nothing — not
+      //                                                          an update, not a delete — and a page that no create under the id sent (it is named otherwise, or its
+      //                                                          source is not one that was sent) is not adopted.
+      //   the page is not there                                                                    -> the create is sent again under the SAME id: a send that is still in flight
+      //                                                          collides on it, so one page can result. If the key is bound to another page by the time it is
+      //                                                          reconciled, nothing is created — and the record is KEPT (see below).
       const resumeIds = new Map();
+      const resumeSent = new Map();
+      const adoptedPending = [];
       const pendingConflicts = [];
       let pendingByKey;
       try { pendingByKey = readPendingCreations(opts.workspaceDir, appUnique, opts.env); } catch (e) {
@@ -5553,24 +5559,35 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (!declaredKeys.has(key)) continue;
         if (records.length > 1) { pendingConflicts.push({ key, reason: 'multiple-pending-creations', pageIds: records.map((r) => r.pageId) }); continue; }
         const [record] = records;
-        if (!live.has(record.pageId)) { resumeIds.set(key, record.pageId); continue; }
-        const storedName = listedNames.get(record.pageId);
-        if (storedName !== record.name) {
-          pendingConflicts.push({ key, reason: 'pending-create-unproven', pageId: record.pageId, storedName: typeof storedName === 'string' ? storedName : null, sentName: record.name });
+        const resume = () => { resumeIds.set(key, record.pageId); resumeSent.set(key, record.sent); };
+        if (!live.has(record.pageId)) { resume(); continue; }
+        // The page is there: its name is in the listing, and its source — the other half of what a create under the id sent — is read.
+        let page;
+        try { page = await genpage.read(record.pageId); } catch (e) {
+          // Gone since the listing: it is not there now, which settles nothing (see below), so it is resumed like any page that was not listed.
+          if (e && e.code === 'GENPAGE_NOT_FOUND') { resume(); continue; }
+          pendingConflicts.push({ key, reason: 'pending-create-unreadable', pageId: record.pageId, error: String((e && e.message) || e) });
+          continue;
+        }
+        if (!holdsWhatWasSent(record.sent, page)) {
+          pendingConflicts.push({ key, reason: 'pending-create-unproven', pageId: record.pageId, why: describeDivergence(record.sent, page) });
           continue;
         }
         try {
-          ownership.created.push(recordPageCreation(opts.workspaceDir, appUnique, key, record.pageId, record.name, opts.env));
+          ownership.created.push(recordPageCreation(opts.workspaceDir, appUnique, key, record.pageId, page.name, opts.env));
           completePendingCreations(opts.workspaceDir, appUnique, [record.pageId], opts.env);
+          adoptedPending.push({ key, pageId: record.pageId, name: page.name });
         } catch (e) {
           // `transient: false`, as for any creation receipt that cannot be saved: the build's re-run of a halt it takes for transient must not run on.
-          throw Object.assign(new BuildHalt(`page "${record.name}" was found as ${record.pageId} (a create an earlier build started), but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
+          throw Object.assign(new BuildHalt(`page "${page.name}" was found as ${record.pageId} (a create an earlier build started), but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
         }
       }
       if (pendingConflicts.length) {
-        const why = pendingConflicts.map((c) => (c.reason === 'multiple-pending-creations'
-          ? `page "${c.key}" has ${c.pageIds.length} unfinished creations (${c.pageIds.join(', ')}), and this build cannot tell which one is its page`
-          : `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it is named ${JSON.stringify(c.storedName)} and that create sent ${JSON.stringify(c.sentName)} — it is not known to be the page that was sent, so it is neither adopted nor updated`));
+        const why = pendingConflicts.map((c) => {
+          if (c.reason === 'multiple-pending-creations') return `page "${c.key}" has ${c.pageIds.length} unfinished creations (${c.pageIds.join(', ')}), and this build cannot tell which one is its page`;
+          if (c.reason === 'pending-create-unreadable') return `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it could not be read to tell whether it is a page that build sent (${c.error}), so it is neither adopted nor updated`;
+          return `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it is not a page that build sent: ${c.why} — so it is neither adopted nor updated`;
+        });
         throw new BuildHalt(`generative-page creation(s) that an earlier build started cannot be settled: ${why.join('; ')}. Look at the page(s) in the environment: delete the one that is not yours, or delete the "pending" record(s) named in ${path.join(path.resolve(opts.workspaceDir || '.'), 'page-ownership.pending.*.json')} for a page you have confirmed is not this app's, and re-run.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
       }
       const createdIds = creationIds(ownership);
@@ -5591,6 +5608,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const listed = listedNames.get(id);
         if (typeof listed === 'string' && listed) storedNames.set(id, unescapePacName(listed));
         else nameReadErrors.push(`${id}: stored page name is unreadable`);
+      }
+      // A page adopted from a pending record is tied to its key by more than a receipt and a stored name: it holds a name and a source that a create under its id sent. Its stored
+      // name may be an older one than the spec's now — the spec renamed the page since the create that left it — which the receipt rule below would read as "not corroborated" and
+      // refuse, though the page is provably this entry's. It is the name this build gave the page, so it stands in for the spec's, and the update that follows renames the page.
+      for (const adopted of adoptedPending) {
+        const entry = (spec.pages || []).find((p) => (p.key || p.name) === adopted.key);
+        if (entry) storedNames.set(adopted.pageId, entry.name);
       }
       const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds, storedNames, createdIds);
       if (conflicts.length) {
@@ -5615,17 +5639,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
         });
         throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
       }
-      // A key that is bound to a page does not create one: a creation an earlier build left pending for it, under an id that is not in the environment, is not
-      // resumed — and would otherwise sit in the workspace for good, keeping `--clear-workspace` from ever clearing it. It is consumed, and said so.
-      for (const [key, records] of pendingByKey) {
+      // A key that is bound to a page does not create one, so a creation an earlier build left pending for it is not resumed. What becomes of its record is decided by what is KNOWN
+      // about its page, never by one listing:
+      //   the page was there (adopted above)  -> if the key is bound to ANOTHER page, this one is an unused page this build made: reported, with its id. It has a creation receipt now,
+      //                                           so teardown finds it and deletes it; nothing else here touches it.
+      //   the page is not there               -> the record is KEPT, and said so. An absence is one snapshot, not proof that the request which would make the page cannot still
+      //                                           land; if it lands later it would be a page with no key, no receipt and no record — nothing to find it by, teardown included. The
+      //                                           record is that trace: a later build adopts the page if it appears (or reports it, if the key is bound elsewhere), teardown deletes
+      //                                           it, and `--clear-workspace` waits for it. Deleting the record by hand, once the page is known not to exist, is the explicit way out.
+      const warnPending = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
+      for (const adopted of adoptedPending) {
+        const bound = keyToId.get(adopted.key);
+        if (bound === undefined || String(bound).toLowerCase() === adopted.pageId) continue;
+        warnPending(`page ${JSON.stringify(adopted.name)} (${adopted.pageId}) was created by an earlier build for "${adopted.key}" — its answer was lost — and is not used: "${adopted.key}" is bound to ${bound}. It is recorded as a page this app created, so teardown deletes it; or delete it in Maker.`);
+      }
+      for (const [key, pendingId] of resumeIds) {
         if (!keyToId.has(key)) continue;
-        const stale = records.filter((r) => !live.has(r.pageId)).map((r) => r.pageId);
-        if (!stale.length) continue;
-        try { completePendingCreations(opts.workspaceDir, appUnique, stale, opts.env); } catch (e) {
-          if (typeof opts.warn === 'function') opts.warn(`page "${key}": the record of an unfinished create (${stale.join(', ')}) could not be removed (${e.message})`);
-          continue;
-        }
-        if (typeof opts.warn === 'function') opts.warn(`page "${key}" is bound to ${keyToId.get(key)}, so the create an earlier build started under ${stale.join(', ')} — a page that is not in the environment — is not resumed, and its record was removed`);
+        warnPending(`page "${key}" is bound to ${keyToId.get(key)}, so the create an earlier build started under ${pendingId} is not resumed. No such page is in the environment now, but a request still in flight can create it later, so its record is kept: a later build adopts the page if it appears, teardown deletes it, and --clear-workspace waits for it. Delete the "pending" record(s) in ${path.join(path.resolve(opts.workspaceDir || '.'), 'page-ownership.pending.*.json')} for ${pendingId} only once you have confirmed that no such page exists, in Maker too.`);
       }
 
       // DUPLICATE-NAME MATERIALIZATION GATE (post-reconciliation). validateAppSpec TOLERATES a duplicate
@@ -5735,9 +5765,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
       const keyOf = (p) => p.key || p.name;
       const canonicalPath = (p) => resolveAppSource(opts.appDir, normalizePageSource(p).codeFile);
-      // One create, with its identity written down FIRST. The id the page is created under is recorded (recordPagePending) before the first request is sent, so a
-      // create whose answer never arrives — and whose page cannot be read back either — is not forgotten: the next build finds the record (above) and adopts the page,
-      // or sends the create again under the same id. `resumeIds` holds the id an earlier build minted for this key when its page is not in the environment.
+      // One create, with its identity written down FIRST. The id the page is created under is recorded (recordPagePending) before the first request is sent, with the name and the
+      // source it sends, so a create whose answer never arrives — and whose page cannot be read back either — is not forgotten: the next build finds the record (above) and adopts the
+      // page if it holds what was sent, or sends the create again under the same id. `resumeIds` holds the id an earlier build minted for this key when its page is not in the
+      // environment, and `resumeSent` what that build (and any after it) sent under it: the backend treats such a create as one with an earlier send still open, and recognises a page that
+      // appears under the id by them.
       // The record is settled here too: acknowledged — recordCreate writes the receipt and consumes it — or known to have written nothing, which leaves nothing that
       // could land, so it is consumed; an outcome that is not known keeps it. No workspace, no record (recordCreate says so).
       const createPage = async (p, fields) => {
@@ -5746,16 +5778,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
         try {
           return await genpage.create({
             ...fields,
-            ...(resumeIds.has(key) ? { pageId: resumeIds.get(key) } : {}),
-            beforeSend: async (id) => {
+            caller: 'build',
+            ...(resumeIds.has(key) ? { pageId: resumeIds.get(key), sentBefore: resumeSent.get(key) } : {}),
+            beforeSend: async (id, sent) => {
               sentUnder = id;
-              if (opts.workspaceDir) recordPagePending(opts.workspaceDir, appUnique, key, id, p.name, opts.env);
+              if (opts.workspaceDir) recordPagePending(opts.workspaceDir, appUnique, key, id, sent.name, opts.env, sent.sourceSha256);
             },
           });
         } catch (e) {
+          // A page found under the id that no create under it sent: the conflict a page listed under a pending id is, said the same way. Nothing was adopted, published or updated.
+          if (e && e.code === 'GENPAGE_CREATE_DIVERGED') throw Object.assign(new BuildHalt(e.message, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, cause: e }), { transient: false });
           // Only for a create this build started itself. A resumed one may share its id with a request an earlier build sent that has still not arrived, which a refusal of THIS send says nothing about.
           if (sentUnder && opts.workspaceDir && e && e.outcome === 'nothing' && !resumeIds.has(key)) {
-            try { completePendingCreations(opts.workspaceDir, appUnique, [sentUnder], opts.env); } catch { /* a record of a page that was not written: the next build resumes it, or removes it when the key is bound to another page */ }
+            try { completePendingCreations(opts.workspaceDir, appUnique, [sentUnder], opts.env); } catch { /* the record of a create that wrote nothing: the next build resumes it, or keeps it while the key is bound to another page — not a reason to halt */ }
           }
           throw e;
         }
@@ -5877,11 +5912,37 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const deployment = new Map(); // key -> resolved code (nav sources only)
       // What a page write answered. The SDK's warnings, and a publish it could not prove, go to the build's log; a page that was SAVED but could not be
       // published is a halt — the page exists (the caller has recorded it by now), the runtime still serves the copy it had, and a re-run reuses the page
-      // and publishes it (a page that already holds its content is published, not written again).
+      // and publishes it (a page that already holds its content is published, not written again — unless this workspace recorded that this very content was
+      // published, below, and that record is only ever written after a publish that was seen to take effect).
       const afterWrite = (p, verb, written) => {
         if (typeof opts.warn === 'function') for (const w of written.warnings || []) opts.warn(`page "${p.name}": ${w}`);
         if (written.publish && written.publish.kind === 'failed') {
           throw new BuildHalt(`page "${p.name}" was ${verb} as ${written.pageId} and saved, but publishing it failed (${written.publish.detail}) — the runtime still serves the previously published copy. Re-run the build once the cause is cleared: the page is reused, not created again`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true });
+        }
+        rememberPublished(written);
+      };
+
+      // WHICH PAGES ARE KNOWN TO BE PUBLISHED. A page that already holds what the spec asks for is not written, but the backend publishes it unless it is told that exactly this content was
+      // published already (`publishedFingerprint`, genpage.update): the server cannot say whether an earlier run's publish of a page finished, and a page whose publish did not finish has to be
+      // published by the next run. Without a record of its own that would publish EVERY unchanged page on EVERY rebuild — one PublishXml of several seconds each, ten pages ten publishes — where an
+      // unchanged page cost no write and no publish before pages went through the SDK. So the build keeps the record (lib/page-publish-records.js): the hash of the content each page was last
+      // published with, written once the publish was SEEN to take effect (`verified`) and never otherwise. A page that is not in it, or is there with other content — new, changed since, saved by a
+      // run whose publish failed or was not proven, or a workspace that is new or cleared — is "not known to be published", and is published. A page a changed-only run leaves alone keeps its entry; the
+      // entry of a page the spec no longer binds is dropped when the next is written.
+      const publishedPages = readPublishedPages(opts.workspaceDir, appUnique, opts.env);
+      let publishRecordWarned = false;
+      const rememberPublished = (written) => {
+        if (!opts.workspaceDir || !written.publish || written.publish.kind !== 'verified' || typeof written.fingerprint !== 'string') return;
+        publishedPages.set(String(written.pageId).toLowerCase(), written.fingerprint);
+        const bound = new Set(Array.from(keyToId.values(), (id) => String(id).toLowerCase()));
+        try {
+          writePublishedPages(opts.workspaceDir, appUnique, opts.env, new Map([...publishedPages].filter(([id]) => bound.has(id))));
+        } catch (e) {
+          // Only a cache: the next build publishes the pages again, which is what it did before there was one. Said once, not once per page.
+          if (!publishRecordWarned && typeof opts.warn === 'function') {
+            publishRecordWarned = true;
+            opts.warn(`could not save which pages this build published (${(e && e.message) || e}), so the next build publishes them again`);
+          }
         }
       };
 
@@ -5990,7 +6051,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // sent, so a re-upload without one used to wipe a deployed page's model id to ""). A downloaded spec carries the model (pages[].model).
             // `caller: 'build'` words the advice for an UPDATE that may have landed: the build keeps no base marker, and reads every page again when it runs.
             const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
-            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build' }) : await createPage(p, fields);
+            // `publishedFingerprint` is what this workspace recorded about the page's last publish (above): a page that already holds this very content is not published again.
+            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', publishedFingerprint: publishedPages.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
             // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).

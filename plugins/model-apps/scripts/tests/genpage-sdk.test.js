@@ -8,7 +8,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const {
   makeGenpageSdk, sourceText, dataSourcesOf, unescapePacName, suppliedButBlank, promptTranscript, configJson, pageFolderFiles,
-  genPagesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS,
+  genPagesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, contentFingerprint,
 } = require('../lib/genpage-sdk.js');
 const { FakeSdk, sdkError, connectionError } = require('./helpers/fake-genpage-sdk.js');
 
@@ -459,6 +459,163 @@ test('create: an id that is not a GUID, and a beforeSend that throws, both stop 
   assert.strictEqual(sdk.count('pushArtifact'), 0, 'not one request was sent');
 });
 
+// ── CREATE: a resumed create, and a page found under its id ───────────────────────────────────────────────────────────────────────────────
+// A create given an id is a RESUMED one: an earlier build sent a create under that id and never learned what became of it, so that request is open from the start — it can reach the service
+// after anything this call reads or is told — and nothing this call's own send answers settles it. And a page found under the id is recognised by what was sent under it, never assumed.
+const { sha256 } = require('../lib/hash.js');
+const SENT = (name, source) => ({ name, sourceSha256: sha256(source) });
+
+test('create: beforeSend hears what is about to be sent under the id — the name, and the SHA-256 of the source — before anything is sent', async () => {
+  const sdk = new FakeSdk();
+  const heard = [];
+  await backend(sdk).create({ name: 'Overview', source: 'export default 1;', beforeSend: async (id, sent) => { heard.push({ id, sent, pushes: sdk.count('pushArtifact') }); } });
+  assert.deepStrictEqual(heard, [{ id: ID, sent: { name: 'Overview', sourceSha256: sha256('export default 1;') }, pushes: 0 }]);
+  const defaulted = new FakeSdk();
+  const named = [];
+  await backend(defaulted).create({ name: '  ', source: 'x', beforeSend: async (id, sent) => { named.push(sent.name); } });
+  assert.deepStrictEqual(named, ['Generative page'], 'the name that is sent, not the one that was asked for');
+});
+
+test('create (resumed): a refusal BEFORE this call sent anything is not "nothing was written" — an earlier build\'s request can still land — and it carries the id; a new create says nothing was written', async () => {
+  const refusal = sdkError('VALIDATION_ERROR', 'Generative page source does not compile: 1:5 Unexpected token');
+  const resumed = new FakeSdk();
+  resumed.createError = refusal;
+  await assert.rejects(backend(resumed).create({ name: 'Broken', source: 'export default (', pageId: APP }), (e) => {
+    assert.strictEqual(e.outcome, 'unknown');
+    assert.strictEqual(e.pageId, APP);
+    assert.strictEqual(e.code, 'VALIDATION_ERROR', 'the SDK\'s own code is kept');
+    assert.strictEqual(e.transient, false);
+    assert.doesNotMatch(e.message, /nothing was written/);
+    assert.match(e.message, new RegExp(`"Broken" was not sent this time \\(.*does not compile.*\\), but a create an earlier build sent under id ${APP} was never accounted for and can still land, so whether page ${APP} exists is not known`));
+    assert.match(e.message, new RegExp(`Look for page ${APP}`));
+    return true;
+  });
+  assert.strictEqual(resumed.count('pushArtifact'), 0);
+
+  // The same for a beforeSend that refuses (the record of what is sent could not be saved).
+  const unsaved = new FakeSdk();
+  await assert.rejects(backend(unsaved).create({ name: 'P', source: 'src', pageId: APP, beforeSend: async () => { throw new Error('the pending record could not be saved'); } }), (e) => e.outcome === 'unknown' && e.pageId === APP && /pending record could not be saved/.test(e.message) && !/nothing was written/.test(e.message));
+  assert.strictEqual(unsaved.count('pushArtifact'), 0);
+
+  // A new create has no earlier build behind it: the same refusal is known to have written nothing.
+  const fresh = new FakeSdk();
+  fresh.createError = refusal;
+  await assert.rejects(backend(fresh).create({ name: 'Broken', source: 'export default (' }), (e) => e.outcome === 'nothing' && e.pageId === undefined && /nothing was written/.test(e.message));
+});
+
+test('create (resumed): a refusal of its first send — a 429 — settles nothing: the page is read, and absent it is UNKNOWN with the id; present and sent by a create under the id it is adopted and published', async () => {
+  const refused = () => connectionError(429, 'Too many requests');
+  const absent = new FakeSdk().script('push', { drop: refused() });
+  await assert.rejects(backend(absent).create({ name: 'P', source: 'src', pageId: ID }), (e) => {
+    assert.strictEqual(e.outcome, 'unknown', 'not "nothing was written": nothing says the earlier request cannot land');
+    assert.strictEqual(e.pageId, ID);
+    assert.strictEqual(e.transient, false);
+    assert.doesNotMatch(e.message, /nothing was written|wrote nothing/);
+    assert.match(e.message, /429/, 'the refusal is named');
+    assert.match(e.message, /a create an earlier build sent under id .*, whose outcome was never learned/, 'and so is the request it says nothing about');
+    assert.match(e.message, /it can still reach the service/);
+    return true;
+  });
+  assert.strictEqual(absent.count('pushArtifact'), 1, 'it was not sent again');
+  assert.strictEqual(absent.count('fetchArtifact'), 1, 'the page was read after the refusal');
+  assert.strictEqual(absent.count('publishArtifact'), 0);
+
+  // While the send is refused, the earlier request lands.
+  const landsMeanwhile = (s, id) => { s.commit('genPage', id); throw refused(); };
+  const landed = new FakeSdk().script('push', landsMeanwhile);
+  const out = await backend(landed).create({ name: 'P', source: 'src', pageId: ID, sentBefore: [SENT('P', 'src')] });
+  assert.strictEqual(out.pageId, ID);
+  assert.strictEqual(landed.pages.size, 1);
+  assert.strictEqual(landed.count('publishArtifact'), 1);
+  assert.match(out.warnings.join('\n'), /was lost.*a later send was refused: .*429.*had been written/s);
+
+  // A resumed create whose own send is saved needs no read, as a new one does not.
+  const saved = new FakeSdk();
+  const direct = await backend(saved).create({ name: 'P', source: 'src', pageId: ID });
+  assert.strictEqual(direct.pageId, ID);
+  assert.strictEqual(saved.count('fetchArtifact'), 0);
+  assert.deepStrictEqual(direct.warnings, []);
+});
+
+test('create: a page found under the id that holds a name no create under it sent, or a source none sent, is not ours — never adopted, updated or published — and the error says what differs', async () => {
+  const found = (change) => new FakeSdk().script('push', { lose: reset() }).script('fetch', (s, type, id) => { change(s.pages.get(id)); });
+  const refuse = async (sdk, args, says) => {
+    await assert.rejects(backend(sdk).create({ name: 'P', source: 'src', ...args }), (e) => {
+      assert.strictEqual(e.code, 'GENPAGE_CREATE_DIVERGED');
+      assert.strictEqual(e.outcome, 'unknown');
+      assert.strictEqual(e.pageId, ID);
+      assert.strictEqual(e.transient, false);
+      assert.match(e.message, new RegExp(`generative page "P" \\(${ID}\\) exists, but it is not a page any create under this id sent: ${says}`));
+      assert.match(e.message, /It was not adopted, not sent again and not published/);
+      return true;
+    });
+    assert.strictEqual(sdk.count('publishArtifact'), 0, 'not published');
+    assert.strictEqual(sdk.count('updateElement') + sdk.count('addElement'), 0, 'not updated');
+    assert.strictEqual(sdk.count('pushArtifact'), 1, 'not sent again');
+  };
+  await refuse(found((page) => { page.name = 'Another app page'; }), {}, 'it is named "Another app page", and the create sent "P"\\.');
+  await refuse(found((page) => { page.source = 'edited by someone else'; }), {}, 'its source is not the one that was sent\\.');
+  await refuse(found((page) => { page.name = 'Another'; page.source = 'theirs'; }), {}, 'it is named "Another", and the create sent "P", and its source is not the one that was sent\\.');
+  // Earlier creates under the id widen what is recognised — and what the error lists.
+  await refuse(found((page) => { page.name = 'Third'; }), { pageId: ID, sentBefore: [SENT('Q', 'old source')] }, 'it is named "Third", and the creates sent "P" or "Q"\\.');
+  await refuse(found((page) => { page.name = 'Q'; }), { pageId: ID, sentBefore: [SENT('Q', 'old source')] }, 'its name and its source were sent by different creates\\.');
+});
+
+test('create: a page found under the id that holds what an EARLIER create under it sent — another model, another name — is ours: it is brought to this create\'s content by the ordinary update, and published after that, not before', async () => {
+  const earlier = (over) => ({ id: ID, name: 'P', source: 'src', dataSources: [], model: 'model-before', firstPrompt: 'First request', conversation: [{ sender: 'user', message: 'First request' }, { sender: 'agent', message: 'First reply' }], ...over });
+
+  // Another model.
+  const sdk = new FakeSdk().seedPage(earlier());
+  const out = await backend(sdk).create({ name: 'P', source: 'src', model: 'model-after', prompt: 'Revised request', agentMessage: 'Revised reply', pageId: ID, sentBefore: [SENT('P', 'src')] });
+  assert.strictEqual(out.pageId, ID);
+  assert.strictEqual(sdk.pages.get(ID).model, 'model-after', 'the page holds what this create asks for');
+  assert.deepStrictEqual(sdk.pages.get(ID).conversation.map((m) => m.message), ['First request', 'First reply', 'Revised request', 'Revised reply'], 'the update recorded this create\'s turn');
+  assert.deepStrictEqual(sdk.of('publishArtifact').map((c) => c.args), [['genPage', ID, { verify: true }]], 'published once, after the update');
+  const calls = sdk.calls.map((c) => c.name);
+  assert.ok(calls.lastIndexOf('pushArtifact') < calls.indexOf('publishArtifact'), 'the push that brought it to this create\'s content came before the publish');
+  assert.match(out.warnings.join('\n'), new RegExp(`differing from this create in model — so it was not sent again, and was updated to what this create asks for instead of being published as it was`));
+  assert.deepStrictEqual(out.publish, { kind: 'verified', detail: '' });
+
+  // Another name, found by the name an earlier create under the id sent.
+  const renamed = new FakeSdk().seedPage(earlier({ name: 'Old name', model: undefined }));
+  const renamedOut = await backend(renamed).create({ name: 'New name', source: 'src', pageId: ID, sentBefore: [SENT('Old name', 'src')] });
+  assert.strictEqual(renamed.pages.get(ID).name, 'New name');
+  assert.match(renamedOut.warnings.join('\n'), /differing from this create in name/);
+
+  // The same page with no record of an earlier create under the id is NOT recognised: the name alone belongs to nobody we can name.
+  const unrecorded = new FakeSdk().seedPage(earlier({ name: 'Old name', model: undefined }));
+  await assert.rejects(backend(unrecorded).create({ name: 'New name', source: 'src', pageId: ID }), (e) => e.code === 'GENPAGE_CREATE_DIVERGED');
+  assert.strictEqual(unrecorded.count('updateElement') + unrecorded.count('publishArtifact'), 0);
+});
+
+test('create: an update that cannot bring the page found under the id to this create\'s content leaves it unpublished and says so — UNKNOWN, with the id, whatever the update\'s own outcome was', async () => {
+  const sdk = new FakeSdk()
+    .seedPage({ id: ID, name: 'P', source: 'src', dataSources: [], model: 'model-before', conversation: [{ sender: 'user', message: 'First' }] })
+    .script('update', sdkError('VALIDATION_ERROR', 'the model is not available'));
+  await assert.rejects(backend(sdk).create({ name: 'P', source: 'src', model: 'model-after', pageId: ID, sentBefore: [SENT('P', 'src')] }), (e) => {
+    assert.strictEqual(e.outcome, 'unknown', 'the update said "nothing was written" — about itself; the page IS there');
+    assert.strictEqual(e.pageId, ID);
+    assert.strictEqual(e.code, 'VALIDATION_ERROR');
+    assert.strictEqual(e.transient, false);
+    assert.match(e.message, /was written by a create under this id, but it holds the model of an earlier one, and bringing it to what this create asks for failed: .*the model is not available/s);
+    assert.match(e.message, /It was not published as it is/);
+    return true;
+  });
+  assert.strictEqual(sdk.count('publishArtifact'), 0);
+});
+
+test('create: a page that holds what this create asks for, with only the first prompt of an earlier create, is adopted as it is — with a warning that the prompt is not this create\'s', async () => {
+  const sdk = new FakeSdk().seedPage({ id: ID, name: 'P', source: 'src', dataSources: [], firstPrompt: 'Earlier prompt', conversation: [{ sender: 'user', message: 'Earlier prompt' }, { sender: 'agent', message: 'Earlier reply' }] });
+  const out = await backend(sdk).create({ name: 'P', source: 'src', prompt: 'This prompt', pageId: ID, sentBefore: [SENT('P', 'src')] });
+  assert.strictEqual(sdk.count('updateElement') + sdk.count('addElement'), 0, 'nothing differs that an update would write — and an update records a prompt only when it changes the page');
+  assert.strictEqual(sdk.count('publishArtifact'), 1);
+  assert.match(out.warnings.join('\n'), /holds what this create asks for, but its first recorded prompt is that of an earlier create under this id: an update records a prompt only when it changes the page, so this create's prompt is not recorded/);
+  // The page this create made itself carries no such warning.
+  const own = new FakeSdk().script('push', { lose: reset() });
+  const ownOut = await backend(own).create({ name: 'P', source: 'src', prompt: 'This prompt' });
+  assert.doesNotMatch(ownOut.warnings.join('\n'), /first recorded prompt/);
+});
+
 // ── UPDATE ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 test('update: writes only what differs, records the new turn, pushes once and publishes with verification', async () => {
@@ -530,6 +687,68 @@ test('update: content the page already holds is NOT written and records no turn 
   assert.strictEqual(sdk.pages.get(ID).conversation.length, 2, 'no turn is recorded for an identical re-send');
   assert.deepStrictEqual(sdk.of('publishArtifact')[0].args, ['genPage', ID, { verify: true }], 'a page saved by a run whose publish failed converges here');
   assert.strictEqual(out.publish.kind, 'verified');
+});
+
+// A caller that kept what it published — the build, in its workspace — tells an update so (`publishedFingerprint`, the `fingerprint` an earlier result gave it), and the update does not publish a
+// page it has just READ as already holding that content. It is the only reason not to publish, and it is conditional on the read: a page that differs is written and published whatever the
+// caller recorded, and a fingerprint that is missing, is another content's or is not a fingerprint leaves the publish as it always was (the test above).
+test('update: a page that already holds the content, given the fingerprint of that content as published, is neither written nor published — the result says "skipped" and carries the fingerprint', async () => {
+  const sdk = seeded({ source: 'same' });
+  const asked = { source: 'same', name: 'Overview', dataSources: ['account'], model: 'gpt-4.1', prompt: 'again', agentMessage: 'again' };
+  const first = await backend(sdk).update(ID, asked);
+  assert.strictEqual(first.publish.kind, 'verified');
+  assert.match(first.fingerprint, /^[0-9a-f]{64}$/);
+  assert.strictEqual(sdk.count('publishArtifact'), 1);
+
+  const again = await backend(sdk).update(ID, { ...asked, publishedFingerprint: first.fingerprint });
+  assert.deepStrictEqual([again.unchanged, again.publish.kind, again.fingerprint, again.warnings], [true, 'skipped', first.fingerprint, []]);
+  assert.strictEqual(sdk.count('publishArtifact'), 1, 'no publish was sent');
+  assert.strictEqual(sdk.count('pushArtifact') + sdk.count('updateElement') + sdk.count('addElement'), 0, 'and nothing was written');
+});
+
+test('update: a fingerprint of OTHER content, or one that is not a fingerprint, is "not known to be published" — the page is published', async () => {
+  const sdk = seeded({ source: 'same' });
+  const asked = { source: 'same', name: 'Overview', dataSources: ['account'], model: 'gpt-4.1' };
+  const { fingerprint } = await backend(sdk).update(ID, asked);
+  let publishes = sdk.count('publishArtifact');
+  const other = contentFingerprint({ ...asked, name: 'Renamed' });
+  for (const recorded of [other, '0'.repeat(64), 'not a hash', '', 42, null, undefined]) {
+    const out = await backend(sdk).update(ID, { ...asked, publishedFingerprint: recorded });
+    publishes += 1;
+    assert.strictEqual(out.publish.kind, 'verified', `${JSON.stringify(recorded)} is not the content's fingerprint`);
+    assert.strictEqual(sdk.count('publishArtifact'), publishes);
+    assert.strictEqual(out.fingerprint, fingerprint);
+  }
+});
+
+test('update: a page that DIFFERS from the content is written and published whatever the caller recorded — the record is only ever read together with the page', async () => {
+  const sdk = seeded({ source: 'old' });
+  const asked = { source: 'new', name: 'Overview', dataSources: ['account'], model: 'gpt-4.1', prompt: 'p', agentMessage: 'r' };
+  const out = await backend(sdk).update(ID, { ...asked, publishedFingerprint: contentFingerprint({ source: 'new', name: 'Overview', dataSources: ['account'], model: 'gpt-4.1' }) });
+  assert.strictEqual(sdk.pages.get(ID).source, 'new', 'written');
+  assert.strictEqual(sdk.count('publishArtifact'), 1, 'and published');
+  assert.strictEqual(out.publish.kind, 'verified');
+  assert.strictEqual(out.unchanged, undefined);
+});
+
+test('contentFingerprint: the content a page is asked to hold — source, name, data sources, model, bindings — and nothing else; create and update give the same one for the same content', async () => {
+  const base = { source: 'export default 1;', name: 'Overview', dataSources: ['account'], model: 'gpt-4.1' };
+  const same = contentFingerprint(base);
+  assert.match(same, /^[0-9a-f]{64}$/);
+  assert.strictEqual(contentFingerprint({ ...base }), same, 'a pure function of the content');
+  assert.strictEqual(contentFingerprint({ ...base, model: undefined }), contentFingerprint({ source: base.source, name: base.name, dataSources: base.dataSources }), 'a field left out is the page\'s own and is no part of it');
+  for (const [field, value] of [['source', 'export default 2;'], ['name', 'Renamed'], ['dataSources', ['account', 'contact']], ['model', 'gpt-5'], ['connectorBindings', [{ connector: 'x' }]], ['actionBindings', [{ action: 'y' }]]]) {
+    assert.notStrictEqual(contentFingerprint({ ...base, [field]: value }), same, `another ${field} is other content`);
+  }
+  assert.notStrictEqual(contentFingerprint({ ...base, dataSources: [] }), contentFingerprint({ source: base.source, name: base.name, model: base.model }), 'an empty list is an instruction to clear, not "left out"');
+
+  // The same content through `create` and through `update`: the data sources are given as a CSV to one and a list to the other, as the callers do.
+  const sdk = new FakeSdk();
+  const created = await backend(sdk).create({ name: 'Overview', source: 'export default 1;', dataSources: 'Account', model: 'gpt-4.1', prompt: 'p', agentMessage: 'r' });
+  assert.strictEqual(created.fingerprint, same);
+  const updated = await backend(sdk).update(ID, { source: 'export default 1;', name: 'Overview', dataSources: ['account'], model: 'gpt-4.1' });
+  assert.strictEqual(updated.fingerprint, same);
+  assert.strictEqual(updated.unchanged, true);
 });
 
 test('update: a name stored the way pac stored it (`\\"`) differs from the same name sent as it is, so the update repairs it', async () => {

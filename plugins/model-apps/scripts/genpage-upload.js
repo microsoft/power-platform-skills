@@ -605,11 +605,16 @@ async function deploy(context) {
     // in the app — while failing to pin views is only a warning, since the page works without them. An upload with nothing to place and no table to pin
     // does not touch the app at all: placing reads it, and a read that was not needed could only fail.
     const tables = clearDataSources ? [] : (flags['data-sources'] || (deployed && deployed.dataSources) || []);
+    // Completing a placement an earlier run began: that run may have SAVED the navigation and failed to publish the app, which leaves nothing to write and the app
+    // still to publish — so the backend is told to finish it: publish the app, and check that the page shows in the navigation that runs. It throws when it cannot
+    // (the publish failed, or the published navigation does not show the page), and the marker is cleared only after it returns.
+    const finishingPlacement = !!(completing && completing.unfinished === 'place' && addToSitemap && flags['app-id']);
     if (pageId && flags['app-id'] && (addToSitemap || (dataSourcesOf(tables) || []).length)) {
       try {
         placement = await genpage.placeInApp(flags['app-id'], {
           pages: addToSitemap ? [{ pageId, title: (written && written.name) || pageName.value || (deployed && deployed.name) }] : [],
           dataSources: tables,
+          ...(finishingPlacement ? { finish: true } : {}),
         });
         for (const w of placement.warnings || []) warnings.push(w);
       } catch (e) {

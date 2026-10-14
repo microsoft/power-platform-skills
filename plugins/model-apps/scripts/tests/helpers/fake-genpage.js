@@ -15,12 +15,13 @@
 //   enumerateError  a string: `enumerateEnv` answers { ok: false, error } instead of listing
 //   readErrors      { [id]: Error }: `read` of that page throws it
 //   newId           (args) => the id `create` mints; default a counter, 00000000-0000-4000-8000-0000000000NN. `create` takes the id in `args.pageId` instead
-//                   when it is given (a resumed create), and awaits `args.beforeSend(id)` before it sends
+//                   when it is given (a resumed create), and awaits `args.beforeSend(id, { name, sourceSha256 })` before it sends
 //   onCreate        (args) => void | result | throw: called by `create` once the id is known and `beforeSend` has run; a returned object is merged into the answer
 //   onUpdate        (id, args) => void | result | throw: the same for `update`
 //   appPages        { [appId]: [{ pageId, name }] } | (appId, options) => { ok, pages, … }: what `enumeratePages` answers
 //   placement       (appId, options) => result | throw: what `placeInApp` answers; default an app edit that added every page asked for
 const DEFAULT_SOURCE = 'export default function Page() { return null; }\n';
+const { sha256 } = require('../../lib/hash.js');
 
 function fakeGenpage(options = {}) {
   const calls = [];
@@ -77,14 +78,15 @@ function fakeGenpage(options = {}) {
 
     async create(args) {
       record('create', [args]);
-      // As the backend does: the id is known (given, or minted) before anything is sent, and handed to `beforeSend` first — a caller that has to remember it records it there.
+      // As the backend does: the id is known (given, or minted) before anything is sent, and handed to `beforeSend` first with what is about to be sent under it — a caller that has to
+      // remember the id records it there.
       const pageId = args.pageId ? String(args.pageId).toLowerCase() : String(options.newId ? options.newId(args) : `00000000-0000-4000-8000-${String(++minted).padStart(12, '0')}`).toLowerCase();
-      if (typeof args.beforeSend === 'function') {
-        try { await args.beforeSend(pageId); } catch (error) { throw fail(error && error.code, `generative page was not created (nothing was written): ${error && error.message}`, { outcome: 'nothing' }); }
-      }
-      const extra = (options.onCreate && await options.onCreate(args)) || {};
       const name = args.name === undefined || args.name === null || !String(args.name).trim() ? 'Generative page' : String(args.name);
       const text = typeof args.source === 'string' ? args.source : Buffer.from(args.source).toString('utf8').replace(/^\uFEFF/, '');
+      if (typeof args.beforeSend === 'function') {
+        try { await args.beforeSend(pageId, { name, sourceSha256: sha256(text) }); } catch (error) { throw fail(error && error.code, `generative page was not created (nothing was written): ${error && error.message}`, { outcome: 'nothing' }); }
+      }
+      const extra = (options.onCreate && await options.onCreate(args)) || {};
       pages.set(pageId, toPage({
         pageId, name, source: text, dataSources: Array.isArray(args.dataSources) ? args.dataSources : (args.dataSources ? String(args.dataSources).split(',') : []),
         model: args.model, prompt: args.prompt, connectorBindings: args.connectorBindings, actionBindings: args.actionBindings,

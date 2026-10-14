@@ -289,7 +289,7 @@ test('readerFor.appRoleIds fails closed when the association rows cannot be read
   assert.match(res.reason, /403/);
 });
 
-function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false, specObject = null, realGates = false, sdkFactory = null }) {
+function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false, specObject = null, realGates = false, sdkFactory = null, disposeOutcome }) {
   const scriptPath = path.join(__dirname, '..', 'verify-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
   const events = [];
@@ -368,7 +368,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
       return {
         makeGenpageSdk: (env, deps) => {
           events.push({ type: 'makeGenpageSdk', env, deps });
-          return { env, dispose: async () => { events.push({ type: 'genpageDispose' }); } };
+          return { env, dispose: async (options) => { events.push({ type: 'genpageDispose', options }); return disposeOutcome; } };
         },
       };
     }
@@ -530,6 +530,31 @@ test('verify CLI gives the page backend a workspace of its own and the run\'s HT
   assert.ok(order('genpageDispose') > -1, 'the backend is disposed');
   assert.ok(order('genpageDispose') < order('rmSync', (e) => e.dir === sdkRoot), 'before the run\'s workspace is removed');
   assert.ok(order('rmSync', (e) => e.dir === sdkRoot) < order('emitResult'), 'and both before emitResult ends the process');
+});
+
+// The final dispose is the last thing between the page's source and the end of the process. dispose() joins whatever cleanup the pass's ending of its reads
+// left draining, so it can take as long as a storage call that never settles: the CLI bounds it, and says so when a workspace is still on disk — it is never
+// reported as done while one is.
+test('verify CLI bounds the final dispose of the page backend, and warns — instead of reporting done — when a workspace could not be removed', async () => {
+  const run = async (disposeOutcome) => {
+    const harness = loadVerifyCli({
+      parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json' } },
+      verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [] },
+      disposeOutcome,
+    });
+    await harness.main();
+    return harness;
+  };
+  const clean = await run({ left: [] });
+  const dispose = clean.events.find((e) => e.type === 'genpageDispose');
+  assert.ok(dispose, 'the backend is disposed');
+  assert.strictEqual(dispose.options.waitMs, 10000, 'within a bound: a backend that cannot answer does not hold the process for ever');
+  assert.doesNotMatch(clean.stderr.join(''), /could not be removed/, 'nothing is said when every workspace is gone');
+
+  const stuck = await run({ left: ['C:\\temp\\genpage-x1y2z3'] });
+  assert.match(stuck.stderr.join(''), /WARNING: the page workspace could not be removed, so page source may be left on disk: C:\\temp\\genpage-x1y2z3/);
+  assert.ok(stuck.events.some((e) => e.type === 'emitResult'), 'the result is still printed');
+  assert.ok(stuck.events.findIndex((e) => e.type === 'genpageDispose') < stuck.events.findIndex((e) => e.type === 'emitResult'), 'after the backend answered, not before');
 });
 
 test('verify CLI accepts a positional spec, leaves the default workspace alone, and prints PASS', async () => {

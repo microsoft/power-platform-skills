@@ -9,8 +9,9 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { makeGenpageSdk, pageFolderFiles } = require('../lib/genpage-sdk.js');
+const { makeGenpageSdk, pageFolderFiles, contentFingerprint } = require('../lib/genpage-sdk.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE: accountTable } = require('./helpers/fake-genpage-server.js');
+const { sha256 } = require('../lib/hash.js');
 
 const SOURCE = "import * as React from 'react';\nexport default function Page() { return <div>Hello</div>; }\n";
 const PAGE_TSX = 'src/pages/page.tsx';
@@ -106,6 +107,44 @@ test('REAL BUNDLE: an update that changes nothing writes nothing — no row, no 
     assert.deepStrictEqual(changeWrites(server), [], 'not one row was written');
     assert.deepStrictEqual(snapshot(server, pageId), before, 'rows and conversation are untouched');
     assert.deepStrictEqual(server.published, [pageId], 'but the page is published, so a page whose earlier publish failed converges');
+  });
+});
+
+// A caller that kept what it published — the build, in its workspace — hands the fingerprint of that content back, and an update that finds the page already holding the content does not publish it
+// again: no PublishXml at all. The page is what says it holds the content (it is read), so the hash is only ever a reason to leave out a publish that was owed to nothing.
+test('REAL BUNDLE: an update given the fingerprint of the content the page holds sends no PublishXml and no write; given any other fingerprint, or none, it publishes — and a page that differs is written and published whatever it is given', async () => {
+  const server = makeServer();
+  await withBackend(server, async (genpage) => {
+    const asked = { source: SOURCE, name: 'Overview', dataSources: ['account'], model: 'm1', prompt: 'again', agentMessage: 'again' };
+    const created = await genpage.create({ name: 'Overview', source: SOURCE, dataSources: 'account', model: 'm1', prompt: 'first', agentMessage: 'ok' });
+    assert.strictEqual(created.publish.kind, 'verified');
+    assert.strictEqual(created.fingerprint, contentFingerprint({ source: SOURCE, name: 'Overview', dataSources: ['account'], model: 'm1' }), 'the create says what content it published');
+    const { pageId } = created;
+    const before = snapshot(server, pageId);
+
+    server.requests.length = 0;
+    server.published.length = 0;
+    const skipped = await genpage.update(pageId, { ...asked, publishedFingerprint: created.fingerprint });
+    assert.deepStrictEqual([skipped.unchanged, skipped.publish.kind, skipped.fingerprint], [true, 'skipped', created.fingerprint]);
+    assert.deepStrictEqual(server.published, [], 'the page was not published again');
+    assert.deepStrictEqual(server.requests.filter((r) => r.method !== 'GET'), [], 'and nothing at all was written or published: the update only read');
+    assert.deepStrictEqual(snapshot(server, pageId), before);
+
+    for (const stale of [undefined, '0'.repeat(64), 'not a hash']) {
+      server.published.length = 0;
+      const published = await genpage.update(pageId, { ...asked, publishedFingerprint: stale });
+      assert.strictEqual(published.publish.kind, 'verified', `a fingerprint of ${JSON.stringify(stale)} is "not known to be published"`);
+      assert.deepStrictEqual(server.published, [pageId]);
+    }
+
+    // A record is not a reason to leave a CHANGE unpublished: the page differs, so it is written and published.
+    const edited = SOURCE.replace('Hello', 'Hello again');
+    server.published.length = 0;
+    const changed = await genpage.update(pageId, { ...asked, source: edited, publishedFingerprint: created.fingerprint });
+    assert.strictEqual(changed.publish.kind, 'verified');
+    assert.deepStrictEqual(server.published, [pageId]);
+    assert.strictEqual(snapshot(server, pageId).files[PAGE_TSX], edited);
+    assert.notStrictEqual(changed.fingerprint, created.fingerprint, 'and what it published is other content');
   });
 });
 
@@ -497,6 +536,115 @@ test('REAL BUNDLE: a create under an id an earlier request has already created c
   });
 });
 
+// ── A create that RESUMES an earlier one recognises the page it finds by what was sent under the id ─────────────────────────────────────────
+// The build records the name and the source hash of every create it sends (`sentBefore` on the next one). A page found under the id is adopted only when it holds
+// a name and a source a create under the id sent; whatever else it still holds of an earlier create is brought to what this one asks for by the ordinary update.
+
+// An earlier build's create under `id`, both of whose sends were still in flight when it gave up — and that then land, as a request in a gateway does.
+async function earlierCreateLandedLate(server, id, args) {
+  await withBackend(server, async (earlier) => {
+    server.strandBatch = (n) => n <= 2;
+    const gaveUp = await earlier.create({ prompt: 'p', agentMessage: 'r', ...args, pageId: id }).then(() => null, (e) => e);
+    assert.ok(gaveUp && gaveUp.outcome === 'unknown' && gaveUp.pageId === id, 'the earlier create did not finish, and named the id');
+    server.strandBatch = undefined;
+  });
+  await server.landStranded();
+  assert.deepStrictEqual(projectIds(server), [id], 'the earlier request has landed meanwhile');
+}
+
+test('REAL BUNDLE: a resumed create that finds the page an earlier create made under ANOTHER NAME — one it recorded — brings it to the name asked for and publishes it once: one page', async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000c1';
+  await earlierCreateLandedLate(server, id, { name: 'Old name', source: SOURCE });
+  await withBackend(server, async (genpage) => {
+    const out = await genpage.create({ name: 'New name', source: SOURCE, prompt: 'p2', agentMessage: 'r2', pageId: id, sentBefore: [{ name: 'Old name', sourceSha256: sha256(SOURCE) }] });
+    assert.strictEqual(out.pageId, id);
+    assert.deepStrictEqual(projectIds(server), [id], 'still one page');
+    assert.strictEqual((await genpage.read(id)).name, 'New name', 'the page has the name this create asked for');
+    assert.strictEqual(out.publish.kind, 'verified');
+    assert.deepStrictEqual(server.published, [id], 'published once, after it was brought up to date');
+    assert.match(out.warnings.join('\n'), /differing from this create in name/);
+  });
+});
+
+// The earlier create sent another MODEL, and the page it made is not what this create asks for. Publishing it as it is would put the old model live under the new create's name.
+test('REAL BUNDLE: a resumed create that finds the page an earlier create made with ANOTHER MODEL writes the model it asks for BEFORE the page is published — never publishes the page as it was', async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000c2';
+  await earlierCreateLandedLate(server, id, { name: 'Overview', source: SOURCE, model: 'model-one' });
+  const heldAtPublish = [];
+  server.failOn = (method, requestPath) => {
+    if (/PublishXml/.test(requestPath)) heldAtPublish.push(JSON.parse(server.rowText(id, 'config.json')).model);
+    return undefined;
+  };
+  await withBackend(server, async (genpage) => {
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, model: 'model-two', prompt: 'p2', agentMessage: 'r2', pageId: id, sentBefore: [] });
+    assert.deepStrictEqual(projectIds(server), [id]);
+    assert.deepStrictEqual(heldAtPublish, ['model-two'], 'the page held the model asked for at the only publish');
+    assert.strictEqual((await genpage.read(id)).model, 'model-two');
+    assert.strictEqual(out.publish.kind, 'verified');
+    assert.match(out.warnings.join('\n'), /differing from this create in model/);
+  });
+});
+
+test('REAL BUNDLE: a resumed create that finds a page under its id that holds NO name and NO source any create under it sent is GENPAGE_CREATE_DIVERGED — not adopted, not updated, not published', async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000c3';
+  const theirs = 'export default function Theirs() { return null; }\n';
+  server.seedPage(id, { name: 'Somebody else\'s page', source: theirs });
+  const before = snapshot(server, id);
+  await withBackend(server, async (genpage) => {
+    const error = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r', pageId: id, sentBefore: [] }).then(() => null, (e) => e);
+    assert.ok(error, 'the create is refused');
+    assert.strictEqual(error.code, 'GENPAGE_CREATE_DIVERGED');
+    assert.strictEqual(error.outcome, 'unknown');
+    assert.strictEqual(error.pageId, id);
+    assert.strictEqual(error.transient, false);
+    assert.match(error.message, /not a page any create under this id sent: it is named "Somebody else's page", and the create sent "Overview"/);
+  });
+  assert.deepStrictEqual(snapshot(server, id), before, 'the page is as it was: nothing was written to it');
+  assert.deepStrictEqual(server.published, [], 'and it was not published');
+});
+
+// A page that holds the NAME a create sent but not a source any of them sent was edited after it was made: a name is not proof of identity on its own.
+test('REAL BUNDLE: a resumed create that finds a page with the name it sent but a source NO create sent is GENPAGE_CREATE_DIVERGED', async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000c4';
+  server.seedPage(id, { name: 'Overview', source: 'export default function Edited() { return null; }\n' });
+  const before = snapshot(server, id);
+  await withBackend(server, async (genpage) => {
+    const error = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r', pageId: id, sentBefore: [] }).then(() => null, (e) => e);
+    assert.ok(error);
+    assert.strictEqual(error.code, 'GENPAGE_CREATE_DIVERGED');
+    assert.match(error.message, /its source is not the one that was sent/);
+  });
+  assert.deepStrictEqual(snapshot(server, id), before);
+  assert.deepStrictEqual(server.published, []);
+});
+
+// A resumed create that is refused before it sends anything is not "nothing was written": the request an earlier build sent under the id can still land.
+test('REAL BUNDLE: a resumed create whose page does not compile is UNKNOWN, with the id — the earlier request can still land — and a new create under no id says nothing was written', async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000c5';
+  const broken = 'export default function Page( { return <div>;\n';
+  await withBackend(server, async (genpage) => {
+    const batches = server.batches.length;
+    const resumed = await genpage.create({ name: 'Broken', source: broken, prompt: 'p', agentMessage: 'r', pageId: id, sentBefore: [{ name: 'Broken', sourceSha256: sha256('an earlier source') }] }).then(() => null, (e) => e);
+    assert.ok(resumed);
+    assert.strictEqual(resumed.outcome, 'unknown');
+    assert.strictEqual(resumed.pageId, id);
+    assert.strictEqual(resumed.transient, false);
+    assert.doesNotMatch(resumed.message, /nothing was written/);
+    assert.strictEqual(server.batches.length, batches, 'nothing was sent');
+
+    const fresh = await genpage.create({ name: 'Broken', source: broken, prompt: 'p', agentMessage: 'r' }).then(() => null, (e) => e);
+    assert.ok(fresh);
+    assert.strictEqual(fresh.outcome, 'nothing');
+    assert.match(fresh.message, /nothing was written/);
+    assert.strictEqual(fresh.pageId, undefined);
+  });
+});
+
 // The service answers a create of an id that exists with a 412. The SDK reports that as `ARTIFACT_ALREADY_EXISTS` — it does not throw it — and a page that cannot be read afterwards
 // is not "nothing was written": a request that carried the id can still be in flight. So the outcome is unknown, with the id to look for, and the create is not sent again.
 test('REAL BUNDLE: a create the service answers with a 412 (the id exists) but whose page cannot be read is UNKNOWN, with the id — never "nothing was written"', async () => {
@@ -705,4 +853,85 @@ test('REAL BUNDLE: discardWorkspaces() while a page read is writing into its wor
     await genpage.dispose();
   }
   assert.ok(made.every((dir) => !fs.existsSync(dir)));
+});
+
+// ── dispose() answers for EVERY workspace the backend made, including one an earlier discard is still clearing ─────────────────────────────
+// discardWorkspaces() hands its folders to a cleanup that waits for the storage calls under way, and forgets them; a dispose() that only looked at the
+// workspaces it still knew would answer at once while that cleanup was waiting — and a process that ended on that answer left the page's source on disk.
+
+// A page read stopped at the write that puts the page's artifact — its source included — into the workspace. Returns what a test needs to drive it.
+function readStoppedAtItsWrite(server, id, deps = {}) {
+  let release;
+  let reached;
+  const held = new Promise((resolve) => { release = resolve; });
+  const arrived = new Promise((resolve) => { reached = resolve; });
+  let first = true;
+  const control = { hold: async (method, args) => { if (first && method === 'writeTextAtomic' && args[0][0] === 'gen-pages') { first = false; reached(); await held; } } };
+  const { genpage, made } = harness(server, { createStorage: (dir) => flakyStorage(dir, control), ...deps });
+  const reading = genpage.read(id).then(() => null, (e) => e);
+  return { genpage, made, reading, arrived, release };
+}
+
+test('REAL BUNDLE: dispose() joins the cleanup an earlier discardWorkspaces() left draining — it answers only once the workspace, and the page source in it, are gone', { timeout: 30000 }, async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000a5';
+  server.seedPage(id, { name: 'Overview', source: SOURCE });
+  const { genpage, made, reading, arrived, release } = readStoppedAtItsWrite(server, id);
+  await arrived;
+  // The discard is not waited for, as when its caller's bound ran out; it goes on waiting for the write that is under way.
+  const discarding = genpage.discardWorkspaces();
+  await turns();
+  assert.ok(fs.existsSync(made[0]), 'the cleanup is still waiting for the write: the folder is there');
+  let answered = false;
+  const disposing = genpage.dispose().then((outcome) => { answered = true; return outcome; });
+  await turns(30);
+  assert.strictEqual(answered, false, 'dispose() has not answered: a workspace this backend made is still on disk');
+  assert.ok(fs.existsSync(made[0]), 'the workspace is still there');
+  release();
+  assert.deepStrictEqual(await disposing, { left: [] }, 'once the cleanup has finished, nothing is left');
+  assert.ok(!fs.existsSync(made[0]), 'the workspace is gone when dispose() answers');
+  assert.deepStrictEqual(await discarding, { left: [] });
+  assert.ok(await reading, 'the read that was cut short failed');
+  await turns(30);
+  assert.ok(!fs.existsSync(made[0]), 'and nothing it did afterwards put the folder back');
+});
+
+test('REAL BUNDLE: dispose() within the caller\'s bound says which workspace it could not remove yet — it never reports done while one is on disk — and a later dispose() finishes what was started', { timeout: 30000 }, async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000a6';
+  server.seedPage(id, { name: 'Overview', source: SOURCE });
+  const { genpage, made, reading, arrived, release } = readStoppedAtItsWrite(server, id);
+  await arrived;
+  const startedAt = Date.now();
+  const first = await genpage.dispose({ waitMs: 40 });
+  assert.ok(Date.now() - startedAt < 10000, 'it answered at the caller\'s bound, not when the write settled');
+  assert.deepStrictEqual(first, { left: [made[0]] }, 'and named the workspace that is still there');
+  assert.ok(fs.existsSync(made[0]));
+  // The cleanup was not abandoned: the write settles, the folder goes, and the next answer is clean.
+  release();
+  assert.deepStrictEqual(await genpage.dispose(), { left: [] });
+  assert.ok(!fs.existsSync(made[0]));
+  await reading;
+});
+
+test('REAL BUNDLE: a workspace that cannot be removed is reported by dispose() — and reported again by the next one — instead of being answered as gone', async () => {
+  const server = makeServer();
+  const id = 'd0000000-0000-4000-8000-0000000000a7';
+  server.seedPage(id, { name: 'Overview', source: SOURCE });
+  let locked = true;
+  const refused = [];
+  const { genpage, made } = harness(server, {
+    rmSync: (dir, options) => {
+      if (locked) { refused.push(dir); throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); }
+      fs.rmSync(dir, options);
+    },
+  });
+  await genpage.read(id);
+  assert.deepStrictEqual(await genpage.dispose(), { left: [made[0]] }, 'the folder is still on disk, and dispose() says so');
+  assert.deepStrictEqual(await genpage.dispose(), { left: [made[0]] }, 'every later answer says so too');
+  assert.ok(fs.existsSync(made[0]));
+  locked = false;
+  assert.deepStrictEqual(await genpage.dispose(), { left: [] }, 'and a call made once what held the folder has let go removes it');
+  assert.ok(!fs.existsSync(made[0]));
+  assert.strictEqual(refused.length, 2, 'it was tried on each call while it was held, not once more after it was removed');
 });

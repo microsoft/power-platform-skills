@@ -236,47 +236,65 @@ test('a linked receipt cannot provide local ownership authority', (t) => {
 });
 
 // A "pending" record is written BEFORE a create is sent. It is the only local pointer to a page whose create was cut short, and it must never be taken for what
-// a creation receipt is: a receipt authorizes an update and a delete, a pending record authorizes neither.
+// a creation receipt is: a receipt authorizes an update and a delete, a pending record authorizes neither. It carries the name and the source hash of the create it stands for.
 const pendingFiles = (dir) => fs.readdirSync(dir).filter((f) => f.startsWith('page-ownership.pending.'));
+const { sha256 } = require('../lib/hash.js');
+const SRC = sha256('page source one');
+const SRC2 = sha256('page source two');
 
 test('a pending creation is intent, not ownership: it is not in the ownership state, and no creation id comes of it', (t) => {
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
   assert.equal(pendingFiles(dir).length, 1);
   const state = lib().readPageOwnership(dir, APP, ENV_A);
   assert.deepEqual(state.created.map((r) => r.pageId), [OTHER], 'only the acknowledged create is a receipt');
   assert.deepEqual(state.teardown, []);
   assert.equal(lib().creationIds(state).has('overview'), false, 'the pending page is not one this app is known to have created');
-  assert.deepEqual(lib().readPendingCreations(dir, APP, ENV_A).get('overview'), [{ pageId: ID, name: 'Overview' }]);
+  assert.deepEqual(lib().readPendingCreations(dir, APP, ENV_A).get('overview'), [{ pageId: ID, sent: [{ name: 'Overview', sourceSha256: SRC }] }]);
 });
 
-test('pending creations are read per key — for this app and this environment only — with the name the create was sent with', (t) => {
+test('a pending creation records what the create sent — the name and the SHA-256 of the source — and refuses a record that cannot say so', (t) => {
   const dir = workspace(t);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
-  lib().recordPagePending(dir, APP, 'overview', OTHER, 'Overview', ENV_A);
-  lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
-  lib().recordPagePending(dir, 'contoso_other', 'overview', ID, 'Overview', ENV_A);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_B);
+  const record = lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
+  assert.deepEqual(Object.keys(record).sort(), ['appUniqueName', 'environmentFingerprint', 'key', 'kind', 'name', 'pageId', 'schemaVersion', 'sourceSha256']);
+  assert.equal(record.sourceSha256, SRC);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, pendingFiles(dir)[0]), 'utf8')).sourceSha256, SRC, 'it is in the file');
+  for (const bad of [undefined, null, '', 'not a hash', SRC.toUpperCase(), SRC.slice(1)]) {
+    assert.throws(() => lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A, bad), /the SHA-256 of the source sent/, `${String(bad)}`);
+  }
+  assert.equal(pendingFiles(dir).length, 1, 'nothing was written for them');
+  // A receipt is the shape it always was: a source hash on one is not a receipt.
+  assert.equal(Object.keys(lib().recordPageCreation(dir, APP, 'detail', OTHER, 'Detail', ENV_A)).length, 7);
+});
+
+test('pending creations are read per key — for this app and this environment only — one entry per page id, with every name and source it was sent with', (t) => {
+  const dir = workspace(t);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
+  lib().recordPagePending(dir, APP, 'overview', OTHER, 'Overview', ENV_A, SRC);
+  lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A, SRC);
+  lib().recordPagePending(dir, 'contoso_other', 'overview', ID, 'Overview', ENV_A, SRC);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_B, SRC);
   const pending = lib().readPendingCreations(dir, APP.toUpperCase(), ENV_A);
   assert.deepEqual([...pending.keys()].sort(), ['detail', 'overview']);
   assert.deepEqual(pending.get('overview').map((r) => r.pageId).sort(), [ID, OTHER], 'two unfinished creations of one key are both reported, so a build can refuse to guess between them');
-  assert.deepEqual(pending.get('detail'), [{ pageId: OTHER, name: 'Detail' }]);
+  assert.deepEqual(pending.get('detail'), [{ pageId: OTHER, sent: [{ name: 'Detail', sourceSha256: SRC }] }]);
   assert.equal(lib().readPendingCreations(dir, APP, 'https://adatum.crm.dynamics.com').size, 0);
   assert.equal(lib().readPendingCreations(null, APP, ENV_A).size, 0, 'no workspace, no record');
-  assert.throws(() => lib().recordPagePending(null, APP, 'overview', ID, 'Overview', ENV_A), /workspace/i);
+  assert.throws(() => lib().recordPagePending(null, APP, 'overview', ID, 'Overview', ENV_A, SRC), /workspace/i);
 });
 
 test('completing a pending creation consumes only the ids named, for this app and environment — never a receipt or a teardown record', (t) => {
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
   lib().recordPageTeardown(dir, APP, [{ id: OTHER, key: 'detail', name: 'Detail' }], ENV_A);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
-  lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
-  lib().recordPagePending(dir, 'contoso_other', 'overview', ID, 'Overview', ENV_A);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_B);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview, renamed', ENV_A, SRC2);
+  lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A, SRC);
+  lib().recordPagePending(dir, 'contoso_other', 'overview', ID, 'Overview', ENV_A, SRC);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_B, SRC);
   lib().completePendingCreations(dir, APP, [ID.toUpperCase()], ENV_A);
-  assert.deepEqual([...lib().readPendingCreations(dir, APP, ENV_A).keys()], ['detail'], 'the page that was settled no longer has a record');
+  assert.deepEqual([...lib().readPendingCreations(dir, APP, ENV_A).keys()], ['detail'], 'the page that was settled no longer has a record — of any of the creates sent under it');
   assert.equal(lib().readPendingCreations(dir, 'contoso_other', ENV_A).size, 1, 'another app\'s record is not this app\'s to consume');
   assert.equal(lib().readPendingCreations(dir, APP, ENV_B).size, 1, 'nor is another environment\'s');
   const state = lib().readPageOwnership(dir, APP, ENV_A);
@@ -286,35 +304,47 @@ test('completing a pending creation consumes only the ids named, for this app an
   lib().completePendingCreations(null, APP, [ID], ENV_A);
 });
 
-test('teardown consumes receipts and teardown records, and leaves a pending creation to be settled', (t) => {
+test('teardown consumes receipts and teardown records, and leaves a pending creation to be settled by evidence', (t) => {
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
   lib().completePageDeletions(dir, APP, [ID], ENV_A);
   assert.deepEqual(lib().readPageOwnership(dir, APP, ENV_A), { created: [], teardown: [] });
-  assert.equal(lib().readPendingCreations(dir, APP, ENV_A).size, 1, 'a pending record names a create that may still land: deleting a page does not retire it');
+  assert.equal(lib().readPendingCreations(dir, APP, ENV_A).size, 1, 'a pending record names a create that may still land: confirming a receipt\'s page gone does not retire it');
 });
 
-test('a pending record is rewritten when the name it was sent under changed; a receipt for another name is still refused', (t) => {
+test('a pending record is one per create sent under the id: another name or source adds a record, the same create adds none, and a receipt for another name is still refused', (t) => {
   const dir = workspace(t);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview, renamed', ENV_A);
-  assert.equal(pendingFiles(dir).length, 1, 'one record per key and id');
-  assert.deepEqual(lib().readPendingCreations(dir, APP, ENV_A).get('overview'), [{ pageId: ID, name: 'Overview, renamed' }], 'it says what the create that may be in flight carries');
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
+  assert.equal(pendingFiles(dir).length, 1, 'the same create, recorded again, is the same record');
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview, renamed', ENV_A, SRC);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC2);
+  assert.equal(pendingFiles(dir).length, 3, 'the earlier creates stay: the page may hold what any of them sent');
+  const byText = (a, b) => (`${a.name}\n${a.sourceSha256}` < `${b.name}\n${b.sourceSha256}` ? -1 : 1);
+  assert.deepEqual(lib().readPendingCreations(dir, APP, ENV_A).get('overview'), [{
+    pageId: ID,
+    sent: [
+      { name: 'Overview', sourceSha256: SRC },
+      { name: 'Overview', sourceSha256: SRC2 },
+      { name: 'Overview, renamed', sourceSha256: SRC },
+    ].sort(byText),
+  }], 'one entry for the id, with each create that was sent under it');
   lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
   assert.throws(() => lib().recordPageCreation(dir, APP, 'overview', ID, 'Another name', ENV_A), /different page name/);
 });
 
-test('a pending record keeps --clear-workspace from clearing, and says how it is settled; a receipt alone does not say that', (t) => {
+test('a pending record keeps --clear-workspace from clearing, and says how it is settled — the build adopts, resumes or reports it, teardown deletes the page, or the record is deleted by hand once no such page exists; a receipt alone does not say that', (t) => {
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
   assert.doesNotMatch(lib().checkPageOwnershipClearable(dir).reason, /pending/i);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
   const clear = lib().checkPageOwnershipClearable(dir);
   assert.equal(clear.ok, false);
   assert.ok(clear.reason.includes(path.join(dir, pendingFiles(dir)[0])), 'the record is named');
-  assert.match(clear.reason, /"pending" record is a page creation that was started and never acknowledged/);
-  assert.match(clear.reason, /adopts the page, or creates it under the same id/);
+  assert.match(clear.reason, /"pending" record is a page creation that was started and never acknowledged — the page may exist, or may still appear/);
+  assert.match(clear.reason, /it adopts the page if it is there and is the one that was sent, creates it under the same id while its key has no page, and reports it as an unused page when the key is bound to another one — teardown deletes it too/);
+  assert.match(clear.reason, /or delete the record by hand once you have confirmed that no such page exists, here or in Maker, and that no request can still create it/);
   lib().completePendingCreations(dir, APP, [ID], ENV_A);
   fs.rmSync(path.join(dir, fs.readdirSync(dir)[0]));
   assert.equal(lib().checkPageOwnershipClearable(dir).ok, true);
@@ -322,7 +352,7 @@ test('a pending record keeps --clear-workspace from clearing, and says how it is
 
 test('a pending record cannot be relabelled into a receipt, and a damaged one fails closed with its file name', (t) => {
   const dir = workspace(t);
-  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A, SRC);
   const file = path.join(dir, pendingFiles(dir)[0]);
   const record = JSON.parse(fs.readFileSync(file, 'utf8'));
 
@@ -333,6 +363,13 @@ test('a pending record cannot be relabelled into a receipt, and a damaged one fa
   fs.rmSync(asCreated);
   fs.writeFileSync(file, JSON.stringify({ ...record, kind: 'created' }) + '\n');
   assert.throws(() => lib().readPageOwnership(dir, APP, ENV_A), (e) => e.message.includes(file));
+  assert.throws(() => lib().readPendingCreations(dir, APP, ENV_A), (e) => e.message.includes(file));
+
+  // What a pending record says it sent is part of its identity too: a record whose hash was edited, or dropped, is not read.
+  fs.writeFileSync(file, JSON.stringify({ ...record, sourceSha256: SRC2 }) + '\n');
+  assert.throws(() => lib().readPendingCreations(dir, APP, ENV_A), (e) => e.message.includes(file) && /inspect it/.test(e.message));
+  const { sourceSha256, ...without } = record;
+  fs.writeFileSync(file, JSON.stringify(without) + '\n');
   assert.throws(() => lib().readPendingCreations(dir, APP, ENV_A), (e) => e.message.includes(file));
 
   fs.writeFileSync(file, '{');

@@ -62,7 +62,7 @@ const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-sdk.js');
-const { readPageOwnership, recordPageTeardown, completePageDeletions } = require('./page-ownership-records.js');
+const { readPageOwnership, readPendingCreations, recordPageTeardown, completePageDeletions, completePendingCreations } = require('./page-ownership-records.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
 // alias because it is part of this module's exported (and unit-tested) surface.
@@ -363,8 +363,11 @@ const KIND_HANDLERS = {
     tolerateDependencyBlock: true,
     async resolve(sdk, target) {
       const ownership = readPageOwnership(target.workspaceDir, target.appUnique, target.env);
+      // A create this app started and never acknowledged leaves a "pending" record under the id it used. The page it was sending may exist by now — the answer was lost, or the key was
+      // bound to another page so no later build resumed it, and the request landed late — and then nothing else names it: no manifest entry, no receipt. The record is how it is found.
+      const pendingCreations = readPendingCreations(target.workspaceDir, target.appUnique, target.env);
       if (typeof sdk.queryRecords !== 'function') {
-        if (ownership.created.length || ownership.teardown.length) throw new Error('cannot read pages while local ownership records remain');
+        if (ownership.created.length || ownership.teardown.length || pendingCreations.size) throw new Error('cannot read pages while local ownership records remain');
         return [];
       }
       // The manifest lives in a web resource this same teardown deletes later (web-resources phase),
@@ -403,13 +406,25 @@ const KIND_HANDLERS = {
       for (const r of [...ownership.created, ...ownership.teardown]) {
         if (!candidateMap.has(r.pageId)) candidateMap.set(r.pageId, { id: r.pageId, key: r.key, name: r.name });
       }
+      // The names each pending create sent under its id. A page found under such an id is deleted only when its stored name is one of them — the corroboration a receipt gets, for the
+      // same reason: the id is one this app's build minted and told nobody, and the name is what it gave the page. The record alone authorizes nothing, and a page named otherwise
+      // is kept. An id the record names that is NOT in the environment is not reported as gone and its record is not consumed (see runTeardown): the request may still land.
+      const sentNames = new Map();
+      const pendingOnly = new Map();
+      for (const [key, entries] of pendingCreations) {
+        for (const entry of entries) {
+          sentNames.set(entry.pageId, new Set(entry.sent.map((s) => s.name)));
+          if (!candidateMap.has(entry.pageId)) pendingOnly.set(entry.pageId, { id: entry.pageId, key, name: entry.sent[0].name, pending: true });
+        }
+      }
       const candidates = [...candidateMap.values()];
-      if (!candidates.length) return [];
+      const lookups = [...candidates, ...pendingOnly.values()];
+      if (!lookups.length) return [];
 
       // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure).
       let rows;
       try {
-        const filter = candidates.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
+        const filter = lookups.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
         // uxagentprojects rows: { "uxagentprojectid": "<id>", "name": "Overview" }.
         // Read the row name, not the editable name carried by the manifest.
         rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid', 'name'], filter, paginate: true });
@@ -419,13 +434,13 @@ const KIND_HANDLERS = {
       } catch (err) {
         // Same as the manifest read above: not being able to look deletes nothing and fails the step,
         // so the manifest naming these pages survives for a re-run.
-        const e = new Error(`could not check which of the ${candidates.length} page(s) in '${target.manifestName}' still exist (${errMsg(err)}) — no page is deleted; re-run the teardown. Candidates: ${candidates.map((p) => `${p.id} ${JSON.stringify(p.name)} (stored name unreadable)`).join('; ')}`);
+        const e = new Error(`could not check which of the ${lookups.length} page(s) in '${target.manifestName}' still exist (${errMsg(err)}) — no page is deleted; re-run the teardown. Candidates: ${lookups.map((p) => `${p.id} ${JSON.stringify(p.name)} (stored name unreadable)`).join('; ')}`);
         e.failClosed = true;
-        e.candidates = candidates;
+        e.candidates = lookups;
         throw e;
       }
       const byId = new Map(rows.map((r) => [r.uxagentprojectid.toLowerCase(), r]));
-      const present = candidates.filter((p) => byId.has(p.id.toLowerCase()));
+      const present = lookups.filter((p) => byId.has(p.id.toLowerCase()));
       const absent = candidates.filter((p) => !byId.has(p.id.toLowerCase())).map((p) => ({ ...p, absent: true }));
       if (!present.length) return { items: [], kept: [], candidates: absent };
       const published = target.appUnique ? await fetchSitemap(sdk, target.appUnique) : { ok: false, reason: 'app identity unavailable' };
@@ -458,10 +473,12 @@ const KIND_HANDLERS = {
         } else if (!nameReadable) {
           kept.push({ ...item, reason: 'stored page name is unreadable' });
           errors.push(`page ${p.id}: stored page name is unreadable`);
-        } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && expectedName === item.name)) {
+        } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && expectedName === item.name) || (sentNames.has(p.id.toLowerCase()) && sentNames.get(p.id.toLowerCase()).has(item.name))) {
           items.push(item);
         } else {
-          kept.push({ ...item, reason: `not proven to belong to this app: no navigation membership or corroborated local creation receipt${unreadDraft}; inspect this id and remove it manually only if it is yours` });
+          kept.push({ ...item, reason: p.pending
+            ? `a create this app started under this id was never acknowledged, but the page is named ${JSON.stringify(item.name)}, not what that create sent (${[...sentNames.get(p.id.toLowerCase())].map((n) => JSON.stringify(n)).join(', ')}) — it is not proven to be the page that create was sending; inspect this id and remove it manually only if it is yours`
+            : `not proven to belong to this app: no navigation membership or corroborated local creation receipt${unreadDraft}; inspect this id and remove it manually only if it is yours` });
           // Unproven only because the saved navigation could not be read: it may be this app's page, and
           // deleting the app now would remove both the navigation that can prove it and the manifest that
           // lists it. That is unreadable proof, so the app is left intact for a re-run (runTeardown stops
@@ -1587,6 +1604,8 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
       if (step.kind === 'genpage') {
         completePageDeletions(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);
+        // A page found under the id of a create that was never acknowledged and deleted: what the record stood for is settled. (An id that was only ABSENT is not — the request may still land.)
+        completePendingCreations(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);
         const pending = readPageOwnership(opts.workspaceDir, step.target.appUnique, opts.env).teardown;
         if (pending.length) throw new Error(`proven pages remain undeleted: ${pending.map((p) => p.pageId).join(', ')}; keeping the manifest and solution`);
       }

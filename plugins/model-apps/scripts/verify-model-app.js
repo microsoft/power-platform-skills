@@ -124,8 +124,8 @@ async function appRoleIdsFor(sdk, appUnique) {
 // time keeps a verify of a large app quick without opening a wide fan of requests against one environment.
 const PAGE_READ_CONCURRENCY = 4;
 
-// The longest readerFor's endPageReads waits for the page backend to close and remove the workspace its reads were writing into. That takes the
-// storage calls already under way, a moment; this only bounds a backend that cannot answer.
+// The longest verify waits for the page backend to close and remove the workspace its reads were writing into — in readerFor's endPageReads, and again in the
+// final dispose() before the process ends. That takes the storage calls already under way, a moment; this only bounds a backend that cannot answer.
 const PAGE_READS_END_WAIT_MS = 10000;
 
 // The SDK resolves a table's EntitySetName with one metadata GET before the table's first record read, and
@@ -613,8 +613,16 @@ async function main() {
   } finally {
     // Before the result is printed: emitResult ends the process, so a cleanup placed after it never ran.
     // The backend first, and awaited: a page read the pass gave up on can still be running, and its workspace is closed and removed once the storage
-    // calls it had under way have settled — so nothing it does later can put the page's source back in the temp directory.
-    try { if (genpage && typeof genpage.dispose === 'function') await genpage.dispose(); } catch { /* best-effort */ }
+    // calls it had under way have settled — so nothing it does later can put the page's source back in the temp directory. dispose() joins the cleanup
+    // endPageReads started and gave up waiting for, so this answers only once every workspace is gone — or, at the bound, says which is not (a backend that
+    // cannot answer must not hold the process for ever, and must not be reported as done while a page's source is on disk).
+    try {
+      if (genpage && typeof genpage.dispose === 'function') {
+        const disposed = await genpage.dispose({ waitMs: PAGE_READS_END_WAIT_MS });
+        const left = (disposed && disposed.left) || [];
+        if (left.length) process.stderr.write(`WARNING: the page workspace could not be removed, so page source may be left on disk: ${left.join(', ')} — delete the folder by hand\n`);
+      }
+    } catch { /* best-effort */ }
     session.dispose();
   }
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)

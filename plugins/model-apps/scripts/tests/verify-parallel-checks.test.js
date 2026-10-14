@@ -454,6 +454,64 @@ test('endPageReads waits for the backend to close its workspace only for a bound
   await pageReader({ enumerateEnv: async () => ({ ok: true, ids: [] }), discardWorkspaces: async () => { throw new Error('the workspace could not be closed'); } }).endPageReads();
 });
 
+// endPageReads' wait is bounded, so it can give up while the cleanup it started is still waiting on a storage call — and that cleanup goes on. The owner's
+// dispose() is verify's last act before the process exits, so it has to JOIN that cleanup: answering while the page's source is still on disk would end the
+// process with the source left behind.
+test('the final dispose() joins the cleanup a bounded endPageReads left draining — it answers only once the workspace, and the page source in it, are gone', { timeout: 30000 }, async () => {
+  const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+  const { createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+  const { FakeGenPageServer, INSTANCE } = require('./helpers/fake-genpage-server.js');
+  const server = new FakeGenPageServer();
+  server.seedPage(PAGE_OVERVIEW, { name: 'Overview', source: 'export default function Overview() { return null; }\n' });
+  let release;
+  let reached;
+  const held = new Promise((resolve) => { release = resolve; });
+  const arrived = new Promise((resolve) => { reached = resolve; });
+  let stopped = false;
+  const folders = [];
+  // The write that stores the page's artifact — its source included — has put the file on disk and has not answered yet.
+  const stopAtThePageWrite = (dir) => {
+    const inner = createNodeWorkspaceStorage(dir);
+    const storage = {};
+    for (const method of ['readText', 'writeTextAtomic', 'deleteFile', 'deleteByPrefix', 'ensureContainer', 'exists']) {
+      if (typeof inner[method] === 'function') storage[method] = (...args) => inner[method](...args);
+    }
+    storage.writeTextAtomic = async (segments, text) => {
+      await inner.writeTextAtomic(segments, text);
+      if (!stopped && segments[0] === 'gen-pages') { stopped = true; reached(); await held; }
+    };
+    return storage;
+  };
+  const genpage = makeGenpageSdk(INSTANCE, {
+    httpClient: server.http(),
+    mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); folders.push(dir); return dir; },
+    createStorage: stopAtThePageWrite,
+  });
+  const reader = pageReader(genpage, { endWaitMs: 20 });
+  const reading = reader.pageCode(PAGE_OVERVIEW).catch((error) => error);
+  try {
+    await arrived;
+    await reader.endPageReads();
+    const source = path.join(folders[0], 'gen-pages', `${PAGE_OVERVIEW}.json`);
+    assert.ok(fs.existsSync(source), 'endPageReads gave up on the cleanup while the page source is on disk');
+
+    let answered = false;
+    const disposing = genpage.dispose().then((outcome) => { answered = true; return outcome; });
+    for (let i = 0; i < 40; i += 1) await turn();
+    assert.strictEqual(answered, false, 'dispose() does not answer while that cleanup is still waiting: it has joined it');
+    assert.ok(fs.existsSync(source));
+
+    release();
+    assert.deepStrictEqual(await disposing, { left: [] });
+    assert.ok(!fs.existsSync(folders[0]), 'the workspace — and the page source in it — is gone when dispose() answers');
+  } finally {
+    release();
+    await reading;
+    await genpage.dispose();
+    for (const dir of folders) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // The reader that was used for the pass that ended its page reads may be used for another: the listing the ended pass was
 // still waiting for is the answer of that pass, and not one to hand the next.
 test('a listing the pass that ended its reads was waiting for is not what the next pass on the same reader is answered with', async () => {

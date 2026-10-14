@@ -87,10 +87,19 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   `list`, `add`) any more, so there is no `pac` process to time out or parse for a page
   (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` is no longer read) — and `az` is now needed to deploy a page, not only to create
   entities.
+- **A rebuild does not publish a page that is already up to date.** A page that already holds what the spec asks for is not
+  written, but the server cannot say whether an earlier run's publish of it finished, so a page found up to date is published
+  unless the build knows it published exactly that content — otherwise an app of ten pages would pay ten `PublishXml` calls of
+  several seconds each on every rebuild. The build keeps that record in its workspace (`page-published.<hash>.json`): the hash of
+  the content each page was published with (source, name, data sources, model, bindings), written once the publish was seen to
+  take effect. A new or changed page, a page saved by a run whose publish failed or was not proven (a renamed one included), and
+  a missing or damaged record all publish; an unchanged rebuild costs no page write and no `PublishXml`, as in 2.14.0. The first
+  build in a workspace with no record publishes each page once, to make it.
 - **A page write is one atomic change set.** A create mints its id first, and an unknown outcome is settled by reading it
   (sent once more under the same id — never a second page); an update writes only what differs, so leaving out `--model`,
   `--name` or `--data-sources` keeps the page's own (the CLI blanked the model and renamed the page to its navigation
-  title), and a page whose content is unchanged is published without recording another prompt. A page's first prompt is
+  title), and a page whose content is unchanged is written nowhere and records no prompt (the upload script publishes it
+  anyway; the build does only when it has no record that this content was published, above). A page's first prompt is
   kept and later prompts are recorded as turns. Every page-write error is marked `transient: false`, so the build's own
   retry never sends a page write again.
 - **A page is stored exactly as written**: no BOM, no line break appended, a file that is not UTF-8 is refused, and a `"` in
@@ -109,10 +118,14 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   the error carries `outcome` and `pageId`. A resend that is refused no longer erases a first send that may still land, and an
   update's resend reuses the first attempt's turn identity, so a late duplicate collides instead of recording the prompt and
   the reply twice.
-- **A create the build could not account for is remembered.** The build writes down the id it minted for a page (a `pending`
-  record in the workspace) before it sends the create. If the answer never arrived and the page could not be read back, the
-  next build finds the page and adopts it, or sends the create again under the same id — never a second page for one spec
-  entry. A pending record is intent: it never authorizes an update or a delete by itself.
+- **A create the build could not account for is remembered, and what it finds is checked against what was sent.** The build writes
+  down the id it minted for a page, with the name and a hash of the source it sends (a `pending` record in the workspace), before
+  it sends the create. If the answer never arrived and the page could not be read back, the next build resumes that create under
+  the same id: a page it finds there is adopted only when it holds a name and a source a create under the id sent — anything else
+  is a conflict, not a page to update — and what an earlier create sent that this one did not (another model, an older name) is
+  brought up to date by the ordinary update. A record is kept until evidence settles it (the page adopted, or deleted by teardown),
+  never because a listing did not show the page; so a key bound to another page keeps its record, and a page that lands late is
+  reported, and found by teardown. A pending record is intent: it never authorizes an update by itself.
 - **The build pins the default views of the tables its pages read** into the app's components once the pages are written (the
   CLI did this on every upload): one app operation for all of them, nothing written when every view is already pinned, and a
   failure to pin is a warning.
@@ -120,13 +133,16 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   it created but did not finish (its publish failed, or the placement it was asked for did) is finished by running the same
   command again with `--page-id` added: the base marker beside the code file records that the tool created the page, and
   that marker lets exactly that page be completed. Every other update still has to prove the page is in the app's navigation.
+  Completing a placement publishes the app even when its saved navigation already names the page (an earlier run may have saved
+  it and failed to publish), and the marker is cleared only once the app's published navigation shows the page.
 - **A page's source is normalized once**: a file's bytes lose one leading BOM and nothing else, and the Griffel check, the
   navigation resolution, the hashes the build records and the page's write all use that text — a file that starts with two
   marks keeps the second, in what is checked, recorded and stored.
 - **Verify cleans up after a page read it gave up on.** Disposing the page backend closes its workspace storage first and removes
   the folder once the storage calls under way have settled, so a read still running cannot write a page's source back into
   the temp directory; ending the page reads does the same for the reads' workspace, and the verify command gives the page
-  backend a workspace of its own.
+  backend a workspace of its own. The final disposal also waits for a cleanup that an earlier one left running (up to 10 s) and
+  prints a warning that names what is still on disk, rather than ending the command while page source is there.
 
 ### Removed
 

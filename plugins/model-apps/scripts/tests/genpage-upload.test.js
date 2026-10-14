@@ -25,7 +25,8 @@ const { pageHash, writeMarker, readMarker, markerPath, deployedCopyPath } = real
 const { commandArg } = require('../lib/cli-failure.js');
 const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
-const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE } = require('./helpers/fake-genpage-server.js');
+const { FakeSdk } = require('./helpers/fake-genpage-sdk.js');
+const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_ID: REAL_APP, APP_EXISTING_PAGE_ID } = require('./helpers/fake-genpage-server.js');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -948,6 +949,158 @@ test('a create that could not be placed leaves the page unfinished too — and t
   assert.strictEqual(readMarker(file).unfinished, undefined);
 });
 
+// A placement can be SAVED and not published: the app's navigation holds the page, and the publish of the app failed. The run that completes it finds the page in the saved
+// navigation, so a placement that only looks for what is missing has nothing to do — and used to answer "placed" while the app that runs did not show the page, and the marker
+// stopped saying the page was unfinished. Completing a placement is publishing the app and seeing the page in what runs.
+test('completing a placement asks the backend to FINISH it — and the marker stops saying the page is unfinished only once the backend finishes it, which it does not while the published navigation lacks the page', async () => {
+  const file = codeFile();
+  const appPages = {};
+  let answer = 'saved, not published';
+  const genpage = environment({
+    pages: [],
+    appPages,
+    placement: (appId, options) => {
+      const saved = (appPages[appId] = appPages[appId] || []);
+      for (const p of options.pages) if (!saved.some((s) => s.pageId === p.pageId)) saved.push({ pageId: p.pageId, name: p.title });
+      if (answer === 'saved, not published') throw Object.assign(new Error(`the navigation of app ${appId} was saved, but publishing the app failed (503)`), { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true });
+      if (answer === 'published, not showing') throw Object.assign(new Error(`app ${appId} was published, but its published navigation does not show page ${NEW_ID} yet (it is not listed)`), { code: 'GENPAGE_APP_PUBLISH_UNPROVEN', saved: true });
+      return { added: [], alreadyPlaced: options.pages.map((p) => String(p.pageId)), pinnedViews: [], warnings: [], appEdited: false, provedPublished: true };
+    },
+  });
+  const args = createArgs(file, [...NAMED, '--add-to-sitemap']);
+  const first = await run(args, genpage);
+  assert.strictEqual(first.ok, false);
+  assert.deepStrictEqual(appPages[APP].map((p) => p.pageId), [NEW_ID], 'the navigation was saved with the page');
+  assert.strictEqual(readMarker(file).unfinished, 'place');
+  assert.strictEqual(genpage.of('placeInApp')[0].args[1].finish, undefined, 'a first placement is an ordinary one');
+
+  // The advice, run: the saved navigation names the page, so there is nothing to write — and the backend is asked to finish the placement all the same.
+  answer = 'published, not showing';
+  const unproved = await run([...args, ...adviceFor(first)], genpage);
+  assert.strictEqual(unproved.ok, false, 'a backend that did not see the page in the published navigation has not finished the placement');
+  assert.match(unproved.payload.error, new RegExp(`but NOT added to app ${APP}'s navigation: app ${APP} was published, but its published navigation does not show page ${NEW_ID} yet`));
+  assert.match(unproved.payload.error, new RegExp(`run the same command again with --page-id ${NEW_ID} added`));
+  assert.strictEqual(unproved.payload.pageId, NEW_ID);
+  assert.strictEqual(readMarker(file).unfinished, 'place', 'so the page is still unfinished: it can be completed again');
+
+  answer = 'finished';
+  const third = await run([...args, ...adviceFor(first)], genpage);
+  assert.strictEqual(third.ok, true, JSON.stringify(third.payload));
+  assert.strictEqual(readMarker(file).unfinished, undefined, 'finished once the app was published with the page');
+  assert.deepStrictEqual(genpage.of('placeInApp').map((c) => c.args[1].finish), [undefined, true, true], 'the two completions asked for a finish; the first placement did not');
+  assert.strictEqual(genpage.of('create').length, 1, 'and no second page was created');
+});
+
+// A completion that is not a placement — the create asked for none and only its publish failed — has no app to publish: it pins views and never asks for a finish.
+test('completing a publish that failed does not ask the backend to finish a placement: no page is placed, so there is no app publish to prove', async () => {
+  const file = codeFile();
+  const genpage = environment({ pages: [], onCreate: () => ({ publish: { kind: 'failed', detail: 'timed out' } }) });
+  const args = createArgs(file, [...NAMED, '--data-sources', 'account']);
+  const first = await run(args, genpage);
+  assert.strictEqual(first.ok, false);
+  const second = await run([...args, ...adviceFor(first)], genpage);
+  assert.strictEqual(second.ok, true, JSON.stringify(second.payload));
+  assert.deepStrictEqual(genpage.of('placeInApp').map((c) => c.args[1].finish), [undefined], 'the views were pinned, the app was not asked to publish anything');
+});
+
+// A page created with no app whose publish failed is completed INTO an app by placing it there. That placement is the first one — an ordinary edit of the app, whose own publish follows
+// it — not the completion of one an earlier run began, so the backend is not asked to finish anything. The marker is rewritten to `place` before the placement is made, so a placement that is
+// saved and whose app publish fails is finished by the next run, which is then a completion.
+test('completing a publish that failed INTO an app places the page as a first placement does — and when that placement is saved but not published, the marker says `place` and the next run finishes it', async () => {
+  const file = codeFile();
+  const appPages = {};
+  let appPublishFails = true;
+  const genpage = environment({
+    pages: [],
+    appPages,
+    onCreate: () => ({ publish: { kind: 'failed', detail: 'timed out' } }),
+    placement: (appId, options) => {
+      const saved = (appPages[appId] = appPages[appId] || []);
+      for (const p of options.pages) if (!saved.some((s) => s.pageId === p.pageId)) saved.push({ pageId: p.pageId, name: p.title });
+      if (appPublishFails && !options.finish) throw Object.assign(new Error(`the navigation of app ${appId} was saved, but publishing the app failed (503)`), { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true });
+      return { added: [], alreadyPlaced: options.pages.map((p) => String(p.pageId)), pinnedViews: [], warnings: [], appEdited: false, provedPublished: true };
+    },
+  });
+  const first = await run(['--env', ENV, '--code-file', file, ...NAMED], genpage);
+  assert.strictEqual(first.ok, false);
+  assert.strictEqual(readMarker(file).unfinished, 'publish', 'created with no app: only its publish is left');
+
+  const into = ['--env', ENV, '--app-id', APP, '--code-file', file, ...NAMED, '--add-to-sitemap', ...adviceFor(first)];
+  const second = await run(into, genpage);
+  assert.strictEqual(second.ok, false, 'the app could not be published');
+  assert.match(second.payload.error, new RegExp(`but NOT added to app ${APP}'s navigation`));
+  assert.deepStrictEqual(genpage.of('placeInApp').map((c) => c.args[1].finish), [undefined], 'a first placement is an ordinary one, even when it completes a page');
+  assert.strictEqual(readMarker(file).unfinished, 'place', 'the placement is what is left now');
+
+  appPublishFails = false;
+  const third = await run(into, genpage);
+  assert.strictEqual(third.ok, true, JSON.stringify(third.payload));
+  assert.deepStrictEqual(genpage.of('placeInApp').map((c) => c.args[1].finish), [undefined, true], 'the next run completes the placement the second one began');
+  assert.strictEqual(readMarker(file).unfinished, undefined, 'finished');
+  assert.strictEqual(genpage.of('create').length, 1, 'and no second page was created');
+});
+
+// The same, through the real backend over the scripted SDK — the app's navigation and its two layers modelled: a publish that fails leaves the saved navigation naming the page and
+// the published one not; the advice's second run must publish the app again, and the page must be in what runs before the marker is cleared.
+function appWithPublishedLayer({ publishTakesEffect = true } = {}) {
+  const published = { xml: '<SiteMap><Area Id="a"><Group Id="g"/></Area></SiteMap>', publishes: [] };
+  const sdk = new FakeSdk({
+    records: {
+      appmodule: (o) => (/^appmoduleid eq /.test(o.filter) ? [{ uniquename: 'contoso_review' }] : [{ appmoduleid: APP, appmoduleidunique: 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb' }]),
+      appmodulecomponent: () => [{ objectid: 'dddddddd-4444-4444-8444-dddddddddddd', componenttype: 62 }],
+      sitemap: () => [{ sitemapxml: published.xml }],
+    },
+  }).seedApp({ id: APP, name: 'Review app', siteMap: { areas: [{ id: 'a', title: 'Main', groups: [{ id: 'g', title: 'Pages', subAreas: [] }] }] } });
+  let failNext = true;
+  const publishArtifact = sdk.publishArtifact.bind(sdk);
+  sdk.publishArtifact = async (type, id, options) => {
+    if (type !== 'app') return publishArtifact(type, id, options);
+    sdk.calls.push({ name: 'publishArtifact', args: [type, id, options] });
+    if (failNext) { failNext = false; published.publishes.push('failed'); throw new Error('PublishXml transient failure'); }
+    published.publishes.push('accepted');
+    // PublishXml copies the saved navigation to the published one — unless it has not taken effect yet.
+    if (publishTakesEffect) published.xml = `<SiteMap><Area Id="a"><Group Id="g">${(sdk.apps.get(id).siteMap.areas[0].groups[0].subAreas || []).map((s) => `<SubArea Id="${s.id}" GenPageId="${s.genPageId}"/>`).join('')}</Group></Area></SiteMap>`;
+    return { type, id, shipped: true, publish: { kind: 'submitted' } };
+  };
+  return { sdk, published };
+}
+
+test('REAL BACKEND over the scripted SDK: the advice after a placement that was saved and not published publishes the app again — the page is in the published navigation, and only then is the marker cleared', async () => {
+  const { sdk, published } = appWithPublishedLayer();
+  const file = codeFile();
+  const args = ['--env', ENV, '--app-id', APP, '--code-file', file, ...NAMED, '--add-to-sitemap'];
+  const make = () => makeGenpageSdk(ENV, { sdk, newId: () => NEW_ID });
+  const first = await run(args, make);
+  assert.strictEqual(first.ok, false);
+  assert.match(first.payload.error, /saved, but publishing the app failed \(PublishXml transient failure\)/);
+  assert.strictEqual(readMarker(file).unfinished, 'place');
+  assert.strictEqual(sdk.apps.get(APP).siteMap.areas[0].groups[0].subAreas.length, 1, 'the saved navigation holds the page');
+  assert.ok(!published.xml.includes(NEW_ID), 'the app that runs does not');
+
+  const second = await run([...args, ...adviceFor(first)], make);
+  assert.strictEqual(second.ok, true, JSON.stringify(second.payload));
+  assert.deepStrictEqual(published.publishes, ['failed', 'accepted'], 'the app was published again');
+  assert.ok(published.xml.includes(NEW_ID), 'and the page is in what runs');
+  assert.strictEqual(sdk.count('pushArtifact'), 1 + 1, 'the page and the app were pushed once each: the completion wrote nothing');
+  assert.strictEqual(readMarker(file).unfinished, undefined, 'the marker is cleared once that is proven');
+});
+
+test('REAL BACKEND over the scripted SDK: a completion whose app publish took no effect is not finished — the marker stays, and the failure says to run it again', async () => {
+  const { sdk, published } = appWithPublishedLayer({ publishTakesEffect: false });
+  const file = codeFile();
+  const args = ['--env', ENV, '--app-id', APP, '--code-file', file, ...NAMED, '--add-to-sitemap'];
+  const make = () => makeGenpageSdk(ENV, { sdk, newId: () => NEW_ID });
+  const first = await run(args, make);
+  assert.strictEqual(first.ok, false);
+  const second = await run([...args, ...adviceFor(first)], make);
+  assert.strictEqual(second.ok, false, 'the publish was accepted and the page is not in what runs: not finished');
+  assert.match(second.payload.error, /its published navigation does not show page .* yet/);
+  assert.match(second.payload.error, /run the same command again with --page-id/);
+  assert.deepStrictEqual(published.publishes, ['failed', 'accepted']);
+  assert.strictEqual(readMarker(file).unfinished, 'place', 'still unfinished');
+  assert.strictEqual(second.payload.pageId, NEW_ID);
+});
+
 test('an update that changes nothing says so; the backend\'s warnings are passed on', async () => {
   const same = await updating();
   assert.strictEqual(same.r.ok, true);
@@ -1690,6 +1843,35 @@ test('REAL SDK: the advice after an app-bound create whose publish failed — ru
   assert.strictEqual(second.payload.addedToSitemap, true);
   assert.strictEqual(readMarker(file).unfinished, undefined);
   assert.strictEqual(readMarker(file).appId, APP);
+});
+
+// The placement that was SAVED and not published, against the real bundle's app reads and writes (the page server, with the app's two layers laid over the same transport):
+// the first run's publish of the app fails after the navigation was pushed; the advice's run must publish the app again, and must not clear the marker until the page is in
+// the navigation that runs. Writing the app a second time would be wrong as well — everything it holds is saved.
+test('REAL SDK: the advice after a placement that was saved and not published publishes the app again — the page is in the app that runs before the marker is cleared, and the app is not written twice', async () => {
+  const server = serverWithAccount();
+  // The page the app's navigation already names, which the app push checks exists.
+  server.seedPage(APP_EXISTING_PAGE_ID, { name: 'Existing', source: SOURCE });
+  const { http, state } = appTransport(server, { publishFailures: 1 });
+  const file = codeFile(SOURCE);
+  const args = ['--env', INSTANCE, '--app-id', REAL_APP, '--code-file', file, '--name', 'Review page', ...P, '--agent-message', 'm', '--add-to-sitemap'];
+  const make = (env) => makeGenpageSdk(env, { httpClient: http });
+  const first = await run(args, make);
+  assert.strictEqual(first.ok, false, JSON.stringify(first.payload));
+  assert.match(first.payload.error, /publishing the app failed/);
+  const id = first.payload.pageId;
+  assert.ok(state.xml.includes(id), 'the saved navigation holds the page');
+  assert.ok(!state.publishedXml.includes(id), 'the published navigation does not');
+  assert.strictEqual(readMarker(file).unfinished, 'place');
+  const writes = state.writes.length;
+
+  const second = await run([...args, ...adviceFor(first)], make);
+  assert.strictEqual(second.ok, true, JSON.stringify(second.payload));
+  assert.strictEqual(state.publishAttempts, 2, 'the app was published again');
+  assert.ok(state.publishedXml.includes(id), 'the page is in what runs');
+  assert.strictEqual(state.writes.length, writes, 'and nothing was written to the app: its navigation was saved already');
+  assert.strictEqual(readMarker(file).unfinished, undefined, 'the marker is cleared once that is proven');
+  assert.strictEqual(second.payload.addedToSitemap, undefined, 'a page that was in the navigation already is not reported as added by this run');
 });
 
 // A create whose answer was lost and whose page cannot be read: the failure the CLI used to flatten into its message, losing the one thing that lets the page be found.

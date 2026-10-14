@@ -1657,7 +1657,7 @@ const UNCERTAIN_CREATES = [
   { what: 'a create that never arrives, twice, for a page named "SQL Timeouts"', name: 'SQL Timeouts', script: (f) => f.script('push', { drop: connectionError(0, 'Request failed: read ECONNRESET') }, { drop: connectionError(0, 'Request failed: read ECONNRESET') }), sends: 2, says: /creating it was sent twice and neither answer could be used/ },
   { what: 'a create that never arrives, twice, for a page named "Concurrent Deletes"', name: 'Concurrent Deletes', script: (f) => f.script('push', { drop: connectionError(0, 'Request failed: read ECONNRESET') }, { drop: connectionError(0, 'Request failed: read ECONNRESET') }), sends: 2, says: /creating it was sent twice and neither answer could be used/ },
   { what: 'a create whose answer is lost and whose page then cannot be read, the service saying "try again later"', name: 'Overview', script: (f) => f.script('push', { lose: connectionError(0, 'Request failed: read ECONNRESET') }).script('fetch', new Error(TRY_AGAIN_LATER)), sends: 1, says: /the outcome of creating it is unknown[\s\S]*reading the page it would have[\s\S]*failed too \(The service is unavailable\. Please try again later\.\)/ },
-  { what: 'a create whose answer is lost and whose page then reads as changed, for a page named "SQL Timeout Report"', name: 'SQL Timeout Report', script: (f) => f.script('push', { lose: connectionError(0, 'Request failed: read ECONNRESET') }).script('fetch', (s, type, id) => { s.pages.get(id).source = 'saved by someone else'; }), sends: 1, says: /its source is not what this create sent — it was changed after it was created/ },
+  { what: 'a create whose answer is lost and whose page then reads as changed, for a page named "SQL Timeout Report"', name: 'SQL Timeout Report', script: (f) => f.script('push', { lose: connectionError(0, 'Request failed: read ECONNRESET') }).script('fetch', (s, type, id) => { s.pages.get(id).source = 'saved by someone else'; }), sends: 1, says: /exists, but it is not a page any create under this id sent: its source is not the one that was sent[\s\S]*not adopted, not sent again and not published/ },
   { what: 'a create the service says already exists, with no page to be read', name: 'Overview', script: (f) => f.script('push', { report: { saved: false, error: Object.assign(new Error('the artifact already exists'), { code: 'ARTIFACT_ALREADY_EXISTS' }) } }), sends: 1, says: /the service answered that page \S+ already exists, but no page \S+ can be read[\s\S]*a request that is still in flight can land/ },
   { what: 'a create that arrives only after its answer was given up on, for a page named "SQL Timeouts"', name: 'SQL Timeouts', script: (f) => f.script('push', { lose: connectionError(0, 'Request failed: read ECONNRESET') }).script('fetch', new Error(TRY_AGAIN_LATER)), sends: 1, says: /the outcome of creating it is unknown/ },
 ];
@@ -1874,7 +1874,7 @@ test('deploy: a create whose answer is lost and whose page cannot be read is not
     await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && /the outcome of creating it is unknown/.test(e.message));
     const [id, ...others] = [...server.state.projects.keys()];
     assert.ok(id && !others.length, 'the page IS on the service — one page');
-    assert.deepStrictEqual([...pendingOf(spec, appDir)], [['p', [{ pageId: id, name: 'Overview' }]]], 'and the build wrote down the id it minted for the spec entry before it sent anything');
+    assert.deepStrictEqual([...pendingOf(spec, appDir)], [['p', [{ pageId: id, sent: [{ name: 'Overview', sourceSha256: sha256(PAGE_SOURCE) }] }]]], 'and the build wrote down the id it minted for the spec entry before it sent anything — with the name and the source it sent');
     assert.deepStrictEqual(receiptsOf(spec, appDir), [], 'a pending creation is intent, not ownership: nothing was acknowledged, so there is no creation receipt');
 
     // Build 2: a new process on the same workspace, the service healthy.
@@ -1940,7 +1940,7 @@ test('deploy: a create that never arrived is sent again by the next build under 
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('deploy: a create known to have written nothing leaves no pending record behind — a resumed one keeps the record, because a request an earlier build sent may still land', async () => {
+test('deploy: a create known to have written nothing leaves no pending record behind — a resumed one keeps the record and is UNKNOWN, because a request an earlier build sent may still land', async () => {
   const { appDir, spec } = onePageApp('Overview');
   const workspaceDir = path.join(appDir, '.maker-workspace');
   const server = new FakeGenPageServer();
@@ -1952,10 +1952,22 @@ test('deploy: a create known to have written nothing leaves no pending record be
     assert.strictEqual(server.batches.length, 0, 'nothing was sent');
     assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and the record the create wrote before it started is consumed: it is known to have written nothing');
 
-    // A create that resumes an earlier build's is another matter: that build's request may still be in flight, and a refusal of THIS send says nothing about it.
-    recordPagePending(workspaceDir, appUniqueName(spec), 'p', EARLIER, 'Overview', BUILD_ENV);
-    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && /nothing was written/.test(e.message));
-    assert.deepStrictEqual([...pendingOf(spec, appDir)], [['p', [{ pageId: EARLIER, name: 'Overview' }]]], 'its record stays');
+    // A create that resumes an earlier build's is another matter: that build's request may still be in flight, and a refusal of THIS call says nothing about it.
+    recordPagePending(workspaceDir, appUniqueName(spec), 'p', EARLIER, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => {
+      assert.strictEqual(e.phase, 'pages');
+      assert.doesNotMatch(e.message, /nothing was written/, 'it is not said: the earlier request can still land');
+      assert.match(e.message, new RegExp(`a create an earlier build sent under id ${EARLIER}, whose outcome was never learned\\) and the send after it was refused[\\s\\S]*it can still reach the service`));
+      assert.strictEqual(e.cause.outcome, 'unknown');
+      assert.strictEqual(e.cause.pageId, EARLIER, 'and the id to look for is kept');
+      return true;
+    });
+    // Both creates stay recorded: the earlier build's, and the one this build recorded before it sent (its page does not compile, so it was refused — but the page may still hold what either sent).
+    const BROKEN = 'export default function Page( {';
+    const kept = pendingOf(spec, appDir);
+    assert.deepStrictEqual([...kept.keys()], ['p']);
+    assert.deepStrictEqual(kept.get('p').map((r) => r.pageId), [EARLIER], 'its record stays');
+    assert.deepStrictEqual(kept.get('p')[0].sent.map((s) => s.sourceSha256).sort(), [sha256(PAGE_SOURCE), sha256(BROKEN)].sort());
     assert.strictEqual(server.state.projects.size, 0);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
@@ -1994,13 +2006,13 @@ test('deploy: a pending creation is not ownership — a page under its id that i
   const RETIRED = '9d3a77c1-0000-4000-8000-0000000000d2';
   const theirs = 'export default function Theirs() { return null; }\n';
   server.seedPage(THEIRS, { name: 'Somebody else\'s page', source: theirs });
-  recordPagePending(workspaceDir, appUniqueName(spec), 'p', THEIRS, 'Overview', BUILD_ENV);
-  recordPagePending(workspaceDir, appUniqueName(spec), 'retired', RETIRED, 'Retired page', BUILD_ENV);
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', THEIRS, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
+  recordPagePending(workspaceDir, appUniqueName(spec), 'retired', RETIRED, 'Retired page', BUILD_ENV, sha256(PAGE_SOURCE));
   try {
     await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => {
       assert.strictEqual(e.phase, 'pages');
       assert.strictEqual(e.code, 'pages-identity-conflict');
-      assert.match(e.message, new RegExp(`page ${THEIRS} exists under the id an earlier build minted for "p", but it is named "Somebody else's page" and that create sent "Overview" — it is not known to be the page that was sent, so it is neither adopted nor updated`));
+      assert.match(e.message, new RegExp(`page ${THEIRS} exists under the id an earlier build minted for "p", but it is not a page that build sent: it is named "Somebody else's page", and the create sent "Overview", and its source is not the one that was sent — so it is neither adopted nor updated`));
       return true;
     });
     assert.deepStrictEqual(server.writes(), [], 'nothing was written to any page: not an update, not a create, not a delete');
@@ -2017,8 +2029,8 @@ test('deploy: two creations left pending for one key cannot be told apart — th
   const server = new FakeGenPageServer();
   const FIRST = '9d3a77c1-0000-4000-8000-0000000000f1';
   const SECOND = '9d3a77c1-0000-4000-8000-0000000000f2';
-  recordPagePending(workspaceDir, appUniqueName(spec), 'p', FIRST, 'Overview', BUILD_ENV);
-  recordPagePending(workspaceDir, appUniqueName(spec), 'p', SECOND, 'Overview', BUILD_ENV);
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', FIRST, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', SECOND, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
   try {
     await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => {
       assert.strictEqual(e.phase, 'pages');
@@ -2032,27 +2044,581 @@ test('deploy: two creations left pending for one key cannot be told apart — th
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('deploy: the record of a create that is not resumed is removed, and said so — its key is bound to a page, so the next build would otherwise keep it in the workspace for good', async () => {
+// ── A key bound to another page keeps the record of a create that can still land ──────────────────────────────────────────────────────────────────────
+// An absence in one listing is a snapshot, not proof that the request which would make the page cannot still arrive. A build that binds the spec key to another live page does not resume the create — but it must not
+// consume the record either: the page that lands later would have no key, no receipt and no record, and nothing — teardown included — would find it. The record stays until evidence settles it (the page appears, or
+// the page is deleted), and the build that finds the page reports it as an unused page it made.
+test('deploy: a key bound to another page does not consume the record of a create that can still land — the record is kept and said so, and when the page lands the next build reports it as an unused page this build made', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const BOUND = '9d3a77c1-0000-4000-8000-0000000000b1';
+  try {
+    // Build 1: both sends are in flight when the build gives up on them.
+    server.strandBatch = () => true;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [[, [pending]]] = [...pendingOf(spec, appDir)];
+
+    // The spec now binds the key to a page that is in this app's navigation.
+    server.strandBatch = undefined;
+    server.seedPage(BOUND, { name: 'Overview', source: PAGE_SOURCE, config: { dataSources: [] } });
+    spec.pages[0].pageId = BOUND;
+    const withNavigation = () => ({ sdk: mockSdk({ liveSitemapXml: pageSitemap([BOUND]) }).sdk });
+    const warnings = [];
+    const second = await buildPages(spec, appDir, realPageBackend(server), { ...withNavigation(), warn: (m) => warnings.push(m) });
+    assert.strictEqual(second.created.pages.p, BOUND, 'the key stays bound to its page');
+    assert.deepStrictEqual([...server.state.projects.keys()], [BOUND], 'nothing was created for it');
+    assert.deepStrictEqual([...pendingOf(spec, appDir)], [['p', [{ pageId: pending.pageId, sent: [{ name: 'Overview', sourceSha256: sha256(PAGE_SOURCE) }] }]]], 'the record of the create that can still land is KEPT');
+    const kept = warnings.filter((m) => m.includes(pending.pageId));
+    assert.strictEqual(kept.length, 1);
+    assert.match(kept[0], /is not resumed\. No such page is in the environment now, but a request still in flight can create it later, so its record is kept/);
+    assert.doesNotMatch(kept[0], /record was removed/);
+    assert.match(kept[0], /--clear-workspace waits for it/);
+
+    // The request build 1 gave up on arrives after that build: the page it makes is the one the record is for.
+    await server.landStranded();
+    assert.strictEqual(server.state.projects.size, 2, 'the page exists now, with no key, no receipt and — until the next build — only the record to find it by');
+    assert.strictEqual(server.state.projects.get(pending.pageId).name, 'Overview');
+
+    const orphanWarnings = [];
+    const third = await buildPages(spec, appDir, realPageBackend(server), { ...withNavigation(), warn: (m) => orphanWarnings.push(m) });
+    assert.strictEqual(third.created.pages.p, BOUND, 'the key is still the other page\'s');
+    assert.strictEqual(server.state.projects.size, 2, 'the page that landed is not deleted — nothing here deletes a page');
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => [r.key, r.pageId, r.name]), [['p', pending.pageId, 'Overview']], 'it is recorded as a page this app created, so teardown finds it by that id');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and the record is consumed: the page was found');
+    const orphan = orphanWarnings.filter((m) => m.includes(pending.pageId));
+    assert.strictEqual(orphan.length, 1);
+    assert.match(orphan[0], new RegExp(`page "Overview" \\(${pending.pageId}\\) was created by an earlier build for "p" — its answer was lost — and is not used: "p" is bound to ${BOUND}\\. It is recorded as a page this app created, so teardown deletes it`));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a resumed create whose send is refused while the earlier build\'s request lands is read, found and adopted — one page, one receipt, never "nothing was written"', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    server.strandBatch = () => true;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [[, [pending]]] = [...pendingOf(spec, appDir)];
+    assert.strictEqual(server.state.projects.size, 0, 'nothing has landed yet');
+
+    // Build 2 finds no page and resumes under the same id. Its send is refused — a throttle — and while it is, the request build 1 gave up on lands.
+    server.strandBatch = undefined;
+    server.failBatch = () => { server.landStranded(); return 429; };
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    server.failBatch = undefined;
+    assert.strictEqual(result.created.pages.p, pending.pageId);
+    assert.deepStrictEqual([...server.state.projects.keys()], [pending.pageId], 'one page: the one the refusal was read for');
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [pending.pageId]);
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'acknowledged: the record is consumed');
+    assert.deepStrictEqual(server.published, [pending.pageId], 'and it is published, once');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a resumed create whose send is refused while nothing has landed is UNKNOWN — it names the id to look for and keeps the record — and the next build adopts the page once the request lands', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    server.strandBatch = () => true;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [[, [pending]]] = [...pendingOf(spec, appDir)];
+
+    // Build 2: refused, and nothing lands. The refusal proves nothing about the request build 1 gave up on.
+    server.strandBatch = undefined;
+    server.failBatch = () => 429;
+    const failure = await buildPages(spec, appDir, realPageBackend(server)).then(() => null, (e) => e);
+    server.failBatch = undefined;
+    assert.ok(failure, 'the build stops');
+    assert.strictEqual(failure.phase, 'pages');
+    assert.doesNotMatch(failure.message, /nothing was written|wrote nothing/);
+    assert.match(failure.message, /it can still reach the service/);
+    assert.strictEqual(failure.cause.outcome, 'unknown');
+    assert.strictEqual(failure.cause.pageId, pending.pageId, 'with the id to look for');
+    assert.strictEqual(pendingOf(spec, appDir).size, 1, 'and the record stays');
+    assert.strictEqual(server.state.projects.size, 0);
+
+    // The request lands afterwards, as it can; the next build finds the page and adopts it.
+    await server.landStranded();
+    assert.deepStrictEqual([...server.state.projects.keys()], [pending.pageId]);
+    const third = await buildPages(spec, appDir, realPageBackend(server));
+    assert.strictEqual(third.created.pages.p, pending.pageId);
+    assert.deepStrictEqual([...server.state.projects.keys()], [pending.pageId], 'one page for one spec entry');
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [pending.pageId]);
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── A page found under a pending id is recognised by what was sent, and brought to what this build asks for ──────────────────────────────────────────────
+// The page under the id is the one the pending record is for only if it holds what a create under that id sent — its name and its source. One that does is ours; it may still hold what an EARLIER build sent (another model
+// or name), and is then updated to what this build asks for — through the ordinary update, never published and acknowledged as if the new content had been stored. One that does not is somebody else's.
+test('deploy: an earlier build\'s request that lands just before the resumed send leaves a page with the OLD model — the page is adopted and updated to the new one before it is published, not acknowledged as it is', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  spec.pages[0].model = 'model-before';
+  spec.pages[0].prompt = 'First request';
+  try {
+    server.strandBatch = () => true;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [[, [pending]]] = [...pendingOf(spec, appDir)];
+
+    // The spec changes — another model, another prompt, the same source — and the request build 1 gave up on lands right before the resumed send, which then collides on the id.
+    server.strandBatch = undefined;
+    spec.pages[0].model = 'model-after';
+    spec.pages[0].prompt = 'Revised request';
+    server.beforeBatch = () => { server.beforeBatch = undefined; server.landStranded(); };
+    const warnings = [];
+    const result = await buildPages(spec, appDir, realPageBackend(server), { warn: (m) => warnings.push(m) });
+    assert.strictEqual(result.created.pages.p, pending.pageId);
+    assert.deepStrictEqual([...server.state.projects.keys()], [pending.pageId], 'one page');
+    assert.strictEqual(JSON.parse(server.rowText(pending.pageId, 'config.json')).model, 'model-after', 'it holds the model this build asks for, not the one the earlier build sent');
+    assert.deepStrictEqual(server.messagesOf(pending.pageId).map((m) => m.message), ['First request', 'Authored by app-builder', 'Revised request', 'Authored by app-builder'], 'its conversation shows both requests: the update recorded this build\'s turn');
+    assert.deepStrictEqual(server.published, [pending.pageId], 'it was published once — after it was brought to what this build asks for, never before');
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => [r.key, r.pageId, r.name]), [['p', pending.pageId, 'Overview']]);
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+    assert.ok(warnings.some((m) => /an earlier create under this id had written, differing from this create in model[\s\S]*was updated to what this create asks for instead of being published as it was/.test(m)), `the build says what it did: ${JSON.stringify(warnings)}`);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: the spec renamed the page since the build that left it pending — the page it left, under the OLD name, is still ours: adopted and renamed, in the resumed create and when found in the listing', async () => {
+  // (a) the earlier request lands while the resumed create is being sent.
+  const a = onePageApp('Overview');
+  fs.writeFileSync(path.join(a.appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    server.strandBatch = () => true;
+    await assert.rejects(buildPages(a.spec, a.appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [[, [pending]]] = [...pendingOf(a.spec, a.appDir)];
+    server.strandBatch = undefined;
+    a.spec.pages[0].name = 'Overview, renamed';
+    server.beforeBatch = () => { server.beforeBatch = undefined; server.landStranded(); };
+    const result = await buildPages(a.spec, a.appDir, realPageBackend(server));
+    assert.strictEqual(result.created.pages.p, pending.pageId);
+    assert.deepStrictEqual([...server.state.projects.keys()], [pending.pageId], 'one page');
+    assert.strictEqual(server.state.projects.get(pending.pageId).name, 'Overview, renamed', 'renamed by the update');
+    assert.strictEqual(pendingOf(a.spec, a.appDir).size, 0, 'both records — the old name\'s and the new one\'s — are consumed with the page');
+  } finally { fs.rmSync(a.appDir, { recursive: true, force: true }); }
+
+  // (b) the page is already in the listing when the next build starts: a create whose answer was lost, and whose page could not be read.
+  const b = onePageApp('Overview');
+  fs.writeFileSync(path.join(b.appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const lost = new FakeGenPageServer();
+  try {
+    lost.afterCommit = lostAnswer;
+    lost.failOn = rowReadsFail;
+    await assert.rejects(buildPages(b.spec, b.appDir, realPageBackend(lost)), (e) => e.phase === 'pages');
+    const [id] = [...lost.state.projects.keys()];
+    lost.afterCommit = undefined;
+    lost.failOn = undefined;
+    b.spec.pages[0].name = 'Overview, renamed';
+    const result = await buildPages(b.spec, b.appDir, realPageBackend(lost));
+    assert.strictEqual(result.created.pages.p, id, 'adopted: its stored name is an older one than the spec\'s, which does not make it somebody else\'s');
+    assert.deepStrictEqual([...lost.state.projects.keys()], [id]);
+    assert.strictEqual(lost.state.projects.get(id).name, 'Overview, renamed', 'and the update renamed it');
+    assert.strictEqual(pendingOf(b.spec, b.appDir).size, 0);
+  } finally { fs.rmSync(b.appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a page found in the listing under a pending id holds what the build sent and an OLD model — it is adopted, and the ordinary update brings it to the new one', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  spec.pages[0].model = 'model-before';
+  const server = new FakeGenPageServer();
+  try {
+    server.afterCommit = lostAnswer;
+    server.failOn = rowReadsFail;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [id] = [...server.state.projects.keys()];
+    server.afterCommit = undefined;
+    server.failOn = undefined;
+    spec.pages[0].model = 'model-after';
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    assert.strictEqual(result.created.pages.p, id);
+    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'one page');
+    assert.strictEqual(JSON.parse(server.rowText(id, 'config.json')).model, 'model-after');
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [id]);
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a page that comes to hold a pending id after the listing — named otherwise than the create sent it — is not ours: not adopted, not published, no receipt, and the build says which id', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    server.strandBatch = () => true;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [[, [pending]]] = [...pendingOf(spec, appDir)];
+
+    // After the listing this build read, a page with the same source but another name appears under the id: the resumed send then collides on it.
+    server.strandBatch = undefined;
+    server.beforeBatch = () => { server.beforeBatch = undefined; server.seedPage(pending.pageId, { name: 'Another app page', source: PAGE_SOURCE }); };
+    const failure = await buildPages(spec, appDir, realPageBackend(server)).then(() => null, (e) => e);
+    assert.ok(failure, 'the build stops');
+    assert.strictEqual(failure.phase, 'pages');
+    assert.strictEqual(failure.code, 'pages-identity-conflict');
+    assert.match(failure.message, new RegExp(`generative page "Overview" \\(${pending.pageId}\\) exists, but it is not a page any create under this id sent: it is named "Another app page", and the create sent "Overview"`));
+    assert.match(failure.message, /not adopted, not sent again and not published/);
+    assert.deepStrictEqual(server.published, [], 'it was not published');
+    assert.deepStrictEqual(receiptsOf(spec, appDir), [], 'no receipt was written — least of all with the spec\'s name');
+    assert.strictEqual(server.state.projects.get(pending.pageId).name, 'Another app page', 'and the page is as it was');
+    assert.strictEqual(pendingOf(spec, appDir).size, 1, 'the record stays for the build — or the person — that settles it');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a page in the listing under a pending id with the right NAME and another SOURCE, or the right source and another name, is not one the build sent — neither is adopted, and each says what differs', async () => {
+  for (const [what, held, says] of [
+    ['another source', { name: 'Overview', source: 'export default function Theirs() { return null; }\n' }, /it is not a page that build sent: its source is not the one that was sent — so it is neither adopted nor updated/],
+    ['another name', { name: 'Overview 2', source: PAGE_SOURCE }, /it is not a page that build sent: it is named "Overview 2", and the create sent "Overview" — so it is neither adopted nor updated/],
+  ]) {
+    const { appDir, spec } = onePageApp('Overview');
+    fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+    const workspaceDir = path.join(appDir, '.maker-workspace');
+    const server = new FakeGenPageServer();
+    const ID = '9d3a77c1-0000-4000-8000-0000000000c1';
+    server.seedPage(ID, held);
+    recordPagePending(workspaceDir, appUniqueName(spec), 'p', ID, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
+    try {
+      await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.code === 'pages-identity-conflict' && says.test(e.message), what);
+      assert.deepStrictEqual(server.writes(), [], `${what}: nothing was written`);
+      assert.deepStrictEqual(receiptsOf(spec, appDir), [], `${what}: no receipt`);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
+// A page the listing showed under a pending id can be gone by the time the build reads it to prove it (a maker deleted it): that is an absence like any other, so the create is resumed under the same id.
+// A page that is there and cannot be READ proves nothing either way — it is not adopted, and not resumed over (a create under an id that exists collides): the build stops and says so.
+const vanish = (server, pageId) => {
+  for (const [fileId, file] of [...server.state.files]) if (file.projectId === pageId) server.state.files.delete(fileId);
+  for (const [messageId, message] of [...server.state.messages]) if (message.regarding === pageId) server.state.messages.delete(messageId);
+  server.state.projects.delete(pageId);
+};
+
+test('deploy: a page that was in the listing under a pending id and is gone when the build reads it is resumed like a page that was not listed — created again under the SAME id', async () => {
   const { appDir, spec } = onePageApp('Overview');
   fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
   const workspaceDir = path.join(appDir, '.maker-workspace');
   const server = new FakeGenPageServer();
-  const STALE = '9d3a77c1-0000-4000-8000-0000000000e2';
+  const ID = '9d3a77c1-0000-4000-8000-0000000000c2';
+  server.seedPage(ID, { name: 'Overview', source: PAGE_SOURCE });
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', ID, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
   try {
-    // Build 1 creates the page and acknowledges it: the key is bound to a page this workspace holds a creation receipt for.
+    const genpage = realPageBackend(server);
+    const read = genpage.read;
+    genpage.read = async (pageId) => { vanish(server, pageId); return read(pageId); };
+    const result = await buildPages(spec, appDir, genpage);
+    assert.strictEqual(result.created.pages.p, ID, 'the page is created again under the recorded id');
+    assert.deepStrictEqual([...server.state.projects.keys()], [ID], 'one page');
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [ID], 'acknowledged, so it has a receipt');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and the record is consumed on that evidence');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a page in the listing under a pending id that cannot be READ is neither adopted nor resumed over — the build stops, says it could not read it, and writes nothing', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const server = new FakeGenPageServer();
+  const ID = '9d3a77c1-0000-4000-8000-0000000000c3';
+  server.seedPage(ID, { name: 'Overview', source: PAGE_SOURCE });
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', ID, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
+  server.failOn = rowReadsFail;
+  try {
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => {
+      assert.strictEqual(e.code, 'pages-identity-conflict');
+      assert.match(e.message, new RegExp(`page ${ID} exists under the id an earlier build minted for "p", but it could not be read to tell whether it is a page that build sent \\(.*\\), so it is neither adopted nor updated`));
+      return true;
+    });
+    assert.deepStrictEqual(server.writes(), [], 'nothing was written');
+    assert.deepStrictEqual(receiptsOf(spec, appDir), [], 'no receipt was made out of the record');
+    assert.strictEqual(pendingOf(spec, appDir).size, 1, 'and the record stays');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a resumed create with another name or source adds a record — the earlier one stays, because the page may hold either — and the acknowledgement consumes them all', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    server.strandBatch = () => true;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    // Build 2 changes both, and is stranded as well.
+    const edited = PAGE_SOURCE.replace('Page</div>', 'Edited</div>');
+    fs.writeFileSync(path.join(appDir, 'p.tsx'), edited, 'utf8');
+    spec.pages[0].name = 'Overview 2';
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [[, [pending]]] = [...pendingOf(spec, appDir)];
+    assert.deepStrictEqual(pending.sent, [
+      { name: 'Overview', sourceSha256: sha256(PAGE_SOURCE) },
+      { name: 'Overview 2', sourceSha256: sha256(edited) },
+    ].sort((a, b) => (`${a.name}\n${a.sourceSha256}` < `${b.name}\n${b.sourceSha256}` ? -1 : 1)), 'what each build sent under the one id');
+    // Build 3 is healthy: the page lands (only the first-sent request lands; the rest collide), and it is the OLD one — adopted, and brought to what build 3 asks for.
+    server.strandBatch = undefined;
+    server.beforeBatch = () => { server.beforeBatch = undefined; server.landStranded(); };
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    assert.strictEqual(result.created.pages.p, pending.pageId);
+    assert.strictEqual(server.state.projects.get(pending.pageId).name, 'Overview 2');
+    assert.strictEqual(server.rowText(pending.pageId, 'src/pages/page.tsx'), edited, 'it holds what the last build asks for');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'every record of the id is consumed');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── An unchanged rebuild publishes nothing ────────────────────────────────────────────────────────────────────────────────────────────────────
+// A page that already holds what the spec asks for is not written, but the backend published it all the same — the server cannot say whether an earlier run's publish of it finished, and a page whose
+// publish did not finish has to be published by the next run. So an unchanged rebuild of an app with ten pages made ten PublishXml calls of several seconds each, where an unchanged page cost no write and
+// no publish before pages went through the SDK. The build now keeps what it published in its workspace (lib/page-publish-records.js): the hash of each page's CONTENT, written once a publish was SEEN to take
+// effect, and handed back to the next update, which publishes a page it finds already holding that content only if the hash is not that content's. These tests count what a rebuild asks of the page service,
+// through the real backend over the stateful fake of the page tables.
+const { readPublishedPages, publishedRecordPath } = require('../lib/page-publish-records.js');
+const publishedOf = (spec, appDir) => readPublishedPages(path.join(appDir, '.maker-workspace'), appUniqueName(spec), BUILD_ENV);
+// The requests the page service received from `from` on, by kind: change sets (one `$batch` is one atomic write), PublishXml, any other write, and reads.
+function requestsOf(server, from = 0) {
+  const received = server.requests.slice(from).filter((r) => !r.batched);
+  const isPublish = (r) => r.method === 'POST' && /PublishXml/.test(r.path);
+  const isChangeSet = (r) => r.method === 'POST' && r.path === '/$batch';
+  return {
+    changeSets: received.filter(isChangeSet).length,
+    publishes: received.filter(isPublish).length,
+    otherWrites: received.filter((r) => r.method !== 'GET' && !isPublish(r) && !isChangeSet(r)).length,
+    reads: received.filter((r) => r.method === 'GET').length,
+  };
+}
+// Two independent pages in a real temp folder: nothing navigates, so no source is rewritten on its way out and what a page holds is exactly its file.
+function twoPageApp() {
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-republish-'));
+  const pages = [['alpha', 'Alpha'], ['beta', 'Beta']];
+  for (const [key, name] of pages) fs.writeFileSync(path.join(appDir, `${key}.tsx`), PAGE_SOURCE.replace('Page()', `${name}()`).replace('>Page<', `>${name}<`), 'utf8');
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'RepublishSol', displayName: 'Republish', publisherPrefix: 'contoso' },
+    app: { name: 'Republish App' },
+    entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+    pages: pages.map(([key, name]) => ({ key, name, source: { kind: 'tsx', codeFile: `${key}.tsx` } })),
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'alpha', title: 'Alpha' }, { page: 'beta', title: 'Beta' }, TABLE_ENTRY] }] }] },
+  };
+  return { appDir, spec };
+}
+// A rebuild of pages an earlier build left: the app's navigation holds them and the manifest names them, as the maker's app would, and the workspace folder is the one the earlier build wrote in.
+// The page backend is a new one over the same service, as a new process has.
+function rebuildPages(spec, appDir, server, ids, extra = {}) {
+  const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: spec.pages.map((p) => ({ key: p.key, name: p.name, pageId: ids[p.key] })) }), 'utf8').toString('base64');
+  const { sdk } = mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap(Object.values(ids)), pageRows: spec.pages.map((p) => ({ uxagentprojectid: ids[p.key], name: p.name })) });
+  return buildPages(spec, appDir, realPageBackend(server), { sdk, ...extra });
+}
+// What a maker's save in the designer does: the page's draft no longer holds the file's source.
+function makerSaves(server, pageId, text) {
+  server.filesOf(pageId).find((f) => f.filename === 'src/pages/page.tsx').content = Buffer.from(text, 'utf8');
+}
+
+test('deploy: an UNCHANGED rebuild of an app with two pages sends no change set and no PublishXml — it only reads — and a rebuild that changes one page writes and publishes that page alone', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
     const first = await buildPages(spec, appDir, realPageBackend(server));
-    const id = first.created.pages.p;
-    assert.deepStrictEqual([...server.state.projects.keys()], [id]);
-    // An earlier create under another id was never acknowledged, and its page is not in the environment.
-    recordPagePending(workspaceDir, appUniqueName(spec), 'p', STALE, 'Overview', BUILD_ENV);
+    const ids = { ...first.created.pages };
+    assert.deepStrictEqual(Object.keys(ids).sort(), ['alpha', 'beta']);
+    const created = requestsOf(server);
+    assert.deepStrictEqual([created.changeSets, created.publishes], [2, 2], 'the first build creates both pages and publishes both');
+    assert.deepStrictEqual([...publishedOf(spec, appDir).keys()].sort(), Object.values(ids).sort(), 'and records that it published them');
+
+    // Nothing changed.
+    let from = server.requests.length;
+    const again = await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(again.created.pages, ids, 'the same two pages');
+    const unchanged = requestsOf(server, from);
+    assert.deepStrictEqual([unchanged.changeSets, unchanged.publishes, unchanged.otherWrites], [0, 0, 0], 'an unchanged page costs no change set, no publish and no other write');
+    assert.ok(unchanged.reads > 0, 'only reads: each page is read to see that it holds what the spec asks for');
+
+    // One page's file changes.
+    const edited = fs.readFileSync(path.join(appDir, 'beta.tsx'), 'utf8').replace('>Beta<', '>Beta, edited<');
+    fs.writeFileSync(path.join(appDir, 'beta.tsx'), edited, 'utf8');
+    const publishedBefore = server.published.length;
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const changed = requestsOf(server, from);
+    assert.deepStrictEqual([changed.changeSets, changed.publishes], [1, 1], 'one change set, for the page that changed, and one publish — the page next to it is neither written nor published');
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.beta], 'and the page that was published is the one that changed');
+    assert.strictEqual(server.rowText(ids.beta, 'src/pages/page.tsx'), edited);
+
+    // The rebuild after that is unchanged again: what was published was recorded.
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const settled = requestsOf(server, from);
+    assert.deepStrictEqual([settled.changeSets, settled.publishes, settled.otherWrites], [0, 0, 0]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The kitchen-sink shape: one page links to the other. The target is created first, the linking page goes up with the target's id resolved into its text, and what is recorded for it is that text.
+test('deploy: pages that link to each other are published once and then left alone — the linking page\'s resolved text is the content its record is of', async () => {
+  const { appDir, spec } = makeTwoPageApp(); // overview links to detail
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    assert.deepStrictEqual(Object.keys(ids).sort(), ['detail', 'overview']);
+    assert.ok(server.rowText(ids.overview, 'src/pages/page.tsx').includes(ids.detail), 'the linking page holds its target\'s id, resolved');
+    assert.deepStrictEqual([...publishedOf(spec, appDir).keys()].sort(), Object.values(ids).sort(), 'both pages are recorded as published');
+
+    const from = server.requests.length;
+    const again = await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(again.created.pages, ids);
+    const unchanged = requestsOf(server, from);
+    assert.deepStrictEqual([unchanged.changeSets, unchanged.publishes, unchanged.otherWrites], [0, 0, 0], 'an unchanged rebuild of linked pages writes and publishes nothing either');
+    assert.ok(unchanged.reads > 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a rebuild after a publish that FAILED publishes that page — the convergence is kept — and still not the page that was published', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    // Build 1 creates both pages; the first publish goes through and every later one is refused (HTTP 500). The second page is written and its id recorded, so the halt says it will be reused.
+    let publishes = 0;
+    server.failOn = (method, requestPath) => (/PublishXml/.test(requestPath) && (publishes += 1) > 1 ? 500 : undefined);
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && e.code === 'pages-publish-failed' && /page "Beta" was created as \S+ and saved, but publishing it failed/.test(e.message));
+    const ids = Object.fromEntries(receiptsOf(spec, appDir).map((r) => [r.key, r.pageId]));
+    assert.deepStrictEqual(Object.keys(ids).sort(), ['alpha', 'beta'], 'both pages are on the service, and both have a receipt');
+    assert.deepStrictEqual([...publishedOf(spec, appDir).keys()], [ids.alpha], 'only the page whose publish took effect is recorded as published');
+
+    // Build 2, the service healthy: Beta holds what the spec asks for — it was written — but was never published, so it is published now. Alpha was published, and is left alone.
+    server.failOn = undefined;
+    const publishedBefore = server.published.length;
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const rebuilt = requestsOf(server, from);
+    assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes], [0, 1], 'nothing is written again, and the one page whose publish failed is published');
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.beta]);
+    assert.deepStrictEqual([...publishedOf(spec, appDir).keys()].sort(), Object.values(ids).sort(), 'and both pages are recorded as published now');
+
+    const next = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, next).publishes, 0, 'after which a rebuild publishes nothing');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// What is recorded is the whole content, not the source: a page that was RENAMED and whose publish failed holds the new name, and the source that was recorded is still its source.
+test('deploy: a page renamed by a rebuild whose publish failed is published by the next one, although its source is the recorded one — what is recorded is the whole content', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    spec.pages[1].name = 'Beta renamed';
+    server.failOn = (method, requestPath) => (/PublishXml/.test(requestPath) ? 500 : undefined);
+    await assert.rejects(rebuildPages(spec, appDir, server, ids), (e) => e.code === 'pages-publish-failed');
+    assert.strictEqual(server.state.projects.get(ids.beta).name, 'Beta renamed', 'the rename was written');
+    assert.strictEqual(server.rowText(ids.beta, 'src/pages/page.tsx'), fs.readFileSync(path.join(appDir, 'beta.tsx'), 'utf8'), 'and the source is the one that was published');
+
+    server.failOn = undefined;
+    const publishedBefore = server.published.length;
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const rebuilt = requestsOf(server, from);
+    assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes], [0, 1], 'the page holds the new name, and the name was never published');
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.beta]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a publish that was accepted but not SEEN to take effect is not recorded — the next rebuild publishes the page again, and once it is seen the page is left alone', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    // The published projection has not caught up (PublishXml is asynchronous): the SDK can say the publish was submitted, not that it took effect.
+    server.holdPublishedProjection = true;
     const warnings = [];
-    const batches = server.batches.length;
-    const second = await buildPages(spec, appDir, realPageBackend(server), { warn: (m) => warnings.push(m) });
-    assert.strictEqual(second.created.pages.p, id, 'the key stays bound to its page');
-    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'no page was created under the stale id, or any other');
-    assert.strictEqual(server.batches.length, batches, 'and nothing was written: the page already held what the build sends');
-    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'the stale record is consumed');
-    assert.ok(warnings.some((m) => m.includes(STALE) && /is not resumed, and its record was removed/.test(m)), 'and the build says so');
+    const first = await buildPages(spec, appDir, realPageBackend(server), { warn: (m) => warnings.push(m) });
+    const ids = { ...first.created.pages };
+    assert.ok(warnings.some((m) => /could not be read back to confirm it/.test(m)), 'the build said so');
+    assert.strictEqual(publishedOf(spec, appDir).size, 0, 'so nothing is recorded as published');
+
+    server.holdPublishedProjection = false;
+    let from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual([requestsOf(server, from).changeSets, requestsOf(server, from).publishes], [0, 2], 'both pages are published again — they are not known to be published — and this time it is seen');
+    assert.strictEqual(publishedOf(spec, appDir).size, 2);
+
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, from).publishes, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a record of a publish never stands in for a write — a page a maker changed since is written back and published, and the page next to it is left alone', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    makerSaves(server, ids.alpha, 'export default function Alpha() { return null; }\n');
+    const publishedBefore = server.published.length;
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const rebuilt = requestsOf(server, from);
+    assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes], [1, 1], 'the file wins, as on any rebuild: one write and one publish');
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.alpha]);
+    assert.strictEqual(server.rowText(ids.alpha, 'src/pages/page.tsx'), fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8'));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a record that is missing, damaged or for another environment costs a publish and nothing else — the build goes on, and records again', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    const workspaceDir = path.join(appDir, '.maker-workspace');
+    const file = publishedRecordPath(workspaceDir, appUniqueName(spec), BUILD_ENV);
+    // Each damage is done to the record the step before it left valid.
+    const damages = [
+      ['missing', () => fs.rmSync(file)],
+      ['torn', () => fs.writeFileSync(file, '{"schemaVersion":1,"pages":{', 'utf8')],
+      ['written for another environment', () => fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/"environmentFingerprint":"[0-9a-f]{64}"/, `"environmentFingerprint":"${'0'.repeat(64)}"`), 'utf8')],
+    ];
+    for (const [what, damage] of damages) {
+      damage();
+      const from = server.requests.length;
+      await rebuildPages(spec, appDir, server, ids);
+      const rebuilt = requestsOf(server, from);
+      assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes], [0, 2], `${what}: both pages are published, and nothing is written`);
+      assert.strictEqual(publishedOf(spec, appDir).size, 2, `${what}: and the record is made again`);
+    }
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a record that cannot be saved is ONE warning — the pages are still published and the build still finishes', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    // The record's name is taken by a folder, so the atomic rename onto it fails.
+    const workspaceDir = path.join(appDir, '.maker-workspace');
+    fs.mkdirSync(publishedRecordPath(workspaceDir, appUniqueName(spec), BUILD_ENV), { recursive: true });
+    const warnings = [];
+    const first = await buildPages(spec, appDir, realPageBackend(server), { warn: (m) => warnings.push(m) });
+    assert.deepStrictEqual(Object.keys(first.created.pages).sort(), ['alpha', 'beta']);
+    assert.strictEqual(requestsOf(server).publishes, 2, 'both pages were published');
+    const said = warnings.filter((m) => /could not save which pages this build published/.test(m));
+    assert.strictEqual(said.length, 1, `said once, not once per page: ${warnings.join(' | ')}`);
+    assert.match(said[0], /so the next build publishes them again/);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: the record keeps only the pages the spec still binds — a page it no longer names is dropped when the next is written', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    // An entry for a page that no key is bound to — a page that was deleted, or replaced — is in the record.
+    const workspaceDir = path.join(appDir, '.maker-workspace');
+    const stale = 'ffffffff-0000-4000-8000-00000000ffff';
+    const { writePublishedPages } = require('../lib/page-publish-records.js');
+    writePublishedPages(workspaceDir, appUniqueName(spec), BUILD_ENV, new Map([...publishedOf(spec, appDir), [stale, sha256('gone')]]));
+    assert.ok(publishedOf(spec, appDir).has(stale));
+    // Beta changes, so its publish writes the record again.
+    fs.writeFileSync(path.join(appDir, 'beta.tsx'), fs.readFileSync(path.join(appDir, 'beta.tsx'), 'utf8').replace('>Beta<', '>Beta 2<'), 'utf8');
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual([...publishedOf(spec, appDir).keys()].sort(), Object.values(ids).sort(), 'the two pages of the app, and not the one nothing is bound to');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 

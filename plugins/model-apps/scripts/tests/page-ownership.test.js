@@ -9,7 +9,8 @@ const { runTeardown: realRunTeardown } = require('../lib/sdk-teardown.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { loadCli } = require('./helpers/cli-harness.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
-const { recordPageCreation, readPageOwnership } = require('../lib/page-ownership-records.js');
+const { recordPageCreation, readPageOwnership, recordPagePending, readPendingCreations, checkPageOwnershipClearable } = require('../lib/page-ownership-records.js');
+const { sha256 } = require('../lib/hash.js');
 
 // What the page backend was asked to write: a build that must not touch a page leaves this empty.
 const writes = (genpage) => genpage.calls.filter((c) => c.method === 'create' || c.method === 'update');
@@ -304,6 +305,73 @@ test('confirmed absence in B leaves A creation and pending teardown records inta
   await runTeardown(spec(), { apply: true, workspaceDir, env: OTHER_ENV }, { sdk });
   assert.deepEqual(state.deletes, []);
   assert.deepEqual(new Map(fs.readdirSync(workspaceDir).map((f) => [f, fs.readFileSync(path.join(workspaceDir, f), 'utf8')])), before);
+});
+
+// A create this app started and never acknowledged leaves a "pending" record under the id it used. The page it was sending can appear later than any build looked — the request lands after the build gave
+// up on it, and by then the spec key may be bound to another page — and nothing else names it: no manifest entry, no receipt. Teardown finds it by the record, and deletes it as it deletes any page it can
+// prove is this app's: the stored name is one the create sent. A page named otherwise is kept, and an id with no page keeps its record — the request may still land.
+test('teardown finds and deletes a page that appeared under a retained pending id — named as the create sent it — and consumes that record; a page named otherwise is kept, and an id with no page keeps its record', async () => {
+  const workspaceDir = workspace();
+  const GONE = '77777777-7777-4777-8777-777777777777';
+  const SENT = sha256('export default () => null;');
+  recordPagePending(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV, SENT);
+  recordPagePending(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview, renamed', ENV, SENT);
+  recordPagePending(workspaceDir, 'contoso_pages', 'detail', OTHER, 'Detail', ENV, SENT);
+  recordPagePending(workspaceDir, 'contoso_pages', 'gone', GONE, 'Gone', ENV, SENT);
+  const { sdk, state } = sdkForPages({
+    candidates: [], membership: [],
+    rows: [{ uxagentprojectid: OWN, name: 'Overview, renamed' }, { uxagentprojectid: OTHER, name: 'Somebody else\'s page' }],
+  });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'the page named as one of the creates under its id sent it is deleted, and only that one');
+  assert.deepEqual(r.deleted.genpage, [OWN]);
+  const kept = r.skipped.join('\n');
+  assert.match(kept, new RegExp(`${OTHER}[^\\n]*a create this app started under this id was never acknowledged, but the page is named "Somebody else's page", not what that create sent \\("Detail"\\)`));
+  assert.match(kept, /inspect this id and remove it manually only if it is yours/);
+  assert.deepEqual([...readPendingCreations(workspaceDir, 'contoso_pages', ENV).keys()].sort(), ['detail', 'gone'], 'the deleted page\'s records are consumed; the page that is not the one that was sent, and the id with no page, keep theirs');
+  assert.deepEqual(readPageOwnership(workspaceDir, 'contoso_pages', ENV), { created: [], teardown: [] }, 'and the pre-delete proof that carried the page through a retry is gone with it');
+  const clear = checkPageOwnershipClearable(workspaceDir);
+  assert.equal(clear.ok, false, '--clear-workspace stays blocked by what is left');
+  assert.match(clear.reason, new RegExp(`page ${OTHER}`));
+  assert.match(clear.reason, new RegExp(`page ${GONE}`));
+  assert.doesNotMatch(clear.reason, new RegExp(`page ${OWN}`));
+  assert.match(clear.reason, /delete the record by hand once you have confirmed that no such page exists/);
+});
+
+test('teardown does not consume a pending record because its page is not there — a request that is still in flight can create it later', async () => {
+  const workspaceDir = workspace();
+  const GONE = '77777777-7777-4777-8777-777777777777';
+  recordPagePending(workspaceDir, 'contoso_pages', 'overview', GONE, 'Overview', ENV, sha256('x'));
+  // The manifest names the same id, so it is a candidate both ways and is "not found" by the ordinary rule — which consumes receipts and teardown records, not this.
+  const { sdk, state } = sdkForPages({ candidates: [{ key: 'overview', name: 'Overview', pageId: GONE }], membership: [], rows: [] });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, []);
+  assert.deepEqual([...readPendingCreations(workspaceDir, 'contoso_pages', ENV).keys()], ['overview'], 'the record is kept');
+});
+
+test('dry-run lists a page found under a pending id as one it would delete — and an id with no page is not listed as "not found": a pending record is not a manifest name', async () => {
+  const workspaceDir = workspace();
+  const GONE = '77777777-7777-4777-8777-777777777777';
+  recordPagePending(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV, sha256('x'));
+  recordPagePending(workspaceDir, 'contoso_pages', 'gone', GONE, 'Gone', ENV, sha256('x'));
+  const { sdk, state } = sdkForPages({ candidates: [], membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }] });
+  const r = await runTeardown(spec(), { apply: false, workspaceDir }, { sdk });
+  const plan = r.plan.join('\n');
+  assert.match(plan, new RegExp(`${OWN}[^\\n]*would delete`));
+  assert.doesNotMatch(plan, new RegExp(GONE), 'an id no page answers to is not a candidate that was "not found"');
+  assert.deepEqual(state.deletes, [], 'and a dry run deletes nothing');
+});
+
+test('a pending record alone authorizes no deletion: with the record, the page named as it was sent is deleted only through teardown\'s own proof — another environment\'s record and another app\'s grant nothing', async () => {
+  const workspaceDir = workspace();
+  recordPagePending(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', OTHER_ENV, sha256('x'));
+  recordPagePending(workspaceDir, 'contoso_other', 'overview', OWN, 'Overview', ENV, sha256('x'));
+  const { sdk, state } = sdkForPages({ candidates: [], membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }] });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [], 'a record for another environment, or for another app, proves nothing here');
 });
 
 test('an environment A creation receipt cannot authorize an off-sitemap build update in B', async (t) => {

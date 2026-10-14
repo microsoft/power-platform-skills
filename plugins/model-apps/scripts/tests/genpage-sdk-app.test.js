@@ -212,6 +212,82 @@ test('placeInApp: an app that cannot be read, a push that is not saved, and a pu
   });
 });
 
+// ── placeInApp: completing a placement an earlier run began (`finish`) ──────────────────────────────────────────────────────────────
+// A run that SAVED the app's navigation and could not publish the app leaves the page in the app's saved navigation and out of the one that runs. Placing it again finds
+// it there, has nothing to write — and, without `finish`, answered as if there were nothing to do. A completion has to publish the app and see the page in what runs.
+const navXml = (...ids) => `<SiteMap><Area Id="a"><Group Id="g">${ids.map((id) => `<SubArea Id="s${id.slice(-3)}" GenPageId="${id}"/>`).join('')}</Group></Area></SiteMap>`;
+// An app whose SAVED navigation names P1 and whose PUBLISHED navigation does not — until the app is published, which copies the one to the other as PublishXml does
+// (`takesEffect: false`: a publish the service accepted and the published navigation has not caught up with).
+function savedButUnpublished({ takesEffect = true, records } = {}) {
+  const app = appArtifact();
+  app.siteMap.areas[0].groups[0].subAreas.push({ id: 'sub_p', type: 'GenPage', genPageId: P1, title: 'Overview' });
+  const published = { xml: navXml() };
+  const sdk = new FakeSdk({ records: records || { ...publishedRecords(''), sitemap: () => [{ sitemapxml: published.xml }] }, onGet: layerGet }).seedApp(app);
+  const publishArtifact = sdk.publishArtifact.bind(sdk);
+  sdk.publishArtifact = async (type, id, options) => {
+    const answer = await publishArtifact(type, id, options);
+    if (type === 'app' && takesEffect && !(answer && answer.publish && answer.publish.kind === 'failed')) published.xml = navXml(P1);
+    return answer;
+  };
+  return { sdk, published };
+}
+
+test('placeInApp finish: a page the SAVED navigation already names is published again and seen in the PUBLISHED navigation — nothing is written, and it says it proved it', async () => {
+  const { sdk, published } = savedButUnpublished();
+  const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], finish: true });
+  assert.deepStrictEqual(out, { added: [], alreadyPlaced: [P1], pinnedViews: [], warnings: [], appEdited: false, provedPublished: true });
+  assert.deepStrictEqual(sdk.of('publishArtifact').map((c) => c.args), [['app', APP, undefined]], 'the app is published');
+  assert.strictEqual(sdk.count('pushArtifact') + sdk.count('updateElement') + sdk.count('addElement'), 0, 'and nothing was written: the placement was saved already');
+  assert.ok(published.xml.includes(P1), 'the page is in what runs');
+});
+
+test('placeInApp without finish: the same state is an ordinary placement with nothing to do — nothing is written and nothing is published', async () => {
+  const { sdk, published } = savedButUnpublished();
+  const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }] });
+  assert.deepStrictEqual(out, { added: [], alreadyPlaced: [P1], pinnedViews: [], warnings: [], appEdited: false });
+  assert.strictEqual(sdk.count('publishArtifact') + sdk.count('pushArtifact') + sdk.count('updateElement') + sdk.count('addElement'), 0);
+  assert.ok(!published.xml.includes(P1), 'it is what it was');
+});
+
+test('placeInApp finish: an app publish that took no effect is not a finished placement — it says the placement is saved, names the page, and proves nothing', async () => {
+  const { sdk } = savedButUnpublished({ takesEffect: false });
+  await assert.rejects(backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], finish: true }), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_APP_PUBLISH_UNPROVEN');
+    assert.strictEqual(e.saved, true);
+    assert.strictEqual(e.transient, false);
+    assert.match(e.message, new RegExp(`app ${APP} was published, but its published navigation does not show page ${P1} yet \\(it is not listed\\)`));
+    assert.match(e.message, /Run the same command again/);
+    return true;
+  });
+  assert.strictEqual(sdk.count('publishArtifact'), 1, 'the app was published');
+});
+
+test('placeInApp finish: a published navigation that cannot be read contradicts nothing — the app WAS published, so it answers with a warning and says it proved nothing — and a publish that fails is the failure it always was, with nothing read back', async () => {
+  const unreadable = savedButUnpublished({ records: { ...publishedRecords(''), sitemap: () => [] } });
+  const out = await backend(unreadable.sdk).placeInApp(APP, { pages: [{ pageId: P1 }], finish: true });
+  assert.strictEqual(out.provedPublished, false);
+  assert.strictEqual(out.appEdited, false);
+  assert.strictEqual(unreadable.sdk.count('publishArtifact'), 1, 'the app was published');
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], new RegExp(`app ${APP} was published again, but its published navigation could not be read back to confirm that the page shows \\(.*sitemap-xml-unreadable.*\\) — treat it as live only once seen to be`));
+
+  const failing = savedButUnpublished();
+  failing.sdk.script('publish', { publish: { kind: 'failed', error: new Error('PublishXml refused') } });
+  await assert.rejects(backend(failing.sdk).placeInApp(APP, { pages: [{ pageId: P1 }], finish: true }), (e) => e.code === 'GENPAGE_APP_PUBLISH_FAILED' && e.saved === true && /PublishXml refused/.test(e.message));
+  assert.strictEqual(failing.sdk.of('queryRecords').filter((c) => c.args[0] === 'appmodule').length, 0, 'a publish that failed proves nothing and is not read back');
+});
+
+test('placeInApp finish: a page the saved navigation does not hold yet is added, pushed and published as any placement is — and proved like a completion', async () => {
+  const app = appArtifact();
+  const published = { xml: navXml() };
+  const sdk = new FakeSdk({ records: { ...publishedRecords(''), sitemap: () => [{ sitemapxml: published.xml }] }, onGet: layerGet }).seedApp(app);
+  const publishArtifact = sdk.publishArtifact.bind(sdk);
+  sdk.publishArtifact = async (type, id, options) => { const answer = await publishArtifact(type, id, options); published.xml = navXml(P1); return answer; };
+  const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], finish: true });
+  assert.deepStrictEqual([out.added, out.alreadyPlaced, out.appEdited, out.provedPublished], [[P1], [], true, true]);
+  assert.deepStrictEqual([sdk.count('updateElement'), sdk.count('pushArtifact'), sdk.count('publishArtifact')], [1, 1, 1]);
+});
+
 test('placeInApp: the sitemap title language is the SDK\'s construction-time option — one SDK per language, made on first use, and the default language for every other operation', async () => {
   const made = [];
   const sdk = placing(appArtifact()).seedPage({ id: P2, name: 'Two', source: 's' });

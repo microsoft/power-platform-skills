@@ -507,4 +507,97 @@ class FakeGenPageServer {
   }
 }
 
-module.exports = { FakeGenPageServer, INSTANCE, API, ACCOUNT_TABLE, batchEnvelope };
+// An app's published and saved navigation behind the same transport — what the REAL bundle's app reads and writes need to find, laid over a page server (above),
+// so a test can run a page placement end to end: the app's row, its sitemap and the component rows that name it, the default public view of `account`, and the
+// two layers an app has — the SAVED one (what an edit changes) and the PUBLISHED one (what runs, and what `PublishXml` copies the saved one to). `publishFailures`
+// is how many `PublishXml` calls for the app answer 503 before one succeeds: a placement whose navigation was SAVED and whose publish did not finish.
+//
+//   const { http, state } = appTransport(server, { publishFailures: 1 });
+//   state.xml / state.publishedXml   the saved and the published sitemap XML (a page is in the app that runs only when publishedXml names it)
+//   state.publishAttempts            `PublishXml` calls made for the app
+//   state.writes                     the sitemap, app-row and component writes, in order: { kind: 'sitemap' | 'app' | 'components', body }
+//   state.views                      the view ids now in the app's components
+// The shapes are the raw Web API ones the SDK parses, as the SDK's own fake answers them: a row set is `{ value: [...] }`, a single row is the row, and every
+// answer carries the etag the SDK echoes back as `If-Match`.
+const APP_ID = '22222222-2222-4222-8222-222222222222';
+const APP_LAYER_ID = '33333333-3333-4333-8333-333333333333';
+const APP_SITEMAP_ID = '44444444-4444-4444-8444-444444444444';
+const APP_EXISTING_PAGE_ID = '55555555-5555-4555-8555-555555555555';
+const APP_VIEW_ID = '66666666-6666-4666-8666-666666666666';
+
+function appTransport(server, { publishFailures = 0, appId = APP_ID, existingPageId = APP_EXISTING_PAGE_ID } = {}) {
+  const pageHttp = server.http();
+  const initial = `<SiteMap><Area Id="a"><Titles><Title LCID="1033" Title="Main"/></Titles><Group Id="g"><Titles><Title LCID="1033" Title="Pages"/></Titles><SubArea Id="old" GenPageId="${existingPageId}"><Titles><Title LCID="1033" Title="Existing"/></Titles></SubArea></Group></Area></SiteMap>`;
+  const state = { xml: initial, publishedXml: initial, version: 1, publishAttempts: 0, failures: publishFailures, views: new Set(), writes: [] };
+  const reply = (body, status = 200) => ({ status, headers: { ETag: `W/"${state.version}"` }, body });
+  const mapRow = (xml) => ({ sitemapid: APP_SITEMAP_ID, sitemapname: 'Review', sitemapnameunique: 'contoso_review', sitemapxml: xml, '@odata.etag': `W/"${state.version}"` });
+  const appRow = () => ({
+    appmoduleid: appId, appmoduleidunique: APP_LAYER_ID, name: 'Review', uniquename: 'contoso_review', description: '',
+    // 0 = published, 1 = a saved layer that is not: the signal the SDK reads to know an unpublished edit exists.
+    componentstate: state.xml === state.publishedXml ? 0 : 1,
+    '@odata.etag': `W/"${state.version}"`,
+  });
+  const http = {
+    ...pageHttp,
+    get: async (url, options) => {
+      const parsed = new URL(url);
+      const route = parsed.pathname.replace(/^\/api\/data\/v[0-9.]+/, '');
+      const entity = /\/EntityDefinitions\(LogicalName='([^']+)'\)/.exec(route);
+      if (entity && ['appmodule', 'appmodulecomponent', 'sitemap', 'savedquery'].includes(entity[1])) {
+        const sets = { appmodule: 'appmodules', appmodulecomponent: 'appmodulecomponents', sitemap: 'sitemaps', savedquery: 'savedqueries' };
+        return reply({ LogicalName: entity[1], EntitySetName: sets[entity[1]] });
+      }
+      if (/^\/appmodulecomponents\b/.test(route)) {
+        // componenttype 26 = savedquery (a view), 1 = entity, 62 = sitemap.
+        const filter = parsed.searchParams.get('$filter') || '';
+        const rows = filter.includes('componenttype eq 26')
+          ? [...state.views].map((objectid) => ({ objectid, componenttype: 26 }))
+          : filter.includes('componenttype eq 1') ? [] : [{ objectid: APP_SITEMAP_ID, componenttype: 62 }];
+        return reply({ value: rows });
+      }
+      if (/^\/appmodules\b/.test(route)) return reply(route === `/appmodules(${appId})` ? appRow() : { value: [appRow()] });
+      if (/^\/sitemaps\b/.test(route)) {
+        // The saved layer is read through RetrieveUnpublished…; without it the PUBLISHED one.
+        const row = mapRow(/RetrieveUnpublished/.test(route) ? state.xml : state.publishedXml);
+        return reply(route === `/sitemaps(${APP_SITEMAP_ID})` ? row : { value: [row] });
+      }
+      if (/^\/savedqueries\b/.test(route)) return reply({ value: [{ savedqueryid: APP_VIEW_ID, isdefault: true, querytype: 0, returnedtypecode: 'account' }] });
+      // The app push checks that every page its navigation names exists (drafts included), by one RetrieveUnpublishedMultiple over their ids.
+      if (/^\/uxagentprojects\/.*RetrieveUnpublishedMultiple/.test(route)) {
+        const filter = parsed.searchParams.get('$filter') || '';
+        return reply({ value: [...server.state.projects.values()].filter((p) => !filter || filter.includes(p.id)).map((p) => ({ uxagentprojectid: p.id, name: p.name })) });
+      }
+      return pageHttp.get(url, options);
+    },
+    post: async (url, body, options) => {
+      if (url.endsWith('/PublishXml') && /<appmodules>/.test(body.ParameterXml || '')) {
+        state.publishAttempts += 1;
+        if (state.failures > 0) { state.failures -= 1; return reply({ error: { message: 'PublishXml unavailable' } }, 503); }
+        state.publishedXml = state.xml;
+        return reply({}, 204);
+      }
+      if (url.endsWith('/AddAppComponents')) {
+        state.writes.push({ kind: 'components', body });
+        for (const component of body.Components || []) if (component.savedqueryid) state.views.add(component.savedqueryid.toLowerCase());
+        return reply({}, 204);
+      }
+      return pageHttp.post(url, body, options);
+    },
+    patch: async (url, body, options) => {
+      if (/\/sitemaps\(/.test(url)) {
+        state.writes.push({ kind: 'sitemap', body });
+        state.xml = body.sitemapxml;
+        state.version += 1;
+        return reply({ sitemapid: APP_SITEMAP_ID, '@odata.etag': `W/"${state.version}"` });
+      }
+      if (/\/appmodules\(/.test(url)) {
+        state.writes.push({ kind: 'app', body });
+        return reply({}, 204);
+      }
+      return pageHttp.patch(url, body, options);
+    },
+  };
+  return { http, state };
+}
+
+module.exports = { FakeGenPageServer, INSTANCE, API, ACCOUNT_TABLE, batchEnvelope, appTransport, APP_ID, APP_EXISTING_PAGE_ID, APP_VIEW_ID };
