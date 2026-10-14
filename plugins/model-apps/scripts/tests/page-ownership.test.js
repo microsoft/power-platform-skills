@@ -8,7 +8,11 @@ const { reconcilePageIds } = require('../lib/page-manifest.js');
 const { runTeardown: realRunTeardown } = require('../lib/sdk-teardown.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { loadCli } = require('./helpers/cli-harness.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const { recordPageCreation, readPageOwnership } = require('../lib/page-ownership-records.js');
+
+// What the page backend was asked to write: a build that must not touch a page leaves this empty.
+const writes = (genpage) => genpage.calls.filter((c) => c.method === 'create' || c.method === 'update');
 
 const workspaces = [];
 function workspace() {
@@ -98,7 +102,7 @@ function sdkForPages(opts = {}) {
     { uxagentprojectid: OWN, name: 'Overview' },
     { uxagentprojectid: OTHER, name: 'Contoso Draft' },
   ];
-  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], uploads: [], draftReads: 0 };
+  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], draftReads: 0 };
   const membership = opts.membership || [OWN];
   const sdk = {
     resolveArtifact: async (kind, identity) => {
@@ -124,7 +128,8 @@ function sdkForPages(opts = {}) {
       return [];
     },
     deleteAppCascade: async () => { state.app = false; return { success: true, deleted: [], failures: [] }; },
-    deleteRecord: async (entity, id) => { state.deletes.push({ entity, id }); },
+    // A page is deleted through the SDK's own delete (the project row, then the conversation history that points at it): the row is what `entity` names.
+    deleteRemoteArtifact: async (kind, id) => { assert.equal(kind, 'genPage'); state.deletes.push({ entity: 'uxagentproject', id }); },
     deleteWebResource: async (id) => { state.resources.push(id); },
     deleteSolution: async () => {},
     createWebResource: async () => ({ id: 'manifest-id' }),
@@ -235,10 +240,11 @@ for (const draft of ['saved', 'unreadable']) {
     const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-draft-navigation-'));
     t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
-    const { sdk, state } = sdkForPages({
-      candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }],
+    const { sdk } = sdkForPages({
+      candidates: manifest(OWN).pages, membership: [],
       ...(draft === 'saved' ? { draftMembership: [OWN] } : { draftError: true }),
     });
+    const genpage = fakeGenpage({ pages: [{ pageId: OWN, name: 'Overview' }] });
     const s = spec();
     s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
     // The build binds by the published navigation or a receipt only: the shared-page scan reads other
@@ -246,10 +252,7 @@ for (const draft of ['saved', 'unreadable']) {
     await assert.rejects(runSdkBuild(s, {
       sdk, apply: true, appDir, workspaceDir: path.join(appDir, '.maker-workspace'), env: ENV, phases: ['pages'],
       changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
-      genpageCli: {
-        enumerateEnv: async () => ({ ok: true, ids: [OWN], pages: [] }),
-        upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
-      },
+      genpage,
     }), (e) => {
       assert.equal(e.code, 'pages-identity-conflict');
       if (draft === 'saved') {
@@ -260,7 +263,7 @@ for (const draft of ['saved', 'unreadable']) {
       }
       return true;
     });
-    assert.deepEqual(state.uploads, []);
+    assert.deepEqual(writes(genpage), []);
   });
 }
 
@@ -309,16 +312,14 @@ test('an environment A creation receipt cannot authorize an off-sitemap build up
   const workspaceDir = path.join(appDir, '.maker-workspace');
   recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
   fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
-  const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }] });
+  const { sdk } = sdkForPages({ candidates: manifest(OWN).pages, membership: [] });
+  const genpage = fakeGenpage({ pages: [{ pageId: OWN, name: 'Overview' }] });
   const s = spec();
   s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
   await assert.rejects(runSdkBuild(s, {
     sdk, apply: true, appDir, workspaceDir, env: OTHER_ENV, phases: ['pages'],
     changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
-    genpageCli: {
-      enumerateEnv: async () => ({ ok: true, ids: [OWN], pages: [] }),
-      upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
-    },
+    genpage,
   }), (e) => {
     assert.equal(e.code, 'pages-identity-conflict');
     assert.ok(e.message.includes(OWN));
@@ -327,7 +328,7 @@ test('an environment A creation receipt cannot authorize an off-sitemap build up
     assert.match(e.message, /remove the stale id from the manifest\/spec/);
     return true;
   });
-  assert.deepEqual(state.uploads, []);
+  assert.deepEqual(writes(genpage), []);
 });
 
 for (const schemaVersion of [1, 99, null]) {
@@ -342,23 +343,21 @@ for (const schemaVersion of [1, 99, null]) {
     const contents = schemaVersion === null ? '{' : JSON.stringify(record);
     fs.writeFileSync(file, contents);
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
-    const { sdk, state } = sdkForPages({ candidates: [], membership: [] });
+    const { sdk } = sdkForPages({ candidates: [], membership: [] });
+    const genpage = fakeGenpage();
     const s = spec();
     s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
     await assert.rejects(runSdkBuild(s, {
       sdk, apply: true, appDir, workspaceDir, env: ENV, phases: ['pages'],
       changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
-      genpageCli: {
-        enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
-        upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
-      },
+      genpage,
     }), (e) => {
       assert.equal(e.code, 'pages-identity-conflict');
       assert.ok(e.message.includes(file));
       assert.match(e.message, /is not a readable page-ownership record.*inspect it/);
       return true;
     });
-    assert.deepEqual(state.uploads, []);
+    assert.deepEqual(writes(genpage), []);
     assert.equal(fs.readFileSync(file, 'utf8'), contents, 'an unrecognized record is never consumed or replaced');
   });
 }
@@ -394,7 +393,9 @@ test('a successful create is receipted before remote persistence and recovered e
   t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
   const workspaceDir = path.join(appDir, '.maker-workspace');
   fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
-  const { sdk, state } = sdkForPages({ candidates: [], membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }] });
+  const { sdk } = sdkForPages({ candidates: [], membership: [] });
+  // The page this run creates joins the environment the backend lists, as a real create does.
+  const genpage = fakeGenpage({ newId: () => OWN });
   const s = spec();
   s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
   sdk.updateWebResource = async () => {
@@ -404,19 +405,14 @@ test('a successful create is receipted before remote persistence and recovered e
   const options = {
     sdk, apply: true, appDir, workspaceDir, env: ENV, phases: ['pages'],
     changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
-    genpageCli: {
-      enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
-      upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
-    },
+    genpage,
   };
   await assert.rejects(runSdkBuild(s, options), /stop after creation receipt/);
-  assert.equal(state.uploads.length, 1);
-  assert.equal(state.uploads[0].pageId, undefined);
+  assert.deepEqual(writes(genpage).map((c) => c.method), ['create']);
   sdk.updateWebResource = async () => {};
-  options.genpageCli.enumerateEnv = async () => ({ ok: true, ids: [OWN], pages: [] });
   await runSdkBuild(s, options);
-  assert.equal(state.uploads.length, 2);
-  assert.equal(state.uploads[1].pageId, OWN);
+  assert.deepEqual(writes(genpage).map((c) => c.method), ['create', 'update']);
+  assert.equal(genpage.of('update')[0].args[0], OWN, 'the second run updates the page the receipt names');
   assert.equal(readPageOwnership(workspaceDir, 'contoso_pages', ENV).created.length, 1, 'an update must not manufacture another creation receipt');
 });
 
@@ -424,21 +420,16 @@ test('build halts on a same-name off-sitemap manifest candidate without local cr
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-no-receipt-'));
   t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
-  const { sdk, state } = sdkForPages({
-    candidates: manifest(OWN).pages, membership: [],
-    rows: [{ uxagentprojectid: OWN, name: 'Overview' }],
-  });
+  const { sdk } = sdkForPages({ candidates: manifest(OWN).pages, membership: [] });
+  const genpage = fakeGenpage({ pages: [{ pageId: OWN, name: 'Overview' }] });
   const s = spec();
   s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
   await assert.rejects(runSdkBuild(s, {
     sdk, apply: true, appDir, env: ENV, workspaceDir: path.join(appDir, '.maker-workspace'), phases: ['pages'],
     changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
-    genpageCli: {
-      enumerateEnv: async () => ({ ok: true, ids: [OWN], pages: [] }),
-      upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
-    },
+    genpage,
   }), (e) => e.code === 'pages-identity-conflict' && e.message.includes(OWN));
-  assert.deepEqual(state.uploads, []);
+  assert.deepEqual(writes(genpage), []);
 });
 
 test('teardown keeps all candidates when the sitemap cannot be read', async () => {
@@ -554,41 +545,43 @@ test('a present but unreadable manifest is preserved for a later teardown', asyn
   assert.ok(state.resources.every((id) => !id.endsWith('_pagemanifest')));
 });
 
-for (const nameError of [false, true]) {
-  test(`build halts rather than recreating an unproven manifest id (row read fails: ${nameError})`, async (t) => {
+// A page the app's sitemap does not prove is bound only by a creation receipt and its stored name, and the stored name is read from the environment's page list: each
+// page's name exactly as its own row has it. A name the list does not carry is unreadable proof, said so in the halt — and neither way is a page the build adopts or recreates.
+for (const [what, listed, says] of [
+  ['the list carries its name', { pageId: OTHER, name: 'Overview' }, null],
+  ['the list carries no name for it', { pageId: OTHER, name: '' }, /stored-name reads failed: .*stored page name is unreadable/],
+]) {
+  test(`build halts rather than recreating an unproven manifest id (${what})`, async (t) => {
     const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-page-proof-'));
     t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
-    const { sdk, state } = sdkForPages({ candidates: manifest().pages, membership: [], nameError });
+    const { sdk } = sdkForPages({ candidates: manifest().pages, membership: [] });
+    const genpage = fakeGenpage({ pages: [listed] });
     const s = spec();
     s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
     await assert.rejects(runSdkBuild(s, {
       sdk, apply: true, env: ENV, appDir, phases: ['pages'],
       changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
-      genpageCli: {
-        enumerateEnv: async () => ({ ok: true, ids: [OTHER], pages: [{ pageId: OTHER, name: 'Overview' }] }),
-        upload: async (o) => { state.uploads.push(o); return { pageId: OTHER }; },
-      },
-    }), (e) => e.code === 'pages-identity-conflict' && /unproven-manifest-id/.test(e.message));
-    assert.deepEqual(state.uploads, []);
+      genpage,
+    }), (e) => e.code === 'pages-identity-conflict' && /unproven-manifest-id/.test(e.message) && (!says || says.test(e.message)));
+    assert.deepEqual(writes(genpage), []);
   });
 }
 
-test('build reads stored names only for live manifest pages outside this app sitemap', async (t) => {
+test('build never reads a page row one at a time: a page this app\'s sitemap proves needs no stored name, and the names that are needed come from the one page list', async (t) => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-page-names-'));
   t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
   const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages });
+  const genpage = fakeGenpage({ pages: [{ pageId: OWN, name: 'Overview' }] });
   const s = spec();
   s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
   await runSdkBuild(s, {
     sdk, apply: true, env: ENV, appDir, phases: ['pages'],
     changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
-    genpageCli: {
-      enumerateEnv: async () => ({ ok: true, ids: [OWN], pages: [] }),
-      upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
-    },
+    genpage,
   });
   assert.equal(state.reads.filter((r) => r.entity === 'uxagentproject').length, 0);
-  assert.equal(state.uploads[0].pageId, OWN);
+  assert.equal(genpage.of('enumerateEnv').length, 1, 'one listing');
+  assert.equal(genpage.of('update')[0].args[0], OWN);
 });

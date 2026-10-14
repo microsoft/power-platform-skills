@@ -99,7 +99,7 @@ function buildPackageJson(slug, features) {
     dependencies: buildDependencyMap(features),
     devDependencies: buildDevDependencyMap(features),
     // No scripts — the runtime owns build and deploy.
-    // `pac model genpage upload` reads <page>.tsx directly.
+    // The page is deployed from <page>.tsx itself: genpage-upload.js sends its text.
   };
 }
 

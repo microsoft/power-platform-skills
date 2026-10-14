@@ -29,7 +29,7 @@ const { hydrateSpec } = pluginLib('hydrate-spec.js');
 // `columns[]`. Grading it here (rather than only in the plugin's unit tests) puts the download
 // side of the round-trip under the same fixture corpus as the build side.
 const { entityFromMetadata, parseDownloadedPages, assignPageKeys } = pluginLib2('download-model-app.js');
-const { unescapePacName } = pluginLib('genpage-cli.js');
+const { unescapePacName } = pluginLib('genpage-sdk.js');
 const { classifyChanges } = pluginLib('classify-changes.js');
 const { annotateContentHashes, pageSourceFileErrors } = pluginLib('content-hash.js');
 const { makeEnvelope, markEligible, parseEnvelope, serializeEnvelope, isFastPathEligible } = pluginLib('apply-snapshot.js');

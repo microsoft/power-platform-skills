@@ -2,7 +2,7 @@
 'use strict';
 // Pre-transpile gate for /genpage: does a generated page write a CSS shorthand that Griffel drops at runtime?
 //
-// `pac model genpage transpile` does not run `makeStyles` and TypeScript does not know Griffel's list, so a page with `borderWidth: '1px'` in a style object
+// Compiling a page does not run `makeStyles` and TypeScript does not know Griffel's list, so a page with `borderWidth: '1px'` in a style object
 // compiles, uploads and then renders without the border (the browser console logs `@griffel/react: You are using unsupported shorthand CSS property`). The rule itself
 // — which ten properties, and where in the page they count — lives in lib/griffel-styles.js. This wrapper exists so the orchestrator, an AI following SKILL.md,
 // gets a yes/no answer it cannot talk itself past, instead of a grep it has to read the result of.

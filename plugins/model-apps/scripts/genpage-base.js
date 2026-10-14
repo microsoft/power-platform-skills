@@ -10,16 +10,14 @@
 // so both hashes are the file's. `--deployed-sha256` binds a chosen local file to the hash `check`
 // observed, which is not the local file's hash when the user picked a different base.
 //
-// `check` downloads the deployed page into a temp directory, compares, and — only when the
-// normalized texts differ — writes `<basename>.deployed.tsx` next to the local file for review.
-// The temp directory is removed before the result is emitted: the real emitter calls
-// `process.exit`, so a cleanup after `emit` would never run.
+// `check` reads the deployed page, compares, and — only when the normalized texts differ — writes
+// `<basename>.deployed.tsx` next to the local file for review. The SDK's throwaway workspace is
+// removed before the result is emitted: the real emitter calls `process.exit`, so a cleanup after
+// `emit` would never run.
 
-const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
-const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
 const {
   pageHash,
@@ -28,7 +26,6 @@ const {
   compareWithMarker,
   lineDelta,
   deployedCopyPath,
-  findDownloadedPageDir,
   readPlainText,
   markerPath,
 } = require('./lib/genpage-base.js');
@@ -99,27 +96,19 @@ async function check(flags, emit, deps) {
   } catch (e) {
     return emit(false, { error: e.message });
   }
-  const cliFactory = deps.makeGenpageCli || makeGenpageCli;
-  const mkdtemp = deps.mkdtempSync || fs.mkdtempSync;
-  const rm = deps.rmSync || fs.rmSync;
-  const probe = mkdtemp(path.join(os.tmpdir(), 'genpage-base-'));
+  const makeBackend = deps.makeGenpageSdk || makeGenpageSdk;
   let deployedText = null;
   let downloadError = null;
+  let genpage;
   try {
-    const cli = cliFactory(flags.env);
-    if (!cli || typeof cli.download !== 'function') {
-      throw new Error('this pac wrapper exposes no page download');
-    }
-    await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [flags['page-id']] });
-    const pageDir = findDownloadedPageDir(probe, flags['page-id']);
-    if (!pageDir) throw new Error('pac wrote no directory for this page');
-    deployedText = fs.readFileSync(path.join(pageDir, 'page.tsx'), 'utf8');
+    genpage = makeBackend(flags.env);
+    deployedText = (await genpage.read(flags['page-id'])).source;
   } catch (e) {
     downloadError = (e && e.message) || String(e);
   } finally {
     // Before any emit. emitResult calls process.exit, so a cleanup placed after it never runs
-    // and the downloaded page source stays on disk.
-    try { rm(probe, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
+    // and the SDK's throwaway workspace — which holds the page source — stays on disk. Awaited: the folder is removed once the storage calls the backend had under way have settled.
+    try { if (genpage && typeof genpage.dispose === 'function') await genpage.dispose(); } catch { /* leave the temp dir */ }
   }
 
   const comparison = compareWithMarker(readMarker(flags.file), {
@@ -136,7 +125,7 @@ async function check(flags, emit, deps) {
   let copyError;
   if (deployedText != null && !contentSame) {
     try {
-      // Raw bytes, not the normalized form: the copy is what pac wrote, for the user to diff.
+      // Raw text, not the normalized form: the copy is what the page holds, for the user to diff.
       deployedCopy = writeFileSafe(deployedCopyPath(flags.file), deployedText, { encoding: 'utf8' });
     } catch (e) {
       copyError = e.message;

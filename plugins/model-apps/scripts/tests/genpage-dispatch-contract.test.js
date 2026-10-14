@@ -437,7 +437,7 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(holds, /`griffelProblemsNotIn`: the same key set to the same value in the same place \(`within`: its slot, selectors and at-rules\), or failing that the same key and value anywhere that nothing else has claimed/);
   assert.match(holds, /A key given \*\*another value\*\* is new too: Griffel drops the new value as it dropped the old one, so the page would show none of the change the maker meant/);
   assert.match(holds, /the hash recorded is of the source the pages phase \*read and checked\* \(`created\.pageSourceShas`\), not of the file when the baseline is written as the build ends/);
-  assert.match(holds, /What is sent is what was checked: every page, a navigation source or not, goes to pac from a staging copy of the bytes the scan read \(`writeStagingFile`\), never from its own file, so a save made after the check does not ship until a build has checked it\./);
+  assert.match(holds, /Every page is written as the text the scan read — the SDK takes a page's text, so there is no file for a later save to reach — and a page saved after the scan does not ship: the next build checks it, because the record holds the source that was checked and the file no longer matches it\./);
   assert.doesNotMatch(holds, /sent from its own file|ships unchecked/, 'no page is uploaded from its canonical file any more, so the guide must not describe the gap that closed');
   assert.match(holds, /`--overwrite-deployed` is no way past that/);
   assert.match(holds, /A call the checker cannot read\*\* is not CSS Griffel drops, and is not said to be/);
@@ -461,11 +461,38 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(schema, /is sent as it is and the build \*\*warns\*\* with the same detail instead: it ships nothing new\./);
 });
 
-// A pac upload that stalls is stopped, and what the script — and so the agent — does next depends on what the stalled call can have done: pac writes the page, records the prompt
-// and the agent message, prints its Page ID, then publishes. The first version of these instructions said an UPDATE is simply sent again ("a second send cannot create anything"),
-// which is false — a call stalled in the publish has already written everything, so a re-send records the prompt twice and overwrites whatever was saved meanwhile — and its
-// advice for a create ("update it") is refused when the stalled create left the page out of the app's navigation. scripts/tests/genpage-cli.test.js runs what the script does.
-test('the docs say a stalled upload is never sent again by the script, what to check after an update that timed out, and what finishes a create that stalled', () => {
+// A page write that cannot say what it did must never be sent again blindly, and what the maker or the agent does next depends on what the write can have done. The SDK writes a page as ONE atomic change
+// set, so a write either landed whole or wrote nothing; an unknown outcome is settled by reading the page, and the advice an update's refusal carries depends on the caller. AGENTS.md says so,
+// and says every page-write error is final for the build's own retry. scripts/tests/genpage-sdk.test.js and genpage-sdk-real-bundle.test.js run what the backend does.
+test('AGENTS.md says a page write whose outcome is not known is never sent again blindly, where each caller is pointed, and that every page-write error is final for the build\'s retry', () => {
+  const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
+  assert.match(agents, /\*\*Generative pages are written through the SDK\*\*/);
+  assert.match(agents, /so a write either landed whole or wrote nothing/);
+  assert.match(agents, /A \*\*create\*\* mints the page's id on the client before anything is sent, so what it did can always be found out by reading that id\./);
+  assert.match(agents, /absent — nothing has landed \*yet\*, so it is sent \*\*once more under the same id\*\*: a first send that lands late collides on the id, so no second page can exist\./);
+  assert.match(agents, /the page is as it was — nothing has landed yet, and it is sent \*\*once more\*\*/);
+  assert.match(agents, /anything else — refused, \*\*not\*\* sent again, with where to look\./);
+  // What a failure may claim: only a proven refusal is "nothing was written", and a send with no usable answer stays open — a later failure, or a read that finds nothing, does not settle it.
+  assert.match(agents, /Only a failure that PROVES nothing was written is reported as `nothing` and not sent again/);
+  assert.match(agents, /A send that got no usable answer stays \*\*open\*\*: it can still reach the service after anything the operation has read or been told/);
+  assert.match(agents, /The turn keeps \*\*one identity\*\* across that read \(`newTurn\.id`, minted per update\)/);
+  // The advice depends on the caller: the upload script has a base marker to check against, the build has none and reads every page again when it runs.
+  assert.match(agents, /the upload script's message names `genpage-base\.js check` \(the deployed page against the file and the base marker beside it\), and a re-run goes back through the script's own guards; the \*\*build\*\* keeps no base marker and reads every page again when it runs, so its message says to run the build again\./);
+  // Every error is final for the build's own retry of a halt that reads as transient — the page's name and the service's words are what that retry reads.
+  assert.match(agents, /\*\*Every page-write error carries `transient: false`\*\*/);
+  assert.match(agents, /so without the marker a re-run would send a write again\./);
+  assert.match(agents, /A \*publish\* that fails after a write is not an error: it is returned \(`publish\.kind: 'failed'`\) with the page's id, because the caller must still record that the page exists\./);
+  assert.match(agents, /halts on it as `pages-publish-failed` \(re-runnable: the page is reused and published, not written again\)/);
+  // The retired claims are in none of the places that could carry them, nor in the backend's own comments.
+  for (const [name, text] of [['AGENTS.md', agents], ['lib/genpage-sdk.js', squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'genpage-sdk.js'), 'utf8'))]]) {
+    assert.doesNotMatch(text, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, `${name} still says a second send of an update is harmless`);
+    assert.doesNotMatch(text, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|time-bounded|runPac/, `${name} still describes the pac wrapper's time limits`);
+  }
+});
+
+// What the /genpage skill still tells the agent to do when a pac upload stalls. The code behind those instructions is gone — the skill's advice is replaced when it moves to the page backend, and these
+// assertions go with it: they pin the wording the skill carries until then, and are the skill rewrite's to change.
+test('the genpage skill still carries its advice for an upload that stalled (to be replaced with the skill\'s move to the page backend)', () => {
   const skill = squash(readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')));
   assert.match(skill, /A listing or a download that times out is retried once\. An \*\*upload is never sent again by the script\*\*/);
   assert.match(skill, /sending it again can record the prompt a second time or overwrite a change someone saved in the meantime\. Follow the message the script prints; do not simply re-run the command\./);
@@ -477,27 +504,7 @@ test('the docs say a stalled upload is never sent again by the script, what to c
   assert.match(skill, /Add it to the app's navigation \(in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`\)/);
   assert.match(skill, /An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on\. A create that \*\*failed\*\* \(not timed out\) after pac had printed a `Page ID` is in the same state: its error says the page was \*\*created as `<page-id>`\*\* and that the create was not run again, with the same two ways on rather than "re-run it as an update"\. The build never re-sends such a create by itself either: every one of these errors is marked as one that is not to be retried\./);
   assert.match(skill, /The same goes for a message that says the environment could not be listed after the create, so nothing is known about what it made\./);
-  const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
-  assert.match(agents, /A timed-out list or download is read-only, so it is retried once\. A timed-out \*\*update\*\* is \*\*not\*\* retried, though it names a page that exists/);
-  assert.match(agents, /It is reported as one that \*may have landed\*, and what it sends you to look at depends on the caller \(`upload\(\)`'s `caller`\): the upload script's message names `genpage-base\.js check`/);
-  // The build keeps no base marker and sends every page from a staging copy it deletes, so the script's advice fails there: it gets its own, and its error is never retried by the build.
-  assert.match(agents, /The \*\*build\*\* keeps no base marker, so that check could only answer "unknown", and every page's code file is a staging copy its cleanup deletes, so the command would fail on a missing file: the build's message tells you to read the deployed page with `pac model genpage download`/);
-  // A FAILED update is in the same state as a stalled one (pac can fail in the publish), so it is not retried either; only a refusal of pac's own arguments is ordinary.
-  assert.match(agents, /An \*\*update\*\* that \*\*fails\*\* — a non-zero exit, or an exit 0 with no `Page ID` — is handled the same way, for the same reason \(pac can fail in the publish, after everything else is written\): it is \*\*not\*\* retried/);
-  assert.match(agents, /Only a non-zero exit that pac reports for its own arguments or input files \(`isDeterministic`\) is an ordinary error, because pac checks those before it sends anything — and only when pac printed no `Page ID`:/);
-  assert.match(agents, /and to open the `page\.tsx` in the folder named for the id, which pac writes in its own letter case\) and then run the build again, which sends the page once more to the same id — nothing new is created, but if the stalled send did land, the page's history now records its prompt a second time/);
-  assert.match(agents, /The error carries `transient: false`, so the build's own retry of transient halts never re-sends it\./);
-  assert.match(agents, /A `Page ID` pac had already printed names the page it created, whether the call then stalled or \*\*failed\*\* \(exited non-zero\): it is reported as \*created as `<id>`, stalled \(or failed\) before publish or placement\*, the create is \*\*not\*\* sent again however the environment's listing looks/);
-  assert.match(agents, /a create that failed and left a candidate gets the same way on, not "re-run it as an update with `--page-id`"/);
-  // Every error that follows a create whose outcome is not known to be nothing is one the build's own retry cannot re-send — the page's name and pac's words are what that retry reads —
-  // and a create that failed outright and left nothing is retried, as in 2.13.0.
-  assert.match(agents, /\*\*Every error that follows a create whose outcome is not known to be nothing carries `transient: false`\*\* \(`neverRetriedError`\) — a stall, a printed Page ID, a candidate in the listing, a listing that cannot be read: the build re-runs a phase when a halt reads as transient/);
-  assert.match(agents, /A create that failed outright and left nothing in the listing, and a listing that fails \*before\* the create was sent, leave nothing to duplicate: both are still retried — by the upload \(3 sends\) and, when the error's text reads as transient, by the build — as in 2\.13\.0\./);
-  assert.doesNotMatch(agents, /Every error that follows a create that was sent|every error that follows a sent create/, 'the claim is made for the creates whose outcome is not known to be nothing, not for every create that was sent');
-  // The retired claim is in none of them, nor in the wrapper's own comments.
-  for (const [name, text] of [['the genpage skill', skill], ['AGENTS.md', agents], ['lib/genpage-cli.js', squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'genpage-cli.js'), 'utf8'))]]) {
-    assert.doesNotMatch(text, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, `${name} still says a second send of an update is harmless`);
-  }
+  assert.doesNotMatch(skill, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, 'the genpage skill still says a second send of an update is harmless');
 });
 
 // Measured against the PAC CLI: `pac model genpage transpile` accepted a `string` assigned to a

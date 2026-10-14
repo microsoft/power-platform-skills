@@ -9,6 +9,7 @@ const path = require('node:path');
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const { readEntityWithDescriptions, readRelationships, runDownload } = require('../download-model-app.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 const tempDirs = [];
 test.after(() => {
@@ -615,29 +616,11 @@ function richDownloadFixture() {
       },
     },
   }, { appId, layerId, sitemapXml });
-  const genpageCli = {
-    enumerateEnv: async () => ({
-      ok: true,
-      ids: [pageOverview.toLowerCase(), pageDetail.toLowerCase()],
-      pages: [{ pageId: pageOverview, name: 'Overview' }, { pageId: pageDetail, name: 'Detail' }],
-    }),
-    download: async ({ outputDir, pageIds }) => {
-      for (const pageId of pageIds) {
-        const pageDir = path.join(outputDir, pageId);
-        fs.mkdirSync(pageDir, { recursive: true });
-        fs.writeFileSync(path.join(pageDir, 'page.tsx'),
-          pageId === pageOverview
-            ? 'export default function Overview() { return "overview"; }\n'
-            : 'export default function Detail() { return "detail"; }\n',
-          'utf8');
-        fs.writeFileSync(path.join(pageDir, 'config.json'),
-          JSON.stringify({ dataSources: pageId === pageOverview ? ['contoso_alpha'] : ['contoso_beta'] }),
-          'utf8');
-      }
-      return true;
-    },
-  };
-  return { sdk, genpageCli, appId, appUnique, auxStats, relStats };
+  const genpage = fakeGenpage({ pages: [
+    { pageId: pageOverview, name: 'Overview', source: 'export default function Overview() { return "overview"; }\n', dataSources: ['contoso_alpha'] },
+    { pageId: pageDetail, name: 'Detail', source: 'export default function Detail() { return "detail"; }\n', dataSources: ['contoso_beta'] },
+  ] });
+  return { sdk, genpage, appId, appUnique, auxStats, relStats };
 }
 
 async function runDownloadSnapshot(concurrency) {
@@ -645,7 +628,7 @@ async function runDownloadSnapshot(concurrency) {
   const fixture = richDownloadFixture();
   const { result, stderr } = await captureStderr(() => runDownload({
     sdk: fixture.sdk,
-    genpageCli: fixture.genpageCli,
+    genpage: fixture.genpage,
     outDir,
     appId: fixture.appId,
     appUnique: fixture.appUnique,

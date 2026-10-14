@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild, appDef } = require('../lib/sdk-build.js');
 const { membershipSpec, membershipSdk, FORM_A, FORM_B, DASHBOARD, META, APP } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 test('appDef carries resolved Main ids and excludes the conflicting created Main pin by id', () => {
   const result = { forms: { contoso_item: FORM_B, contact: DASHBOARD }, views: {}, charts: {} };
@@ -127,7 +128,7 @@ for (const publish of [false, true]) {
     const fake = membershipSdk({ existing: true });
     await runSdkBuild(membershipSpec(), {
       sdk: fake.sdk, apply: true, phases: ['app-shell', 'pages', 'publish'], publish, appDir: dir,
-      genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }) },
+      genpage: fakeGenpage(),
     });
     assert.equal(fake.pushes.length, 1, 'existing-app app-shell defers its push to the pages finalizer');
     assert.deepEqual(fake.pushes[0].components.mainFormsByTable, { contoso_item: [FORM_A] });

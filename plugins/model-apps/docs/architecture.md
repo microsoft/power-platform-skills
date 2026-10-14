@@ -228,8 +228,7 @@ The durable `<app>_pagemanifest` web resource carries page semantics across down
 **Three-authority page identity (pages phase):** generative-page management consults three
 authorities — all matching by id, never by display name:
 (1) **IDENTITY** — the `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own
-`pages[].pageId` outranks it. (2) **EXISTENCE** — env-wide `pac model genpage list` (no
-`--app-id`): decides create-vs-reuse; enables crash-safe convergence (a page present in the env
+`pages[].pageId` outranks it. (2) **EXISTENCE** — the environment's page list through the SDK (every page, drafts included; no `--app-id`): decides create-vs-reuse; enables crash-safe convergence (a page present in the env
 after a crash is reused, never re-created). (3) **MEMBERSHIP** — the app's sitemap `GenPageId`
 set, read via `fetchSitemap` (`scripts/lib/sitemap-pages.js`, fail-closed and discriminated: a
 valid-but-page-less sitemap is `{ ok:true, ids:[] }`; a missing component or unreadable XML is

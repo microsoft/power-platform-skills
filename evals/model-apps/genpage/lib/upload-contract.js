@@ -1,7 +1,7 @@
 'use strict';
 
 const { isDeepStrictEqual } = require('node:util');
-const { unescapePacName } = require('../../../../plugins/model-apps/scripts/lib/genpage-cli.js');
+const { unescapePacName } = require('../../../../plugins/model-apps/scripts/lib/genpage-sdk.js');
 const { currentContract, workflowCalls, isUpload, isObject, resultObject, unassociatedCallProblems } = require('./workflow-evidence.js');
 const { artifactText, artifactJson, commandInfo, isGuid, pathKey } = require('./evidence-utils.js');
 

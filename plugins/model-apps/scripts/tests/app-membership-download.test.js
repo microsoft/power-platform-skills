@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { runDownload, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 const { APP, PUBLISHED, CURRENT, PAGE, FORM_A, FORM_B, DASHBOARD } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const FORM_C = '33333333-0000-4000-8000-000000000004';
 const UNKNOWN = '33333333-0000-4000-8000-000000000005';
 const SITEMAP = '55555555-0000-4000-8000-000000000001';
@@ -124,18 +125,7 @@ async function download(t, options = {}, priorFloor) {
   try {
     result = await runDownload({
       sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory,
-      genpageCli: {
-        enumerateEnv: async () => ({ ok: true, ids: options.page ? [PAGE] : [], pages: options.page ? [{ pageId: PAGE, name: 'Draft Overview' }] : [] }),
-        download: async ({ outputDir, pageIds }) => {
-          for (const id of pageIds) {
-            const dir = path.join(outputDir, id);
-            fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(path.join(dir, 'page.tsx'), 'export default function Page() { return null; }');
-            fs.writeFileSync(path.join(dir, 'config.json'), '{"dataSources":[]}');
-          }
-          return true;
-        },
-      },
+      genpage: fakeGenpage({ pages: options.page ? [{ pageId: PAGE, name: 'Draft Overview', source: 'export default function Page() { return null; }', dataSources: [] }] : [] }),
     });
   } finally { process.stderr.write = original; }
   assert.equal(result.ok, options.expectRefusal ? false : true, JSON.stringify(result));

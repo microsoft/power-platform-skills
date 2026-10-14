@@ -42,9 +42,9 @@ test('a view, chart or form name repeated on another table is not a duplicate; o
   ]);
 });
 
-// pac stores each ASCII `"` in a page's name as `\"` on the page's own record (live-measured) and changes nothing else.
-// A warning: the navigation shows the subarea title, which the build writes as given.
-test('a page name with an ASCII double quote is warned about; the characters pac keeps are not', () => {
+// A page's name is stored exactly as given. A page an earlier release created through pac holds each ASCII `"` as `\"` on the page's own record, so the
+// warning stays — reworded: it no longer says pac stores the name, it says what a page of an earlier release holds.
+test('a page name with an ASCII double quote is warned about; a backslash, typographic quotes and an apostrophe are not', () => {
   const s = base();
   s.pages = [
     { key: 'a', name: 'Say "hi" now', source: { kind: 'tsx', file: 'pages/a.tsx' } },
@@ -52,8 +52,9 @@ test('a page name with an ASCII double quote is warned about; the characters pac
   ];
   const r = lintAppSpec(s);
   assert.deepStrictEqual(r.warnings.filter((w) => /double quote/.test(w)), [
-    'Page \'Say "hi" now\': pac stores each ASCII double quote (") in a page\'s name as \\" on the page\'s own record — use typographic quotes (“ ”) or an apostrophe instead',
+    'Page \'Say "hi" now\': the name has an ASCII double quote (") — it is stored exactly as written, but a page an earlier release created holds each one as \\" on the page\'s own record until a build rewrites its name — use typographic quotes (“ ”) or an apostrophe instead',
   ]);
+  assert.ok(!r.warnings.some((w) => /pac stores/.test(w)), 'pac no longer writes pages');
   assert.strictEqual(r.errors.length, 0, 'a warning, never an error');
 });
 

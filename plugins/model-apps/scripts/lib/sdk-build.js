@@ -16,7 +16,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./hash.js');
 const { resolveAppSource } = require('./app-source-path.js');
-const { readPageOwnership, recordPageCreation, creationIds } = require('./page-ownership-records.js');
+const { readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, creationIds } = require('./page-ownership-records.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
@@ -103,7 +103,8 @@ const {
   cellFitsInRow,
   rowsFromCells,
 } = require('./artifact-intent.js');
-const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./genpage-cli.js');
+const { makeGenpageSdk, suppliedButBlank, unescapePacName, sourceText } = require('./genpage-sdk.js');
+const { genPageSubArea } = require('./genpage-subarea.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
 const { TIMELINE_CONTROL_ID, FULL_BUILD, timelineInSection, controlIdTaken, timelineRepairPlan, timelineRefusal } = require('./form-timeline.js');
@@ -1106,27 +1107,6 @@ function appHasCrossPageNav(spec) {
   return ((spec && spec.pages) || []).some((p) => (p.navigatesTo || []).length > 0);
 }
 
-// Write the copy of a page's .tsx that pac uploads into the run-scoped staging dir — NEVER over the canonical
-// source. Every page is sent from one. A navigation page's copy has its PAGEREF_ tokens resolved (a GUID baked
-// into canonical breaks cross-env recreate; design §9 / SDK T5); every other page's copy is the bytes the pages
-// scan read and checked, so a save to the canonical file while the build runs cannot ship unchecked, and the
-// source hash the build records is the one of what it sent. pac genpage upload takes a file PATH, so the bytes
-// must exist on disk. The dir is created per RUN under <workspace>/.pageref-deploy/<runId>/ and removed in a
-// finally (never leave env GUIDs on disk, no sanitized-name cross-run collision). The key is sanitized to a safe
-// filename, behind a fixed `page-` prefix: Windows reserves the device names CON, PRN, AUX, NUL, COM1-9 and LPT1-9
-// (the digit may also be a superscript ¹ ² ³) as a file name with or without an extension — `NUL.txt` is NUL
-// (https://learn.microsoft.com/windows/win32/fileio/naming-a-file) — and a page key is a slug that can be one
-// (`con`, `com1`). Where a release treats such a name as the device, `con.tsx` is not a file at all, and pac would be
-// handed the console, or nothing. Windows 11 (build 26200, measured) writes `con.tsx` as an ordinary file, but the
-// name is ours to choose, so no key comes near the rule. `code` is a string, or the Buffer the scan read (written
-// byte for byte).
-function writeStagingFile(stagingDir, key, code) {
-  fs.mkdirSync(stagingDir, { recursive: true });
-  const file = path.join(stagingDir, `page-${String(key).replace(/[^A-Za-z0-9_-]/g, '_')}.tsx`);
-  fs.writeFileSync(file, code, 'utf8');
-  return file;
-}
-
 // SINGLE-MACHINE advisory lockfile over the pages protocol (design §9 / review R2 Critical 3, DESCOPED).
 // A courtesy to stop two LOCAL builds of the same app racing to CREATE duplicate pages; correctness does
 // NOT depend on it — the convergence spine (fail-closed enumeration + create-absent-first + persist-after-
@@ -1186,7 +1166,7 @@ function appDef(spec, result, opts = {}) {
         if (opts.omitUnbuiltPages) return null;
         throw new Error(`sitemap subarea "${s.title}" references page '${s.page}' which wasn't built — declare it in pages[] and don't skip the pages phase`);
       }
-      return { ...withVector, type: 'GenPage', genPageId };
+      return genPageSubArea(withVector, genPageId);
     }
     if (s.url) return { ...withVector, type: 'URL', url: s.url };
     return { ...withVector, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
@@ -5421,7 +5401,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // spec pages has nothing to build and no pre-existing pages to remove, so it is correctly skipped (this
   // also avoids spinning up genpage enumeration for every page-less app build).
   if (has('pages') && ((spec.pages || []).length || appWasExisting)) {
-    const genpageCli = opts.genpageCli || makeGenpageCli(opts.env);
+    // The page backend: the SDK on a throwaway workspace of its own, removed in the finally below (never the app folder's, whose copies of a
+    // page would be stale the moment anyone saved it). `opts.genpage` is a seam for the tests, and is the caller's to dispose.
+    const ownGenpage = !opts.genpage;
+    const genpage = opts.genpage || makeGenpageSdk(opts.env);
     const appUnique = appUniqueName(spec);
     // I1 recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun.
@@ -5430,14 +5413,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // Advisory lease: acquired OUTSIDE the try so a failed acquire (pages-locked HALT) never triggers the
     // finally that would release a lease we never held. Correctness rests on the convergence spine, not this.
     const lease = acquireAppPagesLease(wsDir, appUnique);
-    const stagingDir = path.join(wsDir, '.pageref-deploy', randomUUID());
     try {
       // ── THREE AUTHORITIES (Identity · Existence · Membership) ─────────────────────────────────────
-      // EXISTENCE (env-wide `pac genpage list`, Task 2) drives create-vs-reuse. Fail-closed: a failed
+      // EXISTENCE (the environment-wide page list, drafts included) drives create-vs-reuse. Fail-closed: a failed
       // listing must NOT look like "no pages" (that would recreate everything). This is NOT the sitemap —
       // a page created + manifested but not yet finalized into the sitemap is still in EXISTENCE, so a
       // crash-after-create converges to REUSE, not a duplicate (C1).
-      const enumd = await genpageCli.enumerateEnv();
+      const enumd = await genpage.enumerateEnv();
       if (!enumd.ok) throw new BuildHalt(`generative-page existence enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error}`, { phase: 'pages', code: 'pages-existence-failed', recoverable: true });
 
       // MEMBERSHIP (this app's live sitemap, Task 1) — fail-closed & discriminated (C4). Fetched BEFORE
@@ -5472,6 +5454,51 @@ async function runSdkBuildPhases(spec, opts, owed) {
       try { ownership = readPageOwnership(opts.workspaceDir, appUnique, opts.env); } catch (e) {
         throw new BuildHalt(`could not read local page creation receipts (${e.message}); refusing to bind off-sitemap ids`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
       }
+      // The page list holds each page's name exactly as its own row has it, drafts included — so a page that was written and never published (a create
+      // that stopped between its write and its publish) is found by it, where a read of the PUBLISHED rows would not see it at all.
+      const listedNames = new Map((enumd.pages || []).map((p) => [String(p.pageId).toLowerCase(), p.name]));
+
+      // PENDING CREATIONS. Every create is recorded (recordPagePending) under the id it will use BEFORE it is sent. A create whose answer never arrived, and
+      // whose page could not be read back either, leaves the page in the environment with nothing local that names it: the page list shows it, nothing links
+      // it to its spec entry, and this build would create ANOTHER page for the entry. So each record is settled here, before anything is created:
+      //   the page is there, under the name the create sent  -> ADOPTED. The id was minted by this build and the page holds the name this build gave it,
+      //                                                          so a creation receipt is written (the same proof a create that was answered leaves), the
+      //                                                          record is consumed, and the page is updated like any page this build created.
+      //   the page is there, under another name              -> a CONFLICT. A pending record is intent, not ownership: on its own it authorizes nothing —
+      //                                                          not an update, not a delete — and a page that is not what was sent is not adopted.
+      //   the page is not there                              -> the create is sent again under the SAME id: a send that is still in flight collides on it,
+      //                                                          so one page can result.
+      const resumeIds = new Map();
+      const pendingConflicts = [];
+      let pendingByKey;
+      try { pendingByKey = readPendingCreations(opts.workspaceDir, appUnique, opts.env); } catch (e) {
+        throw new BuildHalt(`could not read local records of page creations that were started (${e.message}); refusing to create pages past a record this build cannot read`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+      }
+      for (const [key, records] of pendingByKey) {
+        // A key this spec does not declare is another build's, or an earlier spec's: left as it is, and it keeps blocking `--clear-workspace` until settled.
+        if (!declaredKeys.has(key)) continue;
+        if (records.length > 1) { pendingConflicts.push({ key, reason: 'multiple-pending-creations', pageIds: records.map((r) => r.pageId) }); continue; }
+        const [record] = records;
+        if (!live.has(record.pageId)) { resumeIds.set(key, record.pageId); continue; }
+        const storedName = listedNames.get(record.pageId);
+        if (storedName !== record.name) {
+          pendingConflicts.push({ key, reason: 'pending-create-unproven', pageId: record.pageId, storedName: typeof storedName === 'string' ? storedName : null, sentName: record.name });
+          continue;
+        }
+        try {
+          ownership.created.push(recordPageCreation(opts.workspaceDir, appUnique, key, record.pageId, record.name, opts.env));
+          completePendingCreations(opts.workspaceDir, appUnique, [record.pageId], opts.env);
+        } catch (e) {
+          // `transient: false`, as for any creation receipt that cannot be saved: the build's re-run of a halt it takes for transient must not run on.
+          throw Object.assign(new BuildHalt(`page "${record.name}" was found as ${record.pageId} (a create an earlier build started), but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
+        }
+      }
+      if (pendingConflicts.length) {
+        const why = pendingConflicts.map((c) => (c.reason === 'multiple-pending-creations'
+          ? `page "${c.key}" has ${c.pageIds.length} unfinished creations (${c.pageIds.join(', ')}), and this build cannot tell which one is its page`
+          : `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it is named ${JSON.stringify(c.storedName)} and that create sent ${JSON.stringify(c.sentName)} — it is not known to be the page that was sent, so it is neither adopted nor updated`));
+        throw new BuildHalt(`generative-page creation(s) that an earlier build started cannot be settled: ${why.join('; ')}. Look at the page(s) in the environment: delete the one that is not yours, or delete the "pending" record(s) named in ${path.join(path.resolve(opts.workspaceDir || '.'), 'page-ownership.pending.*.json')} for a page you have confirmed is not this app's, and re-run.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+      }
       const createdIds = creationIds(ownership);
       const storedNames = new Map();
       const nameReadErrors = [];
@@ -5480,24 +5507,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
         ...(spec.pages || []).map((p) => ({ key: p.key || p.name, pageId: p.pageId })),
         ...ownership.created,
       ];
+      // The STORED name of an interrupted, unplaced create is what corroborates its creation receipt: manifest and spec labels are not proof
+      // (`listedNames`, above). `unescapePacName` gives the name a page an earlier release created was given (pac stored `"` as `\"`).
       const nameReads = new Set();
       for (const mp of nameCandidates) {
         const id = String(mp.pageId || '').toLowerCase();
         if (!declaredKeys.has(mp.key) || !live.has(id) || placed.has(id) || nameReads.has(id)) continue;
         nameReads.add(id);
-        try {
-          // queryRecords returns uxagentprojects rows such as
-          // { "uxagentprojectid": "<id>", "name": "Overview" }; listing/manifest labels
-          // are not stored-name proof. Only interrupted, unplaced creates need this read.
-          const rows = await provision.queryRecords('uxagentproject', {
-            select: ['uxagentprojectid', 'name'], filter: `uxagentprojectid eq ${id}`, top: 1,
-          });
-          const row = (rows || []).find((r) => String(r.uxagentprojectid).toLowerCase() === id);
-          if (!row || typeof row.name !== 'string' || !row.name) throw new Error('stored page name is unreadable');
-          storedNames.set(id, unescapePacName(row.name));
-        } catch (e) {
-          nameReadErrors.push(`${id}: ${(e && e.message) || e}`);
-        }
+        const listed = listedNames.get(id);
+        if (typeof listed === 'string' && listed) storedNames.set(id, unescapePacName(listed));
+        else nameReadErrors.push(`${id}: stored page name is unreadable`);
       }
       const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds, storedNames, createdIds);
       if (conflicts.length) {
@@ -5521,6 +5540,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation in the maker, publish the app and re-run; if not, remove the stale id from the manifest/spec (or delete the page) and re-run`;
         });
         throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+      }
+      // A key that is bound to a page does not create one: a creation an earlier build left pending for it, under an id that is not in the environment, is not
+      // resumed — and would otherwise sit in the workspace for good, keeping `--clear-workspace` from ever clearing it. It is consumed, and said so.
+      for (const [key, records] of pendingByKey) {
+        if (!keyToId.has(key)) continue;
+        const stale = records.filter((r) => !live.has(r.pageId)).map((r) => r.pageId);
+        if (!stale.length) continue;
+        try { completePendingCreations(opts.workspaceDir, appUnique, stale, opts.env); } catch (e) {
+          if (typeof opts.warn === 'function') opts.warn(`page "${key}": the record of an unfinished create (${stale.join(', ')}) could not be removed (${e.message})`);
+          continue;
+        }
+        if (typeof opts.warn === 'function') opts.warn(`page "${key}" is bound to ${keyToId.get(key)}, so the create an earlier build started under ${stale.join(', ')} — a page that is not in the environment — is not resumed, and its record was removed`);
       }
 
       // DUPLICATE-NAME MATERIALIZATION GATE (post-reconciliation). validateAppSpec TOLERATES a duplicate
@@ -5564,7 +5595,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (removedIds.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to orphan ${removedIds.length} generative page(s) the spec removed but the app still references: ${removedIds.join(', ')}. Re-run with --allow-destructive to detach them (the page records are LEFT deployed; only the app's nav SubAreas are removed), or restore them to the spec.`, { phase: 'pages', code: 'pages-removed', recoverable: false });
 
       // ── Imp5: SHARED-PAGE DETECTION (report-only, FAIL-CLOSED). A page we are about to UPDATE (a reused
-      // id in keyToId) that ALSO belongs to ANOTHER app's sitemap is shared (`pac genpage add`) — updating
+      // id in keyToId) that ALSO belongs to ANOTHER app's sitemap is shared (added to a second app in Maker) — updating
       // its content would mutate a page another app uses. GROUNDED (live probe): a genpage has NO
       // appmodulecomponent row, so the ONLY membership signal is the sitemap XML; there is no direct
       // genpage→apps join, so we scan every OTHER app's sitemap (fetchAppsForPages; `excludeAppUnique` self-
@@ -5621,10 +5652,40 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // message, and so the page's name: "SQL Timeouts" would match) would create a second one beside it.
           throw Object.assign(new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
         }
+        // The receipt is what the page's creation is now known by; the record that stood for it while it was not is consumed after it, never before. One that cannot be
+        // removed is harmless — the next build finds the page, finds the receipt, and removes it — so it is not a halt.
+        try { completePendingCreations(opts.workspaceDir, appUnique, [id], opts.env); } catch (e) {
+          if (typeof opts.warn === 'function') opts.warn(`page "${p.name}": the record of its create (${id}) could not be removed after the page was recorded (${e.message}); a later build removes it`);
+        }
       };
 
       const keyOf = (p) => p.key || p.name;
       const canonicalPath = (p) => resolveAppSource(opts.appDir, normalizePageSource(p).codeFile);
+      // One create, with its identity written down FIRST. The id the page is created under is recorded (recordPagePending) before the first request is sent, so a
+      // create whose answer never arrives — and whose page cannot be read back either — is not forgotten: the next build finds the record (above) and adopts the page,
+      // or sends the create again under the same id. `resumeIds` holds the id an earlier build minted for this key when its page is not in the environment.
+      // The record is settled here too: acknowledged — recordCreate writes the receipt and consumes it — or known to have written nothing, which leaves nothing that
+      // could land, so it is consumed; an outcome that is not known keeps it. No workspace, no record (recordCreate says so).
+      const createPage = async (p, fields) => {
+        const key = keyOf(p);
+        let sentUnder = null;
+        try {
+          return await genpage.create({
+            ...fields,
+            ...(resumeIds.has(key) ? { pageId: resumeIds.get(key) } : {}),
+            beforeSend: async (id) => {
+              sentUnder = id;
+              if (opts.workspaceDir) recordPagePending(opts.workspaceDir, appUnique, key, id, p.name, opts.env);
+            },
+          });
+        } catch (e) {
+          // Only for a create this build started itself. A resumed one may share its id with a request an earlier build sent that has still not arrived, which a refusal of THIS send says nothing about.
+          if (sentUnder && opts.workspaceDir && e && e.outcome === 'nothing' && !resumeIds.has(key)) {
+            try { completePendingCreations(opts.workspaceDir, appUnique, [sentUnder], opts.env); } catch { /* a record of a page that was not written: the next build resumes it, or removes it when the key is bound to another page */ }
+          }
+          throw e;
+        }
+      };
       const implemented = [];
       // `spec.pages || []` — the phase can run with no spec pages (a removal-only / detach run reaches here
       // for the removal gate + sitemap finalize), so never assume spec.pages is an array.
@@ -5685,15 +5746,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // The baseline (deployed-baseline.js) used to hash the files again when the build ENDED, so a page saved while the build ran was recorded as applied: the next build then found the
       // source it was about to send "unchanged" and let a key it never checked through with a warning.
       const scannedSha = new Map();
-      // The bytes themselves, as the scan read them: every upload below sends a staging copy of these (writeStagingFile), never the canonical file, which may have been
-      // saved again since — the checks above and the hash recorded for the page are then about exactly what was sent.
-      const scannedBytes = new Map();
+      // What every check below is made on, and what is written to the page, is the TEXT of the bytes this scan read — `sourceByKey` — never
+      // a new read of the canonical file, which may have been saved again since: the checks, the hash recorded for the page and the page's
+      // content are then about exactly the same text. It is the file's bytes as they are, bar one leading BOM (the maker stores none); a file
+      // that is not UTF-8 stops the build here, before anything is written — the page is stored as UTF-8 text, so a decode that replaced a
+      // byte would deploy something nobody checked.
       for (const p of implemented) {
         const bytes = fs.readFileSync(canonicalPath(p));
-        scannedBytes.set(keyOf(p), bytes);
         const sourceSha = sha256(bytes);
         scannedSha.set(keyOf(p), sourceSha);
-        const code = bytes.toString('utf8');
+        let code;
+        try { code = sourceText(bytes); } catch (e) {
+          throw new BuildHalt(`page "${p.name}" cannot be deployed: ${e.message}`, { phase: 'pages', code: 'pages-source-not-utf8', recoverable: false });
+        }
         sourceByKey.set(keyOf(p), code);
         const malformed = navMalformedRefs(code);
         if (malformed.length) throw new BuildHalt(`page "${p.name}" has malformed navigation reference(s): ${malformed.join(', ')} — a cross-page link must be a double-quoted "PAGEREF_<key>" pageId literal, alone or followed only by casts such as \`as const\`; ${PAGEREF_RULE}`, { phase: 'pages', code: 'pages-malformed-navref', recoverable: false });
@@ -5736,6 +5801,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
       const mintedKeys = new Set();
       const deployment = new Map(); // key -> resolved code (nav sources only)
+      // What a page write answered. The SDK's warnings, and a publish it could not prove, go to the build's log; a page that was SAVED but could not be
+      // published is a halt — the page exists (the caller has recorded it by now), the runtime still serves the copy it had, and a re-run reuses the page
+      // and publishes it (a page that already holds its content is published, not written again).
+      const afterWrite = (p, verb, written) => {
+        if (typeof opts.warn === 'function') for (const w of written.warnings || []) opts.warn(`page "${p.name}": ${w}`);
+        if (written.publish && written.publish.kind === 'failed') {
+          throw new BuildHalt(`page "${p.name}" was ${verb} as ${written.pageId} and saved, but publishing it failed (${written.publish.detail}) — the runtime still serves the previously published copy. Re-run the build once the cause is cleared: the page is reused, not created again`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true });
+        }
+      };
 
       // (2+3) Inside ONE "resolve cross-page navigation" step: create-absent-first for ABSENT nav TARGETS
       //       (upload symbolic source to mint an id; persist the manifest IMMEDIATELY after EVERY create for
@@ -5746,13 +5820,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const up = await genpageCli.upload({ appId: result.created.app, codeFile: writeStagingFile(stagingDir, key, scannedBytes.get(key)), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
+            const up = await createPage(p, { name: p.name, source: sourceByKey.get(key), prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model });
             recordCreate(p, up.pageId);
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
             result.created.pageSourceShas[key] = scannedSha.get(key);
             mintedKeys.add(key);
             await persistNow();
+            afterWrite(p, 'created', up);
           }
           const navSources = new Map();
           for (const p of implemented) if ((p.navigatesTo || []).length) navSources.set(keyOf(p), { code: sourceByKey.get(keyOf(p)) });
@@ -5832,16 +5907,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
           }
           await runner.run('pages', `page "${p.name}"`, async () => {
             const requestedId = keyToId.get(key);
-            // Capture the EXACT bytes we upload so the caller can record a MEASURED deployedSha (a nav source's
-            // deployed bytes differ from its canonical source — PAGEREF_ is resolved to GUIDs — so deployedSha
-            // must never be assumed equal to the source hash). For a non-nav page they are the bytes the scan read
-            // and checked, which its staging copy holds — not a new read of the canonical file, saved again maybe.
+            // The EXACT text we write, so the caller can record a MEASURED deployedSha (a nav source's deployed text differs from
+            // its canonical source — PAGEREF_ is resolved to GUIDs — so deployedSha must never be assumed equal to the source hash).
+            // For a non-nav page it is the text the scan read and checked — not a new read of the canonical file, saved again maybe.
             const deployedBytes = isNav ? deployment.get(key) : sourceByKey.get(key);
-            const codeFile = writeStagingFile(stagingDir, key, isNav ? deployment.get(key) : scannedBytes.get(key));
-            // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
-            // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
-            // `caller: 'build'` only words the advice for an UPDATE that timed out or failed (genpage-cli.js lookFirst): the build keeps no base marker, and every page's `codeFile` is a staging copy deleted when the build ends.
-            const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
+            // The spec's data sources are authoritative, as they always were: a page that lists none is bound to none. The model and name ride along
+            // too, but the page's own are kept when the spec has none (the SDK writes only what differs; pac stored whatever `--model` it was
+            // sent, so a re-upload without one used to wipe a deployed page's model id to ""). A downloaded spec carries the model (pages[].model).
+            // `caller: 'build'` words the advice for an UPDATE that may have landed: the build keeps no base marker, and reads every page again when it runs.
+            const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
+            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build' }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
             // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
@@ -5855,6 +5930,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
             result.created.pageSourceShas[key] = scannedSha.get(key);
             await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
+            afterWrite(p, requestedId ? 'updated' : 'created', up);
             return up.pageId;
           });
         }
@@ -5902,9 +5978,28 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // nothing to write — otherwise the remaining steps renumber past the advertised total.
         runner.skip('pages', `finalize sitemap (genpage subareas) (${skipSitemapFinalize ? 'content-only re-upload — sitemap unchanged' : 'no sitemap change'})`);
       }
+
+      // Pin the default public view of each table the pages written in this run read. The maker's "/" picker lists a page's tables from the app's components,
+      // pac pinned each table's default view into the app on EVERY upload — this build's included — and the SDK's page write does not. One app operation does it
+      // for all of them: the backend's placeInApp with no page to place and only the tables, the call the standalone upload makes (the logic is that call's, not a
+      // second copy). It runs once the pages are written and recorded, and the sitemap is final: it reads the app's CURRENT layer and writes nothing when every
+      // view is already pinned, so a rebuild that changed no page's tables costs one read. A page works without its views, so a failure to pin is a warning, not a halt.
+      // `result.created.pages` holds the pages this run wrote (a page it left alone — changed-only — is not in it).
+      const writtenTables = [...new Set(implemented.filter((p) => result.created.pages[keyOf(p)] !== undefined).flatMap((p) => p.dataSources || []))];
+      if (writtenTables.length && typeof genpage.placeInApp === 'function') {
+        // The app is edited in the authoring language this build made it in (the SDK refuses to push an artifact fetched in another one, and a label is written in it).
+        const pinLanguage = opts.preResolvedLanguageCode || opts.languageCode;
+        try {
+          const placed = await genpage.placeInApp(result.created.app, { pages: [], dataSources: writtenTables, ...(pinLanguage ? { languageCode: pinLanguage } : {}) });
+          if (typeof opts.warn === 'function') for (const w of (placed && placed.warnings) || []) opts.warn(`default views of the pages' tables: ${w}`);
+        } catch (e) {
+          if (typeof opts.warn === 'function') opts.warn(`the pages were written, but their tables' default views could not be added to the app's components, so the maker's "/" picker may not list them (${(e && e.message) || e})`);
+        }
+      }
     } finally {
-      // Always clean up run-scoped staging (never leave env GUIDs on disk) and release the advisory lease.
-      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      // Always release the advisory lease, and remove the backend's throwaway workspace (it holds every page's source). The backend is disposed only once the
+      // storage calls it had under way have settled (an operation can still be running when a phase halts), so this waits for that before the lease is released.
+      if (ownGenpage && typeof genpage.dispose === 'function') { try { await genpage.dispose(); } catch { /* best-effort */ } }
       lease.release();
     }
   } else if (has('pages')) {

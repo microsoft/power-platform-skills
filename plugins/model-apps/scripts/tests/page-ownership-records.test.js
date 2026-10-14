@@ -235,6 +235,112 @@ test('a linked receipt cannot provide local ownership authority', (t) => {
   assert.throws(() => lib().readPageOwnership(dir, APP, ENV_A), /link|ownership|receipt/i);
 });
 
+// A "pending" record is written BEFORE a create is sent. It is the only local pointer to a page whose create was cut short, and it must never be taken for what
+// a creation receipt is: a receipt authorizes an update and a delete, a pending record authorizes neither.
+const pendingFiles = (dir) => fs.readdirSync(dir).filter((f) => f.startsWith('page-ownership.pending.'));
+
+test('a pending creation is intent, not ownership: it is not in the ownership state, and no creation id comes of it', (t) => {
+  const dir = workspace(t);
+  lib().recordPageCreation(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  assert.equal(pendingFiles(dir).length, 1);
+  const state = lib().readPageOwnership(dir, APP, ENV_A);
+  assert.deepEqual(state.created.map((r) => r.pageId), [OTHER], 'only the acknowledged create is a receipt');
+  assert.deepEqual(state.teardown, []);
+  assert.equal(lib().creationIds(state).has('overview'), false, 'the pending page is not one this app is known to have created');
+  assert.deepEqual(lib().readPendingCreations(dir, APP, ENV_A).get('overview'), [{ pageId: ID, name: 'Overview' }]);
+});
+
+test('pending creations are read per key — for this app and this environment only — with the name the create was sent with', (t) => {
+  const dir = workspace(t);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', OTHER, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
+  lib().recordPagePending(dir, 'contoso_other', 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_B);
+  const pending = lib().readPendingCreations(dir, APP.toUpperCase(), ENV_A);
+  assert.deepEqual([...pending.keys()].sort(), ['detail', 'overview']);
+  assert.deepEqual(pending.get('overview').map((r) => r.pageId).sort(), [ID, OTHER], 'two unfinished creations of one key are both reported, so a build can refuse to guess between them');
+  assert.deepEqual(pending.get('detail'), [{ pageId: OTHER, name: 'Detail' }]);
+  assert.equal(lib().readPendingCreations(dir, APP, 'https://adatum.crm.dynamics.com').size, 0);
+  assert.equal(lib().readPendingCreations(null, APP, ENV_A).size, 0, 'no workspace, no record');
+  assert.throws(() => lib().recordPagePending(null, APP, 'overview', ID, 'Overview', ENV_A), /workspace/i);
+});
+
+test('completing a pending creation consumes only the ids named, for this app and environment — never a receipt or a teardown record', (t) => {
+  const dir = workspace(t);
+  lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPageTeardown(dir, APP, [{ id: OTHER, key: 'detail', name: 'Detail' }], ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
+  lib().recordPagePending(dir, 'contoso_other', 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_B);
+  lib().completePendingCreations(dir, APP, [ID.toUpperCase()], ENV_A);
+  assert.deepEqual([...lib().readPendingCreations(dir, APP, ENV_A).keys()], ['detail'], 'the page that was settled no longer has a record');
+  assert.equal(lib().readPendingCreations(dir, 'contoso_other', ENV_A).size, 1, 'another app\'s record is not this app\'s to consume');
+  assert.equal(lib().readPendingCreations(dir, APP, ENV_B).size, 1, 'nor is another environment\'s');
+  const state = lib().readPageOwnership(dir, APP, ENV_A);
+  assert.equal(state.created.length, 1, 'the receipt the pending record stood in for is kept');
+  assert.equal(state.teardown.length, 1);
+  lib().completePendingCreations(dir, APP, [ID], ENV_A);
+  lib().completePendingCreations(null, APP, [ID], ENV_A);
+});
+
+test('teardown consumes receipts and teardown records, and leaves a pending creation to be settled', (t) => {
+  const dir = workspace(t);
+  lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().completePageDeletions(dir, APP, [ID], ENV_A);
+  assert.deepEqual(lib().readPageOwnership(dir, APP, ENV_A), { created: [], teardown: [] });
+  assert.equal(lib().readPendingCreations(dir, APP, ENV_A).size, 1, 'a pending record names a create that may still land: deleting a page does not retire it');
+});
+
+test('a pending record is rewritten when the name it was sent under changed; a receipt for another name is still refused', (t) => {
+  const dir = workspace(t);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview, renamed', ENV_A);
+  assert.equal(pendingFiles(dir).length, 1, 'one record per key and id');
+  assert.deepEqual(lib().readPendingCreations(dir, APP, ENV_A).get('overview'), [{ pageId: ID, name: 'Overview, renamed' }], 'it says what the create that may be in flight carries');
+  lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  assert.throws(() => lib().recordPageCreation(dir, APP, 'overview', ID, 'Another name', ENV_A), /different page name/);
+});
+
+test('a pending record keeps --clear-workspace from clearing, and says how it is settled; a receipt alone does not say that', (t) => {
+  const dir = workspace(t);
+  lib().recordPageCreation(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
+  assert.doesNotMatch(lib().checkPageOwnershipClearable(dir).reason, /pending/i);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  const clear = lib().checkPageOwnershipClearable(dir);
+  assert.equal(clear.ok, false);
+  assert.ok(clear.reason.includes(path.join(dir, pendingFiles(dir)[0])), 'the record is named');
+  assert.match(clear.reason, /"pending" record is a page creation that was started and never acknowledged/);
+  assert.match(clear.reason, /adopts the page, or creates it under the same id/);
+  lib().completePendingCreations(dir, APP, [ID], ENV_A);
+  fs.rmSync(path.join(dir, fs.readdirSync(dir)[0]));
+  assert.equal(lib().checkPageOwnershipClearable(dir).ok, true);
+});
+
+test('a pending record cannot be relabelled into a receipt, and a damaged one fails closed with its file name', (t) => {
+  const dir = workspace(t);
+  lib().recordPagePending(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  const file = path.join(dir, pendingFiles(dir)[0]);
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+  // The kind is part of the record's identity (its file name), so neither a renamed file nor an edited kind is read as a creation receipt.
+  const asCreated = path.join(dir, path.basename(file).replace('.pending.', '.created.'));
+  fs.copyFileSync(file, asCreated);
+  assert.throws(() => lib().readPageOwnership(dir, APP, ENV_A), (e) => e.message.includes(asCreated));
+  fs.rmSync(asCreated);
+  fs.writeFileSync(file, JSON.stringify({ ...record, kind: 'created' }) + '\n');
+  assert.throws(() => lib().readPageOwnership(dir, APP, ENV_A), (e) => e.message.includes(file));
+  assert.throws(() => lib().readPendingCreations(dir, APP, ENV_A), (e) => e.message.includes(file));
+
+  fs.writeFileSync(file, '{');
+  assert.throws(() => lib().readPendingCreations(dir, APP, ENV_A), (e) => e.message.includes(file) && /inspect it/.test(e.message));
+  assert.throws(() => lib().completePendingCreations(dir, APP, [ID], ENV_A), (e) => e.message.includes(file));
+  assert.ok(fs.existsSync(file), 'a record that cannot be read is never consumed');
+});
+
 test('an unsupported receipt version cannot be treated as an empty ownership set', (t) => {
   const dir = workspace(t);
   const record = { schemaVersion: 1, kind: 'created', appUniqueName: APP, key: 'overview', pageId: ID, name: 'Overview' };

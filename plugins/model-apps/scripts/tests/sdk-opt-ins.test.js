@@ -1,12 +1,13 @@
 'use strict';
-// Two performance options of the vendored SDK that this plugin deliberately leaves off, and the facts each
-// decision rests on. Neither is an oversight, and each would be easy to switch on later without noticing what
-// it breaks — so what keeps them off is pinned here, against the real bundle where the SDK is the subject.
+// Two performance options of the vendored SDK, and the facts each decision rests on: one is passed only where a read it overlaps
+// is made, the other is deliberately left off. Neither is an oversight, and each would be easy to switch on (or off) later without
+// noticing what it breaks — so what decides them is pinned here, against the real bundle where the SDK is the subject.
 //
 //   readConcurrency  overlaps the file downloads of a generative page that the SDK reads, and the per-component
-//                    reads of fetchSolution. The plugin makes neither read: its pages go through
-//                    `pac model genpage`, and no script fetches a solution. The option would change nothing, so
-//                    it is not passed. A script that starts to make one of those reads is where it belongs.
+//                    reads of fetchSolution. The page backend (lib/genpage-sdk.js) reads pages through the SDK, so it
+//                    creates its SDK with the option (4: a page is a handful of file reads, and verify and download read
+//                    many pages); no script fetches a solution. The option is passed exactly when a script makes one of
+//                    those reads, so it can neither go missing from the page backend nor outlive the last read it is for.
 //   published:false  creates an app as a never-published draft that a later publish covers, saving a publish
 //                    round trip per create. A draft is not in the PUBLISHED projection that every app-existence
 //                    probe in the plugin reads (a by-id read answers 404, a by-name query finds nothing), so

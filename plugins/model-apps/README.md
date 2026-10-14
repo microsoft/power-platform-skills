@@ -27,18 +27,16 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
 
-After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed. (Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not.)
+After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. `az` is what every Dataverse call authenticates with — entity creation, and the generative pages themselves, which are written, read and deleted through the bundled SDK, not through `pac model genpage`. (Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not.)
 
 Each Azure CLI call (a token, `az account show`) may take up to **60 seconds** — a busy machine can
 take most of that just to start `az`. A call that runs out of time is reported as a timeout (the
 pre-flight's `az_timeout`), never as a missing or signed-out CLI. To allow longer, set
 `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS` in milliseconds (1000–900000), for example `120000`.
 
-Each `pac` call for generative pages is time-bounded too: **3 minutes** to list or download pages, **10 minutes** to
-upload one. A call that runs out of time is stopped together with everything it started, and the message says what to
-do; a page create whose outcome is unknown is never sent again. To allow longer, set
-`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` in milliseconds (1000–3600000); it applies to every `pac model genpage` call (list,
-download and upload).
+A page write whose outcome is unknown (the connection dropped before the answer) is never sent again blindly: the page is read first, and
+what it holds decides whether the write landed — the message says what to check when that cannot be told. There is no `pac` call, and so
+no timeout setting, for pages.
 
 ## Feature flags (experimental & in-progress)
 
@@ -50,7 +48,7 @@ status) in `scripts/lib/feature-flags.js`; their on/off value lives in
 
 | Flag | Status | Enables | Depends on |
 |---|---|---|---|
-| `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb, and the `GenUxPluginActionAllowList` setting — all live in PROD |
+| `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, the page `actionBindings` the plugin writes into `config.json` (through the SDK), and the `GenUxPluginActionAllowList` setting — all live in PROD |
 | `custom-telemetry` | in-progress | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
 
 Connector authoring is in **public preview** and no longer has a feature flag. Connector discovery, binding, deploy, and ALM packaging are always available when the required PAC and host capabilities are present.
@@ -135,13 +133,13 @@ vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and 
 Creates, updates, and deploys generative pages for model-driven Power Apps. Handles the complete workflow in a single session:
 
 1. **Validate prerequisites** — checks Node.js and PAC CLI version
-2. **Authenticate** — verifies PAC CLI auth (and `az` if entity creation is needed)
+2. **Authenticate** — verifies PAC CLI auth and `az` (entity creation and page deployment both sign in through `az`)
 3. **Gather requirements** — asks about page type, data source, and specific features
 4. **Create entities** (optional) — uses the plugin's Node.js Web API scripts to create Dataverse tables, columns, relationships, and choice columns when the requested entities don't exist. Asks which solution to land them in
 5. **Create app** (optional) — runs `pac model create` if no model-driven app is targeted
 6. **Generate schema** — runs `pac model genpage generate-types` for Dataverse entity pages
 7. **Generate code** — produces a complete single-file `.tsx` component (parallel page-builders for multi-page requests)
-8. **Deploy** — uploads via `pac model genpage upload` to the selected app
+8. **Deploy** — writes the page through the bundled SDK (`scripts/genpage-upload.js`); a page needs no app, and is added to one when you name it
 9. **Verify** — optionally opens the page in Playwright for interactive testing
 
 **Usage:** Invoke directly with `/genpage`, or use any of the keywords below to trigger the skill automatically:

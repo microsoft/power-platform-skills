@@ -1614,8 +1614,8 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
       }
       return [];
     },
-    async deleteRecord(entity, id) {
-      deleted.push(`${entity}:${id}`);
+    async deleteRemoteArtifact(type, id) {
+      deleted.push(`${type}:${id}`);
     },
   };
   return { sdk, deleted, queried };
@@ -1636,11 +1636,31 @@ test('genpage resolve keeps a matching-name manifest candidate without navigatio
 // Deleting the project cascades to its files (the uxagentproject -> uxagentprojectfile
 // relationship is CascadeConfiguration Delete=Cascade), so ONE delete is both necessary and
 // sufficient. Deleting files ourselves first would be destructive — see the skip test below.
-test('genpage del deletes ONLY the project row and never touches its files', async () => {
+// The delete is the SDK's own (`deleteRemoteArtifact('genPage')`): it removes the project row and then the conversation
+// messages that point at the page, which a raw row delete left behind.
+test('genpage del goes through the SDK\'s own page delete and never touches the page\'s files itself', async () => {
   const { sdk, deleted, queried } = genpageSdk({ files: { [PAGE_1.toLowerCase()]: ['f1', 'f2'] } });
   await KIND_HANDLERS.genpage.del(sdk, { id: PAGE_1, name: 'Overview' });
-  assert.deepStrictEqual(deleted, [`uxagentproject:${PAGE_1}`]);
+  assert.deepStrictEqual(deleted, [`genPage:${PAGE_1}`]);
   assert.ok(!queried.includes('uxagentprojectfile'), 'must not enumerate the page files');
+});
+
+// The SDK deletes the page FIRST and its conversation history after it. When only the history could not be fully removed, the page is
+// gone and nothing points at those rows any more — a re-run finds no page and cannot retry them — so it is a warning that names them,
+// not a failed step (which would keep the manifest and the solution for a re-run with nothing left to do).
+test('genpage del: a page deleted whose conversation history was not fully removed is a WARNING, and the page counts as deleted', async () => {
+  const history = Object.assign(new Error(`Generative page '${PAGE_1}' was deleted, but its conversation history was not fully removed — 1 of 2 message(s) could not be (m1)`), { code: 'GENPAGE_HISTORY_NOT_DELETED' });
+  const sdk = { async deleteRemoteArtifact() { throw history; } };
+  const ctx = { warnings: [], warn: (m) => ctx.heard.push(m), heard: [] };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }], ctx);
+  assert.deepStrictEqual(r.deletedIds, [PAGE_1], 'the page is gone');
+  assert.deepStrictEqual(r.skippedIds, []);
+  assert.strictEqual(ctx.warnings.length, 1);
+  assert.match(ctx.warnings[0], new RegExp(`page ${PAGE_1} was deleted, but its conversation history was not fully removed: .*m1`));
+  assert.deepStrictEqual(ctx.heard, ctx.warnings, 'and the caller hears it');
+  // Any other failure of the delete is still a failure.
+  const refused = { async deleteRemoteArtifact() { throw Object.assign(new Error('HTTP 500'), { code: 'CONNECTION_ERROR', statusCode: 500 }); } };
+  await assert.rejects(() => deleteStep(refused, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }], ctx), /HTTP 500/);
 });
 
 // Dataverse is the authority on whether a page is still in use: saving an app that surfaces a page
@@ -1652,7 +1672,7 @@ test('genpage records a still-referenced page as SKIPPED, not a failure', async 
   const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
   const sdk = {
     async queryRecords() { return []; },
-    async deleteRecord() { throw err; },
+    async deleteRemoteArtifact() { throw err; },
   };
   const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
   assert.deepStrictEqual(r.deletedIds, []);
@@ -1666,7 +1686,7 @@ test('a dependency block reports as "still referenced", never "undeletable"', as
   const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
   const sdk = {
     async queryRecords() { return []; },
-    async deleteRecord() { throw err; },
+    async deleteRemoteArtifact() { throw err; },
   };
   const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
   assert.deepStrictEqual(r.skipped, [{ id: PAGE_1, reason: 'referenced' }]);
@@ -1701,9 +1721,9 @@ test('a still-referenced page is SKIPPED with its files left completely intact',
         ? [{ uxagentprojectfileid: 'f1' }, { uxagentprojectfileid: 'f2' }]
         : [];
     },
-    async deleteRecord(entity, id) {
-      deleted.push(`${entity}:${id}`);
-      if (entity === 'uxagentproject') throw err;
+    async deleteRemoteArtifact(type, id) {
+      deleted.push(`${type}:${id}`);
+      if (type === 'genPage') throw err;
     },
   };
   const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
@@ -1711,7 +1731,7 @@ test('a still-referenced page is SKIPPED with its files left completely intact',
   assert.deepStrictEqual(r.deletedIds, []);
   assert.deepStrictEqual(
     deleted,
-    [`uxagentproject:${PAGE_1}`],
+    [`genPage:${PAGE_1}`],
     'the page delete must be the ONLY write attempted — its files must survive the skip'
   );
 });
@@ -1731,7 +1751,7 @@ test('genpage deletes nothing when the live-existence query fails, and FAILS the
       if (entity === 'webresource') return [{ content: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }] }), 'utf8').toString('base64') }];
       throw new Error('uxagentproject query failed');
     },
-    async deleteRecord() { throw new Error('nothing may be deleted'); },
+    async deleteRemoteArtifact() { throw new Error('nothing may be deleted'); },
   };
   // Not an empty resolution: "none of them" would let the same run delete the manifest naming them.
   await assert.rejects(() => KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' }), (err) => {
@@ -1809,8 +1829,8 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
       if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><SubArea GenPageId="${PAGE_1}" /></SiteMap>` }];
       return [];
     },
-    deleteRecord: async (entity, id) => {
-      assert.strictEqual(entity, 'uxagentproject');
+    deleteRemoteArtifact: async (type, id) => {
+      assert.strictEqual(type, 'genPage');
       if (pageDelete) pageDelete();
       state.deletes.push(`page:${id}`);
       state.pages.delete(id);

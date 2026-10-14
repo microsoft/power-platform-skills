@@ -1387,8 +1387,9 @@ test('build --verify wires readers that verify-spec will NOT skip role-privilege
   // Matched on the wiring, not the exact arity: the deps.verify lambda gained a second parameter so
   // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
   // business-rule skip must not read as "not deployed"). Pinning `(s)` exactly made this test fail
-  // for a change that did not touch what it is actually guarding.
-  const call = src.split(/\r?\n/).find((l) => /verify: \([^)]*\) => verifySpec/.test(l));
+  // for a change that did not touch what it is actually guarding. The lambda now makes (and disposes)
+  // the page backend around that call, so the line is found by what it calls.
+  const call = src.split(/\r?\n/).find((l) => /verifySpec\(\s*s\s*,\s*readerFor\(provisionSdk,/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
   assert.match(call, /readerFor\(provisionSdk,/, 'verify must read through the provisioning SDK');
   // The second argument must actually be forwarded, or the environment-skip list is silently
@@ -1401,12 +1402,12 @@ test('build --verify wires readers that verify-spec will NOT skip role-privilege
   // conditional again on something the build does not supply.
   const optsSrc = /readerFor\(provisionSdk,[^,]+,\s*(\{[^}]*\})\s*\)/.exec(call);
   assert.ok(optsSrc, `could not extract the readerFor options from: ${call}`);
-  // Shorthand-aware: `{ genpageCli: makeGenpageCli(env), workspaceDir }` carries one `key:` and one
-  // SHORTHAND key. A colon-only pattern silently saw just `genpageCli`, which made the assertion
-  // below weaker than it looks — it would have kept passing for an option bag that had lost
-  // `workspaceDir` entirely. Match a name followed by `:`, `,` or `}`.
+  // Shorthand-aware: `{ genpage, workspaceDir, isolatedReader }` carries only SHORTHAND keys, and a
+  // colon-only pattern would see none of them, which would make the assertion below weaker than it
+  // looks — it would have kept passing for an option bag that had lost `workspaceDir` entirely.
+  // Match a name followed by `:`, `,` or `}`.
   const optKeys = [...optsSrc[1].matchAll(/([A-Za-z_$][\w$]*)\s*(?::|[,}])/g)].map((m) => m[1]);
-  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpageCli'),
+  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpage'),
     `expected both readerFor options to be extracted, got ${JSON.stringify(optKeys)}`);
   const { readerFor } = require('../verify-model-app.js');
   // A bare object is enough: every base reader is a lazy closure, so this asserts PRESENCE, which is
@@ -1444,8 +1445,8 @@ test('the build verifies dashboards through makeSdk\u2019s isolated reader, shar
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
   assert.match(body, /const httpClient = createAzHttpClient\(env\);/);
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
-  const wiring = src.slice(src.indexOf('verify: (s, verifyOpts) =>'));
-  assert.match(wiring.slice(0, wiring.indexOf('\n')), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
+  const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
+  assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
   assert.strictEqual((src.match(/isolatedReaderFor\(/g) || []).length, 1, 'no second reader, and so no second client, is made');
 });
 
@@ -2145,7 +2146,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
   const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
   const snapshotStore = require('../lib/apply-snapshot-store.js');
   const { sha256 } = require('../lib/hash.js');
-  const { makeGenpageCli } = require('../lib/genpage-cli.js');
+  const genpageSdk = require('../lib/genpage-sdk.js');
   const scriptsDir = path.join(__dirname, '..');
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-changed-only-'));
   const workspaceDir = path.join(appDir, '.maker-workspace');
@@ -2176,7 +2177,6 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
   const uploads = [];
   const whoAmI = [];
   const sdkTempDirs = [];
-  const uploadTempDirs = [];
   const createArtifact = sdk.createArtifact;
   sdk.createArtifact = (type, def) => {
     if (type !== 'app') return createArtifact(type, def);
@@ -2265,48 +2265,52 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     const original = sdk[method];
     sdk[method] = (...args) => { writes.push({ method, args }); return original(...args); };
   }
-  const pacRun = async (args) => {
-    const value = (flag) => args[args.indexOf(flag) + 1];
-    assert.deepStrictEqual(args.slice(0, 2), ['model', 'genpage']);
-    assert.strictEqual(value('--environment'), env);
-    if (args[2] === 'list') {
-      const pages = [...state.pages.values()];
-      return { status: 0, stdout: `Found ${pages.length} generated page(s):\nPage ID                              Name          Published\n`
-        + pages.map((p) => `${p.pageId} ${p.name.padEnd(14)}-\n`).join(''), stderr: '' };
-    }
-    assert.strictEqual(value('--app-id'), state.app.id, 'PAC is scoped to the app resolved by main');
-    if (args[2] === 'upload') {
-      const name = value('--name');
-      const pageId = args.includes('--page-id') ? value('--page-id') : pageIds[name];
-      const code = fs.readFileSync(value('--code-file'), 'utf8');
-      uploads.push({ name, pageId, requestedId: args.includes('--page-id') ? value('--page-id') : null, code });
-      uploadTempDirs.push(path.dirname(value('--prompt-file')));
-      state.pages.set(pageId, { pageId, name, code });
-      return { status: 0, stdout: `Page ID: ${pageId}`, stderr: '' };
-    }
-    assert.strictEqual(args[2], 'download', 'no other PAC command is allowed');
-    if (state.failDownload) return { status: 1, stdout: '', stderr: 'offline verification download failed' };
-    for (const pageId of value('--page-id').split(',')) {
-      const dir = path.join(value('--output-directory'), pageId);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'page.tsx'), state.pages.get(pageId).code, 'utf8');
-    }
-    return { status: 0, stdout: '', stderr: '' };
+  // The page backend the build and verify make (lib/genpage-sdk.js `makeGenpageSdk`), over the pages this fake environment holds: a write records what it was sent, and a read answers the page
+  // as the last write left it — or fails, as a verification read that cannot reach the service does. Every backend made through the seam is kept, to see that each was disposed.
+  const backends = [];
+  const answer = (o, pageId) => ({ pageId, name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [] });
+  const makeBackend = () => {
+    const backend = {
+      disposed: false,
+      enumerateEnv: async () => {
+        const pages = [...state.pages.values()].map((p) => ({ pageId: p.pageId, name: p.name }));
+        return { ok: true, ids: pages.map((p) => p.pageId.toLowerCase()), pages };
+      },
+      create: async (o) => {
+        const pageId = pageIds[o.name];
+        uploads.push({ name: o.name, pageId, requestedId: null, code: o.source });
+        state.pages.set(pageId, { pageId, name: o.name, code: o.source });
+        return answer(o, pageId);
+      },
+      update: async (id, o) => {
+        uploads.push({ name: o.name, pageId: id, requestedId: id, code: o.source });
+        state.pages.set(id, { pageId: id, name: o.name, code: o.source });
+        return answer(o, id);
+      },
+      read: async (id) => {
+        if (state.failDownload) throw new Error('offline verification download failed');
+        const page = state.pages.get(id);
+        return { id, name: page.name, source: page.code, dataSources: [], conversation: [] };
+      },
+      dispose: () => { backend.disposed = true; },
+    };
+    backends.push(backend);
+    return backend;
   };
-  const genpageModule = { ...require('../lib/genpage-cli.js'), makeGenpageCli: (url) => {
+  const genpageModule = { ...genpageSdk, makeGenpageSdk: (url) => {
     assert.strictEqual(url, env);
-    return makeGenpageCli(url, { run: pacRun, attempts: 1, request: async () => { throw new Error('unexpected Dataverse page request'); } });
+    return makeBackend();
   } };
   // Only transport/SDK construction is fake: main, buildModelApp, engine, verifier, flow and snapshot
-  // store remain real. Loading the engine with the PAC seam avoids replacing the build with a stub.
-  const engine = loadCli(path.join(scriptsDir, 'lib', 'sdk-build.js'), { requires: { './genpage-cli.js': genpageModule } }).exports;
+  // store remain real. Loading the engine with the page-backend seam avoids replacing the build with a stub.
+  const engine = loadCli(path.join(scriptsDir, 'lib', 'sdk-build.js'), { requires: { './genpage-sdk.js': genpageModule } }).exports;
   const previousPath = process.env.PATH;
   process.env.PATH = path.dirname(process.execPath);
   const assertCleaned = () => {
-    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) assert.strictEqual(fs.existsSync(dir), false, `temporary workspace removed: ${dir}`);
+    for (const dir of sdkTempDirs) assert.strictEqual(fs.existsSync(dir), false, `temporary workspace removed: ${dir}`);
+    assert.deepStrictEqual(backends.filter((b) => !b.disposed).length, 0, 'every page backend the run made was disposed — each holds a workspace of page sources');
     assert.strictEqual(fs.existsSync(snapshotStore.leasePath(workspaceDir)), false, 'snapshot lease released');
-    const staging = path.join(workspaceDir, '.pageref-deploy');
-    assert.ok(!fs.existsSync(staging) || fs.readdirSync(staging).length === 0, 'page staging removed');
+    assert.strictEqual(fs.existsSync(path.join(workspaceDir, '.pageref-deploy')), false, 'no page staging folder is made');
   };
   const runMain = async (exitCode = 0) => {
     writes.length = uploads.length = 0;
@@ -2335,7 +2339,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
         './lib/dataverse-auth.js': auth,
         './lib/entity-provision.js': entityProvision,
         './lib/sdk-build.js': engine,
-        './lib/genpage-cli.js': genpageModule,
+        './lib/genpage-sdk.js': genpageModule,
         './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
         './lib/maker-sdk.js': {
           createNodeWorkspaceStorage: (dir) => { if (dir !== workspaceDir) sdkTempDirs.push(dir); return { dir }; },
@@ -2394,7 +2398,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     assert.strictEqual(noop.noop, true);
     assert.strictEqual(noop.changedOnly.decision, 'noop');
     assert.deepStrictEqual(writes, [], 'NOOP makes no SDK writes');
-    assert.deepStrictEqual(uploads, [], 'NOOP makes no PAC writes');
+    assert.deepStrictEqual(uploads, [], 'NOOP makes no page writes');
     assert.deepStrictEqual(fs.readFileSync(snapshotStore.snapshotPath(workspaceDir)), snapshotBytes, 'NOOP leaves the snapshot byte-identical');
 
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode + '\n', 'utf8');
@@ -2425,7 +2429,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     }
   } finally {
     process.env.PATH = previousPath;
-    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) fs.rmSync(dir, { recursive: true, force: true });
+    for (const dir of sdkTempDirs) fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(appDir, { recursive: true, force: true });
   }
   assert.strictEqual(fs.existsSync(appDir), false, 'the test removes its durable temporary state too');

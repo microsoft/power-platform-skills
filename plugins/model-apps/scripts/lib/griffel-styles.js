@@ -4,7 +4,7 @@
 // WHY THIS EXISTS. The pages use @fluentui/react-components, whose styles are Griffel's. Griffel does not support a few CSS shorthands: `resolveStyleRules` skips
 // the property and, in the browser, logs
 //   @griffel/react: You are using unsupported shorthand CSS property "borderWidth". Please check your "makeStyles" calls, there *should not* be following: ...
-// Nothing earlier notices. The page type-checks, `pac model genpage transpile` does not execute `makeStyles`, and the deploy succeeds — the page then renders
+// Nothing earlier notices. The page type-checks, compiling it does not execute `makeStyles`, and the deploy succeeds — the page then renders
 // without the border, the colour or the reset the author wrote. The only guard used to be an agent grepping the page for `borderWidth`, which covers one of the
 // ten properties and, as a text search, reads a string, a comment and an inline `style={{ … }}` the same as a style key.
 //

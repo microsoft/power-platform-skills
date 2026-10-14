@@ -9,7 +9,21 @@ const { validateAppSpec } = require('../lib/app-spec.js');
 // The AI phase's proof after a publish waits 500 ms between reads of an override row that is not there yet, as --verify
 // does. No test below is about that wait (it is pinned through `proofBudget`), and every one that leaves a row absent
 // would otherwise sleep a second for it.
-const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofDelayMs: 0, ...opts });
+//
+// The page backend a test hands the build (`genpageCli`) is written as a double of the CLI wrapper the pages phase used before pages
+// went through the SDK: `{ enumerateEnv, upload(o) }`, `upload` answering a create (no `pageId`) or an update (the page it is sent
+// to) with `{ pageId }`. The build takes a backend of lib/genpage-sdk.js's shape (`genpage`: enumerateEnv, create, update), so the
+// double is adapted here: each write reaches `upload` as `{ name, pageId?, model, dataSources, prompt, agentMessage, source }` and is
+// answered as a page that was written and published.
+function pageBackend(double) {
+  const written = async (answer, o) => ({ name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [], ...(await answer) });
+  return {
+    enumerateEnv: (...args) => double.enumerateEnv(...args),
+    create: (o) => written(double.upload({ ...o, pageId: undefined }), o),
+    update: (id, o) => written(double.upload({ ...o, pageId: id }), o),
+  };
+}
+const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofDelayMs: 0, ...opts, ...(opts.genpageCli ? { genpage: pageBackend(opts.genpageCli) } : {}) });
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
@@ -2342,13 +2356,28 @@ test('app-shell: a page subarea resolves to a GenPage subarea with the built gen
   assert.strictEqual(sub.genPageId, 'gp-1');
 });
 
+// A page placed on its own (lib/genpage-sdk.js placeInApp, and apps.js around a first page) is a sub-area of the same shape the build writes for a page of an App Spec: both come from
+// genPageSubArea (lib/genpage-subarea.js), so a navigation holds one shape of GenPage entry whoever put the page there.
+test('app-shell: the GenPage subarea the build writes is the one genPageSubArea builds — a page placed on its own has the same shape', () => {
+  const { genPageSubArea, genPageSubAreaId } = require('../lib/genpage-subarea.js');
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const sub = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: { Overview: 'gp-1' } }).siteMap.areas[0].groups[0].subAreas.find((s) => s.type === 'GenPage');
+  assert.deepStrictEqual(sub, genPageSubArea({ id: sub.id, title: 'Overview' }, 'gp-1'));
+  assert.deepStrictEqual(Object.keys(sub).sort(), ['genPageId', 'id', 'title', 'type']);
+  // The shape, spelled out: nothing but the target is added to what every sub-area has — the SDK writes the designer defaults itself.
+  assert.deepStrictEqual(genPageSubArea({ id: genPageSubAreaId('11111111-0000-4000-8000-000000000001'), title: 'T', icon: 'i.png' }, '11111111-0000-4000-8000-000000000001'),
+    { id: 'genpage_11111111000040008000000000000001', title: 'T', icon: 'i.png', type: 'GenPage', genPageId: '11111111-0000-4000-8000-000000000001' });
+});
+
 test('app-shell: a page subarea for an unbuilt page throws a clear error', () => {
   const spec = makeSpec();
   spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Missing', title: 'X' });
   assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {} }), /references page 'Missing' which wasn't built/);
 });
 
-test('pages phase uploads each page (no --add-to-sitemap) then finalizes the sitemap with GenPage subareas', async () => {
+test('pages phase writes each page (it is placed by the sitemap finalize, not by the write) then finalizes the sitemap with GenPage subareas', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx', prompt: 'kpis', dataSources: ['new_customer'] }];
   spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
@@ -2400,8 +2429,8 @@ test('pages phase reuses an existing page by MANIFEST+EXISTENCE (not by name) �
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// pac stores whatever `--model` an upload sends, so an upload without one stored the page's model empty. The build sends
-// the spec's `pages[].model` on every upload — the create, and the in-place update of an existing page — and nothing
+// The page's model is stored as sent, and a write that omits one leaves the page's own (the SDK writes only what differs). The build sends
+// the spec's `pages[].model` on every write — the create, and the in-place update of an existing page — and nothing
 // for a page without one.
 test('pages phase sends each page\'s model on create and on update, and none for a page without one', async () => {
   const spec = makeSpec();

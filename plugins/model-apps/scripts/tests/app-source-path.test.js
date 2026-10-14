@@ -10,6 +10,7 @@ const { webResourceOpts, runSdkBuild } = require('../lib/sdk-build.js');
 const { pageSourceFileErrors, webResourceSourceFileErrors, appSourceFileErrors } = require('../lib/content-hash.js');
 const { confinedReader } = require('../lib/deployed-baseline.js');
 const { resolveAppSource } = require('../lib/app-source-path.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 function specWithSource(file) {
   return {
@@ -264,10 +265,10 @@ test('an unconfined contentPath is a schema error only, not reported again by th
   }
 });
 
-test('page deployment refuses a linked source before any upload', async (t) => {
+test('page deployment refuses a linked source before any page is written', async (t) => {
   const { appDir, outside } = files(t);
   if (!linkFile(t, outside, path.join(appDir, 'linked.tsx'))) return;
-  const uploads = [];
+  const genpage = fakeGenpage();
   const sdk = {
     queryRecords: async (entity) => {
       if (entity === 'appmodule') return [{ appmoduleid: 'app-id', appmoduleidunique: 'app-layer', uniquename: 'contoso_sources' }];
@@ -281,10 +282,7 @@ test('page deployment refuses a linked source before any upload', async (t) => {
   await assert.rejects(runSdkBuild(specWithSource('linked.tsx'), {
     sdk, provisionSdk: sdk, apply: true, appDir, phases: ['pages'],
     changedOnly: { resolvedAppId: 'app-id', selectedKeys: ['overview'], skipSitemapFinalize: true },
-    genpageCli: {
-      enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
-      upload: async (o) => { uploads.push(o); return { pageId: 'page-created' }; },
-    },
+    genpage,
   }), /link|outside/);
-  assert.deepEqual(uploads, []);
+  assert.deepEqual(genpage.of('create').concat(genpage.of('update')), []);
 });

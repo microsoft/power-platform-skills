@@ -61,7 +61,7 @@ const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
-const { unescapePacName } = require('./genpage-cli.js');
+const { unescapePacName } = require('./genpage-sdk.js');
 const { readPageOwnership, recordPageTeardown, completePageDeletions } = require('./page-ownership-records.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
@@ -472,10 +472,11 @@ const KIND_HANDLERS = {
       if (!sitemapReadable) errors.push(`app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`);
       return { items, kept, candidates: [...items, ...kept, ...absent], ...(errors.length ? { readError: errors.join('; ') } : {}) };
     },
-    // Delete ONLY the project row. Its `uxagentprojectfile` children go with it: the
-    // uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
-    // Delete=Cascade, verified end to end — one DELETE of a real pac-created page removed the
-    // project and all four of its file rows, none orphaned.
+    // The page goes through the SDK's own delete (`deleteRemoteArtifact('genPage')`): the project row, whose `uxagentprojectfile`
+    // children go with it — the uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
+    // Delete=Cascade, verified end to end: one DELETE of a real page removed the project and all four of its file rows, none
+    // orphaned — and then the conversation messages that point at the page, which do NOT cascade (the SDK measured one surviving the
+    // delete of its page). A raw DELETE of the row, which this step used, left those behind.
     //
     // Deleting the files ourselves first would be actively DESTRUCTIVE. Dataverse tracks a
     // dependency on the PROJECT row (component type 10372) but NOT on its files (10373):
@@ -483,9 +484,21 @@ const KIND_HANDLERS = {
     // DELETE is refused, while every one of its files reports ZERO dependents and would delete
     // cleanly. So a files-first order would strip the content out of a page the platform is about
     // to refuse to delete, leaving the app that still references it pointing at an empty shell —
-    // exactly the data loss this step exists to avoid. One delete, and the platform decides.
-    async del(sdk, item) {
-      await sdk.deleteRecord('uxagentproject', item.id);
+    // exactly the data loss this step exists to avoid. The SDK deletes the row first and the
+    // history only after it, so a page the platform refuses (HTTP 400, "referenced by N other components") loses nothing,
+    // and the platform decides.
+    async del(sdk, item, ctx) {
+      try {
+        await sdk.deleteRemoteArtifact('genPage', item.id);
+      } catch (err) {
+        // The page IS deleted; only part of its conversation history could not be removed, and nothing points at those rows any more — a
+        // re-run finds no page and cannot retry them. So it is a warning that names them (the SDK's message lists their ids), not a failed
+        // step, which would keep the manifest and the solution for a re-run that has nothing left to do.
+        if (!(err && err.code === 'GENPAGE_HISTORY_NOT_DELETED')) throw err;
+        const message = `page ${item.id} was deleted, but its conversation history was not fully removed: ${errMsg(err)}`;
+        if (ctx && Array.isArray(ctx.warnings)) ctx.warnings.push(message);
+        if (ctx && typeof ctx.warn === 'function') ctx.warn(message);
+      }
     },
   },
   dashboard: {
@@ -1409,7 +1422,7 @@ async function deleteStep(sdk, handler, items, ctx) {
 // ok=false with an `errors[]` is returned. deps: { sdk (MakerSdk client), emit(event), warn(message) }.
 //
 // `warn` hears (and `result.warnings` lists, when there are any) the default-view resets whose publish
-// could not be confirmed. This wrapper exists so the batched publish of those resets is settled however
+// could not be confirmed, and a deleted page whose conversation history could not be fully removed. This wrapper exists so the batched publish of those resets is settled however
 // the steps end — normally, through the app-delete stop, or because a callback threw — without wrapping
 // the step loop (and re-indenting every line of it) in a try/finally.
 async function runTeardown(spec, opts = {}, deps = {}) {
@@ -1570,7 +1583,7 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         emit({ phase: step.phase, status: 'skip', skip: skipReason ? 'kept' : 'not-found', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
         continue;
       }
-      const { deletedIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' ? deferredResetPublishes : undefined);
+      const { deletedIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' ? deferredResetPublishes : undefined);
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
       if (step.kind === 'genpage') {
         completePageDeletions(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);

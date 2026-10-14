@@ -300,14 +300,14 @@ Reuse `/genpage`'s navigation contract (`references/rules.md` 299–356): naviga
 
 **Source stays symbolic.** Code-gen emits `PAGEREF_<page-key>` and the **canonical `.tsx` is never
 mutated** with a GUID (mutation would bake environment-specific ids into source and break
-cross-env deploy / recreate — reviewer C4, SDK **T5** opaque-identity). Because `genpageCli.upload`
-takes a **file path**, not in-memory content (`genpage-cli.js`, `upload()`), the resolver writes a
-**staging file** (a deployment copy adjacent to `RuntimeTypes.ts`); the canonical source is left
-untouched.
+cross-env deploy / recreate — reviewer C4, SDK **T5** opaque-identity). Because the page backend takes a
+page's **text** (`genpage-sdk.js`, `create()` / `update()`), the resolver holds each resolved copy **in
+memory**; the canonical source is left untouched.
 
-**Deployment protocol (safe recovery — new Critical from R2).** `listPages` currently turns any PAC
-failure into `[]` (`genpage-cli.js`, `listPages()`), which the engine treats as "no pages" — risking
-duplicates and orphans. The `app` stage instead:
+**Deployment protocol (safe recovery — new Critical from R2).** The listing must fail closed: the first
+page backend (a PAC wrapper) turned any failure into `[]`, which the engine treated as "no pages" — risking
+duplicates and orphans. `enumerateEnv` answers `{ ok:false }` on a failure (`genpage-sdk.js`). The `app`
+stage:
 
 1. **Enumerate fail-closed** — page listing retries and **distinguishes failure from empty**; a
    failed enumeration halts (never "no pages exist"). Seed the `key → pageId` map from the durable
@@ -316,7 +316,7 @@ duplicates and orphans. The `app` stage instead:
    brand-new pages have no live navigation to disturb. Persist each returned `key → pageId` to
    pipeline state **and the manifest immediately**.
 3. Once **all** ids are known, **resolve** the graph (validate every `PAGEREF_<key>`; fail on any
-   dangling target) and write per-page **staging files** with GUIDs substituted.
+   dangling target) and keep per-page resolved copies in memory with GUIDs substituted.
 4. **Upload resolved content exactly once** per page (existing pages get their resolved content in a
    single update — no symbolic intermediate that could break live nav).
 5. **Finalize the sitemap** (`sdk-build.js:1045-1054`) — the true commit point, only after all

@@ -1,8 +1,8 @@
 'use strict';
 // Integration tests for the §9 PAGEREF_ deployment protocol: STRUCTURAL scan/parity → create-absent-first
-// → resolve-to-run-scoped-staging (never mutate canonical) → upload-once (no duplicates) → sitemap finalize.
-// Uses a REAL temp appDir so the fs read (canonical .tsx) and write (staging) run. Staging is cleaned in a
-// finally, so the mock upload captures the uploaded bytes at call time.
+// → resolve in memory (never mutate canonical) → upload-once (no duplicates) → sitemap finalize.
+// Uses a REAL temp appDir so the fs read of the canonical .tsx runs; the page backend double records the text
+// each write was sent — the SDK takes the text of a page, so there is no file to stage or to read back.
 //
 // Tests also cover OVERRIDE 2 (new-Important-1): a nav pageId that is a `dynamic` expression or a `literal`
 // GUID (hardcoded) must be rejected fail-closed BEFORE any write, even when navigatesTo: [] (so the existing
@@ -12,9 +12,15 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
+const { runSdkBuild: runBuild, appUniqueName } = require('../lib/sdk-build.js');
+const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+const { FakeSdk, connectionError, sdkError } = require('./helpers/fake-genpage-sdk.js');
+// The page backend double these tests hand the build is named `genpageCli` throughout — what it stood in for until pages went through the SDK
+// (lib/genpage-sdk.js) — and the build takes it as `genpage`.
+const runSdkBuild = (spec, opts) => runBuild(spec, { ...opts, ...(opts.genpageCli ? { genpage: opts.genpageCli } : {}) });
 const { writeBaseline, readBaseline } = require('../lib/deployed-baseline.js');
 const { sha256 } = require('../lib/hash.js');
+const { readPageOwnership, readPendingCreations, recordPagePending } = require('../lib/page-ownership-records.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
@@ -106,20 +112,30 @@ function mockSdk(opts = {}) {
   return { sdk, calls };
 }
 
-// genpageCli mock: mints deterministic ids from the page name; captures the uploaded bytes (staging is
-// cleaned in a finally). `live` seeds enumerate() for a rebuild.
+// The page backend double: mints deterministic ids from the page name, and records every write as the text it was sent (`content`) — what
+// the SDK takes — never a file. `live` seeds the environment's pages a rebuild reuses (EXISTENCE is env-wide). A rebuild's writes are
+// updates; `update` and `create` can be wrapped to do something as a page goes up, as a maker saving a file would.
 function mockGenpageCli(live = []) {
   const uploads = [];
+  // The app operations the build asked for: one entry per `placeInApp`, { appId, pages, dataSources }.
+  const placements = [];
+  const answer = (o, pageId) => ({ pageId, name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [] });
   return {
     uploads,
-    // EXISTENCE is env-wide (Task 2). `live` seeds the id set a rebuild reuses.
+    placements,
     enumerateEnv: async () => ({ ok: true, ids: live.map((p) => String(p.pageId).toLowerCase()), pages: live }),
-    upload: async (o) => {
-      let content = '';
-      try { content = fs.readFileSync(o.codeFile, 'utf8'); } catch { /* nothing */ }
-      const pageId = o.pageId || (o.name === 'Detail' ? DETAIL_ID : OVERVIEW_ID);
-      uploads.push({ name: o.name, requestedId: o.pageId, resolvedId: pageId, codeFile: o.codeFile, content });
-      return { pageId };
+    create: async (o) => {
+      const pageId = o.name === 'Detail' ? DETAIL_ID : OVERVIEW_ID;
+      uploads.push({ name: o.name, requestedId: undefined, resolvedId: pageId, content: o.source });
+      return answer(o, pageId);
+    },
+    update: async (id, o) => {
+      uploads.push({ name: o.name, requestedId: id, resolvedId: id, content: o.source });
+      return answer(o, id);
+    },
+    placeInApp: async (appId, o) => {
+      placements.push({ appId, ...o });
+      return { added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false };
     },
   };
 }
@@ -161,10 +177,9 @@ test('deploy: nav page uploads RESOLVED content (target id, no PAGEREF_); canoni
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
     const overviewUpload = genpageCli.uploads.find((u) => u.name === 'Overview');
     assert.ok(overviewUpload.content.includes(DETAIL_ID), 'uploaded content carries the resolved target id');
-    assert.ok(!/PAGEREF_/.test(overviewUpload.content), 'no PAGEREF_ token remains in the uploaded (staged) bytes');
+    assert.ok(!/PAGEREF_/.test(overviewUpload.content), 'no PAGEREF_ token remains in the uploaded bytes');
     assert.ok(fs.readFileSync(path.join(appDir, 'overview.tsx'), 'utf8').includes('"PAGEREF_detail"'), 'canonical .tsx untouched');
-    const stagingRoot = path.join(appDir, '.maker-workspace', '.pageref-deploy');
-    assert.ok(!fs.existsSync(stagingRoot) || fs.readdirSync(stagingRoot).length === 0, 'run-scoped staging cleaned in finally');
+    assert.ok(!fs.existsSync(path.join(appDir, '.maker-workspace', '.pageref-deploy')), 'the resolved copy is held in memory: no staging folder is made');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -502,7 +517,7 @@ test('deploy: a resolved copy that still holds a PAGEREF_ token HALTs before any
       const { sdk } = proven();
       const genpageCli = mockGenpageCli(live);
       await assert.rejects(
-        build(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
+        build(spec, { sdk, apply: true, env: 'https://x', appDir, genpage: genpageCli, phases: PHASES }),
         (e) => e && e.phase === 'pages' && e.code === 'pages-stray-pageref' && !e.recoverable
           && /page "Overview" has PAGEREF_ token\(s\) left once its navigation links were resolved/.test(e.message)
           && /PAGEREF_detail \(line \d+, column \d+\)/.test(e.message)
@@ -962,7 +977,7 @@ test('deploy: the Griffel halt of a page whose name reads as a transient error i
     let halt = null;
     try {
       await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0 }, {
-        sdk, provisionSdk: sdk, genpageCli, sleep: async () => {}, log: (m) => lines.push(m),
+        sdk, provisionSdk: sdk, genpage: genpageCli, sleep: async () => {}, log: (m) => lines.push(m),
         discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
       });
     } catch (e) { halt = e; }
@@ -1172,89 +1187,132 @@ test('deploy: a makeStyles call the checker cannot read is reported as that — 
   } finally { fs.rmSync(fresh.appDir, { recursive: true, force: true }); }
 });
 
-// The build wraps a pac upload that timed out with the caller's own advice: it keeps no base marker, and a navigation page's code file is a staging copy it deletes at the end, so the standalone
-// script's `genpage-base.js check --file <staging copy>` would fail on a missing file. The update is reported as one that may have landed, it is NOT sent again, and the next build
-// converges with one page per name.
-test('deploy: a pac timeout during an UPDATE stops the build with the build\'s advice, sends nothing again, and the next build converges with one page per name', async () => {
-  const { makeGenpageCli } = require('../lib/genpage-cli.js');
+// The page write that cannot say what it did is the one the build must never send again. An UPDATE whose answer is lost, and whose read then shows the page changed by someone else, MAY HAVE
+// LANDED: the backend refuses it with the build's advice — the build keeps no base marker, so it points at its own re-run, which reads every page first — and the error says it must not be
+// retried, so the build's own retry of a halt it takes for transient does not send it again. The next build converges with one page per name. Driven through the REAL backend over the SDK stand-in.
+function liveTwoPages(sdk) {
+  sdk.seedPage({ id: OVERVIEW_ID, name: 'Overview', source: 'export default function Overview(){ return null; }', conversation: [{ sender: 'user', message: 'first' }, { sender: 'agent', message: 'ok' }] });
+  sdk.seedPage({ id: DETAIL_ID, name: 'Detail', source: 'export default function Detail(){ return null; }', conversation: [{ sender: 'user', message: 'first' }, { sender: 'agent', message: 'ok' }] });
+  return sdk;
+}
+const reset = () => connectionError(0, 'Request failed: read ECONNRESET');
+
+test('deploy: an UPDATE whose outcome is not known stops the build with the build\'s advice, sends nothing again, and the next build converges with one page per name', async () => {
   const { isTransientHalt } = require('../build-model-app.js');
-  const { appDir, spec } = makeTwoPageApp(); // overview links to detail: its upload goes through a staging copy
+  const { appDir, spec } = makeTwoPageApp(); // overview links to detail
   try {
     const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
     const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
-    const listing = `Connected as tester@contoso.com\nRetrieving generated pages...\nFound ${live.length} generated page(s):\n\n${'Page ID'.padEnd(37)}${'Name'.padEnd(9)}Published\n${live.map((p) => `${p.pageId} ${p.name.padEnd(8)} -`).join('\n')}\n`;
-    const pacCalls = [];
-    let stall = true;
-    const run = async (args) => {
-      pacCalls.push(args);
-      if (args[2] === 'list') return { status: 0, stdout: listing, stderr: '' };
-      if (stall) return { status: null, timedOut: true, timeoutMs: 600000, command: 'pac model genpage upload', stdout: '', stderr: '' };
-      return { status: 0, stdout: `Page ID: ${args[args.indexOf('--page-id') + 1]}`, stderr: '' };
-    };
-    const genpageCli = makeGenpageCli('https://x', { run, sleep: async () => {} });
+    // The answer to the first page's write is lost, and by the time it is read the page holds neither what was sent nor what it held.
+    const fake = liveTwoPages(new FakeSdk())
+      .script('push', { lose: reset() })
+      .script('fetch', undefined, (s, type, id) => { s.pages.get(id).source = 'saved by someone else in the meantime'; });
+    const genpage = makeGenpageSdk('https://x', { sdk: fake });
     const make = () => mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) }).sdk;
-    await assert.rejects(runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }), (e) => {
+    await assert.rejects(runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpage, phases: PHASES }), (e) => {
       assert.strictEqual(e.phase, 'pages');
-      assert.match(e.message, /timed out after 600 s and was stopped — the UPDATE of page 11111111-0000-4000-8000-000000000001 MAY HAVE LANDED/);
-      assert.match(e.message, /First see what is deployed: pac model genpage download --environment https:\/\/x --app-id [^ ]+ --page-id 11111111-0000-4000-8000-000000000001 --output-directory <folder>/);
-      assert.match(e.message, /Then run the build again: it sends this page once more, to the same page id/);
-      assert.doesNotMatch(e.message, /genpage-base\.js|\.pageref-deploy|re-run the upload/, 'no advice the build cannot follow: no check on a staging copy it deletes');
+      assert.match(e.message, new RegExp(`the update of generative page "Overview" \\(${OVERVIEW_ID}\\) MAY HAVE LANDED or been overtaken`));
+      assert.match(e.message, /a second send would overwrite whatever was saved since/);
+      assert.match(e.message, /Run the build again: it reads the page first, so an update that did land is not sent again and records nothing twice/);
+      assert.doesNotMatch(e.message, /genpage-base\.js|re-run the upload/, 'no advice the build cannot follow: it keeps no base marker');
       assert.strictEqual(isTransientHalt(e), false, 'the build does not retry it by itself');
       return true;
     });
-    const uploads = pacCalls.filter((a) => a[2] === 'upload');
-    assert.strictEqual(uploads.length, 1, 'one send: the update that stalled is not sent again, and the next page was never started');
-    assert.ok(!fs.existsSync(path.join(appDir, '.maker-workspace', '.pageref-deploy')) || fs.readdirSync(path.join(appDir, '.maker-workspace', '.pageref-deploy')).length === 0, 'the staging copy is gone, as the message says it would be');
+    assert.strictEqual(fake.count('pushArtifact'), 1, 'one send: the update whose answer was lost is not sent again, and the next page was never started');
+    assert.strictEqual(fake.count('createArtifact'), 0);
     // The next normal build: the same pages, the same ids — one page per name, nothing created.
-    stall = false;
-    pacCalls.length = 0;
-    await runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
-    const sent = pacCalls.filter((a) => a[2] === 'upload');
-    assert.strictEqual(sent.length, 2, 'both pages are sent');
-    assert.deepStrictEqual(sent.map((a) => a[a.indexOf('--page-id') + 1]).sort(), [OVERVIEW_ID, DETAIL_ID].sort(), 'each to the id it already has: updates, and no create');
+    fake.pages.get(OVERVIEW_ID).source = 'export default function Overview(){ return null; }';
+    await runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpage, phases: PHASES });
+    assert.strictEqual(fake.count('createArtifact'), 0, 'updates, and no create');
+    assert.deepStrictEqual([...fake.pages.keys()].sort(), [OVERVIEW_ID, DETAIL_ID].sort(), 'one page per name');
+    assert.ok(fake.pages.get(OVERVIEW_ID).source.includes(DETAIL_ID), 'the navigation page now holds its resolved copy');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// The same for an UPDATE that FAILS rather than stalls: pac can fail in the publish after it wrote the page and recorded its prompt, so the build sends it once — not again in the
-// upload's own loop, and not by its re-run of a halt it takes for transient (the pac words here, "try again later", would read as one without the marker) — and gives its own advice.
-test('deploy: a pac failure during an UPDATE stops the build with the build\'s advice, sends nothing again, and the next build converges with one page per name', async () => {
-  const { makeGenpageCli } = require('../lib/genpage-cli.js');
-  const { isTransientHalt } = require('../build-model-app.js');
+// A page that was WRITTEN but whose publish failed is on the server, so the next build reuses it and publishes the copy it already holds — it does not write it again, nor create another.
+test('deploy: an UPDATE whose publish fails stops the build naming the page, and the next build publishes what the page holds without writing it again', async () => {
   const { appDir, spec } = makeTwoPageApp();
   try {
     const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
     const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
-    const listing = `Connected as tester@contoso.com\nRetrieving generated pages...\nFound ${live.length} generated page(s):\n\n${'Page ID'.padEnd(37)}${'Name'.padEnd(9)}Published\n${live.map((p) => `${p.pageId} ${p.name.padEnd(8)} -`).join('\n')}\n`;
-    const pacCalls = [];
-    let fail = true;
-    const run = async (args) => {
-      pacCalls.push(args);
-      if (args[2] === 'list') return { status: 0, stdout: listing, stderr: '' };
-      const id = args[args.indexOf('--page-id') + 1];
-      if (fail) return { status: 1, stdout: `Page ID: ${id}\r\nPublishing...\r\n`, stderr: 'Error: The service is busy, try again later.' };
-      return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
-    };
-    const genpageCli = makeGenpageCli('https://x', { run, sleep: async () => {} });
+    const fake = liveTwoPages(new FakeSdk()).script('publish', new Error('PublishXml answered 500: the service is busy'));
+    const genpage = makeGenpageSdk('https://x', { sdk: fake });
     const make = () => mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) }).sdk;
-    await assert.rejects(runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }), (e) => {
+    await assert.rejects(runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpage, phases: PHASES }), (e) => {
       assert.strictEqual(e.phase, 'pages');
-      assert.match(e.message, /failed \(Error: The service is busy, try again later\.\) — the UPDATE of page 11111111-0000-4000-8000-000000000001 MAY HAVE LANDED: pac had printed the Page ID/);
-      assert.match(e.message, /First see what is deployed: pac model genpage download --environment https:\/\/x --app-id [^ ]+ --page-id 11111111-0000-4000-8000-000000000001 --output-directory <folder>/);
-      assert.match(e.message, /Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the failed send did land/);
-      assert.doesNotMatch(e.message, /genpage-base\.js|\.pageref-deploy|re-run the upload/, 'no advice the build cannot follow: no check on a staging copy it deletes');
-      assert.strictEqual(isTransientHalt(e), false, 'the build does not retry it by itself');
+      assert.strictEqual(e.code, 'pages-publish-failed');
+      assert.match(e.message, new RegExp(`page "Overview" was updated as ${OVERVIEW_ID} and saved, but publishing it failed \\(PublishXml answered 500: the service is busy\\)`));
+      assert.match(e.message, /the runtime still serves the previously published copy\. Re-run the build once the cause is cleared: the page is reused, not created again/);
       return true;
     });
-    const uploads = pacCalls.filter((a) => a[2] === 'upload');
-    assert.strictEqual(uploads.length, 1, 'one send: the update that failed is not sent again, and the next page was never started');
-    // The next normal build: the same pages, the same ids — one page per name, nothing created.
-    fail = false;
-    pacCalls.length = 0;
-    await runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
-    const sent = pacCalls.filter((a) => a[2] === 'upload');
-    assert.strictEqual(sent.length, 2, 'both pages are sent');
-    assert.deepStrictEqual(sent.map((a) => a[a.indexOf('--page-id') + 1]).sort(), [OVERVIEW_ID, DETAIL_ID].sort(), 'each to the id it already has: updates, and no create');
+    assert.strictEqual(fake.count('pushArtifact'), 1, 'the write landed once; the next page was never started');
+    const written = fake.pages.get(OVERVIEW_ID).source;
+    assert.ok(written.includes(DETAIL_ID), 'the page was written, with its resolved navigation');
+    // The next normal build: the page holds its content, so it is published — not written again — and the other page goes up. One page per name, nothing created.
+    await runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpage, phases: PHASES });
+    assert.strictEqual(fake.count('pushArtifact'), 1, 'nothing is written again: the page that was written is only published, and the other already holds its source');
+    assert.strictEqual(fake.count('createArtifact'), 0, 'no create');
+    assert.strictEqual(fake.pages.get(OVERVIEW_ID).source, written, 'the page that was already written is as it was');
+    assert.ok(fake.of('publishArtifact').filter((c) => c.args[1] === OVERVIEW_ID).length >= 2, 'and is published again');
+    assert.ok(fake.of('publishArtifact').some((c) => c.args[1] === DETAIL_ID), 'and the page the first build never reached is published too');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// An UPDATE answers with the id it was asked to write. A different one would leave the navigation that links to the page pointing at a page that is not the one written, so the build stops
+// there instead of finalizing on an inconsistent target.
+test('deploy: an UPDATE that answers with a different page id halts the build — nothing is finalized on an inconsistent target', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
+    const OTHER_ID = '99999999-9999-4999-8999-999999999999';
+    const genpageCli = mockGenpageCli(live);
+    const update = genpageCli.update;
+    genpageCli.update = async (id, o) => { const up = await update(id, o); return o.name === 'Detail' ? { ...up, pageId: OTHER_ID } : up; };
+    const { sdk } = mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
+      (e) => {
+        assert.strictEqual(e.phase, 'pages');
+        assert.strictEqual(e.code, 'pages-update-identity-mismatch');
+        assert.match(e.message, new RegExp(`page "Detail" UPDATE returned a different id \\(${OTHER_ID} != ${DETAIL_ID}\\)`));
+        return true;
+      }
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The backend the pages phase makes for itself holds a throwaway workspace with every page's source in it, so it is removed when the phase ends — by finishing or by halting. A backend the
+// caller lends is the caller's to dispose, and the build makes no other.
+test('deploy: the backend the pages phase makes for itself is disposed when the phase ends, finishing or halting — and a lent one is left to its owner', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const made = [];
+  const genpageModule = {
+    ...require('../lib/genpage-sdk.js'),
+    makeGenpageSdk: (url) => {
+      assert.strictEqual(url, 'https://x');
+      const backend = { ...mockGenpageCli(), disposed: 0, dispose() { this.disposed += 1; } };
+      made.push(backend);
+      return backend;
+    },
+  };
+  const engine = loadCli(path.join(__dirname, '..', 'lib', 'sdk-build.js'), { requires: { './genpage-sdk.js': genpageModule } }).exports;
+  for (const [what, options] of [['finishes', {}], ['halts', { malformed: true }]]) {
+    const { appDir, spec } = makeTwoPageApp(options);
+    try {
+      const run = engine.runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, phases: PHASES });
+      if (what === 'halts') await assert.rejects(run, (e) => e.code === 'pages-malformed-navref'); else await run;
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+    assert.strictEqual(made.length, what === 'finishes' ? 1 : 2, `${what}: one backend is made for the run`);
+    assert.strictEqual(made[made.length - 1].disposed, 1, `${what}: and disposed exactly once`);
+  }
+  const lent = { ...mockGenpageCli(), disposed: 0, dispose() { this.disposed += 1; } };
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    await engine.runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, genpage: lent, phases: PHASES });
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  assert.strictEqual(made.length, 2, 'no backend of its own was made for a run that was lent one');
+  assert.strictEqual(lent.disposed, 0, 'and the lent one is not disposed by the build');
 });
 
 test('deploy: a page with the same names only in a comment, a string or an inline style is not refused, and a spec of clean pages builds as it did', async () => {
@@ -1348,8 +1406,8 @@ test('deploy: a page saved while a build runs is not recorded as applied — the
     const earlier = recordApply(app.spec, app.appDir); // an earlier apply sent the clean page
     // Build 1: the pre-write scan has read both pages when, during the upload, the maker saves a `borderColor` into detail.tsx.
     const first = app.rebuild({ baselineSpec: earlier });
-    const upload = first.genpageCli.upload;
-    first.genpageCli.upload = async (o) => { const up = await upload(o); if (o.name === 'Detail') app.edit(GRIFFEL_BAD); return up; };
+    const update = first.genpageCli.update;
+    first.genpageCli.update = async (id, o) => { const up = await update(id, o); if (o.name === 'Detail') app.edit(GRIFFEL_BAD); return up; };
     const result = await first.run();
     assert.strictEqual(first.genpageCli.uploads.find((u) => u.name === 'Detail').content, GRIFFEL_CLEAN, 'build 1 sent the clean page, and succeeded');
     assert.ok(persistAppliedBaseline(result, { spec: app.spec, opts: { apply: true, baselineSpec: earlier }, workspaceDir: workspace, appDirAbs: app.appDir, baselineIdentity: identity }), 'its baseline is written, as main() does');
@@ -1392,8 +1450,8 @@ test('changed-only: a page the run did not select keeps the record it had, whate
     const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
     const sdk = mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) }).sdk;
     const cli = mockGenpageCli(live);
-    const upload = cli.upload;
-    cli.upload = async (o) => { const up = await upload(o); app.edit(GRIFFEL_BAD); return up; };
+    const update = cli.update;
+    cli.update = async (id, o) => { const up = await update(id, o); app.edit(GRIFFEL_BAD); return up; };
     const result = await runSdkBuild(app.spec, { sdk, apply: true, env: 'https://x', appDir: app.appDir, genpageCli: cli, phases: PAGES_ONLY, baselineSpec: earlier,
       changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys: ['overview'] } });
     assert.deepStrictEqual(cli.uploads.map((u) => u.name), ['Overview']);
@@ -1516,19 +1574,11 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
       fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
       dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
     };
-    genpageCli.download = async ({ outputDir, pageIds }) => {
-      assert.deepStrictEqual([...pageIds].sort(), [overviewId, detailId].sort());
-      for (const id of pageIds) {
-        const dir = path.join(outputDir, id);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'page.tsx'), genpageCli.uploads.find((u) => u.requestedId === id).content, 'utf8');
-        fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":[]}', 'utf8');
-      }
-      return true;
-    };
+    // What the environment now holds is what the build last wrote: a download reads each page back from it.
+    genpageCli.read = async (id) => ({ id, name: live.find((p) => p.pageId === id).name, source: genpageCli.uploads.find((u) => u.requestedId === id).content, dataSources: [], conversation: [] });
     const downloaded = await runDownload({
       sdk: currentReadSdk(downloadSdk, { appId: APP_ID, layerId: SELF_UNIQUE_VALUE, sitemapXml: xml }),
-      genpageCli, outDir: downloadDir, appId: APP_ID, appUnique: 'contoso_deployapp',
+      genpage: genpageCli, outDir: downloadDir, appId: APP_ID, appUnique: 'contoso_deployapp',
     });
     assert.ok(downloaded.ok, JSON.stringify(downloaded));
     const overview = downloaded.spec.pages.find((p) => p.key === 'overview');
@@ -1542,8 +1592,7 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     assert.strictEqual(rebuiltCli.uploads.find((u) => u.requestedId === overviewId).content, resolved);
     assert.strictEqual(fs.readFileSync(path.join(downloadDir, overview.source.codeFile), 'utf8'), canonical);
     for (const dir of [appDir, downloadDir]) {
-      const staging = path.join(dir, '.maker-workspace', '.pageref-deploy');
-      assert.ok(!fs.existsSync(staging) || fs.readdirSync(staging).length === 0, 'run-scoped staging cleaned');
+      assert.ok(!fs.existsSync(path.join(dir, '.maker-workspace', '.pageref-deploy')), 'the resolved copy is held in memory: no staging folder is made');
     }
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
@@ -1574,11 +1623,11 @@ test('lexical navigation overrides halt before any upload', async () => {
   }
 });
 
-// ── An upload whose outcome is not known is never sent again — not by the build's own retry either ─────────────────────────────────────────────
+// ── A write whose outcome is not known is never sent again — not by the build's own retry either ──────────────────────────────────────────────
 // buildModelApp re-runs the whole build when a halt reads as transient (isTransientHalt), and it decides that from the halt's TEXT. The text of an uncertain create quotes the page's name — user
-// text, so "SQL Timeouts" or "Concurrent Deletes" read as a SQL timeout or a concurrent delete — and pac's own words ("… try again later"). A re-run is a second create: the page the first one made,
-// if it landed, is left beside the new one, outside the app's navigation, and the run reports success. These tests drive the REAL retry loop, the real wrapper and a pac that ends the create each
-// way, and count the creates that reach pac.
+// text, so "SQL Timeouts" or "Concurrent Deletes" read as a SQL timeout or a concurrent delete — and the service's own words ("… try again later"). A re-run would send the create again: the page the
+// first send made, if it landed, is left beside the new one, outside the app's navigation, and the run reports success. These tests drive the REAL retry loop and the real backend over the SDK
+// stand-in, with a create that ends each way, and count the sends that reach the service: under one minted id, never a second page.
 function onePageApp(pageName) {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-uncertain-'));
   fs.writeFileSync(path.join(appDir, 'p.tsx'), 'export default function P(){ return null; }', 'utf8');
@@ -1592,69 +1641,49 @@ function onePageApp(pageName) {
   };
   return { appDir, spec };
 }
-const PAC_LISTING_EMPTY = 'Connected as tester@contoso.com\nRetrieving generated pages...\nFound 0 generated page(s):\n';
-function pacListing(rows) {
-  const width = Math.max(4, ...rows.map((r) => r.name.length));
-  return `Connected as tester@contoso.com\nRetrieving generated pages...\nFound ${rows.length} generated page(s):\n\n${'Page ID'.padEnd(37)}${'Name'.padEnd(width + 1)}Published\n${rows.map((r) => `${r.pageId} ${r.name.padEnd(width)} -`).join('\n')}\n`;
-}
-const PAC_STALLED = { status: null, timedOut: true, timeoutMs: 600000, command: 'pac model genpage upload', stdout: '', stderr: '' };
-// A pac whose create ends as `create` says, and whose listings, once a create was sent, answer as `afterListing` says. Every call is recorded.
-function sendingPac({ create, afterListing = () => ({ status: 0, stdout: PAC_LISTING_EMPTY, stderr: '' }) }) {
-  const calls = [];
-  let sent = 0;
-  let listedSinceSend = 0;
-  const run = async (args) => {
-    calls.push(args);
-    if (args[2] === 'list') {
-      if (sent === 0) return { status: 0, stdout: PAC_LISTING_EMPTY, stderr: '' };
-      listedSinceSend += 1;
-      return afterListing(listedSinceSend);
-    }
-    if (args[2] === 'upload') { sent += 1; return create(sent, args); }
-    return { status: 1, stdout: '', stderr: 'unexpected pac call' };
-  };
-  return { run, calls, creates: () => calls.filter((a) => a[2] === 'upload' && !a.includes('--page-id')).length };
-}
-const TRY_AGAIN_LATER = 'Error: The service is unavailable. Please try again later.';
+const TRY_AGAIN_LATER = 'The service is unavailable. Please try again later.';
 const UNCERTAIN_PAGE_ID = '3a1f9c52-0000-4000-8000-00000000a0a0';
-// `says` is what the halt says; each scenario ends the create a different way.
+// A backend over the SDK stand-in whose create ends as `fake` is scripted to: the page's id is minted up front, so every send is under the same id.
+function uncertainBackend(script) {
+  const fake = new FakeSdk();
+  script(fake);
+  return { fake, genpage: makeGenpageSdk('https://contoso.crm.dynamics.com', { sdk: fake, newId: () => UNCERTAIN_PAGE_ID }) };
+}
+// `says` is what the halt says; each scenario ends the create a different way, and `sends` is how many sends reach the service.
 const UNCERTAIN_CREATES = [
-  { what: 'a create that stalls with nothing visible yet, for a page named "SQL Timeouts"', name: 'SQL Timeouts', create: () => PAC_STALLED, says: /an UNCERTAIN create: no new page is visible/ },
-  { what: 'a create that stalls with nothing visible yet, for a page named "Concurrent Deletes"', name: 'Concurrent Deletes', create: () => PAC_STALLED, says: /an UNCERTAIN create: no new page is visible/ },
-  { what: 'a create that stalls and whose environment listing then fails with "try again later"', name: 'Overview', create: () => PAC_STALLED, afterListing: () => ({ status: 1, stdout: '', stderr: TRY_AGAIN_LATER }), says: /env enumeration failed — refusing to retry/ },
-  { what: 'a create that fails and whose environment listing then fails with "try again later"', name: 'Overview', create: () => ({ status: 1, stdout: '', stderr: 'Error: the upload failed' }), afterListing: () => ({ status: 1, stdout: '', stderr: TRY_AGAIN_LATER }), says: /env enumeration failed — refusing to retry/ },
-  { what: 'a create that stalls and whose page then shows up in the environment, for a page named "SQL Timeout Report"', name: 'SQL Timeout Report', create: () => PAC_STALLED, afterListing: () => ({ status: 0, stdout: pacListing([{ pageId: UNCERTAIN_PAGE_ID, name: 'SQL Timeout Report' }]), stderr: '' }), says: /ambiguous ownership/ },
-  { what: 'a create that fails and leaves a page in the environment, for a page named "SQL Timeout Report"', name: 'SQL Timeout Report', create: () => ({ status: 1, stdout: '', stderr: 'Error: could not publish' }), afterListing: () => ({ status: 0, stdout: pacListing([{ pageId: UNCERTAIN_PAGE_ID, name: 'SQL Timeout Report' }]), stderr: '' }), says: /ambiguous ownership/ },
-  { what: 'a create that stalls after pac printed the Page ID, for a page named "SQL Timeouts"', name: 'SQL Timeouts', create: () => ({ ...PAC_STALLED, stdout: `Page ID: ${UNCERTAIN_PAGE_ID}\n` }), says: /after it had CREATED the page as/ },
-  { what: 'a create that fails after pac printed the Page ID, with "try again later"', name: 'Overview', create: () => ({ status: 1, stdout: `Page ID: ${UNCERTAIN_PAGE_ID}\n`, stderr: TRY_AGAIN_LATER }), says: /failed after it had CREATED the page as/ },
+  { what: 'a create that never arrives, twice, for a page named "SQL Timeouts"', name: 'SQL Timeouts', script: (f) => f.script('push', { drop: connectionError(0, 'Request failed: read ECONNRESET') }, { drop: connectionError(0, 'Request failed: read ECONNRESET') }), sends: 2, says: /creating it was sent twice and neither answer could be used/ },
+  { what: 'a create that never arrives, twice, for a page named "Concurrent Deletes"', name: 'Concurrent Deletes', script: (f) => f.script('push', { drop: connectionError(0, 'Request failed: read ECONNRESET') }, { drop: connectionError(0, 'Request failed: read ECONNRESET') }), sends: 2, says: /creating it was sent twice and neither answer could be used/ },
+  { what: 'a create whose answer is lost and whose page then cannot be read, the service saying "try again later"', name: 'Overview', script: (f) => f.script('push', { lose: connectionError(0, 'Request failed: read ECONNRESET') }).script('fetch', new Error(TRY_AGAIN_LATER)), sends: 1, says: /the outcome of creating it is unknown[\s\S]*reading the page it would have[\s\S]*failed too \(The service is unavailable\. Please try again later\.\)/ },
+  { what: 'a create whose answer is lost and whose page then reads as changed, for a page named "SQL Timeout Report"', name: 'SQL Timeout Report', script: (f) => f.script('push', { lose: connectionError(0, 'Request failed: read ECONNRESET') }).script('fetch', (s, type, id) => { s.pages.get(id).source = 'saved by someone else'; }), sends: 1, says: /its source is not what this create sent — it was changed after it was created/ },
+  { what: 'a create the service says already exists, with no page to be read', name: 'Overview', script: (f) => f.script('push', { report: { saved: false, error: Object.assign(new Error('the artifact already exists'), { code: 'ARTIFACT_ALREADY_EXISTS' }) } }), sends: 1, says: /the service answered that page \S+ already exists, but no page \S+ can be read[\s\S]*a request that is still in flight can land/ },
+  { what: 'a create that arrives only after its answer was given up on, for a page named "SQL Timeouts"', name: 'SQL Timeouts', script: (f) => f.script('push', { lose: connectionError(0, 'Request failed: read ECONNRESET') }).script('fetch', new Error(TRY_AGAIN_LATER)), sends: 1, says: /the outcome of creating it is unknown/ },
 ];
 async function runUncertainBuild(scenario) {
   const { buildModelApp } = require('../build-model-app.js');
-  const { makeGenpageCli } = require('../lib/genpage-cli.js');
   const { appDir, spec } = onePageApp(scenario.name);
   try {
-    const pac = sendingPac(scenario);
-    const genpageCli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: pac.run, sleep: async () => {}, request: async () => ({ status: 200, data: { name: scenario.name, createdon: '2026-01-01T00:00:00Z' } }) });
+    const backend = uncertainBackend(scenario.script);
     const { sdk } = mockSdk();
     const lines = [];
     let halt = null;
     try {
       await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0 }, {
-        sdk, provisionSdk: sdk, genpageCli, sleep: async () => {}, log: (m) => lines.push(m),
+        sdk, provisionSdk: sdk, genpage: backend.genpage, sleep: async () => {}, log: (m) => lines.push(m),
         discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
       });
     } catch (e) { halt = e; }
-    return { halt, lines, pac, spec };
+    return { halt, lines, fake: backend.fake, spec };
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 }
 for (const scenario of UNCERTAIN_CREATES) {
-  test(`deploy: ${scenario.what} halts the build — its create reaches pac once, and the build's own retry does not send it again`, async () => {
+  test(`deploy: ${scenario.what} halts the build — it reaches the service under one id, and the build's own retry does not send it again`, async () => {
     const { isTransientHalt } = require('../build-model-app.js');
-    const { halt, lines, pac, spec } = await runUncertainBuild(scenario);
+    const { halt, lines, fake, spec } = await runUncertainBuild(scenario);
     assert.ok(halt, 'the build halts');
     assert.strictEqual(halt.phase, 'pages');
     assert.match(halt.message, scenario.says);
-    assert.strictEqual(pac.creates(), 1, 'one create: a second would make a duplicate page');
+    assert.strictEqual(fake.count('pushArtifact'), scenario.sends, `${scenario.sends} send(s): the one id is never sent a third time, and no second page is created`);
+    assert.strictEqual(new Set(fake.of('createArtifact').map((c) => c.args[1].id)).size, 1, 'every send is under the same minted id');
     assert.deepStrictEqual(lines.filter((l) => /transient error|retrying/.test(l)), [], 'and the build never says it is retrying');
     assert.strictEqual(isTransientHalt(halt, { spec }), false, 'the halt reads as final');
     assert.strictEqual(halt.cause && halt.cause.transient, false, 'because the error it wraps says so, whatever its text quotes');
@@ -1664,31 +1693,26 @@ for (const scenario of UNCERTAIN_CREATES) {
 // The marker is not a blanket: what the build rides out is still ridden out. A listing that fails BEFORE any create was sent — the snapshot the create is checked against — leaves nothing
 // to duplicate, so a transient failure there is retried, and the create is sent once, when it can be.
 test('deploy: a transient failure BEFORE the create was sent is still retried by the build, and the create is sent once', async () => {
-  const scenario = { name: 'Overview', create: () => ({ status: 0, stdout: `Page ID: ${UNCERTAIN_PAGE_ID}\n`, stderr: '' }) };
   const { buildModelApp } = require('../build-model-app.js');
-  const { makeGenpageCli } = require('../lib/genpage-cli.js');
-  const { appDir, spec } = onePageApp(scenario.name);
+  const { appDir, spec } = onePageApp('Overview');
   try {
-    const pac = sendingPac(scenario);
-    let snapshots = 0;
-    const run = async (args) => {
-      if (args[2] === 'list' && pac.creates() === 0 && (snapshots += 1) <= 3) return { status: 1, stdout: '', stderr: TRY_AGAIN_LATER };
-      return pac.run(args);
-    };
-    const genpageCli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {} });
+    // The environment's page list — read before anything is created — fails once with "try again later": nothing has been sent, so there is nothing to duplicate.
+    const fake = new FakeSdk().script('list', new Error(TRY_AGAIN_LATER));
+    const genpage = makeGenpageSdk('https://contoso.crm.dynamics.com', { sdk: fake, newId: () => UNCERTAIN_PAGE_ID });
     const { sdk } = mockSdk();
     const lines = [];
     const result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0 }, {
-      sdk, provisionSdk: sdk, genpageCli, sleep: async () => {}, log: (m) => lines.push(m),
+      sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m),
       discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
     });
     assert.strictEqual(result.ok, true);
     assert.ok(lines.some((l) => /transient error in pages — retrying/.test(l)), 'the build retried');
-    assert.strictEqual(pac.creates(), 1, 'and the create went out once');
+    assert.strictEqual(fake.count('pushArtifact'), 1, 'and the create went out once');
+    assert.deepStrictEqual([...fake.pages.keys()], [UNCERTAIN_PAGE_ID], 'one page');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// The one other place a create is left unrecorded: pac made the page, and the receipt that lets a later build find it could not be written. The halt quotes the page's name too.
+// The one other place a create is left unrecorded: the page was made, and the receipt that lets a later build find it could not be written. The halt quotes the page's name too.
 test('deploy: a page that was created but whose local receipt cannot be saved halts, and the build does not retry it into a second page — whatever the page is called', async () => {
   const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
   const { recordPageCreation } = require('../lib/page-ownership-records.js');
@@ -1703,7 +1727,7 @@ test('deploy: a page that was created but whose local receipt cannot be saved ha
     let halt = null;
     try {
       await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, workspaceDir, retryDelayMs: 0 }, {
-        sdk, provisionSdk: sdk, genpageCli, sleep: async () => {}, log: (m) => lines.push(m),
+        sdk, provisionSdk: sdk, genpage: genpageCli, sleep: async () => {}, log: (m) => lines.push(m),
         discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
       });
     } catch (e) { halt = e; }
@@ -1715,11 +1739,11 @@ test('deploy: a page that was created but whose local receipt cannot be saved ha
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// The pages scan reads each page ONCE, and checks and hashes those bytes; every upload then sends a staging copy of them, never the canonical file.
-// A page saved again while the build runs — after the scan, before its own upload — must not ship unchecked, nor be recorded as what was sent.
+// The pages scan reads each page ONCE, and checks and hashes those bytes; every write then sends the text of those bytes — the SDK takes a page's text, so no file is read again — never the canonical file.
+// A page saved again while the build runs — after the scan, before its own write — must not ship unchecked, nor be recorded as what was sent.
 // Overview links to Detail and Notes, so both are minted first (the create-absent-first step); Help links nowhere and goes up last. While the
 // first page goes up, Notes and Help are saved with a key Griffel drops.
-test('deploy: every page is uploaded from a staging copy of the bytes the scan read — a save to a page during the build does not ship', async () => {
+test('deploy: every page is written from the bytes the scan read — a save to a page during the build does not ship', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-deploy-'));
   try {
     const original = {
@@ -1748,13 +1772,13 @@ test('deploy: every page is uploaded from a staging copy of the bytes the scan r
     const uploads = [];
     const genpageCli = {
       enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
-      upload: async (o) => {
-        uploads.push({ name: o.name, codeFile: o.codeFile, content: fs.readFileSync(o.codeFile, 'utf8') });
+      create: async (o) => {
+        uploads.push({ name: o.name, content: o.source });
         if (uploads.length === 1) {
           fs.writeFileSync(path.join(appDir, 'notes.tsx'), saved, 'utf8');
           fs.writeFileSync(path.join(appDir, 'help.tsx'), saved, 'utf8');
         }
-        return { pageId: o.pageId || ids[o.name] };
+        return { pageId: ids[o.name], name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [] };
       },
     };
     const { sdk } = mockSdk();
@@ -1763,9 +1787,8 @@ test('deploy: every page is uploaded from a staging copy of the bytes the scan r
     const by = Object.fromEntries(uploads.map((u) => [u.name, u]));
     assert.strictEqual(by.Notes.content, original.notes, 'a minted target sends what the scan read, not the later save');
     assert.strictEqual(by.Help.content, original.help, 'a page that links nowhere sends what the scan read, not the later save');
-    const stagingRoot = path.join(appDir, '.maker-workspace', '.pageref-deploy');
-    for (const u of uploads) assert.ok(u.codeFile.startsWith(stagingRoot), `${u.name}: a staging copy, not the canonical file (${u.codeFile})`);
-    assert.ok(!fs.existsSync(stagingRoot) || fs.readdirSync(stagingRoot).length === 0, 'and the copies are removed when the build ends');
+    for (const u of uploads) assert.strictEqual(typeof u.content, 'string', `${u.name}: the page is written as text — there is no file for a later save to reach`);
+    assert.ok(!fs.existsSync(path.join(appDir, '.maker-workspace', '.pageref-deploy')), 'and no staging folder is made');
     // What the build records as sent is what it sent: the source hash the next build compares with, and (for a page sent in the upload step) the deployed hash.
     for (const key of ['notes', 'help']) assert.strictEqual(r.created.pageSourceShas[key], sha256(original[key]), `${key}: source hash`);
     assert.strictEqual(r.created.pageDeployedShas.help, sha256(original.help), 'help: deployed hash');
@@ -1773,13 +1796,11 @@ test('deploy: every page is uploaded from a staging copy of the bytes the scan r
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// Windows reserves the device names, with or without an extension (`NUL.txt` is NUL —
-// https://learn.microsoft.com/windows/win32/fileio/naming-a-file), and a page key is a slug that can be one. The
-// staging copy pac uploads must never be named like one: where a release reads `con.tsx` as the console, the build
-// would hand pac a device instead of the page. Checked on the name rather than by writing one, because Windows 11
-// writes `con.tsx` as an ordinary file, so a write would pass here and fail elsewhere.
-test('deploy: a page keyed like a Windows device name is staged under a name that is not one', async () => {
-  const DEVICE = /^(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(?:\..*)?$/i;
+// A page key is a slug, and some slugs are Windows device names: CON, PRN, AUX, NUL, COM1-9 and LPT1-9 are reserved as a file name with or
+// without an extension (https://learn.microsoft.com/windows/win32/fileio/naming-a-file). Through 2.14.0 the build handed pac each page as a
+// staging file named after its key (`page-<key>.tsx`, so that no key could become a device name). The SDK takes a page's text, so no file is
+// named after a key at all: such pages build like any other, and nothing is written to disk on their behalf.
+test('deploy: pages keyed like Windows device names are written as text, with no file named after them', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-deploy-'));
   try {
     const keys = ['con', 'nul', 'aux', 'prn', 'com1', 'lpt1'];
@@ -1799,27 +1820,383 @@ test('deploy: a page keyed like a Windows device name is staged under a name tha
       pages: keys.map((key) => ({ key, name: `Page ${key}`, ...(key === 'con' ? { navigatesTo: [{ targetKey: 'nul' }, { targetKey: 'aux' }] } : {}), source: { kind: 'tsx', codeFile: `src-${key}.tsx` } })),
       appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: keys.map((page) => ({ page, title: page })) }] }] },
     };
-    const uploads = [];
+    const writes = [];
     let minted = 0;
     const genpageCli = {
       enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
-      upload: async (o) => {
-        uploads.push({ name: o.name, codeFile: o.codeFile, content: fs.readFileSync(o.codeFile, 'utf8') });
-        return { pageId: o.pageId || `5${String(++minted).padStart(7, '0')}-0000-4000-8000-000000000000` };
+      create: async (o) => {
+        writes.push({ name: o.name, content: o.source });
+        return { pageId: `5${String(++minted).padStart(7, '0')}-0000-4000-8000-000000000000`, name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [] };
       },
     };
     const { sdk } = mockSdk();
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
-    assert.deepStrictEqual(uploads.map((u) => u.name).sort(), keys.map((k) => `Page ${k}`).sort(), 'every page goes up once');
-    for (const u of uploads) {
-      const base = path.basename(u.codeFile);
-      assert.doesNotMatch(base, DEVICE, `${u.name}: staged as "${base}", which Windows reserves for a device`);
-      assert.match(base, /\.tsx$/, `${u.name}: still a .tsx file, for pac to transpile`);
+    assert.deepStrictEqual(writes.map((w) => w.name).sort(), keys.map((k) => `Page ${k}`).sort(), 'every page is written once');
+    for (const w of writes) assert.strictEqual(typeof w.content, 'string', `${w.name}: written as text`);
+    for (const key of keys.filter((k) => k !== 'con')) assert.strictEqual(writes.find((w) => w.name === `Page ${key}`).content, source[key], `${key}: the text the scan read`);
+    assert.doesNotMatch(writes.find((w) => w.name === 'Page con').content, /PAGEREF_/, 'and the navigation page goes up with its tokens resolved');
+    assert.ok(!fs.existsSync(path.join(appDir, '.maker-workspace', '.pageref-deploy')), 'no staging folder is made');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── A create the build could not account for is not forgotten: its identity is written down BEFORE it is sent ───────────────────────────────────
+// The build used to learn the identity of a page it created only when the create RETURNED. A create that committed, whose answer was lost and whose page could not be read back either, threw an
+// error that carried the minted id — and nothing local kept it: the next build found the page in the environment's list with no link to its spec entry, and created ANOTHER page for it. The id is
+// now recorded as a PENDING creation (lib/page-ownership-records.js) before the first request, and the next build settles the record: the page is there under the name the create sent — it is
+// adopted, a creation receipt is written and the record consumed; it is not there — the create is sent again under the SAME id. These tests run the real pages phase twice over one workspace,
+// through the real backend over the stateful fake of the page tables, and count the pages the service holds.
+const { FakeGenPageServer, INSTANCE: PAGE_SERVICE } = require('./helpers/fake-genpage-server.js');
+const BUILD_ENV = 'https://x';
+const PAGE_SOURCE = "import * as React from 'react';\nexport default function Page() { return <div>Page</div>; }\n";
+const lostAnswer = () => { throw new Error('Request failed: read ECONNRESET'); };
+// The reads that would settle a create are the page's own row; the listing of the environment's pages, which the build reads before it creates anything, is not one of them.
+const rowReadsFail = (method, requestPath, batched) => (method === 'GET' && !batched && /^\/uxagentprojects\(/.test(requestPath) ? 503 : undefined);
+const realPageBackend = (server) => makeGenpageSdk(PAGE_SERVICE, { httpClient: server.http() });
+async function buildPages(spec, appDir, genpage, extra = {}) {
+  try {
+    return await runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: BUILD_ENV, appDir, workspaceDir: path.join(appDir, '.maker-workspace'), genpage, phases: PHASES, ...extra });
+  } finally { await genpage.dispose(); }
+}
+const pendingOf = (spec, appDir) => readPendingCreations(path.join(appDir, '.maker-workspace'), appUniqueName(spec), BUILD_ENV);
+const receiptsOf = (spec, appDir) => readPageOwnership(path.join(appDir, '.maker-workspace'), appUniqueName(spec), BUILD_ENV).created;
+
+test('deploy: a create whose answer is lost and whose page cannot be read is not forgotten — the next build adopts the page it left, where it used to create another', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    // Build 1: the create commits, its answer is lost, and the read that would settle it fails too.
+    server.afterCommit = lostAnswer;
+    server.failOn = rowReadsFail;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && /the outcome of creating it is unknown/.test(e.message));
+    const [id, ...others] = [...server.state.projects.keys()];
+    assert.ok(id && !others.length, 'the page IS on the service — one page');
+    assert.deepStrictEqual([...pendingOf(spec, appDir)], [['p', [{ pageId: id, name: 'Overview' }]]], 'and the build wrote down the id it minted for the spec entry before it sent anything');
+    assert.deepStrictEqual(receiptsOf(spec, appDir), [], 'a pending creation is intent, not ownership: nothing was acknowledged, so there is no creation receipt');
+
+    // Build 2: a new process on the same workspace, the service healthy.
+    server.afterCommit = undefined;
+    server.failOn = undefined;
+    const batches = server.batches.length;
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'one page per spec entry: the page build 1 left is the page, not the first of two');
+    assert.strictEqual(result.created.pages.p, id);
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => [r.key, r.pageId, r.name]), [['p', id, 'Overview']], 'it is adopted: a creation receipt now says it was created for this key');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and the record that stood for it is consumed');
+    assert.strictEqual(server.batches.length, batches, 'the page held what the build sends, so nothing was written to it — it was only published');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: the page a lost create left is adopted and then written like any page the build created — a file edited since goes up as an update, not as a second create that collides', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    server.afterCommit = lostAnswer;
+    server.failOn = rowReadsFail;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages');
+    const [id] = [...server.state.projects.keys()];
+    server.afterCommit = undefined;
+    server.failOn = undefined;
+    // The author edits the page before the next build.
+    const edited = PAGE_SOURCE.replace('Page</div>', 'Edited</div>');
+    fs.writeFileSync(path.join(appDir, 'p.tsx'), edited, 'utf8');
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'still one page');
+    assert.strictEqual(server.rowText(id, 'src/pages/page.tsx'), edited, 'it holds the edit: the build updated the page it adopted');
+    assert.strictEqual(result.created.pages.p, id);
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [id]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a create that never arrived is sent again by the next build under the SAME id — one page — and a late send of the first collides on the id instead of making another', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  try {
+    // Build 1: both sends of the create time out in flight; the service has seen neither yet.
+    server.strandBatch = (n) => n <= 2;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && /was sent twice and neither answer could be used/.test(e.message));
+    assert.strictEqual(server.state.projects.size, 0, 'nothing has landed');
+    const [[key, [pending]]] = [...pendingOf(spec, appDir)];
+    assert.strictEqual(key, 'p');
+
+    // Build 2 finds no such page, so it sends the create again — under the id build 1 minted, not a new one.
+    server.strandBatch = undefined;
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    assert.deepStrictEqual([...server.state.projects.keys()], [pending.pageId], 'one page, under the recorded id');
+    assert.strictEqual(result.created.pages.p, pending.pageId);
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'acknowledged: the record is consumed');
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [pending.pageId]);
+
+    // The two requests build 1 gave up on reach the service now: each collides on the project id and is rolled back whole.
+    await server.landStranded();
+    assert.deepStrictEqual([...server.state.projects.keys()], [pending.pageId], 'no second page');
+    assert.strictEqual(server.messagesOf(pending.pageId).length, 2, 'and the conversation holds the turn once');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a create known to have written nothing leaves no pending record behind — a resumed one keeps the record, because a request an earlier build sent may still land', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const server = new FakeGenPageServer();
+  const EARLIER = '9d3a77c1-0000-4000-8000-0000000000e1';
+  try {
+    // A page that does not compile is refused by the SDK before it sends anything: nothing can land, so there is nothing for a later build to find.
+    fs.writeFileSync(path.join(appDir, 'p.tsx'), 'export default function Page( {', 'utf8');
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && /nothing was written/.test(e.message));
+    assert.strictEqual(server.batches.length, 0, 'nothing was sent');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and the record the create wrote before it started is consumed: it is known to have written nothing');
+
+    // A create that resumes an earlier build's is another matter: that build's request may still be in flight, and a refusal of THIS send says nothing about it.
+    recordPagePending(workspaceDir, appUniqueName(spec), 'p', EARLIER, 'Overview', BUILD_ENV);
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && /nothing was written/.test(e.message));
+    assert.deepStrictEqual([...pendingOf(spec, appDir)], [['p', [{ pageId: EARLIER, name: 'Overview' }]]], 'its record stays');
+    assert.strictEqual(server.state.projects.size, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a pre-created navigation target is resumed like any create — the next build adopts it, and the page that links to it holds its id', async () => {
+  const { appDir, spec } = makeTwoPageApp(); // overview links to detail, so detail is minted first
+  const server = new FakeGenPageServer();
+  try {
+    let lost = true;
+    server.afterCommit = () => { if (lost) lostAnswer(); };
+    server.failOn = (method, requestPath, batched) => (lost ? rowReadsFail(method, requestPath, batched) : undefined);
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => e.phase === 'pages' && /the outcome of creating it is unknown/.test(e.message));
+    const [detailId, ...others] = [...server.state.projects.keys()];
+    assert.ok(detailId && !others.length, 'the target is on the service, and nothing else');
+    assert.deepStrictEqual([...pendingOf(spec, appDir).keys()], ['detail'], 'recorded under its own key, before its create was sent');
+
+    lost = false;
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    assert.strictEqual(server.state.projects.size, 2, 'two pages for two spec entries — not three');
+    assert.strictEqual(result.created.pages.detail, detailId, 'the target is the page build 1 left');
+    const overviewId = result.created.pages.overview;
+    assert.ok(overviewId && overviewId !== detailId);
+    const linked = server.rowText(overviewId, 'src/pages/page.tsx');
+    assert.ok(linked.includes(detailId) && !/PAGEREF_/.test(linked), 'and the page that links to it holds its id, resolved');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.key).sort(), ['detail', 'overview']);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a pending creation is not ownership — a page under its id that is not named what the create sent is a conflict: not adopted, not updated; a key the spec does not declare is left as it is', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const server = new FakeGenPageServer();
+  const THEIRS = '9d3a77c1-0000-4000-8000-0000000000d1';
+  const RETIRED = '9d3a77c1-0000-4000-8000-0000000000d2';
+  const theirs = 'export default function Theirs() { return null; }\n';
+  server.seedPage(THEIRS, { name: 'Somebody else\'s page', source: theirs });
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', THEIRS, 'Overview', BUILD_ENV);
+  recordPagePending(workspaceDir, appUniqueName(spec), 'retired', RETIRED, 'Retired page', BUILD_ENV);
+  try {
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => {
+      assert.strictEqual(e.phase, 'pages');
+      assert.strictEqual(e.code, 'pages-identity-conflict');
+      assert.match(e.message, new RegExp(`page ${THEIRS} exists under the id an earlier build minted for "p", but it is named "Somebody else's page" and that create sent "Overview" — it is not known to be the page that was sent, so it is neither adopted nor updated`));
+      return true;
+    });
+    assert.deepStrictEqual(server.writes(), [], 'nothing was written to any page: not an update, not a create, not a delete');
+    assert.strictEqual(server.rowText(THEIRS, 'src/pages/page.tsx'), theirs, 'the other page is as it was');
+    assert.deepStrictEqual(receiptsOf(spec, appDir), [], 'and no receipt was made out of the record');
+    assert.deepStrictEqual([...pendingOf(spec, appDir).keys()].sort(), ['p', 'retired'], 'both records are kept: one is for the build to settle, the other for a key this spec does not declare');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: two creations left pending for one key cannot be told apart — the build stops before it writes anything, naming both ids', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const server = new FakeGenPageServer();
+  const FIRST = '9d3a77c1-0000-4000-8000-0000000000f1';
+  const SECOND = '9d3a77c1-0000-4000-8000-0000000000f2';
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', FIRST, 'Overview', BUILD_ENV);
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', SECOND, 'Overview', BUILD_ENV);
+  try {
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(server)), (e) => {
+      assert.strictEqual(e.phase, 'pages');
+      assert.strictEqual(e.code, 'pages-identity-conflict');
+      assert.match(e.message, /page "p" has 2 unfinished creations/);
+      assert.ok(e.message.includes(FIRST) && e.message.includes(SECOND), 'it names both ids');
+      return true;
+    });
+    assert.strictEqual(server.batches.length, 0, 'nothing was sent: neither id is resumed on a guess');
+    assert.deepStrictEqual(pendingOf(spec, appDir).get('p').map((r) => r.pageId).sort(), [FIRST, SECOND], 'and both records are kept');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: the record of a create that is not resumed is removed, and said so — its key is bound to a page, so the next build would otherwise keep it in the workspace for good', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const server = new FakeGenPageServer();
+  const STALE = '9d3a77c1-0000-4000-8000-0000000000e2';
+  try {
+    // Build 1 creates the page and acknowledges it: the key is bound to a page this workspace holds a creation receipt for.
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const id = first.created.pages.p;
+    assert.deepStrictEqual([...server.state.projects.keys()], [id]);
+    // An earlier create under another id was never acknowledged, and its page is not in the environment.
+    recordPagePending(workspaceDir, appUniqueName(spec), 'p', STALE, 'Overview', BUILD_ENV);
+    const warnings = [];
+    const batches = server.batches.length;
+    const second = await buildPages(spec, appDir, realPageBackend(server), { warn: (m) => warnings.push(m) });
+    assert.strictEqual(second.created.pages.p, id, 'the key stays bound to its page');
+    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'no page was created under the stale id, or any other');
+    assert.strictEqual(server.batches.length, batches, 'and nothing was written: the page already held what the build sends');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'the stale record is consumed');
+    assert.ok(warnings.some((m) => m.includes(STALE) && /is not resumed, and its record was removed/.test(m)), 'and the build says so');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── The text of a page file is normalized ONCE ────────────────────────────────────────────────────────────────────────────────────────────────────
+// The build reads each page file once and turns its bytes into text (sourceText: one leading byte order mark is the encoding, and goes). The Griffel gate, the PAGEREF resolution, the hash recorded as
+// deployed and the page's write all use that text as it is. The backend used to normalize the text again, so a file that started with two marks was sent with neither, and what the build recorded as
+// deployed was not what the SDK stored.
+test('deploy: a page file that starts with two byte order marks is checked, resolved, hashed and stored as the same text — one mark is the encoding, the other is content', async () => {
+  const { appDir, spec } = makeTwoPageApp(); // overview links to detail
+  const MARK = '\uFEFF';
+  const server = new FakeGenPageServer();
+  try {
+    const bodies = {
+      overview: `export default function Overview(){ ${NAV('detail')} return null; }`,
+      detail: 'export default function Detail(){ return null; }',
+    };
+    for (const [key, body] of Object.entries(bodies)) fs.writeFileSync(path.join(appDir, `${key}.tsx`), `${MARK}${MARK}${body}`, 'utf8');
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    const stored = (key) => server.rowText(result.created.pages[key], 'src/pages/page.tsx');
+    assert.strictEqual(stored('detail'), `${MARK}${bodies.detail}`, 'the file\'s first mark was the encoding marker and is gone; the second is content and is stored');
+    assert.strictEqual(stored('overview'), `${MARK}${bodies.overview.replace('PAGEREF_detail', result.created.pages.detail)}`, 'a navigation page is resolved on that same text');
+    // The link target is created in the step that resolves navigation and is not sent again, so only the page sent in the upload step has a deployed hash.
+    assert.strictEqual(result.created.pageDeployedShas.overview, sha256(stored('overview')), 'the hash recorded as deployed is the hash of what the service stores');
+    for (const key of ['overview', 'detail']) {
+      assert.strictEqual(result.created.pageSourceShas[key], sha256(fs.readFileSync(path.join(appDir, `${key}.tsx`))), `${key}: the source hash is that of the file`);
     }
-    assert.strictEqual(new Set(uploads.map((u) => path.basename(u.codeFile))).size, uploads.length, 'one staging file per page');
-    for (const key of keys.filter((k) => k !== 'con')) assert.strictEqual(uploads.find((u) => u.name === `Page ${key}`).content, source[key], `${key}: the bytes the scan read`);
-    assert.doesNotMatch(uploads.find((u) => u.name === 'Page con').content, /PAGEREF_/, 'and the navigation page goes up with its tokens resolved');
-    const stagingRoot = path.join(appDir, '.maker-workspace', '.pageref-deploy');
-    assert.ok(!fs.existsSync(stagingRoot) || fs.readdirSync(stagingRoot).length === 0, 'the copies are removed when the build ends');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+
+  // A page that links nowhere is sent in the upload step as it is.
+  const alone = onePageApp('Overview');
+  try {
+    const body = 'export default function P(){ return null; }';
+    fs.writeFileSync(path.join(alone.appDir, 'p.tsx'), `${MARK}${MARK}${body}`, 'utf8');
+    const result = await buildPages(alone.spec, alone.appDir, realPageBackend(server));
+    const stored = server.rowText(result.created.pages.p, 'src/pages/page.tsx');
+    assert.strictEqual(stored, `${MARK}${body}`);
+    assert.strictEqual(result.created.pageDeployedShas.p, sha256(stored), 'the hash recorded as deployed is the hash of what the service stores');
+  } finally { fs.rmSync(alone.appDir, { recursive: true, force: true }); }
+});
+
+// ── The build pins the default views of the tables the pages it wrote read ────────────────────────────────────────────────────────────────────
+// pac pinned each table's default public view into the app on EVERY upload — the build's included — so that the maker's "/" picker lists the table. The SDK's page write does not. After its pages are
+// written and recorded, the build makes ONE app operation for all of them: the backend's placeInApp with no page to place and only the tables (the call genpage-upload.js makes with --app-id). It writes
+// nothing when every view is already pinned, and a failure to pin is a warning, not a halt.
+const withTables = (spec, tables) => { for (const p of spec.pages) if (tables[p.key]) p.dataSources = tables[p.key]; return spec; };
+
+test('deploy: once its pages are written the build pins the default views of the tables they read — ONE app operation for all of them, after the pages are written', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    withTables(spec, { overview: ['contoso_item', 'contoso_note'], detail: ['contoso_item'] });
+    const genpageCli = mockGenpageCli();
+    const seen = [];
+    const placeInApp = genpageCli.placeInApp;
+    genpageCli.placeInApp = (appId, o) => { seen.push(genpageCli.uploads.map((u) => u.name)); return placeInApp(appId, o); };
+    const { sdk, calls } = mockSdk();
+    const r = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.strictEqual(genpageCli.placements.length, 1, 'one app operation, not one per page');
+    assert.deepStrictEqual(genpageCli.placements[0], { appId: r.created.app, pages: [], dataSources: ['contoso_item', 'contoso_note'] }, 'no page is placed, the app is the one built, and each table is named once');
+    assert.deepStrictEqual(seen, [['Detail', 'Overview']], 'it came after both pages were written');
+    assert.ok(finalizeRan(calls), 'and the sitemap was finalized by then');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: the build\'s pin names the authoring language it built in, and says nothing of a language when it built in none', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    withTables(spec, { detail: ['contoso_item'] });
+    const plain = mockGenpageCli();
+    await runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, genpageCli: plain, phases: PHASES });
+    assert.deepStrictEqual(Object.keys(plain.placements[0]).sort(), ['appId', 'dataSources', 'pages']);
+    const german = mockGenpageCli();
+    await runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, genpageCli: german, phases: PHASES, preResolvedLanguageCode: 1031 });
+    assert.strictEqual(german.placements[0].languageCode, 1031);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a build whose pages read no table makes no app operation; a changed-only run pins only the tables of the pages it wrote', async () => {
+  const none = makeTwoPageApp();
+  try {
+    const genpageCli = mockGenpageCli();
+    await runSdkBuild(none.spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir: none.appDir, genpageCli, phases: PHASES });
+    assert.deepStrictEqual(genpageCli.placements, [], 'no table, no app operation — placing reads the app, and a read that was not needed could only fail');
+  } finally { fs.rmSync(none.appDir, { recursive: true, force: true }); }
+
+  const app = deployedApp(GRIFFEL_CLEAN); // two independent pages, both live and bound
+  try {
+    withTables(app.spec, { overview: ['contoso_item'], detail: ['contoso_note'] });
+    const run = app.rebuild({ phases: PAGES_ONLY, changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys: ['overview'] } });
+    await run.run();
+    assert.deepStrictEqual(run.genpageCli.uploads.map((u) => u.name), ['Overview'], 'only the selected page was written');
+    assert.deepStrictEqual(run.genpageCli.placements, [{ appId: APP_ID, pages: [], dataSources: ['contoso_item'] }], 'so only its table is pinned: the page left alone writes nothing the app needs');
+  } finally { app.cleanup(); }
+});
+
+test('deploy: a table whose view could not be pinned is a warning — the pages were written, so the build does not halt', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    withTables(spec, { detail: ['contoso_item'] });
+    const genpageCli = mockGenpageCli();
+    genpageCli.placeInApp = async () => { throw new Error('the app could not be saved'); };
+    const warnings = [];
+    const r = await runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES, warn: (m) => warnings.push(m) });
+    assert.ok(r.ok, 'the build finished');
+    assert.strictEqual(genpageCli.uploads.length, 2, 'with both pages written');
+    assert.ok(warnings.some((m) => /the pages were written, but their tables' default views could not be added to the app's components.*the app could not be saved/.test(m)), warnings.join('\n'));
+
+    const refused = mockGenpageCli();
+    refused.placeInApp = async () => ({ added: [], alreadyPlaced: [], pinnedViews: [], warnings: ['table contoso_item has no default public view to pin into the app'], appEdited: false });
+    const heard = [];
+    await runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, genpageCli: refused, phases: PHASES, warn: (m) => heard.push(m) });
+    assert.ok(heard.some((m) => /^default views of the pages' tables: table contoso_item has no default public view/.test(m)), 'what the backend warns about is passed on');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: through the real backend the pin is ONE app edit, and a rebuild writes nothing to the app when every view is already pinned', async () => {
+  const VIEW = 'aaaaaaaa-0000-4000-8000-0000000000a1';
+  const LAYER = '33333333-0000-4000-8000-0000000000cc';
+  const held = [];
+  const fake = new FakeSdk({
+    records: {
+      savedquery: () => [{ savedqueryid: VIEW.toUpperCase() }],
+      appmodulecomponent: () => held.map((objectid) => ({ objectid: `{${objectid}}`, componenttype: 26 })),
+    },
+    onGet: async (url) => (/RetrieveUnpublishedMultiple/.test(url) ? { status: 200, body: { value: [{ appmoduleid: APP_ID, appmoduleidunique: LAYER, componentstate: 0 }] } } : { status: 404, body: null }),
+  }).seedApp({ id: APP_ID, name: 'App', siteMap: { areas: [{ id: 'area_1', title: 'Main', groups: [{ id: 'group_1', title: 'Pages', subAreas: [] }] }] } });
+  liveTwoPages(fake);
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    spec.pages[0].navigatesTo = undefined;
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function Overview(){ return 1; }', 'utf8');
+    for (const p of spec.pages) p.dataSources = ['contoso_item'];
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
+    const genpage = makeGenpageSdk('https://x', { sdk: fake });
+    const run = () => runSdkBuild(spec, {
+      sdk: mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) }).sdk,
+      apply: true, env: 'https://x', appDir, genpage, phases: PAGES_ONLY, changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true },
+    });
+    const appCalls = (name) => fake.of(name).filter((c) => c.args[0] === 'app');
+    await run();
+    assert.deepStrictEqual(fake.apps.get(APP_ID).components, { views: [VIEW] }, 'the default view of the pages\' table is pinned into the app');
+    assert.strictEqual(appCalls('pushArtifact').length, 1, 'by one push');
+    assert.strictEqual(appCalls('publishArtifact').length, 1, 'and one publish — for both pages and their one table');
+    held.push(VIEW); // the app's layer holds it now
+    await run();
+    assert.strictEqual(appCalls('pushArtifact').length, 1, 'a rebuild writes nothing to the app: every view is already pinned');
+    assert.strictEqual(appCalls('publishArtifact').length, 1);
+    await genpage.dispose();
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });

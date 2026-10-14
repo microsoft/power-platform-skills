@@ -14,6 +14,7 @@ const snapshot = require('../lib/apply-snapshot.js');
 const snapshotStore = require('../lib/apply-snapshot-store.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = '11111111-0000-4000-8000-000000000001';
@@ -192,9 +193,10 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     state.apps.delete(app.uniquename);
     return { success: true, deleted: [], failures: [] };
   };
-  sdk.deleteRecord = async (set, id) => {
+  // A page is deleted through the SDK's own page delete, which removes its project row (the files cascade) and its conversation.
+  sdk.deleteRemoteArtifact = async (type, id) => {
     state.beforeDelete();
-    assert.strictEqual(set, 'uxagentproject', 'project files must never be deleted separately');
+    assert.strictEqual(type, 'genPage', 'project files must never be deleted separately');
     if (state.failure === 'page') throw new Error('offline page delete failed');
     if (id === DETAIL_ID && !state.sharedReferenceRemoved) throw new Error('The component cannot be deleted because it is referenced by 1 other components.');
     state.pages.delete(id);
@@ -214,28 +216,17 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     const original = sdk[method];
     sdk[method] = (...args) => { calls.push({ method, args }); return original(...args); };
   }
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, ids: [...state.pages], pages: [
-      { pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }, { pageId: FOREIGN_PAGE_ID, name: 'Detail' },
-    ] }),
-    download: async ({ appId, outputDir, pageIds }) => {
-      assert.strictEqual(appId, APP_ID);
-      assert.deepStrictEqual(pageIds.slice().sort(), [OVERVIEW_ID, DETAIL_ID]);
-      for (const id of pageIds) {
-        const dir = path.join(outputDir, id);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'page.tsx'), 'export default function Page(){ return null; }', 'utf8');
-        fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ dataSources: ['contoso_project'] }), 'utf8');
-      }
+  const pageDefaults = { source: 'export default function Page(){ return null; }', dataSources: ['contoso_project'] };
+  const genpage = fakeGenpage({
+    pages: [
+      { pageId: OVERVIEW_ID, name: 'Overview', ...pageDefaults }, { pageId: DETAIL_ID, name: 'Detail', ...pageDefaults }, { pageId: FOREIGN_PAGE_ID, name: 'Detail', ...pageDefaults },
+    ],
+    onUpdate: (id, args) => {
+      calls.push({ method: 'update', args: [id, args] });
+      assert.ok([OVERVIEW_ID, DETAIL_ID].includes(id), 'rebuild updates only downloaded page IDs');
     },
-    upload: async (o) => {
-      calls.push({ method: 'upload', args: [o] });
-      assert.strictEqual(o.appId, APP_ID);
-      assert.ok([OVERVIEW_ID, DETAIL_ID].includes(o.pageId), 'rebuild updates only downloaded page IDs');
-      return { pageId: o.pageId };
-    },
-  };
-  return { sdk, genpageCli, calls, state };
+  });
+  return { sdk, genpage, calls, state };
 }
 
 test('downloaded ownership survives rebuild and teardown planning', async () => {
@@ -251,9 +242,10 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     const sitemap = await fixture.sdk.queryRecords('sitemap', { filter: `sitemapid eq ${SITEMAP_ID}`, top: 1 });
     const downloaded = await runDownload({
       sdk: currentReadSdk(fixture.sdk, { appId: APP_ID, layerId: APP_LOOKUP, sitemapXml: sitemap[0].sitemapxml }),
-      genpageCli: fixture.genpageCli, outDir, appId: APP_ID, appUnique: APP_UNIQUE,
+      genpage: fixture.genpage, outDir, appId: APP_ID, appUnique: APP_UNIQUE,
     });
     assert.strictEqual(downloaded.ok, true, JSON.stringify(downloaded));
+    assert.deepStrictEqual(fixture.genpage.of('read').map((c) => c.args[0]).sort(), [OVERVIEW_ID, DETAIL_ID].sort(), 'the download reads exactly the app\'s pages, by id');
     assert.deepStrictEqual(downloaded.relationshipsSkipped, []);
     const specFile = path.join(outDir, 'app-spec.json');
     fs.writeFileSync(specFile, JSON.stringify(downloaded.spec), 'utf8');
@@ -262,7 +254,7 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     assert.strictEqual(spec.solution.uniqueName, systemOnly ? 'Default' : 'ContosoOwnership');
     const rebuild = await runSdkBuild(spec, {
       sdk: fixture.sdk, apply: true, env: ENV, appDir: outDir, workspaceDir,
-      preResolvedLanguageCode: 1033, genpageCli: fixture.genpageCli,
+      preResolvedLanguageCode: 1033, genpage: fixture.genpage,
     });
     assert.strictEqual(rebuild.ok, true);
     assert.strictEqual(rebuild.created.app, APP_ID, 'a display-name rename cannot redirect the rebuild');
@@ -342,9 +334,9 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     assert.ok(clean.skipped.some((s) => /table contoso_task.*existing: true/.test(s)));
     assert.ok(clean.skipped.some((s) => /relationship contoso_project_task.*existing: true/.test(s)));
     const deletes = calls.filter((c) => c.method.startsWith('delete'));
-    assert.deepStrictEqual(deletes.map((c) => c.method), ['deleteAppCascade', 'deleteRecord', 'deleteRecord', 'deleteWebResource']);
+    assert.deepStrictEqual(deletes.map((c) => c.method), ['deleteAppCascade', 'deleteRemoteArtifact', 'deleteRemoteArtifact', 'deleteWebResource']);
     assert.deepStrictEqual(deletes[0].args, [APP_ID, APP_LOOKUP], 'atomic delete uses the resolved app and its unique lookup');
-    assert.deepStrictEqual(deletes.filter((c) => c.method === 'deleteRecord').map((c) => c.args), [['uxagentproject', OVERVIEW_ID], ['uxagentproject', DETAIL_ID]]);
+    assert.deepStrictEqual(deletes.filter((c) => c.method === 'deleteRemoteArtifact').map((c) => c.args), [['genPage', OVERVIEW_ID], ['genPage', DETAIL_ID]]);
     assert.deepStrictEqual(events.filter((e) => e.status === 'start').map((e) => e.label), plan.map((s) => s.label), 'execution preserves the dependency-safe plan order');
     assertReusedRetained(fixture);
     assert.strictEqual(state.resources.has(OWNED_ICON), false, 'owned-icon positive control is deleted');

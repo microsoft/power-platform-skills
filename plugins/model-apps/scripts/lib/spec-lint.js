@@ -400,11 +400,13 @@ function lintAppSpec(spec) {
     for (const ds of p.dataSources || []) {
       if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
     }
-    // pac stores each ASCII `"` in a page's name as `\"` on the page's own record, and changes nothing else
-    // (live-measured). A warning, not an error: the navigation shows the subarea's `title`, which the build
-    // writes as given. (The standalone genpage upload refuses such a name — there pac writes the title too.)
+    // A warning, not an error: a page's name is stored exactly as given, in the page and in the navigation title. Pages an earlier release
+    // created through pac hold each ASCII `"` as `\"` on the page's own record (the build repairs that name on its next update), so the same
+    // name can read differently from page to page. The warning is kept — reworded, because pac no longer writes pages — since the app-builder
+    // eval (evals/model-apps/app-builder/lib/assertions.js) and references/app-spec-schema.md still treat it as part of the lint contract;
+    // retire it together with them.
     if (typeof p.name === 'string' && p.name.includes('"')) {
-      W(`Page '${p.name}': pac stores each ASCII double quote (") in a page's name as \\" on the page's own record — use typographic quotes (“ ”) or an apostrophe instead`);
+      W(`Page '${p.name}': the name has an ASCII double quote (") — it is stored exactly as written, but a page an earlier release created holds each one as \\" on the page's own record until a build rewrites its name — use typographic quotes (“ ”) or an apostrophe instead`);
     }
   }
   // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or

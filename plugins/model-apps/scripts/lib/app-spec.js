@@ -34,8 +34,8 @@ function formIdentityKey(f) {
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, because the
-// build hands it to pac as one command-line value. Shared with download, which carries only a model the spec can hold.
+// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, stored as the page's
+// `model` in its config.json. Shared with download, which carries only a model the spec can hold.
 const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 
 // Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
@@ -3243,7 +3243,7 @@ function validateAppSpec(spec, opts = {}) {
   // slugify (:686) which always conforms; a hand-authored v2 key must too, since the key is the
   // cross-reference identity (navigatesTo.targetKey, PAGEREF_<key>, appShell page subareas).
   const PAGE_KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse / PAC CLI.
+  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse or by the SDK on a page create.
   // A spec page carrying this field is an EDIT-SNAPSHOT (env-specific, downloaded from a live app);
   // a portable fresh-authored spec omits it. When present it must be exactly this shape so
   // reconcilePageIds can use it as the highest identity authority without silently accepting garbage
@@ -3262,8 +3262,8 @@ function validateAppSpec(spec, opts = {}) {
     if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
       errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
     }
-    // The id of the model that generated the page — what `pac model genpage upload --model` records, and
-    // what a download writes back. A short token (e.g. `gpt-4.1`); it travels as a command-line value.
+    // The id of the model that generated the page — what the page's config.json records as `model`, and
+    // what a download writes back. A short token (e.g. `gpt-4.1`).
     if (p.model !== undefined && (typeof p.model !== 'string' || !PAGE_MODEL_RE.test(p.model))) {
       errors.push(`page '${p.key || p.name}': model must be a model id such as 'gpt-4.1' (letters, digits and . _ : / @ + -, at most 100 characters)`);
     }
@@ -3317,7 +3317,7 @@ function validateAppSpec(spec, opts = {}) {
   // edit-snapshot can legitimately carry a PRE-EXISTING duplicate the run did NOT create (two pages
   // authored by different people/tools), and blocking every build — even an unrelated form edit that
   // never touches pages — on a dupe the run is not changing is wrong (the pages phase matches by id/key,
-  // never by name: genpage-cli.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
+  // never by name: lib/genpage-sdk.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
   // with a -N suffix, so distinct-id same-name pages build fine). Signal: a page carrying a deployed
   // `pageId` is PRE-EXISTING (an edit-snapshot marker); a page WITHOUT one is NEW (authored this run).
   //   - collision involving a NEW page  → ERROR  (prevent authoring/adding a duplicate)

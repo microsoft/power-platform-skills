@@ -36,8 +36,8 @@ function noAppSdk() {
 
 test('readerFor.existenceIds() calls enumerateEnv(), memoized to one call, throws on failure', async () => {
   let calls = 0;
-  const genpageCli = { enumerateEnv: async () => { calls++; return { ok: true, ids: [GP_OVERVIEW, GP_DETAIL] }; } };
-  const reader = readerFor(stubSdk(), 'contoso_app', { genpageCli, workspaceDir: os.tmpdir() });
+  const genpage = { enumerateEnv: async () => { calls++; return { ok: true, ids: [GP_OVERVIEW, GP_DETAIL] }; } };
+  const reader = readerFor(stubSdk(), 'contoso_app', { genpage, workspaceDir: os.tmpdir() });
 
   const ids = await reader.existenceIds();
   assert.deepStrictEqual(ids, [GP_OVERVIEW, GP_DETAIL]);
@@ -46,7 +46,7 @@ test('readerFor.existenceIds() calls enumerateEnv(), memoized to one call, throw
 
   // Failure path: enumerateEnv !ok → existenceIds must throw (fail-closed — unknown env means cannot verify).
   const failing = readerFor(stubSdk(), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: false, error: 'auth expired' }) },
+    genpage: { enumerateEnv: async () => ({ ok: false, error: 'auth expired' }) },
     workspaceDir: os.tmpdir(),
   });
   await assert.rejects(failing.existenceIds(), /auth expired/i);
@@ -55,7 +55,7 @@ test('readerFor.existenceIds() calls enumerateEnv(), memoized to one call, throw
 test('readerFor.sitemapPageIds() returns page ids from fetchSitemap; throws when sitemap unreadable', async () => {
   const xml = `<SiteMap><Area><Group><SubArea GenPageId="${GP_OVERVIEW}"/><SubArea GenPageId="${GP_DETAIL}"/></Group></Area></SiteMap>`;
   const reader = readerFor(stubSdk({ sitemap: xml }), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   const ids = await reader.sitemapPageIds();
@@ -64,7 +64,7 @@ test('readerFor.sitemapPageIds() returns page ids from fetchSitemap; throws when
 
   // Failure: fetchSitemap returns !ok (app-not-found) → sitemapPageIds must throw (fail-closed).
   const failing = readerFor(noAppSdk(), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   await assert.rejects(failing.sitemapPageIds(), /could not read the app sitemap/i);
@@ -73,7 +73,7 @@ test('readerFor.sitemapPageIds() returns page ids from fetchSitemap; throws when
 test('readerFor.manifest() returns null when webresource absent; parsed manifest when valid; null when corrupt', async () => {
   // Absent: no webresource row → manifest() returns null (verifySpec will set unableToRun on a page-bearing spec).
   const readAbsent = readerFor(stubSdk(), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   assert.strictEqual(await readAbsent.manifest(), null, 'manifest null when webresource absent');
@@ -82,7 +82,7 @@ test('readerFor.manifest() returns null when webresource absent; parsed manifest
   const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_OVERVIEW }] };
   const b64 = Buffer.from(JSON.stringify(manifest)).toString('base64');
   const readPresent = readerFor(stubSdk({ webresource: [{ content: b64 }] }), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   const m = await readPresent.manifest();
@@ -91,55 +91,50 @@ test('readerFor.manifest() returns null when webresource absent; parsed manifest
   // Corrupt: base64 of non-JSON → parseManifestBase64 returns null → manifest() returns null.
   const corruptB64 = Buffer.from('this is not valid json!').toString('base64');
   const readCorrupt = readerFor(stubSdk({ webresource: [{ content: corruptB64 }] }), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   assert.strictEqual(await readCorrupt.manifest(), null, 'manifest null when webresource is corrupt JSON');
 });
 
-test('readerFor.pageCode(id) downloads by id (pageIds:[id]), caches per id, throws on download failure', async () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'vf-'));
-  let downloads = 0;
-  const genpageCli = {
+test('readerFor.pageCode(id) reads the page by id, caches per id, throws on read failure', async () => {
+  let reads = 0;
+  const genpage = {
     enumerateEnv: async () => ({ ok: true, ids: [] }),
-    // Simulate pac writing <outDir>/<pageId>/page.tsx (the per-id output layout).
-    download: async ({ outputDir, pageIds }) => {
-      downloads += 1;
-      const id = pageIds[0];
-      fs.mkdirSync(path.join(outputDir, id), { recursive: true });
-      fs.writeFileSync(path.join(outputDir, id, 'page.tsx'), `// code for ${id}`, 'utf8');
-      return true;
+    read: async (id) => {
+      reads += 1;
+      return { id, name: 'Page', source: `// code for ${id}` };
     },
   };
-  const reader = readerFor(stubSdk(), 'contoso_app', { genpageCli, workspaceDir: ws });
+  const reader = readerFor(stubSdk(), 'contoso_app', { genpage, workspaceDir: os.tmpdir() });
 
   const code = await reader.pageCode(GP_OVERVIEW);
   assert.ok(code.includes(GP_OVERVIEW), 'returned the page code for the requested id');
 
-  await reader.pageCode(GP_OVERVIEW); // second call — same id — must NOT re-download
-  assert.strictEqual(downloads, 1, 'download runs once per id (cached)');
+  await reader.pageCode(GP_OVERVIEW); // second call — same id — must NOT re-read
+  assert.strictEqual(reads, 1, 'the page is read once per id (cached)');
 
-  await reader.pageCode(GP_DETAIL); // different id → exactly one more download (per-id, not all-pages)
-  assert.strictEqual(downloads, 2, 'each distinct id downloaded separately');
+  await reader.pageCode(GP_DETAIL); // different id → exactly one more read (per-id, not all-pages)
+  assert.strictEqual(reads, 2, 'each distinct id is read separately');
 
-  // Download failure → throws so the build gate gets an error (fail-closed).
+  // Read failure → throws so the build gate gets an error (fail-closed).
   const failing = readerFor(stubSdk(), 'contoso_app', {
-    genpageCli: {
+    genpage: {
       enumerateEnv: async () => ({ ok: true, ids: [] }),
-      download: async () => { throw new Error('pac download failed'); },
+      read: async () => { throw new Error('page read failed'); },
     },
-    workspaceDir: fs.mkdtempSync(path.join(os.tmpdir(), 'vf-')),
+    workspaceDir: os.tmpdir(),
   });
-  await assert.rejects(failing.pageCode(GP_OVERVIEW), /pac download failed/i);
+  await assert.rejects(failing.pageCode(GP_OVERVIEW), /page read failed/i);
 });
 
-test('readerFor WITHOUT a genpageCli has no sitemapPageIds/existenceIds/manifest/pageCode — verifySpec fails closed (Imp7/C6)', () => {
+test('readerFor WITHOUT a page backend has no sitemapPageIds/existenceIds/manifest/pageCode — verifySpec fails closed (Imp7/C6)', () => {
   const reader = readerFor(stubSdk(), 'contoso_app', {});
-  // No genpageCli → page-authority methods absent → verifySpec detects reader-incapacity → unableToRun.
-  assert.strictEqual(typeof reader.sitemapPageIds, 'undefined', 'no sitemapPageIds when no genpageCli');
-  assert.strictEqual(typeof reader.existenceIds, 'undefined', 'no existenceIds when no genpageCli');
-  assert.strictEqual(typeof reader.manifest, 'undefined', 'no manifest when no genpageCli');
-  assert.strictEqual(typeof reader.pageCode, 'undefined', 'no pageCode when no genpageCli');
+  // No page backend → page-authority methods absent → verifySpec detects reader-incapacity → unableToRun.
+  assert.strictEqual(typeof reader.sitemapPageIds, 'undefined', 'no sitemapPageIds when no page backend');
+  assert.strictEqual(typeof reader.existenceIds, 'undefined', 'no existenceIds when no page backend');
+  assert.strictEqual(typeof reader.manifest, 'undefined', 'no manifest when no page backend');
+  assert.strictEqual(typeof reader.pageCode, 'undefined', 'no pageCode when no page backend');
 });
 
 test('readerFor base readers normalize exact identities for tables, relationships, commands, and settings', async () => {
@@ -341,7 +336,8 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
       };
     }
     if (id === './lib/sdk-http-client.js') {
-      return { createAzHttpClient: (env) => ({ env }) };
+      // One client is made for the run; the page backend must be given that same one (its token is shared), so each is recorded.
+      return { createAzHttpClient: (env) => { const client = { env }; events.push({ type: 'createAzHttpClient', client }); return client; } };
     }
     if (!realGates && id === './lib/verify-spec.js') {
       return {
@@ -366,8 +362,15 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/odata.js') {
       return { odataLit: (value) => String(value).replace(/'/g, "''") };
     }
-    if (id === './lib/genpage-cli.js') {
-      return { makeGenpageCli: (env) => { events.push({ type: 'makeGenpageCli', env }); return { env }; } };
+    if (id === './lib/genpage-sdk.js') {
+      // The page backend the CLI makes: what it was made for and what it was given are recorded, so a test can tell that it works in a workspace of its
+      // own (it is lent no SDK) through the run's own HTTP client, and that it is disposed before the result is printed.
+      return {
+        makeGenpageSdk: (env, deps) => {
+          events.push({ type: 'makeGenpageSdk', env, deps });
+          return { env, dispose: async () => { events.push({ type: 'genpageDispose' }); } };
+        },
+      };
     }
     if (id === './lib/sitemap-pages.js') {
       return {
@@ -493,6 +496,40 @@ test('verify CLI prints per-check status and aliases missing checks into emitRes
   const removed = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === sdkRoot);
   assert.ok(removed > -1, 'the throwaway workspace is removed');
   assert.ok(removed < harness.events.findIndex((e) => e.type === 'emitResult'), 'before emitResult ends the process');
+});
+
+// The page reads a pass gave up on can still be running when it ends, and only a workspace the backend made itself is one it can close — so it is not
+// lent the run's SDK (whose folder the run removes). It is made lazily, when the first page is read, and disposed (closed, then removed) before the result is
+// printed: emitResult ends the process, so a cleanup placed after it never runs.
+test('verify CLI gives the page backend a workspace of its own and the run\'s HTTP client, and disposes it before the run\'s own workspace goes and the result is printed', async () => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json' } },
+    verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [] },
+    sdkFactory: () => ({
+      initWorkspace: () => {},
+      findTables: async () => [],
+      findColumns: async () => [],
+      queryRecords: async () => [],
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+      marker: 'the-run-sdk',
+    }),
+  });
+  await harness.main();
+  const made = harness.events.filter((e) => e.type === 'makeGenpageSdk');
+  assert.strictEqual(made.length, 1, 'one page backend per run');
+  assert.strictEqual(made[0].env, 'https://org.example');
+  assert.strictEqual(made[0].deps.sdk, undefined, 'it is not lent the SDK the run\'s other reads use: its workspace is its own to close');
+  const clients = harness.events.filter((e) => e.type === 'createAzHttpClient');
+  assert.strictEqual(clients.length, 1, 'one HTTP client for the run');
+  assert.strictEqual(made[0].deps.httpClient, clients[0].client, 'which the page backend shares, and so the Azure CLI token');
+  assert.strictEqual(harness.events.filter((e) => e.type === 'createMakerSdk').length, 1, 'the run\'s SDK is the only one the CLI makes itself: the backend makes its own when a page is read');
+  const sdkRoot = harness.events.find((e) => e.type === 'createMakerSdk').cfg.workspaceStorage.__mockWorkspaceRoot;
+  const order = (type, match = () => true) => harness.events.findIndex((e) => e.type === type && match(e));
+  assert.ok(order('genpageDispose') > -1, 'the backend is disposed');
+  assert.ok(order('genpageDispose') < order('rmSync', (e) => e.dir === sdkRoot), 'before the run\'s workspace is removed');
+  assert.ok(order('rmSync', (e) => e.dir === sdkRoot) < order('emitResult'), 'and both before emitResult ends the process');
 });
 
 test('verify CLI accepts a positional spec, leaves the default workspace alone, and prints PASS', async () => {

@@ -26,7 +26,7 @@ test('check-auth.js enumerates all blocker codes', () => {
 
 test('check-auth.js: a missing PAC login blocks only under --require-pac (genpage); otherwise it is a warning', () => {
   // Gap 4: the app-builder build/verify/teardown flow authenticates to Dataverse with the az token,
-  // so a missing pac login must NOT block it. Genpage (which uploads pages via `pac model genpage`)
+  // so a missing pac login must NOT block it. Genpage (which discovers connections through pac)
   // opts back into the hard block with --require-pac.
   assert.match(scriptSrc, /requirePac/, 'pac requirement is gated behind a --require-pac flag');
   assert.match(scriptSrc, /argv\.includes\('--require-pac'\)/);
@@ -459,14 +459,15 @@ test('without --env the token is not warmed early, because the env URL comes fro
 });
 
 test('a missing pac login is a WARNING for the app-builder path, not a blocker', async () => {
-  // The build/verify/teardown flow authenticates with the az token; only the genpage pages phase
-  // shells out to pac. Blocking here would stop a build that would have worked.
+  // The build/verify/teardown flow authenticates with the az token, and so do the pages; pac is only used to
+  // discover connections. Blocking here would stop a build that would have worked.
   const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
   assert.equal(r.ok, true);
   assert.equal(r.blocker, null);
   assert.equal(r.pacUser, null);
   assert.equal(r.warnings.length, 1);
-  assert.match(r.warnings[0], /genpage/i);
+  assert.match(r.warnings[0], /discover connections/i);
+  assert.doesNotMatch(r.warnings[0], /pac model genpage/, 'pages are written through the SDK: the warning no longer says pac deploys them');
 });
 
 test('--require-pac turns the same missing pac login into a hard block', async () => {

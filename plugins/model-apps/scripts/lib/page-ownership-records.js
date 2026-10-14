@@ -51,9 +51,12 @@ function recordName(r) {
 // Example: { schemaVersion:2, kind:"created", appUniqueName:"contoso_app", key:"overview",
 // pageId:"11111111-1111-4111-8111-111111111111", name:"Overview", environmentFingerprint:"<sha256>" }.
 // Baselines and journals include adopted/downloaded ids; only an acknowledged CREATE writes "created".
+// A "pending" record has the same shape and is written BEFORE a create is sent, under the page id the build minted for it: it says "a create
+// of this key under this id may have reached the environment", which is all a build that was cut short needs to find the page again. It is
+// intent, not ownership — it never authorizes anything (see readPendingCreations).
 function validRecord(r) {
   return r && r.schemaVersion === 2 && FINGERPRINT.test(r.environmentFingerprint)
-    && ['created', 'teardown'].includes(r.kind)
+    && ['created', 'teardown', 'pending'].includes(r.kind)
     && Object.keys(r).length === 7
     && nonempty(r.appUniqueName) && r.appUniqueName === r.appUniqueName.toLowerCase()
     && nonempty(r.pageId) && GUID.test(r.pageId) && nonempty(r.name)
@@ -84,7 +87,7 @@ function readRecord(root, file) {
 // The exact name recordName() produces: page-ownership.<kind>.<64 hex>.json. Anything else in the
 // folder — an editor backup such as page-ownership.created.<hash>.backup.json, a temp file — is
 // not a record and is ignored, rather than halting every build as a malformed one.
-const RECORD_FILE = /^page-ownership\.(created|teardown)\.[0-9a-f]{64}\.json$/;
+const RECORD_FILE = /^page-ownership\.(created|teardown|pending)\.[0-9a-f]{64}\.json$/;
 
 function readAllRecords(workspaceDir) {
   const records = [];
@@ -111,6 +114,8 @@ function readPageOwnership(workspaceDir, appUniqueName, environment) {
   const fingerprint = environmentFingerprint(environment);
   const app = String(appUniqueName || '').toLowerCase();
   for (const r of readAllRecords(workspaceDir)) {
+    // A pending creation is intent, not ownership: it is not part of what a receipt proves, so it is not part of this state (readPendingCreations).
+    if (r.kind === 'pending') continue;
     if (r.environmentFingerprint === fingerprint && r.appUniqueName === app) state[r.kind].push(r);
   }
   return state;
@@ -126,7 +131,8 @@ function saveRecord(workspaceDir, kind, appUniqueName, key, pageId, name, enviro
   try { existing = readRecord(root, file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   if (existing) {
     if (kind === 'created' && existing.name !== name) throw new Error(`creation receipt for ${pageId} has a different page name`);
-    return existing;
+    // A pending record is rewritten when the name it was sent under changed since: it says what the create that may be in flight carries.
+    if (kind !== 'pending' || existing.name === name) return existing;
   }
   // One immutable record per tuple avoids losing another page's proof when writers overlap.
   // Atomic, fsynced writes make a record durable before the remote manifest or app is changed.
@@ -136,6 +142,49 @@ function saveRecord(workspaceDir, kind, appUniqueName, key, pageId, name, enviro
 
 function recordPageCreation(workspaceDir, appUniqueName, key, pageId, name, environment) {
   return saveRecord(workspaceDir, 'created', appUniqueName, key, pageId, name, environment);
+}
+
+// Written BEFORE a page create is sent, durably, under the id the create will use. A create whose answer never arrives — and whose page cannot be read
+// back either — leaves the page on the environment with nothing local that names it; the next build then finds a page it has no link to, and creates another
+// for the same spec entry. This record is the link: the next build reads the id it names (readPendingCreations), and either finds the page there and
+// adopts it, or does not and creates it under the SAME id.
+function recordPagePending(workspaceDir, appUniqueName, key, pageId, name, environment) {
+  return saveRecord(workspaceDir, 'pending', appUniqueName, key, pageId, name, environment);
+}
+
+// The creations this app started in this environment and never acknowledged, as Map<key, [{ pageId, name }]> (the name is what the create was sent
+// with). A pending record is INTENT, and grants nothing: it is not a creation receipt, so it never makes a page this build "owns" (readPageOwnership
+// and creationIds do not see it), never authorizes an update, and teardown never deletes a page because of it. What a build may do with one is
+// settle it — adopt the page it names, after proving it is the page that was sent, or send the create again under that id.
+function readPendingCreations(workspaceDir, appUniqueName, environment) {
+  const pending = new Map();
+  if (!workspaceDir) return pending;
+  const fingerprint = environmentFingerprint(environment);
+  const app = String(appUniqueName || '').toLowerCase();
+  for (const r of readAllRecords(workspaceDir)) {
+    if (r.kind !== 'pending' || r.environmentFingerprint !== fingerprint || r.appUniqueName !== app) continue;
+    if (!pending.has(r.key)) pending.set(r.key, []);
+    pending.get(r.key).push({ pageId: r.pageId, name: r.name });
+  }
+  return pending;
+}
+
+// A pending record is consumed once what it stood for is settled: the page was created and acknowledged (a creation receipt now says so), adopted
+// as the page that was sent, or the create is known to have written nothing. Consuming it before that would forget a page that may exist.
+function completePendingCreations(workspaceDir, appUniqueName, pageIds, environment) {
+  const root = workspaceRoot(workspaceDir);
+  if (!root) return;
+  const done = new Set(pageIds.map((id) => String(id).toLowerCase()));
+  const fingerprint = environmentFingerprint(environment);
+  const app = String(appUniqueName || '').toLowerCase();
+  for (const r of readAllRecords(root)) {
+    if (r.kind !== 'pending' || r.environmentFingerprint !== fingerprint || r.appUniqueName !== app || !done.has(r.pageId)) continue;
+    const file = recordName(r);
+    try {
+      readRecord(root, file);
+      fs.unlinkSync(path.join(root, file));
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
 }
 
 function recordPageTeardown(workspaceDir, appUniqueName, items, environment) {
@@ -174,7 +223,11 @@ function checkPageOwnershipClearable(workspaceDir) {
   if (!records.length) return { ok: true };
   const root = path.resolve(workspaceDir);
   const remaining = records.map((r) => `${path.join(root, recordName(r))}: ${r.appUniqueName}/${r.key || '(navigation)'}, page ${r.pageId}, ${r.kind}, environment ${r.environmentFingerprint}`).join('; ');
-  return { ok: false, reason: `unconsumed local page ownership records remain: ${remaining}. Preserve the workspace; resume teardown in the original app and environment. Teardown consumes a record when it deletes the page or confirms its absence. A record whose page you have confirmed gone may be deleted by hand, then re-run --clear-workspace. Do not relabel records to another environment.` };
+  // A pending record is the only pointer to a page whose create was cut short, so it is kept like a receipt — and says how it is settled.
+  const pending = records.some((r) => r.kind === 'pending')
+    ? ' A "pending" record is a page creation that was started and never acknowledged — the page may exist: run the build again in the original app and environment (it adopts the page, or creates it under the same id), or delete the record by hand once you have confirmed that no such page exists.'
+    : '';
+  return { ok: false, reason: `unconsumed local page ownership records remain: ${remaining}. Preserve the workspace; resume teardown in the original app and environment. Teardown consumes a record when it deletes the page or confirms its absence. A record whose page you have confirmed gone may be deleted by hand, then re-run --clear-workspace. Do not relabel records to another environment.${pending}` };
 }
 
-module.exports = { PREFIX, environmentFingerprint, readPageOwnership, recordPageCreation, recordPageTeardown, creationIds, completePageDeletions, checkPageOwnershipClearable };
+module.exports = { PREFIX, environmentFingerprint, readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, recordPageTeardown, creationIds, completePageDeletions, checkPageOwnershipClearable };

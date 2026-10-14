@@ -42,7 +42,7 @@ const { envTruthy } = require('./lib/interaction-mode.js');
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
-const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
 // missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
@@ -642,7 +642,7 @@ async function buildModelApp(spec, opts, deps) {
         livePlan: opts.livePlan,
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
-        env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        env: opts.env, // for the pages phase (its page backend is made for this environment)
         languageCode: opts.languageCode,
         // Forwarded explicitly because this is a fresh literal, not a spread of `opts`: without it
         // the data-model phase re-resolves, and on a transient org-read failure that fallback lands
@@ -652,7 +652,7 @@ async function buildModelApp(spec, opts, deps) {
         // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
         provisionedLanguages: deps.provisionedLanguages,
         warn: deps.warn,
-        genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
+        genpage: deps.genpage, // injectable seam for tests (lib/genpage-sdk.js's shape); else made from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         authorizedFormRemovals,
         authorizedSitemapRemovals,
@@ -1156,7 +1156,17 @@ async function main() {
       // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
       // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
-      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, isolatedReader }), verifyOpts),
+      verify: async (s, verifyOpts) => {
+        // The page reads go through a backend of their own, in a throwaway workspace — not the app folder's `.maker-workspace`, which
+        // would be left holding a copy of every page read — removed as soon as this verify ends.
+        const genpage = makeGenpageSdk(env);
+        try {
+          return await verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir, isolatedReader }), verifyOpts);
+        } finally {
+          // Awaited: a read the pass gave up on can still be running, and the workspace is removed only once the storage calls it had under way have settled.
+          await genpage.dispose();
+        }
+      },
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),

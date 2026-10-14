@@ -84,8 +84,8 @@ function makeCheckPlan(concurrency) {
   //
   // It is also a read the pass stops waiting for once a check LISTED BEFORE ITS CONSUMER has failed (`unlessFailed`).
   // The pass throws the failure of the lowest-numbered task, so after that the consumer cannot change what is thrown
-  // whatever it reports — and the read can be slow without bound as far as this pass is concerned (it is a `pac`
-  // run, which the pass cannot time out), so draining it would turn a failure that used to be immediate into a
+  // whatever it reports — and the read can be slow as far as this pass is concerned (it is a run of requests to the
+  // environment, which the pass cannot cancel), so draining it would turn a failure that used to be immediate into a
   // hang. A check listed AFTER the consumer is another matter: the consumer's own failure outranks it, and the
   // pass must still throw that one, as it did when the checks ran one after another — so a failure there does not
   // end the wait. A read the pass gave up on is left to finish, or hang, on its own; `abandonedReads()` says there
@@ -1355,8 +1355,8 @@ async function verifySpec(spec, read, opts = {}) {
     return (p) => p.pageId || idByKey.get(p.key || p.name);
   };
   // The page checks' slow reads, made in the order the checks have always made them: the three authorities
-  // (one is a pac listing, about five seconds) and then the code of the pages whose navigation is checked,
-  // which a reader that can (`pageCodes`) downloads in one pac run instead of one run per page. One memo, so
+  // (one is the environment's page listing) and then the code of the pages whose navigation is checked,
+  // which a reader that can (`pageCodes`) reads a few at a time instead of one after another. One memo, so
   // the early start below and the check share the same reads. It never throws: a failed read is handed to the
   // pages check, which throws it in its own place in the report — the read is no longer made at that point,
   // and the error that ends the pass must not depend on when it was.
@@ -1887,11 +1887,10 @@ async function verifySpec(spec, read, opts = {}) {
   // Every check above is registered and none has run yet: run them. The reads overlap (at most
   // `concurrency` at a time); the report below does not depend on which answered first.
   //
-  // A page read the pass gave up on (see makeCheckPlan) can still be running when the pass ends: a `pac` run outlives
-  // whoever stopped waiting for it, a batch shim keeps running after the process that started it is ended, and the
-  // temporary folder a download writes to is removed only when that download ends. So the reader is asked to end what it
-  // started, and to say when it has — before the pass returns, or throws, whichever it is, because a verify CLI exits
-  // the moment it does. Best-effort: nothing it throws may replace the outcome of the pass.
+  // A page read the pass gave up on (see makeCheckPlan) can still be running when the pass ends: a request already sent
+  // finishes on its own, and a read still to start would begin behind a pass that no longer needs it. So the reader is asked
+  // to end what it started — to start no more page reads — before the pass returns, or throws, whichever it is, because a
+  // verify CLI exits the moment it does. Best-effort: nothing it throws may replace the outcome of the pass.
   let ran;
   try {
     ran = await plan.run();

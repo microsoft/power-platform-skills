@@ -174,7 +174,7 @@ test('verifyPlanProvenance halts when the planner wrote nothing, or the approval
 });
 
 // An overlong id was truncated to its first 36 characters and certified. Both GUID patterns are bounded
-// like the upload parser's (lib/genpage-cli.js parsePageId), and a Page ID label whose value is malformed
+// like the id parsers elsewhere in the plugin (a page id is exactly 36 characters), and a Page ID label whose value is malformed
 // makes the plan name nothing — never a GUID found elsewhere, since the edit worker reads that label.
 test('an overlong or malformed page id is refused, never truncated to a valid-looking one', () => {
   const overlong = EDIT_WRITTEN.replace(`**Page ID:** ${PAGE_ID}`, `**Page ID:** ${PAGE_ID}deadbeef`);

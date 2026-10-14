@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 'use strict';
-// genpage-upload: deploy ONE generative page through the shared, quoting-safe upload wrapper.
+// genpage-upload: deploy ONE generative page through the SDK, from a code file and the files that carry its text.
 //
-// WHY THIS SCRIPT EXISTS (#589). `makeGenpageCli().upload()` already writes the prompt and
-// agent-message to temp files and passes `--prompt-file` / `--agent-message-file`, because a
-// prompt is arbitrary user text: it carries quotes, newlines, `%VAR%`, `&`, `|` and non-ASCII.
-// `/app-builder` went through that wrapper, but the standalone `/genpage` skill still told the
-// orchestrator to compose a raw `pac model genpage upload --prompt "<text>"` command line in
-// Markdown — so the same page content deployed one way and failed the other. Observed live:
+// WHY THIS SCRIPT EXISTS (#589). A prompt is arbitrary user text: it carries quotes, newlines,
+// `%VAR%`, `&`, `|` and non-ASCII, and it used to reach the deploy as part of a command line the
+// /genpage skill composed in Markdown — observed live to fail with
 //
 //   Error: Not a valid command.
 //   Parse failed on: Inspection
@@ -17,22 +14,33 @@
 // to EDIT the approved prompt (swap in typographic quotes), which silently breaks prompt
 // provenance — the page is then built from text the user never approved.
 //
-// So this script is the one entry point both skills use. The prompt never becomes part of a
-// command line: it is read from a FILE and handed to the wrapper as a value.
+// So this script is the one entry point both skills use, and the prompt never becomes part of a
+// command line: it is read from a FILE and handed to the page backend (lib/genpage-sdk.js) as a value.
+// The page is written through the SDK, so there is no longer a `pac` process whose arguments could
+// mangle anything; the file inputs stay, because the agent that runs this writes text to files.
 //
 // Usage:
-//   node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path>
+//   node scripts/genpage-upload.js --env <orgUrl> --code-file <path>
 //        --prompt-file <path> --agent-message-file <path>
-//        [--page-id <guid>] [--name <text>] [--data-sources <csv>]
+//        [--app-id <guid>] [--page-id <guid>] [--name <text>] [--data-sources <csv>]
+//
+//   `--app-id` is optional for a CREATE: a page needs no app, and one created without it is placed
+//   later (by the app that is built around it, or by a later `--add-to-sitemap` upload of another).
+//   An UPDATE (`--page-id`) needs it: the page must be proven to be in that app's navigation.
+//
+//   One update is different: `--page-id` for a page THIS TOOL created and did not finish — its publish failed, or the
+//   `--add-to-sitemap` placement it was asked for did — completes it. The base marker beside the code file records that
+//   (`unfinished`), the page is published and, with `--add-to-sitemap`, placed, and the proof of the page's place in the app's
+//   navigation that every other update makes is replaced by that marker, for that page only. The failure that leaves a page
+//   unfinished says to run the same command again with `--page-id <id>` added.
 //
 //   `--prompt` / `--agent-message` are accepted for short, shell-safe text, but `--prompt-file` is
 //   the documented path precisely because it cannot be mangled by a shell. `--compiled-code-file` is
-//   refused (see main): pac compiles the checked `--code-file` itself.
+//   refused (see main): the page is compiled from the checked `--code-file` itself.
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
-const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./lib/genpage-cli.js');
+const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf } = require('./lib/genpage-sdk.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
 const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
@@ -45,17 +53,18 @@ const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'n
 const SWITCHES = ['add-to-sitemap', 'clear-data-sources', 'overwrite-deployed'];
 const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 
-const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path> '
-  + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name-file <path> | --name <text>] '
+const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --code-file <path> '
+  + '--prompt-file <path> --agent-message-file <path> [--app-id <guid>] [--page-id <guid>] [--name-file <path> | --name <text>] '
   + '[--data-sources <csv>] [--clear-data-sources] [--model <id>] '
-  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed]';
+  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed]'
+  + ' (--app-id is required with --page-id and with --add-to-sitemap; --page-id alone finishes a page this tool created and did not finish)';
 
 // The skill writes these inputs — the prompt, agent-message and page-name files, connectors.json, actions.json —
 // into the working directory just before the upload, and a write through a link left at one of those names (a
 // symbolic link, a junction, or a hard link whose other name lives elsewhere) rewrites the file it points to,
 // outside the working directory included. The skill checks each name before it writes (SKILL.md Phase 6); this is
 // the check that holds when that step was skipped: the upload stops, and says the linked file may have been
-// changed. Returns null for a plain file, and for a path that is not there (the read or pac reports that).
+// changed. Returns null for a plain file, and for a path that is not there (the read reports that).
 //
 // Scope: both checks close a link left in the folder BEFORE the run, such as one shipped in a cloned repository. A
 // process racing the skill to plant one between its check and its write is out of their reach. Such a process
@@ -88,10 +97,11 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
     // blank lines — and whose final newline — are part of the text.
     //
     // A LEADING UTF-8 BOM is stripped. MEASURED against a live deployment: `pac model genpage
-    // download` writes the recovered `prompt.txt` starting `ef bb bf`, and the documented edit flow
-    // re-feeds exactly that file through `--prompt-file`. Node's 'utf8' decode keeps the BOM as
-    // U+FEFF, so the prompt handed back to pac would begin with an invisible character — silently
-    // altering the first character of a prompt the user approved. Only the LEADING one is removed:
+    // download` (what an earlier release used) wrote the recovered `prompt.txt` starting `ef bb bf`,
+    // and the documented edit flow re-feeds exactly that file through `--prompt-file`, so a folder
+    // downloaded then still carries it. Node's 'utf8' decode keeps the BOM as U+FEFF, so the prompt
+    // handed to the deploy would begin with an invisible character — silently altering the first
+    // character of a prompt the user approved. Only the LEADING one is removed:
     // a U+FEFF anywhere else is content, not an encoding marker.
     // The bytes are otherwise passed through UNCHANGED — no trailing-newline normalization. This
     // transport exists precisely so an arbitrary prompt survives verbatim, and the direct
@@ -112,96 +122,57 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
   return { ok: true, value: hasInline ? inline : undefined };
 }
 
-function bindingRefusal(pageId, why) {
-  return `cannot read the current data-source bindings for page ${pageId} (${why})`
-    + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
-    + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
-    + ' --clear-data-sources to unbind deliberately.';
-}
-
-// Every update downloads the deployed page once, both to preserve omitted bindings/model and to
-// hash page.tsx against the base marker. The directory is removed before this returns: the caller
-// emits afterwards, and the real emitter calls process.exit, so a cleanup after emit never runs.
-async function probeDeployedPage(cli, flags) {
-  const result = { deployedText: null, deployedError: null, cfg: null, configError: null };
-  let probe;
+// Reads the deployed page once, for the update's guards: the base-marker comparison needs its source, and the Griffel check
+// compares a file with it. It never rejects — a page that cannot be read is `deployedError`, and one that is not there says
+// so (`notFound`), so the caller reaches its verdicts in its own order. `page` is the SDK's projection of the page (its
+// `dataSources` are what an upload that names none leaves in place).
+async function probeDeployedPage(genpage, pageId) {
   try {
-    probe = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ds-'));
-    if (typeof cli.download !== 'function') {
-      throw new Error('this pac wrapper exposes no page download');
-    }
-    await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [flags['page-id']] });
-    // pac names the downloaded directory with its own casing of the page id.
-    const pageDir = genpageBase.findDownloadedPageDir(probe, flags['page-id']);
-    if (!pageDir) throw new Error('pac wrote no directory for this page');
-    try {
-      result.deployedText = fs.readFileSync(path.join(pageDir, 'page.tsx'), 'utf8');
-    } catch (e) {
-      result.deployedError = `pac wrote no readable page.tsx (${e.message})`;
-    }
-    try {
-      // pac writes config.json UTF-8 WITH a BOM, which JSON.parse rejects outright.
-      const raw = fs.readFileSync(path.join(pageDir, 'config.json'), 'utf8').replace(/^\uFEFF/, '');
-      const cfg = JSON.parse(raw);
-      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
-        throw new Error('config.json is not a JSON object');
-      }
-      result.cfg = cfg;
-    } catch (e) {
-      result.configError = e;
-    }
+    const page = await genpage.read(pageId);
+    return { page, deployedText: page.source, deployedError: null, notFound: false };
   } catch (e) {
-    result.deployedError = (e && e.message) || String(e);
-    if (!result.configError) result.configError = e;
-  } finally {
-    if (probe) {
-      try { fs.rmSync(probe, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
-    }
+    return { page: null, deployedText: null, deployedError: (e && e.message) || String(e), notFound: !!(e && e.code === 'GENPAGE_NOT_FOUND') };
   }
-  return result;
 }
 
-// Page-name failures are warnings, never refusals — the same as when this read ran on its own.
-// A throw must not replace an earlier divergence verdict, so the caller settles the promise.
-function noteCurrentName(nameResult, cli) {
-  if (!nameResult) return {};
-  if (nameResult.missing) return { nameUnread: 'this pac wrapper cannot read a page name' };
-  if (nameResult.failed) {
-    return { nameUnread: (nameResult.error && nameResult.error.message) || String(nameResult.error) };
+// What a file holding a JSON array of bindings (--connectors / --actions) says, or why it cannot be used. The array goes to the
+// page's config.json as it is: the SDK neither validates nor resolves a binding.
+function readBindings(flag, file, readFile) {
+  let parsed;
+  try {
+    // A BOM is not part of the JSON; an editor on Windows adds one.
+    parsed = JSON.parse(String(readFile(path.resolve(file), 'utf8')).replace(/^\uFEFF/, ''));
+  } catch (e) {
+    return { ok: false, error: `--${flag} could not be read as JSON: ${(e && e.message) || e}` };
   }
-  const current = nameResult.value;
-  if (typeof current !== 'string' || !current.trim()) return {};
-  const name = unescapePacName(current);
-  const refusal = typeof cli.argumentRefusal === 'function' ? cli.argumentRefusal(name) : null;
-  if (refusal) return { nameUnsent: { current, refusal } };
-  const out = { preservedName: name };
-  // Only a `"` pac did not write (no backslash before it) cannot be kept as it is.
-  if (/(?:^|[^\\])"/.test(current)) out.nameChanged = current;
-  return out;
+  if (!Array.isArray(parsed)) return { ok: false, error: `--${flag} must hold a JSON array (the bindings the page uses), not ${parsed === null ? 'null' : typeof parsed}` };
+  return { ok: true, value: parsed };
 }
 
 // After a successful upload, record the hash of the file we sent. A readback whose hash equals
-// that file (pac's BOM and final CRLF are not a difference) confirms the service stored it:
+// that file (a BOM and a final CRLF are not a difference) confirms the service stored it:
 // source 'upload'. A readback that differs must not become the trusted deployed hash — a save
-// can land between the upload and the download, and recording it would make the next update
+// can land between the upload and the readback, and recording it would make the next update
 // treat someone else's page as our base. Record the uploaded hash as 'upload-unverified', with
 // the line delta, so the next update refuses deployed-changed until genpage-base.js check. A
 // failed readback is the same unverified marker. The whole step is best-effort: the upload
 // already succeeded, and a throw here would report that create as a failure without a page id,
 // so a retry could create a second page. A failed marker write deletes any previous marker: a
-// stale base is worse than no base.
+// stale base is worse than no base. Answers the marker it wrote, or null when it wrote none.
+//
+// `unfinished` marks a page this upload CREATED and has not finished: it is recorded with the marker (lib/genpage-base.js) so that naming the page again completes it
+// (completionMarker) — and a marker that could not be written is no way to complete anything, which the caller has to know to say so (hence the answer).
 async function recordObservedBase(args) {
   try {
-    await writeObservedBase(args);
+    return await writeObservedBase(args);
   } catch (e) {
     args.warnings.push(`could not record a base marker (${(e && e.message) || e}) — a later update will refuse no-base until the page is recorded`);
+    return null;
   }
 }
 
-async function writeObservedBase({ cli, flags, pageId, base, warnings, checkedText, mkdtempSync, rmSync }) {
+async function writeObservedBase({ genpage, flags, pageId, base, warnings, checkedText, unfinished }) {
   const codeFile = flags['code-file'];
-  const mkdtemp = mkdtempSync || fs.mkdtempSync;
-  const rm = rmSync || fs.rmSync;
   // The marker sits beside the file the caller named, which must still be a regular file with one name: readPlainText refuses a link, or a file
   // that is gone, as it always did. What the marker records is the hash of the bytes that were checked and sent (`checkedText`) — never a new
   // read of the file, which may have been saved again since; a later check then sees that save as a local change, which it is.
@@ -212,20 +183,14 @@ async function writeObservedBase({ cli, flags, pageId, base, warnings, checkedTe
     try { base.deleteMarker(codeFile); } catch (del) {
       warnings.push(`the previous base marker could not be removed (${del.message})`);
     }
-    return;
+    return null;
   }
   const localText = checkedText;
   const localSha256 = base.pageHash(localText);
   let deployedSha256 = localSha256;
   let source = 'upload';
-  let probe;
   try {
-    probe = mkdtemp(path.join(os.tmpdir(), 'genpage-base-'));
-    if (typeof cli.download !== 'function') throw new Error('this pac wrapper exposes no page download');
-    await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [pageId] });
-    const pageDir = base.findDownloadedPageDir(probe, pageId);
-    if (!pageDir) throw new Error('pac wrote no directory for this page');
-    const downloaded = fs.readFileSync(path.join(pageDir, 'page.tsx'), 'utf8');
+    const downloaded = (await genpage.read(pageId)).source;
     if (base.pageHash(downloaded) === localSha256) {
       source = 'upload';
       deployedSha256 = localSha256;
@@ -239,50 +204,85 @@ async function writeObservedBase({ cli, flags, pageId, base, warnings, checkedTe
     source = 'upload-unverified';
     deployedSha256 = localSha256;
     warnings.push(`could not re-read the deployed page to confirm its hash (${(e && e.message) || e}), so the base marker records the uploaded file's hash as unverified — a later update may refuse deployed-changed if the service rewrote the page`);
-  } finally {
-    if (probe) {
-      try { rm(probe, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
-    }
   }
   try {
-    base.writeMarker(codeFile, {
+    return base.writeMarker(codeFile, {
       version: 1,
       pageId,
-      appId: flags['app-id'],
+      // No app for a page created without one: the marker then records the page alone, and the first update that names
+      // the app the page was placed in goes ahead on it (lib/genpage-base.js compareWithMarker) and records the app.
+      ...(flags['app-id'] ? { appId: flags['app-id'] } : {}),
       deployedSha256,
       localSha256,
       source,
+      ...(unfinished ? { unfinished } : {}),
     });
   } catch (e) {
     warnings.push(`could not write the base marker (${e.message}) — a later update will refuse no-base until the page is recorded again`);
     try { base.deleteMarker(codeFile); } catch (del) {
       warnings.push(`the previous base marker could not be removed (${del.message})`);
     }
+    return null;
   }
+}
+
+// The base marker of the page this upload is COMPLETING, or null. Only an update that names a page can be one, and only a marker that says `unfinished` for exactly that
+// page counts: another page's marker, a finished page's, none, or one that cannot be read is "not completing", and the ordinary rules apply, whatever they say.
+function completionMarker(flags, base) {
+  if (!flags['page-id'] || typeof flags['code-file'] !== 'string' || !flags['code-file']) return null;
+  let marker;
+  try { marker = base.readMarker(flags['code-file']); } catch { return null; }
+  return marker && marker.unfinished && marker.pageId === String(flags['page-id']).toLowerCase() ? marker : null;
 }
 
 async function main(argv = process.argv.slice(2), deps = {}) {
   const emit = deps.emit || emitResult;
   const readFile = deps.readFile || fs.readFileSync;
-  const cliFactory = deps.makeGenpageCli || makeGenpageCli;
+  const makeBackend = deps.makeGenpageSdk || makeGenpageSdk;
 
   const flagError = validateFlags(argv, { known: KNOWN, needValue: NEED_VALUE });
   if (flagError) return emit(false, { error: `${flagError}\n${USAGE}` });
   const { flags } = parseArgs(argv);
 
-  for (const required of ['env', 'app-id', 'code-file']) {
+  for (const required of ['env', 'code-file']) {
     if (typeof flags[required] !== 'string' || !flags[required]) {
       return emit(false, { error: `--${required} is required\n${USAGE}` });
     }
   }
-  // Refused, not passed on. pac deploys the JavaScript in --compiled-code-file instead of compiling --code-file, and the Griffel check below
-  // reads the TypeScript: compiled output names makeStyles in ways the check does not read as Griffel's (`(0, x.makeStyles)(…)` after a
-  // require), and nothing ties the file to the source that was checked — so a page could ship a shorthand Griffel drops with no check at all.
-  // No flow of this plugin sends it; without it pac compiles the checked file itself, which is how every page here is deployed.
+  const base = deps.base || genpageBase;
+  // An upload that CREATED a page and did not finish it — the publish failed, or the placement it was asked for did — leaves a base marker that says so
+  // (lib/genpage-base.js `unfinished`). Naming that page again with --page-id COMPLETES it: it is published and, with --add-to-sitemap, placed, without the proof an
+  // ordinary update makes that the page is in the app's navigation — an unfinished page is not in it yet, so that proof could never be made. The marker is for one
+  // page, so this is for that page alone; for any other the rules below apply as they always did.
+  const completing = completionMarker(flags, base);
+  // A create needs no app — a page is a row of its own, placed by whatever app names it — but an update must prove the page is in the app
+  // it names, and a placement is an edit of that app: both need the app's id. A page that was created with no app and is being completed needs none either.
+  if (flags['page-id'] && (typeof flags['app-id'] !== 'string' || !flags['app-id']) && !(completing && !completing.appId)) {
+    return emit(false, { error: `--app-id is required with --page-id: an update must name the app the page is placed in\n${USAGE}` });
+  }
+  const addToSitemap = flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true';
+  if (addToSitemap && (typeof flags['app-id'] !== 'string' || !flags['app-id'])) {
+    return emit(false, { error: `--add-to-sitemap needs --app-id: the page is added to that app's navigation. Pass --app-id, or drop --add-to-sitemap to create the page with no app\n${USAGE}` });
+  }
+  // A page created with no app is completed into an app only by placing it there: an app named without a placement would attach the page's tables to an app
+  // that does not hold the page, which is what an ordinary update proves it does not do.
+  if (completing && !completing.appId && typeof flags['app-id'] === 'string' && flags['app-id'] && !addToSitemap) {
+    return emit(false, { error: `page ${flags['page-id']} was created with no app, so completing it into app ${flags['app-id']} needs --add-to-sitemap: the page is placed in that app, not merely attached to it. Pass --add-to-sitemap, or drop --app-id to only publish the page\n${USAGE}` });
+  }
+  // A page whose create was asked to place it is not finished until it is placed. The marker keeps that, and the run that completes it has to ask for it again — it is
+  // the one thing in the command that the marker cannot stand in for, and a run that left it out would clear the page's unfinished state with the placement undone,
+  // leaving a page no later update could prove is in the app.
+  if (completing && completing.unfinished === 'place' && !addToSitemap) {
+    return emit(false, { error: `page ${flags['page-id']} was created to be placed in app ${completing.appId || flags['app-id']}, and it is not finished until it is placed: run the same command again with --page-id ${flags['page-id']} added and --add-to-sitemap kept\n${USAGE}` });
+  }
+  // Refused, not passed on. The page is compiled from the TypeScript in --code-file, which is what the Griffel check below reads; JavaScript
+  // compiled elsewhere would be deployed in its place, and compiled output names makeStyles in ways the check does not read as Griffel's
+  // (`(0, x.makeStyles)(…)` after a require), with nothing to tie the file to the source that was checked — so a page could ship a shorthand
+  // Griffel drops with no check at all. No flow of this plugin sends it.
   if (flags['compiled-code-file'] !== undefined) {
     return emit(false, {
       error: '--compiled-code-file is not accepted: the Griffel check reads the TypeScript in --code-file, and JavaScript compiled '
-        + 'elsewhere would be deployed without it. Leave it out — pac compiles the --code-file it is given.',
+        + 'elsewhere would be deployed without it. Leave it out — the page is compiled from the --code-file it is given.',
     });
   }
 
@@ -298,7 +298,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   if (!pageName.ok) return emit(false, { error: pageName.error });
   if (typeof flags['name-file'] === 'string' && pageName.value !== undefined) pageName.value = pageName.value.replace(/(?:\r?\n)+$/, '');
 
-  // An EMPTY prompt or agent-message is refused rather than defaulted. `upload()` substitutes
+  // An EMPTY prompt or agent-message is refused rather than defaulted. The page backend substitutes
   // `Generative page <name>` for a blank prompt and `Authored by app-builder` for a blank agent
   // message, which is reasonable when nothing was supplied at all — but a caller who passed
   // `--prompt-file` / `--agent-message-file` asked for THAT text, and silently deploying generated
@@ -317,20 +317,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       });
     }
   }
-  // An ASCII double quote cannot be deployed in a page name: pac stores every `"` in it as `\"` — in the page
-  // row AND in the navigation title it writes, which the app then shows (live-measured: `Say "hi" now` became
-  // `Say \"hi\" now` in both). No other character is changed — backslashes, typographic quotes, apostrophes
-  // and non-ASCII text all arrive exactly — so the name is refused before anything is deployed, and the
-  // message names the characters that do survive.
-  if (typeof pageName.value === 'string' && pageName.value.includes('"')) {
-    return emit(false, {
-      error: `the page name ${JSON.stringify(pageName.value)} contains an ASCII double quote ("), which the page would `
-        + 'show as \\" — pac stores every " in a page name that way, in the navigation title too. Use typographic '
-        + 'quotes (“ ”) or an apostrophe instead; they are stored exactly.',
-    });
-  }
 
-  const addToSitemap = flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true';
   // Same normalization as the switch above, and for the same reason: `parseArgs` yields the STRING
   // "false" for `--clear-data-sources=false`, which is truthy. Testing the raw flag would have read
   // an explicit refusal to clear as permission to clear — unbinding the page the guard protects.
@@ -346,214 +333,151 @@ async function main(argv = process.argv.slice(2), deps = {}) {
         + 'the other sets its bindings. Drop whichever you did not mean.',
     });
   }
-  // REFUSED, not silently dropped. pac rejects the combination, and an update that quietly discards
-  // the flag leaves the caller believing a placement happened. The wrapper also omits it on an
-  // update as a backstop, but a backstop is not an answer to an explicit contradictory request.
-  if (addToSitemap && flags['page-id']) {
+  // REFUSED, not silently dropped. An update cannot add a sitemap entry, and one that quietly discards
+  // the flag leaves the caller believing a placement happened. (Completing a page this tool created and did not finish is the one update that places it.)
+  if (addToSitemap && flags['page-id'] && !completing) {
     return emit(false, {
       error: '--add-to-sitemap cannot be combined with --page-id: an update cannot add a sitemap '
         + 'entry, and the page it names is already placed. Drop one of the two.',
     });
   }
 
-  // pac reads these two itself; they are checked here for the same reason as the text files (notPlainFile).
-  for (const flag of ['connectors', 'actions']) {
-    const linked = typeof flags[flag] === 'string' && flags[flag] ? notPlainFile(path.resolve(flags[flag])) : null;
+  // The two binding files are read here, as the page's `connectorBindings` / `actionBindings` (bare JSON arrays), and checked first for the
+  // same reason as the text files (notPlainFile). An omitted flag leaves a page's bindings as they are; `[]` clears them.
+  const bindings = {};
+  for (const [flag, key] of [['connectors', 'connectorBindings'], ['actions', 'actionBindings']]) {
+    if (typeof flags[flag] !== 'string' || !flags[flag]) continue;
+    const linked = notPlainFile(path.resolve(flags[flag]));
     if (linked) return emit(false, { error: `--${flag} ${linked}` });
+    const read = readBindings(flag, flags[flag], readFile);
+    if (!read.ok) return emit(false, { error: read.error });
+    bindings[key] = read.value;
   }
 
   // The page is read ONCE, here, and everything after is decided on these bytes: the Griffel check below, an update's comparison with the deployed page, the base marker's hash,
-  // and the upload itself, which sends pac a copy of them rather than the file (see the upload below). An update lists the environment and downloads the deployed page before it
-  // uploads — seconds in which the file can be saved again — and pac reading the file then would deploy bytes nothing here checked. A file that cannot be read is refused: there
-  // is nothing to check, or to send.
-  let checkedCode;
+  // and what is written to the page. An update reads the deployed page before it writes — seconds in which the file can be saved again — and reading the file again then would
+  // deploy bytes nothing here checked. A file that cannot be read is refused: there is nothing to check, or to send. The text is the bytes as they are, bar one leading BOM
+  // (the maker stores none) — and bytes that are not UTF-8 are refused, since the page is stored as UTF-8 text and a decode that replaced a byte would send a page nobody checked.
+  let checkedText;
   try {
-    checkedCode = fs.readFileSync(path.resolve(flags['code-file']));
+    checkedText = sourceText(fs.readFileSync(path.resolve(flags['code-file'])));
   } catch (e) {
-    return emit(false, { error: `--code-file could not be read: ${(e && e.message) || e}` });
+    return emit(false, { error: `--code-file ${e && e.code === 'GENPAGE_SOURCE_NOT_UTF8' ? 'is not usable: ' : 'could not be read: '}${(e && e.message) || e}` });
   }
-  const checkedText = checkedCode.toString('utf8');
 
   // The Griffel check (AB#6691124), where every page upload passes: a /genpage create, an edit-flow update and a browser-verify fix all go through this script, so a page whose
   // `makeStyles` writes one of the ten shorthands Griffel drops at runtime is refused here whether or not the skill's own gate (scripts/check-griffel-styles.js) was run before
-  // it — pac transpiles without executing makeStyles, and the page would otherwise deploy and render without its border, colour or reset. It is made on the bytes read above,
-  // which are the ones pac is sent.
-  // A CREATE is refused here, before any listing or download. An UPDATE is held to the check by what it ADDS: the page is already deployed, possibly with a key Griffel drops that an
-  // earlier version of the plugin let through, and the same bytes sent again ship nothing new — so the file is compared with the deployed page, which an update downloads anyway for
+  // it — the compile does not execute makeStyles, and the page would otherwise deploy and render without its border, colour or reset. It is made on the bytes read above,
+  // which are the ones the page is written from.
+  // A CREATE is refused here, before anything is read from the environment. An UPDATE is held to the check by what it ADDS: the page is already deployed, possibly with a key Griffel drops that an
+  // earlier version of the plugin let through, and the same bytes sent again ship nothing new — so the file is compared with the deployed page, which an update reads anyway for
   // its base check, and only a key that page did not have stops the upload (below, once it is read).
   const styleProblems = griffelStyleProblems(checkedText).problems;
   // The checker command the message suggests names the file: as one argument no shell reads anything in, or — for a path a shell cannot be given literally — as a
   // placeholder, with the path named in a sentence instead (lib/cli-failure.js commandArg; a path can come from an untrusted checkout).
   const griffelFile = commandArgOrPlaceholder(flags['code-file'], '<file>');
   const griffelWords = { surface: 'upload', subject: flags['code-file'], command: `node scripts/check-griffel-styles.js --file ${griffelFile.arg}`, ...(griffelFile.note ? { note: griffelFile.note } : {}) };
-  const refuseStyles = (problems) => emit(false, {
+  const stylesRefusal = (problems) => ({
     ok: false,
     code: 'griffel-shorthand',
     error: describeGriffelRefusal(problems, flags['code-file'], griffelWords),
     problems,
   });
-  if (styleProblems.length && !flags['page-id']) return refuseStyles(styleProblems);
+  if (styleProblems.length && !flags['page-id']) return emit(false, stylesRefusal(styleProblems));
+
+  const genpage = makeBackend(flags.env);
+  // The backend's workspace is removed BEFORE anything is reported: emitResult calls process.exit, so a cleanup placed after an emit never
+  // runs, and that workspace holds the page's source. dispose() answers when the storage calls the backend had under way have settled and the
+  // folder is gone, so it is awaited.
+  let outcome;
+  try {
+    outcome = await deploy({
+      flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal,
+      prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap,
+    });
+  } finally {
+    try { await genpage.dispose(); } catch { /* the backend's own folder; nothing to report */ }
+  }
+  return emit(outcome.ok, outcome.payload);
+}
+
+// Everything after the flags and the files have been read and checked: an update's guards, the write, the base marker and the placement in an
+// app. It RETURNS what to report — { ok, payload } — instead of reporting it, so that main can remove the backend's workspace first.
+async function deploy(context) {
+  const { flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal, prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap } = context;
+  const done = (ok, payload) => ({ ok, payload });
   let griffelWarnings = [];
-
-  const cli = cliFactory(flags.env);
-  const base = deps.base || genpageBase;
-
-  // An UPDATE must have a target that EXISTS. pac treats an unknown `--page-id` as a CREATE and
-  // returns the NEW page's id, and the wrapper's identity guard compares the returned id to the one
-  // it just used — which matches, so a typo'd or stale id silently produced a brand-new, UNPLACED
-  // page reported as `updated: true`. Live-reproduced: a UUID proven absent beforehand became a page.
-  //
-  // Checked here rather than inside `upload()` because this is where an ARBITRARY id enters: the
-  // standalone CLI takes it straight from the caller. /app-builder's page updates carry ids from its
-  // own manifest and reconcile, so they do not need an extra env-wide listing per page.
-  //
-  // Env-wide and including unpublished pages, because an app-scoped list is derived from the sitemap
-  // and would miss exactly the unplaced page this defect creates. Fail CLOSED on an unreadable
-  // listing: "cannot prove the target exists" must not license a write that might create a duplicate.
+  // The page's own checks, before anything is written. A CREATE has none left (its file was refused above if it was bad); an UPDATE reads the deployed page and compares.
+  let overwroteDeployed = false;
+  let deployed = null; // what the update's probe read: the page as the SDK projects it
+  // The page's id as soon as it is known, kept outside the write's try: an update names it up front, and a create learns it from the backend — from its answer, or from the
+  // error it raises once it has sent (`pageId`). Whatever fails after that, the failure carries it.
+  let knownPageId = flags['page-id'] || null;
   if (flags['page-id']) {
-    // Resolve the enumerator by EITHER of the wrapper's two exported names. A wrapper exposing
-    // neither cannot prove the target exists, and skipping the check in that case would be
-    // fail-OPEN exactly when the wrapper is unknown — the opposite of the policy this guard
-    // implements. Gating on `typeof ... === 'function'` alone silently restored the original defect
-    // for any older or custom wrapper.
-    const enumerate = typeof cli.enumerateEnvironment === 'function' ? () => cli.enumerateEnvironment()
-      : typeof cli.enumerateEnv === 'function' ? () => cli.enumerateEnv()
-        : null;
-    if (!enumerate) {
-      return emit(false, {
-        error: `cannot verify that page ${flags['page-id']} exists before updating it — this pac `
-          + 'wrapper exposes no environment listing. Refusing to upload, because pac treats an '
-          + 'unknown --page-id as a create and would make a new page and report it as an update.',
-      });
-    }
-    const enumeratePages = typeof cli.enumeratePages === 'function' ? cli.enumeratePages.bind(cli) : null;
-    // The existence and membership listings are independent reads, each its own pac process of about
-    // five seconds, so they run together. Measured live: a pair run one after the other averaged
-    // 10.6 s and an overlapped pair 5.6 s, and all 20 overlapped listings succeeded. The VERDICTS are
-    // still reached in the original order (existence first), so a given failure is reported as it
-    // was before, and a listing that throws surfaces only when its verdict is reached: a page that
-    // does not exist is reported as absent even if the app listing also broke.
+    // An UPDATE must have a target that EXISTS, and it must be in the app it names: updating a real page through the wrong app would write
+    // the page and attach its tables to an app that does not hold it. The page read is the existence proof — a page that is not there is a
+    // 404, and an update of it is refused (it would never become a create, as an unknown id once did) — and the app's navigation is the
+    // membership proof, SAVED layer included (what the designer holds is the app's page set the maker sees). The two are independent reads, so
+    // they run together; the VERDICTS are still reached in order, existence first: a page that does not exist is reported as absent even if
+    // the app listing also broke, and a listing that throws surfaces only when its verdict is reached.
+    // A page this tool created and did not finish (`completing`) is not in the app's navigation yet — that is what is left to do — so for that page alone the base
+    // marker is the proof, and the navigation is not read. Everything else about the update is as for any page.
     const settle = (fn) => Promise.resolve().then(fn).then((value) => ({ value }), (error) => ({ failed: true, error }));
-    const [existence, membership] = await Promise.all([
-      settle(enumerate),
-      enumeratePages ? settle(() => enumeratePages(flags['app-id'], { includeUnpublished: true })) : null,
+    const [probeResult, membership] = await Promise.all([
+      settle(() => probeDeployedPage(genpage, flags['page-id'])),
+      completing ? { value: null } : settle(() => genpage.enumeratePages(flags['app-id'], { includeUnpublished: true })),
     ]);
-    if (existence.failed) throw existence.error;
-    const known = existence.value;
-    if (!known || known.ok !== true) {
-      return emit(false, {
-        error: `cannot verify that page ${flags['page-id']} exists before updating it `
-          + `(${(known && known.error) || 'unknown reason'}) — refusing to upload, because pac treats an `
-          + 'unknown --page-id as a create and would make a new page.',
-      });
-    }
-    if (!(known.ids || []).includes(String(flags['page-id']).toLowerCase())) {
-      return emit(false, {
-        error: `page ${flags['page-id']} does not exist in this environment — refusing to "update" it. `
-          + 'pac would create a NEW unplaced page and report it as an update. Check the id, or drop '
+    const probe = probeResult.value;
+    if (probe.notFound) {
+      return done(false, {
+        error: `page ${flags['page-id']} does not exist in this environment — refusing to "update" it. Check the id, or drop `
           + '--page-id to create a page deliberately.',
       });
     }
-    // EXISTENCE is not enough for an update: pac accepts a real page id together with ANY app id
-    // and then writes the page under that app context, which renames it and attaches its table
-    // bindings to the wrong app. The app-scoped list is sitemap/navigation membership, so prove the
-    // page is actually placed in THIS app before the binding probe downloads content or upload writes.
-    if (!enumeratePages) {
-      return emit(false, {
-        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} — this pac `
-          + 'wrapper exposes no app-scoped page listing. Refusing to upload, because updating a '
-          + 'page through the wrong app id would rename it and attach its tables to that app.',
-      });
+    if (!completing) {
+      if (membership.failed) throw membership.error;
+      const appPages = membership.value;
+      if (!appPages || appPages.ok !== true) {
+        return done(false, {
+          error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} `
+            + `(${(appPages && appPages.error) || 'unknown reason'})`,
+        });
+      }
+      const pages = Array.isArray(appPages.pages) ? appPages.pages : [];
+      if (!pages.length) {
+        return done(false, {
+          error: `app ${flags['app-id']} has no generative pages, or could not be found — cannot verify `
+            + `that page ${flags['page-id']} belongs to it`,
+        });
+      }
+      const pageInApp = pages.some((p) => String(p && p.pageId || '').toLowerCase() === String(flags['page-id']).toLowerCase());
+      if (!pageInApp) {
+        return done(false, {
+          error: `page ${flags['page-id']} is not in app ${flags['app-id']}'s navigation — updating it `
+            + 'with this app id would attach its tables to that app; use the id of the app the page belongs to',
+        });
+      }
     }
-    if (membership.failed) throw membership.error;
-    const appPages = membership.value;
-    if (!appPages || appPages.ok !== true) {
-      return emit(false, {
-        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} `
-          + `(${(appPages && appPages.error) || 'unknown reason'})`,
-      });
-    }
-    const pages = Array.isArray(appPages.pages) ? appPages.pages : [];
-    if (!pages.length) {
-      return emit(false, {
-        error: `app ${flags['app-id']} has no generative pages, or could not be found — cannot verify `
-          + `that page ${flags['page-id']} belongs to it`,
-      });
-    }
-    const pageInApp = pages.some((p) => String(p && p.pageId || '').toLowerCase() === String(flags['page-id']).toLowerCase());
-    if (!pageInApp) {
-      return emit(false, {
-        error: `page ${flags['page-id']} is not in app ${flags['app-id']}'s navigation — updating it `
-          + 'with this app id would rename it and attach its tables to that app; use the id of the app the page belongs to',
-      });
-    }
-  }
 
-  // An UPDATE that says NOTHING about data sources must not DESTROY them. pac rewrites the page's
-  // binding list from the flags it is given, so omitting `--data-sources` persists `[]` — the page
-  // goes on querying the table while its stored binding disappears. Live-reproduced by following
-  // the Phase 7.5 fix-redeploy command, which omits the flag.
-  //
-  // Same rule as an omitted cell span: absence is "no opinion", never "clear it". The current
-  // bindings are read back and re-sent, so a fix-redeploy is non-destructive by default; pass
-  // `--clear-data-sources` to actually unbind. A create has nothing to preserve.
-  //
-  // The page's MODEL follows the same rule: pac stores whatever `--model` an upload sends, and an update
-  // without one wiped the deployed model id to "" (live-measured). So an update that omits it re-sends the
-  // one config.json records — read from the same download.
-  //
-  // That download now runs on EVERY update, not only when a binding or the model was omitted: the
-  // base-marker check needs page.tsx whether or not the caller named those flags. An unreadable
-  // page is `deployed-unreadable`, independent of the binding options — a model-only miss used to
-  // be a warning, and that must not become the policy for a snapshot we could not take.
-  // `--overwrite-deployed` is the only bypass, and it is never the default. The download and the
-  // upload are separate pac calls; a save that lands between them (seconds) is not detected.
-  let preservedDataSources;
-  let preservedModel;
-  let modelUnread = null; // why the page's current model could not be read, when it could not
-  let preservedName;
-  let nameUnread = null;
-  let nameChanged = null;
-  let nameUnsent = null;
-  let overwroteDeployed = false;
-  if (flags['page-id']) {
-    const preserveBindings = !flags['data-sources'] && !clearDataSources;
-    const preserveModel = !flags.model;
-    // The page-name read is its own Dataverse call. Start it with the probe download, after the
-    // existence and membership guards above have passed, so a guard failure is still the verdict
-    // and neither call is made. Name failures stay warnings, reached only if the update proceeds.
-    // An update without a name keeps the page's current name. pac otherwise renames it to its
-    // navigation title — live-reproduced: a renamed page reverted when a later update omitted
-    // --name. The name is read from the page row and sent again, unescaped, so pac stores the
-    // same value. A name this installation cannot hand to pac (a pac.cmd shim and `%` or `"`)
-    // is not sent; the update still proceeds and says so. Metadata, like the model: not knowing
-    // the name never blocks the update.
-    const wantName = pageName.value === undefined;
-    const settle = (p) => Promise.resolve(p).then((value) => ({ value }), (error) => ({ failed: true, error }));
-    const nameTask = !wantName ? Promise.resolve(null)
-      : typeof cli.pageName !== 'function' ? Promise.resolve({ missing: true })
-        : settle(cli.pageName(flags['page-id']));
-    const probeTask = settle(probeDeployedPage(cli, flags));
-    const [nameResult, probeResult] = await Promise.all([nameTask, probeTask]);
-    ({ preservedName, nameUnread, nameChanged, nameUnsent } = {
-      preservedName, nameUnread, nameChanged, nameUnsent, ...noteCurrentName(nameResult, cli),
-    });
-    const probe = probeResult.failed
-      ? { deployedText: null, deployedError: (probeResult.error && probeResult.error.message) || String(probeResult.error), cfg: null, configError: probeResult.error }
-      : probeResult.value;
-    // Recorded here, emitted below — never from inside the probe. emitResult calls process.exit.
+    // The deployed page is read on EVERY update: the base-marker check needs its source, and so does the Griffel comparison. An unreadable
+    // page is `deployed-unreadable`. `--overwrite-deployed` is the only bypass, and it is never the default. The read and the write are
+    // separate calls; a save that lands between them (seconds) is not detected here — the write itself refuses a page whose version
+    // moved after it was read.
+    // An update that names no data sources, model, name or bindings leaves them as they are (the SDK writes only what differs), so nothing
+    // of the page's own is read back and re-sent; `--clear-data-sources` unbinds on purpose.
+    deployed = probe.page;
     if (probe.deployedError && !overwriteDeployed) {
-      return emit(false, {
+      return done(false, {
         ok: false,
         code: 'deployed-unreadable',
         pageId: flags['page-id'],
         appId: flags['app-id'],
         error: `cannot read the deployed page ${flags['page-id']} (${probe.deployedError}) — refusing to update, `
           + 'because the page may have changed and this upload would replace it unseen. Pass --overwrite-deployed '
-          + 'to replace it deliberately, or retry when the page can be downloaded.',
+          + 'to replace it deliberately, or retry when the page can be read.',
       });
     }
-    // The Griffel check for an UPDATE (see the create check above): what the deployed page already has ships nothing new. A file that IS the deployed page's text (pac's BOM and final
+    // The Griffel check for an UPDATE (see the create check above): what the deployed page already has ships nothing new. A file that IS the deployed page's text (a BOM and final
     // CRLF are not a difference) is a re-send as it is, so none of its problems is new; otherwise a key counts as already there when the deployed page has it (griffelProblemsNotIn).
     // Only a key, or a call the checker cannot read, that the deployed page did not have stops the upload — and --overwrite-deployed is no way past it: that flag is about edits made
     // to the deployed page, not about what this file writes. When the deployed page could not be read (possible only under --overwrite-deployed) nothing says which keys it had; the
@@ -566,33 +490,8 @@ async function main(argv = process.argv.slice(2), deps = {}) {
         const { added, inherited } = sameAsDeployed
           ? { added: [], inherited: styleProblems }
           : griffelProblemsNotIn(styleProblems, griffelStyleProblems(probe.deployedText).problems);
-        if (added.length) return refuseStyles(added);
+        if (added.length) return done(false, stylesRefusal(added));
         griffelWarnings = [describeGriffelWarning(inherited, flags['code-file'], { ...griffelWords, standing: 'inherited' })];
-      }
-    }
-    if (preserveBindings) {
-      let why = null;
-      if (probe.configError || !probe.cfg) {
-        why = (probe.configError && probe.configError.message) || probe.deployedError || 'pac wrote no directory for this page';
-      } else if (probe.cfg.dataSources !== undefined && !Array.isArray(probe.cfg.dataSources)) {
-        why = `config.json dataSources is ${typeof probe.cfg.dataSources}, not an array`;
-      } else if (Array.isArray(probe.cfg.dataSources)) {
-        const bad = probe.cfg.dataSources.find((value) => typeof value !== 'string' || !value.trim());
-        if (bad !== undefined) why = 'config.json dataSources must be an array of non-empty table logical names';
-        else preservedDataSources = probe.cfg.dataSources;
-      } else {
-        // An ABSENT dataSources key means the page HAS no bindings.
-        preservedDataSources = [];
-      }
-      if (why) return emit(false, { error: bindingRefusal(flags['page-id'], why) });
-    }
-    if (preserveModel) {
-      if (probe.configError || !probe.cfg) {
-        modelUnread = (probe.configError && probe.configError.message) || probe.deployedError || 'pac wrote no directory for this page';
-      } else if (typeof probe.cfg.model === 'string' && probe.cfg.model.trim()) {
-        preservedModel = probe.cfg.model.trim();
-      } else if (probe.cfg.model !== undefined && probe.cfg.model !== null && probe.cfg.model !== '') {
-        modelUnread = `config.json model is ${typeof probe.cfg.model}, not a string`;
       }
     }
     if (overwriteDeployed) {
@@ -606,9 +505,9 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       });
       if (cmp.marker !== 'present') {
         const why = marker
-          ? `the base marker next to ${flags['code-file']} is for page ${marker.pageId} in app ${marker.appId}, not page ${flags['page-id']} in app ${flags['app-id']}`
+          ? `the base marker next to ${flags['code-file']} is for page ${marker.pageId}${marker.appId ? ` in app ${marker.appId}` : ''}, not page ${flags['page-id']} in app ${flags['app-id']}`
           : `no base marker for page ${flags['page-id']} in app ${flags['app-id']} next to ${flags['code-file']}`;
-        return emit(false, {
+        return done(false, {
           ok: false,
           code: 'no-base',
           pageId: flags['page-id'],
@@ -628,7 +527,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
         } catch (e) {
           copyError = e.message;
         }
-        return emit(false, {
+        return done(false, {
           ok: false,
           code: 'deployed-changed',
           pageId: flags['page-id'],
@@ -646,76 +545,110 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     }
   }
 
-  // pac reads the code file itself, after every check above, so it is sent a copy of the bytes they were made on: a file of the same name (pac compiles by its extension) in a
-  // folder of its own, removed as soon as pac has answered and before anything is reported (emit may end the process). `sourceFile` is the file the caller named, which is what
-  // an upload's own messages point at; the base marker belongs to it too, and records the hash of these bytes.
-  let stageDir = null;
-  const removeStage = () => {
-    if (!stageDir) return;
-    try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
-    stageDir = null;
-  };
+  // The page is written from the bytes checked above — `checkedText` is what the Griffel check, the comparison with the deployed page and the base marker's hash were made on —
+  // and never from a new read of the file, which may have been saved again since. There is no copy of it to stage for a process to read: the SDK takes the text.
   try {
-    stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-code-'));
-    const stagedCodeFile = path.join(stageDir, path.basename(flags['code-file']));
-    fs.writeFileSync(stagedCodeFile, checkedCode);
-    let res;
-    try {
-      res = await cli.upload({
-        appId: flags['app-id'],
-        pageId: flags['page-id'] || undefined,
-        codeFile: stagedCodeFile,
-        sourceFile: flags['code-file'],
-        name: pageName.value || preservedName || undefined,
+    const written = flags['page-id']
+      ? await genpage.update(flags['page-id'], {
+        source: checkedText,
+        name: pageName.value || undefined,
         prompt: prompt.value,
         agentMessage: agentMessage.value,
-        // Passed through as the CSV the caller typed; upload() normalizes array-or-string. When the
-        // caller said nothing on an update, this carries the page's EXISTING bindings so they survive.
-        dataSources: flags['data-sources'] || preservedDataSources || undefined,
-        model: flags.model || preservedModel || undefined,
-        connectors: flags.connectors || undefined,
-        actions: flags.actions || undefined,
-        addToSitemap,
-      });
-    } finally {
-      removeStage();
-    }
-    const pageId = (res && (res.pageId || res.id)) || null;
-    // A create that asked for placement, crashed mid-flight, and was recovered as an UPDATE leaves
-    // the page deployed but NOT in the sitemap — invisible in the app's navigation. That is an
-    // incomplete deployment, so it is reported as a failure WITH the page id, rather than as
-    // success, so the operator can place it instead of discovering the gap later.
-    if (res && res.sitemapPending) {
-      return emit(false, {
-        pageId,
+        // An omitted data-source list leaves the page's own; `--clear-data-sources` is the one way to empty it.
+        dataSources: clearDataSources ? [] : (flags['data-sources'] || undefined),
+        model: flags.model || undefined,
+        ...bindings,
+        caller: 'upload',
         appId: flags['app-id'],
-        error: `page ${pageId} was deployed but NOT added to the sitemap: the create was recovered as `
-          + 'an update, which cannot carry --add-to-sitemap. Add the page to the app navigation manually.',
+        sourceFile: flags['code-file'],
+      })
+      : await genpage.create({
+        source: checkedText,
+        name: pageName.value || undefined,
+        prompt: prompt.value,
+        agentMessage: agentMessage.value,
+        dataSources: flags['data-sources'] || undefined,
+        model: flags.model || undefined,
+        ...bindings,
       });
+    const pageId = (written && (written.pageId || written.id)) || null;
+    knownPageId = pageId || knownPageId;
+    const warnings = [...griffelWarnings, ...((written && written.warnings) || [])];
+    // The page is written (and may be published): from here on a failure is reported WITH the page's id, so the caller can go on from it.
+    // `pageId` is the one value a caller needs in order to continue (placing the page in an app, a follow-up edit).
+    const failed = (error) => ({ ok: false, pageId, ...(flags['app-id'] ? { appId: flags['app-id'] } : {}), error });
+    // An upload that CREATED the page, or is completing one that was created, is not finished until the page is published and — when it was asked to place it — placed.
+    // Until then the base marker says what is left (`unfinished`: `place`, or `publish`), and that is what lets the page be completed by naming it again (completionMarker).
+    const creating = !flags['page-id'];
+    const finishing = creating || !!completing;
+    const publishFailed = !!(written && written.publish && written.publish.kind === 'failed');
+    const placementWanted = addToSitemap && !!flags['app-id'];
+    // After the write, not before it is reported: the readback inside recordObservedBase is a read like any other, and the backend is disposed only when this returns.
+    const unfinished = finishing ? (placementWanted ? 'place' : (publishFailed ? 'publish' : undefined)) : undefined;
+    const recorded = pageId ? await recordObservedBase({ genpage, flags, pageId, base, warnings, checkedText, unfinished }) : null;
+    if (publishFailed) {
+      const detail = written.publish.detail;
+      if (!finishing) {
+        return done(false, failed(`page ${pageId} was updated and saved, but publishing it failed (${detail}) — `
+          + `the runtime still serves the previously published copy. Run the upload again as an update (--page-id ${pageId}) to publish it: a page that already holds the content is published, not written again.`));
+      }
+      // A page that was just created is in no app's navigation, so run as an update it would be refused for that; the marker is what lets exactly this page through.
+      const way = recorded
+        ? `To finish it, run the same command again with --page-id ${pageId} added and nothing else changed: the base marker beside ${flags['code-file']} records that this upload created the page and did not finish it, so that run publishes it${placementWanted ? ' and places it in the app' : ''} without the check of the app's navigation an ordinary update makes — for this page only — and a page that already holds the content is published, not written again.`
+        : `The base marker that would let this tool finish it could not be written, so publish page ${pageId} in Maker, or delete it and create it again.`;
+      return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'}, but publishing it failed (${detail}) — it is not live yet. ${way}`));
     }
-    // `pageId` is the one value a caller needs in order to continue (sitemap wiring, a follow-up
-    // edit). Echo the identity back rather than making the caller re-parse pac output.
-    const warnings = [
-      ...griffelWarnings,
-      ...(modelUnread ? [`could not read page ${flags['page-id']}'s current model (${modelUnread}), so this update stored it empty — pass --model to set it`] : []),
-      ...(nameUnread ? [`could not read page ${flags['page-id']}'s current name (${nameUnread}), so pac may have renamed it to its navigation title — pass --name-file to set it`] : []),
-      ...(nameChanged ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameChanged)} has a double quote (") pac cannot store as it is, so the page now shows \\" there — pass --name-file with typographic quotes (“ ”) or an apostrophe to fix it`] : []),
-      ...(nameUnsent ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameUnsent.current)} could not be sent to keep it (${nameUnsent.refusal}), so pac may have renamed the page to its navigation title — give it a name without % or a double quote, or install pac as a .NET tool, which receives any name`] : []),
-    ];
-    // After the upload, not before emit's caller returns. The post-upload probe is removed inside
-    // recordObservedBase, so this emit — which may process.exit — does not leak it.
-    if (pageId) await recordObservedBase({ cli, flags, pageId, base, warnings, checkedText, mkdtempSync: deps.mkdtempSync, rmSync: deps.rmSync });
-    return emit(true, {
+    let placement = null;
+    // Placing the page in an app is an edit of that app, which pac's `--add-to-sitemap` did with the upload: the page becomes a sub-area of the
+    // app's navigation, and the default view of each table the page reads joins the app's components so the maker's "/" picker lists it.
+    // An upload that names an app but no placement pins the views alone (as pac did). A failed PLACEMENT is a failure — the page is written but not
+    // in the app — while failing to pin views is only a warning, since the page works without them. An upload with nothing to place and no table to pin
+    // does not touch the app at all: placing reads it, and a read that was not needed could only fail.
+    const tables = clearDataSources ? [] : (flags['data-sources'] || (deployed && deployed.dataSources) || []);
+    if (pageId && flags['app-id'] && (addToSitemap || (dataSourcesOf(tables) || []).length)) {
+      try {
+        placement = await genpage.placeInApp(flags['app-id'], {
+          pages: addToSitemap ? [{ pageId, title: (written && written.name) || pageName.value || (deployed && deployed.name) }] : [],
+          dataSources: tables,
+        });
+        for (const w of placement.warnings || []) warnings.push(w);
+      } catch (e) {
+        if (addToSitemap) {
+          const again = recorded && finishing
+            ? `, or run the same command again with --page-id ${pageId} added and nothing else changed: the page is already published, so only its placement is made, for this page only (the base marker beside ${flags['code-file']} records that it is not done)`
+            : '';
+          return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'} and published, but NOT added to app ${flags['app-id']}'s navigation: ${(e && e.message) || e}. `
+            + `Add the page to the app navigation in Maker${again}.`));
+        }
+        warnings.push(`the page was written, but its tables' default views could not be added to app ${flags['app-id']}'s components, so the maker's "/" picker may not list them (${(e && e.message) || e})`);
+      }
+    }
+    // Published, and placed where it was asked to be: the page is finished, and the marker stops saying it is not.
+    if (recorded && recorded.unfinished) {
+      try { base.writeMarker(flags['code-file'], { ...recorded, unfinished: false }); } catch (e) {
+        warnings.push(`could not clear the base marker's unfinished state (${(e && e.message) || e}) — running the same command with --page-id ${pageId} completes the page again, which changes nothing`);
+      }
+    }
+    return done(true, {
       ok: true,
       pageId,
-      appId: flags['app-id'],
+      ...(flags['app-id'] ? { appId: flags['app-id'] } : {}),
       ...(overwroteDeployed ? { overwroteDeployed: true } : {}),
       updated: !!flags['page-id'],
+      ...(written && written.unchanged ? { unchanged: true } : {}),
+      ...(placement && placement.added && placement.added.length ? { addedToSitemap: true } : {}),
       ...(warnings.length ? { warnings } : {}),
     });
   } catch (e) {
-    removeStage();
-    return emit(false, { error: e && e.message ? e.message : String(e) });
+    // Everything the backend knows about a failed write goes out with it: the page's id (an unknown outcome has one to look for), whether anything was written, and the SDK's own code.
+    // The page's id is the one known BEFORE the try or learned in it — a failure after the write cannot drop it.
+    const id = (e && e.pageId) || knownPageId;
+    return done(false, {
+      error: e && e.message ? e.message : String(e),
+      ...(id ? { pageId: id, ...(flags['app-id'] ? { appId: flags['app-id'] } : {}) } : {}),
+      ...(e && e.outcome ? { outcome: e.outcome } : {}),
+      ...(e && typeof e.code === 'string' && e.code ? { code: e.code } : {}),
+    });
   }
 }
 

@@ -7,6 +7,10 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [Unreleased] — 2.15.0
 
+Generative pages, the environment's apps and tables, connections, connector metadata and deployment settings go
+through the bundled SDK instead of `pac`. `pac` is left for signing in and choosing the environment, the type generator
+`/genpage` runs, and the fallbacks where the SDK refuses. A page can be created before the app that will hold it.
+
 ### Added
 
 - **`scripts/apps.js` and `scripts/list-tables.js`: the environment's apps and tables through the bundled SDK, for the skills to use in
@@ -33,6 +37,9 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
   the deployment-settings file for a solution or a package, in `pac`'s own format, so settings files you already have keep
   working; `solution-settings.js import` imports a package and applies the settings in the same import. Both print one
   JSON line that says whether the bundled SDK or `pac` answered.
+
+- `scripts/lib/genpage-subarea.js` — `genPageSubArea(base, genPageId)`, the one shape of a page as a sub-area of an app's
+  navigation, shared by the build, the placement of a page into an app and scripts that create an app around a first page.
 
 ### Changed
 
@@ -73,6 +80,56 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
   `403` whose body names a refusal's code is a failure, not a reason to ask `pac`.
 - **`/genpage` no longer falls back to `pac model list-languages`.** Every `/genpage` page operation goes through the SDK
   and needs the Azure CLI, so a failed language read now ends language detection instead of being retried with `pac`.
+
+- **Every generative-page operation goes through the SDK** (`scripts/lib/genpage-sdk.js`): `genpage-upload.js`, the build's
+  pages phase, verify, download and teardown. No script runs a page verb of `pac model genpage` (`upload`, `download`,
+  `list`, `add`) any more, so there is no `pac` process to time out or parse for a page
+  (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` is no longer read) — and `az` is now needed to deploy a page, not only to create
+  entities.
+- **A page write is one atomic change set.** A create mints its id first, and an unknown outcome is settled by reading it
+  (sent once more under the same id — never a second page); an update writes only what differs, so leaving out `--model`,
+  `--name` or `--data-sources` keeps the page's own (the CLI blanked the model and renamed the page to its navigation
+  title), and a page whose content is unchanged is published without recording another prompt. A page's first prompt is
+  kept and later prompts are recorded as turns. Every page-write error is marked `transient: false`, so the build's own
+  retry never sends a page write again.
+- **A page is stored exactly as written**: no BOM, no line break appended, a file that is not UTF-8 is refused, and a `"` in
+  a page name is kept (`genpage-upload.js` no longer refuses it; spec-lint still warns about one, and now says why: a page
+  an earlier release created holds it as `\"` until a build rewrites its name).
+- **`genpage-upload.js` creates a page without `--app-id`** — a page needs no app, and a new app cannot be created empty,
+  so the first page comes first. Such a create makes no app-scoped check and adds the page to no app; the base marker it
+  writes names no app, and the first update that names the app the page was placed in goes ahead once that app's
+  navigation lists the page. `--add-to-sitemap` and updates still need `--app-id`; with it, the default views of the
+  tables the page reads are pinned into the app (as the CLI did).
+- **Verify** reads pages in-process and reports one it cannot read as that page's failed check; **download** writes nothing
+  when a page cannot be read; **teardown** also removes a deleted page's conversation history.
+- **A page write says what it did, and nothing more.** "Nothing was written" is said only when the SDK refused the write
+  before it sent anything, or the service answered it with a 4xx; any other failure at or after the send — a full disk once
+  the service had committed, a dropped connection, a 5xx from a gateway — is `unknown`: the page is read by its minted id, and
+  the error carries `outcome` and `pageId`. A resend that is refused no longer erases a first send that may still land, and an
+  update's resend reuses the first attempt's turn identity, so a late duplicate collides instead of recording the prompt and
+  the reply twice.
+- **A create the build could not account for is remembered.** The build writes down the id it minted for a page (a `pending`
+  record in the workspace) before it sends the create. If the answer never arrived and the page could not be read back, the
+  next build finds the page and adopts it, or sends the create again under the same id — never a second page for one spec
+  entry. A pending record is intent: it never authorizes an update or a delete by itself.
+- **The build pins the default views of the tables its pages read** into the app's components once the pages are written (the
+  CLI did this on every upload): one app operation for all of them, nothing written when every view is already pinned, and a
+  failure to pin is a warning.
+- **`genpage-upload.js` reports what it knows when a write fails** — the page's id, `outcome` and the SDK's `code` — and a page
+  it created but did not finish (its publish failed, or the placement it was asked for did) is finished by running the same
+  command again with `--page-id` added: the base marker beside the code file records that the tool created the page, and
+  that marker lets exactly that page be completed. Every other update still has to prove the page is in the app's navigation.
+- **A page's source is normalized once**: a file's bytes lose one leading BOM and nothing else, and the Griffel check, the
+  navigation resolution, the hashes the build records and the page's write all use that text — a file that starts with two
+  marks keeps the second, in what is checked, recorded and stored.
+- **Verify cleans up after a page read it gave up on.** Disposing the page backend closes its workspace storage first and removes
+  the folder once the storage calls under way have settled, so a read still running cannot write a page's source back into
+  the temp directory; ending the page reads does the same for the reads' workspace, and the verify command gives the page
+  backend a workspace of its own.
+
+### Removed
+
+- `scripts/lib/genpage-cli.js`, the wrapper around the `pac model genpage` page verbs, with its time limits.
 
 ### Fixed
 

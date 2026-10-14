@@ -316,7 +316,7 @@ const SOMETHING_SAVED = {
   'a saved copy of an artifact': (dir) => fs.writeFileSync(path.join(dir, 'apps', '11111111-1111-4111-8111-111111111111.json'), '{}'),
   'the saved metadata of an artifact': (dir) => fs.writeFileSync(path.join(dir, '.metadata', 'views', 'v.meta.json'), '{}'),
   'cached table metadata': (dir) => fs.writeFileSync(path.join(dir, '.metadata', 'entities', 'new_ticket.json'), '{}'),
-  'files the plugin staged for a deploy': (dir) => {
+  'files an earlier release staged for a deploy': (dir) => {
     fs.mkdirSync(path.join(dir, '.pageref-deploy', 'run-1'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.pageref-deploy', 'run-1', 'page.tsx'), 'export {}\n');
   },

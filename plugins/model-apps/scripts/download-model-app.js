@@ -4,7 +4,7 @@
 // editable app-spec + page codeFiles. The vendored appApi.get uses RetrieveUnpublishedMultiple for
 // both header and sitemap, so membership must use that same current state, not the published layer.
 // Reconstructs the app (sitemap -> appShell), ALL its generative
-// pages (via pac list+download, incl. Maker-authored), its entities (minimal — the build reuses
+// pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
 // Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]
@@ -17,7 +17,7 @@ const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } =
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
-const { makeGenpageCli, unescapePacName } = require('./lib/genpage-cli.js');
+const { makeGenpageSdk, unescapePacName, pageFolderFiles } = require('./lib/genpage-sdk.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
@@ -785,8 +785,9 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
 }
 
-// Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
-// pages[] entries with codeFile paths relative to `outDir`.
+// Read the page tree a download writes (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
+// pages[] entries with codeFile paths relative to `outDir`. The same layout is what an earlier release's
+// `pac model genpage download` wrote, so a folder downloaded then is read the same way.
 //
 // `unreadable` collects pages whose config.json EXISTS but could not be parsed. That distinction is
 // load-bearing: a MISSING config is genuinely optional, but a present-and-unparseable one means the
@@ -812,7 +813,7 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     // bindings and never recorded as unreadable, so it slipped past the --allow-lossy-download gate
     // this very function exists to feed.
     try {
-      // MEASURED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+      // MEASURED: the config.json an earlier release's `pac model genpage download` wrote starts `ef bb bf`. Node's
       // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
       // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
@@ -842,8 +843,9 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
     // The model that generated the page, as config.json records it. It has to come back with the page:
-    // pac stores whatever `--model` an upload sends, so a rebuild that re-uploads without it wiped a
-    // deployed model id to "" (live-measured). Only an id the spec can hold is carried (see above).
+    // a rebuild that re-uploads a page without its model must not lose the one the page was generated with (an
+    // upload through `pac` stored whatever `--model` it was sent, so one without it wiped the id to "" — live-measured).
+    // Only an id the spec can hold is carried (see above).
     const recordedModel = typeof config.model === 'string' ? config.model.trim() : '';
     const model = PAGE_MODEL_RE.test(recordedModel) ? recordedModel : undefined;
     if (recordedModel && !model && Array.isArray(unkeptModels)) unkeptModels.push({ pageId: entry, model: recordedModel });
@@ -892,7 +894,7 @@ function assignPageKeys(pages, manifest, keyToId) {
       if (m.purpose !== undefined) p.purpose = m.purpose;
       if (m.navigatesTo) p.navigatesTo = m.navigatesTo;
       if (m.pageInput !== undefined) p.pageInput = m.pageInput;
-      // Only copy manifest dataSources when the download gave us nothing (pac may include them).
+      // Only copy manifest dataSources when the download gave us nothing (the page's own config normally carries them).
       if (m.dataSources && !(p.dataSources || []).length) p.dataSources = m.dataSources;
     }
   }
@@ -907,7 +909,7 @@ function assignPageKeys(pages, manifest, keyToId) {
 }
 
 // Entries of `a` whose pageId is absent from `b`. Used BOTH directions to require exact enumerated<->
-// downloaded id equality (I3). A gap either way means pac downloaded a different set than exists —
+// downloaded id equality (I3). A gap either way means the download read a different set than exists —
 // rebuilding from this spec would silently drop/add pages, so download FAILS instead.
 function missingDownloads(a, b) {
   const have = new Set((b || []).map((p) => String(p.pageId).toLowerCase()));
@@ -1911,7 +1913,7 @@ async function recoverAppSolution(sdk, appId) {
 
 // Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
 // `sdk`        — the MakerSDK (fetchArtifact, queryRecords, fetchEntityMetadata)
-// `genpageCli` — the genpage CLI wrapper (enumerateEnv, download)
+// `genpage`    — the page backend (lib/genpage-sdk.js: enumerateEnv, read)
 // `outDir`     — output directory root
 // `appId`      — the app's GUID (used for download + solution lookup)
 // `appUnique`  — the app's unique name (for fetchSitemap + manifest lookup); may be undefined for
@@ -1946,29 +1948,39 @@ function assertNoPlantedPageLinks(pagesRoot) {
   }
 }
 
-// pac writes the page tree itself and follows a link left at the destination name. The
-// download therefore lands in a private directory; each file is then copied, raw, into the
-// directory the caller named. A link at pages/<id> or at a file under it is refused first.
-function installDownloadedPages(stagingRoot, pagesRoot) {
+// The page folders a download writes, from the pages as the backend read them: pages/<pageId>/{page.tsx,config.json,prompt.txt}, the
+// layout parseDownloadedPages reads back. The tree is replaced as a whole, so a page deleted since the last download does not linger.
+//
+// The SDK writes nothing to disk itself, so this is the one place that must not follow a link planted in the output folder: one already
+// under pages/ is refused first (assertNoPlantedPageLinks), a folder is made only after the name is checked (assertSafeOutputDir), and
+// every file is written by writeFileSafe, which refuses a link at the file's own name. A page id reaches here only after the backend has
+// read it, and the backend reads a GUID and nothing else, so no id can hold a path separator.
+function writePageTree(pagesRoot, pages) {
   assertSafeOutputDir(pagesRoot, { create: true });
   assertNoPlantedPageLinks(pagesRoot);
   fs.rmSync(pagesRoot, { recursive: true, force: true });
   assertSafeOutputDir(pagesRoot, { create: true });
-  for (const entry of fs.readdirSync(stagingRoot)) {
-    const srcDir = path.join(stagingRoot, entry);
-    if (!fs.statSync(srcDir).isDirectory()) continue;
-    const destDir = path.join(pagesRoot, entry);
+  for (const { pageId, files } of pages) {
+    const destDir = path.join(pagesRoot, pageId);
     assertSafeOutputDir(destDir, { create: true });
-    for (const name of fs.readdirSync(srcDir)) {
-      const srcFile = path.join(srcDir, name);
-      if (!fs.statSync(srcFile).isFile()) continue;
-      // Raw bytes: pac's BOM and CRLF are content, not something to re-encode.
-      writeFileSafe(path.join(destDir, name), fs.readFileSync(srcFile));
-    }
+    for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8' });
   }
 }
 
-async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false, concurrency }) {
+// Reads every page the sitemap names, by id — so nothing outside this app is read — a few at a time, and answers
+// { ok: true, pages: [{ pageId, files }] } in the sitemap's order, or { ok: false, errors } naming each page that could not be read. A page that
+// cannot be read is a page the spec would drop: the caller refuses to write one rather than report it as an app without that page. That includes
+// a page the SDK holds as raw files, which has no source to put in a folder (the backend throws for it).
+async function readSitemapPages(genpage, ids, concurrency) {
+  const results = await mapLimit(ids, concurrency, async (id) => {
+    try { return { id, page: await genpage.read(id) }; } catch (error) { return { id, error }; }
+  }, { firstInOrder: true });
+  const failed = results.filter((r) => r.error);
+  if (failed.length) return { ok: false, errors: failed.map((r) => `${r.id}: ${(r.error && r.error.message) || r.error}`) };
+  return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
+}
+
+async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, concurrency }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -2001,7 +2013,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const componentInventory = await readAppComponentInventory(sdk, appId);
 
   // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,
-  // discriminated). The app-scoped `pac genpage list --app-id` is sitemap-scoped anyway but returns
+  // discriminated). A page list scoped to the app is sitemap-scoped anyway but carries
   // SITEMAP TITLES (not page names), misses headless nav-target pages, and cannot be trusted as the
   // "real names" source. The raw sitemap XML is the single authoritative membership record.
   const smResult = await fetchSitemap(sdk, appUnique, { currentLayer: componentInventory.layer });
@@ -2032,10 +2044,10 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     }
 
     // Real names from the ENV-WIDE list (addenda new-1: env names ≠ sitemap titles). The env-wide
-    // `pac genpage list` returns each page's actual configured name; the sitemap title is what the
+    // list holds each page's actual configured name; the sitemap title is what the
     // Maker chose for the subarea label, which can differ. Using the sitemap title as the page name
     // was the root of the name-vs-title mismatch (live-confirmed; see Plan-5 §Background).
-    const envResult = await genpageCli.enumerateEnv();
+    const envResult = await genpage.enumerateEnv();
     if (!envResult.ok) {
       return { ok: false, error: `page enumeration failed during download: ${envResult.error}` };
     }
@@ -2044,7 +2056,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
         .map((p) => [String(p.pageId).toLowerCase(), p.name])
     );
 
-    // Download EXACTLY the sitemap's pages (by id — headless-free, no env-wide over-pull). The
+    // Read EXACTLY the sitemap's pages (by id — headless-free, no env-wide over-pull). The
     // sitemap is the MEMBERSHIP authority: we pull precisely this app's pages, no more, no less.
     const pagesRoot = path.join(outDir, 'pages');
     // Refuse a link already at pages/ before removing it or creating children through it.
@@ -2056,25 +2068,16 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       if (!(e && e.code === 'ENOENT')) throw e;
     }
     const sitemapIds = smPages.map((p) => p.pageId);
-    // pac follows a link at the output name. Stage in a private directory, then copy.
-    const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-download-pages-'));
-    try {
-      try {
-        await genpageCli.download({ appId, outputDir: stagingRoot, pageIds: sitemapIds });
-      } catch (e) {
-        return { ok: false, error: `pac genpage download failed: ${e.message}` };
-      }
-      installDownloadedPages(stagingRoot, pagesRoot);
-    } finally {
-      try { fs.rmSync(stagingRoot, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
-    }
+    const read = await readSitemapPages(genpage, sitemapIds, concurrency);
+    if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
+    writePageTree(pagesRoot, read.pages);
 
     // Name resolver: env-wide name (real, stable) primary; sitemap title (XML-entity-decoded) as
     // fallback when the env-wide list doesn't cover an id (shouldn't happen in practice — env-wide
     // lists all pages — but guards against an eventual stale or truncated listing). Either one may hold
-    // pac's `\"` for a `"` (the row name always does; a title does when pac wrote it), and the spec's
-    // name is what a rebuild sends to pac — which would escape it again, adding a backslash every
-    // round trip. So the spec gets the name pac was given (`unescapePacName`).
+    // the `\"` an earlier release's `pac` stored for a `"` (the page's own name always did; a navigation title did when
+    // pac wrote it), and the spec's name is what a rebuild sends back — which must not gain a backslash every
+    // round trip. So the spec gets the name the page was given (`unescapePacName`).
     const nameById = new Map(smPages.map((p) => {
       const id = String(p.pageId).toLowerCase();
       return [id, unescapePacName(envNameById.get(id) || p.title || p.pageId)];
@@ -2082,10 +2085,11 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     const unreadableConfigs = [];
     const unkeptModels = [];
     pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels);
-    // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the
-    // spec carried models — the model is stored empty.
+    // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
+    // update leaves the model the page already has as it is (the SDK writes only what a spec names), and a page the rebuild creates
+    // gets none.
     if (unkeptModels.length) {
-      process.stderr.write(`WARNING: ${unkeptModels.length} page model id(s) the App Spec cannot hold were left out, so a rebuild stores them empty: ${unkeptModels.map((u) => `${u.pageId} (${JSON.stringify(u.model)})`).join(', ')}\n`);
+      process.stderr.write(`WARNING: ${unkeptModels.length} page model id(s) the App Spec cannot hold were left out, so a rebuild keeps the model of a page that exists as it is and stores none on a page it creates: ${unkeptModels.map((u) => `${u.pageId} (${JSON.stringify(u.model)})`).join(', ')}\n`);
     }
     // A page whose config.json could not be read has UNKNOWN data sources, and the spec would claim
     // it has none — rebuilding it with no table bindings while its source still queries the table.
@@ -2098,8 +2102,8 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       process.stderr.write(`WARNING: ${unreadableConfigs.length} page config(s) unreadable; their data-source bindings are DROPPED: ${detail}\n`);
     }
 
-    // Bidirectional exact equality: sitemap ids ↔ downloaded ids (I3). A gap either way means pac
-    // fetched a different set than the sitemap declares — rebuilding from this spec would silently
+    // Bidirectional exact equality: sitemap ids ↔ downloaded ids (I3). A gap either way means the download
+    // read a different set than the sitemap declares — rebuilding from this spec would silently
     // drop or add pages, so download FAILS instead.
     const missing = missingDownloads(smPages, pages);
     if (missing.length) {
@@ -2474,7 +2478,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
 async function main(deps = {}) {
   const argv = deps.argv || process.argv.slice(2);
   // Test seam: every side effect of main() — the process streams and exit, the result printer, the
-  // auth probe, and the helpers that reach Dataverse or pac — can be replaced. Each call still names the
+  // auth probe, and the helpers that reach Dataverse — can be replaced. Each call still names the
   // real function (`io.emitResult(...)`), so a reader, and the source-level contract tests, see which runs.
   const io = {
     stderr: deps.stderr || process.stderr,
@@ -2482,7 +2486,7 @@ async function main(deps = {}) {
     emitResult: deps.emitResult || emitResult,
     preflightAuth: deps.preflightAuth || preflightAuth,
     makeDownloadSdk: deps.makeDownloadSdk || makeDownloadSdk,
-    makeGenpageCli: deps.makeGenpageCli || makeGenpageCli,
+    makeGenpageSdk: deps.makeGenpageSdk || makeGenpageSdk,
     runDownload: deps.runDownload || runDownload,
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
@@ -2550,9 +2554,10 @@ async function main(deps = {}) {
     // Resolve the app's unique name early — needed for fetchSitemap (MEMBERSHIP) + manifest lookup.
     const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });
     const appUnique = appRows && appRows[0] && appRows[0].uniquename;
-    const genpageCli = io.makeGenpageCli(env);
+    // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
+    const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload });
     if (!result.ok) { finish(false, result); return; }
 
     const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft } = result;

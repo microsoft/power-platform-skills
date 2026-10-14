@@ -4,7 +4,7 @@
 // writes/reads exactly this — cds-maker-sdk.cjs parses /GenPageId="([0-9a-fA-F-]{36})"/, subarea attr set
 // ["Entity","Url","DefaultDashboard","Page","GenPageId"]). The sitemap is the authoritative, complete record
 // of which pages BELONG to the app (model-driven-app membership == sitemap presence). Membership is NOT an
-// existence check — a page can exist env-wide yet not be in this app's sitemap (see genpage-cli.enumerateEnv).
+// existence check — a page can exist env-wide yet not be in this app's sitemap (see genpage-sdk.js enumerateEnv).
 
 const { odataLit } = require('./odata.js');
 const { appComponentRows, currentAppLayer, collectionRows, currentLayerRows } = require('./app-components.js');

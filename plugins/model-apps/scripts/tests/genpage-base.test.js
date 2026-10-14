@@ -212,6 +212,49 @@ test('compareWithMarker distinguishes absent, other-page, and hash drift', () =>
   }
 });
 
+test('a marker may carry no app — the page was created before any app held it — while a value that IS present must be a usable id', () => {
+  const d = tmp();
+  const code = path.join(d, 'page.tsx');
+  fs.writeFileSync(code, PAGE);
+  const base = { version: 1, pageId: PAGE_ID, deployedSha256: pageHash(PAGE), localSha256: pageHash(PAGE), source: 'upload' };
+  const body = writeMarker(code, base);
+  assert.ok(!('appId' in body), 'no key at all, rather than an empty one a reader would have to tell from a bad value');
+  assert.ok(!('appId' in JSON.parse(fs.readFileSync(markerPath(code), 'utf8'))));
+  const read = readMarker(code);
+  assert.strictEqual(read.pageId, PAGE_ID.toLowerCase());
+  assert.ok(!('appId' in read));
+  assert.strictEqual(read.source, 'upload');
+
+  assert.ok(!('appId' in writeMarker(code, { ...base, appId: '' })), 'an empty app is no app');
+  assert.ok(!('appId' in writeMarker(code, { ...base, appId: null })));
+  assert.strictEqual(writeMarker(code, { ...base, appId: APP_ID }).appId, APP_ID.toLowerCase());
+
+  // The reader: absent or null is a page no app held; anything else must be a usable id, or the marker is no base.
+  for (const [value, usable] of [[undefined, true], [null, true], ['', false], ['   ', false], [42, false], [{}, false], [APP_ID, true]]) {
+    const raw = { ...base, recordedAt: '2026-10-01T00:00:00.000Z' };
+    if (value !== undefined) raw.appId = value;
+    fs.writeFileSync(markerPath(code), JSON.stringify(raw), 'utf8');
+    assert.strictEqual(readMarker(code) !== null, usable, `appId ${JSON.stringify(value)}`);
+  }
+  assert.throws(() => writeMarker(code, { ...base, pageId: '  ' }), /pageId is required/);
+});
+
+test('compareWithMarker: a marker with no app is for the page alone — any app may ask — while a marker recorded with an app still refuses another app, and any marker refuses another page', () => {
+  const deployed = pageHash('deployed');
+  const local = pageHash('local');
+  const noApp = { version: 1, pageId: PAGE_ID.toLowerCase(), deployedSha256: deployed, localSha256: local, source: 'upload' };
+  const withApp = { ...noApp, appId: APP_ID.toLowerCase() };
+  const input = (over) => ({ pageId: PAGE_ID, appId: APP_ID, deployedText: 'deployed', localText: 'local', ...over });
+  const present = { marker: 'present', deployed: 'unchanged', local: 'unchanged' };
+  assert.deepStrictEqual(compareWithMarker(noApp, input()), present, 'the app the page was placed in');
+  assert.deepStrictEqual(compareWithMarker(noApp, input({ appId: 'any-other-app' })), present);
+  assert.deepStrictEqual(compareWithMarker(noApp, input({ appId: undefined })), present);
+  assert.deepStrictEqual(compareWithMarker(noApp, input({ pageId: 'other' })), { marker: 'other-page', deployed: 'unknown', local: 'no-base' });
+  assert.deepStrictEqual(compareWithMarker(withApp, input()), present);
+  assert.deepStrictEqual(compareWithMarker(withApp, input({ appId: 'any-other-app' })), { marker: 'other-page', deployed: 'unknown', local: 'no-base' });
+  assert.deepStrictEqual(compareWithMarker(noApp, input({ deployedText: 'changed meanwhile' })), { marker: 'present', deployed: 'changed', local: 'unchanged' }, 'a marker with no app still catches a deployed page that changed');
+});
+
 test('lineDelta counts multiset line differences and ignores pac download noise', () => {
   assert.deepStrictEqual(lineDelta('a\nb\nb\n', 'a\nb\nc\n'), { added: 1, removed: 1 });
   assert.deepStrictEqual(lineDelta('a\na\n', 'a\n'), { added: 0, removed: 1 });
@@ -258,76 +301,101 @@ test('record writes a marker from the file, and --deployed-sha256 binds the obse
   assert.strictEqual(readMarker(file).deployedSha256, observed, 'a rejected hash must not replace the marker');
 });
 
-test('check returns the observed hash, writes a deployed copy only when the files differ, and cleans up before emitting', async () => {
+// A stand-in for the page backend (lib/genpage-sdk.js): what `check` needs of it is `read(pageId)` and `dispose()`.
+function fakeBackend(answer) {
+  const backend = {
+    reads: [],
+    disposed: 0,
+    read: async (pageId) => {
+      backend.reads.push(pageId);
+      if (answer instanceof Error) throw answer;
+      return { source: answer };
+    },
+    dispose: () => { backend.disposed += 1; },
+  };
+  return backend;
+}
+
+test('check returns the observed hash, writes a deployed copy only when the files differ, and disposes the backend before emitting', async () => {
   const d = tmp();
   const file = path.join(d, 'local.tsx');
   fs.writeFileSync(file, 'export const n = 1;\n');
-  let probe;
-  const download = async ({ outputDir, pageIds }) => {
-    probe = outputDir;
-    const dir = path.join(outputDir, pageIds[0].toUpperCase());
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'page.tsx'), '\uFEFFexport const n = 2;\r\n');
-  };
+  const differing = fakeBackend('export const n = 2;\n');
+  let seenEnv;
   const r = await runCli(
     ['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file],
-    { makeGenpageCli: () => ({ download }) },
+    { makeGenpageSdk: (env) => { seenEnv = env; return differing; } },
   );
   assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(seenEnv, 'https://contoso.crm.dynamics.com/');
+  assert.deepStrictEqual(differing.reads, [PAGE_ID], 'the deployed page is read by its id');
   assert.strictEqual(r.payload.deployedSha256, pageHash('export const n = 2;\n'));
   assert.strictEqual(r.payload.contentSame, false);
   assert.strictEqual(r.payload.marker, 'absent');
   assert.ok(r.payload.lines.added >= 1 || r.payload.lines.removed >= 1);
-  assert.strictEqual(fs.readFileSync(r.payload.deployedCopy, 'utf8'), '\uFEFFexport const n = 2;\r\n');
-  assert.strictEqual(fs.existsSync(probe), false, 'the probe directory must be gone before the result is emitted');
+  assert.strictEqual(fs.readFileSync(r.payload.deployedCopy, 'utf8'), 'export const n = 2;\n', 'the copy is the page as it is stored, for the user to diff');
+  assert.strictEqual(differing.disposed, 1);
 
+  // A file that IS the deployed page (a BOM and a final CRLF are not a difference): no copy is written, and the backend is gone
+  // by the time the result is emitted — the real emitter ends the process, so a cleanup placed after it would never run.
   fs.writeFileSync(file, '\uFEFFexport const n = 2;\r\n\r\n');
-  let probe2;
-  let existedAtEmit = 'not-called';
-  const same = await runCli(
-    ['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file],
-    {
-      makeGenpageCli: () => ({
-        download: async ({ outputDir, pageIds }) => {
-          probe2 = outputDir;
-          const dir = path.join(outputDir, 'not-the-caller-casing');
-          fs.mkdirSync(dir);
-          fs.writeFileSync(path.join(dir, 'page.tsx'), 'export const n = 2;\n');
-          // Wrong casing of a DIFFERENT id must not be selected; the matching dir is below.
-          fs.rmSync(dir, { recursive: true });
-          const match = path.join(outputDir, PAGE_ID.toLowerCase());
-          fs.mkdirSync(match);
-          fs.writeFileSync(path.join(match, 'page.tsx'), 'export const n = 2;\n');
-        },
-      }),
-      emit: (ok, payload) => {
-        existedAtEmit = probe2 ? fs.existsSync(probe2) : 'no-probe';
-        return { ok, payload };
-      },
-    },
-  );
-  // runCli replaces emit. Re-invoke main directly so the cleanup assertion runs inside emit.
+  const identical = fakeBackend('export const n = 2;\n');
+  let disposedAtEmit = 'not-called';
   const { main } = loadCli();
   const direct = await main(
     ['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file],
     {
-      makeGenpageCli: () => ({
-        download: async ({ outputDir }) => {
-          probe2 = outputDir;
-          const match = path.join(outputDir, PAGE_ID.toLowerCase());
-          fs.mkdirSync(match);
-          fs.writeFileSync(path.join(match, 'page.tsx'), 'export const n = 2;\n');
-        },
-      }),
+      makeGenpageSdk: () => identical,
       emit: (ok, payload) => {
-        existedAtEmit = fs.existsSync(probe2);
+        disposedAtEmit = identical.disposed;
         return { ok, payload };
       },
     },
   );
-  assert.strictEqual(existedAtEmit, false, 'emit must see the probe already removed — emitResult calls process.exit');
+  assert.strictEqual(disposedAtEmit, 1, 'emit must see the backend already disposed — emitResult calls process.exit');
   assert.strictEqual(direct.ok, true);
   assert.strictEqual(direct.payload.contentSame, true, JSON.stringify(direct.payload));
   assert.strictEqual(direct.payload.deployedCopy, undefined);
-  assert.strictEqual(same.ok, true);
+});
+
+test('check: a page that cannot be read — missing, unreadable, or held as raw files with no source — is deployed-unreadable, with the reason, and the backend is still disposed', async () => {
+  const d = tmp();
+  const file = path.join(d, 'local.tsx');
+  fs.writeFileSync(file, 'export const n = 1;\n');
+  for (const failure of [
+    Object.assign(new Error(`page ${PAGE_ID} does not exist in this environment`), { code: 'GENPAGE_NOT_FOUND' }),
+    Object.assign(new Error(`page ${PAGE_ID} ("Hand made") has no source this tool can read`), { code: 'GENPAGE_NO_SOURCE' }),
+    new Error('Transport failure reaching the environment'),
+  ]) {
+    const backend = fakeBackend(failure);
+    const r = await runCli(
+      ['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file],
+      { makeGenpageSdk: () => backend },
+    );
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.payload.code, 'deployed-unreadable');
+    assert.ok(r.payload.error.includes(failure.message), r.payload.error);
+    assert.strictEqual(r.payload.deployedSha256, null);
+    assert.strictEqual(r.payload.contentSame, false, 'an unreadable page is never reported as the same');
+    assert.strictEqual(backend.disposed, 1);
+  }
+  const refused = await runCli(['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', path.join(d, 'missing.tsx')],
+    { makeGenpageSdk: () => { throw new Error('the backend is not made when the local file cannot be read'); } });
+  assert.strictEqual(refused.ok, false);
+  assert.match(refused.payload.error, /could not read/);
+});
+
+test('check: the marker an app-less create wrote is found by the app the page was placed in, and says nothing about the page\'s content until it is compared', async () => {
+  const d = tmp();
+  const file = path.join(d, 'local.tsx');
+  fs.writeFileSync(file, PAGE);
+  writeMarker(file, { version: 1, pageId: PAGE_ID, deployedSha256: pageHash(PAGE), localSha256: pageHash(PAGE), source: 'upload' });
+  const r = await runCli(
+    ['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file],
+    { makeGenpageSdk: () => fakeBackend(PAGE) },
+  );
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(r.payload.marker, 'present');
+  assert.strictEqual(r.payload.deployed, 'unchanged');
+  assert.strictEqual(r.payload.contentSame, true);
 });

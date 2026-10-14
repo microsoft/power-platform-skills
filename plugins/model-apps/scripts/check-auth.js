@@ -27,8 +27,10 @@
 //
 // PAC login is NOT required to pass: the app-builder build/verify/teardown flow authenticates to
 // Dataverse with the `az` token (the SDK's az-token HttpClient), and WhoAmI below is the
-// authoritative test. PAC is only needed for the genpage `pages` phase (`pac model genpage ...`),
-// so a missing/for-different-identity pac login is surfaced as a WARNING, not a hard blocker.
+// authoritative test. Generative pages are built, written and read through the SDK with that token too,
+// so PAC is only used by the steps that fall back to it where the SDK cannot read something (connections,
+// connector metadata, deployment settings) and, when --env is omitted, to read the environment; a
+// missing/for-different-identity pac login is surfaced as a WARNING, not a hard blocker.
 //
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
@@ -158,7 +160,8 @@ async function main() {
     }));
   }
   let envUrl = parseEnvUrl(argv);
-  // Genpage deploys pages via `pac model genpage ...`, so its callers pass --require-pac to keep a
+  // Genpage discovers connections through scripts/list-connections.js, which falls back to pac where the SDK cannot read
+  // them, so its callers pass --require-pac to keep a
   // missing pac login a hard blocker. The app-builder build path only needs the az token, so it
   // omits the flag and a missing pac login is downgraded to a warning.
   const requirePac = argv.includes('--require-pac');
@@ -247,7 +250,7 @@ async function main() {
   if (!pacUser) {
     const slowPac = `\`pac org who\` did not answer within ${PAC_PROBE_TIMEOUT_MS / 1000} s — the PAC CLI can be that slow to start on a busy machine, so its login is unknown, not missing`;
     if (requirePac) {
-      // Genpage caller (--require-pac): pac is genuinely required to upload pages, so keep the hard block.
+      // Genpage caller (--require-pac): its flow can need pac to discover connections, so keep the hard block.
       return emit(
         buildResult({
           azUser,
@@ -258,12 +261,13 @@ async function main() {
         })
       );
     }
-    // App-builder path: not a blocker — the build/verify/teardown flow uses the az token, not pac.
-    // Only the genpage `pages` phase shells out to `pac model genpage`. Warn so a genpage run isn't surprised.
+    // App-builder path: not a blocker — the build/verify/teardown flow uses the az token, not pac, and so do the pages.
+    // Pac is only used where a step falls back to it and to read the environment when --env is omitted. Warn so a genpage run isn't surprised.
     warnings.push(pacSlow
-      ? `${slowPac}. This is only required for the genpage \`pages\` phase (\`pac model genpage ...\`); table/column/form/view/app builds authenticate with the az token.`
-      : 'PAC CLI is not logged in. This is only required for the genpage `pages` phase (`pac model genpage ...`); ' +
-        'table/column/form/view/app builds authenticate with the az token. Run `pac auth create --environment <url>` if you need genpage.');
+      ? `${slowPac}. It is only needed where a step falls back to pac — to discover connections, or to read a connector or deployment settings, where the SDK cannot — and to read the environment when --env is omitted; table/column/form/view/app/page builds authenticate with the az token.`
+      : 'PAC CLI is not logged in. It is only needed where a step falls back to pac — to discover connections, or to read a connector or deployment settings, ' +
+        'where the SDK cannot — and to read the environment when --env is omitted; table/column/form/view/app/page builds authenticate with the az token. ' +
+        'Run `pac auth create --environment <url>` if you need them.');
   }
   if (!envUrl) {
     return emit(
@@ -357,8 +361,8 @@ async function main() {
   // it contradicted it: a slow PAC CLI's login is unknown, not missing.
   const readyMessage = !pacUser
     ? (pacSlow
-      ? `Ready (az signed in as ${azUser}, env ${envUrl}). PAC's login is unknown — \`pac org who\` did not answer in time; it is only needed for the genpage pages phase.`
-      : `Ready (az signed in as ${azUser}, env ${envUrl}). PAC is not logged in — only needed for the genpage pages phase.`)
+      ? `Ready (az signed in as ${azUser}, env ${envUrl}). PAC's login is unknown — \`pac org who\` did not answer in time; it is only needed where a step falls back to pac.`
+      : `Ready (az signed in as ${azUser}, env ${envUrl}). PAC is not logged in — only needed where a step falls back to pac.`)
     : identitiesMatch
       ? `Ready (az + pac both signed in as ${azUser}, env ${envUrl}).`
       : `Ready, but az ("${azUser}") and pac ("${pacUser}") use different identities. WhoAmI passed so this works for now — but if entity creation later returns 403, run \`az login --username ${pacUser}\` to align them.`;

@@ -130,6 +130,7 @@ const { pushFailed } = require('./lib/entity-provision.js');
 const { collectionRows, currentLayerRow } = require('./lib/app-components.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { odataLit } = require('./lib/odata.js');
+const { genPageSubArea } = require('./lib/genpage-subarea.js');
 
 const USAGE = [
   'Usage:',
@@ -415,7 +416,8 @@ function appDefinition({ name, description, uniqueName, pages, sitemapId }) {
         groups: [{
           id: 'group_0_0',
           title: GROUP_TITLE,
-          subAreas: pages.map((page, i) => ({ id: `sub_0_0_${i}`, title: page.title, type: 'GenPage', genPageId: page.id })),
+          // The one shape a page has as a sub-area (lib/genpage-subarea.js), shared with the build and the placement of a page.
+          subAreas: pages.map((page, i) => genPageSubArea({ id: `sub_0_0_${i}`, title: page.title }, page.id)),
         }],
       }],
     },
