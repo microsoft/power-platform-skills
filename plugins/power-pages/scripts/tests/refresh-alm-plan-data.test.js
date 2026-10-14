@@ -2020,3 +2020,192 @@ test('reconcile: soft no-op when there is no plan', (t) => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'no-plan');
 });
+
+// ── Live env var values (--live) ─────────────────────────────────────────
+//
+// Values set in Power Platform Admin Center never touch deployment-settings.json,
+// so `--live` queries each stage's `environmentvariablevalues` table and merges
+// the result in. Local values (deployment-settings.json / manual edits) win.
+// Token + HTTP are injected — these tests never shell out to az or hit a network.
+
+const {
+  fetchLiveEnvVarValues,
+  mergeLiveEnvVarValues,
+  runCli,
+} = require('../lib/refresh-alm-plan-data');
+
+const LIVE_STAGING = 'https://contoso-staging.crm.dynamics.com';
+const LIVE_PROD = 'https://contoso-prod.crm.dynamics.com';
+
+// Fake makeRequest: routes by host + entity set to canned OData bodies.
+function fakeLiveRequest(tables, calls = []) {
+  return async ({ url, headers }) => {
+    calls.push({ url, auth: headers.Authorization });
+    const u = new URL(url);
+    const entity = u.pathname.split('/').pop();
+    const body = tables[u.origin] && tables[u.origin][entity];
+    if (body === undefined) return { statusCode: 500, body: 'boom' };
+    return { statusCode: 200, body: JSON.stringify({ value: body }) };
+  };
+}
+
+const LIVE_TABLES = {
+  [LIVE_STAGING]: {
+    environmentvariabledefinitions: [
+      { environmentvariabledefinitionid: 'AAAA0000-0000-0000-0000-000000000001', schemaname: 'cr5fe_apiBaseUrl', type: 100000000 },
+      { environmentvariabledefinitionid: 'aaaa0000-0000-0000-0000-000000000002', schemaname: 'cr5fe_localLoginEnabled', type: 100000002 },
+      { environmentvariabledefinitionid: 'aaaa0000-0000-0000-0000-000000000003', schemaname: 'cr5fe_clientSecret', type: 100000005 },
+    ],
+    environmentvariablevalues: [
+      { value: 'https://ppac-staging.example.com', _environmentvariabledefinitionid_value: 'aaaa0000-0000-0000-0000-000000000001' },
+      { value: 'false', _environmentvariabledefinitionid_value: 'aaaa0000-0000-0000-0000-000000000002' },
+      { value: 'https://vault.vault.azure.net/secrets/x', _environmentvariabledefinitionid_value: 'aaaa0000-0000-0000-0000-000000000003' },
+    ],
+  },
+  [LIVE_PROD]: {
+    environmentvariabledefinitions: [
+      { environmentvariabledefinitionid: 'bbbb0000-0000-0000-0000-000000000001', schemaname: 'cr5fe_apiBaseUrl', type: 100000000 },
+    ],
+    environmentvariablevalues: [
+      { value: 'https://ppac-prod.example.com', _environmentvariabledefinitionid_value: 'bbbb0000-0000-0000-0000-000000000001' },
+    ],
+  },
+};
+
+test('live: fetchLiveEnvVarValues maps value rows to schema names per stage and skips Secret definitions', async () => {
+  const calls = [];
+  const live = await fetchLiveEnvVarValues({
+    stages: [
+      { label: 'Staging', envUrl: LIVE_STAGING + '/', type: 'target' },
+      { label: 'Production', envUrl: LIVE_PROD, type: 'target' },
+      { label: 'NoUrl', type: 'target' },
+    ],
+  }, { getToken: (url) => 'tok-' + url, request: fakeLiveRequest(LIVE_TABLES, calls) });
+
+  assert.deepEqual(live.queriedStages, ['Staging', 'Production']);
+  assert.deepEqual(live.errors, []);
+  assert.deepEqual(live.byStage, {
+    Staging: { cr5fe_apiBaseUrl: 'https://ppac-staging.example.com', cr5fe_localLoginEnabled: 'false' },
+    Production: { cr5fe_apiBaseUrl: 'https://ppac-prod.example.com' },
+  });
+  assert.equal(calls.length, 4);
+  assert.ok(calls.every((c) => c.auth.endsWith(' tok-' + new URL(c.url).origin)), 'per-stage token must be used');
+});
+
+test('live: fetchLiveEnvVarValues records per-stage failures without throwing', async () => {
+  const live = await fetchLiveEnvVarValues({
+    stages: [
+      { label: 'Staging', envUrl: LIVE_STAGING },
+      { label: 'Production', envUrl: LIVE_PROD },
+      { label: 'Evil', envUrl: 'https://attacker.example.com' },
+    ],
+  }, {
+    getToken: (url) => (url.includes('prod') ? null : 'tok'),
+    request: fakeLiveRequest({}),
+  });
+  assert.deepEqual(live.byStage, {});
+  assert.deepEqual(live.queriedStages, []);
+  assert.deepEqual(live.errors.map((e) => e.stage), ['Staging', 'Production', 'Evil']);
+});
+
+test('live: merge fills empty cells, prefers deployment-settings.json and manual values', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    stages: { 'Deploy to Staging': { EnvironmentVariables: [{ SchemaName: 'cr5fe_apiBaseUrl', Value: 'https://file-staging.example.com' }] } },
+  });
+  const planData = {
+    stages: [{ label: 'Staging', envUrl: LIVE_STAGING }, { label: 'Production', envUrl: LIVE_PROD }],
+    envVars: [
+      { schemaName: 'cr5fe_apiBaseUrl', values: { Production: 'manual-prod' } },
+      { schemaName: 'cr5fe_localLoginEnabled' },
+    ],
+  };
+  const counts = mergeLiveEnvVarValues(planData, root, {
+    byStage: {
+      Staging: { cr5fe_apiBaseUrl: 'https://ppac-staging.example.com', cr5fe_localLoginEnabled: 'false' },
+      Production: { cr5fe_apiBaseUrl: 'https://ppac-prod.example.com' },
+    },
+  });
+  assert.deepEqual(planData.envVars[0].values, {
+    Production: 'manual-prod',
+    'Deploy to Staging': 'https://file-staging.example.com',
+  }, 'local file (any stage alias) and manual values must win over live');
+  assert.equal(planData.envVars[0].valueSources, undefined);
+  assert.deepEqual(planData.envVars[1].values, { Staging: 'false' });
+  assert.deepEqual(planData.envVars[1].valueSources, { Staging: 'live' });
+  assert.deepEqual(counts, { filled: 1, updated: 0, cleared: 0 });
+});
+
+test('live: live-sourced cells are updated, cleared, and superseded by the local file on later refreshes', (t) => {
+  const root = makeProject(t);
+  const planData = {
+    stages: [{ label: 'Staging', envUrl: LIVE_STAGING }, { label: 'Production', envUrl: LIVE_PROD }],
+    envVars: [{
+      schemaName: 'cr5fe_apiBaseUrl',
+      values: { Staging: 'old-live', Production: 'old-live-prod' },
+      valueSources: { Staging: 'live', Production: 'live' },
+    }],
+  };
+  // Staging value changed in PPAC; Production value record deleted.
+  let counts = mergeLiveEnvVarValues(planData, root, {
+    byStage: { Staging: { cr5fe_apiBaseUrl: 'new-live' }, Production: {} },
+  });
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'new-live' });
+  assert.deepEqual(planData.envVars[0].valueSources, { Staging: 'live' });
+  assert.deepEqual(counts, { filled: 0, updated: 1, cleared: 1 });
+
+  // A stage whose query failed (absent from byStage) leaves its cells untouched.
+  counts = mergeLiveEnvVarValues(planData, root, { byStage: {} });
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'new-live' });
+
+  // The user then writes the value into deployment-settings.json — local wins.
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: { EnvironmentVariables: [{ SchemaName: 'cr5fe_apiBaseUrl', Value: 'file-value' }] },
+  });
+  mergeLiveEnvVarValues(planData, root, { byStage: { Staging: { cr5fe_apiBaseUrl: 'new-live' } } });
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'file-value' });
+  assert.equal(planData.envVars[0].valueSources, undefined);
+});
+
+test('live: runCli --live merges live values into the refreshed plan and reports a summary', async (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    stages: [{ label: 'Dev', envUrl: 'https://contoso-dev.crm.dynamics.com', type: 'source' }, { label: 'Staging', envUrl: LIVE_STAGING, type: 'target' }],
+    envVars: [{ schemaName: 'cr5fe_apiBaseUrl' }],
+    steps: [{ name: 'Configure environment variables', status: 'pending' }],
+  });
+  const result = await runCli(
+    { projectRoot: root, phase: 'configure-env-variables', render: false, live: true },
+    { getToken: () => 'tok', request: fakeLiveRequest(LIVE_TABLES) },
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.liveEnvVars.queriedStages, ['Staging']);
+  assert.deepEqual(result.liveEnvVars.errors.map((e) => e.stage), ['Dev']);
+  assert.equal(result.liveEnvVars.filled, 1);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'https://ppac-staging.example.com' });
+});
+
+test('live: runCli without --live never queries Dataverse', async (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    stages: [{ label: 'Staging', envUrl: LIVE_STAGING }],
+    envVars: [{ schemaName: 'cr5fe_apiBaseUrl' }],
+    steps: [],
+  });
+  const result = await runCli(
+    { projectRoot: root, phase: 'deploy-pipeline', render: false, live: false },
+    { getToken: () => { throw new Error('must not be called'); } },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.liveEnvVars, undefined);
+});
+
+test('live: runCli --live is a soft no-op (no token request) when the plan is missing', async (t) => {
+  const root = makeProject(t);
+  const result = await runCli(
+    { projectRoot: root, phase: 'deploy-pipeline', render: false, live: true },
+    { getToken: () => { throw new Error('must not be called'); } },
+  );
+  assert.equal(result.ok, false);
+});
