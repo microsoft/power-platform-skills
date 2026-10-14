@@ -94,7 +94,9 @@ function twoPageApp() {
       { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
       { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
     ],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }] }] }] },
+    // A new app is created with its navigation minus the pages, and Dataverse refuses a navigation with nothing left
+    // (lib/app-navigation.js), so the app has an entry that is not a page beside its pages.
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }, { entity: 'contoso_item', title: 'Items' }] }] }] },
   };
   return { appDir, spec };
 }

@@ -537,6 +537,53 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
   nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
   run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
+  **A navigation Dataverse would refuse stops the build before it writes anything.** A new app is created in the
+  app-shell phase with the navigation the spec gives it MINUS its page entries (`appDef` with `omitUnbuiltPages`: a page
+  does not exist yet, and the pages phase writes it into the navigation afterwards), and Dataverse refuses to CREATE a
+  sitemap with no non-empty area holding a non-empty group (measured: HTTP 400 "SiteMap needs to have a non-empty Area
+  with a non-empty Group, even when ignoring all Areas, Groups, and SubAreas with an IsVisible child"; the spec models no
+  such children). It does not refuse the same navigation when the sitemap of an app that ALREADY EXISTS is updated:
+  measured on an app that had one entry, the SDK's update of its navigation to `areas: []` and to an area holding an
+  empty group were saved, a raw PATCH of the sitemap row to an area holding an empty group answered 204, and publishing
+  after each (the SDK's publish, and a raw `PublishXml` of the app and its sitemap) was accepted, the published sitemap
+  then holding no entry at all. `validateAppSpec` still accepts every spec that has none — no `appShell`, `areas: []`, an
+  area with no group, a group with no entry, a navigation of pages only — because data-only builds rely on it, and a
+  downloaded spec carries the app's own navigation, which can be empty, so a build of a new app used to fail at the app
+  step, after the solution, tables, views and forms were written. `navigationVerdict` (`scripts/lib/app-navigation.js`)
+  now decides from the spec alone, whenever the app-shell phase is in the run's range (never for `--stage data`, or an
+  `--only` without it). A NEW app needs one table, dashboard or url entry in a group in an area, because its first push
+  creates the sitemap: a navigation of pages only, or with no entry, is refused. An EXISTING app is refused for neither.
+  Its navigation is written from the whole spec once the pages exist, so a page entry counts; and an empty navigation is
+  built (Dataverse accepts it on an update) with a WARNING that the app is left with no navigation entries — any it has
+  now are removed, which the destructive-operation gate (`lib/op-diff.js`, wired in `buildModelApp`) asks
+  `--allow-destructive` for. That is said only when the run writes the navigation to the existing app
+  (`existingAppSitemapIsWritten`: the pages finalizer with the pages phase in range, except in a changed-only
+  re-upload; the app step without it, for a spec with no page entry); a run that writes none leaves the app as it is
+  and says nothing. A spec with no `appShell.areas` is refused for every app (`appDef` throws on it before it asks
+  whether the app exists). `appDef` classifies an entry through the same `navigationEntryKind`, so the entries it
+  leaves out of the first push are the ones the check does not count.
+  The dry run (`checkNavigationInPlan`) marks the app step `? unknown` with the reason and `wouldHalt`, so the summary counts
+  it as "would stop the build" — with a live plan and with `--no-live-plan` alike, and a summary that counts a step that
+  would stop the build closes with "Fix the steps marked ? above, then re-run with --apply to execute." rather than
+  inviting an apply that would stop; `--apply` (`checkNavigationBeforeWriting`, ahead of the view-filter pre-flight) halts
+  with `BuildHalt` code `app-navigation-empty` (phase `preflight`, `recoverable: false`, `transient = false`, never
+  retried), saying what the platform requires and what to add — `{ entity: '<table>', title: '<label>' }` in a group, and
+  for a navigation of pages only that a page entry joins the navigation only once its page exists, so a new app needs one
+  other entry. A navigation that is fine for an app that exists and refused for a new one — pages only, or no entry at all
+  — depends on whether the app exists, so only it reads that: one `findArtifact('app')`, the read the app step makes next.
+  A valid navigation adds no call, and its plan and requests are byte-identical to what they were. When that read cannot
+  answer (`--no-live-plan`, a failed read) the stricter rule is not applied: the build warns what it could not check and
+  goes on as before. A spec with no `appShell.areas` is refused whatever the answer. The destructive-operation gate in
+  `buildModelApp` runs before the engine's check, so for an existing app whose navigation the spec empties it asks first —
+  the removal is real, and the build then goes on — and it does not ask about a spec the check refuses outright:
+  `discoverOpDiffState` reads the deployed navigation only for a spec that declares `appShell.areas`, so a maker is never
+  asked to authorize the removal of entries from a navigation the build will not write.
+  `lint-app-spec` warns (`appShell: …`) for a navigation a new app cannot be built from, and says whether an app that
+  already exists is spared (not affected, or built with no entries). A test that builds a NEW app against a fake SDK must
+  give its navigation an entry that is not a page: the fakes do not model the platform's rule.
+  Pinned by `app-navigation.test.js` (the rule, its agreement with `appDef`, validation, lint) and
+  `app-navigation-build.test.js` (dry run and apply for every shape, with every call recorded, the summary line, and the
+  order of the destructive gate and the check).
   **An existing app's sitemap is rewritten ONTO its live nodes (AB#6726727).** The App Spec describes a
   node's label/title, target and icons only, and the SDK serializes a node without its fetched `bag` from
   scratch (new `Id`, `ResourceId="SitemapDesigner.NewSubArea"`, broad `Client`/`Sku`,

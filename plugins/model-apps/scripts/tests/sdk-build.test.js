@@ -1736,7 +1736,7 @@ test('a junction sample row binds multiple parents via $parents', async () => {
       { type: 'OneToMany', referenced: 'new_wo', referencing: 'new_assign', lookup: { schemaName: 'new_woid', displayName: 'WO' } },
       { type: 'OneToMany', referenced: 'new_tech', referencing: 'new_assign', lookup: { schemaName: 'new_techid', displayName: 'Tech' } },
     ],
-    views: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [], charts: [], forms: [], appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'new_wo', title: 'Work orders' }] }] }] },
     sampleData: {
       new_wo: [{ new_name: 'WO1' }], new_tech: [{ new_name: 'T1' }],
       new_assign: [{ new_name: 'A1', $parents: [{ entity: 'new_wo', match: { new_name: 'WO1' } }, { entity: 'new_tech', match: { new_name: 'T1' } }] }],

@@ -2169,7 +2169,9 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
       { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
       { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
     ],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview' }, { page: 'detail' }] }] }] },
+    // A new app is created with its navigation minus the pages, and Dataverse refuses a navigation with nothing left
+    // (lib/app-navigation.js), so the first run builds an app that has an entry that is not a page beside its pages.
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview' }, { page: 'detail' }, { url: 'https://contoso.example/help', title: 'Help' }] }] }] },
   };
   const state = { orgId, app: null, creates: 0, table: null, resources: new Map(), pages: new Map(), failDownload: false };
   const { sdk } = makeSimpleMockSdk();

@@ -32,6 +32,7 @@ const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('.
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
+const { navigationHolds } = require('./lib/app-navigation.js');
 // Unattended-mode detection lives in one module so /app-builder and /genpage cannot drift apart
 // on what "unattended" means. Re-exported from here because callers and tests already import it
 // from this file.
@@ -237,9 +238,11 @@ async function discoverOpDiffState(spec, provision) {
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
     forms.push({ formId: id, label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
   }
-  // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap).
+  // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap) and the build will write a navigation. A spec
+  // whose appShell has no `areas` array is refused by the navigation check before anything is written (lib/app-navigation.js: `appDef` has nothing to
+  // build a sitemap from), so listing every live entry as dropped would ask the maker to authorize a removal the build is then going to refuse.
   let sitemap = null;
-  if (spec.appShell && collision.appExists) {
+  if (navigationHolds(spec).declared && collision.appExists) {
     const appId = await provision.findArtifact('app', { uniqueName: collision.appUnique });
     if (appId) {
       await provision.fetchArtifact('app', appId);
@@ -700,9 +703,12 @@ async function buildModelApp(spec, opts, deps) {
     if (unreadable) parts.push(`${unreadable} could not be read`);
     if (wouldHalt) parts.push(`${wouldHalt} would stop the build`);
     if (unprobed) parts.push(`${unprobed} not probed`);
+    // A dry run that says a step would stop the build must not then tell the maker to run it. The spec-only summary counts those steps too: with no live
+    // probe the navigation check can still refuse a spec on its own, and it marks the app step the same way.
+    const closing = wouldHalt ? 'Fix the steps marked ? above, then re-run with --apply to execute.' : 'Re-run with --apply to execute.';
     log(r.livePlan
-      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). Re-run with --apply to execute.`
-      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan). Re-run with --apply to execute.`);
+      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). ${closing}`
+      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan)${wouldHalt ? `, ${wouldHalt} would stop the build` : ''}. ${closing}`);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);

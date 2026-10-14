@@ -1489,6 +1489,23 @@ custom control), but the spec validator emits a warning.
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
   — surfaced as a `GenPage` sitemap subarea).
+- **The navigation needs an entry Dataverse will take — for a new app.** Dataverse refuses to **create** a sitemap with no
+  non-empty area holding a non-empty group (HTTP 400: "SiteMap needs to have a non-empty Area with a non-empty Group"); it
+  accepts the same navigation when the sitemap of an app that **already exists** is updated (measured: saved and published).
+  A **new** app is created before its pages exist, so its first navigation leaves every `page` entry out and the pages phase
+  writes them in afterwards: it needs **at least one `entity`, `dashboard` or `url` entry in a group in an area**, and pages
+  may sit beside it. An **existing** app is refused for neither a navigation of only `page` entries (its navigation is
+  written from the whole spec once its pages are built) nor one with no entry at all: the build goes on, and for the empty
+  one it **warns** that the app is left with no navigation entries — any it has now are removed, which the destructive-
+  operation check asks `--allow-destructive` for. A spec with no `appShell.areas` is refused for every app, since there is no
+  navigation to build the app's sitemap from. A spec with no `appShell`, `areas: []`, an area with no group, a group with no
+  entry, or (for a new app) only `page` entries still **validates** — a data-only spec has no navigation, and a downloaded
+  spec carries the app's own, which can be empty — but a build that includes the app-shell phase refuses what a new app
+  cannot be built from **before it writes anything**: the dry run marks the app step `? unknown` with the reason and counts it
+  among the steps that would stop the build (with a live plan or without one), `--apply` halts with `app-navigation-empty`,
+  and `lint-app-spec` warns. Whether the app exists is read only when the verdict depends on it (a navigation of pages only,
+  or with no entry); when it cannot be read (`--no-live-plan`, a failed read) that navigation is not refused: the build
+  warns that it could not check, and goes on.
 - **Areas and groups take `label`; subareas take `title`.** Each level accepts only the keys the build
   reads — area: `label`, `icon`, `vectorIcon`, `iconDescription`, `groups`; group: `label`,
   `iconDescription`, `subAreas`; subarea: `title`, one target, `icon`, `vectorIcon`, `iconDescription` —

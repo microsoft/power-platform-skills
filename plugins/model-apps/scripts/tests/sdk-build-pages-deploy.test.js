@@ -30,6 +30,9 @@ const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
 const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
 const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
+// A new app is created with its navigation minus the pages, and Dataverse refuses a navigation with nothing left
+// (lib/app-navigation.js), so an app these tests build from nothing has an entry that is not a page beside its pages.
+const TABLE_ENTRY = { entity: 'contoso_item', title: 'Items' };
 const OVERVIEW_ID = '11111111-0000-4000-8000-000000000001';
 const DETAIL_ID = '22222222-0000-4000-8000-000000000002';
 const pageSitemap = (ids) => `<SiteMap><Area><Group>${ids.map((id) => `<SubArea GenPageId="${id}"/>`).join('')}</Group></Area></SiteMap>`;
@@ -162,7 +165,7 @@ function makeTwoPageApp(opts = {}) {
       { key: 'overview', name: 'Overview', navigatesTo, source: { kind: 'tsx', codeFile: 'overview.tsx' } },
       { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
     ],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }] }] }] },
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }, TABLE_ENTRY] }] }] },
   };
   return { appDir, spec };
 }
@@ -220,7 +223,7 @@ test('deploy: a DECOY "PAGEREF_" string (not a nav call site) does NOT satisfy a
       schemaVersion: 2, solution: { uniqueName: 'PgDecoy', displayName: 'Pg', publisherPrefix: 'contoso' }, app: { name: 'Decoy App' },
       entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
       pages: [{ key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } }, { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } }],
-      appShell: { areas: [{ label: 'M', groups: [{ label: 'P', subAreas: [{ page: 'overview' }, { page: 'detail' }] }] }] },
+      appShell: { areas: [{ label: 'M', groups: [{ label: 'P', subAreas: [{ page: 'overview' }, { page: 'detail' }, TABLE_ENTRY] }] }] },
     };
     const { sdk } = mockSdk();
     const genpageCli = mockGenpageCli();
@@ -660,7 +663,7 @@ function makeDupNamePageApp() {
       { key: 'sc-a', name: 'Supplier Scorecard', pageId: GA, source: { kind: 'tsx', codeFile: 'a.tsx' } },
       { key: 'sc-b', name: 'Supplier Scorecard', pageId: GB, source: { kind: 'tsx', codeFile: 'b.tsx' } },
     ],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'sc-a', title: 'Supplier Scorecard' }, { page: 'sc-b', title: 'Supplier Scorecard' }] }] }] },
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'sc-a', title: 'Supplier Scorecard' }, { page: 'sc-b', title: 'Supplier Scorecard' }, TABLE_ENTRY] }] }] },
   };
   const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'sc-a', name: 'Supplier Scorecard', pageId: GA }, { key: 'sc-b', name: 'Supplier Scorecard', pageId: GB }] }), 'utf8').toString('base64');
   return { appDir, spec, GA, GB, manifest };
@@ -728,7 +731,7 @@ test('deploy: DYNAMIC nav pageId (variable expression) HALTS before any write �
         { key: 'overview', name: 'Overview', navigatesTo: [], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
         { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
       ],
-      appShell: { areas: [{ label: 'Main', groups: [{ label: 'P', subAreas: [{ page: 'overview' }, { page: 'detail' }] }] }] },
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'P', subAreas: [{ page: 'overview' }, { page: 'detail' }, TABLE_ENTRY] }] }] },
     };
     const { sdk } = mockSdk();
     const genpageCli = mockGenpageCli();
@@ -761,7 +764,7 @@ test('deploy: LITERAL GUID nav pageId (hardcoded) HALTS before any write — new
         { key: 'overview', name: 'Overview', navigatesTo: [], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
         { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
       ],
-      appShell: { areas: [{ label: 'Main', groups: [{ label: 'P', subAreas: [{ page: 'overview' }, { page: 'detail' }] }] }] },
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'P', subAreas: [{ page: 'overview' }, { page: 'detail' }, TABLE_ENTRY] }] }] },
     };
     const { sdk } = mockSdk();
     const genpageCli = mockGenpageCli();
@@ -1637,7 +1640,7 @@ function onePageApp(pageName) {
     app: { name: 'Uncertain App' },
     entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
     pages: [{ key: 'p', name: pageName, source: { kind: 'tsx', codeFile: 'p.tsx' } }],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'p', title: pageName }] }] }] },
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'p', title: pageName }, TABLE_ENTRY] }] }] },
   };
   return { appDir, spec };
 }
@@ -1765,7 +1768,7 @@ test('deploy: every page is written from the bytes the scan read — a save to a
         { key: 'notes', name: 'Notes', source: { kind: 'tsx', codeFile: 'notes.tsx' } },
         { key: 'help', name: 'Help', source: { kind: 'tsx', codeFile: 'help.tsx' } },
       ],
-      appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: ['overview', 'detail', 'notes', 'help'].map((page) => ({ page, title: page })) }] }] },
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [...['overview', 'detail', 'notes', 'help'].map((page) => ({ page, title: page })), TABLE_ENTRY] }] }] },
     };
     const saved = "import { makeStyles } from '@fluentui/react-components';\nconst useStyles = makeStyles({ root: { borderWidth: '1px' } });\nexport default function Saved(){ return null; }";
     const ids = { Overview: OVERVIEW_ID, Detail: DETAIL_ID, Notes: '33333333-0000-4000-8000-000000000003', Help: '44444444-0000-4000-8000-000000000004' };
@@ -1818,7 +1821,7 @@ test('deploy: pages keyed like Windows device names are written as text, with no
       app: { name: 'Deploy App' },
       entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
       pages: keys.map((key) => ({ key, name: `Page ${key}`, ...(key === 'con' ? { navigatesTo: [{ targetKey: 'nul' }, { targetKey: 'aux' }] } : {}), source: { kind: 'tsx', codeFile: `src-${key}.tsx` } })),
-      appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: keys.map((page) => ({ page, title: page })) }] }] },
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [...keys.map((page) => ({ page, title: page })), TABLE_ENTRY] }] }] },
     };
     const writes = [];
     let minted = 0;

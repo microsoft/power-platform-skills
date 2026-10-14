@@ -137,6 +137,22 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   API root (HTTP 404), so a result longer than one page — an app's components, the saved sitemaps, the apps never published — was reported as
   unverifiable instead of read. A refused read now names the URL and carries the platform's own message.
 
+- **A navigation Dataverse would refuse stops the build before it writes anything.** A new app is created before its
+  pages exist, with its navigation minus the `page` entries, and Dataverse refuses to create a sitemap with no non-empty
+  area holding a non-empty group — so a spec whose navigation was only pages, or had `areas: []`, an area with no group, a
+  group with no entry or no `appShell` at all, passed validation and stopped at the app step, after the solution, tables,
+  views and forms were written. A build that includes the app step now refuses such a spec for a new app up front: the dry
+  run marks the app step as one that would stop the build, and `--apply` halts (`app-navigation-empty`) before its first
+  write, saying what to add (for example `{ entity: '<table>', title: '<label>' }` in a group). A new app needs one entry
+  that is not a page. An existing app is not refused for a navigation of pages only (its pages are written into its
+  navigation once they exist, so it builds as before) or for one with no entry at all: Dataverse accepts an empty
+  navigation when an app's sitemap is updated, so the build goes on and warns that the app is left with no navigation
+  entries (the destructive-operation check still asks for `--allow-destructive` when it has some to remove). A spec with
+  no `appShell.areas` is refused for every app. When the build cannot read whether the app exists it does not refuse a
+  navigation of pages only or with no entry: it warns and goes on. `lint-app-spec` warns about a navigation a new app
+  cannot be built from. Validation is unchanged. A dry run that would stop counts it in its summary line, with a live
+  plan or without one (`--no-live-plan`), and then asks for the steps marked `?` to be fixed rather than to be applied.
+
 ## [2.14.0]
 
 The Notes timeline renders, a related-records grid can be placed where you want it, lookups are labelled with the table

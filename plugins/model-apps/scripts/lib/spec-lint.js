@@ -9,6 +9,7 @@ const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolve
 const { nearestName } = require('./nearest-name.js');
 const { isAppSourcePath } = require('./app-source-path.js');
 const { labelLintWarnings } = require('./view-filter-labels.js');
+const { navigationVerdict } = require('./app-navigation.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -436,6 +437,16 @@ function lintAppSpec(spec) {
         }
       }
     }
+  }
+  // A navigation a NEW app cannot be built from. validateAppSpec accepts it (data-only specs have no navigation, and a downloaded spec carries
+  // the app's own, which can be empty), but a build that includes the app step refuses it for a new app before it writes anything. Whether the
+  // app exists is not known here, so this is a warning, and it says who is spared by asking the same rule again for an app that exists.
+  const navigation = navigationVerdict(spec, { appExists: false });
+  if (navigation.outcome === 'refuse') {
+    const forExisting = navigationVerdict(spec, { appExists: true }).outcome;
+    const spared = forExisting === 'ok' ? ' An app that already exists is not affected.'
+      : forExisting === 'warn' ? ' An app that already exists is built with no navigation entries, and the build says so.' : '';
+    W(`appShell: ${navigation.message}${spared}`);
   }
 
   for (const ch of spec.charts || []) {

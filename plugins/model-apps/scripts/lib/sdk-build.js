@@ -128,6 +128,7 @@ const { isRestrictedSolution } = require('./system-solutions.js');
 const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings } = require('./app-components.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
+const { navigationEntryKind, navigationVerdict } = require('./app-navigation.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -1107,6 +1108,71 @@ function appHasCrossPageNav(spec) {
   return ((spec && spec.pages) || []).some((p) => (p.navigatesTo || []).length > 0);
 }
 
+// Whether this run writes the spec's navigation to an app that ALREADY exists — the question the navigation check
+// (app-navigation.js) needs answered, because a navigation that is not written leaves the app as it is: nothing for the
+// build to say of an empty one. It mirrors the two writers in runSdkBuildPhases, and the test that drives each of them
+// pins that it does:
+//   * with the pages phase in the run, the pages finalizer writes the whole navigation, page entries included (appDef
+//     without `omitUnbuiltPages`) — except in a changed-only re-upload, which skips it;
+//   * without it, the app step writes the navigation from the spec, but only for a spec with no page entry: that step has
+//     no pages to point such an entry at, and writing the navigation without them would detach every live page, so for a
+//     spec with one it writes no navigation at all.
+function existingAppSitemapIsWritten(spec, phases, changedOnly) {
+  if (phases.includes('pages')) return !(changedOnly && changedOnly.skipSitemapFinalize);
+  return !appHasPageSubareas(spec);
+}
+
+// The dry run's share of the navigation check: say, on the app step's own line, that an apply would stop there, and why.
+// The line is marked as a view the build would refuse is (annotateLivePlan): `? unknown` with the reason, and `wouldHalt` so
+// the summary counts it among the steps that would stop the build and not among those it could not read. Whether the app
+// exists is what the live plan found out on that same line; without a live plan, or when its read failed, it is unknown.
+// A navigation the build goes on with but its author should hear of — an app of unknown existence it would refuse if new,
+// or an existing app it leaves with no entries — is a warning, not a mark: nothing would stop the build.
+function checkNavigationInPlan(plan, spec, { phases, changedOnly, warn }) {
+  const item = plan.find((p) => p.key && p.key.kind === 'app');
+  if (!item) return;
+  const verdict = navigationVerdict(spec, {
+    appExists: item.state === 'create' ? false : item.state === 'reuse' ? true : undefined,
+    existingAppIsWritten: existingAppSitemapIsWritten(spec, phases, changedOnly),
+    whyUnknown: item.state === 'unknown' ? (item.stateWhy || 'the app could not be read') : 'this dry run did not read the environment',
+  });
+  if (verdict.outcome === 'refuse') {
+    item.state = 'unknown';
+    item.stateWhy = `the build would stop before writing anything: ${verdict.message}`;
+    item.wouldHalt = true;
+  } else if ((verdict.outcome === 'unknown' || verdict.outcome === 'warn') && typeof warn === 'function') {
+    warn(`app "${spec.app.name}": ${verdict.message}`);
+  }
+}
+
+// The apply's share: before the first write, refuse a navigation Dataverse will refuse. Left to the app step it stopped the
+// build there, after the solution, tables, columns, views and forms were written. The verdict comes from the spec alone,
+// except for a navigation that depends on whether the app exists — pages only, or no entry at all: fine for an app that
+// exists, refused for a new one — which pays for one read of that, the very read the app step makes next. A read that fails
+// leaves the answer unknown: the build goes on as it always did and says what it could not check. Halts as the view-filter
+// pre-flight does (phase `preflight`, never retried).
+async function checkNavigationBeforeWriting(spec, { provision, phases, changedOnly, warn }) {
+  const rule = { existingAppIsWritten: existingAppSitemapIsWritten(spec, phases, changedOnly) };
+  let verdict = navigationVerdict(spec, rule);
+  if (verdict.outcome === 'unknown') {
+    let appExists;
+    let whyUnknown;
+    try {
+      appExists = !!(await provision.findArtifact('app', { uniqueName: appUniqueName(spec) }));
+    } catch (err) {
+      whyUnknown = (err && err.message) || String(err);
+    }
+    verdict = navigationVerdict(spec, { ...rule, appExists, whyUnknown });
+  }
+  if (verdict.outcome === 'refuse') {
+    const halt = new BuildHalt(`app "${spec.app.name}" cannot be built: ${verdict.message} The build stopped before writing anything.`, { phase: 'preflight', code: verdict.code, recoverable: false });
+    // The message quotes the author's own page keys, so it must never be read as one of the texts the CLI retries on (isTransientHalt).
+    halt.transient = false;
+    throw halt;
+  }
+  if ((verdict.outcome === 'unknown' || verdict.outcome === 'warn') && typeof warn === 'function') warn(`app "${spec.app.name}": ${verdict.message}`);
+}
+
 // SINGLE-MACHINE advisory lockfile over the pages protocol (design §9 / review R2 Critical 3, DESCOPED).
 // A courtesy to stop two LOCAL builds of the same app racing to CREATE duplicate pages; correctness does
 // NOT depend on it — the convergence spine (fail-closed enumeration + create-absent-first + persist-after-
@@ -1149,7 +1215,10 @@ function appDef(spec, result, opts = {}) {
     // surfaces it as a warning). Non-entity subareas keep emitting any vectorIcon as before.
     const emitVector = s.vectorIcon && (isPlatformIconRef(s.vectorIcon) || !s.entity);
     const withVector = emitVector ? { ...base, vectorIcon: s.vectorIcon } : base;
-    if (s.dashboard) {
+    // The kind is decided by the function the navigation check (app-navigation.js) counts entries with, so the
+    // page entries left out of a new app's first navigation below are the ones it does not count.
+    const kind = navigationEntryKind(s);
+    if (kind === 'dashboard') {
       const dashboardId = (result.dashboards || {})[s.dashboard];
       if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
       // The designer gives every dashboard entry it creates this launcher Url, recognizes a dashboard
@@ -1157,7 +1226,7 @@ function appDef(spec, result, opts = {}) {
       // renders a placeholder icon (AB#6726727). The SDK's from-scratch node omits it.
       return { ...withVector, type: 'DashBoard', dashboardId, dashboardUrl: DASHBOARD_LAUNCHER_URL };
     }
-    if (s.page) {
+    if (kind === 'page') {
       const genPageId = (result.pages || {})[s.page];
       if (!genPageId) {
         // During the initial app-create (app_early) pages aren't uploaded yet — omit the subarea;
@@ -1168,7 +1237,7 @@ function appDef(spec, result, opts = {}) {
       }
       return genPageSubArea(withVector, genPageId);
     }
-    if (s.url) return { ...withVector, type: 'URL', url: s.url };
+    if (kind === 'url') return { ...withVector, type: 'URL', url: s.url };
     return { ...withVector, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
   };
   // `appShell` is OPTIONAL to validation (the deploy profile deliberately accepts a spec without
@@ -2152,6 +2221,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         emit({ phase: 'plan', status: 'warn', label: `live plan unavailable (${(err && err.message) || err}) — showing the spec-derived plan only`, n: 0, total: plan.length });
       }
     }
+    if (has('app-shell')) checkNavigationInPlan(plan, spec, { phases, changedOnly: opts.changedOnly, warn: opts.warn });
     plan.forEach((p, i) => emit({ phase: p.phase, status: p.state === 'reuse' ? 'skip' : 'skip', label: p.label, state: p.state, stateWhy: p.stateWhy, n: i + 1, total: plan.length }));
     return {
       ok: true,
@@ -2161,6 +2231,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
       planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}) })),
     };
   }
+
+  // A navigation Dataverse will refuse stops the build here, before anything is written, rather than at the app step
+  // after the solution, tables, columns, views and forms have been (app-navigation.js). Only a run that has the app step.
+  if (has('app-shell')) await checkNavigationBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
 
   const createdFormsThisRun = new Set();
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, pageSourceShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
@@ -6770,4 +6844,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten };
