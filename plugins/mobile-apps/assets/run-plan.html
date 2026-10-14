@@ -52,6 +52,7 @@
   --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
   --warn:#ca5010; --warn-bg:#ca50100a; --warn-border:#ca501020;
   --footer-h:38px;
+  --topbar-h:72px;
   --fail:#a4262c; --fail-bg:#a4262c0a; --fail-border:#a4262c20;
   --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
   --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
@@ -71,14 +72,18 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .pill-progress{background:var(--purple-bg);color:var(--purple);border-color:var(--purple-border);}
 .pill-live{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
 .shell{display:flex;align-items:flex-start;}
-.layout{display:flex;min-height:calc(100vh - 65px);flex:1;min-width:0;}
-.rail{width:430px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
+.layout{display:flex;min-height:calc(100vh - var(--topbar-h));flex:1;min-width:0;}
+.rail{width:430px;flex-shrink:0;position:sticky;top:var(--topbar-h);height:calc(100vh - var(--topbar-h) - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:14px;padding:24px 20px;overflow-y:auto;border-left:1px solid var(--border);background:var(--surface);}
 .rail-title{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
 /* The sticky rail is shorter than the viewport because the topbar and footer remain visible.
-   Fit the phone to that space so its label and caption do not disappear on laptop-height windows. */
-.device{height:min(620px,calc(100vh - 65px - var(--footer-h) - 150px));width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;flex-shrink:0;}
+   The phone is the only rail item that can give up height, so it flex-shrinks into whatever the
+   label, caption, preview link and store buttons leave. A fixed budget cannot work here: the QR
+   stage adds the link and store row, so a budget sized for the building stage pushes the label
+   under the topbar and the store row behind the footer on a 720px-tall window. Below 360px the
+   phone stops shrinking and the rail scrolls, because a smaller phone cannot show the QR copy. */
+.device{flex:0 1 620px;min-height:360px;max-height:620px;width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;}
 .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
-.device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
+.device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;container-type:size;}
 .device-screen iframe{border:0;}
 /* Stage 1 - building */
 .bld{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#faf9f8;padding:0 28px;text-align:center;}
@@ -112,12 +117,16 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .car-dot.on{background:var(--accent);}
 .rail-caption{font-size:12px;color:var(--text-dim);text-align:center;min-height:32px;padding:0 10px;}
 /* Stage 3 - QR */
-.qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#fff;padding:0 26px;text-align:center;}
-.qr img{width:min(196px,100%);height:auto;}
+/* On a short window the phone shrinks (see .device), so the QR screen must fit a smaller frame:
+   the code gives up height first, the content clears the notch, and the copy tightens when the
+   phone is short. Without this the code slides under the notch and the Metro URL is cut off. */
+.qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:16px;background:#fff;padding:30px 22px 18px;text-align:center;}
+.qr img{flex:0 1 196px;min-height:84px;max-height:196px;width:auto;max-width:100%;aspect-ratio:1/1;object-fit:contain;}
+@container (max-height:520px){.qr{gap:8px;padding:28px 12px 14px;}.qr-title{font-size:14px;}.qr-sub{font-size:11px;line-height:1.4;}.qr-url{font-size:10px;}}
 .qr-title{font-size:16px;font-weight:700;color:#201f1e;}
 .qr-sub{font-size:12.5px;color:#605e5c;line-height:1.55;}
 .qr-url{font-family:var(--mono);font-size:11px;color:#0078d4;word-break:break-all;}
-@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{height:auto;width:min(300px,calc(100vw - 44px));}}
+@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{flex:none;height:auto;width:min(300px,calc(100vw - 44px));}}
 .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
 .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
 .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
@@ -1805,6 +1814,17 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   if (!isNaN(generated.getTime())) {
     updatedAt.textContent = 'Updated ' + generated.toLocaleString(undefined,
       { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  // The sticky rail is offset by the topbar, whose height grows when its pills wrap on a narrow
+  // window. Mirror the real height into --topbar-h so the rail neither slides under the topbar
+  // nor runs behind the fixed footer; the CSS default covers the single-row topbar.
+  var topbarEl = document.querySelector ? document.querySelector('.topbar') : null;
+  var rootStyle = document.documentElement && document.documentElement.style;
+  if (topbarEl && rootStyle && rootStyle.setProperty) {
+    var syncTopbar = function () { rootStyle.setProperty('--topbar-h', topbarEl.offsetHeight + 'px'); };
+    syncTopbar();
+    window.addEventListener('resize', syncTopbar);
   }
 
   renderPhone();

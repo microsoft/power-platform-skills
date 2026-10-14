@@ -1202,9 +1202,9 @@ test('the device rail moves through building, screens and QR', () => {
   const template = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8',
   );
-  assert.match(template, /\.device\{height:min\(620px,calc\(100vh - 65px - var\(--footer-h\) - 150px\)\)/);
-  assert.match(template, /@media\(max-width:1180px\)[\s\S]*\.device\{height:auto;width:min\(300px/);
-  assert.match(template, /\.qr img\{width:min\(196px,100%\);height:auto;\}/);
+  assert.match(template, /\.device\{flex:0 1 620px;min-height:360px;max-height:620px;[^}]*aspect-ratio:300\/620;/);
+  assert.match(template, /@media\(max-width:1180px\)[\s\S]*\.device\{flex:none;height:auto;width:min\(300px/);
+  assert.match(template, /\.qr img\{flex:0 1 196px;min-height:84px;max-height:196px;[^}]*aspect-ratio:1\/1;/);
 
   const root = project('docs-rail');
   const state = initState(root, { appName: 'App' });
