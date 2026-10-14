@@ -326,6 +326,32 @@ test('edit progress renders each operation state and settles when work completes
   }), /requires navigation edges/);
 });
 
+test('screen diagram labels keep Expo dynamic route segments', () => {
+  // Expo file-based routing names dynamic segments `[id]`, so these brackets are the
+  // common case in a screen graph rather than an edge case. Dropping them rewrote the
+  // route the maker reads (`/inspections/[id]` became `/inspections/ id`), so the
+  // characters are escaped with Mermaid entity codes and must survive to the source.
+  const root = project('docs-edit-routes');
+  const progress = writeEditProgress(root, {
+    changes: [{
+      title: 'Add the inspection detail route',
+      rationale: 'Inspectors open one record before capturing evidence against it.',
+      kind: 'screen',
+      screenGraph: {
+        screens: [
+          { id: 'list', name: 'Inspections', route: '/inspections' },
+          { id: 'detail', name: 'Inspection detail', route: '/inspections/[id]' },
+        ],
+        edges: [{ from: 'list', to: 'detail', label: 'select {row}' }],
+      },
+    }],
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+  assert.match(html, /\/inspections\/#91;id#93;/);
+  assert.match(html, /select #123;row#125;/);
+  assert.doesNotMatch(html, /\/inspections\/ id/);
+});
+
 test('plan sync creates an inferred full snapshot and replaces changed sections', () => {
   const root = project('docs-edit-sync');
   const inferred = syncPlanToCurrentApp(root, {

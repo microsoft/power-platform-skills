@@ -499,9 +499,33 @@ function safeMermaidName(value, fallback) {
   return source.replace(/[^A-Za-z0-9_]/g, '_') || fallback;
 }
 
+// Mermaid labels are always emitted inside a quoted string here (`["..."]`,
+// `|"..."|`, `: "..."`), so the characters below are escaped with Mermaid's
+// decimal entity codes rather than dropped. Stripping them silently rewrote the
+// text the user reads: Expo dynamic routes are the common case in this plugin,
+// and `/inspections/[id]` came out as `/inspections/ id`.
+// `#` is escaped too, and in the same pass, so a literal `#` already in the
+// source cannot combine with a code emitted after it.
+// See: https://mermaid.js.org/syntax/flowchart.html#entity-codes-to-escape-characters
+const MERMAID_LABEL_ESCAPES = {
+  '#': '#35;',
+  '"': '#quot;',
+  '[': '#91;',
+  ']': '#93;',
+  '{': '#123;',
+  '}': '#125;',
+  '<': '#60;',
+  '>': '#62;',
+  '|': '#124;',
+};
+
 function safeMermaidLabel(value, fallback = '') {
   const source = value === undefined || value === null ? fallback : String(value);
-  return source.replace(/["[\]{}<>|]/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
+  const escaped = source
+    .replace(/[#"[\]{}<>|]/g, (character) => MERMAID_LABEL_ESCAPES[character])
+    .replace(/\s+/g, ' ')
+    .trim();
+  return escaped || fallback;
 }
 
 function relationshipConnector(cardinality) {
