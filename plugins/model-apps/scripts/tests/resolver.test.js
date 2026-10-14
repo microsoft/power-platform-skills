@@ -3,12 +3,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const https = require("node:https");
 const { EventEmitter } = require("node:events");
 
 const resolver = require("../lib/telemetry/resolver");
+const { makeTempDir } = require("./helpers/temp-dirs");
 
 const SHIPPED_IKEY = path.join(__dirname, "..", "lib", "telemetry", "ikey.json");
 const ORG_ID = "00000000-0000-0000-0000-0000000000aa";
@@ -25,7 +25,7 @@ const REGIONS = {
 const CFG = { default_region: "us", regions: REGIONS };
 
 function mkTemp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "modelapps-resolver-"));
+  return makeTempDir("modelapps-resolver-");
 }
 
 // Replace https.request (which artemis-service calls at request time) for the duration of `fn`, so a

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 const {
   compareSemver,
@@ -70,7 +71,7 @@ test('readMarketplaceName reads the repository marketplace', () => {
 });
 
 test('readMarketplaceName falls back to the legacy marketplace path', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-apps-version-'));
+  const tempDir = makeTempDir('model-apps-version-');
   fs.mkdirSync(path.join(tempDir, '.claude-plugin'));
   fs.writeFileSync(
     path.join(tempDir, '.claude-plugin', 'marketplace.json'),
@@ -81,7 +82,7 @@ test('readMarketplaceName falls back to the legacy marketplace path', () => {
 });
 
 test('readMarketplaceName returns null when no marketplace exists', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-apps-version-'));
+  const tempDir = makeTempDir('model-apps-version-');
   assert.equal(readMarketplaceName(tempDir), null);
 });
 

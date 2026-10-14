@@ -7,9 +7,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { validatePageOutput, stampPageTarget } = require('../genpage-worker-output.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 function write(code) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-worker-output-'));
+  const dir = makeTempDir('genpage-worker-output-');
   const filePath = path.join(dir, 'page.tsx');
   fs.writeFileSync(filePath, code, 'utf8');
   return filePath;

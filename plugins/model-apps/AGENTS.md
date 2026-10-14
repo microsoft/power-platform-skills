@@ -2772,6 +2772,10 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
 ```
 
 - `run-tests.js` runs the full `scripts/tests/*.test.js` suite and prints a combined PASS/FAIL.
+  The suite runs in a temporary folder of its own (TEMP, TMP and TMPDIR point into it), and the run
+  FAILS when a test leaves a file or folder in it, naming what was left: a test removes everything it
+  makes. `scripts/tests/helpers/temp-dirs.js` (`makeTempDir`) is the shared way — require it at the top
+  of the test file, and the folders it makes are removed after the file's last test.
   **CI runs this same command** (`.github/workflows/model-apps-script-tests.yml`) on any PR into `main`
   touching `plugins/model-apps/**`, `evals/model-apps/**`, `shared/telemetry/**`, `shared/skills/**` or the
   workflow itself, across ubuntu × windows × macos and Node 20 × 22.

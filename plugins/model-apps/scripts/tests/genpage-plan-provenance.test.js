@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { preparePlanProvenance, verifyPlanProvenance, planTargets } = require('../genpage-plan-provenance.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 // What the planner hands back for approval (agents/genpage-planner.md Step 5) — a PREVIEW, with full
 // prefixed names — and what it then writes (Step 6): a different document, suffixes only. The gate
@@ -52,7 +53,7 @@ const EDIT_WRITTEN = `# Genpage Edit Plan\n\n## File Being Edited\n- **Absolute 
 // kind its name says.
 const EDIT = 'genpage-edit-plan.md';
 function tmpPlan(content, name = 'genpage-plan.md') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-plan-prov-'));
+  const dir = makeTempDir('genpage-plan-prov-');
   const planPath = path.join(dir, name);
   if (content !== undefined) fs.writeFileSync(planPath, content, 'utf8');
   return planPath;

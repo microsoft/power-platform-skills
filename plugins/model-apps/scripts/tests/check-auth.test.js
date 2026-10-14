@@ -212,6 +212,10 @@ function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', a
         else cb(null, pacOrg, '');
       });
       if (pacDelayMs !== null) setTimeout(finishSuccess, pacDelayMs);
+      // With pac's own 5 ms timeout armed (pacTimer), its success must come first whatever holds the event loop:
+      // setImmediate loses to an expired timer when the loop was busy for 5 ms first (the module warm-up of a
+      // file's first test is), and the test then staged a pac timeout it never meant to. nextTick runs before any timer.
+      else if (pacTimer) process.nextTick(finishSuccess);
       else setImmediate(finishSuccess);
       return child;
     }
