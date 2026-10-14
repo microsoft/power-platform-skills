@@ -282,7 +282,7 @@ test("emits a start for every bare workflow skill across prompt and tool payload
 
 test("ignores other plugins, prose, telemetry control and untracked names", () => {
   for (const prompt of ["please /generate-ppmplugin", "/telemetry off", `/${PLUGIN_NAME}:telemetry off`,
-    "/pam-first-party:generate-native-extension", "/power-pages:create-site", "/unrelated"]) {
+    "/another-plugin:generate-native-extension", "/power-pages:create-site", "/unrelated"]) {
     assert.equal(invocation("prompt", { prompt }), null);
   }
   assert.equal(invocation("pretool", { tool_name: "Bash", tool_input: { skill: `${PLUGIN_NAME}:generate-ppmplugin` } }), null);
