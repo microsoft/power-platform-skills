@@ -57,7 +57,7 @@ error if the bundle is missing. That file is a single self-contained ESM bundle
 `npx`, no published npm package, no remote host.
 
 Auth uses Azure CLI (`az login`) plus MSAL for connectivity endpoints — see
-`CLAUDE.md` and `references/connection-patterns.md` in this folder.
+`references/connection-patterns.md` in this folder.
 
 ## Telemetry logs
 
