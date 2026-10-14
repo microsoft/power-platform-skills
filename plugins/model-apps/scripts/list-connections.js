@@ -381,7 +381,7 @@ function pacFailureMessage(pac) {
   if (pac.error && pac.error.code === 'ETIMEDOUT') {
     // What the call may claim about pac is what the runner confirmed (lib/pac-fallback.js stopClaim): a process pac started that still holds its output is not "stopped".
     const { stopped, claim } = stopClaim(pac.error);
-    return `pac connection list did not finish within ${PAC_READ_TIMEOUT_MS / 1000} s and ${claim}.${stopped ? '' : LEFTOVER_ADVICE} A stalled call is usually transient, or pac is waiting for a sign-in (\`pac auth list\` shows the profile it uses): run it again.`;
+    return `pac connection list did not finish within ${PAC_READ_TIMEOUT_MS / 1000} s; ${claim}.${stopped ? '' : LEFTOVER_ADVICE} A stalled call is usually transient, or pac is waiting for a sign-in (\`pac auth list\` shows the profile it uses): run it again.`;
   }
   if (pac.error) {
     return `pac connection list could not run: ${pac.error.message}. Ensure the PAC CLI is installed and on PATH (dotnet tool install -g Microsoft.PowerApps.CLI.Tool).`;

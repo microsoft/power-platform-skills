@@ -1,12 +1,13 @@
 'use strict';
 // scripts/solution-settings.js — deployment settings for a solution: the CLI contract, the checks made before any request, the SDK calls and
-// pac's defaults, which refusals fall back to pac and which do not, the long-running-action client, and what is never printed.
+// pac's defaults, which refusals fall back to pac and which do not, the long-running-action client, and what the sanitizer keeps out of what is printed (and what it leaves).
 // The SDK and pac are stood in for here; tests/solution-settings-real-bundle.test.js drives the real bundle and the real script.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { loadCli } = require('./helpers/cli-harness.js');
 const realAuth = require('../lib/dataverse-auth.js');
 
@@ -246,35 +247,35 @@ test('the sanitizer takes every filled connection id and every value that is not
   assert.strictEqual(meta('x a.b*c(d)[e]|f+g y aXbbc(d)e'), 'x <redacted> y aXbbc(d)e');
 });
 
-test('whether a variable is a secret is the PACKAGE\'s to say — its definition\'s type — and never the file\'s optional TypeId: the file can only add secrecy, and a variable the package was not read for is treated as a secret', () => {
+test('what is KNOWN of a variable\'s secrecy is the PACKAGE\'s to say — its definition\'s type — and never the file\'s optional TypeId: the file can only add secrecy, and a variable the package was not read for is not known to be anything', () => {
   assert.strictEqual(ss.MIN_HIDDEN_LENGTH, 6);
   assert.strictEqual(ss.SECRET_TYPE_ID, 100000005);
-  // [the package's type, the file's TypeId, secret?]
+  // [the package's type, the file's TypeId, what is known: 'secret', 'plain' (the package says another type) or 'unknown' (no definition was read)]
   const NUMBER_TYPE = 100000001;
   const table = [
-    [SECRET_TYPE, undefined, true], // the package says Secret and the file says nothing: the case an optional field must not decide
-    [SECRET_TYPE, null, true],
-    [SECRET_TYPE, TEXT_TYPE, true], // the file says Text, the package says Secret: the package's word is the one that counts
-    [SECRET_TYPE, '100000000', true],
-    [SECRET_TYPE, 'secret', true],
-    [SECRET_TYPE, SECRET_TYPE, true],
-    [TEXT_TYPE, undefined, false],
-    [TEXT_TYPE, TEXT_TYPE, false],
-    [NUMBER_TYPE, undefined, false],
-    [NUMBER_TYPE, 'nonsense', false],
-    [TEXT_TYPE, SECRET_TYPE, true], // the file adds secrecy: a maker who marks a value secret is believed
-    [TEXT_TYPE, '100000005', true],
-    [undefined, undefined, true], // nothing read, nothing said: not known to be anything else
-    [undefined, null, true],
-    [undefined, TEXT_TYPE, true], // the file's word is not evidence: nothing checks it
-    [undefined, '100000000', true],
-    [undefined, 'secret', true],
-    [undefined, SECRET_TYPE, true],
-    [undefined, '100000005', true],
+    [SECRET_TYPE, undefined, 'secret'], // the package says Secret and the file says nothing: the case an optional field must not decide
+    [SECRET_TYPE, null, 'secret'],
+    [SECRET_TYPE, TEXT_TYPE, 'secret'], // the file says Text, the package says Secret: the package's word is the one that counts
+    [SECRET_TYPE, '100000000', 'secret'],
+    [SECRET_TYPE, 'secret', 'secret'],
+    [SECRET_TYPE, SECRET_TYPE, 'secret'],
+    [TEXT_TYPE, undefined, 'plain'],
+    [TEXT_TYPE, TEXT_TYPE, 'plain'],
+    [NUMBER_TYPE, undefined, 'plain'],
+    [NUMBER_TYPE, 'nonsense', 'plain'],
+    [TEXT_TYPE, SECRET_TYPE, 'secret'], // the file adds secrecy: a maker who marks a value secret is believed
+    [TEXT_TYPE, '100000005', 'secret'],
+    [undefined, undefined, 'unknown'], // nothing read, nothing said: not known to be anything
+    [undefined, null, 'unknown'],
+    [undefined, TEXT_TYPE, 'unknown'], // the file's word is not evidence: nothing checks it
+    [undefined, '100000000', 'unknown'],
+    [undefined, 'secret', 'unknown'],
+    [undefined, SECRET_TYPE, 'secret'], // ...except that a file's word that a value is a secret is believed: evidence only ever raises secrecy
+    [undefined, '100000005', 'secret'],
   ];
   for (const [packageType, TypeId, expected] of table) {
     const entry = TypeId === undefined ? {} : { TypeId };
-    assert.strictEqual(ss.isSecretVariable(entry, packageType), expected, `package ${packageType}, file ${JSON.stringify(TypeId)}`);
+    assert.strictEqual(ss.secrecyOf(entry, packageType), expected, `package ${packageType}, file ${JSON.stringify(TypeId)}`);
   }
 });
 
@@ -295,7 +296,7 @@ test('a secret is hidden at any length whatever the file says of its type; a val
   assert.strictEqual(as(SECRET_TYPE, 'x')('an x in it'), WITHHELD(), 'a one-character secret is hidden too');
   // The package says Text and the file says Secret: the file adds secrecy.
   assert.strictEqual(as(TEXT_TYPE, 'PIN42', SECRET_TYPE)('Value PIN42 was refused'), WITHHELD());
-  // The package was not read: a variable is not known to be anything else, whatever the file says.
+  // The package was not read: a variable is not known to be anything else, whatever the file says. (Five characters is below MIN_HIDDEN_LENGTH, so the value is looked for as a whole word: here it is one.)
   for (const TypeId of [undefined, null, TEXT_TYPE, '100000000', 'secret', SECRET_TYPE]) {
     assert.strictEqual(as(undefined, 'PIN42', TypeId)('Value PIN42 was refused'), WITHHELD(), `no definition, file ${JSON.stringify(TypeId)}`);
   }
@@ -304,9 +305,200 @@ test('a secret is hidden at any length whatever the file says of its type; a val
   // The definitions are looked at when a text is sanitized, not when the sanitizer is made: what the import learns of the package later is used.
   const definitions = new Map();
   const later = ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'New_A', Value: 'abcdefgh' }] }, definitions);
-  assert.strictEqual(later('x abcdefgh y'), WITHHELD(), 'before the package was read: a secret');
+  assert.strictEqual(later('x abcdefgh y'), WITHHELD(), 'before the package was read: not known to be anything, and six characters or more are looked for as a substring');
   definitions.set('new_a', TEXT_TYPE);
   assert.strictEqual(later('x abcdefgh y'), 'x <redacted> y', 'after: the package says Text, and the schema name is matched without regard to case');
+});
+
+// The escapes of a double quote that the decoders do not read, and the value glued to words: only a SUBSTRING test finds a value in them. (`\042` is an octal escape, `%u0022` the legacy
+// percent form, and `&#x22` has no `;`.) The other texts quote the value in a form the decoders DO read, or plainly.
+const UNDECODED_TEXTS = [
+  ['an octal escape', 'Value \\042PIN42\\042 was refused'],
+  ['a legacy %u escape', 'Value %u0022PIN42%u0022 was refused'],
+  ['an XML reference with no semicolon', 'Value &#x22PIN42&#x22 was refused'],
+  ['glued to words', 'ValuePIN42wasRefused'],
+  ['after an underscore', 'key_PIN42 was refused'],
+];
+const DECODED_TEXTS = [
+  ['plainly', "Value 'PIN42' was refused"],
+  ['a JSON \\u0022', 'Value \\u0022PIN42\\u0022 was refused'],
+  ['a percent-encoded quote', 'value=%22PIN42%22'],
+  ['an XML entity', 'Value &quot;PIN42&quot; was refused'],
+];
+
+test('a KNOWN secret — the package says Secret, or the file does — is found as a substring at ANY length, whatever the text spells around it: glued to words, inside an escape the decoders do not read', () => {
+  const sanitizeAs = (value, packageType, TypeId) => ss.sanitizer(
+    { EnvironmentVariables: [{ SchemaName: 'new_A', Value: value, ...(TypeId === undefined ? {} : { TypeId }) }] },
+    packageType === undefined ? new Map() : packageTypes({ new_A: packageType })
+  );
+  const known = [
+    ['the package says Secret', SECRET_TYPE, undefined],
+    ['the package says Secret, the file says Text', SECRET_TYPE, TEXT_TYPE],
+    ['the file says Secret, the package says Text', TEXT_TYPE, SECRET_TYPE],
+    ['the file says Secret, the package was not read', undefined, SECRET_TYPE],
+    ['both say Secret', SECRET_TYPE, SECRET_TYPE],
+  ];
+  for (const [how, packageType, TypeId] of known) {
+    const sanitize = sanitizeAs('PIN42', packageType, TypeId);
+    for (const [name, text] of [...UNDECODED_TEXTS, ...DECODED_TEXTS]) assert.strictEqual(sanitize(text, 'message'), WITHHELD('message'), `${how}: ${name}: ${text}`);
+    // Even one character: a substring of a word is found, which is what hiding a secret of any length costs.
+    assert.strictEqual(sanitizeAs('x', packageType, TypeId)('new_Text', 'message'), WITHHELD('message'), `${how}: one character, inside a word`);
+  }
+});
+
+test('a value whose type is NOT known is looked for as a substring from six characters, as before — a Secret-type value is a Key Vault reference, always long — in every text it can be spelled in', () => {
+  const sanitize = ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'new_A', Value: 'PIN420' }] }, new Map());
+  for (const [name, text] of [...UNDECODED_TEXTS, ...DECODED_TEXTS]) assert.strictEqual(sanitize(text.replace(/PIN42/g, 'PIN420'), 'message'), WITHHELD('message'), `${name}: ${text}`);
+  // A Key Vault reference, as a settings file holds one for a Secret-type variable, is found in any of them.
+  const reference = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/contoso/secrets/token';
+  const vault = ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'new_A', Value: reference }] }, new Map());
+  for (const text of [`the secret ${reference} was refused`, `{"path":"${reference.replace(/\//g, '\\/')}"}`, `value%3D${encodeURIComponent(reference)}`, `the vault is ${reference.toUpperCase()}`]) assert.strictEqual(vault(text, 'message'), WITHHELD('message'), text);
+  // The length is that of the trimmed value: six characters are looked for as a substring, five as a whole word.
+  const at = (value) => ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'new_A', Value: value }] }, new Map());
+  assert.strictEqual(at('abcdef')('xabcdefy'), WITHHELD(), 'six: a substring');
+  assert.strictEqual(at(' abcdef ')('xabcdefy'), WITHHELD(), 'six once trimmed: a substring');
+  assert.strictEqual(at('abcde')('xabcdey'), 'xabcdey', 'five: not a whole word in it');
+  assert.strictEqual(at('  abcde  ')('xabcdey'), 'xabcdey', 'five once trimmed: not a whole word in it');
+  assert.strictEqual(at('abcde')('x abcde y'), WITHHELD(), 'five: a whole word in it');
+});
+
+// The SDK's own account of an entry the package does not define (api/SolutionApi.ts of the vendored SDK, measured): it names the entry and the package's variables, and never a value.
+const MISMATCH = "importSolution: deploymentSettings does not match the package — EnvironmentVariables: 'new_NotInPackage' is not a variable of the package. The package's variables: new_Text; its connection references: none. Nothing was imported.";
+
+test('a value whose type is NOT known and is shorter than six characters is looked for as a WHOLE WORD — so "x" does not withhold "new_Text" — in every decoded view, every occurrence, either case', () => {
+  const FEATURE = listSentence('Workflows');
+  const unknown = (value) => ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'new_A', Value: value }] }, new Map());
+  // [value, text]: a text that does not have the value as a word is shown as it is.
+  const shown = [
+    ['x', 'new_Text'], // the case seen on a real organization: the x of "Text"
+    ['x', MISMATCH],
+    ['Text', MISMATCH], // the second half of a name: the underscore before it is part of the word
+    ['new', 'new_NotInPackage'], // an underscore is part of a word
+    ['en', 'deployment'],
+    ['en', FEATURE],
+    ['x', 'new_Text, boxes, x1, x_y, and 2x'], // a letter, a digit or an underscore on either side
+    ['  x ', 'new_Text'], // the white space around a value is not part of what is looked for
+    ['1', 'a1b, 11, 1a, _1'],
+    ['_', 'a_b'],
+    ['x', 'x\u203Fy'], // U+203F, another connector punctuation (Pc)
+    ['e', 'x e\u0301 y'], // a combining mark glued to it
+    ['e\u0301', 'cafe\u0301'], // a value that ends in a mark has a word's edge there, and a letter before it
+    ['\u00e9', 'caf\u00e9'], // a letter that is not ASCII
+    ['\u00c9', 'caf\u00e9'], // ...in the other case
+    ['\u4e16', '\u4e16\u754c'], // ideographs are letters
+    ['\ud835\udc9c', 'x\ud835\udc9cy'], // a letter outside the Basic Multilingual Plane is one character
+    ['-x', 'a-xb'], // an edge that is a word character is glued to the next letter, whatever the other edge is
+    ['x-', 'ax-b'],
+    ['PIN42', 'ValuePIN42wasRefused'], // what the rule leaves (stated in AGENTS.md): a short value glued to words…
+    ['PIN42', 'key_PIN42 was refused'],
+    ['PIN42', 'Value \\042PIN42\\042 was refused'], // …or inside an escape the decoders do not read
+    ['PIN42', 'Value %u0022PIN42%u0022 was refused'],
+    ['PIN42', 'Value &#x22PIN42&#x22 was refused'],
+  ];
+  for (const [value, text] of shown) assert.strictEqual(unknown(value)(text, 'message'), text, `${JSON.stringify(value)} in ${JSON.stringify(text)}`);
+  // A text that has it as a word is withheld whole.
+  const withheld = [
+    ['x', "'x'"],
+    ['x', 'a x b'],
+    ['X', "'x'"], // either case
+    ['x', 'X'],
+    ['x', 'x'],
+    ['  x ', "'x'"], // a value is looked for without the white space around it: a service may trim it
+    ['\tPIN4 ', 'Value "PIN4" was refused'],
+    ['x', 'x y'],
+    ['x', 'y x'],
+    ['x', 'x.'], // punctuation and symbols are not word characters
+    ['x', 'x-y'],
+    ['x', 'value=x;'],
+    ['x', "new_Text and 'x'"], // every occurrence is looked at, not the first
+    ['x', "'x' and new_Text"],
+    ['x', 'new_Text box x1 and, last of all, x'],
+    ['en', 'the en value'],
+    ['1', '`pac solution import` failed (exit 1)'],
+    ['none', MISMATCH], // a whole word of the SDK's own words: what the rule costs
+    ['is', MISMATCH], // …and so is any other word of that sentence, whatever the value is: a word as much as a value
+    ['the', MISMATCH],
+    ['_', 'a _ b'],
+    ['-x-', 'the token a-x-b was refused'], // edges that are not word characters need nothing around them
+    ['-x', 'a-x b'], // …and a side whose edge IS a word character needs its neighbour not to be one: here the x is followed by a space
+    ['x-', 'a x-b'], // …here the x is preceded by one
+    ['e\u0301', 'a (e\u0301) b'],
+    ['\u00e9', 'a (\u00e9) b'],
+    ['\u00c9', 'a (\u00e9) b'],
+    ['\u4e16', 'a \u4e16 b'],
+    ['\ud835\udc9c', 'x \ud835\udc9c y'],
+    ['PIN42', "Value 'PIN42' was refused"],
+    ['PIN42', '[PIN42]'],
+    ['PIN42', 'Value \\u0022PIN42\\u0022 was refused'], // a form the decoders read puts the quote beside it
+    ['PIN42', 'value=%22PIN42%22'],
+    ['PIN42', 'Value &quot;PIN42&quot; was refused'],
+    ['PIN42', 'Value &#x22;PIN42&#x22; was refused'],
+    ['PIN42', 'a %2522PIN42%2522 b'], // two levels
+    ['a  b', 'the pair a b was refused'], // white space collapsed, as for a secret
+    ['a  b', 'the pair a\n\nb was refused'],
+  ];
+  for (const [value, text] of withheld) assert.strictEqual(unknown(value)(text, 'message'), WITHHELD('message'), `${JSON.stringify(value)} in ${JSON.stringify(text)}`);
+  // The caller's status line (`lead`) is still kept in front of what is withheld, and a text that does not have the value is not touched.
+  const lead = `HTTP 400 from ${ENV}/api/data/v9.0/ImportSolution: `;
+  assert.strictEqual(unknown('x')(`${lead}the value 'x' is not a number`, 'message', lead), `${lead}${WITHHELD('message')}`);
+  assert.strictEqual(unknown('x')(`${lead}the value is not a number`, 'message', lead), `${lead}the value is not a number`);
+});
+
+test('a short value of an entry the package does not define does not withhold the SDK\'s account of which entry is wrong — the case seen on a real organization — which names the entry, never a value', () => {
+  const definitions = packageTypes({ new_Text: TEXT_TYPE });
+  for (const value of ['x', 'true', '1', 'en', 'Text', 'qqq', 'new']) {
+    const sanitize = ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'new_Text', Value: '' }, { SchemaName: 'new_NotInPackage', Value: value }] }, definitions);
+    assert.strictEqual(sanitize(MISMATCH, 'message'), MISMATCH, `a value of ${JSON.stringify(value)}`);
+  }
+});
+
+// What the documents say the sanitizer leaves: the skill, AGENTS.md and the CHANGELOG each list it. Every limit they name is checked here against the sanitizer itself, so a document that promises more than
+// the rule does — or a rule that changes under a document — is a failing test, and each document is checked to name each limit it should.
+test('the limits the skill, AGENTS.md and the CHANGELOG state are the limits the sanitizer has — each is a text that prints a value — and each document names them', () => {
+  const sanitizerOf = (Value, types) => ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'new_A', Value }] }, types);
+  const unknownOf = (Value) => sanitizerOf(Value, new Map());
+  const printed = (sanitize, text, what) => assert.strictEqual(sanitize(text, 'message'), text, `${what}: ${text}`);
+  // A value of fewer than six characters that is known not to be a secret: printed wherever a text quotes it.
+  printed(sanitizerOf('PIN42', packageTypes({ new_A: TEXT_TYPE })), "Value 'PIN42' was refused", 'a short value the package says is not a secret');
+  // A value of fewer than six characters whose type is not known: found only as a whole word, so printed when glued to letters, digits, marks or underscores or inside an escape the decoders do not read.
+  for (const [what, text] of [...UNDECODED_TEXTS, ['a digit', 'PIN421 was refused'], ['a mark', 'Value PIN42\u0301 was refused']]) printed(unknownOf('PIN42'), text, `no type, ${what}`);
+  // What the decoders do not know, for a secret of any length.
+  const secret = 'caf\u00e9-secret-0123';
+  const nested = (levels) => Array.from({ length: levels }).reduce((text) => encodeURIComponent(text), secret);
+  const known = sanitizerOf(secret, packageTypes({ new_A: SECRET_TYPE }));
+  for (const [what, text] of [
+    ['a value quoted in part', 'the value caf\u00e9-secret was refused'],
+    ['a value hashed', `the digest ${crypto.createHash('sha256').update(secret).digest('hex')} was refused`],
+    ['a value base64-encoded', `the value ${Buffer.from(secret).toString('base64')} was refused`],
+    ["a value written as an HTML entity beyond XML's five", 'the value caf&eacute;-secret-0123 was refused'],
+    ['a value whose Unicode a service normalizes', `the value ${secret.normalize('NFD')} was refused`],
+    ['an encoding nested more than three levels deep', `the value ${nested(4)} was refused`],
+  ]) printed(known, text, what);
+  assert.strictEqual(known(`the value ${nested(3)} was refused`, 'message'), WITHHELD('message'), 'three levels of encoding are within what the decoders read');
+  // What the whole-word rule costs: a short value of unknown type that is a whole word of the SDK's own sentence withholds it.
+  for (const value of ['none', 'is', 'the']) assert.strictEqual(unknownOf(value)(MISMATCH, 'message'), WITHHELD('message'), value);
+
+  const read = (...parts) => fs.readFileSync(path.join(__dirname, '..', '..', ...parts), 'utf8').replace(/\r\n/g, '\n').replace(/\s+/g, ' ');
+  const documents = [
+    ['skills/genpage/SKILL.md', read('skills', 'genpage', 'SKILL.md'), [
+      /a value of fewer than six characters that is known not to be a secret is not hidden/,
+      /is found only as a whole word, so it is printed when glued to letters, digits, marks or underscores or written inside an escape the sanitizer does not decode/,
+      /quoted in part, hashed, base64-encoded, written as an HTML entity beyond XML's five, Unicode-normalized or nested in more than three levels of encoding is not recognised/,
+    ]],
+    ['CHANGELOG.md', read('CHANGELOG.md'), [
+      /quoted in part, hashed, base64-encoded, written as an HTML entity beyond XML's five, normalized in its Unicode by a service, or nested in more than three levels of encoding/,
+      /a value of fewer than six characters that is known not to be a secret, which is printed wherever a text quotes it/,
+      /a value of fewer than six characters with no recorded type that a text glues to letters, digits, marks or underscores or writes inside an escape the sanitizer does not read/,
+    ]],
+    ['AGENTS.md', read('AGENTS.md'), [
+      /the SDK's account of which entry is wrong \(it names entries, never values\) stays readable unless the value is itself a whole word of that sentence \(see below\)/,
+      /printed when a text quotes it glued to letters, digits, marks or underscores \(`ValuePIN42was`, `key_PIN42`\), or inside an escape the decoders do not read/,
+      /a value that is known not to be one is printed wherever it is quoted/,
+      /a service that quotes only part of a value, hashes or base64-encodes it, writes it as a named HTML entity beyond XML's five, normalizes its Unicode, or nests the encodings more than three deep/,
+      /`none`, `is` or `the` as a value — still withholds that sentence/,
+    ]],
+  ];
+  for (const [name, text, patterns] of documents) for (const pattern of patterns) assert.match(text, pattern, `${name} says ${pattern}`);
 });
 
 test('a text that quotes a SECRET is withheld whole — what takes its place says so — and the only thing kept in front of it is the status line the CALLER built from the SDK\'s own fields', () => {
@@ -702,6 +894,45 @@ test('the types of the package\'s own variable definitions are read from the Sta
   }
 });
 
+test('evidence only RAISES secrecy: a name the reply lists twice keeps the most secret type, and when the types differ and none is Secret nothing is known of it', () => {
+  const stage = (...definitions) => stageReply(definitions.map(([schemaname, type]) => definitionOf(type === undefined ? { schemaname } : { schemaname, type: String(type) })));
+  const NUMBER_TYPE = 100000001;
+  const recorded = (...replies) => {
+    const definitions = new Map();
+    for (const reply of replies) ss.recordStagedTypes(definitions, JSON.stringify(reply));
+    return [...definitions];
+  };
+  // Secret wins, in either order, however many times the name is listed, and in any case of the name.
+  assert.deepStrictEqual(recorded(stage(['new_Secret', SECRET_TYPE], ['new_Secret', TEXT_TYPE])), [['new_secret', SECRET_TYPE]]);
+  assert.deepStrictEqual(recorded(stage(['new_Secret', TEXT_TYPE], ['new_Secret', SECRET_TYPE])), [['new_secret', SECRET_TYPE]]);
+  assert.deepStrictEqual(recorded(stage(['new_Secret', TEXT_TYPE], ['NEW_SECRET', NUMBER_TYPE], ['new_secret', SECRET_TYPE])), [['new_secret', SECRET_TYPE]]);
+  assert.deepStrictEqual(recorded(stage(['new_Secret', SECRET_TYPE], ['new_Secret', TEXT_TYPE], ['new_Secret', NUMBER_TYPE])), [['new_secret', SECRET_TYPE]]);
+  // The same type twice is that type; types that differ with no Secret among them are no type — kept in the map as "not known", which reads as no evidence.
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE], ['new_Text', TEXT_TYPE])), [['new_text', TEXT_TYPE]]);
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE], ['new_Text', NUMBER_TYPE])), [['new_text', undefined]]);
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE], ['new_Text', NUMBER_TYPE], ['new_Text', TEXT_TYPE])), [['new_text', undefined]], 'a third listing does not undo the disagreement');
+  // A listing whose type cannot be read disagrees with one that can; one listing that cannot be read records nothing, as before.
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE], ['new_Text', undefined])), [['new_text', undefined]]);
+  assert.deepStrictEqual(recorded(stage(['new_Text', undefined], ['new_Text', TEXT_TYPE])), [['new_text', undefined]]);
+  assert.deepStrictEqual(recorded(stage(['new_Text', undefined])), []);
+  assert.deepStrictEqual(recorded(stage(['new_Text', undefined], ['new_Text', SECRET_TYPE])), [['new_text', SECRET_TYPE]]);
+  // The same holds across replies: what an earlier one said is evidence too.
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE]), stage(['new_Text', NUMBER_TYPE])), [['new_text', undefined]]);
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE], ['new_Text', NUMBER_TYPE]), stage(['new_Text', TEXT_TYPE])), [['new_text', undefined]], 'a later, clean listing does not undo it');
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE], ['new_Text', NUMBER_TYPE]), stage(['new_Text', SECRET_TYPE])), [['new_text', SECRET_TYPE]]);
+  assert.deepStrictEqual(recorded(stage(['new_Text', TEXT_TYPE]), stage(['new_Text', TEXT_TYPE])), [['new_text', TEXT_TYPE]]);
+  // Names that are listed once are untouched by another's listings.
+  assert.deepStrictEqual(recorded(stage(['new_A', TEXT_TYPE], ['new_B', SECRET_TYPE], ['new_B', TEXT_TYPE], ['new_C', NUMBER_TYPE])), [['new_a', TEXT_TYPE], ['new_b', SECRET_TYPE], ['new_c', NUMBER_TYPE]]);
+  // What that does to a value: Secret wins, so a five-character value is found glued to words, as a secret's is; not known is a whole-word match, as for a name the package does not define.
+  const settings = { EnvironmentVariables: [{ SchemaName: 'new_Secret', Value: 'PIN42' }, { SchemaName: 'new_Text', Value: 'en' }] };
+  const definitions = new Map();
+  ss.recordStagedTypes(definitions, JSON.stringify(stage(['new_Secret', SECRET_TYPE], ['new_Secret', TEXT_TYPE], ['new_Text', TEXT_TYPE], ['new_Text', NUMBER_TYPE])));
+  const sanitize = ss.sanitizer(settings, definitions);
+  assert.strictEqual(sanitize('ValuePIN42wasRefused', 'message'), WITHHELD('message'), 'Secret won');
+  assert.strictEqual(sanitize('deployment', 'message'), 'deployment', 'no type: a whole-word match, so "en" in "deployment" is shown');
+  assert.strictEqual(sanitize('the en value', 'message'), WITHHELD('message'), '...and "en" as a word is withheld');
+});
+
 test('the client tells what StageSolution answered — only that, and only an answer — before the SDK reads it, and passes the answer on untouched', async () => {
   const body = JSON.stringify(stageReply([definitionOf({ schemaname: 'new_Secret', type: '100000005' })]));
   const heard = [];
@@ -834,6 +1065,54 @@ test('without --force a file that APPEARS while the export, the staging or pac i
   });
   await assert.rejects(ss.runTemplate({ command: 'template', packagePath: pkg, outPath: out2, force: false }, { sdkFirst: stubSdkFirst({}), pac }), (err) => err.code === 'OUT_EXISTS');
   assert.strictEqual(fs.readFileSync(out2, 'utf8'), mine);
+});
+
+test('a name that is taken at the very moment the file is installed is OUT_EXISTS, and a temporary file that cannot be removed is said there — and the SDK\'s warnings and the write\'s come out together', async () => {
+  const dir = tempDir();
+  const { out } = files(dir);
+  // What a file system does that a test cannot ask of the real one: another writer takes the name between the look and the link, and a scanner holds the temporary name. Both are patched on the
+  // module object that lib/safe-fs.js looks its functions up on at the time of the call, and put back in the `finally`.
+  const realLink = fs.linkSync;
+  const realUnlink = fs.unlinkSync;
+  const sibling = /[\\/]\.[^\\/]+\.\d+\.[0-9a-f]{8}\.tmp$/;
+  fs.unlinkSync = (target, ...rest) => {
+    if (sibling.test(String(target))) throw Object.assign(new Error('EIO: i/o error, unlink'), { code: 'EIO' });
+    return realUnlink(target, ...rest);
+  };
+  try {
+    fs.linkSync = (from, to) => {
+      fs.writeFileSync(to, 'theirs');
+      return realLink(from, to);
+    };
+    const { sdk } = sdkStub();
+    await assert.rejects(ss.runTemplate(templateRequest({ solution: 'ContosoDemo', outPath: out }), { sdkFirst: stubSdkFirst(sdk) }), (err) => {
+      assert.strictEqual(err.code, 'OUT_EXISTS');
+      assert.match(err.message, /^--out: .* already exists\. Choose another file, or pass --force to replace it \(a replaced file loses every value already filled in\)\. Its temporary file .*\.tmp could not be removed \(EIO\): delete it\.$/);
+      return true;
+    });
+    assert.strictEqual(fs.readFileSync(out, 'utf8'), 'theirs', 'the file that appeared is not replaced');
+    const [left] = fs.readdirSync(dir).filter((name) => /^\..*\.tmp$/.test(name));
+    assert.ok(left, 'the temporary file is where the message says');
+    fs.rmSync(path.join(dir, left));
+    fs.rmSync(out);
+
+    // The write is a success whose temporary name stays: its warning comes after the SDK's own, in one list.
+    fs.linkSync = realLink;
+    const staged = sdkStub({ result: { settings: template(), warnings: ['The staged copy of the package could not be deleted.'] } });
+    const result = await ss.runTemplate(templateRequest({ solution: 'ContosoDemo', outPath: out }), { sdkFirst: stubSdkFirst(staged.sdk) });
+    assert.strictEqual(result.warnings.length, 2);
+    assert.strictEqual(result.warnings[0], 'The staged copy of the package could not be deleted.');
+    assert.match(result.warnings[1], /was written in full, but its temporary name .*\.tmp could not be removed \(EIO\): delete it/);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(out, 'utf8')), template(), 'the file is complete');
+    // And without a leftover the warnings are the SDK's alone.
+    for (const name of fs.readdirSync(dir).filter((entry) => /^\..*\.tmp$/.test(entry))) fs.rmSync(path.join(dir, name));
+    fs.unlinkSync = realUnlink;
+    const clean = await ss.runTemplate(templateRequest({ solution: 'ContosoDemo', outPath: out, force: true }), { sdkFirst: stubSdkFirst(staged.sdk) });
+    assert.deepStrictEqual(clean.warnings, ['The staged copy of the package could not be deleted.']);
+  } finally {
+    fs.linkSync = realLink;
+    fs.unlinkSync = realUnlink;
+  }
 });
 
 test('--package is checked as far as a file can be before anything is requested: missing, a folder, empty, not a zip', async () => {
@@ -1133,10 +1412,108 @@ test('a pac import that fails names no import job — pac mints its own, and the
   const slow = fakePac(() => ({ status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawn pac ETIMEDOUT'), { code: 'ETIMEDOUT' }) }));
   await assert.rejects(ss.runImport(viaPac.request, { sdkFirst: stubSdkFirst(sdk), pac: slow.pac, importJobId: JOB }), (err) => {
     assert.strictEqual(err.code, 'PAC_TIMEOUT');
-    assert.match(err.message, /^`pac solution import` did not finish within 3600 s and was stopped\. The environment may still be importing the package: look at its import history/);
+    assert.match(err.message, /^`pac solution import` did not finish within 3600 s; pac and every process that held its output were stopped\. The environment may still be importing the package: look at its import history/);
     assert.ok(!('importJobId' in err));
     return true;
   });
+});
+
+// What pac's own text is, the plugin's words around it, and the sentence that sends a file to pac, are three different things, and only the first is another party's. pac's text is given to the
+// sanitizer where it is READ (runPac's `redact`); the label and the exit status the plugin writes around it, and the feature sentence it builds from the file's keys, hold no value and are not.
+const FEATURE_FILE = (value, name = 'new_Flag') => template({ EnvironmentVariables: [{ SchemaName: name, Value: value }], Workflows: [{ WorkflowId: 'x' }] });
+function viaPacRequest(settings) {
+  const files = importFiles(settings);
+  const sdk = sdkStub().sdk;
+  sdk.importSolution = async () => { throw refusal('INVALID_ARGUMENT', listSentence('Workflows')); };
+  return { ...files, sdk };
+}
+
+test('a pac failure is sanitized ONCE, where pac\'s text is read: the plugin\'s own label and exit status stay whatever the values are — "1" for the status, "pac" for the label — and pac\'s own words are still cleaned', async () => {
+  // Nothing was read of the package (the pac fallback), so each variable's type is unknown: below six characters a value is looked for as a whole word, from six as a substring.
+  for (const value of ['1', 'pac', 'exit', 'solution', 'failed', 'import', 'import`']) {
+    const { request, sdk } = viaPacRequest(FEATURE_FILE(value));
+    const { pac } = fakePac(() => ({ status: 1, stdout: '', stderr: 'Error: the platform said no' }));
+    await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(sdk), pac, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.message, '`pac solution import` failed (exit 1): Error: the platform said no', JSON.stringify(value));
+      assert.strictEqual(err.code, 'PAC_FAILED');
+      assert.strictEqual(err.fallback.message, listSentence('Workflows'), `the reason pac was asked, for ${JSON.stringify(value)}`);
+      return true;
+    }, JSON.stringify(value));
+  }
+  // pac's own words are looked at where they are read: a value they quote takes them out and leaves the plugin's words.
+  for (const [value, stderr] of [['1', 'Error: value 1 was refused'], ['pac', 'Error: pac said no'], ['PIN420', 'Error: the value PIN420 was refused'], ['PIN42', "Error: the value 'PIN42' was refused"]]) {
+    const { request, sdk } = viaPacRequest(FEATURE_FILE(value));
+    const { pac } = fakePac(() => ({ status: 1, stdout: '', stderr }));
+    await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(sdk), pac, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.message, `\`pac solution import\` failed (exit 1): ${WITHHELD('text')}`, stderr);
+      return true;
+    }, stderr);
+  }
+  // A call that ran out of time says so in the plugin's own words, "3600" and "within" among them.
+  for (const value of ['3600', 'within', 'finish']) {
+    const { request, sdk } = viaPacRequest(FEATURE_FILE(value));
+    const { pac } = fakePac(() => ({ status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawn pac ETIMEDOUT'), { code: 'ETIMEDOUT' }) }));
+    await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(sdk), pac, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.code, 'PAC_TIMEOUT');
+      assert.match(err.message, /^`pac solution import` did not finish within 3600 s/, JSON.stringify(value));
+      assert.doesNotMatch(err.message, /withheld/, JSON.stringify(value));
+      return true;
+    }, JSON.stringify(value));
+  }
+});
+
+test('the sentence that sends a file to pac is the plugin\'s own and is shown as it is — failing and succeeding — whatever the values are: "en" is in "deployment", "Workflows" is the key it names', async () => {
+  for (const value of ['en', 'pac', 'only', 'file', 'list', 'Workflows', 'a pac feature', 'deploymentSettings', 'Nothing was imported']) {
+    const failing = viaPacRequest(FEATURE_FILE(value));
+    const failed = fakePac(() => ({ status: 1, stdout: '', stderr: 'Error: the platform said no' }));
+    await assert.rejects(ss.runImport(failing.request, { sdkFirst: stubSdkFirst(failing.sdk), pac: failed.pac }), (err) => {
+      assert.deepStrictEqual(err.fallback, { code: 'INVALID_ARGUMENT', message: listSentence('Workflows') }, JSON.stringify(value));
+      return true;
+    }, JSON.stringify(value));
+    const succeeding = viaPacRequest(FEATURE_FILE(value));
+    const imported = fakePac(() => ({ status: 0, stdout: 'Solution Imported successfully.\n', stderr: '' }));
+    const result = await ss.runImport(succeeding.request, { sdkFirst: stubSdkFirst(succeeding.sdk), pac: imported.pac });
+    assert.deepStrictEqual(result.fallback, { code: 'INVALID_ARGUMENT', message: listSentence('Workflows') }, JSON.stringify(value));
+    assert.deepStrictEqual(result.applied, { environmentVariables: ['new_Flag'], connectionReferences: [] });
+  }
+  // The other feature sentences are the plugin's own too.
+  const instance = importFiles(template({ EnvironmentVariables: [{ SchemaName: 'new_Flag', Value: 'en' }], ConnectionReferences: [{ LogicalName: 'new_a', ConnectionId: '', ConnectionInstance: { x: 1 } }] }));
+  const instanceSdk = sdkStub().sdk;
+  instanceSdk.importSolution = async () => { throw refusal('INVALID_ARGUMENT', instanceSentence(0)); };
+  const done = fakePac(() => ({ status: 0, stdout: '', stderr: '' }));
+  assert.strictEqual((await ss.runImport(instance.request, { sdkFirst: stubSdkFirst(instanceSdk), pac: done.pac })).fallback.message, instanceSentence(0));
+});
+
+test('what the SDK says of a staging reply it could not read is ANOTHER party\'s text — it can quote what it was given — so it is still sanitized, and a short value that stands alone in it withholds it', async () => {
+  const cases = [
+    // [value, the SDK's words, shown as they are?]
+    ['x', 'StageSolution\'s reply could not be read: the entry \'x\' has no type', false],
+    ['x', 'StageSolution\'s reply could not be read: a box was not a list', true],
+    ['en', 'StageSolution\'s reply could not be read: deployment of the entry has no type', true],
+    ['en', 'StageSolution\'s reply could not be read: the en entry has no type', false],
+    ['PIN420', 'StageSolution\'s reply could not be read: it held PIN420', false],
+    ['PIN420', 'StageSolution\'s reply could not be read: it held ValuePIN420wasRefused', false],
+  ];
+  for (const [value, message, shown] of cases) {
+    const { request } = importFiles(template({ EnvironmentVariables: [{ SchemaName: 'new_Flag', Value: value }] }));
+    const sdk = sdkStub().sdk;
+    sdk.importSolution = async () => { throw refusal('SOLUTION_STAGING_UNREADABLE', message); };
+    const { pac } = fakePac(() => ({ status: 0, stdout: '', stderr: '' }));
+    const result = await ss.runImport(request, { sdkFirst: stubSdkFirst(sdk), pac });
+    assert.strictEqual(result.fallback.message, shown ? message : WITHHELD('message'), `${JSON.stringify(value)}: ${message}`);
+    const failed = fakePac(() => ({ status: 1, stdout: '', stderr: 'Error: the platform said no' }));
+    await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(sdk), pac: failed.pac }), (err) => {
+      assert.strictEqual(err.fallback.message, shown ? message : WITHHELD('message'));
+      assert.strictEqual(err.message, '`pac solution import` failed (exit 1): Error: the platform said no');
+      return true;
+    });
+  }
+  // The feature sentence is accepted by EXACT equality: a complaint about a reply that merely begins with it is the SDK's words about a reply — it can quote a value — and is sanitized.
+  const feature = importFiles(template({ EnvironmentVariables: [{ SchemaName: 'new_Flag', Value: 'PIN420' }], Workflows: [{ WorkflowId: 'x' }] }));
+  const lookalike = sdkStub().sdk;
+  lookalike.importSolution = async () => { throw refusal('SOLUTION_STAGING_UNREADABLE', `${listSentence('Workflows')} The reply also held PIN420.`); };
+  const imported = fakePac(() => ({ status: 0, stdout: '', stderr: '' }));
+  assert.strictEqual((await ss.runImport(feature.request, { sdkFirst: stubSdkFirst(lookalike), pac: imported.pac })).fallback.message, WITHHELD('message'));
 });
 
 test('a package that did not stage is NOT imported by pac: the failure is the SDK\'s, with its words and its code', async () => {
@@ -1295,6 +1672,42 @@ test('an import whose answer does not say it was refused says it was sent once a
   await assert.rejects(ss.runImport(unsent, { sdkFirst: stubSdkFirst(tokenless), importJobId: JOB, readJobLog: async () => null }), (err) => {
     assert.strictEqual(err.message, `Transport failure reaching ${ENV}/api/data/v9.0/ImportSolution: Failed to acquire an Azure CLI token for the environment. Run 'az login' first.`);
     assert.strictEqual(err.importJobId, JOB);
+    return true;
+  });
+});
+
+// What the SDK does with the error a client throws: its message is the status line followed by the client's own message, and the client's error is kept as its `cause` (measured on the real bundle in
+// solution-settings-real-bundle.test.js). The plugin's own sentence for a request that got no answer is recognised by the identity of that cause — never by how a message reads.
+test('the plugin\'s own "got no answer" sentence is shown whole, whatever short value the file fills in; a message that only reads like it, or has anything added to it, is sanitized like any other', async () => {
+  const settings = { EnvironmentVariables: [{ SchemaName: 'new_Text', Value: 'not' }], ConnectionReferences: [] }; // "not" is a word of the plugin's sentence, and nothing is known of the variable's type here
+  // The error the plugin's client throws for a request that got no answer: the one object the plugin marks as its own composition.
+  let composed;
+  const client = ss.solutionHttpClient(ENV, { getToken: () => 'dataverse-token', sleep: async () => {}, request: async () => ({ error: 'Request timed out' }) });
+  await assert.rejects(client.post(`${ENV}/api/data/v9.0/StageSolution`, { CustomizationFile: 'x' }), (err) => { composed = err; return true; });
+  const lead = `Transport failure reaching ${ENV}/api/data/v9.0/ImportSolution: `;
+  const asTheSdkWraps = (message, cause) => new ConnectionError(`${ENV}/api/data/v9.0/ImportSolution`, 0, message, cause);
+  const run = async (error) => {
+    const { request } = importFiles(settings);
+    const { sdk } = sdkStub();
+    sdk.importSolution = failAs(error);
+    return ss.runImport(request, { sdkFirst: stubSdkFirst(sdk), importJobId: JOB, readJobLog: async () => null }).then(
+      () => assert.fail('the import was expected to fail'),
+      (err) => err.message
+    );
+  };
+  // The status line and the plugin's own sentence, exactly: not looked at again.
+  assert.strictEqual(await run(asTheSdkWraps(composed.message, composed)), `${lead}${composed.message}`);
+  // The same words with a cause the plugin never made (nothing marks it), or with no cause: another party's text, so sanitized — and "not" is a whole word in it.
+  assert.strictEqual(await run(asTheSdkWraps(composed.message, new Error(composed.message))), `${lead}${WITHHELD('message')}`);
+  assert.strictEqual(await run(importFailureOf(0, composed.message)), `${lead}${WITHHELD('message')}`);
+  // The plugin's error as the cause, with something else in the message — the SDK's or the platform's words, before or after: sanitized.
+  assert.strictEqual(await run(asTheSdkWraps(`${composed.message} The platform added a word.`, composed)), `${lead}${WITHHELD('message')}`);
+  assert.strictEqual(await run(asTheSdkWraps(`Added first. ${composed.message}`, composed)), `${lead}${WITHHELD('message')}`);
+  // The transport's own words are cleaned where the plugin reads them: a value they quote is withheld there, and the sentence around it stays.
+  const sanitize = ss.sanitizer({ EnvironmentVariables: [{ SchemaName: 'new_Text', Value: 'timed' }] });
+  const cleaning = ss.solutionHttpClient(ENV, { getToken: () => 'dataverse-token', sleep: async () => {}, request: async () => ({ error: 'Request timed out' }) }, { sanitize });
+  await assert.rejects(cleaning.post(`${ENV}/api/data/v9.0/StageSolution`, { CustomizationFile: 'x' }), (err) => {
+    assert.strictEqual(err.message, `StageSolution got no answer (${WITHHELD('transport text')}). It was not sent again: the environment may still be working on it, or may have finished.`);
     return true;
   });
 });

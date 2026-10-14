@@ -213,7 +213,7 @@ test('the pac listing is given the read budget — a fixed three minutes, as eve
   assert.equal(run.spawned[0][2].timeout, 180000);
   assert.deepEqual(run.spawned[0][2].stdio, ['ignore', 'pipe', 'pipe']);
   assert.equal(run.emitted[0].ok, false);
-  assert.match(run.emitted[0].payload.error, /^pac connection list did not finish within 180 s and was stopped\. A stalled call is usually transient, or pac is waiting for a sign-in/);
+  assert.match(run.emitted[0].payload.error, /^pac connection list did not finish within 180 s; pac and every process that held its output were stopped\. A stalled call is usually transient, or pac is waiting for a sign-in/);
   assert.doesNotMatch(run.emitted[0].payload.error, /could not run|Ensure the PAC CLI is installed/);
   assert.deepEqual(run.queries, [], 'the references are not read after a failed listing');
 
@@ -221,12 +221,12 @@ test('the pac listing is given the read budget — a fixed three minutes, as eve
   assert.match(pacFailureMessage({ error: Object.assign(new Error('spawn pac ENOENT'), { code: 'ENOENT' }), status: null }), /^pac connection list could not run: spawn pac ENOENT\. Ensure the PAC CLI is installed/);
 });
 
-test('a pac listing that ran out of time says what the runner confirmed: "was stopped" for a tree that was ended, and that a process it started may still be running for one that was not', () => {
+test('a pac listing that ran out of time says what the runner confirmed: "pac and every process that held its output were stopped" for an ending it confirmed, and that a process it started may still be running for one that it did not', () => {
   const ended = (containment, pid) => ({ status: null, signal: 'SIGKILL', stdout: '', stderr: '', error: Object.assign(new Error('spawn pac ETIMEDOUT'), { code: 'ETIMEDOUT', containment, pid }) });
-  assert.match(pacFailureMessage(ended('confirmed', 7)), /^pac connection list did not finish within 180 s and was stopped\. A stalled call is usually transient/);
-  assert.match(pacFailureMessage(ended(undefined, undefined)), /^pac connection list did not finish within 180 s and was stopped\./, 'an error that says nothing of containment reads as it always did');
+  assert.match(pacFailureMessage(ended('confirmed', 7)), /^pac connection list did not finish within 180 s; pac and every process that held its output were stopped\. A stalled call is usually transient/);
+  assert.match(pacFailureMessage(ended(undefined, undefined)), /^pac connection list did not finish within 180 s; pac and every process that held its output were stopped\./, 'an error that says nothing of containment reads as it always did');
   const unconfirmed = pacFailureMessage(ended('unconfirmed', 7));
-  assert.match(unconfirmed, /^pac connection list did not finish within 180 s and was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running \(pac was started as process 7, which has exited; what it started is not known by id\)\. End any leftover pac process/);
+  assert.match(unconfirmed, /^pac connection list did not finish within 180 s; pac was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running \(pac was started as process 7, which has exited; what it started is not known by id\)\. End any leftover pac process/);
   assert.match(unconfirmed, /pac is waiting for a sign-in \(`pac auth list` shows the profile it uses\): run it again\.$/);
-  assert.doesNotMatch(unconfirmed, /was stopped/);
+  assert.doesNotMatch(unconfirmed, /stopped/);
 });

@@ -123,16 +123,19 @@ connectionreference logical name, connector id, and connection display name.
 The listing also says where the connections came from: `connectionsSource` is `"sdk"`
 (the Power Apps connections API, read with the Azure CLI's token for that service) or
 `"pac"` — then `connectionsFallback` (`{ code, message }`) says why the SDK was not
-used (an environment in a cloud it does not support, a service that has been switched
-off, or no Azure CLI token for the Power Apps service) and `pac` listed the connections
-instead. The rows have the same fields either way. Record the source in the log.
+used (an environment in a cloud it does not read connections in, a token the service
+refused — HTTP 401 or 403, `CONNECTIVITY_UNAUTHORIZED` —, a service that has been
+switched off, or no Azure CLI token for the Power Apps service) and `pac` listed the
+connections instead. The rows have the same fields either way. Record the source in the log.
 
 If the script fails (exit 1), discovery did not happen — it never reports a failed read as
-"no connections". A failure of the SDK's own read prints `{ "ok": false, "error", "code" }`
-on stdout; any other failure (pac output it cannot read, the connection references, an
-environment URL that is not a Dataverse one) prints its message on stderr alone. Either way,
-do **not** treat that as "no suitable connection exists" below, and never create a connection
-on it: return `needs_input` with the script's error.
+"no connections". Every failure past the arguments — the SDK's read, `pac`, the connection
+references, an environment URL that is not a Dataverse one — prints one
+`{ "ok": false, "error" }` line on stdout, with the error's `code` when it has one (the
+SDK's errors do), and the message on stderr; a usage error (no URL, an unknown flag) is the
+problem on stderr alone. Whichever it is, do **not** treat that as "no suitable connection
+exists" below, and never create a connection on it: return `needs_input` with the script's
+error.
 
 After selecting any existing connection — before branching into tabular versus
 REST/action discovery — derive `connectorName` from the final path segment of
@@ -212,7 +215,8 @@ node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logic
 - Enumerate datasets, then tables, for that connection (connector runtime
   metadata discovery). `pac model genpage list-connector-tables --environment '<ENV_URL>'
   --connector-id <connectorName> --connection-id <connId> [--dataset <ds>]` may help pick
-  the table: no script replaces it, because the SDK has no read of a connector's tables.
+  the table: no script replaces it, because the plugin cannot build the client the SDK reads a
+  connector's tables with.
   Always pass `--environment`; without it `pac` answers for the active organization of its
   auth profile, which may be another environment.
 - Store SharePoint datasets as the **site URL** and tables as **list GUIDs** (not
@@ -255,8 +259,8 @@ node "${PLUGIN_ROOT}/scripts/connector.js" schema --env '<ENV_URL>' --connector-
 Parse `{ ok, table, columns:[{ name, type, required }], source }` and record each column in
 the binding's `Fields` cell, e.g.
 `PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime)`.
-This form is always answered by `pac` (`"source": "pac"`, no `fallback`): the SDK has no read
-of a connector's tables, so `pac` must be signed in to an account that can reach `<ENV_URL>`. `--table`
+This form is always answered by `pac` (`"source": "pac"`, no `fallback`): the plugin cannot build the client
+the SDK reads a connector's tables with, so `pac` must be signed in to an account that can reach `<ENV_URL>`. `--table`
 is the table's id (a SharePoint list GUID), never a display name.
 Treat all connector fields as **optional** — connector rows are dynamic; the
 generated TSX declares `field?` regardless of the discovery payload's `required`.

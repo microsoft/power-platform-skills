@@ -1585,7 +1585,7 @@ scripts/
     throwaway-sdk.js           ← `withThrowawaySdk({ env, prefix, httpClient? }, run)`: the bundled SDK, made through `maker-sdk.js`, over a throwaway workspace folder that is removed whichever way the run ends (a constructor, a storage or a module that throws included); `run(make)` gets a `make(extra)` for more instances over the same folder and the one client (`make({ languageCode })` is a writer). The one copy of what `apps.js`, `list-tables.js` and `list-languages.js` each wrote out
     power-apps-service-client.js ← the HttpClient for the SDK's connection and connector reads: GET only, https only, a host allowlist that is exactly the hosts the SDK's connectivity code calls, redirects never followed, the Azure CLI token for the Power Apps service read only for a request that passed and never in a message, a body, a header or a key the service answers with (it is scrubbed, in whole and by part)
     sdk-first.js               ← the rule `list-connections.js`, `connector.js` and `solution-settings.js` share: read through the SDK, and through `pac` for the SDK's typed refusals (`sdkFirst`, `CONNECTIVITY_REFUSALS`) — an error counts only when it IS the bundle's `SdkError` (an HTTP body that carries a refusal's code does not); any other failure is thrown with the SDK's own code. An environment outside the Public cloud is judged from its host first (`connectivityCloudOf`, pinned to the bundle by a table of hosts) and answered by `pac` at once, with the code the SDK would give
-    pac-fallback.js            ← runs a `pac` fallback command through `process-runner.js` (`spawnResultTree`) within a fixed time limit (`PAC_READ_TIMEOUT_MS`, 3 minutes; `PAC_IMPORT_TIMEOUT_MS`, 60) — a call that runs out has its whole process tree ended before it is reported, and the message says "was stopped" only when the runner confirmed the pipes closed (otherwise that a process `pac` started may still be running) — reads the JSON `pac` prints after its header, and keeps pac's sign-in banner and version lines out of every failure text (`pacErrorText`)
+    pac-fallback.js            ← runs a `pac` fallback command through `process-runner.js` (`spawnResultTree`) within a fixed time limit (`PAC_READ_TIMEOUT_MS`, 3 minutes; `PAC_IMPORT_TIMEOUT_MS`, 60) — a call that runs out has its whole process tree ended before it is reported, and the message says what the runner confirmed — "`pac` and every process that held its output were stopped" — and, when the pipes did not close, that a process `pac` started may still be running — reads the JSON `pac` prints after its header, and keeps pac's sign-in banner and version lines out of every failure text (`pacErrorText`)
     typescript-compiler.js     ← loads the vendored TypeScript 5.8.3 compiler (vendor/typescript/) for the SDK's page compile: lazily, once, only after its bytes match PROVENANCE.json
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
     lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
@@ -1600,7 +1600,7 @@ scripts/
     left-on-disk.js            ← `leftOnDiskWarning(disposed)`: the one wording of "the page workspace could not be removed, so page source may be left on disk: <folders>" — what every command that makes a page backend says when `dispose()` answers a non-empty `{ left }` (verify on stderr, the others in the result's `warnings` or on stderr), kept apart from the backend so a test that replaces the backend module does not have to replace it too
     genpage-subarea.js         ← `genPageSubArea(base, genPageId)` and `genPageSubAreaId(pageId)`: the one shape a generative page has as a sub-area of an app's navigation (`{ ...base, type: 'GenPage', genPageId }`). The build's `appDef` and `placeInApp` — and a script that creates an app around a first page — all build it here
     genpage-base.js            ← base-marker hash, compare, and read/write (sibling dotfile of the code file; no environment URL; `appId` is optional — a page created before any app held it is recorded with the page alone, and the first update that names the app it was then placed in goes ahead on that marker and records the app; `unfinished` (`publish` or `place`) is set only by an upload that CREATED the page and did not finish it, and is what lets `genpage-upload.js --page-id` finish exactly that page — it is cleared when the page is finished, and `genpage-base.js record` never writes it)
-    safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename, or — with `exclusive: true` — never replace a name: the content goes to a sibling file this process created exclusively and is published with a hard link to the target name (which fails if the name exists, so the file system decides and a file that appeared meanwhile is never overwritten: `IO_ERROR` with `reason: 'exists'`; where hard links do not exist the write fails closed, `reason: 'no-hard-links'`), and only that sibling is ever removed. Shared by genpage markers and later callers
+    safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename, or — with `exclusive: true` — never replace a name: the content goes to a sibling file this process created exclusively and is published with a hard link to the target name (which fails if the name exists, so the file system decides and a file that appeared meanwhile is never overwritten: `IO_ERROR` with `reason: 'exists'`; where hard links do not exist the write fails closed, `reason: 'no-hard-links'`), and only that sibling is ever removed — retried, and reported (a warning after a publish, the error after a failure) when it cannot be — and a later write of a file that still has its second name is refused naming it. Shared by genpage markers and later callers
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core (checks are ordered tasks on a pool of 4)
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
@@ -3401,39 +3401,69 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     `overwriteUnmanagedCustomizations: false` — `importSolution` requires it), activates no plug-ins or workflows
     (`--activate-plugins` off, so `publishWorkflows: false` — required too), publishes nothing afterwards and
     skips no check; none of them is a flag here.
-  - **What is never printed.** A token, a settings value (an environment variable of a secret type holds its secret
-    in the file) and a connection id. The output names entries, never values, and the settings file is read from
-    and written to disk only. Every text a run prints — the SDK's, the platform's, `pac`'s, a job log's, and the
-    cleanup warnings of a failed run as well as a successful one — goes through one sanitizer built from the file
-    (`sanitizer`), and is read WHOLE: nothing in it is trusted for the way it begins. Three rules.
-    - *What is secret is the package's to say.* A variable is a secret when its definition in the package says so —
-      the type in the StageSolution reply the SDK reads for an import that fills anything in, recorded as it passes
-      through the plugin's client (`recordStagedTypes`) — or when the file marks it secret (`TypeId` 100000005). The
-      file's `TypeId` is informational (the SDK accepts it and ignores it; `pac` writes it and a file may leave it
-      out), so it can only add secrecy, never take it away; and a variable the package was not read for (the
-      `pac` fallback, a reply that could not be read, a name the package does not define) is not known to be
-      anything else and is treated as a secret. A secret is hidden whatever its length.
+  - **What is kept out of the output, and what is not.** A token is never printed. A settings value and a connection
+    id are kept out of every text a run prints as far as the text quotes them in a form that can be recognised; the output
+    otherwise names entries, never values, and the settings file is read from and written to disk only. Every text
+    another party wrote — the SDK's, the platform's, `pac`'s, a job log's, and the cleanup warnings of a failed run as
+    well as a successful one — goes through one sanitizer built from the file (`sanitizer`), and is read WHOLE: nothing in
+    it is trusted for the way it begins. Four rules.
+    - *What is secret is the package's to say, and how a value is treated depends on what is known* (`secrecyOf`). A
+      variable is a secret when its definition in the package says so — the type in the StageSolution reply the SDK reads
+      for an import that fills anything in, recorded as it passes through the plugin's client (`recordStagedTypes`) —
+      or when the file marks it secret (`TypeId` 100000005). The file's `TypeId` is informational (the SDK accepts it and
+      ignores it; `pac` writes it and a file may leave it out), so it can only add secrecy, never take it away. A name
+      the reply lists twice keeps the most secret type (Secret wins), and when the types differ and none is Secret nothing
+      is known of it. A variable the package was not read for — the `pac` fallback, a reply that could not be read, a name
+      the package does not define — is *not known* to be anything.
+    - *A secret is hidden at any length; what is not known is hidden by length.* A **secret** is looked for as a
+      substring, whatever its length. A value whose type is **not known** is looked for as a substring from six
+      characters on (a Secret-type value is the location of a Key Vault secret, far longer), and below six only as a
+      **whole word** — a boundary is required on a side where the value's own edge is a letter, digit, mark or
+      underscore, and the neighbour must not be one — so a one-letter value does not withhold every message that holds the
+      letter, and the SDK's account of which entry is wrong (it names entries, never values) stays readable unless the
+      value is itself a whole word of that sentence (see below). A value that is **known not to be a secret** (the
+      package says Text, say) and a connection id are replaced by `<redacted>` where a text spells them as written, from
+      six characters on; a shorter value of that kind is **not hidden** — it is a word as much as a value ("1",
+      "true", "en"), a message with every such word blanked explains nothing, and by the package's own definition
+      there is nothing in it to protect.
     - *A text is looked at in every form decoding it gives.* A message that quotes a value rarely quotes it as it
       is — a JSON error writes a quote as `\"` or `\u0022`, an XML log as `&quot;`, a URL as `%22`, and any of
       them can sit inside another — so instead of a list of spellings the text is decoded (JSON string escapes, XML
       character references, percent-encoding, a form's `+`) and searched in each decoded form, to three levels, with
       runs of white space also compared as one space, and without regard to case (a service may normalise it: a GUID is
-      quoted in lower case). A text that repeats a SECRET in any of them is not shown at
+      quoted in lower case). A text that repeats a secret, or a value that is not known and is found, is not shown at
       all: it is replaced by a sentence saying it was withheld, because complete scrubbing of another party's text
-      cannot be guaranteed and a service that quotes its input is not trusted for the rest of it. The status and the
-      code stay in their own fields, and so does the SDK's own `HTTP <status> from <url>:` line — rebuilt from the
-      error's `statusCode` and `url` (`sdkLead`), never recognised from how a text begins: a job log, `pac` or a
-      warning that begins like it is just text. A text of more than 1 MiB is withheld, not cut.
-    - *A value that is not a secret* (the package says Text, say, or a connection id) is replaced by `<redacted>`
-      where a text spells it as written, and a text that spells it only in a decoded form is withheld whole (it
-      cannot be taken out of the text it was decoded from). A value of fewer than six characters that is not a secret
-      is left alone: it is a word as much as a value ("1", "true", "en"), a message with every such word blanked
-      explains nothing, and by the package's own definition there is nothing in it to protect.
+      cannot be guaranteed and a service that quotes its input is not trusted for the rest of it; a value that is not
+      a secret and is found only in a decoded form withholds the text too (it cannot be taken out of the text it was
+      decoded from). The status and the code stay in their own fields, and so does the SDK's own `HTTP <status> from
+      <url>:` line — rebuilt from the error's `statusCode` and `url` (`sdkLead`), never recognised from how a text begins:
+      a job log, `pac` or a warning that begins like it is just text. A text of more than 1 MiB is withheld, not cut.
+    - *Another party's text is sanitized once, and the plugin's own words are not.* `pac`'s text is sanitized where it
+      is read (`lib/pac-fallback.js`, through its `redact` option); the sentence the plugin writes around it — the command, its exit status, how a
+      timeout ended — is not looked at again (`COMPOSED_MESSAGE`). The same holds for the plugin's "got no answer"
+      sentence for a long action (the transport's own words in it are sanitized where they are read; the SDK keeps the
+      error the client threw as the `cause` of its own, and the sentence is recognised by that object together with an
+      exact match with the SDK's status line, never by how a message reads) and for the feature sentence that sends a
+      file to `pac`, which the plugin builds from the file's keys and accepts only by exact equality (`shownRefusal`).
+      Looked at again, they would be withheld for a value of `1` ("(exit 1)"), `en` ("deployment") or `not` ("It was
+      not sent again"). The SDK's own account of a staging reply it could not read, its messages and its warnings are
+      another party's text and are sanitized.
+
+    What this leaves, stated: a value of fewer than six characters that is not known to be a secret is printed when a text
+    quotes it glued to letters, digits, marks or underscores (`ValuePIN42was`, `key_PIN42`), or inside an escape the
+    decoders do not read (`\042`, `%u0022`, `&#x22` with no `;`) — a Secret-type value is long and its type is known on
+    the SDK path, so this is a gap for a short value nothing says is a secret, not for a secret; and a value that is known
+    not to be one is printed wherever it is quoted. What the decoders do not know is a limit too: a service that quotes
+    only part of a value, hashes or base64-encodes it, writes it as a named HTML entity beyond XML's five, normalizes its
+    Unicode, or nests the encodings more than three deep. And what the whole-word rule costs: a short value whose type is
+    not known that is itself a whole word of the SDK's own sentence — `none`, `is` or `the` as a value — still withholds
+    that sentence, so which entry is wrong is hidden for such a value (the status, the code and the plugin's own
+    sentences stay). The short-value gap and the cost are pinned by tests (the whole-word table in
+    `solution-settings.test.js`), so a change to the rule shows.
 
     A job's log is cut last: its reason is decoded, sanitized in full, and only then made one line and cut to 600
     characters (a value that begins before the cut, or holds runs of white space, would otherwise have been changed
-    before it was looked for). What the decoders do not know stays a limit: a service that quotes only part of a
-    value, or encodes it another way (base64, a hash, a named HTML entity beyond XML's five). An
+    before it was looked for). An
     import's failure is rebuilt from its parts, so what the SDK attached to its own error (the raw answer,
     unfiltered warnings) does not travel with it, and an unexpected failure of the script itself prints only its kind.
   - **Long actions are sent exactly once.** The plugin's HTTP client sends a POST that got no answer again, after
@@ -3457,12 +3487,15 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     `--max-async-wait-time`) and its timeout message says to look at the environment's import history before
     importing again. A call that runs out is reported as a timeout, never as a missing pac, and its process tree is
     ended before the call settles (`spawnResultTree`, `killProcessTree`), so a Windows `pac.cmd` launcher's own child
-    does not outlive it. The message says "was stopped" only when the runner CONFIRMED it: the pipes `pac`'s
-    tree held have closed (`error.containment` is `confirmed`). A process that outlived `pac` itself — a descendant
-    in a tree that cannot be walked from a launcher that has already exited — can still hold the pipes when the short
-    wait for them ends (`unconfirmed`), and then the message says that a process `pac` started may still be running
-    (with the process id `pac` was started as, which has usually exited; the survivor's own is not known) and to end
-    any leftover `pac` process before trying again. A failure is `missing` (not on `PATH`), `timeout`,
+    does not outlive it. What the message says was stopped is what the runner CONFIRMED, and no more: the pipes
+    `pac`'s tree held have closed (`error.containment` is `confirmed`), so nothing holds `pac`'s output — "`pac` and
+    every process that held its output were stopped". That does not prove that no other process `pac` started is
+    running: one that never held the pipes (started detached, with streams of its own) can outlive the kill, and no
+    tree that can be walked from a launcher that has already exited leads to it — so the message does not say the
+    tree is gone. A process that outlived `pac` itself and still holds the pipes when the short
+    wait for them ends (`unconfirmed`) is the other case, and then the message says that a process `pac` started
+    may still be running (with the process id `pac` was started as, which has usually exited; the survivor's own is
+    not known) and to end any leftover `pac` process before trying again. A failure is `missing` (not on `PATH`), `timeout`,
     `failed` or `refused` — the process runner will not hand an argument to a Windows batch launcher that it
     cannot carry unchanged, such as a `%` in a URL-encoded SharePoint address, when `pac` is installed as a
     launcher of any shape but the MSI's plain forwarder, and `pac` is then not started at all; the message names
@@ -3477,14 +3510,27 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     and a file that appeared meanwhile is never overwritten (`IO_ERROR`, `reason: 'exists'`) — and only the sibling
     is ever removed. A file system that has no hard links (some network and FAT shares) answers the link with an error,
     and the write fails closed with `IO_ERROR`, `reason: 'no-hard-links'`: it is not replaced by a write that could
-    overwrite. A sibling that cannot be removed after the target was published is `reason: 'sibling-left'`.
+    overwrite. `--force` needs no link (it renames a finished sibling over the target) and so writes there, which the
+    message says. The sibling's name is the one thing a write can leave behind, and it is never left unmentioned: on a
+    failure it is removed with the bounded retry a Windows lock needs (a scanner or a sync client can hold a
+    just-written file, and `unlink` then answers `EBUSY`), and one that stays is said in the error; after a PUBLISH it
+    is the same retry, and one that still stays is a WARNING (`onWarning`; `template` prints it in `warnings` and exits
+    0) because the file is complete under its name. The file then has two names, and the next write of it is refused as
+    a hard link that names the leftover — a `.<name>.<pid>.<random>.tmp` in the same folder that is the same file. A
+    `link` that answers `EEXIST` for a link it made (NFS, when the reply to a retransmitted request is lost) is read
+    as published when the target is the sibling's own file — the same device and file id — and the sibling has exactly its
+    two names (a link count of two: a file id alone is not proof, since ReFS, a Windows Dev Drive, does not guarantee its
+    64-bit ids unique).
   - **Tests.** `power-apps-service-client.test.js` (other hosts, `http:`, a relative URL, credentials and ports,
     every other method, a redirect, a token failure, the token's absence from every message and every answer),
     `sdk-first.test.js` and `pac-fallback.test.js`, `maker-sdk.test.js` (the opt-in), `list-connections.test.js` and
     `list-connections-sdk.test.js`, `connector.test.js`, `solution-settings.test.js` (the sanitizer: the classification
-    of secrets, the decoded views, each spelling in a message of its own — `helpers/value-spellings.js` writes the
-    spellings out independently of the script — the 600-character boundary and white space in a secret),
-    `sdk-http-client.test.js` (`sendOnce`, over every replay path), `safe-fs.test.js` (the exclusive create),
+    of secrets, the whole-word rule for a short value that nothing says is a secret, the decoded views, each spelling in a
+    message of its own — `helpers/value-spellings.js` writes the
+    spellings out independently of the script — the 600-character boundary and white space in a secret, and that the
+    skill, this file and the CHANGELOG state the limits the sanitizer has), `sdk-http-client.test.js` (`sendOnce`, over
+    every replay path), `safe-fs.test.js` (the exclusive create: the retry of a held sibling, the warning and the error
+    that name it, the refusal that names a leftover, the lost-reply check and the link count it needs),
     `process-runner.test.js` (the forwarder grammar, and a call ended whole with real processes, containment asserted)
     and — against the real bundle
     over a fake Business Application Platform, Power Apps service and Dataverse — `connectivity-real-bundle.test.js`

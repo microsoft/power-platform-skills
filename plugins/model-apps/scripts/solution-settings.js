@@ -37,14 +37,23 @@
 // first one did. The first answer is the SDK's, with its status and code. When it does not say how the import ended (no answer, 401, 408, any 5xx) the failure says
 // the import was sent once and names its job, and the job's log is read once for the platform's own reason (never failing the report if it cannot be read).
 //
-// What is never printed: a token, a settings value (an environment variable of a secret type holds its secret there) or a connection id.
-// The settings file is read from and written to disk only; the output names entries, never their values; and every message — the SDK's, the
-// platform's, pac's, a job log's — goes through `sanitizer`, WHOLE, before it is shown. Whether a variable is a secret is decided by the package's own definition
-// (the type the staging reply the SDK reads gives it; isSecretVariable), not by the file's optional `TypeId`, and a variable the package was not read for is treated as one.
-// A text is looked at as it is and in each form decoding it gives (JSON string escapes, XML character references, percent-encoding), in any case: one that repeats a SECRET value in any of
-// them is withheld whole; a connection id or a value that is not a secret is replaced by `<redacted>` where the text spells it as it is, and the text is withheld whole when
-// one of them is only in a decoded form. An import's failure is rebuilt from its parts (message, status, code, job), so nothing attached to the SDK's own error object
-// travels with it.
+// What the output holds of the settings file: entry NAMES, and what the sanitizer lets through of a text that quotes a value — which is less than every value, as follows. The file is read from
+// and written to disk only, and every text another party wrote — the SDK's, the platform's, pac's, a job log's — goes through `sanitizer`, WHOLE, before it is shown. What it does with a value depends
+// on what is KNOWN of the variable (secrecyOf): the package's own definition — the type the staging reply the SDK reads gives it — decides, never the file's optional `TypeId`, which can only add secrecy.
+//   - a SECRET (the package says so, or the file's TypeId does): a text that quotes the value, at any length, as it is or in any form decoding it gives (JSON string escapes, XML character
+//     references, percent-encoding), in any case, is withheld whole;
+//   - a variable the package was not read for (the pac fallback, a staging reply that could not be read, a name the package does not define): the same from six characters on — what a Secret-type
+//     variable holds is the location of a Key Vault secret, far longer — and, for a shorter value, a text that has it as a WHOLE WORD is withheld (edges that are letters, digits, marks or
+//     underscores must not touch another one: a one-letter value would otherwise withhold every message that holds the letter);
+//   - a variable the package says is not a secret, and a connection id: replaced by `<redacted>` where the text spells it as it is (the text is withheld whole when only a decoded form holds it).
+//     A value of that kind shorter than six characters is NOT hidden: it is a word as much as a value, and by the package's own definition there is nothing in it to protect.
+// A token is never printed. What remains is stated, not hidden: a value of the second kind that is shorter than six characters is printed when a text quotes it glued to word characters or inside an
+// escape the decoders do not read (`\042`, `%u0022`, `&#x22` without its `;`), and any value is printed when a text quotes only part of it, hashes or base64-encodes it, writes it as a named HTML
+// entity beyond XML's five, normalizes its Unicode or nests the encodings more than three deep (a text of more than 1 MiB is withheld, not read). The whole-word rule has a cost too: a short value of the
+// second kind that is itself a whole word of the SDK's own sentence about an entry (`none`, `is`, `the`) still withholds that sentence, and with it which entry is wrong — its status and code stay. A sentence
+// the plugin builds itself — pac's label
+// and exit status, the feature sentence that sends a file to pac — is not another party's text and is not looked at again. An import's failure is rebuilt from its parts (message, status, code, job),
+// so nothing attached to the SDK's own error object travels with it.
 //
 // Usage:
 //   node scripts/solution-settings.js template --env <envUrl> --solution <uniqueName> --out <settings.json> [--force]
@@ -62,7 +71,8 @@
 //   import    { "ok": true, "source": "sdk", "importJobId": "<guid>", "applied": { "environmentVariables": ["new_Url"], "connectionReferences": ["new_Dataverse"] } }
 //   and, when pac answered because the SDK refused, "source": "pac" and "fallback": { "code": "<the SDK's code>", "message": "…" } — the SDK's own words, so
 //   the "Nothing was imported" in one is about the SDK's attempt, which stopped before any request; pac then did the work;
-//   "warnings": [...] when the SDK could not delete the staged copy of the package it made. For pac `applied` lists the entries the file
+//   "warnings": [...] when something the run made could not be cleaned up: the SDK could not delete the staged copy of the package it made, or `template` could not remove the temporary name its
+//   file was written under (the file is complete; until that name is removed the file has two names, and writing it again is refused as a hard link). For pac `applied` lists the entries the file
 //   filled (pac does not report what it applied).
 //
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
@@ -105,9 +115,12 @@ const ACTION_TIMEOUT_MS = 60 * 60 * 1000;
 const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
 
 const REDACTED = '<redacted>';
-// A value that is NOT a secret and is shorter than this is not hidden from a message: it would be taken out of ordinary words ("1", "true"), and a message with every digit
-// blanked explains nothing. By the package's own definition such a value is not a secret, so there is nothing to protect by hiding it. A SECRET is hidden whatever its length
-// (isSecretVariable), and so is every connection id (every id there is, is longer than this).
+// The length from which a value is looked for as text. A value that is KNOWN not to be a secret and is shorter than this is not hidden from a message: it would be taken out of ordinary words
+// ("1", "true"), and a message with every digit blanked explains nothing — by the package's own definition there is nothing in it to protect. A value whose type is NOT known is looked for as a
+// secret from this length on (what a Secret-type variable holds is the location of a Key Vault secret — a subscription id, a resource group, a vault and a secret name — never a short string; and a text of
+// plain words does not hold a string of six characters or more that it does not quote) and, below it, as a whole word. A SECRET is hidden whatever its length (secrecyOf), and so is every connection id
+// (every id there is, is longer than this).
+// See: https://learn.microsoft.com/power-apps/maker/data-platform/environmentvariables-azure-key-vault-secrets
 const MIN_HIDDEN_LENGTH = 6;
 // The most of one text the sanitizer reads — a message, a few lines of a log; pac's own stderr can be megabytes. A text longer than this is withheld whole, not cut: a value that
 // straddled the cut would leave its first half in what is shown.
@@ -298,15 +311,19 @@ function typeIdOf(value) {
 }
 
 /**
- * Whether a filled variable holds a secret. The PACKAGE's own definition decides — the `type` its definition has in the StageSolution reply the SDK reads (`packageType`, recorded
- * by recordStagedTypes). The file's `TypeId` is only informational: the SDK accepts it and ignores it (api/SolutionApi.ts, VARIABLE_KEYS), a file may leave it out, and a value that
- * is a secret must not depend on a field that is optional and unchecked. So the file can only ADD secrecy — a `TypeId` of Secret where the package says another type — and never take
- * it away; and a variable the package's definitions were not read for (the pac fallback, a staging reply that could not be read, a name the package does not define) is not known to be
- * anything else, so it is treated as a secret. What that costs is a message withheld where it could have been shown with a value taken out of it; the status, the code and the
- * import job's id are separate fields and stay.
+ * What is KNOWN of whether a filled variable holds a secret — `'secret'`, `'plain'` or `'unknown'` — and so how a text that quotes its value is treated (sanitizer). The PACKAGE's own definition is the
+ * evidence: the `type` it has in the StageSolution reply the SDK reads (`packageType`, recorded by recordStagedTypes). The file's `TypeId` is only informational: the SDK accepts it and ignores it
+ * (api/SolutionApi.ts, VARIABLE_KEYS), a file may leave it out, and nothing checks it, so a value that is a secret must not depend on it. The file can therefore only ADD secrecy — a `TypeId` of Secret
+ * where the package says another type, or says nothing — and never take it away; evidence only ever raises it.
+ *   'secret'   the package's definition says Secret, or the file's `TypeId` does.
+ *   'plain'    the package's definition says another type, and the file does not say Secret.
+ *   'unknown'  no definition was read for it: the pac fallback (pac reads the package itself and tells the plugin nothing of its types), a staging reply the plugin could not read, a name the package does
+ *              not define (the SDK refuses such an entry before it sends anything), or a name the reply lists twice with types that differ and none Secret (recordStagedTypes). It is not known to be
+ *              anything else, so it is not treated as a value to ignore: see sanitizer for what that costs and what it leaves.
  */
-function isSecretVariable(entry, packageType) {
-  return packageType === SECRET_TYPE_ID || typeIdOf(entry.TypeId) === SECRET_TYPE_ID || packageType === undefined;
+function secrecyOf(entry, packageType) {
+  if (packageType === SECRET_TYPE_ID || typeIdOf(entry.TypeId) === SECRET_TYPE_ID) return 'secret';
+  return packageType === undefined ? 'unknown' : 'plain';
 }
 
 // What the StageSolution reply says each environment variable of the package is, by lower-cased schema name — the reply the SDK stages the package with before an import that fills
@@ -314,9 +331,11 @@ function isSecretVariable(entry, packageType) {
 //   { "StageSolutionResults": { "StageSolutionStatus": "Passed", "SolutionComponentsDetails": [
 //       { "ComponentTypeName": "EnvironmentVariableDefinition",
 //         "Attributes": { "Count": 3, "Keys": ["schemaname", "type", "defaultvalue"], "Values": ["new_Secret", "100000005", ""] } }, … ] } }
-// Read leniently and never thrown from — what cannot be read is simply not recorded, and a variable with no recorded type is one the package's definition is not known for
-// (isSecretVariable) — and whatever the status: the types a failed staging still lists are as true as a passed one's. The SDK matches a settings entry to a definition by the lower-cased
-// schema name too, so a name is recorded that way.
+// Read leniently and never thrown from — what cannot be read is simply not recorded, and a variable with no recorded type is one the package's definition is not known for (secrecyOf) — and whatever the
+// status: the types a failed staging still lists are as true as a passed one's. The SDK matches a settings entry to a definition by the lower-cased schema name too, so a name is recorded that way.
+// A name the reply lists more than once is the one case where a reply contradicts itself. The SDK refuses such a reply (SOLUTION_STAGING_UNREADABLE, "listed twice") and pac imports instead, so this
+// reader is the one whose record decides how pac's echo of a value is treated. Evidence only ever RAISES secrecy: Secret wins whatever else is said of the name, and when the types differ and none is
+// Secret nothing is known of it — it is kept in the map with no type, which reads as 'unknown', and stays so if a later reply lists it again.
 function recordStagedTypes(definitions, body) {
   let parsed;
   try {
@@ -326,6 +345,7 @@ function recordStagedTypes(definitions, body) {
   }
   const details = parsed && parsed.StageSolutionResults && parsed.StageSolutionResults.SolutionComponentsDetails;
   if (!Array.isArray(details)) return;
+  const listed = new Map(); // lower-cased name -> the type each listing of it gives, `undefined` for one that cannot be read
   for (const element of details) {
     if (!element || typeof element.ComponentTypeName !== 'string' || element.ComponentTypeName.toLowerCase() !== 'environmentvariabledefinition') continue;
     const attributes = element.Attributes;
@@ -335,9 +355,22 @@ function recordStagedTypes(definitions, body) {
       return at === -1 ? undefined : attributes.Values[at];
     };
     const name = valueOf('schemaname');
-    const type = typeIdOf(valueOf('type'));
-    if (typeof name === 'string' && name !== '' && type !== undefined) definitions.set(name.toLowerCase(), type);
+    if (typeof name !== 'string' || name === '') continue;
+    const key = name.toLowerCase();
+    listed.set(key, [...(listed.get(key) || []), typeIdOf(valueOf('type'))]);
   }
+  for (const [name, types] of listed) {
+    const votes = definitions.has(name) ? [definitions.get(name), ...types] : types;
+    const type = mergedType(votes);
+    // One listing whose type cannot be read records nothing; a name listed more than once is always recorded, if only as "not known".
+    if (votes.length > 1 || type !== undefined) definitions.set(name, type);
+  }
+}
+
+// The one type the listings of a name add up to: Secret when any of them says so, the type they all give when they agree, else nothing (undefined).
+function mergedType(types) {
+  if (types.includes(SECRET_TYPE_ID)) return SECRET_TYPE_ID;
+  return types.every((type) => type === types[0]) ? types[0] : undefined;
 }
 
 // ---- Decoded views of a text -----------------------------------------------------------------------------------------
@@ -400,74 +433,118 @@ function decodedViews(text) {
 
 const collapseWhite = (text) => text.replace(/\s+/g, ' ');
 
-// A function that says whether a value is in any of `views`. Case does not matter — a service may normalise it (a GUID is quoted in lower case, an identifier in the case it is stored in),
-// and a value is not less a secret for being written in another case — and, for a value that holds white space, runs of white space are made one on both sides (a service may join
-// the lines of a value or collapse its spaces).
+// The characters of a WORD: letters, digits, combining marks and connector punctuation (so `_` is part of one) — the Unicode general categories L, N, M and Pc, which is what `\w` and `\b` are for a
+// pattern that knows more than ASCII. A mark counts so that `e` is not found in `é` written as `e` and a combining accent.
+// See: https://www.unicode.org/reports/tr44/#General_Category_Values and https://tc39.es/ecma262/#sec-runtime-semantics-unicodematchproperty-p (the `\p{…}` escapes)
+const WORD_CLASS = '\\p{L}\\p{N}\\p{M}\\p{Pc}';
+const WORD_CHARACTER = new RegExp(`^[${WORD_CLASS}]$`, 'u');
+
+// The pattern that finds `needle` — in the case the views are in — only where it is a whole word, in the sense a word boundary has: a side needs a non-word neighbour (or the end of the text) only
+// where the needle's OWN edge character is a word character. So `x` is not in `new_Text` or `box` but is in `'x'` and in `a x b`, and `-x-` IS in `a-x-b`: its edges are not word characters, so the
+// text around it cannot glue it to a word. `u` makes the pattern read code points, so a letter outside the Basic Multilingual Plane is one character and not two halves.
+function wholeWordPattern(needle) {
+  const edges = Array.from(needle);
+  const before = WORD_CHARACTER.test(edges[0]) ? `(?<![${WORD_CLASS}])` : '';
+  const after = WORD_CHARACTER.test(edges[edges.length - 1]) ? `(?![${WORD_CLASS}])` : '';
+  return new RegExp(`${before}${escapeRegExp(needle)}${after}`, 'u');
+}
+
+// Whether a value is in any of `views`, as a substring (`substring`) or only as a whole word (`token`: see wholeWordPattern). Case does not matter — a service may normalise it (a GUID is quoted
+// in lower case, an identifier in the case it is stored in), and a value is not less a secret for being written in another case: both look in the same lower-cased views — and, for a value that
+// holds white space, runs of white space are made one on both sides (a service may join the lines of a value or collapse its spaces).
 function quoter(views) {
   const lower = views.map((view) => view.toLowerCase());
   let collapsed = null;
-  return (value) => {
+  // `finder(needle)` makes the function that says whether a view holds `needle`.
+  const search = (value, finder) => {
     const needle = value.toLowerCase();
-    if (lower.some((view) => view.includes(needle))) return true;
+    if (lower.some(finder(needle))) return true;
     if (!/\s/.test(value)) return false;
     if (collapsed === null) collapsed = lower.map(collapseWhite);
-    const spaced = collapseWhite(needle);
-    return collapsed.some((view) => view.includes(spaced));
+    return collapsed.some(finder(collapseWhite(needle)));
+  };
+  return {
+    substring: (value) => search(value, (needle) => (view) => view.includes(needle)),
+    token: (value) => search(value, (needle) => {
+      const pattern = wholeWordPattern(needle);
+      return (view) => view.includes(needle) && pattern.test(view);
+    }),
   };
 }
 
-// The strings to look for, in two sets: those of a SECRET value, which are never shown at all, and those of a value that is not — a plain variable's and a connection id — which are
-// replaced where a text spells them. A value is looked for as it is and trimmed (a service may trim it); one of white space alone has nothing in it to repeat, and a value that is not
-// a secret and is shorter than MIN_HIDDEN_LENGTH is left to ordinary words.
+// The strings to look for, in three sets, by what is known of the variable (secrecyOf) and how long the value is:
+//   secrets  looked for as a SUBSTRING of a text, in every decoded view; a text that holds one is withheld whole. A secret, at any length; a value whose type is not known, from MIN_HIDDEN_LENGTH on.
+//   tokens   looked for as a WHOLE WORD, in the same views; a text that holds one is withheld whole. A value whose type is not known and is shorter than MIN_HIDDEN_LENGTH: a substring test would find "x"
+//            in every message that has an x in it, and withhold the SDK's own account of which entry is wrong; the whole-word test finds it where it stands alone. (A secret that is not known to be one and
+//            is that short is rare — a Key Vault reference, which a secret holds, is long — and this is what protects it.)
+//   others   REPLACED by `<redacted>` where a text spells them: a connection id and a value that is known not to be a secret, from MIN_HIDDEN_LENGTH on; a shorter value of that kind is left to ordinary words.
+// A value is looked for as it is and trimmed (a service may trim it); one of white space alone has nothing in it to repeat.
 function filledValues(settings, definitions) {
   const secrets = new Set();
+  const tokens = new Set();
   const others = new Set();
-  const take = (value, secret) => {
-    if (typeof value !== 'string' || value.trim() === '' || (!secret && value.trim().length < MIN_HIDDEN_LENGTH)) return;
-    for (const form of new Set([value, value.trim()])) (secret ? secrets : others).add(form);
+  const take = (value, secrecy) => {
+    if (typeof value !== 'string' || value.trim() === '') return;
+    const trimmed = value.trim();
+    const long = trimmed.length >= MIN_HIDDEN_LENGTH;
+    if (secrecy === 'unknown' && !long) {
+      tokens.add(trimmed);
+      return;
+    }
+    if (secrecy === 'plain' && !long) return;
+    for (const form of new Set([value, trimmed])) (secrecy === 'plain' ? others : secrets).add(form);
   };
   for (const entry of (settings && settings.EnvironmentVariables) || []) {
     if (entry === null || typeof entry !== 'object') continue;
     const packageType = typeof entry.SchemaName === 'string' ? definitions.get(entry.SchemaName.toLowerCase()) : undefined;
-    take(entry.Value, isSecretVariable(entry, packageType));
+    take(entry.Value, secrecyOf(entry, packageType));
   }
   for (const entry of (settings && settings.ConnectionReferences) || []) {
-    if (entry !== null && typeof entry === 'object') take(entry.ConnectionId, false);
+    if (entry !== null && typeof entry === 'object') take(entry.ConnectionId, 'plain');
   }
-  return { secrets, others };
+  return { secrets, tokens, others };
 }
 
 /**
  * A function that takes what the settings file holds out of a text before anything shows it. The file may hold a secret (an environment variable of a secret type carries its secret as
- * its value), and every text a run prints comes from the SDK, the platform, pac or a job's log, which can quote what they were given — in the shape they were given it or in another
- * (see "Decoded views"). So nothing they say is shown without this, and the WHOLE text is read: no part of it is taken to be trusted because of how it looks. A text that begins like
+ * its value), and every text a run prints that another party wrote comes from the SDK, the platform, pac or a job's log, which can quote what they were given — in the shape they were given it or in
+ * another (see "Decoded views"). So nothing they say is shown without this, and the WHOLE text is read: no part of it is taken to be trusted because of how it looks. A text that begins like
  * the SDK's own "HTTP 400 from <url>:" has said nothing about where it came from, so the one piece of text kept in front of a withheld one — the SDK's status line — is the caller's
- * `lead`, built from the SDK error's own fields (see sdkLead), and is used only when the text really begins with it:
+ * `lead`, built from the SDK error's own fields (see sdkLead), and is used only when the text really begins with it. What is done depends on what is KNOWN of each variable (secrecyOf):
  *   - a text that quotes a SECRET value, in any decoded view and in any case, is not shown at all — what takes its place says it was withheld. Complete scrubbing of another party's text cannot be
  *     guaranteed, and what such a text is evidence of is that the service quotes its input, so the rest of it is not trusted either. The status and the code of a failure are separate
- *     fields and stay;
- *   - a connection id and a variable that is not a secret are replaced by `<redacted>` where the text spells them as it is (in any case); one found only in a decoded view cannot be taken out of
- *     the text it was decoded from, so that text is withheld as well. (A non-secret value shorter than MIN_HIDDEN_LENGTH is left alone — see there.)
- * Which variables are secrets is decided by `definitions` (isSecretVariable): a Map of lower-cased schema name to the type of the package's own definition, which the import fills in
- * as the SDK reads it (recordStagedTypes) — looked at on every call, so a text sanitized after the package was read is judged by it. `what` names the text in the sentence that takes
- * its place.
+ *     fields and stay. The same for a variable whose type is NOT known (the pac fallback, a reply that could not be read, a name the package does not define) from MIN_HIDDEN_LENGTH characters on;
+ *   - a value of that kind SHORTER than that is looked for as a whole word only (filledValues): "x" is withheld from `'x'` and from `a x b` and not from `new_Text`, so a one-letter value does
+ *     not withhold every message with that letter in it, and a message that says which entry is wrong stays readable;
+ *   - a connection id and a variable that is known not to be a secret are replaced by `<redacted>` where the text spells them as it is (in any case); one found only in a decoded view cannot be taken
+ *     out of the text it was decoded from, so that text is withheld as well. (A value of that kind shorter than MIN_HIDDEN_LENGTH is left alone — see there.)
+ * What this leaves, stated: a value shorter than MIN_HIDDEN_LENGTH whose type is not known is printed when a text quotes it glued to word characters (`ValuePIN42was`, `key_PIN42`) or inside an escape the decoders
+ * do not read (`\042PIN42\042`, `%u0022PIN42%u0022`, `&#x22PIN42&#x22` with no `;`) — a Secret-type value is long, so this is a gap for a value that is not known to be a secret, not for one that is — and
+ * a value that is known not to be a secret and is shorter than MIN_HIDDEN_LENGTH is printed wherever a text quotes it. What the whole-word rule costs: a value shorter than MIN_HIDDEN_LENGTH whose type is not
+ * known that is itself a whole word of the SDK's own sentence about an entry (`none`, `is`, `the`) still withholds that sentence — it is a word as much as a value — while the status and the code stay.
+ * Which variables are secrets is decided by `definitions`: a Map of lower-cased schema name to the type of the package's own definition, which the import fills in as the SDK reads it
+ * (recordStagedTypes) — looked at on every call, so a text sanitized after the package was read is judged by it. `what` names the text in the sentence that takes its place.
+ * A sanitizer is for text ANOTHER PARTY wrote. A sentence the plugin builds itself from parts that were already looked at (pac's label and exit status around its redacted text; the "got no answer"
+ * sentence around the transport's cleaned words) or from the file's keys (the feature sentence that sends a file to pac) holds no value and is not given to it: looking at a plugin's own words
+ * again would withhold "(exit 1)" for a value of `1`.
  */
 function sanitizer(settings, definitions = new Map()) {
   return function sanitize(text, what = 'text', lead = '') {
     const whole = String(text == null ? '' : text);
-    const { secrets, others } = filledValues(settings, definitions);
-    if (secrets.size === 0 && others.size === 0) return whole;
+    const { secrets, tokens, others } = filledValues(settings, definitions);
+    if (secrets.size === 0 && tokens.size === 0 && others.size === 0) return whole;
     const kept = lead && whole.startsWith(lead) ? lead : '';
     const withheld = (why) => `${kept}<${what} withheld: ${why}>`;
     if (whole.length > MAX_SANITIZED_CHARS) return withheld('it is too long to check against the settings file');
-    if ([...secrets].some(quoter(decodedViews(whole)))) return withheld('it repeated a value from the settings file');
+    const quoted = quoter(decodedViews(whole));
+    if ([...secrets].some(quoted.substring) || [...tokens].some(quoted.token)) return withheld('it repeated a value from the settings file');
     if (others.size === 0) return whole;
     // Longest first inside one alternation, so a value that contains another is taken out whole; and one pass, so what replaces a value is never searched again; in either case, as the
     // search above is. `split` leaves the text between the values: joined by the marker it is what is shown; joined by a NUL, which stands in for a removed value without being able to
     // complete another one, it is what is checked again in its decoded views — so the marker (a value may be a piece of the word "redacted") is never taken for a value that was left behind.
     const alternation = [...others].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
     const between = whole.split(new RegExp(alternation, 'i'));
-    if ([...others].some(quoter(decodedViews(between.join('\u0000'))))) return withheld('it repeated a value from the settings file');
+    if ([...others].some(quoter(decodedViews(between.join('\u0000'))).substring)) return withheld('it repeated a value from the settings file');
     return between.join(REDACTED);
   };
 }
@@ -484,7 +561,7 @@ function sdkLead(error) {
   return error.message.startsWith(lead) ? lead : '';
 }
 
-const outExists = (outPath) => fail('OUT_EXISTS', `--out: ${outPath} already exists. Choose another file, or pass --force to replace it (a replaced file loses every value already filled in).`);
+const outExists = (outPath, leftoverNote) => fail('OUT_EXISTS', `--out: ${outPath} already exists. Choose another file, or pass --force to replace it (a replaced file loses every value already filled in).${leftoverNote ? ` ${leftoverNote}` : ''}`);
 
 // Where a run's settings file is written: checked BEFORE anything is read from the environment, so a refusal costs nothing. (The check is repeated at the
 // moment the file is installed — see writeTemplate — because the work in between takes minutes and the file can appear meanwhile.)
@@ -555,6 +632,10 @@ function importRefusal(error, settings) {
 // The sentence that sends a reader to the one place that says what became of an import whose answer was lost or not trustworthy.
 const lookUpJob = (id) => ` Look up import job ${id} (importjobs(${id}) in the Web API, or the solution history in Maker) before importing again.`;
 
+// The errors whose message the plugin composed itself, from text that was already looked at: a pac failure's message (importThroughPac) and the "got no answer" error of the long-action client
+// (solutionHttpClient). `importFailure` does not give such a message to the sanitizer again: see there.
+const COMPOSED_MESSAGE = new WeakSet();
+
 /**
  * The az-token client of `env`, with the three solution actions given an hour to answer and sent EXACTLY ONCE.
  * The plain client re-sends a POST that got no answer after five minutes, and one whose answer was a 401 or a transient status (429, 500, 502, 503, 504).
@@ -563,7 +644,9 @@ const lookUpJob = (id) => ` Look up import job ${id} (importjobs(${id}) in the W
  * policy sits where the client decides to send again (`sendOnce`): the first answer is the SDK's — its status and its code survive — and an import whose
  * outcome is unknown is looked up, not repeated. A request that never got an answer is thrown here, naming the import job when there is one.
  * `observe.onStageReply(body)` is told the raw text of a StageSolution answer that arrived, before the SDK reads it: the package's own definitions (what type each environment
- * variable is) are in it, and an import needs them to know what is a secret (isSecretVariable). It only listens — the answer goes on to the SDK untouched.
+ * variable is) are in it, and an import needs them to know what is a secret (secrecyOf). It only listens — the answer goes on to the SDK untouched.
+ * `observe.sanitize(text, what)` is given the transport's own words in the error of a request that got no answer ("Request timed out", a socket error): they are another party's text, so they are
+ * looked at where they are read, and the sentence the plugin puts around them is its own and is marked as composed (COMPOSED_MESSAGE) so that it is not looked at again.
  */
 function solutionHttpClient(env, deps = {}, observe = {}) {
   const send = deps.request || makeRequest;
@@ -585,7 +668,12 @@ function solutionHttpClient(env, deps = {}, observe = {}) {
       } catch {
         // The body is the SDK's own JSON; had it not parsed there would be no id to name.
       }
-      throw new Error(`${action[1]} got no answer (${res.error}). It was not sent again: the environment may still be working on it, or may have finished.${job}`);
+      // The transport's words (`res.error`: "Request timed out", a socket error) are another party's text and are looked at here, where they are read; the sentence around them is the plugin's own.
+      // The SDK wraps what a client throws and keeps it as the `cause` of its own error, which is how importFailure knows this message again (isComposed) without reading it.
+      const transport = observe.sanitize ? observe.sanitize(String(res.error), 'transport text') : String(res.error);
+      const error = new Error(`${action[1]} got no answer (${transport}). It was not sent again: the environment may still be working on it, or may have finished.${job}`);
+      COMPOSED_MESSAGE.add(error);
+      throw error;
     },
   });
 }
@@ -641,7 +729,22 @@ async function importThroughPac({ env, packagePath, settingsPath }, redact, refu
     ['solution', 'import', '--path', packagePath, '--environment', env, '--settings-file', settingsPath],
     { label, kind: 'import', redact, ...(deps.pac || {}) }
   );
-  if (!run.ok) throw pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
+  if (!run.ok) {
+    const error = pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
+    // `run.message` is the plugin's own sentence — the command, its exit status, how a timeout ended — around the only text pac wrote, which `runPac` has already given to `redact`, where it is
+    // read. So it holds nothing that was not looked at, and it is not looked at again: for a value of `1` the "(exit 1)" of the plugin's own words would be found and withheld, and with it the
+    // one thing that says how pac failed.
+    COMPOSED_MESSAGE.add(error);
+    throw error;
+  }
+}
+
+// The reason pac was asked, as it is shown. The sentence for a feature of pac's that the file holds is the plugin's own: pacOnlyFeatureMessages builds it from the file's KEYS and the SDK's wording, and
+// importRefusal sent the file to pac only because the SDK's error was exactly it. It holds no value, so it is shown as it is; looked at by the sanitizer, "en" would be found in "deployment" and the
+// reason pac was asked withheld, on a successful import too. Any other reason is the SDK's own account of a staging reply it could not read — another party's text — and is sanitized like any other.
+function shownRefusal(refusal, settings, sanitize) {
+  const own = pacOnlyFeatureMessages(settings).includes(refusal.message);
+  return { ...refusal, message: own ? refusal.message : sanitize(refusal.message, 'message') };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -652,20 +755,27 @@ const countOf = (settings, list) => (Array.isArray(settings[list]) ? settings[li
 
 // Writes the settings file and describes it: where, and how many entries — never what they hold.
 function writeTemplate(request, text, settings, extra) {
+  const writeWarnings = [];
   try {
     // Without --force the file must still be absent when it is INSTALLED, not only when the run began: the export, staging or pac work in between takes minutes, and a
     // file a maker started filling in meanwhile — or another run's — is exactly what the refusal at the start protects. The file system decides, in one step
     // (writeFileSafe's `exclusive`), so there is no gap between a look and a write.
-    writeFileSafe(request.outPath, text, { encoding: 'utf8', exclusive: !request.force });
+    writeFileSafe(request.outPath, text, { encoding: 'utf8', exclusive: !request.force, onWarning: (warning) => writeWarnings.push(warning) });
   } catch (err) {
-    if (err && err.code === 'IO_ERROR' && err.reason === 'exists') throw outExists(request.outPath);
+    if (err && err.code === 'IO_ERROR' && err.reason === 'exists') throw outExists(request.outPath, err.leftoverNote);
+    // The exclusive write needs a hard link (lib/safe-fs.js), which a FAT or exFAT volume and some network shares do not have. --force does not: it renames a finished copy over the target, which
+    // is also what lets it replace a file, so it works there — and a file system that cannot link says so only to a run that did not ask for that.
+    if (err && err.code === 'IO_ERROR' && err.reason === 'no-hard-links') err.message += ' Or pass --force: it replaces the file at --out by renaming a finished copy over it, which needs no hard link.';
     throw err;
   }
+  // The file is written and complete. What could not be cleaned up beside it — the SDK's staging copy, the write's temporary name — is said with it, as a warning: the run did what was asked.
+  const warnings = [...((extra && extra.warnings) || []), ...writeWarnings];
   return {
     out: request.outPath,
     environmentVariables: countOf(settings, 'EnvironmentVariables'),
     connectionReferences: countOf(settings, 'ConnectionReferences'),
     ...extra,
+    ...(warnings.length ? { warnings } : {}),
   };
 }
 
@@ -803,21 +913,35 @@ async function readImportJobFailure(env, importJobId, deps = {}) {
   }
 }
 
+// Whether `error`'s message is entirely the plugin's own composition — and so holds no text of another party that has not been looked at: a message it composed and marked (importThroughPac), or the
+// SDK's status line followed by the message of an error the plugin's action client threw (solutionHttpClient). The SDK keeps what a client threw as the `cause` of its transport failure and writes
+// `<status line><cause's message>`; the second case is believed only when the message IS exactly that — the status line built from the error's own fields (sdkLead), then the marked error's own
+// message — so nothing the SDK or the platform added can be passed as the plugin's.
+function isComposed(error) {
+  if (COMPOSED_MESSAGE.has(error)) return true;
+  const cause = error.cause;
+  return cause instanceof Error && COMPOSED_MESSAGE.has(cause) && error.message === `${sdkLead(error)}${cause.message}`;
+}
+
 /**
- * The error an import leaves this module with: a NEW error whose every text has been through `sanitize` — the message, the reason pac was asked, the SDK's cleanup
+ * The error an import leaves this module with: a NEW error whose every text another party wrote has been through `sanitize` — the message, the reason pac was asked, the SDK's cleanup
  * warnings, the job log's words — so nothing the SDK, the platform or pac said reaches an output with a filled value in it. (The SDK's own error is not passed on: its `cause`
  * holds the raw answer of the service and its attached warnings are unfiltered.) It keeps the code, the status and the reason pac was asked, and — for a failure of the SDK path —
  * names the import job. For a request that was SENT, the job's log is read once for the real reason (the platform's own answer is often only "An unexpected error
  * occurred"), and an outcome that is not known (see outcomeUnknown) says that the request was not repeated and where to look.
- * Every text is sanitized WHOLE. The one thing kept in front of a text that is withheld is the SDK's own status line, and it is built from the SDK error's `statusCode` and `url`
- * (sdkLead) — never found by looking at how a text begins, because the text of a job log, a warning or pac can begin with anything.
+ * Every text is sanitized WHOLE, ONCE, and only text that another party wrote. The one thing kept in front of a text that is withheld is the SDK's own status line, built from the SDK error's
+ * `statusCode` and `url` (sdkLead) — never found by looking at how a text begins, because the text of a job log, a warning or pac can begin with anything. What the plugin composed itself is not looked
+ * at again: a pac failure's message (the command and exit status around pac's text, which runPac redacted where it read it; COMPOSED_MESSAGE), the sentence for a feature of pac's (shownRefusal) and the
+ * "got no answer" sentence of the action client (solutionHttpClient), whose transport words were cleaned where they were read.
+ * What this function sanitizes: the SDK's own message (it quotes names, and can quote what the platform said), the SDK's staging-reply reason, its cleanup warnings, and a job log's reason (which is
+ * appended to the plugin's own sentence AFTER it is sanitized, and the sentence around it is not looked at).
  */
-async function importFailure(err, { sanitize, importJobId, env, deps }) {
+async function importFailure(err, { sanitize, settings, importJobId, env, deps }) {
   const original = err instanceof Error ? err : new Error(String(err));
-  const failure = new Error(sanitize(original.message, 'message', sdkLead(original)));
+  const failure = new Error(isComposed(original) ? original.message : sanitize(original.message, 'message', sdkLead(original)));
   if (typeof original.code === 'string') failure.code = original.code;
   if (Number.isInteger(original.statusCode)) failure.statusCode = original.statusCode;
-  if (original.fallback) failure.fallback = { ...original.fallback, message: sanitize(original.fallback.message, 'message') };
+  if (original.fallback) failure.fallback = shownRefusal(original.fallback, settings, sanitize);
   const warnings = (deps.readCleanupWarnings || require('./lib/maker-sdk.js').readCleanupWarnings)(original);
   if (warnings && warnings.length) failure.warnings = warnings.map((warning) => sanitize(warning, 'warning'));
   // The job is the SDK's: pac mints its own and never sees this one, so a failure of the pac import (it carries the reason pac was asked) names none.
@@ -837,7 +961,7 @@ async function importFailure(err, { sanitize, importJobId, env, deps }) {
 async function runImport(request, deps = {}) {
   const settings = readSettingsFile(request.settingsPath);
   // What the package's own definitions say each variable is: filled in as the SDK reads the package (the StageSolution reply that passes through the client below), and looked at
-  // by the sanitizer each time it is asked — see isSecretVariable for why the file's `TypeId` is not what decides whether a value is a secret.
+  // by the sanitizer each time it is asked — see secrecyOf for why the file's `TypeId` is not what decides whether a value is a secret.
   const definitions = new Map();
   const sanitize = sanitizer(settings, definitions);
   const { base64 } = inspectPackage(request.packagePath, { withBytes: true });
@@ -845,7 +969,7 @@ async function runImport(request, deps = {}) {
   try {
     const outcome = await (deps.sdkFirst || sdkFirst)(request.env, {
       refusal: (error) => importRefusal(error, settings),
-      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body) }),
+      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize }),
       fromSdk: (sdk) => sdk.importSolution({
         base64,
         // pac's defaults: --force-overwrite and --activate-plugins are off. Both are required by the SDK, which no longer defaults them.
@@ -865,9 +989,9 @@ async function runImport(request, deps = {}) {
         ...(warnings && warnings.length ? { warnings: warnings.map((warning) => sanitize(warning, 'warning')) } : {}),
       };
     }
-    return { source: 'pac', applied: filledNames(settings), fallback: { ...outcome.fallback, message: sanitize(outcome.fallback.message, 'message') } };
+    return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize) };
   } catch (err) {
-    throw await importFailure(err, { sanitize, importJobId, env: request.env, deps });
+    throw await importFailure(err, { sanitize, settings, importJobId, env: request.env, deps });
   }
 }
 
@@ -917,7 +1041,7 @@ module.exports = {
   filledNames,
   sanitizer,
   decodedViews,
-  isSecretVariable,
+  secrecyOf,
   recordStagedTypes,
   sdkLead,
   oneLine,

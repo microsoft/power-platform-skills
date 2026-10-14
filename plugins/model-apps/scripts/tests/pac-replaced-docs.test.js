@@ -376,11 +376,15 @@ test('the connector builder runs connector.js for operations and a REST schema, 
   assert.match(builder, /node "\$\{PLUGIN_ROOT\}\/scripts\/connector\.js" schema --env '<ENV_URL>' --connector-id <connectorName> --connection-id <connId> --operation <op>/);
   assert.match(builder, /node "\$\{PLUGIN_ROOT\}\/scripts\/connector\.js" schema --env '<ENV_URL>' --connector-id <connectorName> --connection-id <connId> --dataset <ds> --table <tableId>/);
   assert.match(builder, /`source` is `"sdk"` or `"pac"`; with `"pac"` the answer carries `fallback`/);
-  assert.match(builder, /This form is always answered by `pac` \(`"source": "pac"`, no `fallback`\): the SDK has no read of a connector's tables/);
+  assert.match(builder, /This form is always answered by `pac` \(`"source": "pac"`, no `fallback`\): the plugin cannot build the client the SDK reads a connector's tables with/);
   assert.match(builder, /`connectionsSource` is `"sdk"`/);
   assert.match(builder, /`connectionsFallback` \(`\{ code, message \}`\) says why the SDK was not used/);
-  assert.match(builder, /`pac model genpage list-connector-tables --environment '<ENV_URL>' --connector-id <connectorName> --connection-id <connId> \[--dataset <ds>\]` may help pick the table: no script replaces it/);
-  assert.match(builder, /A failure of the SDK's own read prints `\{ "ok": false, "error", "code" \}` on stdout; any other failure/);
+  assert.match(builder, /a token the service refused — HTTP 401 or 403, `CONNECTIVITY_UNAUTHORIZED` —/, 'the refusal of a token is among the reasons pac is asked');
+  assert.match(builder, /`pac model genpage list-connector-tables --environment '<ENV_URL>' --connector-id <connectorName> --connection-id <connId> \[--dataset <ds>\]` may help pick the table: no script replaces it, because the plugin cannot build the client the SDK reads a connector's tables with/);
+  // The failure contract of list-connections.js: one ok:false line for every failure past the arguments, the code when the error has one; a usage error is stderr alone.
+  assert.match(builder, /Every failure past the arguments — the SDK's read, `pac`, the connection references, an environment URL that is not a Dataverse one — prints one `\{ "ok": false, "error" \}` line on stdout, with the error's `code` when it has one/);
+  assert.match(builder, /a usage error \(no URL, an unknown flag\) is the problem on stderr alone/);
+  assert.doesNotMatch(builder, /any other failure \(pac output|prints its message on stderr alone|the SDK has no read of a connector's tables/, 'the old contract, and the old reason for the tabular read, are gone');
   assert.match(squash(doc('references', 'connectors.md')), /from `connector\.js schema --operation`/);
   assert.match(squash(doc('references', 'connectors.md')), /`genpage-upload\.js --connectors <connectors\.json>` then persists that array into the deployed page's `config\.json`/);
   assert.match(squash(doc('references', 'custom-api.md')), /`genpage-upload\.js --actions <actions\.json>` then persists that array into the deployed page's `config\.json`/);
@@ -392,7 +396,12 @@ test('the genpage skill sets deployment settings through solution-settings.js', 
   assert.match(skill, /node "\$\{PLUGIN_ROOT\}\/scripts\/solution-settings\.js" template --env '<envUrl>' --solution '<solutionUniqueName>' --out '<settings\.json>'/);
   assert.match(skill, /node "\$\{PLUGIN_ROOT\}\/scripts\/solution-settings\.js" import --env '<target-envUrl>' --package '<solution\.zip>' --settings '<settings\.json>'/);
   assert.match(skill, /an existing `--out` is not replaced unless `--force` is given, so a file already filled in is not lost/);
-  assert.match(skill, /never a settings value or a connection id/);
+  // The whole guarantee and its limits, not only the guarantee: what is kept out; a short value that is known not to be a secret; a short value whose type is not known; the decoding limits.
+  assert.match(skill, /A secret value and a connection id are kept out of what they print — a text that quotes one is withheld, or has it replaced by `<redacted>` — with these limits: /);
+  assert.match(skill, /a value of fewer than six characters that is known not to be a secret is not hidden; /);
+  assert.match(skill, /one whose type is not known \(the `pac` route, a name the package does not define\) is found only as a whole word, so it is printed when glued to letters, digits, marks or underscores or written inside an escape the sanitizer does not decode; /);
+  assert.match(skill, /and a value quoted in part, hashed, base64-encoded, written as an HTML entity beyond XML's five, Unicode-normalized or nested in more than three levels of encoding is not recognised\./);
+  assert.doesNotMatch(skill, /never a settings value or a connection id/, 'the skill does not promise more than the sanitizer does');
 });
 
 test('the genpage skill generates the types with genpage.js, and a failure of it ends the phase — a column is never guessed', () => {

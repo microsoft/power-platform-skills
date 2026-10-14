@@ -256,8 +256,10 @@ const TREE_CLOSE_GRACE_MS = 5000;
  * (`pac.cmd`), whose child — the program that is actually working, and may be importing a solution — goes on running after the call has reported that it timed out.
  * The result of a call that was ended has `error.code` `ETIMEDOUT`; one that wrote past `maxBuffer` was ended too, with `ENOBUFS`.
  *
- * What such an error says about the process is `error.containment`, and a caller must not claim more than it says. `'confirmed'`: the pipes closed after the kill, so nothing the call
- * started still holds them — the tree is gone. `'unconfirmed'`: the wait for the pipes (TREE_CLOSE_GRACE_MS) ran out first, so a process the call started still holds them and may
+ * What such an error says about the process is `error.containment`, and a caller must not claim more than it says. `'confirmed'`: the pipes closed after the kill, so nothing that was holding them
+ * is left — the call's process and every process that held its output were stopped. That is ALL it proves: a process the call started that never held the pipes (detached, with streams of its
+ * own) is not covered, and can outlive the kill unnoticed, so a message says "pac and every process that held its output were stopped" (lib/pac-fallback.js stopClaim) and not that the tree is gone.
+ * `'unconfirmed'`: the wait for the pipes (TREE_CLOSE_GRACE_MS) ran out first, so a process the call started still holds them and may
  * still be running — the case killProcessTree cannot reach, because it will not end a tree by the pid of a launcher that has already exited (the number may be another process's
  * by then) and what that launcher started has been re-parented, out of every tree that can be walked from a live pid. `error.pid` is the process the call started, when it has one:
  * for an unconfirmed ending that process is usually gone, and the survivor's own id is not known.

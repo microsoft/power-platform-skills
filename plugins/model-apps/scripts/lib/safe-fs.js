@@ -7,7 +7,8 @@
 // a temp file in the same directory, then rename) does not.
 //
 // `writeFileSafe(…, { exclusive: true })` is the no-clobber form: it writes the file whole to a sibling nobody else knows and gives it the target's name with a hard link, which
-// fails when the name is taken — so the file system decides whether the name is free, in one step, and a failure removes only the sibling it made.
+// fails when the name is taken — so the file system decides whether the name is free, in one step, and a failure removes only the sibling it made. A sibling that cannot be removed is
+// never left unmentioned: the error of a failed write names it, and a write that was published reports it through `onWarning` (see createExclusive).
 //
 // Only the FINAL component is inspected. A symlinked ancestor is the caller's own choice: macOS
 // temp directories live under a symlinked `/var`, and a junctioned project root is a normal setup.
@@ -140,15 +141,43 @@ function plantedFileCode(filePath, st, fsImpl) {
   return null;
 }
 
-function plantedFilePhrase(code, st) {
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The temporary sibling of `filePath` that still holds the file's second name, when there is one: a hidden `.<name>.<pid>.<8 hex>.tmp` in the same folder (siblingTempName) that is the SAME file
+// (same device and file id). That is what an exclusive write leaves when it published the file but could not remove the sibling afterwards (a scanner or a sync client held it), and what a crash
+// between the link and the removal leaves — and the next write of the file is refused as a hard link, which on its own does not say where the other name is. Read with `bigint`, because a Windows
+// file id is 64 bits and a number cannot hold it. A folder that cannot be listed or a file that cannot be read has no hint: the refusal stands without one.
+function leftoverSibling(filePath, fsImpl) {
+  try {
+    const name = path.basename(filePath);
+    const dir = path.dirname(filePath);
+    const pattern = new RegExp(`^\\.${escapeRegExp(name)}\\.\\d+\\.[0-9a-f]{8}\\.tmp$`);
+    const target = fsImpl.lstatSync(filePath, { bigint: true });
+    if (target.ino === 0n) return null; // a file system that does not give files an id cannot say which names are the same file
+    for (const entry of fsImpl.readdirSync(dir)) {
+      if (!pattern.test(entry)) continue;
+      const candidate = path.join(dir, entry);
+      const other = fsImpl.lstatSync(candidate, { bigint: true });
+      if (other.ino === target.ino && other.dev === target.dev) return candidate;
+    }
+  } catch {
+    // no hint
+  }
+  return null;
+}
+
+function plantedFilePhrase(code, st, filePath, fsImpl) {
   if (code === 'link') return 'a symbolic link or junction';
-  if (code === 'hard-link') return `a hard link (${st.nlink} names share this file)`;
+  if (code === 'hard-link') {
+    const sibling = filePath && fsImpl ? leftoverSibling(filePath, fsImpl) : null;
+    return `a hard link (${st.nlink} names share this file${sibling ? `; one of them is ${sibling}, the temporary name an earlier write could not remove — delete it` : ''})`;
+  }
   return 'not a regular file';
 }
 
 function plantedFileReason(filePath, st, fsImpl) {
   const code = plantedFileCode(filePath, st, fsImpl);
-  return code ? plantedFilePhrase(code, st) : null;
+  return code ? plantedFilePhrase(code, st, filePath, fsImpl) : null;
 }
 
 function existingTarget(filePath, fsImpl) {
@@ -166,7 +195,7 @@ function assertWritableTarget(filePath, fsImpl) {
   if (!st) return null;
   const code = plantedFileCode(filePath, st, fsImpl);
   if (code) {
-    unsafe(`refusing to write ${filePath}: it is ${plantedFilePhrase(code, st)}, and writing it would change the file it points at`, code);
+    unsafe(`refusing to write ${filePath}: it is ${plantedFilePhrase(code, st, filePath, fsImpl)}, and writing it would change the file it points at`, code);
   }
   // A read-only file is a deliberate "do not modify". Replacing the directory entry needs write
   // access to the directory, not the file, so a rename would ignore the bit an in-place write honored.
@@ -195,7 +224,7 @@ function assertPlainFileTarget(filePath, opts) {
   }
   const code = plantedFileCode(resolved, st, fsImpl);
   if (code) {
-    unsafe(`refusing to write ${resolved}: it is ${plantedFilePhrase(code, st)}, and writing it would change the file it points at`, code);
+    unsafe(`refusing to write ${resolved}: it is ${plantedFilePhrase(code, st, resolved, fsImpl)}, and writing it would change the file it points at`, code);
   }
   return resolved;
 }
@@ -278,7 +307,14 @@ const HARD_LINK_UNSUPPORTED_CODES = new Set(['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 
 // removes is the sibling's, which it created exclusively and nobody else knows, so a failure can never reach another writer's file; and a reader never sees a half-written target.
 //
 // A file system without hard links cannot do this: the call then FAILS — `reason: 'no-hard-links'` — rather than fall back to something that cannot keep the promise. A caller that does
-// not need it (it replaces a file anyway) does not pass `exclusive`.
+// not need it (it replaces a file anyway) does not pass `exclusive`: that write renames a finished sibling over the target, which needs no link, and so works on such a file system.
+//
+// What becomes of the sibling's name, which is the one thing this call may leave behind:
+//   - when the call FAILS (the name is taken, no hard links, the write itself failed) it is removed with the bounded retry a Windows lock needs; one that still cannot be removed is said in the error
+//     (`leftover`, and the sentence in `leftoverNote` that is also at the end of its message) — a file this call could not clean up is not left unmentioned;
+//   - when the file was PUBLISHED, it is complete under its name, which is the write that was asked for, so a sibling that cannot be removed is a WARNING — `opts.onWarning(sentence)` — and not a
+//     failure: the file has two names until someone removes the sibling, and the next write of it is refused as a hard link that names the leftover (leftoverSibling). A caller that passes no
+//     `onWarning` is not told.
 function createExclusive(fsImpl, target, data, opts) {
   const dir = path.dirname(target);
   const name = path.basename(target);
@@ -293,8 +329,14 @@ function createExclusive(fsImpl, target, data, opts) {
       if (!(err && err.code === 'EEXIST') || attempt >= 4) throw writeFailure(target, err, { replacing: false });
     }
   }
-  const removeSibling = () => {
-    try { fsImpl.unlinkSync(tmp); } catch { /* already gone */ }
+  // Drops the sibling's name: null when it is gone, else the code of what stopped it (a lock that outlasts the retry, a permission).
+  const dropSibling = () => {
+    try {
+      unlinkWithRetry(fsImpl, tmp);
+      return null;
+    } catch (err) {
+      return (err && err.code) || String(err);
+    }
   };
   try {
     try {
@@ -306,26 +348,54 @@ function createExclusive(fsImpl, target, data, opts) {
     try {
       fsImpl.linkSync(tmp, target);
     } catch (err) {
-      if (err && err.code === 'EEXIST') throw existsError(target);
-      if (err && HARD_LINK_UNSUPPORTED_CODES.has(err.code)) throw noHardLinksError(target, err);
-      throw err;
+      if (err && err.code === 'EEXIST') {
+        // A name that is taken by anything else is the refusal. But over NFS a link request that is sent again because its reply was lost answers EEXIST for a link the first request MADE
+        // (link(2): "On NFS file systems, the return code may be wrong in the case the NFS server performs the link creation and dies before it can say so. Use stat(2) to find out if the link
+        // got created."), and then the target IS this call's file, with the sibling its second name: published, whatever the answer said (publishedAlready says how that is told).
+        // See: https://man7.org/linux/man-pages/man2/link.2.html
+        if (!publishedAlready(fsImpl, tmp, target)) throw existsError(target);
+      } else if (err && HARD_LINK_UNSUPPORTED_CODES.has(err.code)) {
+        throw noHardLinksError(target, err);
+      } else {
+        throw err;
+      }
     }
   } catch (err) {
-    removeSibling();
-    if (err && err.code === 'IO_ERROR') throw err;
-    throw writeFailure(target, err, { replacing: false });
+    const failure = err && err.code === 'IO_ERROR' ? err : writeFailure(target, err, { replacing: false });
+    const left = dropSibling();
+    if (left) withLeftover(failure, tmp, left);
+    throw failure;
   }
   // The target is complete under its name. Dropping the sibling's name leaves one name for it; a name that cannot be dropped (Windows holds a just-written file for a moment while a
-  // scanner reads it, hence the retry) is reported, because the file then has two names and a later write of it is refused as a hard link.
-  try {
-    unlinkWithRetry(fsImpl, tmp);
-  } catch (err) {
-    const e = new Error(`${target} was written, but its temporary name ${tmp} could not be removed (${(err && err.code) || err}): remove it, or the file keeps two names and a later write of it is refused as a hard link`);
-    e.code = 'IO_ERROR';
-    e.reason = 'sibling-left';
-    throw e;
+  // scanner reads it, hence the retry) leaves the file two names, and that is said — but the write is done, so it is a warning, not a failure.
+  const left = dropSibling();
+  if (left && opts && typeof opts.onWarning === 'function') {
+    opts.onWarning(`${target} was written in full, but its temporary name ${tmp} could not be removed (${left}): delete it — until then the file has two names, and writing it again is refused as a hard link`);
   }
   return target;
+}
+
+// Whether `target` is this call's own file: the file `sibling` names — the same device and file id — with the sibling as its second name, which is a link count of exactly two. open(2) gives that test
+// for a lock made with link(2) over NFS: "use stat(2) on the unique file to check if its link count has increased to 2, in which case the lock is also successful"
+// (https://man7.org/linux/man-pages/man2/open.2.html, O_EXCL). The id alone is not proof: Windows documents the 64-bit file id as not guaranteed unique on ReFS (a Dev Drive) — "The 64-bit identifier in
+// this structure is not guaranteed to be unique on ReFS", https://learn.microsoft.com/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information — so a file another writer put at the target could
+// share it, and only a sibling that really was linked has two names. A doubt is a refusal, never an overwrite. Read with `bigint`, because a Windows file id is 64 bits and a number cannot hold it; a file
+// system that gives files no id (0) cannot say, and a name that cannot be read is not that file.
+function publishedAlready(fsImpl, sibling, target) {
+  try {
+    const own = fsImpl.lstatSync(sibling, { bigint: true });
+    const named = fsImpl.lstatSync(target, { bigint: true });
+    return own.nlink === 2n && own.ino !== 0n && own.ino === named.ino && own.dev === named.dev;
+  } catch {
+    return false;
+  }
+}
+
+// Says in `error` that the sibling's name could not be removed: where it is (`leftover`) and a sentence for a caller that makes a message of its own (`leftoverNote`), also added to the message.
+function withLeftover(error, file, code) {
+  error.leftover = file;
+  error.leftoverNote = `Its temporary file ${file} could not be removed (${code}): delete it.`;
+  error.message = `${error.message.replace(/\.?$/, '.')} ${error.leftoverNote}`;
 }
 
 function noHardLinksError(target, err) {

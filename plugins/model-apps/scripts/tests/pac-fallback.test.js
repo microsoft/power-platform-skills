@@ -106,17 +106,17 @@ test('pac that is not installed fails as "missing", with the way to install it',
   assert.doesNotMatch(run.message, /exit null/);
 });
 
-test('a pac that runs out of its time is "timeout": how long it was given, that it was stopped, and what to do — for an import, that the environment may still be importing', async () => {
+test('a pac that runs out of its time is "timeout": how long it was given, what was stopped, and what to do — for an import, that the environment may still be importing', async () => {
   const timedOut = spawnReturning({ status: null, signal: 'SIGKILL', stdout: '', stderr: '', error: Object.assign(new Error('spawn pac ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
   const read = await runPac(['x'], { label: LABEL, spawn: timedOut.spawn });
   assert.strictEqual(read.failure, 'timeout');
-  assert.match(read.message, /^`pac model genpage list-connector-operations` did not finish within 180 s and was stopped\./);
+  assert.match(read.message, /^`pac model genpage list-connector-operations` did not finish within 180 s; pac and every process that held its output were stopped\./);
   assert.match(read.message, /pac is waiting for a sign-in \(`pac auth list` shows the profile it uses\): run it again\./);
   assert.doesNotMatch(read.message, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|allow it longer/, 'there is no variable to name: the budget is fixed');
   assert.doesNotMatch(read.message, /still importing/, 'a read has no import to look up');
   const imported = await runPac(['solution', 'import'], { label: 'pac solution import', kind: 'import', spawn: timedOut.spawn });
   assert.strictEqual(imported.failure, 'timeout');
-  assert.match(imported.message, /^`pac solution import` did not finish within 3600 s and was stopped\./);
+  assert.match(imported.message, /^`pac solution import` did not finish within 3600 s; pac and every process that held its output were stopped\./);
   assert.match(imported.message, /The environment may still be importing the package: look at its import history \(Solutions → History in Maker\) before importing again\./);
   assert.doesNotMatch(imported.message, /run it again/, 'an import that may have landed is not simply run again');
 });
@@ -125,33 +125,34 @@ test('output past the buffer is "failed", not "missing"', async () => {
   const { spawn } = spawnReturning({ status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawn pac ENOBUFS'), { code: 'ENOBUFS' }) });
   const run = await runPac(['x'], { label: LABEL, spawn });
   assert.strictEqual(run.failure, 'failed');
-  assert.match(run.message, /wrote more than 64 MiB of output and was stopped/);
+  assert.match(run.message, /wrote more than 64 MiB of output; pac and every process that held its output were stopped/);
 });
 
-// What the message may claim is what the runner confirmed (error.containment, lib/process-runner.js spawnResultTree): "was stopped" only when the pipes closed after the kill.
-test('a message says "was stopped" only when the runner confirmed it: with an ending it could not confirm, it says a process pac started may still be running — and names the pid pac was started as', async () => {
+// What the message may claim is what the runner confirmed (error.containment, lib/process-runner.js spawnResultTree): the pipes closed after the kill, so nothing holds pac's output — "pac and every
+// process that held its output were stopped". That is all it says: a process that never held the pipes is not covered, and a message does not say the tree is gone.
+test('a message says what was stopped only when the runner confirmed it: with an ending it could not confirm, it says a process pac started may still be running — and names the pid pac was started as', async () => {
   const ended = (code, containment, pid) => spawnReturning({ status: null, signal: 'SIGKILL', stdout: '', stderr: '', error: Object.assign(new Error(`spawn pac ${code}`), { code, containment, pid }) });
   const unconfirmed = (code) => ended(code, 'unconfirmed', 4242);
 
   const read = await runPac(['x'], { label: LABEL, spawn: unconfirmed('ETIMEDOUT').spawn });
   assert.strictEqual(read.failure, 'timeout');
-  assert.match(read.message, /^`pac model genpage list-connector-operations` did not finish within 180 s and was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running \(pac was started as process 4242, which has exited; what it started is not known by id\)\./);
+  assert.match(read.message, /^`pac model genpage list-connector-operations` did not finish within 180 s; pac was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running \(pac was started as process 4242, which has exited; what it started is not known by id\)\./);
   assert.match(read.message, /End any leftover pac process \(`Get-Process pac` on Windows, `ps` elsewhere\) before trying again\./);
-  assert.doesNotMatch(read.message, /was stopped/, 'it does not tell the reader the process is gone');
+  assert.doesNotMatch(read.message, /stopped/, 'it does not tell the reader the process is gone');
   assert.match(read.message, /pac is waiting for a sign-in/, 'the rest of the read\'s advice stays');
 
   const imported = await runPac(['solution', 'import'], { label: 'pac solution import', kind: 'import', spawn: unconfirmed('ETIMEDOUT').spawn });
-  assert.doesNotMatch(imported.message, /was stopped/);
+  assert.doesNotMatch(imported.message, /stopped/);
   assert.match(imported.message, /so it may still be running \(pac was started as process 4242/);
   assert.match(imported.message, /The environment may still be importing the package: look at its import history/, 'a local survivor does not replace the warning about the environment');
 
   const flooded = await runPac(['x'], { label: LABEL, spawn: unconfirmed('ENOBUFS').spawn });
   assert.strictEqual(flooded.failure, 'failed');
-  assert.match(flooded.message, /^`pac model genpage list-connector-operations` wrote more than 64 MiB of output and was asked to stop, but a process it started still held its output[\s\S]*may still be running/);
+  assert.match(flooded.message, /^`pac model genpage list-connector-operations` wrote more than 64 MiB of output; pac was asked to stop, but a process it started still held its output[\s\S]*may still be running/);
   assert.match(flooded.message, /End any leftover pac process \(`Get-Process pac` on Windows, `ps` elsewhere\) before trying again\.$/, 'an output that overflowed gives the same advice');
-  assert.doesNotMatch(flooded.message, /was stopped/);
+  assert.doesNotMatch(flooded.message, /stopped/);
   const floodedAndEnded = await runPac(['x'], { label: LABEL, spawn: ended('ENOBUFS', 'confirmed', 4242).spawn });
-  assert.match(floodedAndEnded.message, /wrote more than 64 MiB of output and was stopped\.$/, 'a confirmed ending says so and gives no advice to end anything');
+  assert.match(floodedAndEnded.message, /wrote more than 64 MiB of output; pac and every process that held its output were stopped\.$/, 'a confirmed ending says so and gives no advice to end anything');
 
   // No pid is known (the process never had one): the sentence still says what is true, and names nothing.
   const noPid = await runPac(['x'], { label: LABEL, spawn: ended('ETIMEDOUT', 'unconfirmed', undefined).spawn });
@@ -161,10 +162,12 @@ test('a message says "was stopped" only when the runner confirmed it: with an en
   // A confirmed ending, and an error from a runner that does not say (a stand-in, spawnSync), are read as they always were.
   for (const spawn of [ended('ETIMEDOUT', 'confirmed', 4242).spawn, ended('ETIMEDOUT', undefined, undefined).spawn]) {
     const stopped = await runPac(['x'], { label: LABEL, spawn });
-    assert.match(stopped.message, /did not finish within 180 s and was stopped\. A stalled call/);
+    assert.match(stopped.message, /did not finish within 180 s; pac and every process that held its output were stopped\. A stalled call/);
     assert.doesNotMatch(stopped.message, /may still be running|leftover/);
+    // What it claims is what the runner confirmed and no more: not that the whole tree, or everything pac started, is gone.
+    assert.doesNotMatch(stopped.message, /tree|everything|all processes|every process pac started/i);
   }
-  assert.deepStrictEqual(stopClaim(null), { stopped: true, claim: 'was stopped' });
+  assert.deepStrictEqual(stopClaim(null), { stopped: true, claim: 'pac and every process that held its output were stopped' });
   assert.strictEqual(stopClaim({ containment: 'unconfirmed' }).stopped, false);
 });
 
@@ -310,7 +313,7 @@ test('a pac that times out is ended WHOLE before the call settles: the program i
   const spawn = (name, args, options) => spawnResultTree(name, args, { ...options, timeout: 1000 }, { env, clock: clockStartedWith(pac.started) });
   const run = await runPac(['solution', 'import'], { label: 'pac solution import', kind: 'import', spawn });
   assert.deepStrictEqual([run.ok, run.failure], [false, 'timeout']);
-  assert.match(run.message, /did not finish within 3600 s and was stopped\. The environment may still be importing the package/);
+  assert.match(run.message, /did not finish within 3600 s; pac and every process that held its output were stopped\. The environment may still be importing the package/);
   const pid = pac.pid();
   assert.ok(Number.isInteger(pid), 'the program ran');
   // The program would run for a minute: gone within seconds of the call's end means it was ended with the call.
@@ -351,10 +354,54 @@ test('a pac whose launcher exited and left a process running is NOT reported as 
     assert.deepStrictEqual([run.ok, run.failure], [false, 'timeout']);
     assert.strictEqual(alive(readPid(survivorFile)), true, 'the process pac started is STILL RUNNING when the call settles');
     assert.strictEqual(alive(launcher), false, 'and the launcher the message names has exited');
-    assert.doesNotMatch(run.message, /was stopped/, 'a process is still running: the message must not say everything was stopped');
-    assert.match(run.message, new RegExp(`^\`pac solution import\` did not finish within 3600 s and was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running \\(pac was started as process ${launcher}, which has exited; what it started is not known by id\\)\\.`));
+    assert.doesNotMatch(run.message, /stopped/, 'a process is still running: the message must not say anything was stopped');
+    assert.match(run.message, new RegExp(`^\`pac solution import\` did not finish within 3600 s; pac was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running \\(pac was started as process ${launcher}, which has exited; what it started is not known by id\\)\\.`));
     assert.match(run.message, /End any leftover pac process/);
     assert.match(run.message, /The environment may still be importing the package/);
+  } finally {
+    const survivor = readPid(survivorFile);
+    if (survivor) { try { process.kill(survivor, 'SIGKILL'); } catch { /* already gone */ } }
+  }
+});
+
+// The ending the runner CAN confirm, and what the confirmation covers. The pipes close, so nothing holds pac's output — but a process the launcher started that NEVER held them (detached, with streams of its
+// own) is not in any tree the kill can walk once its parent has exited, and is not touched. So the message says what was confirmed — pac and every process that held its output were stopped — and not that
+// everything pac started is gone: here a survivor that never held the pipes is really running when the call settles, and the claim is still true.
+test('a confirmed ending claims only what it confirmed: a process that never held pac\'s output survives it, and the message does not say the tree is gone', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pac-fallback-detached-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+  const reported = path.join(dir, 'reported.txt');
+  const survivorFile = path.join(dir, 'survivor.txt');
+  const launcherScript = path.join(dir, 'launcher.js');
+  // The middle process starts the survivor — detached, with streams of its own, so it never holds a pipe of the call — and exits. The launcher outlives it and is still running at the deadline.
+  const middle = [
+    "const { spawn } = require('node:child_process');",
+    "const survivor = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { detached: true, stdio: 'ignore' });",
+    `require('node:fs').writeFileSync(${JSON.stringify(survivorFile)}, String(survivor.pid));`,
+    'survivor.unref();',
+  ].join('\n');
+  fs.writeFileSync(launcherScript, [
+    "const fs = require('node:fs');",
+    "const { spawn } = require('node:child_process');",
+    `const middle = spawn(process.execPath, ['-e', ${JSON.stringify(middle)}], { stdio: 'ignore' });`,
+    `middle.on('exit', () => fs.writeFileSync(${JSON.stringify(reported)}, String(process.pid)));`,
+    'setTimeout(() => {}, 120000);',
+  ].join('\n'), 'utf8');
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.toUpperCase() === 'PATH') delete env[key];
+  env.PATH = path.dirname(process.execPath);
+  const spawn = (name, args, options) => spawnResultTree(path.basename(process.execPath, path.extname(process.execPath)), [launcherScript], { ...options, timeout: 1000 }, { env, clock: clockStartedWith(reported) });
+  const readPid = (file) => (fs.existsSync(file) ? Number(fs.readFileSync(file, 'utf8')) : 0);
+  try {
+    const run = await runPac(['solution', 'import'], { label: 'pac solution import', kind: 'import', spawn });
+    const launcher = readPid(reported);
+    const survivor = readPid(survivorFile);
+    assert.ok(launcher > 0 && survivor > 0, 'the launcher ran and its middle process started the survivor');
+    assert.deepStrictEqual([run.ok, run.failure], [false, 'timeout']);
+    assert.match(run.message, /^`pac solution import` did not finish within 3600 s; pac and every process that held its output were stopped\. The environment may still be importing the package/);
+    assert.doesNotMatch(run.message, /tree|everything|may still be running|leftover/i, 'it says what was confirmed and nothing wider');
+    assert.strictEqual(await goneWithin(launcher, 10000), true, 'the launcher — pac — was stopped: the claim is true');
+    assert.strictEqual(alive(survivor), true, 'a process that never held the output is not covered, which is why the message does not claim it');
   } finally {
     const survivor = readPid(survivorFile);
     if (survivor) { try { process.kill(survivor, 'SIGKILL'); } catch { /* already gone */ } }

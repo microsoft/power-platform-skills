@@ -62,7 +62,7 @@ where the SDK refuses. A page can be created before the app that will hold it.
 - **Connections, connector metadata and deployment settings are read through the bundled SDK**, with your Azure CLI
   sign-in, instead of by running `pac` (connector metadata comes back ten to twenty-five times faster). `pac` is asked only
   where the SDK has no route or refuses: an environment in the Test cloud or any other cloud the SDK does not read
-  connections in (these go to `pac` at once, about 23 s faster per read than before), a token the service refused (401 or
+  connections in (these go to `pac` with no SDK attempt first), a token the service refused (401 or
   403), a service that has been switched off, a connector definition the SDK does not project, a package the platform will not
   stage, a settings file that uses a feature only `pac` applies, or no Azure CLI token for the Power Apps service. The output
   says so (`connectionsSource` and `connectionsFallback` in `list-connections.js`; `source` and `fallback` in the others).
@@ -72,14 +72,26 @@ where the SDK refuses. A page can be created before the app that will hold it.
 - **The `solution-settings.js import` defaults are `pac`'s**: nothing unmanaged is overwritten, no workflows or plug-ins
   are activated, nothing is published afterwards. `template` does not replace an existing `--out` file unless `--force` is
   given (`pac` replaced it silently, and every value already filled in with it) — not even one that appears while it works,
-  and it never removes a file it did not write.
+  and it never removes a file it did not write. To keep that promise it needs a file system that can make a hard link (NTFS,
+  ext4, APFS): on one that cannot (a FAT or exFAT volume, some network shares) it refuses with `IO_ERROR` and says that
+  `--force`, which needs no link, writes there. If the temporary name the file was written under cannot be removed afterwards,
+  the file is still complete and the run is a success with a warning that names the leftover; the next run refuses the file as
+  a hard link and names it too.
   The solution actions that can run for minutes (`ExportSolution`, `StageSolution`, `ImportSolution`) get an hour and are
   sent exactly once: a gateway's 502, 504 or 401 for an import the platform accepted is not answered with a second import.
-  A failed import names its job and, when the request was sent, the reason the job's log gives. A token, a settings value
-  and a connection id are never printed — in an error, a warning, a job log or a message `pac` printed, however the text
-  quotes them (JSON, XML or URL escapes, white space collapsed, any case) — and a text that quotes a secret is withheld. Whether a
-  variable is a secret is the package's own definition of it, not the settings file's optional `TypeId`. A variable's value
-  is passed through exactly as written, white space included.
+  A failed import names its job and, when the request was sent, the reason the job's log gives. What the settings file holds
+  is kept out of what is printed — an error, a warning, a job log, a message `pac` printed — wherever a text quotes it as
+  written or in a JSON, XML or URL escape, with white space collapsed and in any case. A text that quotes a secret is withheld
+  whole, whatever its length; a connection id and a value the package defines as not secret are replaced by `<redacted>`
+  (a value of that kind shorter than six characters is not hidden). Whether a variable is a secret is the package's own
+  definition of it, not the settings file's optional `TypeId`. For a variable the package was not read for (`pac` importing,
+  an entry the package does not define) a value of six characters or more is treated as a secret, and a shorter one withholds a
+  text only where the text has it as a whole word. What is not caught: a value quoted in part, hashed, base64-encoded, written
+  as an HTML entity beyond XML's five, normalized in its Unicode by a service, or nested in more than three levels of
+  encoding; a value of fewer than six characters that is known not to be a secret, which is printed wherever a text quotes
+  it; and a value of fewer than six characters with no recorded type that a text glues to letters, digits, marks or
+  underscores or writes inside an escape the sanitizer does not read. A token is never printed. A
+  variable's value is passed through exactly as written, white space included.
 - **`list-connections.js` checks the environment URL before it runs anything**, and the `pac` commands the plugin runs for
   connections and connector metadata (`pac connection list` among them) are pinned to that environment with
   `--environment` (without it `pac` answers for the active organization of its auth profile).
@@ -88,8 +100,9 @@ where the SDK refuses. A page can be created before the app that will hold it.
   on stderr alone. `code` is there when the error has one — the SDK's errors do; a `pac` failure, a bad environment URL and a
   connection-references read that failed do not. A usage error (no URL, an unknown flag) is still the problem on stderr alone.
 - **The `pac` fallbacks stop `pac` whole and print only why it failed.** A `pac` call that runs out of time ends `pac` and
-  everything it started, where a Windows `pac.cmd` launcher's own child used to go on running — and says "may still be
-  running" instead of "was stopped" when something `pac` started outlives it and still holds its output; a failure shows
+  the processes in its tree, where a Windows `pac.cmd` launcher's own child used to go on running — and says what it confirmed:
+  "`pac` and every process that held its output were stopped", or, when something `pac` started outlives it and still holds its
+  output, that it "may still be running" (a process that never held the output is not covered); a failure shows
   `pac`'s error without its sign-in banner and version lines; and a percent-encoded SharePoint address reaches a `pac`
   installed by the Windows MSI unchanged (any other batch launcher still refuses it, naming the cause and the way through).
 - **The Power Apps service token never appears in what the service answers**, only in the request that carries it, and a

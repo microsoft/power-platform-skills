@@ -1,8 +1,8 @@
 'use strict';
 // Running pac as the FALLBACK of a script that reads through the bundled SDK first (list-connections.js, connector.js, solution-settings.js): one place that
-// starts it through the process runner, bounds the time it may take — a call that runs out has its whole process tree ended before it is reported, and is reported as stopped only
-// when the runner has confirmed that — and says why a run failed, without pac's own header. list-connections.js starts `pac connection list` itself, as it always has, through
-// the same runner and with the same read budget (PAC_READ_TIMEOUT_MS below).
+// starts it through the process runner, bounds the time it may take — a call that runs out has its whole process tree ended before it is reported, and what its message says was stopped is only
+// what the runner confirmed (pac and every process that held its output: stopClaim) — and says why a run failed, without pac's own header. list-connections.js starts `pac connection list` itself,
+// as it always has, through the same runner and with the same read budget (PAC_READ_TIMEOUT_MS below).
 //
 // Every run goes through lib/process-runner.js — an absolute executable from PATH, never the working directory, no shell — so a script
 // that falls back to pac starts nothing the rest of the plugin would not.
@@ -84,14 +84,16 @@ const LAUNCHER_ADVICE = 'The launcher is a Windows batch file, which cannot rece
   + 'Install pac as pac.exe (`dotnet tool install -g Microsoft.PowerApps.CLI.Tool`), which takes the value as it is, or run the command yourself in a shell that passes it as it is.';
 
 // What a call that ran out of time or output says about the process it started, and so what its message may claim. The runner ends the whole tree and settles once the pipes
-// have closed (`error.containment` 'confirmed', lib/process-runner.js spawnResultTree): nothing pac started still holds its output, and "was stopped" is true. When the wait for the
-// pipes ran out first ('unconfirmed') a process pac started still holds them and may still be running — typically one that outlived pac itself, which no process tree can be walked
-// to from a launcher that has already exited — so the message says that instead: it must not tell a reader a local process is gone when one is not. The one id it can give is
-// the process pac was started as, which has usually exited by then; the survivor's own is not known. An error with no containment (a stand-in, a synchronous runner) is read as before.
+// have closed (`error.containment` 'confirmed', lib/process-runner.js spawnResultTree). What that CONFIRMS is that nothing holds pac's output any more: pac, and every process that held its
+// output, was stopped — and that is all the message says. It does not prove that no other process pac started is running: one that never held the pipes (started detached, with streams of its own)
+// can outlive the kill, and no process tree that can be walked from a launcher that has already exited leads to it. When the wait for the pipes ran out first ('unconfirmed') a process pac started
+// still holds them and may still be running — typically one that outlived pac itself — so the message says that instead: it must not tell a reader a local process is gone when one is not. The one
+// id it can give is the process pac was started as, which has usually exited by then; the survivor's own is not known. An error with no containment (a stand-in, a synchronous runner) is read as before.
+// `claim` is a clause that follows a semicolon: "… did not finish within 180 s; <claim>."
 function stopClaim(error) {
-  if (!error || error.containment !== 'unconfirmed') return { stopped: true, claim: 'was stopped' };
+  if (!error || error.containment !== 'unconfirmed') return { stopped: true, claim: 'pac and every process that held its output were stopped' };
   const pid = Number.isInteger(error.pid) ? ` (pac was started as process ${error.pid}, which has exited; what it started is not known by id)` : '';
-  return { stopped: false, claim: `was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running${pid}` };
+  return { stopped: false, claim: `pac was asked to stop, but a process it started still held its output when the wait for it ended, so it may still be running${pid}` };
 }
 const LEFTOVER_ADVICE = ' End any leftover pac process (`Get-Process pac` on Windows, `ps` elsewhere) before trying again.';
 
@@ -123,11 +125,11 @@ async function runPac(args, { label, kind = 'read', redact = (text) => text, spa
       const next = kind === 'import'
         ? ' The environment may still be importing the package: look at its import history (Solutions → History in Maker) before importing again.'
         : ' A stalled call is usually transient, or pac is waiting for a sign-in (`pac auth list` shows the profile it uses): run it again.';
-      return { ok: false, failure: 'timeout', message: `\`${label}\` did not finish within ${Math.round(budget / 1000)} s and ${claim}.${stopped ? '' : LEFTOVER_ADVICE}${next}` };
+      return { ok: false, failure: 'timeout', message: `\`${label}\` did not finish within ${Math.round(budget / 1000)} s; ${claim}.${stopped ? '' : LEFTOVER_ADVICE}${next}` };
     }
     if (result.error.code === 'ENOBUFS') {
       const { stopped, claim } = stopClaim(result.error);
-      return { ok: false, failure: 'failed', message: `\`${label}\` wrote more than ${MAX_OUTPUT_BYTES / (1024 * 1024)} MiB of output and ${claim}.${stopped ? '' : LEFTOVER_ADVICE}` };
+      return { ok: false, failure: 'failed', message: `\`${label}\` wrote more than ${MAX_OUTPUT_BYTES / (1024 * 1024)} MiB of output; ${claim}.${stopped ? '' : LEFTOVER_ADVICE}` };
     }
     // The process runner refuses, before it starts anything, an argument a Windows batch launcher (`pac.cmd`) cannot pass on unchanged — a `%` or a
     // double quote, as in a URL-encoded SharePoint site address — unless the launcher is a plain forwarder to a native program, which it starts directly.

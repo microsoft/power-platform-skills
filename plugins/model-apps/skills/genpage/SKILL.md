@@ -1169,8 +1169,14 @@ writes the settings file of the solution (an empty `ConnectionId` for each conne
 file already filled in is not lost), the deployer fills it in, and
 `node "${PLUGIN_ROOT}/scripts/solution-settings.js" import --env '<target-envUrl>' --package '<solution.zip>' --settings '<settings.json>'`
 imports the package and applies the settings in the same import. Each prints one JSON line with
-`source` (`"sdk"`, or `"pac"` with a `fallback` that says why the SDK did not do the work) and never a
-settings value or a connection id.
+`source` (`"sdk"`, or `"pac"` with a `fallback` that says why the SDK did not do the work). A secret value
+and a connection id are kept out of what they print — a text that quotes one is withheld, or has it
+replaced by `<redacted>` — with these limits: a value of fewer than six characters that is known not to be
+a secret is not hidden; one whose type is not known (the `pac` route, a name the package does not define)
+is found only as a whole word, so it is printed when glued to letters, digits, marks or underscores or
+written inside an escape the sanitizer does not decode; and a value quoted in part, hashed, base64-encoded,
+written as an HTML entity beyond XML's five, Unicode-normalized or nested in more than three levels of
+encoding is not recognised.
 
 Custom API bindings need **no** extra ALM step: `config.json`'s `actionBindings` travels
 automatically in the `uxagentprojectfile` rows already pulled with the GenPage. The

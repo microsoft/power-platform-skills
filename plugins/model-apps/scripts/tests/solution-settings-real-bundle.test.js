@@ -321,6 +321,34 @@ test('REAL BUNDLE: an import that gets no answer is never sent again — one req
   }
 });
 
+test('REAL BUNDLE: the sentence the plugin writes for a request that got no answer is its own — shown whole whatever short value the file fills in, which can be a word of it — while the transport\'s own words in it are cleaned where they are read', async () => {
+  const noAnswer = (action, entries, transport) => {
+    const cloud = createCloud({ solution: { packageBase64: ZIP.toString('base64'), stage: STAGE } });
+    const request = async (options) => (new URL(options.url).pathname.endsWith(`/${action}`) ? { error: transport } : cloud.request(options));
+    const f = files({ EnvironmentVariables: entries, ConnectionReferences: [] });
+    const http = { getToken: () => cloud.tokens.dataverse, request, sleep: async () => {} };
+    return ss.runImport(importRequest(f), { http, pac: never, importJobId: JOB }).then(() => assert.fail(`${action}: the import was expected to fail`), (err) => err);
+  };
+  const tail = 'It was not sent again: the environment may still be working on it, or may have finished.';
+  const lead = (action) => `Transport failure reaching ${ORG}/api/data/v9.0/${action}: `;
+  // A staging that gets no answer: no definition has been read yet, so a short value's type is not known and it is looked for as a whole word — and the plugin's own sentence is made of words.
+  // The SDK writes the status line and the client's own message, and keeps the client's error as its cause, which is how the plugin knows the sentence is its own.
+  for (const value of ['not', 'may', 'again', 'it', 'on']) {
+    const err = await noAnswer('StageSolution', [{ SchemaName: 'new_Url', Value: value }], 'Request timed out');
+    assert.strictEqual(err.message, `${lead('StageSolution')}StageSolution got no answer (Request timed out). ${tail}`, value);
+    assert.strictEqual(err.code, 'CONNECTION_ERROR', value);
+  }
+  // An import: the sentence names the job, as before.
+  const imported = await noAnswer('ImportSolution', [{ SchemaName: 'new_Url', Value: 'again' }], 'Request timed out');
+  assert.strictEqual(imported.message, `${lead('ImportSolution')}ImportSolution got no answer (Request timed out). ${tail}${ss.lookUpJob(JOB)}`);
+  // The transport's own words are another party's text: a value they quote is withheld there — a secret at any length, a short value of unknown type as a whole word — and the sentence around them stays.
+  const secret = await noAnswer('ImportSolution', [{ SchemaName: 'new_Secret', Value: SECRET }], `connection reset while sending ${SECRET}`);
+  assert.strictEqual(secret.message, `${lead('ImportSolution')}ImportSolution got no answer (${WITHHELD('transport text')}). ${tail}${ss.lookUpJob(JOB)}`);
+  assert.ok(!secret.message.includes(SECRET));
+  const short = await noAnswer('StageSolution', [{ SchemaName: 'new_Url', Value: 'timed' }], 'Request timed out');
+  assert.strictEqual(short.message, `${lead('StageSolution')}StageSolution got no answer (${WITHHELD('transport text')}). ${tail}`);
+});
+
 test('REAL BUNDLE: an import that the platform ACCEPTED and a gateway answered 5xx (or 401) is not sent a second time — one ImportSolution, the SDK\'s ConnectionError with that status, then the job named', async () => {
   for (const status of [500, 502, 503, 504, 401]) {
     const cloud = createCloud({ solution: { packageBase64: ZIP.toString('base64'), stage: STAGE } });
@@ -745,6 +773,94 @@ test('PROCESS: the reason pac was asked and what pac says are cleaned — a secr
   assert.strictEqual(out.error, `\`pac solution import\` failed (exit 1): ${WITHHELD('text')}`);
 });
 
+// What a short value that the file gives and the package does not define, or that nothing was read for, may withhold. The case seen on a real organization: an entry for a name the package does not define, with the value `x` — a
+// message that names the entry, and holds no value, was withheld because the letter occurs in "new_Text". The SDK refuses such an entry before it sends anything.
+const TEXT_STAGE = { variables: [{ schemaName: 'new_Text', type: '100000000' }], references: [] };
+const NOT_IN_PACKAGE = /^importSolution: deploymentSettings does not match the package \u2014 EnvironmentVariables: 'new_NotInPackage' is not a variable of the package\. The package's variables: new_Text; its connection references: none\. Nothing was imported\.$/;
+
+test('PROCESS: an entry for a name the package does not define, with a short value — "x" among them — prints the SDK\'s own account of which entry is wrong, exits 1, and imports nothing', () => {
+  for (const value of ['x', 'Text', 'new', 'en', 'true', '1', 'qqq']) {
+    const run = importInProcess({
+      settings: JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Text', Value: '' }, { SchemaName: 'new_NotInPackage', Value: value }], ConnectionReferences: [] }),
+      solution: { stage: TEXT_STAGE },
+    });
+    assert.strictEqual(run.status, 1, JSON.stringify(value));
+    assert.strictEqual(importPosts(run), 0, `${JSON.stringify(value)}: the SDK refused the entry before it sent anything`);
+    const out = JSON.parse(run.lines[0]);
+    assert.strictEqual(out.code, 'INVALID_ARGUMENT', JSON.stringify(value));
+    assert.match(out.error, NOT_IN_PACKAGE, `a value of ${JSON.stringify(value)}`);
+    assert.strictEqual(run.stderr.trim(), out.error, 'stderr says the same');
+    assert.strictEqual(run.state.imports.length, 0);
+  }
+});
+
+// A value of four or five characters that the package does not define is not known to be anything: it is looked for as a whole word. The whole-word rule is what lets a message that names the entry
+// through — and what still holds a value back when a text has it standing alone.
+test('PROCESS: a short value that is not known to be anything is still withheld where a text has it as a whole word — the platform\'s answer that quotes it, and nothing else of the message', () => {
+  const run = importInProcess({
+    settings: JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_NotInPackage', Value: 'none' }], ConnectionReferences: [] }),
+    solution: { stage: TEXT_STAGE },
+  });
+  // The SDK's own words say "its connection references: none": the value is a whole word in them, and it is a word as much as a value, so the message is withheld — the cost the rule leaves.
+  assert.strictEqual(JSON.parse(run.lines[0]).error, WITHHELD('message'));
+  assert.strictEqual(run.status, 1);
+  assertPrintsNone(run, ['none'], 'a value that is a whole word of the SDK\'s message');
+  // The same value for a variable the package defines as Text is not hidden at all (it is known not to be a secret, and shorter than six characters).
+  const known = importInProcess({
+    settings: JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Text', Value: 'none' }], ConnectionReferences: [] }),
+    solution: { stage: TEXT_STAGE, importAnswer: json(400, { error: { message: 'the value none was refused' } }) },
+  });
+  assert.strictEqual(JSON.parse(known.lines[0]).error, `HTTP 400 from ${IMPORT_URL}: the value none was refused`);
+});
+
+// The pac fallback reads no package: every variable is of unknown type there. A value of `1` or `en` is a word as much as a value — and the plugin's own "(exit 1)" and the SDK's sentence for the feature
+// ("deployment") are not another party's text, so neither is withheld for it.
+const PAC_FAILING = [
+  'Connected as maker@contoso.onmicrosoft.com',
+  'Microsoft PowerPlatform CLI',
+  'Version: 2.12.2+ga6b1ffa (.NET 10.0.12)',
+  '',
+  "Error: Failed to deserialize the deployment settings. Required property 'UserEmail' not found in JSON. Path 'Workflows[0]', line 22, position 5.",
+].join('\r\n');
+const FEATURE_SENTENCE = 'importSolution: deploymentSettings is not a deployment-settings file this SDK applies \u2014 deploymentSettings.Workflows is a pac feature this SDK does not apply: only an empty list is accepted. Nothing was imported.';
+
+test('PROCESS: the pac fallback prints the reason pac was asked, and pac\'s exit status, for a short Text value — "1" or "en" — whether pac fails or succeeds', () => {
+  for (const value of ['1', 'en']) {
+    const settings = JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Flag', Value: value }], ConnectionReferences: [], Workflows: [{ WorkflowId: '1' }] });
+    const solution = { stage: { variables: [{ schemaName: 'new_Flag', type: '100000000' }], references: [] } };
+    const failed = importInProcess({ settings, solution, pac: { responses: [{ match: ['solution', 'import'], status: 1, stdout: PAC_FAILING }] } });
+    assert.strictEqual(failed.status, 1, `a value of ${value}`);
+    assert.deepStrictEqual(failed.requests, [], 'the SDK refused the file before any request: pac read the package, not the plugin');
+    const out = JSON.parse(failed.lines[0]);
+    assert.strictEqual(out.code, 'PAC_FAILED');
+    assert.strictEqual(out.error, "`pac solution import` failed (exit 1): Error: Failed to deserialize the deployment settings. Required property 'UserEmail' not found in JSON. Path 'Workflows[0]', line 22, position 5.", `a value of ${value}`);
+    assert.deepStrictEqual(out.fallback, { code: 'INVALID_ARGUMENT', message: FEATURE_SENTENCE }, `a value of ${value}`);
+    assert.strictEqual(failed.stderr.trim(), out.error);
+
+    const ok = importInProcess({ settings, solution, pac: { responses: [{ match: ['solution', 'import'], stdout: 'Solution Imported successfully.\n' }] } });
+    assert.strictEqual(ok.status, 0, `${value}: ${ok.stderr}`);
+    const done = JSON.parse(ok.lines[0]);
+    assert.deepStrictEqual([done.ok, done.source], [true, 'pac']);
+    assert.deepStrictEqual(done.fallback, { code: 'INVALID_ARGUMENT', message: FEATURE_SENTENCE }, `a value of ${value}`);
+    assert.deepStrictEqual(done.applied, { environmentVariables: ['new_Flag'], connectionReferences: [] });
+  }
+});
+
+// A short secret — what a package that says Secret, or a file that does, may hold — is hidden by SUBSTRING at any length: the spellings the decoders do not read, and a value glued to words, are not a way
+// round it. (The same texts print a short value that nothing says is a secret: see AGENTS.md for what that leaves.) Each is a process of its own.
+for (const [name, spelled] of [['in an octal escape', '\\042PIN42\\042'], ['in a legacy %u escape', '%u0022PIN42%u0022'], ['in an XML reference with no semicolon', '&#x22PIN42&#x22'], ['glued to words', 'ValuePIN42wasRefused']]) {
+  test(`PROCESS: a five-character secret — the package says Secret — is not printed when the platform quotes it ${name}, nor when only the file says Secret`, () => {
+    const byPackage = importOf('PIN42', { message: `Value ${spelled} was refused` });
+    assert.strictEqual(byPackage.status, 1);
+    assert.strictEqual(importPosts(byPackage), 1, 'the import was sent and the platform answered');
+    assertPrintsNone(byPackage, ['PIN42'], `the package says Secret, ${name}`);
+    assert.strictEqual(JSON.parse(byPackage.lines[0]).error, `HTTP 400 from ${IMPORT_URL}: ${WITHHELD('message')}`);
+    const byFile = importOf('PIN42', { fileType: 100000005, type: '100000000', message: `Value ${spelled} was refused` });
+    assertPrintsNone(byFile, ['PIN42'], `the file says Secret, ${name}`);
+    assert.strictEqual(JSON.parse(byFile.lines[0]).error, `HTTP 400 from ${IMPORT_URL}: ${WITHHELD('message')}`);
+  });
+}
+
 test('PROCESS: pac\'s header is not in a failure — the Error line is, and the signed-in account, the version and the links are not', () => {
   const failing = [
     'Connected as maker@contoso.onmicrosoft.com',
@@ -789,6 +905,61 @@ test('PROCESS: template without --force does not replace a file that APPEARED wh
   const forced = runScript('solution-settings.js', ['template', '--env', ORG, '--solution', 'ContosoDemo', '--out', inRunDir('settings.json'), '--force'], { platform: { ...STAGE_CONFIG, hooks }, read: ['settings.json'] });
   assert.strictEqual(forced.status, 0, forced.stderr);
   assert.ok(JSON.parse(forced.outputs['settings.json']).EnvironmentVariables.length > 0 && forced.outputs['settings.json'] !== mine);
+});
+
+// The settings file is published under its name by a hard link, and the temporary name it was written under is then removed (lib/safe-fs.js). Two things can go wrong with that on a real machine, and each is a
+// process of its own here, with a preload that makes it happen: the temporary name cannot be removed (a scanner holds it), and the file system cannot link at all (FAT, exFAT, some shares).
+const HELD_SIBLING = path.resolve(__dirname, 'helpers', 'fake-held-sibling-preload.js');
+const NO_HARD_LINKS = path.resolve(__dirname, 'helpers', 'fake-no-hard-links-preload.js');
+const requiring = (preload) => ({ NODE_OPTIONS: `--require=${JSON.stringify(preload)}` });
+const templateInto = (out, extra = [], env = {}) => runScript('solution-settings.js', ['template', '--package', inRunDir('solution.zip'), '--env', ORG, '--out', out, ...extra], { platform: STAGE_CONFIG, files: { 'solution.zip': ZIP }, env });
+
+test('PROCESS: template whose temporary name cannot be removed after the file was written is a SUCCESS — exit 0, the complete file, a warning naming the leftover — and the next run refuses the file, naming it', () => {
+  const folder = tempDir();
+  const out = path.join(folder, 'settings.json');
+  const first = templateInto(out, [], requiring(HELD_SIBLING));
+  assert.strictEqual(first.status, 0, first.stderr);
+  const done = JSON.parse(first.lines[0]);
+  assert.deepStrictEqual([done.ok, done.source, done.environmentVariables, done.connectionReferences], [true, 'sdk', 2, 1]);
+  assert.strictEqual(done.warnings.length, 1);
+  const [leftover] = fs.readdirSync(folder).filter((name) => name !== 'settings.json');
+  assert.match(leftover, /^\.settings\.json\.\d+\.[0-9a-f]{8}\.tmp$/, 'the temporary name is what is left beside the file');
+  assert.ok(done.warnings[0].includes(leftover) && /was written in full, but its temporary name .* could not be removed \(EBUSY\): delete it/.test(done.warnings[0]), done.warnings[0]);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(out, 'utf8')).EnvironmentVariables.map((v) => v.SchemaName), ['new_Secret', 'new_Url'], 'the file is complete');
+  assert.strictEqual(fs.statSync(out).nlink, 2, 'under two names, until the leftover is removed');
+  assert.match(first.stdout, /^[\x00-\x7e\r\n]*$/, 'pure ASCII');
+  // The next run — with or without --force — finds a file with a second name, and says where the other name is.
+  for (const extra of [[], ['--force']]) {
+    const again = templateInto(out, extra);
+    assert.strictEqual(again.status, 1, extra.join(' '));
+    const refused = JSON.parse(again.lines[0]);
+    assert.strictEqual(refused.code, 'UNSAFE_OUTPUT');
+    assert.match(refused.error, /it is a hard link \(2 names share this file; one of them is .*the temporary name an earlier write could not remove — delete it\)/);
+    assert.ok(refused.error.includes(leftover));
+    assert.deepStrictEqual(again.requests, [], 'refused before anything is asked of the environment');
+  }
+  // Delete the leftover and the same run goes through.
+  fs.rmSync(path.join(folder, leftover));
+  const third = templateInto(out, ['--force']);
+  assert.strictEqual(third.status, 0, third.stderr);
+  assert.strictEqual(fs.statSync(out).nlink, 1);
+  assert.deepStrictEqual(fs.readdirSync(folder), ['settings.json']);
+});
+
+test('PROCESS: template on a file system that cannot make a hard link fails closed without --force — and the message says that --force writes there — and --force writes the file', () => {
+  const folder = tempDir();
+  const out = path.join(folder, 'settings.json');
+  const refused = templateInto(out, [], requiring(NO_HARD_LINKS));
+  assert.strictEqual(refused.status, 1);
+  const failure = JSON.parse(refused.lines[0]);
+  assert.strictEqual(failure.code, 'IO_ERROR');
+  assert.match(failure.error, /this file system cannot make a second name for a file \(link failed with EISDIR\)/);
+  assert.match(failure.error, /file system that supports hard links \(NTFS, ext4, APFS\)\. Or pass --force: it replaces the file at --out by renaming a finished copy over it, which needs no hard link\.$/);
+  assert.deepStrictEqual(fs.readdirSync(folder), [], 'nothing is left: not the file, not the temporary name');
+  const forced = templateInto(out, ['--force'], requiring(NO_HARD_LINKS));
+  assert.strictEqual(forced.status, 0, forced.stderr);
+  assert.deepStrictEqual(fs.readdirSync(folder), ['settings.json']);
+  assert.ok(JSON.parse(fs.readFileSync(out, 'utf8')).EnvironmentVariables.length > 0);
 });
 
 test('PROCESS: an invalid file whose key holds "this SDK does not apply" is a failure — pac is not asked — while a file that holds a real feature is answered by pac', () => {
