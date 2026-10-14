@@ -273,7 +273,7 @@ test('download: <output>/<page id>/{page.tsx, config.json, prompt.txt}, with the
   const out = path.join(scratch('dl'), 'pages');
   const genpage = fakeGenpage({ pages: [pageOf(P1, { source: 'const x = 1;\r\n// é\n', name: 'Überblick' }), pageOf(P2, { prompt: undefined, dataSources: [] })] });
   const payload = ok(await run(downloadArgs(out, P1, P2.toUpperCase()), genpage));
-  const root = fs.realpathSync(out);
+  const root = fs.realpathSync.native(out);
   assert.deepStrictEqual(payload, {
     ok: true,
     outputDirectory: root,
@@ -316,7 +316,7 @@ test('download: a conversation of several prompts is the transcript a rebuild re
 test('download: a prompt.txt an earlier download left is removed when the page has no prompt — it would be read as this page\'s — and the removal is said', async () => {
   const out = scratch('stale');
   ok(await run(downloadArgs(out, P1), fakeGenpage({ pages: [pageOf(P1)] })));
-  const directory = path.join(fs.realpathSync(out), P1);
+  const directory = path.join(fs.realpathSync.native(out), P1);
   assert.ok(fs.existsSync(path.join(directory, 'prompt.txt')));
   const payload = ok(await run(downloadArgs(out, P1), fakeGenpage({ pages: [pageOf(P1, { prompt: undefined })] })));
   assert.deepStrictEqual(payload.pages[0].removed, ['prompt.txt']);
@@ -421,7 +421,7 @@ test('types: the SDK\'s text is written exactly as it came — LF, no byte order
   const text = '\n// ---- types ----\nexport type Café = 1;\n';
   const genpage = fakeGenpage({ types: text });
   const payload = ok(await run(typesArgs(file), genpage));
-  assert.deepStrictEqual(payload, { ok: true, outputFile: fs.realpathSync(file), dataSources: ['account', 'contact'], detail: 'none', bytes: Buffer.byteLength(text, 'utf8') });
+  assert.deepStrictEqual(payload, { ok: true, outputFile: fs.realpathSync.native(file), dataSources: ['account', 'contact'], detail: 'none', bytes: Buffer.byteLength(text, 'utf8') });
   assert.deepStrictEqual(fs.readFileSync(file), Buffer.from(text, 'utf8'));
   assert.deepStrictEqual(genpage.of('runtimeTypes').map((c) => c.args), [[['account', 'contact'], { detail: 'None' }]]);
   assert.strictEqual(payload.bytes, text.length + 1, 'bytes, not characters: é is two');

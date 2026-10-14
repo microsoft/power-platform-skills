@@ -1234,8 +1234,8 @@ test('--out is replaced the safe way: written to a temp file in its own folder a
   await ss.runTemplate({ command: 'template', packagePath: pkg, outPath: out, force: true }, { sdkFirst: stubSdkFirst({}), pac });
   const onto = renames.filter((r) => r.toName === 'settings.json');
   assert.strictEqual(onto.length, 1, 'one rename onto --out');
-  assert.strictEqual(fs.realpathSync(onto[0].toDir), fs.realpathSync(dir));
-  assert.strictEqual(fs.realpathSync(onto[0].fromDir), fs.realpathSync(dir), 'the temp file is beside the target, so the rename replaces the entry');
+  assert.strictEqual(fs.realpathSync.native(onto[0].toDir), fs.realpathSync.native(dir));
+  assert.strictEqual(fs.realpathSync.native(onto[0].fromDir), fs.realpathSync.native(dir), 'the temp file is beside the target, so the rename replaces the entry');
   assert.match(onto[0].fromName, /^\.settings\.json\..+\.tmp$/);
   assert.deepStrictEqual(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp')), []);
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(out, 'utf8')), PAC_TEMPLATE, 'the old file is replaced');

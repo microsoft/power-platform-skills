@@ -90,7 +90,7 @@ test('PROCESS download: the files of a page are on disk with the bytes the page 
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stderr, '');
   const payload = result(r);
-  const root = fs.realpathSync(out);
+  const root = fs.realpathSync.native(out);
   assert.deepStrictEqual(payload.pages.map((p) => [p.pageId, p.directory, p.files]), [
     [P1, path.join(root, P1), ['page.tsx', 'config.json', 'prompt.txt']],
     [P2, path.join(root, P2), ['page.tsx', 'config.json', 'prompt.txt']],
@@ -123,7 +123,7 @@ test('PROCESS types: the SDK\'s module is written as it came — a blank first l
   const payload = result(r);
   const bytes = fs.readFileSync(file);
   assert.strictEqual(payload.bytes, bytes.length);
-  assert.deepStrictEqual([payload.dataSources, payload.detail, payload.outputFile], [['account'], 'none', fs.realpathSync(file)]);
+  assert.deepStrictEqual([payload.dataSources, payload.detail, payload.outputFile], [['account'], 'none', fs.realpathSync.native(file)]);
   const text = bytes.toString('utf8');
   assert.ok(text.startsWith('\n// ---------------- Type Definitions which can be imported from ./RuntimeTypes'));
   assert.ok(text.includes('export type account = TableRow<{') && text.includes('export interface GeneratedComponentProps'));
