@@ -59,6 +59,13 @@ that holds it, a rebuild publishes only the pages that changed, and teardown fin
   time out or parse for a page (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` is no longer read), and **`az` is now needed to deploy a
   page**, not only to create entities. Verify reads page code in-process, four pages at a time; a command that could not remove the
   temporary folder it read page source into says so instead of reporting success.
+- **A page is compiled by the bundled SDK, with the TypeScript 5.8.3 compiler the plugin now ships**, in place of the transpile `pac`
+  made when it uploaded one. The compiler is the official `typescript` package's `lib/typescript.js`, minified and brotli-compressed
+  (`scripts/vendor/typescript/`, ~0.8 MB, with its Apache-2.0 license and notices): the SDK compiles a page itself whenever a push
+  changes it and accepts only the TypeScript version the maker portal compiles with, and a plugin install has no `node_modules`. It is
+  unpacked and run (about 0.2 s) only when a page is compiled, and its bytes are checked against the recorded hash first. As in the
+  portal this is a transpile, not a type check — a page with a type error still deploys — and a page that does not parse, has no
+  default export or imports a value `RuntimeTypes` does not hold is refused by the SDK before anything is written.
 - **A page write is one atomic change set, and says what it did and nothing more.** A create mints its id first, so an unknown
   outcome is settled by reading that id (sent once more under the same id only when nothing landed: never a second page); "nothing
   was written" is said only when the SDK refused the write before sending it or the service answered 4xx, and any other failure at

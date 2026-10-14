@@ -251,38 +251,78 @@ test('removing a required subset module declaration is reported', () => withTemp
 
 // A retained function can call a helper FUNCTION that is not exported: model-apps' getAuthToken calls readAzToken. Its own text
 // is identical in both copies, so only the helper's absence (or drift) says the copy is broken — at run time, as a ReferenceError.
+// The helper's text goes in exactly as given, so that a test can find it again to change or remove it.
 function withHelper(root, helperText) {
   for (const rel of [COPY_SETS[0].subset.source, COPY_SETS[0].subset.copy]) {
     const full = path.join(root, rel);
     const text = fs.readFileSync(full, 'utf8')
-      .replace('module.exports = {', `${helperText}\nmodule.exports = {`)
-      .replaceAll('return DATAVERSE_HOST.test', 'return helper() && DATAVERSE_HOST.test');
+      .replaceAll('return DATAVERSE_HOST.test', 'return helper() && DATAVERSE_HOST.test')
+      .replace('module.exports = {', `${helperText}\nmodule.exports = {`);
     fs.writeFileSync(full, text);
   }
   return path.join(root, COPY_SETS[0].subset.copy);
 }
 
-const HELPER = "const deep = 'https://contoso.crm.dynamics.com';\nfunction helper() {\n  return DATAVERSE_HOST.test(deep);\n}\n";
+// Every form of top-level function declaration the finder reads (see `topLevelFunctions`). A form it did not read would never be required
+// of pcf's copy, and the copy would throw ReferenceError the first time a retained function called that helper — so each form is a helper.
+const DEEP = "const deep = 'https://contoso.crm.dynamics.com';\n";
+const HELPER_FORMS = [
+  ['function', 'function helper() {\n  return DATAVERSE_HOST.test(deep);\n}\n'],
+  ['async function', 'async function helper() {\n  return DATAVERSE_HOST.test(deep);\n}\n'],
+  ['generator function', 'function* helper() {\n  yield DATAVERSE_HOST.test(deep);\n}\n'],
+  ['async generator function', 'async function* helper() {\n  yield DATAVERSE_HOST.test(deep);\n}\n'],
+  ['unevenly spaced async generator', 'async   function  *  helper  (opts = {}) {\n  return DATAVERSE_HOST.test(deep);\n}\n'],
+];
 
-test('a helper function a retained function calls must be in the copy, and so must what the helper uses', () => {
-  withTempRepo((root) => {
-    withHelper(root, HELPER);
-    assert.equal(runCheck(root).ok, true, 'with the helper in both copies');
+for (const [form, helper] of HELPER_FORMS) {
+  test(`a helper written as ${form} is required of the copy, with what it uses and its text`, () => {
+    withTempRepo((root) => {
+      withHelper(root, DEEP + helper);
+      assert.equal(runCheck(root).ok, true, 'with the helper in both copies');
+    });
+    withTempRepo((root) => {
+      const copyPath = withHelper(root, DEEP + helper);
+      const withoutHelper = fs.readFileSync(copyPath, 'utf8').replace(helper, '');
+      assert.notEqual(withoutHelper, fs.readFileSync(copyPath, 'utf8'), 'the helper was in the copy');
+      fs.writeFileSync(copyPath, withoutHelper);
+      const result = runCheck(root);
+      assert.equal(result.ok, false);
+      assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'helper'));
+    });
+    withTempRepo((root) => {
+      const copyPath = withHelper(root, DEEP + helper);
+      fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace(DEEP, ''));
+      const result = runCheck(root);
+      assert.equal(result.ok, false);
+      assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'deep'), 'what the helper reads');
+    });
+    withTempRepo((root) => {
+      const copyPath = withHelper(root, DEEP + helper);
+      fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace('DATAVERSE_HOST.test(deep)', 'DATAVERSE_HOST.test(deep) || true'));
+      const result = runCheck(root);
+      assert.equal(result.ok, false);
+      assert.ok(result.findings.some((finding) => finding.kind === 'declaration-drift' && finding.source === 'helper'), 'a helper that differs');
+    });
   });
-  withTempRepo((root) => {
-    const copyPath = withHelper(root, HELPER);
-    fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace(/function helper\(\) \{\n[\s\S]*?\n\}\n/, ''));
-    const result = runCheck(root);
-    assert.equal(result.ok, false);
-    assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'helper'));
-  });
-  withTempRepo((root) => {
-    const copyPath = withHelper(root, HELPER);
-    fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace(/^const deep = .*\n/m, ''));
-    const result = runCheck(root);
-    assert.equal(result.ok, false);
-    assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'deep'), 'what the helper reads');
-  });
+}
+
+test('the function finder reads a declaration in each form it supports, whole, and nothing that only looks like one', () => {
+  const declarations = {
+    plain: 'function plain(a, b = {}) {\n  return a + b;\n}',
+    waits: 'async function waits(a) {\n  function inner() {\n    return a;\n  }\n  return await inner();\n}',
+    walks: 'function* walks() {\n  yield 1;\n}',
+    streams: 'async function* streams() {\n  yield 1;\n}',
+    spaced: 'async   function  *  spaced  (opts = {}) {\n  return opts;\n}',
+  };
+  const source = [
+    ...Object.values(declarations),
+    // At the left margin, but inside a comment and a template: no declarations. A function expression is a `const` declaration, not one of these.
+    '/*\nfunction commented() {}\n*/',
+    'const quoted = `\nfunction templated() {}\n`;',
+    'const expression = function named() {\n  return 1;\n};',
+    '',
+  ].join('\n');
+  assert.deepEqual(Object.fromEntries(topLevelFunctions(source)), declarations);
 });
 
 test('a helper function must keep the source text, to its last line — a brace in a literal or a comment does not end it', () => {
@@ -320,9 +360,12 @@ test('the function finder reads every exported function of the real dataverse-au
   for (const rel of [COPY_SETS[0].subset.source, COPY_SETS[0].subset.copy]) {
     const full = path.join(REPO_ROOT, rel);
     const found = topLevelFunctions(fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n'));
-    const exported = Object.entries(require(full)).filter(([name, fn]) => typeof fn === 'function' && found.has(name));
-    assert.ok(exported.length >= 10, `${rel}: ${exported.length}`);
-    for (const [name, fn] of exported) assert.equal(found.get(name), String(fn).replace(/\r\n/g, '\n'), `${rel} ${name}`);
+    // Every export the module writes as a function declaration. Keeping only what the finder found would drop exactly the ones it missed
+    // — an `async function`, say — and a helper the finder misses is never required of pcf's copy.
+    const declared = Object.entries(require(full)).filter(([, fn]) => typeof fn === 'function' && /^(?:async\s+)?function\b/.test(String(fn)));
+    assert.ok(declared.length > 0, `${rel}: no exported function declaration to read`);
+    assert.deepEqual(declared.map(([name]) => name).filter((name) => !found.has(name)), [], `${rel}: exported functions the finder did not find`);
+    for (const [name, fn] of declared) assert.equal(found.get(name), String(fn).replace(/\r\n/g, '\n'), `${rel} ${name}`);
   }
 });
 

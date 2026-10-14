@@ -1689,7 +1689,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
         schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name`,
       }),
     };
-    // Env-wide names differ from sitemap titles (the core addenda new-1 distinction)
+    // Env-wide names differ from sitemap titles
     const mockGenpage = fakeGenpage({ pages: [{ pageId: GP_A, name: 'Env Name A' }, { pageId: GP_B, name: 'Env Name B' }] });
 
     const result = await runDownload({
@@ -1701,10 +1701,10 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
     // Full spec validates (profile:'plan' enforces every page is a sitemap subarea)
     const v = validateAppSpec(spec, { profile: 'plan' });
     assert.ok(v.ok, v.errors.join('; '));
-    // Every page carries its pageId (C3 edit-snapshot self-description)
+    // Every page carries its pageId (an edit snapshot describes itself)
     assert.ok(spec.pages.every((p) => p.pageId !== undefined), 'every page in the spec carries its pageId');
     assert.strictEqual(spec.pages.length, 2, 'recovered spec has every sitemap page (no drop)');
-    // Env-wide names used (not sitemap titles) — the core addenda new-1 assertion
+    // Env-wide names used (not sitemap titles)
     const pageA = spec.pages.find((p) => p.pageId === GP_A);
     assert.strictEqual(pageA.name, 'Env Name A', 'env-wide name used as page name (not sitemap title "Sitemap A")');
     // App identity round-trips: the REAL immutable uniquename is captured (so a rebuild resolves the

@@ -1,7 +1,8 @@
 'use strict';
 // The plugin-wide allowlist of what `pac` is still started for. Every other command the plugin used to run through pac is done
-// through the bundled SDK now, so a NEW way to start pac — another verb, another script, an indirection — fails here and has to be
-// argued for in this file. What stays, and why:
+// through the bundled SDK now, so a NEW way to start pac — another verb, another script, another spelling of its name — fails
+// here and has to be argued for in this file. Not seen: a name held in a constant inside one of the files that already name pac
+// (`const X = 'pac.exe'; spawnSync(X, …)`); a pac literal in any other file fails the file list below. What stays, and why:
 //   pac org who                     check-auth.js: the pre-flight compares pac's identity with az's (a mismatch is what makes a
 //                                   later write fail with 403), and reads the environment when --env is omitted.
 //   pac connection list             list-connections.js: when the SDK refuses the read (an org in a cloud or behind a route it does
@@ -15,20 +16,34 @@
 //   pac --version, pac auth who     lib/telemetry/lib: the shared telemetry library (a byte copy of shared/telemetry/lib) reads
 //                                   pac's version and signed-in identity for its event dimensions; changing that is the shared
 //                                   library's business, not this plugin's.
-// A "start" is a call whose first argument is the literal 'pac' (any quote). lib/pac-fallback.js's runPac is the one wrapper that
-// takes its argv from a caller, so its calls are pinned as well. Comments are not code (helpers/production-scripts.js).
+// A "start" is a call whose first argument is a literal that names pac (any quote) — `pac`, `pac.exe`, `pac.cmd`, a path ending in one
+// of them, in any letter case — or, for exec and execSync, a command line that begins with such a name. lib/pac-fallback.js's runPac is
+// the one wrapper that takes its argv from a caller, so its calls are pinned as well. Comments are not code (helpers/production-scripts.js).
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { SCRIPTS_DIR, productionScripts, withoutComments } = require('./helpers/production-scripts.js');
 
-// `exec("pac", ["auth", "who"], …)`, `spawnResultTree('pac', ['connection', 'list', …])`, `spawn('pac', args, …)`:
+// The names a script starts pac by — not only `pac`. On Windows Node starts a program by its file name, so a direct
+// `spawnSync('pac.exe', …)` starts the dotnet-tool install with no shell and no process runner; `pac.cmd` is the shim the other installs
+// use; a path to either starts the same program; and a file name there is not case-sensitive (`PAC.EXE`). A word that only contains pac
+// (`unpac`, `pac-fallback.js`) is not one: the name is the whole literal, or what follows the last path separator in it.
+const QUOTE = /['"`]/.source;
+const NOT_QUOTE = /[^'"`\r\n]/.source;
+const PAC_NAME = String.raw`(?:${NOT_QUOTE}*[\\/])?pac(?:\.exe|\.cmd)?`;
+// `exec("pac", ["auth", "who"], …)`, `spawnResultTree('pac', ['connection', 'list', …])`, `spawn('pac.exe', args, …)`:
 // the function, then the argv — an array literal or the name of one.
-const PAC_START = /\b([A-Za-z_$][\w$]*)\s*\(\s*(['"`])pac\2\s*,\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)/g;
+const PAC_START = new RegExp(String.raw`\b([A-Za-z_$][\w$]*)\s*\(\s*(${QUOTE})${PAC_NAME}\2\s*,\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)`, 'gi');
+// `execSync('pac solution export --name x')`: a command line handed to a shell. validate-secure-process-execution.js requires the
+// command of exec and execSync to be one static string, and a static `pac …` is one, so it is read here: a literal first argument that
+// begins with the name. Not seen: an alias of exec under another name, and a command line inside a longer argument
+// (`spawn('cmd.exe', ['/c', 'pac …'])`).
+const PAC_SHELL_START = new RegExp(String.raw`\b(?:exec|execSync)\s*\(\s*${QUOTE}\s*${PAC_NAME}\s+(${NOT_QUOTE}*)`, 'gi');
 // `runPac(['solution', 'import', …], …)` or `runPac(args, …)`; its declaration (`function runPac(args, …)`) is not a call.
 const RUN_PAC = /(?<!function\s+)\brunPac\s*\(\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)/g;
-const PAC_LITERAL = /(['"`])pac\1/;
+// The name as a string anywhere (`const exe = 'pac.exe'; spawn(exe, args)`): an indirection the call patterns cannot follow.
+const PAC_LITERAL = new RegExp(String.raw`(${QUOTE})${PAC_NAME}\1`, 'i');
 
 // The first two string literals of an argv array — the command — or `<name>` when the argv is a variable.
 function commandOf(argv) {
@@ -42,17 +57,46 @@ function scan(sources) {
   const literalFiles = [];
   for (const [name, source] of sources) {
     const code = withoutComments(source);
+    const shellStarts = [...code.matchAll(PAC_SHELL_START)];
     for (const m of code.matchAll(PAC_START)) starts.push(`${name}: ${commandOf(m[3])}`);
+    // `pac solution export --name x` is the command `solution export`.
+    for (const m of shellStarts) starts.push(`${name}: ${m[1].trim().split(/\s+/).slice(0, 2).join(' ')}`);
     for (const m of code.matchAll(RUN_PAC)) runPacCalls.push(`${name}: ${commandOf(m[1])}`);
-    if (PAC_LITERAL.test(code)) literalFiles.push(name);
+    if (PAC_LITERAL.test(code) || shellStarts.length > 0) literalFiles.push(name);
   }
   return { starts: starts.sort(), runPacCalls: runPacCalls.sort(), literalFiles: literalFiles.sort() };
 }
 
-const PRODUCTION = scan(productionScripts().map((file) => [
+const SOURCES = productionScripts().map((file) => [
   path.relative(SCRIPTS_DIR, file).split(path.sep).join('/'),
   fs.readFileSync(file, 'utf8'),
-]));
+]);
+const PRODUCTION = scan(SOURCES);
+
+// What the scan may find in the production scripts. The tests below assert exactly this, and the last ones add a script of their own to
+// the sources to show that it no longer holds.
+const ALLOWED_STARTS = [
+  'check-auth.js: org who',
+  'lib/pac-fallback.js: <args>',
+  'lib/telemetry/lib/agent-info.js: --version',
+  'lib/telemetry/lib/pac-auth.js: auth who',
+  'list-connections.js: connection list',
+];
+const ALLOWED_RUN_PAC_CALLS = [
+  'connector.js: <args>',
+  'solution-settings.js: solution create-settings',
+  'solution-settings.js: solution import',
+];
+const ALLOWED_LITERAL_FILES = [
+  'check-auth.js',
+  'connector.js',
+  'lib/pac-fallback.js',
+  'lib/sdk-first.js',
+  'lib/telemetry/lib/agent-info.js',
+  'lib/telemetry/lib/pac-auth.js',
+  'list-connections.js',
+  'solution-settings.js',
+];
 
 test('the scan itself: it finds a start in any quote, with a literal or a variable argv, and not one in a comment', () => {
   const found = scan([
@@ -67,22 +111,35 @@ test('the scan itself: it finds a start in any quote, with a literal or a variab
   assert.deepStrictEqual(found.literalFiles, ['a.js', 'b.js', 'e.js']);
 });
 
-test('pac is started in exactly these places, for exactly these commands', () => {
-  assert.deepStrictEqual(PRODUCTION.starts, [
-    'check-auth.js: org who',
-    'lib/pac-fallback.js: <args>',
-    'lib/telemetry/lib/agent-info.js: --version',
-    'lib/telemetry/lib/pac-auth.js: auth who',
-    'list-connections.js: connection list',
+test('the scan itself: it finds a start by any spelling of the name — an extension, a path, capitals — and by the command line given to exec', () => {
+  const found = scan([
+    ['f.js', "spawnSync('pac.exe', ['solution', 'export', '--name', n], { shell: false });"],
+    ['g.js', 'execFileSync("PAC.CMD", args);'],
+    ['h.js', "spawn('C:\\\\Users\\\\maker\\\\.dotnet\\\\tools\\\\pac.exe', ['org', 'who']);"],
+    ['i.js', "execFile('/usr/local/bin/pac', ['connection', 'list'], callback);"],
+    ['j.js', "execSync('pac solution export --name Contoso');"],
+    ['k.js', 'child_process.execSync(`Pac.Exe auth who`);'],
   ]);
+  assert.deepStrictEqual(found.starts, ['f.js: solution export', 'g.js: <args>', 'h.js: org who', 'i.js: connection list', 'j.js: solution export', 'k.js: auth who']);
+  assert.deepStrictEqual(found.literalFiles, ['f.js', 'g.js', 'h.js', 'i.js', 'j.js', 'k.js']);
+});
+
+test('the scan itself: a word that only contains pac, a message that begins with it and a shell line that only mentions it are not starts', () => {
+  const found = scan([
+    ['l.js', "const names = ['unpac', 'spac.exe', 'pac-fallback.js', './pac.js', 'tools/pac.exe.bak'];"],
+    ['m.js', "throw new Error('pac connection list failed');\nlog(`PAC CLI is not installed`);"],
+    ['n.js', "execSync('echo pac');"],
+  ]);
+  assert.deepStrictEqual(found.starts, []);
+  assert.deepStrictEqual(found.literalFiles, []);
+});
+
+test('pac is started in exactly these places, for exactly these commands', () => {
+  assert.deepStrictEqual(PRODUCTION.starts, ALLOWED_STARTS);
 });
 
 test('runPac — the one wrapper that takes its argv from a caller — runs only the connector verbs and the two solution verbs', () => {
-  assert.deepStrictEqual(PRODUCTION.runPacCalls, [
-    'connector.js: <args>',
-    'solution-settings.js: solution create-settings',
-    'solution-settings.js: solution import',
-  ]);
+  assert.deepStrictEqual(PRODUCTION.runPacCalls, ALLOWED_RUN_PAC_CALLS);
   // connector.js passes an argv it builds: every one it can build is a connector verb of `pac model genpage`.
   const connector = withoutComments(fs.readFileSync(path.join(SCRIPTS_DIR, 'connector.js'), 'utf8'));
   const built = [...connector.matchAll(/\[\s*(['"`])model\1\s*,\s*(['"`])genpage\2\s*,\s*(['"`])([\w-]+)\3/g)].map((m) => m[4]);
@@ -92,14 +149,26 @@ test('runPac — the one wrapper that takes its argv from a caller — runs only
 
 test('only these scripts hold the string pac in their code, so an indirection cannot hide a new start', () => {
   // connector.js, solution-settings.js and lib/sdk-first.js also report `source: 'pac'` in their output.
-  assert.deepStrictEqual(PRODUCTION.literalFiles, [
-    'check-auth.js',
-    'connector.js',
-    'lib/pac-fallback.js',
-    'lib/sdk-first.js',
-    'lib/telemetry/lib/agent-info.js',
-    'lib/telemetry/lib/pac-auth.js',
-    'list-connections.js',
-    'solution-settings.js',
-  ]);
+  assert.deepStrictEqual(PRODUCTION.literalFiles, ALLOWED_LITERAL_FILES);
 });
+
+// Each of these starts pac for `solution export`, a verb the plugin does not use pac for. The first is the spelling the scan has always read;
+// the others reach the same program under another name.
+const NEW_SCRIPT_SPELLINGS = [
+  ['its plain name', "spawnSync('pac', ['solution', 'export', '--name', name]);"],
+  ['its Windows file name', "spawnSync('pac.exe', ['solution', 'export', '--name', name], { shell: false });"],
+  ['its batch shim, in capitals', 'execFileSync("PAC.CMD", ["solution", "export", "--name", name]);'],
+  ['an absolute Windows path', "spawn('C:\\\\Users\\\\maker\\\\.dotnet\\\\tools\\\\pac.exe', ['solution', 'export', '--name', name]);"],
+  ['an absolute POSIX path', "execFile('/usr/local/bin/pac', ['solution', 'export', '--name', name], callback);"],
+  ['a command line given to a shell', "execSync('pac solution export --name Contoso');"],
+];
+
+for (const [spelling, code] of NEW_SCRIPT_SPELLINGS) {
+  test(`a new script that starts pac through ${spelling} fails the allowlist`, () => {
+    const grown = scan([...SOURCES, ['lib/new-script.js', code]]);
+    // The assertions of the tests above, on the production sources with the new script among them.
+    assert.notDeepStrictEqual(grown.starts, ALLOWED_STARTS);
+    assert.notDeepStrictEqual(grown.literalFiles, ALLOWED_LITERAL_FILES);
+    assert.ok(grown.starts.includes('lib/new-script.js: solution export'), `the start is listed with its verb: ${JSON.stringify(grown.starts)}`);
+  });
+}

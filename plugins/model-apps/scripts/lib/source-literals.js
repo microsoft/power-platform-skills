@@ -3,8 +3,11 @@
 //
 // WHY hand-rolled: this plugin ships **dependency-free** (no package.json, no node_modules; it is
 // installed by copying its directory, and every runtime `require` under scripts/ is a node builtin
-// or a relative path), so there is no TypeScript parser to call. Several checks nevertheless have to
-// answer "is this token code, or is it text?", and getting that wrong is costly in BOTH directions:
+// or a relative path), and a TypeScript compiler is not free to call: model-apps vendors one for the
+// SDK's page compile alone and loads it lazily, because unpacking and evaluating it takes ~0.2 s and
+// ~20 MB of heap — more than a hook that runs after every write, or a gate that reads one file, should
+// pay. Several checks nevertheless have to answer "is this token code, or is it text?", and getting
+// that wrong is costly in BOTH directions:
 //
 //   accepting text as code   ->  prose is promoted as a page, permanently marked implemented
 //   rejecting code as text   ->  a valid generated page is refused and the user is blocked mid-build

@@ -1,6 +1,6 @@
 'use strict';
 // Contract tests for the literal/comment blanker that backs the promotion gate and the eval's
-// effect scoper. The plugin ships dependency-free, so this hand-rolled lexer stands in for a TSX
+// effect scoper. These checks load no TypeScript parser, so this hand-rolled lexer stands in for a TSX
 // parser — which makes its FALSE-POSITIVE behaviour (wrongly rejecting a real page) as important as
 // its ability to reject prose. The corpus test below runs it over every .tsx the repo ships.
 

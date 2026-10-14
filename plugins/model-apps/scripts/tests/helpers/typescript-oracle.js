@@ -15,8 +15,9 @@ function loadFromEnv(name, what, file = '') {
 }
 
 // The TypeScript parser that review snippets are checked against: the lexer's, and the navigation oracle's tolerance of
-// type-only tails. The plugin ships dependency-free, so a checkout has none: point TYPESCRIPT_ORACLE_PATH at a
-// `typescript` package to run those checks; they are skipped otherwise.
+// type-only tails. A checkout has no `typescript` package to load (the compiler the plugin ships is vendored compressed,
+// for the SDK's page compile): point TYPESCRIPT_ORACLE_PATH at a `typescript` package to run those checks; they are
+// skipped otherwise.
 function loadTypescriptOracle() {
   return loadFromEnv('TYPESCRIPT_ORACLE_PATH', 'a typescript package');
 }

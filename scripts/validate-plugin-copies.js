@@ -228,6 +228,8 @@ function referencedDeclarations(sourcePath, sourceModule, copyModule, subset, so
 // how every top-level declaration in these files is written:
 //   function readAzToken(resource, opts = {}) {
 //   async function preflightAuth(envUrl) {
+// The head also reads the generator forms (`function* name(`, `async function* name(`) and uneven spacing; a head it does not
+// read is a helper the copy is never asked for, so scripts/tests/validate-plugin-copies.test.js pins every form.
 // The search runs over the source with every comment, string, template and regex literal blanked (offsets kept), so `function`
 // in a comment is no declaration and a `}` inside a literal does not end a body early. The parameter list is skipped before the
 // body is looked for: a default value such as `opts = {}` holds braces of its own.

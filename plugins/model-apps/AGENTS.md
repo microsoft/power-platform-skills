@@ -1825,7 +1825,11 @@ The two remaining flags currently ship **OFF**, each waiting on cross-repo depen
 ## TSX source lexer — known limits
 
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
-parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
+parser. The plugin does ship the TypeScript compiler (`scripts/vendor/typescript/`), but only the SDK's page
+compile loads it, and lazily: unpacking it takes ~15 ms and evaluating it ~200 ms, with ~20 MB of heap
+(`lib/typescript-compiler.js`) — more than a hook that runs after every code write (`hooks/validate-icon-imports.js`, a
+new process each time) or a gate that reads a page before it is deployed should pay, so those read source with
+this lexer. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
 backs the page structural gate (`lib/page-structure.js`, shared by `promote-intent-pages.js` and
 `genpage-worker-output.js`) plus the eval's effect scoper. It also
@@ -2845,7 +2849,7 @@ those sources, copy the corresponding file into `plugins/pcf` in the same PR; re
 first, then copy the resulting SDK bundle.
 
 **Re-vendor from a COMMIT, and check the recorded provenance.** `scripts/_vendor-build/build.js`
-writes `scripts/vendor/PROVENANCE.json` next to the bundle: the upstream SHA and subject, whether
+writes `scripts/vendor/PROVENANCE.json` next to the bundle: the upstream SHA, whether
 that package had uncommitted changes, and the bundle's own sha256. Two things make this
 load-bearing rather than bookkeeping. First, the bundler consumes the SDK's **gitignored `lib/`**,
 a build output that can be arbitrarily older than `src/` — a bundle shipped in this repo was once
@@ -2855,13 +2859,12 @@ Second, "built from master" is not provenance, because master moves; the SHA is 
 reviewer reproduce the artifact. Re-running the build on the same inputs must reproduce the same
 sha256 — check it.
 
-⚠ **`subject` is the subject of the commit the bundle was BUILT FROM — normally master's HEAD — and
-is usually unrelated to the change you are taking up.** It is recorded verbatim from git on purpose
-(`sanitize-subject.js` only strips merge-tool prefixes), because editorialising it would break the
-one thing provenance is for. So expect it to read like `Revert 'fix: scheduled trigger skips its
-first run…'` while the uptake is about AI settings: master simply moved on after the commit that
-carried the fix. Do not "correct" it, and do not read it as a description of the uptake — name the
-change in `CHANGELOG.md` instead, which is where a reader looks for what actually arrived.
+⚠ **`commit` is the commit the bundle was BUILT FROM — normally master's HEAD — and is usually
+past the change you are taking up.** The record carries no commit subject: the subject of that commit
+named whatever merged last, which is usually not about the SDK, and in a public file it told a reader
+nothing. The SHA is what identifies the source, and `sdk-async-surface.test.js` fails if a `subject`
+comes back. So do not read the SHA as a description of the uptake — name the change in
+`CHANGELOG.md` instead, which is where a reader looks for what actually arrived.
 
 `scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
 method the engines call (`SKILL_SDK_SURFACE`, kept in sync with the `provision.*` / `sdk.*` call

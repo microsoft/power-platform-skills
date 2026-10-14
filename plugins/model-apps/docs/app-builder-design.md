@@ -126,7 +126,7 @@ full build     (engine, run 2)  build --apply (FULL, idempotent) → ui + app + 
   `:570-573`; the same discover-and-record pattern rehydrates entities/forms/views/charts/
   dashboards). **This is the exact path that already makes `create == edit` work** — an edit is a
   full idempotent rebuild — so it is proven, not new.
-- **Parity by construction (answers the reviewer's parity test).** Run 2 *is* today's monolithic
+- **Parity by construction (answers the parity test).** Run 2 *is* today's monolithic
   full build; run 1 is an idempotent **prefix** (solution + data-model only). Because `data-model`
   is discover-reconcile — as are forms/views/charts (`sdk-build.js:782-786,835-838`) — run 1's
   tables are transparently rediscovered by run 2, which then does everything else (including
@@ -134,7 +134,7 @@ full build     (engine, run 2)  build --apply (FULL, idempotent) → ui + app + 
   monolithic build. (Dashboards/commands are re-created rather than reconciled on a rebuild — a
   *pre-existing* idempotency nuance at `sdk-build.js:966-975,951-958` — which §14 fixes so a
   full-build retry stays idempotent.) Only the no-write main-loop code-gen sits between the runs.
-- **Simpler than the reviewer's per-range rehydration context.** We reuse the proven full-rebuild
+- **Simpler than a per-range rehydration context.** We reuse the proven full-rebuild
   discovery instead of adding a bespoke rehydrator per phase-range. The cost is that run 2 re-runs
   data-model *discovery* (a few metadata reads, no writes) — acceptable and DRY.
 - **LLM code-gen stays in the main loop, between the two engine runs** (invariant §4). The engine
@@ -221,8 +221,8 @@ One `pages[]` collection; implementation state is **explicit**, not a nullable f
 ```
 
 - **Stable `key`** is the single identity used by `navigatesTo.targetKey`, `PAGEREF_<key>`, and
-  `appShell` subareas — eliminating the reviewer's key/filename/display-name mixing (C4).
-- **`sitemapSlot` is dropped** (reviewer I1): placement lives only in `appShell` (the authoritative
+  `appShell` subareas — eliminating the mixing of key, filename and display name.
+- **`sitemapSlot` is dropped**: placement lives only in `appShell` (the authoritative
   sitemap model), whose page subareas reference the page **`key`** (`appDef` resolves key →
   `genPageId`, adapting `sdk-build.js:497-506`). Single source of truth.
 - **`schemaVersion`** gates the new shape; loaders reject unknown versions.
@@ -517,7 +517,7 @@ artifact-specific SDK mutator — SDK **T2/T7 pass**).
   validation profiles; discriminated-source lint; `op-diff` classification; `pageref-resolver`
   (`PAGEREF_<key>`→id, dangling-target failure); `preview-app` render; `verifySpec` page checks;
   `schema-facts` extractor. Keep the suite green (currently 510).
-- **A staged-vs-monolithic parity test** (reviewer C1): the two-invocation pipeline must produce the
+- **A staged-vs-monolithic parity test**: the two-invocation pipeline must produce the
   same deployed state as a single full build.
 - **Data-driven offline harness** (`evals/model-apps/app-builder/`) with the §13.2 oracles.
 - **Live tier:** keep `smoke-eval.js`; add a multi-page navigation case.
@@ -527,8 +527,8 @@ artifact-specific SDK mutator — SDK **T2/T7 pass**).
 
 # Part II — `--changed-only` safe partial apply
 
-Status: **implemented; PROD-readiness reviewed; live-verified.** The design went through several
-adversarial review rounds before implementation (v1 *unsafe* → v7 *safe-to-implement*), and the
+Status: **implemented; PROD-readiness reviewed; live-verified.** The design was adversarially
+reviewed before implementation, and the
 implementation was reviewed again with all Critical/High findings fixed and covered by tests.
 This is the canonical spec for the multi-deliverable build.
 

@@ -910,7 +910,7 @@ function assignPageKeys(pages, manifest, keyToId) {
 }
 
 // Entries of `a` whose pageId is absent from `b`. Used BOTH directions to require exact enumerated<->
-// downloaded id equality (I3). A gap either way means the download read a different set than exists —
+// downloaded id equality. A gap either way means the download read a different set than exists —
 // rebuilding from this spec would silently drop/add pages, so download FAILS instead.
 function missingDownloads(a, b) {
   const have = new Set((b || []).map((p) => String(p.pageId).toLowerCase()));
@@ -2044,10 +2044,10 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       if (rows && rows[0] && rows[0].content) manifest = parseManifestBase64(rows[0].content);
     }
 
-    // Real names from the ENV-WIDE list (addenda new-1: env names ≠ sitemap titles). The env-wide
+    // Real names from the ENV-WIDE list (env names ≠ sitemap titles). The env-wide
     // list holds each page's actual configured name; the sitemap title is what the
     // Maker chose for the subarea label, which can differ. Using the sitemap title as the page name
-    // was the root of the name-vs-title mismatch (live-confirmed; see Plan-5 §Background).
+    // was the root of the name-vs-title mismatch (live-confirmed).
     const envResult = await genpage.enumerateEnv();
     if (!envResult.ok) {
       return { ok: false, error: `page enumeration failed during download: ${envResult.error}` };
@@ -2103,7 +2103,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       process.stderr.write(`WARNING: ${unreadableConfigs.length} page config(s) unreadable; their data-source bindings are DROPPED: ${detail}\n`);
     }
 
-    // Bidirectional exact equality: sitemap ids ↔ downloaded ids (I3). A gap either way means the download
+    // Bidirectional exact equality: sitemap ids ↔ downloaded ids. A gap either way means the download
     // read a different set than the sitemap declares — rebuilding from this spec would silently
     // drop or add pages, so download FAILS instead.
     const missing = missingDownloads(smPages, pages);

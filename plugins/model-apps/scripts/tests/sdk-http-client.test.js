@@ -66,8 +66,9 @@ test('a read of a file\'s content ($value) answers the bytes as they arrived; an
 });
 
 // patchRaw (cds-maker-sdk HttpClient): a PATCH whose body is a file's bytes, sent verbatim — never JSON.stringify'd — with its length and the caller's
-// Content-Type. It carries If-Match, so one that got no answer is not re-sent: it may still commit.
-test('patchRaw sends a file\'s bytes verbatim with their length and the caller\'s headers, and is not re-sent when no answer came', async () => {
+// Content-Type. The SDK adds `If-Match: *` only when it replaces the content of an EXISTING row, and such a PATCH that got no answer is not re-sent:
+// it may still commit.
+test('patchRaw sends a file\'s bytes verbatim with their length and the caller\'s headers, and with If-Match is not re-sent when no answer came', async () => {
   const bytes = new Uint8Array([0x3c, 0x64, 0x69, 0x76, 0x3e, 0xff, 0x00]);
   const { request, calls } = fakeTransport({ statusCode: 204, headers: {}, body: '' });
   const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
@@ -85,6 +86,15 @@ test('patchRaw sends a file\'s bytes verbatim with their length and the caller\'
   const client = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: lost.request, sleep: async () => {} });
   await assert.rejects(client.patchRaw('https://org.crm.dynamics.com/x', bytes, { headers: { 'If-Match': '*' } }), /was not re-sent/);
   assert.strictEqual(lost.calls.length, 1, 'one send');
+});
+
+// A new row's content PATCH is unconditional (no If-Match) and writes the same bytes to the same row, so it is idempotent and keeps the transport retry.
+test('patchRaw without If-Match — the content of a new row — keeps its transport retry', async () => {
+  const bytes = new Uint8Array([0x3c, 0x64, 0x69, 0x76, 0x3e]);
+  const lost = fakeTransport({ error: 'socket hang up' });
+  const client = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: lost.request, sleep: async () => {} });
+  await assert.rejects(client.patchRaw('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles(1)/filecontent', bytes), /Request failed: socket hang up$/);
+  assert.strictEqual(lost.calls.length, 6, 'six attempts in all, as for any write that is not conditional');
 });
 
 test('does NOT throw on non-2xx — passes status/body through (412 version conflict)', async () => {

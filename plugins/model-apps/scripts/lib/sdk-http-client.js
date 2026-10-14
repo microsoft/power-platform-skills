@@ -525,7 +525,9 @@ function createAzHttpClient(orgUrl, deps = {}) {
     // content is not JSON and never rides in a JSON body. The SDK writes a page's rows in one `$batch` when every body is
     // exactly UTF-8, and through this otherwise (a page that carries an image); without it the SDK refuses such a write
     // rather than save a page whose content never uploaded. The caller's Content-Type passes through; Content-Length is
-    // the byte count. It carries `If-Match`, so a PATCH that got no answer is not re-sent (see `conditional` above).
+    // the byte count. The SDK sends `If-Match: *` only when it replaces the content of an EXISTING row, and such a PATCH that
+    // got no answer is not re-sent (see `conditional` above). A new row's content PATCH has no If-Match: it writes the same
+    // bytes to the same row, so it is idempotent and keeps the ordinary transport retry.
     patchRaw: (url, bytes, options) => call('PATCH', url, bytes, options, { bytes: true }),
   };
 }

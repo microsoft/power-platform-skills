@@ -10,7 +10,7 @@
  * bundle holds no TypeScript (`_vendor-build/build.js` keeps it external); the host passes one in
  * (`MakerSdkOptions.typescript`). A plugin install has no node_modules, so it ships this one.
  *
- * Why this shape (measured, cds-maker-sdk specs/genpage-compiler-shipping.md): only `lib/typescript.js` is needed — the
+ * Why this shape (measured): only `lib/typescript.js` is needed — the
  * compile reads no `.d.ts` file; minified it is ~3.6 MB, brotli-compressed ~0.8 MB on disk, unpacked in ~15 ms on the
  * first compile. It is minified as a SCRIPT (no `format`): as a module, esbuild renames the top-level `var ts`, and a host
  * that evaluates the file as a plain script then finds no `ts`. Another compiler (esbuild, swc, sucrase) is not an option:

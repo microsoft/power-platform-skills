@@ -68,8 +68,8 @@ test('vendored bundle exports createMakerSdk', () => {
 
 // The SDK's genPage compiler takes TypeScript from its host, and its `loadNodeTypeScript` helper loads
 // it with a dynamic import that esbuild would otherwise follow: the compiler then made up 3.5 MB of a
-// 4.4 MB bundle. The plugin supplies no compiler, so `_vendor-build/build.js` marks `typescript`
-// external. A rebuild that drops that flag inlines it again, and this fails on the size of the text.
+// 4.4 MB bundle. The plugin passes its own compiler (lib/maker-sdk.js), so `_vendor-build/build.js` marks
+// `typescript` external. A rebuild that drops that flag inlines it again, and this fails on the size of the text.
 test('the vendored bundle does not carry the TypeScript compiler, and loading one fails closed', async () => {
   const text = fs.readFileSync(BUNDLE, 'utf8');
   assert.ok(text.length < 2 * 1024 * 1024, `bundle is ${Math.round(text.length / 1024)} KB — was the TypeScript compiler inlined?`);
