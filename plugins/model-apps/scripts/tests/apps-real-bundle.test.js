@@ -97,6 +97,35 @@ test('REAL BUNDLE: a list longer than one page is followed to the end — the sa
   assert.deepStrictEqual(org.unexpected, []);
 });
 
+// The two layers are matched by id in any letter case. The platform answers GUIDs in lower case from both endpoints, so only a test holds that comparison in place.
+test('REAL BUNDLE: a published row whose id the platform answers in capitals is the same app as its saved row', async () => {
+  const id = '00000000-0000-4000-8000-0000000000ab';
+  const org = createFakeAppsOrg({
+    apps: [row(id, 'Edited', 'edited', 1, null, true)],
+    answer: (req) => (req.method === 'GET' && /^\/appmodules\?/.test(req.path) ? json(200, { value: [{ appmoduleid: id.toUpperCase() }] }) : undefined),
+  });
+  const result = await listApps(ORIGIN, {}, client(org));
+  assert.deepStrictEqual(result.apps.map((a) => [a.id, a.published, a.unpublishedChanges]), [[id, true, true]]);
+});
+
+// The saved layer is read first, then the published one, so an app deleted between the two reads is in the first answer as published (componentstate 0) and
+// not in the second: neither published nor holding a saved change, which no app is. It is left out.
+test('REAL BUNDLE: an app deleted between the list\u2019s two reads is left out, and an app still there is listed', async () => {
+  const gone = '00000000-0000-4000-8000-000000000001';
+  const kept = '00000000-0000-4000-8000-000000000002';
+  const org = createFakeAppsOrg({
+    apps: [row(gone, 'Going away', 'going_away', 0), row(kept, 'Staying', 'staying', 0)],
+    answer: (req) => {
+      if (req.method === 'GET' && /^\/appmodules\?/.test(req.path)) org.state.apps.splice(org.state.apps.findIndex((a) => a.appmoduleid === gone), 1);
+      return undefined;
+    },
+  });
+  const result = await listApps(ORIGIN, {}, client(org));
+  assert.deepStrictEqual(org.requests.map((r) => `${r.method} ${r.path}`), [`GET ${LIST_PATH}`, `GET ${PUBLISHED_PATH}`], 'the order that makes this the only way to read it as neither');
+  assert.deepStrictEqual(result.apps.map((a) => [a.name, a.published, a.unpublishedChanges]), [['Staying', true, false]]);
+  assert.strictEqual(result.count, 1);
+});
+
 test('REAL BUNDLE: a list the platform refuses, or cannot be asked for want of a token, fails with the SDK\u2019s own code and the platform\u2019s own words', async () => {
   const org = createFakeAppsOrg({ answer: () => json(403, { error: { code: '0x80040220', message: 'The user is not a member of the organization.' } }) });
   await assert.rejects(listApps(ORIGIN, {}, client(org)), (err) => {
@@ -521,6 +550,93 @@ test('REAL BUNDLE: a read-back that cannot be made is an unknown outcome — nev
   assert.deepStrictEqual(result.lookFor, { uniqueName: 'account_metrics_1a2b3c4d', appId: result.lookFor.appId, sitemapId: result.sitemapId });
   assert.match(result.lookFor.appId, GUID);
   assert.ok(!('left' in result) && !('appId' in result) && !('published' in result));
+});
+
+// A push the SDK reported as saved committed both rows. A failure after it, with the platform then unreadable, is not "unknown": the output says what the run knows.
+test('REAL BUNDLE: a failure after the push, with the platform unreadable, still says written — the push saved both rows — and names the app', async () => {
+  let down = false;
+  const org = orgWithPages({
+    answer: (req) => {
+      if (req.path === '/AddSolutionComponent') down = true;
+      return down ? json(503, { error: { message: 'service unavailable' } }) : undefined;
+    },
+  });
+  const result = await createApp(args(), client(org), seams);
+  assert.deepStrictEqual([org.state.apps.length, org.state.sitemaps.length], [1, 1], 'the premise: both rows are there');
+  assert.deepStrictEqual([result.ok, result.stage, result.written], [false, 'solution', true]);
+  assert.strictEqual(result.appId, org.state.apps[0].appmoduleid);
+  assert.strictEqual(result.sitemapId, org.state.sitemaps[0].sitemapid);
+  assert.deepStrictEqual(result.left, { app: true, sitemap: true });
+  assert.match(result.readBackError, /HTTP 503/);
+  assert.deepStrictEqual(result.lookFor, { uniqueName: 'account_metrics_1a2b3c4d', appId: result.appId, sitemapId: result.sitemapId });
+  assert.ok(!('published' in result), 'the platform could not be asked whether the app is published');
+});
+
+// The rollback is refused, so both rows stay; the app is read, and then the site maps cannot be. The app was read, so it is written.
+test('REAL BUNDLE: an app found before the site map read failed is written, and the output keeps what it read', async () => {
+  const org = orgWithPages({
+    answer: (req) => {
+      if (req.path === '/AddAppComponents') return json(400, { error: { message: 'component refused' } });
+      if (req.path === '/$batch') return batchResponse([{ contentId: '2', status: 412 }]);
+      return req.method === 'GET' && /^\/sitemaps\/Microsoft/.test(req.path) && org.requests.some((r) => r.path === '/$batch') ? json(503, { error: { message: 'service unavailable' } }) : undefined;
+    },
+  });
+  const result = await createApp(args(), client(org), seams);
+  assert.strictEqual(org.state.apps.length, 1, 'the premise: the app is still there');
+  assert.deepStrictEqual([result.ok, result.written, result.stage], [false, true, 'create']);
+  assert.strictEqual(result.appId, org.state.apps[0].appmoduleid);
+  assert.deepStrictEqual(result.left, { app: true, sitemap: null }, 'the app was read; the site map could not be');
+  assert.deepStrictEqual([result.published, result.unpublishedChanges], [false, true], 'both layers of the app were read before the site maps');
+  assert.match(result.readBackError, /HTTP 503/);
+  assert.strictEqual(result.lookFor.sitemapId, result.sitemapId);
+});
+
+// What makes a row THIS create's is its id — the app's, which the SDK minted and sent as the row's key, and the site map's, which the script chose — not the
+// unique name, which is only what a retry collides on. A create under the same --unique-name that reaches the platform first makes this one's write fail as a
+// duplicate and writes nothing; the rows under the name are that other create's, and they are not reported as left behind by this one.
+const FOREIGN_APP = '99999999-9999-4999-8999-999999999999';
+const FOREIGN_SITEMAP = '88888888-8888-4888-8888-888888888888';
+const foreignSitemap = (uniqueName) => ({ sitemapid: FOREIGN_SITEMAP, sitemapnameunique: uniqueName, sitemapname: uniqueName, sitemapxml: '<SiteMap />' });
+
+test('REAL BUNDLE: a create that loses the race for its unique name writes nothing, and the app and site map another create made under the name are named apart, not reported as its leftovers', async () => {
+  let raced = false;
+  const org = orgWithPages({
+    answer: (req) => {
+      // The other create reaches the platform between the script\u2019s check that the name is free and the SDK\u2019s write of the app.
+      if (!raced && req.method === 'POST' && /^\/appmodules(\?|$)/.test(req.path)) {
+        raced = true;
+        org.state.apps.push({ appmoduleid: FOREIGN_APP, name: 'Another maker\u2019s app', uniquename: req.body.uniquename, description: null, componentstate: 0, published: true });
+        org.state.sitemaps.push(foreignSitemap(req.body.uniquename));
+      }
+      return undefined;
+    },
+  });
+  const result = await createApp(args({ uniqueName: 'shared_name' }), client(org), seams);
+  assert.deepStrictEqual(org.writeNames(), ['POST appmodules'], 'this run\u2019s only write was refused, as a duplicate of the other app');
+  assert.match(result.error, /already exists/);
+  assert.deepStrictEqual([result.ok, result.written, result.stage, result.left], [false, false, 'create', { app: false, sitemap: false }]);
+  assert.deepStrictEqual(result.nameTakenBy, { appId: FOREIGN_APP, sitemapId: FOREIGN_SITEMAP });
+  assert.ok(!('appId' in result) && !('published' in result), 'the other app is not this create\u2019s: it is neither named as its app nor described');
+  assert.match(result.sitemapId, GUID);
+  assert.notStrictEqual(result.sitemapId, FOREIGN_SITEMAP, 'the id the script chose, which no row has');
+  assert.deepStrictEqual([org.state.apps.length, org.state.sitemaps.length], [1, 1], 'and the other create\u2019s rows are untouched');
+});
+
+test('REAL BUNDLE: this create\u2019s app is left when its site map is refused as a duplicate and the app cannot be deleted — and the site map that holds the name is another\u2019s, named apart', async () => {
+  const org = orgWithPages({
+    answer: (req) => {
+      if (req.method === 'POST' && /^\/sitemaps(\?|$)/.test(req.path)) org.state.sitemaps.push(foreignSitemap(req.body.sitemapnameunique));
+      return req.method === 'DELETE' && /^\/appmodules\(/.test(req.path) ? json(400, { error: { message: 'the app cannot be deleted' } }) : undefined;
+    },
+  });
+  const result = await createApp(args(), client(org), seams);
+  assert.deepStrictEqual(org.state.apps.map((a) => a.componentstate), [1], 'the premise: this create\u2019s app is a draft, and it is still there');
+  assert.deepStrictEqual([result.ok, result.written, result.stage, result.left], [false, true, 'create', { app: true, sitemap: false }]);
+  assert.strictEqual(result.appId, org.state.apps[0].appmoduleid);
+  assert.deepStrictEqual([result.published, result.unpublishedChanges], [false, true]);
+  assert.deepStrictEqual(result.nameTakenBy, { sitemapId: FOREIGN_SITEMAP });
+  assert.strictEqual(result.sitemapId, sitemapIdSent(org), 'the id this create sent, which no row has: the site map found under the name is the other one');
+  assert.notStrictEqual(result.sitemapId, FOREIGN_SITEMAP);
 });
 
 test('REAL BUNDLE: a solution the sitemap cannot join fails at the solution stage, naming the app and which component joined — and the platform agrees — and publishes nothing', async () => {

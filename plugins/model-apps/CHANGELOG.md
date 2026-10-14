@@ -27,10 +27,11 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   as one area "Main" and one group "Pages" with a sub-area per page named for the page, adds the app and its sitemap to the solution, and
   publishes only with `--publish`. Every check — no page, a page or a solution that does not exist, a managed solution, a unique name
   already taken — refuses before anything is written, and says why. The navigation's titles are written in the environment's base language
-  and the app's icon is the system's default one. A run that fails after it began reads the platform back and says what is actually left —
-  the app, its sitemap, whether the app is published, which of the two joined the solution — or, when it cannot read that, that the outcome
-  is unknown and what to look for. A create into `Default` says it needs no add instead of reading like a failure. Like every app the SDK
-  creates, the app gets the new header and navigation setting, which `pac model create` did not write.
+  and the app's icon is the system's default one. A run that fails after the push began reads the platform back and says what is actually left —
+  the app, its sitemap, whether the app is published, which of the two joined the solution — recognising the rows by their ids, so an app
+  another create made under the same unique name is named apart and never reported as this one's; when it cannot read that, it says what it
+  knows (a push the SDK saved wrote both rows) and what to look for. A create into `Default` says it needs no add instead of reading like a
+  failure. Like every app the SDK creates, the app gets the new header and navigation setting, which `pac model create` did not write.
 
 - **`scripts/connector.js` and `scripts/solution-settings.js`.** `connector.js` lists a connector's operations, and reads
   one operation's parameters and response or a tabular connector's table columns. `solution-settings.js template` writes

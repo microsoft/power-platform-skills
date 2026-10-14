@@ -1483,7 +1483,7 @@ scripts/
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
   list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
   list-languages.js            ← /genpage planner: the environment's base language and each provisioned language (LCID, culture code, right-to-left) — the SDK's `getEnvironmentLanguages()` over the az-token client, three reads and no write, printed as one pure-ASCII JSON line. The only source: no `pac model list-languages` stands behind it, because every /genpage page operation needs the Azure CLI
-  apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder will use (their text still names the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left
+  apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder will use (their text still names the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left of this create (its rows are recognised by their ids, and a row that holds the unique name under another id is named apart)
   list-tables.js               ← the replacement for `pac model list-tables` (the skills' text still names the `pac` command): the environment's tables — the SDK's `findTables(term)` for each comma-separated `--search` term, a few reads at a time, joined without repeats; `--exact` keeps the tables whose logical name IS a term and names the terms no table has (`missing`), from one read of every table; `--type custom|standard|all` is `pac`'s own filter, `custom` through the SDK's `customOnly` option. One pure-ASCII JSON line of `{ logicalName, displayName, schemaName, isCustom }` rows
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
   solution-settings.js         ← Deployment settings: `template` writes the settings file of a solution or a package (pac's own format), `import` imports a package and applies the settings in the same import — the SDK first, `pac solution create-settings` / `import --settings-file` only where it refuses; ExportSolution, StageSolution and ImportSolution are each sent exactly once, every text it prints has the settings file's values taken out, and a failed import names its job and the job log's reason; one pure-ASCII JSON line with `source`
@@ -2608,8 +2608,9 @@ solutions, sitemaps, tables, setting definitions and the app settings the SDK wr
 until their app is published; it records the requests the process made into a file), so the real client and
 bundle run too and a test can see that a refusal sent no write. It records the SDK's `$batch` change set too —
 a multipart body, kept as the text it is, with its `operations` — and answers one of deletes by id, so the
-SDK's atomic rollback of a failed create is run for real (`batchResponse` builds the platform's wording of
-an answer to refuse one or to lose it). It can also refuse chosen requests (`refuseWhen`: a method, a path
+SDK's atomic rollback of a failed create is run for real (`batchResponse` builds the platform's wording of an
+answer to a change set: the fake's own, when it applies one, and the refusal a test asks for; a test that loses the
+answer replies with a 502 JSON body itself). It can also refuse chosen requests (`refuseWhen`: a method, a path
 pattern and, with `nth`, only the nth such request), so a run that fails half way — the second
 `AddSolutionComponent`, say — can be driven end to end.
 
@@ -3039,7 +3040,9 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   `pac model list`, `pac model create` and `pac model list-tables`: no production script runs any of the
   three (a source scan pins it), while the skills', agents' and references' text still names them until it
   moves onto these scripts. Each prints one pure-ASCII JSON line, writes a usage error to stderr alone (exit
-  1, stdout empty), and reports a failure as `{ ok: false, code, error }` with the SDK's own code and message. The
+  1, stdout empty), and reports a failure as `{ ok: false, code, error }` with the SDK's own code and message — `code` is the
+  SDK's when it has one: a failure that is the script's own, such as a list that fails because the platform answered a row with
+  no id, prints `{ ok: false, error }` and no `code`. The
   real-bundle tests drive the real client, the real bundle and the real script over a fake Dataverse
   (`tests/helpers/fake-apps-org.js`) that records every request, and the same fake, through a
   `node --require` preload, a real process.
@@ -3083,7 +3086,10 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   published app with a saved edit did not (measured on all eleven apps of an environment). For the apps a
   skill makes the mark meant "never published", which a skill reads as `published === false`;
   `unpublishedChanges` is something `pac` never said. The saved layer is read first, so an app published
-  between the two reads shows as published with changes (a combination real apps have), never as neither.
+  between the two reads shows as published with changes (a combination real apps have), never as neither. The
+  cost of that order is an app deleted between the reads: it is in the first answer as published (`componentstate`
+  0) and not in the second, so it would read as neither — a pair no app has — and it is left out of the list
+  (a draft deleted in that window cannot be told from one still there, and is listed as it was a moment ago).
   A pending edit can also answer two layers: the authored one (1) is the app — `currentLayerRow` in
   `lib/app-components.js`, the one place that rule is written for a listing (`currentLayerRows` is the strict
   form its other callers refuse on).
@@ -3138,25 +3144,39 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   sitemap to the solution, never the setting. `apps-real-bundle.test.js` pins the request, its place in the
   sequence, the warning for an environment without the definition, and that a plain read does not see a
   draft's row while the SDK's own does.
-  **A failure after the push began** reads the platform back before it answers: one read of the app by its
-  unique name in both layers (the saved and the published one) and one of the sitemap by that name. The SDK
-  rolls a partial create back when it can, and a rollback can be refused (the rows are KEPT), lost (the SDK
-  says "unconfirmed") or not needed, so neither "something was written" nor "nothing was" follows from how
-  far the run got. `written` is true only when something exists (the app or its sitemap), false when
-  nothing does, and null when the read-back itself failed; `appId` is only an app that was found, with its
-  own `published` and `unpublishedChanges` (a publish the SDK reported as failed that the platform took reads
-  as published); `left` says which of the two rows is there; `sitemapId` is always the id the script chose
-  before its first write (it is the one on the wire); `stage` is `create`, `solution` or `publish`; and
-  `inSolution`, `addedToSolution`, `systemSolution` are as for a success. When the read-back cannot be made
-  the outcome is unknown and not guessed — `written: null`, no `left`, no `appId`, `lookFor` (the unique
-  name, the id the create used, the sitemap's id) and `readBackError` — and the create's own error is still
-  the one reported: a failure of the failure never replaces it. A failure before the push (in the workspace
-  only this run sees) is `written: false` and nothing more. The SDK's `warnings` on the push (the System
-  Administrator role it could not associate, say) are kept for a run that fails after it too: in the
+  **A failure after the push began** reads the platform back before it answers: the app by its unique name in
+  both layers (the saved and the published one) and the sitemap by that name. A row is this create's by its
+  ID, not by the name: the app's id is the one the SDK minted before its first write and sent as the new row's
+  key (so the row is at that id or does not exist) and the sitemap's is the one the script chose. A row that
+  holds the unique name under another id belongs to another create — two runs under one `--unique-name`: the one
+  that reaches the platform second is refused as a duplicate and writes nothing — and reporting it as this
+  create's leftover would point a skill that offers to remove what a failed create left at another maker's app.
+  It is named apart instead (`nameTakenBy`: `{ appId, sitemapId }`, each only when found; a retry with that
+  name is refused while the row exists, and it is not this create's to remove). The SDK rolls a partial create
+  back when it can, and a rollback can be refused (the rows are KEPT), lost (the SDK says "unconfirmed") or not
+  needed, so neither "something was written" nor "nothing was" follows from how far the run got. `written` is
+  true when something of THIS create exists (its app or its sitemap), false when the read-back found neither,
+  and null when no row is known to exist and one could not be read; `left` says of each of the two rows
+  whether it is there (true, false, or null when it could not be read and nothing else says); `appId` is only
+  this create's app, and only when it exists, with its own `published` and `unpublishedChanges` when both
+  layers were read (a publish the SDK reported as failed that the platform took reads as published);
+  `sitemapId` is always the id the script chose before its first write (it is the one on the wire); `stage` is
+  `create`, `solution` or `publish`; and `inSolution`, `addedToSolution`, `systemSolution` are as for a
+  success. The reads are made in turn — the saved layer, the published layer, the sitemaps — and the first
+  that fails ends them; the create's own error is still the one reported (a failure of the failure never
+  replaces it), beside `readBackError` and `lookFor` (the unique name, the id the create used, the sitemap's
+  id). A read-back that cannot be made keeps what the run knows: a push the SDK reported as saved (the stage
+  is `solution` or `publish`) wrote both rows, and a row that a read found before a later read failed is
+  there, so `written` is `true` and `left` says what is known. `written: null` is for a run that knows of no
+  row that exists and could not read one, and `left` is then absent (nothing was read) or has a `false` beside
+  a `null` (the app was read and is not there, the sitemap could not be). A failure before the push (in the
+  workspace only this run sees) is `written: false` and nothing more. The SDK's `warnings` on the push (the
+  System Administrator role it could not associate, say) are kept for a run that fails after it too: in the
   failure payload and on stderr, as for a run that succeeds. The tests run the SDK's own rollback — one
   `$batch` change set deleting the app and its sitemap — against the fake, with the change set accepted,
   refused (both rows kept) and answered by a lost reply, and compare what is printed with what the fake
-  platform holds.
+  platform holds; a create that loses the race for its unique name, and a read-back that fails part way, are
+  run against the real bundle too.
   **The reads the SDK has no method for** — the apps, the pages by id, the sitemaps by name, each from
   `RetrieveUnpublishedMultiple` through `sdk.dataverse` — go through `collectionRows` in
   `lib/app-components.js`, the one reader of a paged collection (`apps.js` asks it for `CONNECTION_ERROR`,

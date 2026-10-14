@@ -26,6 +26,9 @@
 //           publish (PublishXml) sets. That is neither fact: a managed app an import brought in, which is live, carried the mark, and a published app with
 //           a saved edit did not. For the apps a skill makes the mark meant "never published", which is `published === false`; `unpublishedChanges` is
 //           something `pac` never said. The mark is never part of `name`.
+//           The two layers are read one after the other, the saved one first. An app published between the reads is then listed as published with
+//           changes, a pair real apps have (a published app with a saved edit), and never as neither; the cost is that an app DELETED between them is
+//           in the first answer, as published, and not in the second, which reads as neither — a pair no app has — so it is left out of the list.
 //           Retire the first read for `fetchArtifactList('app')` once the SDK's list carries the columns it needs.
 //
 //   create  an app that opens on the given generative pages: one area, "Main", one group, "Pages" (what `pac model create` named
@@ -60,7 +63,7 @@
 //           means what it meant to `pac model create`: without it the app stays in draft. The build never does this, because its
 //           own probes cannot see a draft. After a create that worked nothing here looks the app up by name or id — the ids are minted
 //           before the first write (the app's by the SDK, the sitemap's below) — so a draft costs nothing; a create that failed reads
-//           the platform back, by the unique name, to say what it left (see the output below).
+//           the platform back to say what it left, recognising its rows by those ids (see the output below).
 //
 //           Unique name. `pac model create` derived `<display name lower-cased, spaces as underscores>_<8 hex digits>` (an app named
 //           "Account Metrics" got `account_metrics_1a2b3c4d`) — no publisher prefix; the hex digits make two apps of one name differ.
@@ -108,17 +111,27 @@
 //             "warnings": [ … ] — the SDK's notes on the push — are added when there are some
 //   a refusal, or a failure to read:  { "ok": false, "code": "PAGE_NOT_FOUND", "error": "<message>", "written": false }
 //   a failure after the push began, when something may exist: `code` and `error` are the SDK's own, and the rest is READ BACK from the
-//             platform by the unique name the script chose (the app in both layers, the site map by that name), not inferred from how far the
-//             run got — the SDK rolls a partial create back when it can, and a rollback can be refused or lost:
+//             platform, not inferred from how far the run got — the SDK rolls a partial create back when it can, and a rollback can be refused
+//             or lost. A row is this create's when it has this create's ID: the app's (the SDK mints it before the first write and sends it as
+//             the row's key) or the site map's (this script chooses it). The unique name alone does not make a row this create's: a row that
+//             holds it under another id belongs to another create.
 //               { "ok": false, "code": …, "error": …, "written": true, "stage": "create" | "solution" | "publish", "uniqueName": …,
 //                 "appId": "…", "sitemapId": "…", "left": { "app": true, "sitemap": true }, "published": false, "unpublishedChanges": true,
 //                 "addedToSolution": false, "inSolution": ["app"] }
-//             `written` is true only when something exists (the app or its site map), and false when the read-back found nothing; `appId` is
-//             only an app that exists (with its two facts, `published` and `unpublishedChanges`); `sitemapId` is always the id the script chose
-//             before its first write. When the read-back cannot be made the outcome is UNKNOWN and is not guessed: "written": null, no `left`, no
-//             `appId`, `lookFor: { uniqueName, appId (the id the create used), sitemapId }` and `readBackError`. `inSolution` is each of "app"
-//             and "sitemap" as it joined (a failure between the two has ["app"]; `addedToSolution` is true only when both did), `systemSolution`
-//             is as for a success, and the SDK's `warnings`, if it gave any, are also written to stderr.
+//             `written` is true when something of this create exists (its app or its site map), false when the read-back found neither, and null
+//             when no row is known to exist and one could not be read. `left` says of each row whether it exists: true, false, or null when it
+//             could not be read and nothing else says. `appId` is only this create's app, and only when it exists (with its two facts, `published` and
+//             `unpublishedChanges`, when both layers were read); `sitemapId` is always the id the script chose before its first write.
+//             A row that holds the unique name under another id is neither written nor left: it is named apart, as
+//             "nameTakenBy": { "appId": …, "sitemapId": … } (each only when found), and a retry with that name is refused while it exists.
+//             The reads are the app in the saved layer, the app in the published layer, then the site map by that name, in that order, and the first
+//             that fails ends them: "readBackError" says why, and "lookFor": { uniqueName, appId (the id the create used), sitemapId } what to look
+//             for. A read-back that cannot be made keeps what the run knows. A push the SDK reported as saved (stage "solution" or "publish")
+//             wrote both rows, and a row that a read found before a later read failed is there, so "written" is true then, with "left" saying what
+//             is known and null for the rest; "written" is null only when nothing is known to exist, and then "left" is absent (nothing was read)
+//             or has a false and a null. `inSolution` is each of "app" and "sitemap" as it joined (a failure between the two has ["app"];
+//             `addedToSolution` is true only when both did), `systemSolution` is as for a success, and the SDK's `warnings`, if it gave any, are
+//             also written to stderr.
 //   a failure before the push (in the workspace only this run sees): the same as a refusal, "written": false
 //
 // Exit codes: 0 done; 1 usage error (stderr names the flag and the usage, stdout stays empty), a refusal or a failure.
@@ -221,13 +234,39 @@ const APPS_PATH = '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultipl
 // The published layer: the apps users can open. An app never published has no row here, and an app with a saved edit that is not published yet still has its row.
 const PUBLISHED_APPS_PATH = '/appmodules?$select=appmoduleid';
 
-const idOf = (row) => (row && typeof row.appmoduleid === 'string' ? row.appmoduleid.toLowerCase() : '');
+// Ids are compared without regard to letter case, whichever layer or caller they come from (a GUID is one id however it is spelled).
+const lower = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
+const idOf = (row) => lower(row && row.appmoduleid);
 // A real number or nothing: `Number(null)` is 0, which would read a row with no state as a published one.
 const stateOf = (row) => (typeof row.componentstate === 'number' ? row.componentstate : null);
+const text = (value) => (typeof value === 'string' ? value : '');
+// Narrows a read of the apps to the one of that unique name (how a failed create looks for what it left); nothing without one.
+const byUniqueName = (uniqueName) => (uniqueName === undefined ? '' : `&$filter=uniquename eq '${odataLit(uniqueName)}'`);
+
+// The saved layer's rows, by app: id (lower-case) -> its rows. A row with no id fails the read: an app that cannot be told from another can neither be listed
+// nor be said to be, or not to be, the one a create made.
+async function readSavedApps(sdk, { uniqueName } = {}) {
+  const rows = await readRows(sdk, `${APPS_PATH}${byUniqueName(uniqueName)}`, 'the model-driven apps');
+  const byId = new Map();
+  for (const row of rows) {
+    const id = idOf(row);
+    if (!GUID.test(id)) throw new Error('the platform answered an app with no id, so the list cannot be trusted');
+    if (!byId.has(id)) byId.set(id, []);
+    byId.get(id).push(row);
+  }
+  return byId;
+}
+
+// The ids (lower-case) of the apps that have a row in the published layer.
+async function readPublishedIds(sdk, { uniqueName } = {}) {
+  const rows = await readRows(sdk, `${PUBLISHED_APPS_PATH}${byUniqueName(uniqueName)}`, 'the published model-driven apps');
+  if (rows.some((row) => !GUID.test(idOf(row)))) throw new Error('the platform answered a published app with no id, so the list cannot be trusted');
+  return new Set(rows.map(idOf));
+}
 
 /**
- * The apps of the environment — or, with `uniqueName`, the one app of that name, which is how a failed create looks for what it left — sorted by name
- * (any letter case) and then id. Two facts are reported for each, apart, because neither is the other's reverse:
+ * One app as `list` shows it, from its rows in the saved layer and the ids of the published one. Two facts are reported for it, apart, because neither is
+ * the other's reverse:
  *   published           the app has a row in the published layer: users can open it
  *   unpublishedChanges  it has a saved row that is not published: componentstate 1 in RetrieveUnpublishedMultiple; null when its rows name no state
  * Measured on a real environment (RetrieveUnpublishedMultiple's rows, and whether a published row exists):
@@ -237,40 +276,42 @@ const stateOf = (row) => (typeof row.componentstate === 'number' ? row.component
  *   a managed app that a solution import brought in   one row, 0; a published row with no `publishedon`  -> published true,  unpublishedChanges false
  * A pending edit may also answer two rows, one per layer; the authored one (1) is the app, whichever comes first.
  */
-async function readApps(sdk, { uniqueName } = {}) {
-  const only = uniqueName === undefined ? '' : `&$filter=uniquename eq '${odataLit(uniqueName)}'`;
-  const rows = await readRows(sdk, `${APPS_PATH}${only}`, 'the model-driven apps');
+function describeApp(id, appRows, publishedIds) {
+  const row = currentLayerRow(appRows);
+  const states = appRows.map(stateOf);
+  return {
+    id,
+    name: text(row.name),
+    uniqueName: text(row.uniquename),
+    description: text(row.description),
+    published: publishedIds.has(id),
+    unpublishedChanges: states.includes(1) ? true : states.every((state) => state === 0) ? false : null,
+  };
+}
+
+// An app that is neither published nor holds a saved change does not exist: the saved layer says it is published (componentstate 0, which is a published row) and the
+// published layer has no row for it. It was deleted between the two reads, which are made one after the other.
+const deletedBetweenReads = (app) => !app.published && app.unpublishedChanges === false;
+
+/**
+ * The apps of the environment, drafts included, sorted by name (any letter case) and then id.
+ */
+async function readApps(sdk) {
+  const saved = await readSavedApps(sdk);
   // The published layer is read second. An app published between the two reads then shows its saved row AND its published one — published, with changes,
   // a combination real apps have (a published app with a saved edit) — where the other order could show it with neither (published false,
   // unpublishedChanges false), which no app ever is.
-  const publishedRows = await readRows(sdk, `${PUBLISHED_APPS_PATH}${only}`, 'the published model-driven apps');
-  if (publishedRows.some((row) => !GUID.test(idOf(row)))) throw new Error('the platform answered a published app with no id, so the list cannot be trusted');
-  const published = new Set(publishedRows.map(idOf));
-
-  const byId = new Map();
-  for (const row of rows) {
-    const id = idOf(row);
-    if (!GUID.test(id)) throw new Error('the platform answered an app with no id, so the list cannot be trusted');
-    if (!byId.has(id)) byId.set(id, []);
-    byId.get(id).push(row);
-  }
-  const text = (value) => (typeof value === 'string' ? value : '');
-  const apps = [...byId].map(([id, appRows]) => {
-    const row = currentLayerRow(appRows);
-    const states = appRows.map(stateOf);
-    return {
-      id,
-      name: text(row.name),
-      uniqueName: text(row.uniquename),
-      description: text(row.description),
-      published: published.has(id),
-      unpublishedChanges: states.includes(1) ? true : states.every((state) => state === 0) ? false : null,
-    };
-  });
-  return apps.sort((a, b) => {
-    const [x, y] = [a.name.toLowerCase(), b.name.toLowerCase()];
-    return x < y ? -1 : x > y ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  });
+  const published = await readPublishedIds(sdk);
+  // The same order has one cost: an app DELETED between the reads is still in the first answer and no longer in the second, so it comes out as that pair. It
+  // is left out. The app no longer exists, so leaving it out is what a read made a moment later would say; a re-read would add a request to every list for an
+  // event that needs a delete inside the window between two requests, and a mark would give the boolean `published` a third state for an app that is gone.
+  // (A draft deleted in that window cannot be told from one still there, so it is listed, as it was a moment ago.)
+  return [...saved].map(([id, appRows]) => describeApp(id, appRows, published))
+    .filter((app) => !deletedBetweenReads(app))
+    .sort((a, b) => {
+      const [x, y] = [a.name.toLowerCase(), b.name.toLowerCase()];
+      return x < y ? -1 : x > y ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
 }
 
 /**
@@ -456,29 +497,58 @@ async function createApp(args, httpClient, seams = {}) {
 
 // What a create that failed after its push began left behind, READ from the platform rather than inferred from how far the run got. The SDK rolls a
 // partial app back when it can, and a rollback can be refused, left undone on purpose or lost, so neither "something was written" nor "nothing was" can
-// be said from here. The unique name is the key: the one both rows were written under, and the one a retry would collide on. The app is read in both of
-// its layers (readApps), the site map by the same name (sitemapsNamed).
+// be said from here.
 //
-// A read that fails does not fail the failure: the outcome is then reported as unknown (`written: null`), with what to look for, because the error the
-// caller most needs is the one the create already has. `appId` is only ever an app that was found; the id the create used is offered as something to look
-// for when nothing could be read, and `sitemapId` is always the one the script chose before its first write.
+// The rows are recognised by their IDS, never by the unique name alone: the app's, which the SDK minted before its first write and sent as the new row's key
+// (so the row is at that id, or it does not exist), and the site map's, which this script chose. The name is what a retry collides on, but a row that holds it
+// under another id is somebody else's — a create under the same --unique-name that got there first — and reporting it as this create's leftover would point
+// a skill that offers to remove what a failed create left at another maker's app. (The SDK addresses its own rows by those ids for the same reason.) Such a
+// row is reported apart, as `nameTakenBy`, and `written` is decided from this run's rows alone.
+//
+// The reads — the app in the saved layer and in the published one, then the site map by that name — are made in turn, and the first that fails ends them.
+// A read that fails does not fail the failure (the error the caller most needs is the one the create already has): the outcome says what is still known.
+// A push the SDK reported as saved (the failure is at the solution or publish stage) committed the app and its site map, so both are known to be there
+// without a read, and each read that answers replaces that with what it found. `left.app` and `left.sitemap` are true, false, or null when nothing says;
+// `written` is true when either is true, false when both are false, and null otherwise: no row is known to exist, and one could not be read. `appId` is only
+// ever an app that is known to exist; the id the create used is offered as something to look for when a read failed, and `sitemapId` is always the one the
+// script chose.
 async function readLeftovers(sdk, { uniqueName, sitemapId, appId, stage }) {
-  let app;
-  let sitemap;
+  const [mineApp, mineSitemap] = [lower(appId), lower(sitemapId)];
+  let saved;
+  let published;
+  let sitemapIds;
+  let readBackError;
   try {
-    [app] = await readApps(sdk, { uniqueName });
-    sitemap = (await sitemapsNamed(sdk, uniqueName)).length > 0;
+    saved = await readSavedApps(sdk, { uniqueName });
+    published = await readPublishedIds(sdk, { uniqueName });
+    const sitemaps = await sitemapsNamed(sdk, uniqueName);
+    if (sitemaps.some((row) => !GUID.test(lower(row && row.sitemapid)))) throw new Error('the platform answered a site map with no id, so what is left cannot be told');
+    sitemapIds = sitemaps.map((row) => lower(row.sitemapid));
   } catch (err) {
-    return { written: null, stage, uniqueName, sitemapId, lookFor: { uniqueName, appId, sitemapId }, readBackError: String((err && err.message) || err) };
+    readBackError = String((err && err.message) || err);
   }
+
+  const impliedByPush = stage !== 'create' ? true : null;
+  const appRows = saved && saved.get(mineApp);
+  const app = appRows && published ? describeApp(mineApp, appRows, published) : undefined;
+  const left = {
+    // An app that reads as neither published nor changed was deleted between the two reads, and is not there (deletedBetweenReads).
+    app: saved ? Boolean(appRows) && !(app && deletedBetweenReads(app)) : impliedByPush,
+    sitemap: sitemapIds ? sitemapIds.includes(mineSitemap) : impliedByPush,
+  };
+  const otherApp = saved && [...saved.keys()].find((id) => id !== mineApp);
+  const otherSitemap = sitemapIds && sitemapIds.find((id) => id !== mineSitemap);
+  const nameTakenBy = { ...(otherApp ? { appId: otherApp } : {}), ...(otherSitemap ? { sitemapId: otherSitemap } : {}) };
   return {
-    written: Boolean(app) || sitemap,
+    written: left.app === true || left.sitemap === true ? true : left.app === false && left.sitemap === false ? false : null,
     stage,
-    ...(app ? { appId: app.id } : {}),
+    ...(left.app === true ? { appId } : {}),
     uniqueName,
     sitemapId,
-    left: { app: Boolean(app), sitemap },
-    ...(app ? { published: app.published, unpublishedChanges: app.unpublishedChanges } : {}),
+    ...(left.app === null && left.sitemap === null ? {} : { left }),
+    ...(left.app === true && app ? { published: app.published, unpublishedChanges: app.unpublishedChanges } : {}),
+    ...(Object.keys(nameTakenBy).length ? { nameTakenBy } : {}),
+    ...(readBackError === undefined ? {} : { lookFor: { uniqueName, appId, sitemapId }, readBackError }),
   };
 }
 

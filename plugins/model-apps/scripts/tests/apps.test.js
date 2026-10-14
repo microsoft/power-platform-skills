@@ -400,6 +400,8 @@ test('list fails closed on a row with no id, and on a read the SDK refuses, with
   assert.strictEqual(noId.exitCode, 1);
   assert.strictEqual(noId.payload.ok, false);
   assert.match(noId.payload.error, /an app with no id, so the list cannot be trusted/);
+  // The script's own failure, not the SDK's: it has no SDK code to carry.
+  assert.deepStrictEqual(Object.keys(noId.payload).sort(), ['error', 'ok']);
 
   const refused = Object.assign(new Error('HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.0/appmodules: not a member'), { code: 'CONNECTION_ERROR', statusCode: 403 });
   const w = world();
@@ -417,6 +419,49 @@ test('a published layer that cannot be read, or that answers a row with no id, f
   const noId = await run(['list', '--env', ENV], world({ apps: [appRow()], publishedRows: [{ name: 'x' }] }));
   assert.strictEqual(noId.exitCode, 1);
   assert.match(noId.payload.error, /a published app with no id, so the list cannot be trusted/);
+  assert.ok(!('code' in noId.payload), 'the script\u2019s own failure carries no SDK code');
+});
+
+// The two layers are matched by id, and an id is the same id in any letter case: the platform answers GUIDs in lower case from both endpoints, so nothing
+// else holds the comparison in place.
+test('the two layers of an app are matched by id whichever of them answers capitals', async () => {
+  const id = '00000000-0000-4000-8000-0000000000ab';
+  const publishedInCapitals = world({
+    apps: [appRow({ appmoduleid: id, name: 'Edited', uniquename: 'edited', componentstate: 1, published: true })],
+    publishedRows: [{ appmoduleid: id.toUpperCase() }],
+  });
+  const shown = (r) => r.payload.apps.map((a) => [a.id, a.published, a.unpublishedChanges]);
+  assert.deepStrictEqual(shown(await run(['list', '--env', ENV], publishedInCapitals)), [[id, true, true]]);
+  const savedInCapitals = world({
+    apps: [appRow({ appmoduleid: id.toUpperCase(), name: 'Edited', uniquename: 'edited', componentstate: 1 })],
+    publishedRows: [{ appmoduleid: id }],
+  });
+  assert.deepStrictEqual(shown(await run(['list', '--env', ENV], savedInCapitals)), [[id, true, true]], 'and the app is listed under its lower-case id');
+});
+
+// The saved layer is read first and the published one second (readApps), so an app deleted between the two reads is in the first answer, as published
+// (componentstate 0), and absent from the second: neither published nor holding a saved change, which no app is. It is left out. The apps that are
+// possible in the same window are listed: a draft, an app whose state the platform did not name, and an app that is published.
+test('an app deleted between the list\u2019s two reads is left out, so no app is printed as neither published nor changed — and a draft, or an app of unknown state, is not', async () => {
+  const gone = '00000000-0000-4000-8000-0000000000e1';
+  const draft = '00000000-0000-4000-8000-0000000000e2';
+  const unnamed = '00000000-0000-4000-8000-0000000000e3';
+  const live = '00000000-0000-4000-8000-0000000000e4';
+  const w = world({
+    apps: [
+      appRow({ appmoduleid: gone, name: 'a gone', uniquename: 'a_gone', componentstate: 0 }),
+      appRow({ appmoduleid: draft, name: 'b draft', uniquename: 'b_draft', componentstate: 1 }),
+      appRow({ appmoduleid: unnamed, name: 'c unnamed', uniquename: 'c_unnamed', componentstate: undefined }),
+      appRow({ appmoduleid: live, name: 'd live', uniquename: 'd_live', componentstate: 0 }),
+    ],
+    publishedRows: [{ appmoduleid: live }],
+  });
+  const r = await run(['list', '--env', ENV], w);
+  assert.deepStrictEqual(r.payload.apps.map((a) => [a.name, a.published, a.unpublishedChanges]), [['b draft', false, true], ['c unnamed', false, null], ['d live', true, false]]);
+  assert.strictEqual(r.payload.count, 3, 'the count is of the apps listed');
+  assert.ok(!r.payload.apps.some((a) => !a.published && a.unpublishedChanges === false), 'no app has neither fact');
+  const searched = await run(['list', '--env', ENV, '--search', 'gone'], w);
+  assert.deepStrictEqual(searched.payload, { ok: true, search: 'gone', count: 0, apps: [] });
 });
 
 test('the throwaway workspace is removed after a list, after one that failed, and after a create', async () => {
@@ -750,20 +795,94 @@ test('a push that throws, after the SDK took the partial app away, is a failure 
 });
 
 test('a push that throws and leaves the app and its sitemap (the rollback was refused) says so: written, the app that exists, the sitemap, and that nothing is published', async () => {
-  const FOUND = '44444444-4444-4444-8444-444444444444';
   const r = await run(CREATE, world(), {
     pushArtifact: () => { throw Object.assign(new Error('the sitemap write failed. The partial app this create wrote was KEPT'), { code: 'CONNECTION_ERROR' }); },
     afterPush: (added, { def }) => {
-      added.apps.push({ appmoduleid: FOUND, name: def.name, uniquename: def.uniqueName, componentstate: 1 });
+      added.apps.push({ appmoduleid: APP_ID, name: def.name, uniquename: def.uniqueName, componentstate: 1 });
       added.sitemaps.push({ sitemapid: def.sitemapId, sitemapnameunique: def.uniqueName });
     },
   });
   assert.strictEqual(r.exitCode, 1);
-  assert.deepStrictEqual(r.payload, {
-    ...draftLeft(r, { code: 'CONNECTION_ERROR', error: 'the sitemap write failed. The partial app this create wrote was KEPT', stage: 'create', addedToSolution: false, inSolution: [] }),
-    appId: FOUND,
+  assert.deepStrictEqual(r.payload, draftLeft(r, { code: 'CONNECTION_ERROR', error: 'the sitemap write failed. The partial app this create wrote was KEPT', stage: 'create', addedToSolution: false, inSolution: [] }));
+  assert.strictEqual(r.payload.appId, APP_ID, 'the app this create wrote: the id the SDK minted and sent as the row\u2019s key');
+});
+
+// What makes a row THIS create's is its id — the app's, which the SDK minted before its first write and sent as the new row's key, and the site map's, which the
+// script chose — and not the unique name, which is only what a retry collides on. A create under the same --unique-name that reaches the platform first makes
+// this one's write fail as a duplicate, and the rows found under the name are that other create's: not left behind by this one, and never to be reported as that.
+const FOREIGN_APP = '99999999-9999-4999-8999-999999999999';
+const FOREIGN_SITEMAP = '88888888-8888-4888-8888-888888888888';
+const holdsTheName = (added, def, { app = true, sitemap = true } = {}) => {
+  if (app) added.apps.push({ appmoduleid: FOREIGN_APP, name: 'Another maker\u2019s app', uniquename: def.uniqueName, componentstate: 0 });
+  if (sitemap) added.sitemaps.push({ sitemapid: FOREIGN_SITEMAP, sitemapnameunique: def.uniqueName });
+};
+
+test('a create refused because another create holds its unique name wrote nothing: the app and site map found under the name are not its leftovers, and are named apart', async () => {
+  const r = await run(CREATE, world(), {
+    pushArtifact: () => { throw Object.assign(new Error('HTTP 400 from …/appmodules: A record with the same unique name already exists.'), { code: 'CONNECTION_ERROR' }); },
+    afterPush: (added, { def }) => holdsTheName(added, def),
   });
-  assert.strictEqual(r.payload.appId, FOUND, 'the id of the app that was found, which is what exists');
+  assert.strictEqual(r.exitCode, 1);
+  assert.deepStrictEqual(r.payload, nothingLeft(r, {
+    code: 'CONNECTION_ERROR',
+    error: 'HTTP 400 from …/appmodules: A record with the same unique name already exists.',
+    stage: 'create',
+    addedToSolution: false,
+    inSolution: [],
+    nameTakenBy: { appId: FOREIGN_APP, sitemapId: FOREIGN_SITEMAP },
+  }));
+  assert.ok(!('appId' in r.payload) && !('published' in r.payload), 'the other app is not this create\u2019s, so it is not named as its app nor described');
+  assert.notStrictEqual(r.payload.sitemapId, FOREIGN_SITEMAP, 'and the sitemap id is the one the script chose, not the one found under the name');
+});
+
+test('this create\u2019s app is left and another site map holds the name: the app is written, the site map is not this one\u2019s and is named apart', async () => {
+  const r = await run(CREATE, world(), {
+    pushArtifact: () => { throw new Error('the site map was refused as a duplicate, and the app could not be removed'); },
+    afterPush: (added, { def }) => {
+      added.apps.push({ appmoduleid: APP_ID, name: def.name, uniquename: def.uniqueName, componentstate: 1 });
+      holdsTheName(added, def, { app: false });
+    },
+  });
+  assert.deepStrictEqual(r.payload, draftLeft(r, {
+    error: 'the site map was refused as a duplicate, and the app could not be removed',
+    stage: 'create',
+    addedToSolution: false,
+    inSolution: [],
+    left: { app: true, sitemap: false },
+    nameTakenBy: { sitemapId: FOREIGN_SITEMAP },
+  }));
+});
+
+test('a row is this create\u2019s whichever way the platform spells its id: capitals are the same id', async () => {
+  const r = await run(CREATE, world(), {
+    pushArtifact: () => { throw new Error('the pin failed'); },
+    afterPush: (added, { def }) => {
+      added.apps.push({ appmoduleid: APP_ID.toUpperCase(), name: def.name, uniquename: def.uniqueName, componentstate: 1 });
+      added.sitemaps.push({ sitemapid: def.sitemapId.toUpperCase(), sitemapnameunique: def.uniqueName });
+    },
+  });
+  assert.deepStrictEqual(r.payload, draftLeft(r, { error: 'the pin failed', stage: 'create', addedToSolution: false, inSolution: [] }));
+  assert.ok(!('nameTakenBy' in r.payload), 'the same id in other letters is not another row');
+});
+
+test('an app of this create that reads as neither published nor changed was deleted between the read-back\u2019s two reads: it is not left, and no pair that no app has is printed', async () => {
+  const r = await run(CREATE, world(), {
+    pushArtifact: () => { throw new Error('the pin failed'); },
+    afterPush: (added, { def }) => { added.apps.push({ appmoduleid: APP_ID, name: def.name, uniquename: def.uniqueName, componentstate: 0, published: false }); },
+  });
+  assert.deepStrictEqual(r.payload, nothingLeft(r, { error: 'the pin failed', stage: 'create', addedToSolution: false, inSolution: [] }));
+  assert.ok(!('appId' in r.payload) && !('published' in r.payload) && !('unpublishedChanges' in r.payload));
+});
+
+test('a site map the platform answers with no id cannot be told from this create\u2019s, so the read-back is unknown and says why — it does not guess', async () => {
+  const r = await run(CREATE, world(), {
+    pushArtifact: () => { throw new Error('the pin failed'); },
+    afterPush: (added, { def }) => { added.sitemaps.push({ sitemapnameunique: def.uniqueName }); },
+  });
+  assert.strictEqual(r.payload.written, null);
+  assert.match(r.payload.readBackError, /a site map with no id, so what is left cannot be told/);
+  assert.deepStrictEqual(r.payload.left, { app: false, sitemap: null }, 'the app was read and is not there; the site map could not be placed');
+  assert.deepStrictEqual(r.payload.lookFor, { uniqueName: r.payload.uniqueName, appId: APP_ID, sitemapId: r.def.sitemapId });
 });
 
 test('only the sitemap left behind (the app is gone) is written:true with no appId, and left says which row it is', async () => {
@@ -804,9 +923,15 @@ test('an app left behind is described by what the platform says of it — publis
   assert.deepStrictEqual([r.payload.written, r.payload.published, r.payload.unpublishedChanges], [true, true, true]);
 });
 
-test('a read-back that cannot be made does not fail the failure: the outcome is unknown, and what to look for is named — every one of the three reads', async () => {
+test('a read-back that cannot be made does not fail the failure: the outcome is unknown unless an earlier read answered, and what to look for is named — each of the three reads', async () => {
   const refused = Object.assign(new Error('the model-driven apps: HTTP 503 from …/appmodules'), { code: 'CONNECTION_ERROR', statusCode: 503 });
-  for (const [which, unreadable] of [['the saved layer', /^\/appmodules\/Microsoft/], ['the published layer', /^\/appmodules\?/], ['the site maps', /^\/sitemaps\//]]) {
+  // The reads are made in turn and the first that fails ends them. The saved layer is the first, so when it fails nothing is learned; when a later one fails the
+  // app has been read — it is not there — and the site map has not, so the outcome is still unknown, with the half that is known said.
+  for (const [which, unreadable, reads, left] of [
+    ['the saved layer', /^\/appmodules\/Microsoft/, 1, undefined],
+    ['the published layer', /^\/appmodules\?/, 2, { app: false, sitemap: null }],
+    ['the site maps', /^\/sitemaps\//, 3, { app: false, sitemap: null }],
+  ]) {
     let armed = false;
     const w = world({ push: { type: 'app', id: APP_ID, saved: false, error: Object.assign(new Error('the push was refused'), { code: 'VALIDATION_ERROR' }) } });
     const r = await run(CREATE, w, { afterPush: () => { armed = true; }, read: (p) => { if (armed && unreadable.test(p)) throw refused; } });
@@ -820,12 +945,81 @@ test('a read-back that cannot be made does not fail the failure: the outcome is 
       stage: 'create',
       uniqueName: r.payload.uniqueName,
       sitemapId: r.def.sitemapId,
+      ...(left ? { left } : {}),
       lookFor: { uniqueName: r.payload.uniqueName, appId: APP_ID, sitemapId: r.def.sitemapId },
       readBackError: refused.message,
       addedToSolution: false,
       inSolution: [],
     }, which);
-    assert.ok(!('appId' in r.payload) && !('left' in r.payload) && !('published' in r.payload), `${which}: nothing is claimed that was not read`);
+    assert.ok(!('appId' in r.payload) && !('published' in r.payload), `${which}: nothing is claimed that was not read`);
+    assert.strictEqual(readBackOf(r).length, reads, `${which}: the first read that fails ends the read-back`);
+  }
+});
+
+// A read-back that cannot be made is not a run that knows nothing. A push the SDK reported as saved committed the app and its site map, so a failure after it
+// (the solution, the publish) leaves both whether or not they can be read back; and an app read before a later read failed is an app.
+test('a push the SDK reported as saved wrote both rows, so a read-back that cannot be made still says written — at the solution stage and at the publish stage', async () => {
+  const refused = Object.assign(new Error('the model-driven apps: HTTP 503 from …/appmodules'), { code: 'CONNECTION_ERROR', statusCode: 503 });
+  const failedPublish = world({ publishResult: { type: 'app', id: APP_ID, shipped: false, publish: { kind: 'failed', error: new Error('another publish is running') } } });
+  for (const [stage, w, argv, error, joined] of [
+    ['solution', world(), CREATE, 'the app could not be added', []],
+    ['publish', failedPublish, [...CREATE, '--publish'], 'another publish is running', ['app', 'sitemap']],
+  ]) {
+    let armed = false;
+    const r = await run(argv, w, {
+      afterPush: () => { armed = true; },
+      addSolutionComponent: () => { if (stage === 'solution') throw new Error(error); },
+      read: () => { if (armed) throw refused; },
+    });
+    assert.strictEqual(r.exitCode, 1, stage);
+    assert.deepStrictEqual(r.payload, {
+      ok: false,
+      error,
+      written: true,
+      stage,
+      appId: APP_ID,
+      uniqueName: r.payload.uniqueName,
+      sitemapId: r.def.sitemapId,
+      left: { app: true, sitemap: true },
+      lookFor: { uniqueName: r.payload.uniqueName, appId: APP_ID, sitemapId: r.def.sitemapId },
+      readBackError: refused.message,
+      addedToSolution: joined.length === 2,
+      inSolution: joined,
+    }, stage);
+    assert.ok(!('published' in r.payload), `${stage}: the platform could not be asked, so nothing is said of whether the app is published`);
+    assert.strictEqual(readBackOf(r).length, 1, `${stage}: the first read failed and ended the read-back`);
+  }
+});
+
+test('an app read before a later read failed is written: the read-back keeps what it learned and says what it could not read', async () => {
+  const refused = Object.assign(new Error('the model-driven apps: HTTP 503 from …/appmodules'), { code: 'CONNECTION_ERROR', statusCode: 503 });
+  for (const [which, unreadable, facts] of [['the published layer', /^\/appmodules\?/, false], ['the site maps', /^\/sitemaps\//, true]]) {
+    let armed = false;
+    const r = await run(CREATE, world(), {
+      pushArtifact: () => { throw new Error('the pin failed, and the rollback was refused'); },
+      afterPush: (added, { def }) => {
+        armed = true;
+        added.apps.push({ appmoduleid: APP_ID, name: def.name, uniquename: def.uniqueName, componentstate: 1 });
+        added.sitemaps.push({ sitemapid: def.sitemapId, sitemapnameunique: def.uniqueName });
+      },
+      read: (p) => { if (armed && unreadable.test(p)) throw refused; },
+    });
+    assert.deepStrictEqual(r.payload, {
+      ok: false,
+      error: 'the pin failed, and the rollback was refused',
+      written: true,
+      stage: 'create',
+      appId: APP_ID,
+      uniqueName: r.payload.uniqueName,
+      sitemapId: r.def.sitemapId,
+      left: { app: true, sitemap: null },
+      // The published fact needs the published layer: it is there when the site maps failed, which come after it, and not when the published layer did.
+      ...(facts ? { published: false, unpublishedChanges: true } : {}),
+      lookFor: { uniqueName: r.payload.uniqueName, appId: APP_ID, sitemapId: r.def.sitemapId },
+      readBackError: refused.message,
+      addedToSolution: false,
+      inSolution: [],
+    }, which);
   }
 });
 
