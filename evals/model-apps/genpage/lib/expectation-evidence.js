@@ -11,15 +11,19 @@
 //
 // Nothing here executes evidence: command text is tokenized by commandInfo, never evaluated.
 
-const { workflowCalls, isUpload } = require('./workflow-evidence.js');
+const { workflowCalls, isUpload, resultObject } = require('./workflow-evidence.js');
 const { commandInfo, fileName } = require('./evidence-utils.js');
 const { planSection, parseMarkdownRows } = require('./plan-evidence.js');
 
 const PAC = String.raw`\bpac(?:\.exe|\.cmd)?\s+model\s+`;
-const LIST_TABLES = new RegExp(`${PAC}list-tables\\b`);
-// Language discovery is the plugin's own `scripts/list-languages.js` or `pac model list-languages` — the command the
-// captures made before that script record, and the one the planner runs when the script cannot read the languages — so
-// either spelling is the planner having looked.
+// The plugin's own scripts replaced `pac model list-tables`, `pac model list` and `pac model create` (scripts/list-tables.js, apps.js list, apps.js create). A capture made before them
+// records the pac form, and it is still read: each pattern accepts both. A script path is usually quoted (`node 'D:/repo/…/apps.js' list`), so the pattern allows a closing quote
+// between `apps.js` and its subcommand.
+const LIST_TABLES = new RegExp(`${PAC}list-tables\\b|\\blist-tables\\.js\\b`);
+const LIST_APPS = new RegExp(`${PAC}list(?![\\w-])|\\bapps\\.js['"]?\\s+list\\b`);
+const CREATE_APP = new RegExp(`${PAC}create\\b|\\bapps\\.js['"]?\\s+create\\b`);
+// Language discovery is the plugin's own `scripts/list-languages.js` — the only source since the `pac model list-languages` fallback was removed (every /genpage page operation needs the
+// Azure CLI the script reads with). `pac model list-languages` is the command the captures made before that script record, and still counts as the planner having looked.
 const LIST_LANGUAGES = new RegExp(`${PAC}list-languages\\b|\\blist-languages\\.js\\b`);
 const GENERATE_TYPES = new RegExp(`${PAC}genpage\\s+generate-types\\b`);
 const GENPAGE_LIST = new RegExp(`${PAC}genpage\\s+list\\b`);
@@ -30,6 +34,7 @@ const LEGACY_PROVISION = /\b(?:create-table|add-column|create-relationship|creat
 // A list-tables result that says the searched table is absent. The captures phrase it as
 //   `pac model list-tables --search 'cr_candidate'` — exact logical-name match: NOT FOUND
 //   No tables found matching the specified criteria. / Result: cr_ticket does NOT exist
+// and scripts/list-tables.js says it as data: `{ "ok": true, "search": ["cr_candidate"], "exact": true, "count": 0, "tables": [], "missing": ["cr_candidate"] }` — see tableAbsent.
 const NOT_FOUND = /\bNOT\s+FOUND\b|\bdoes\s+not\s+exist\b|\bdo\s+not\s+exist\b|\bNo\s+tables?\s+found\b/i;
 
 // `--data-sources 'incident,contact'` → ['incident', 'contact']. commandInfo already removed the
@@ -65,6 +70,21 @@ function commandCalls(fixture, pattern) {
 function listTablesSearches(fixture) {
   return commandCalls(fixture, LIST_TABLES).filter((c) => typeof c.flags.search === 'string')
     .map((c) => ({ ...c, terms: csvList(c.flags.search) }));
+}
+
+// Whether a list-tables search says `name` is NOT a table. scripts/list-tables.js answers as data, and the answer is read as data: a table exists when one of `tables` has exactly that
+// logical name (any letter case) — whatever else a substring search returned beside it — and is absent when none has. A capture made before the script records prose, which NOT_FOUND reads.
+function tableAbsent(search, name) {
+  const result = resultObject(search.call);
+  if (result && result.ok === true && Array.isArray(result.tables)) {
+    return !result.tables.some((table) => String(table && table.logicalName).toLowerCase() === String(name).toLowerCase());
+  }
+  return NOT_FOUND.test(search.text);
+}
+
+// A list-tables run that did not read the tables: `{ "ok": false, "error": "…", "code": "…" }`. Nothing was learned about any table, so it neither confirms one exists nor that one is absent.
+function searchFailed(search) {
+  return resultObject(search.call)?.ok === false;
 }
 
 function generateTypesCalls(fixture) {
@@ -220,12 +240,13 @@ function choiceEnum(source, tableSuffix, columnSuffix) {
   return null;
 }
 
-// The rows of a PAC listing — apps from `pac model list`, pages from `pac model genpage list` — as
-// { id, name }. Three recorded shapes:
+// The rows of an app or page listing — apps from `scripts/apps.js list` (or `pac model list` in an older capture), pages from `pac model genpage list` — as
+// { id, name }. Four recorded shapes:
 //   App ID                                Display Name   Unique Name        (raw PAC table)
 //   11111111-2222-3333-4444-555555555555  Sales Hub      SalesHub
 //   - Sales Hub — 11111111-2222-3333-4444-555555555555 (SalesHub)          (log bullet)
-//   { "apps": [ { "appId": "…", "displayName": "…" } ] }                     (structured result)
+//   { "apps": [ { "appId": "…", "displayName": "…" } ] }                     (structured result of an older capture)
+//   { "ok": true, "count": 1, "apps": [ { "id": "…", "name": "Sales Hub", "uniqueName": "sales_hub_1a2b3c4d", "published": true, "unpublishedChanges": false } ] }   (apps.js list)
 const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 function listingRows(call) {
   const rows = [];
@@ -264,8 +285,8 @@ function conversationSteps(fixture) {
 }
 
 module.exports = {
-  LIST_LANGUAGES, GENPAGE_LIST, NOT_FOUND, GUID_RE,
-  csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, generateTypesCalls, uploadCalls,
+  LIST_TABLES, LIST_LANGUAGES, LIST_APPS, CREATE_APP, GENPAGE_LIST, NOT_FOUND, GUID_RE,
+  csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, tableAbsent, searchFailed, generateTypesCalls, uploadCalls,
   provisionCalls, legacyProvisionCalls, planPrefix, planSolution, planEntityBlocks, existingEntities, entityLog,
   createdTableNames, runtimeEnums, choiceEnum, parseOptions, listingRows, conversationSteps,
 };

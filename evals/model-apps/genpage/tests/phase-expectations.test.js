@@ -20,6 +20,10 @@ const { loadFixtures } = require('../lib/fixture-loader.js');
 
 const FIXTURES = loadFixtures(path.join(__dirname, '..', 'fixtures'));
 
+// The two fixtures whose app listing and app create are graded in the last section of the file, where all of eval 8's tests are (eval 3 has more under its own heading).
+const E3 = '3-contacts-edit-search-sort';
+const E8 = '8-account-metrics-new-app';
+
 function committed(dirName) {
   const fixture = FIXTURES.find((f) => f.dirName === dirName);
   assert.ok(fixture, `committed fixture ${dirName} exists`);
@@ -83,18 +87,36 @@ test('eval 2: the data-source question resolves to mock data and no entity detec
   const base = committed('2-mock-dashboard');
   assertFail(grade(text, { ...base, workflowLog: `${base.workflowLog}\n- \`pac model list-tables --search 'account'\` — account exists\n` }),
     /entity detection ran/);
+  assertFail(grade(text, { ...base, workflowLog: `${base.workflowLog}\n- \`node scripts/list-tables.js --env https://contoso.crm.dynamics.com --search 'account' --exact\` — account exists\n` }),
+    /entity detection ran/);
   assertFail(grade(text, mutated('2-mock-dashboard', 'genpagePlan', '(none — mock data page)', 'account')), /existing entities \(account\)/);
 });
 
 // --- Eval 4 ------------------------------------------------------------------------------------
 
 test('eval 4: list-tables confirms incident and contact as existing tables', () => {
-  const text = "Phase 1 (Planner): pac model list-tables --search 'incident,contact' is run; both entities confirmed as existing";
+  const text = "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing";
   assertPass(grade(text, committed('4-case-wizard')));
   assertFail(grade(text, mutated('4-case-wizard', 'workflowLog', "--search 'incident,contact'", "--search 'incident'")),
-    /no pac model list-tables --search covered contact/);
+    /no list-tables --search covered contact/);
   assertFail(grade(text, mutated('4-case-wizard', 'genpagePlan', '## Existing Entities\n\nincident, contact', '## Existing Entities\n\nincident')),
     /does not confirm contact/);
+});
+
+// scripts/list-tables.js answers as data: `tables` holds the rows, `missing` the terms no table has (with --exact). The check reads that, and still reads the prose of a capture made before it.
+const LIST_TABLES_JS = "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com'";
+const tableRow = (logicalName) => ({ logicalName, displayName: logicalName, schemaName: logicalName, isCustom: false });
+
+test('eval 4: list-tables.js results are read as data — a table that is in `tables` exists, one in `missing` does not', () => {
+  const text = "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing";
+  const found = { ok: true, search: ['incident', 'contact'], exact: true, count: 2, tables: [tableRow('incident'), tableRow('contact')], missing: [] };
+  const withSearch = (result) => ({ ...committed('4-case-wizard'), events: [{ id: 'list-tables', command: `${LIST_TABLES_JS} --search 'incident,contact' --exact`, result }] });
+  assertPass(grade(text, withSearch(found)));
+  assertFail(grade(text, withSearch({ ...found, count: 1, tables: [tableRow('incident')], missing: ['contact'] })), /list-tables recorded contact as not found/);
+  // A substring search returns more rows than the table it was asked for: only an exact logical name counts.
+  assertFail(grade(text, withSearch({ ...found, exact: false, tables: [tableRow('incident'), tableRow('contactleads')], missing: [] })), /list-tables recorded contact as not found/);
+  // A failed read says nothing about the tables, and is not "they exist".
+  assertFail(grade(text, withSearch({ ok: false, error: 'the read failed', code: 'CONNECTION_ERROR' })), /list-tables failed, so incident was not confirmed to exist/);
 });
 
 test('eval 4: the entity-builder is skipped when every table exists', () => {
@@ -141,7 +163,7 @@ test('eval 5: task exists and the plan maps the three kanban columns to status v
   const text = 'Phase 1 (Planner): task entity confirmed as existing; plan describes kanban with 3 columns mapped to task statecode/statuscode values';
   assertPass(grade(text, committed('5-kanban-task-board')));
   assertFail(grade(text, mutated('5-kanban-task-board', 'workflowLog', "list-tables --search 'task'", "list-tables --search 'account'")),
-    /no pac model list-tables --search covered task/);
+    /no list-tables --search covered task/);
   assertFail(grade(text, mutated('5-kanban-task-board', 'genpagePlan', 'Three columns mapped to task statuscode values', 'Three columns')),
     /does not map the columns to task statuscode\/statecode/);
 });
@@ -163,13 +185,24 @@ test('eval 5: status values identified after generate-types match the generated 
 const E7 = '7-job-candidates-new-entities';
 
 test('eval 7: list-tables records both new tables as absent on an exact match', () => {
-  const text = 'Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)';
+  const text = 'Phase 1 (Planner): list-tables.js --search --exact confirms cr_candidate and cr_jobrequisition do NOT exist (named in missing — an exact logical-name match, not fuzzy)';
   assertPass(grade(text, committed(E7)));
   assertFail(grade(text, mutated(E7, 'workflowLog', "--search 'cr_candidate'` — exact logical-name match: NOT FOUND", "--search 'cr_candidate'` — fuzzy match: NOT FOUND")),
     /cr_candidate does not rest on an exact logical-name match/);
   assertFail(grade(text, mutated(E7, 'workflowLog', "--search 'cr_jobrequisition'` — exact logical-name match: NOT FOUND", "--search 'cr_jobrequisition'` — exact logical-name match: cr_jobrequisition")),
     /does not record cr_jobrequisition as absent/);
   assertFail(grade(text, mutated(E7, 'genpagePlan', '### candidate', '### applicant')), /no "### candidate" block/);
+});
+
+test('eval 7: list-tables.js --exact names both tables in `missing`; a fuzzy reading of a longer name is not an absence', () => {
+  const text = 'Phase 1 (Planner): list-tables.js --search --exact confirms cr_candidate and cr_jobrequisition do NOT exist (named in missing — an exact logical-name match, not fuzzy)';
+  const absent = { ok: true, search: ['cr_candidate', 'cr_jobrequisition'], exact: true, count: 0, tables: [], missing: ['cr_candidate', 'cr_jobrequisition'] };
+  const withSearch = (result, flags = '--exact') => ({ ...committed(E7), events: [{ id: 'list-tables', command: `${LIST_TABLES_JS} --search 'cr_candidate,cr_jobrequisition' ${flags}`, result }] });
+  assertPass(grade(text, withSearch(absent)));
+  // Without --exact the same two terms can return longer names (`cr_candidatenote`) and no row of the exact name: the table is still absent, but only the data says so, not --exact.
+  assertFail(grade(text, withSearch({ ...absent, exact: false, count: 1, tables: [tableRow('cr_candidatenote')], missing: [] }, '')), /cr_candidate does not rest on an exact logical-name match/);
+  assertFail(grade(text, withSearch({ ...absent, count: 1, tables: [tableRow('cr_candidate')], missing: ['cr_jobrequisition'] })), /does not record cr_candidate as absent/);
+  assertFail(grade(text, withSearch({ ok: false, error: 'the read failed', code: 'CONNECTION_ERROR' })), /list-tables failed, so cr_candidate was not confirmed to be absent/);
 });
 
 test('eval 7: the plan defines both tables with typed columns and the candidate → jobrequisition lookup', () => {
@@ -358,7 +391,7 @@ test('eval 11: every page resolves its types from the one generated RuntimeTypes
 });
 
 test('eval 11: each page has exactly one create upload with its own --code-file', () => {
-  const text = 'Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file';
+  const text = 'Phase 6: All 3 pages are deployed via separate genpage-upload.js create uploads, each with the correct --code-file';
   assertPass(grade(text, committed(E11)));
   assertPass(grade(text, committed(E11_REAL)));
   assertFail(grade(text, mutated(E11, 'workflowLog', '--code-file recruitment-pages/hiring-metrics.tsx', '--code-file recruitment-pages/candidate-list.tsx')),
@@ -448,13 +481,12 @@ const withLog = (...replacements) => replacements.reduce((fixture, [from, to]) =
 // environment the capture's own command names.
 const originOf13 = () => /--env '([^']+)'/.exec(scriptCall())[1];
 const failedRead = () => `{"ok":false,"error":"Transport failure reaching ${originOf13()}/api/data/v9.0/organizations?$select=languagecode: Could not get an Azure CLI token for ${originOf13()}: Azure CLI (\`az\`) is not on PATH. Install it from https://aka.ms/azure-cli and run \`az login\`.","code":"CONNECTION_ERROR"}`;
-// What `pac model list-languages` prints for the same environment.
+// What `pac model list-languages` printed for the same environment — the table of a capture made before the script, and what the removed fallback would have recorded.
 const PAC_ROWS = ['1033 English (United States) en-US No', '1025 Arabic (Saudi Arabia)   ar-SA Yes', '1036 French (France)         fr-FR No'];
 const pacTable = (rows = PAC_ROWS) => `\`pac model list-languages\`\nLCID Language                Code  RTL\n${rows.join('\n')}`;
-// The planner pins the fallback to the environment the script was given (`--environment '<envUrl>'`); to the grader that is the same command.
+// The removed fallback was pinned to the environment the script was given (`--environment '<envUrl>'`); to the grader that is the same command.
 const pinnedPacTable = (rows) => pacTable(rows).replace('`pac model list-languages`', `\`pac model list-languages --environment '${originOf13()}'\``);
-// The log of a run whose script failed, the way the planner records it: the script's command and result, then the
-// `pac` command and its table, each verbatim (agents/genpage-planner.md, "Detect Configured Languages").
+// The log of a run whose script failed: the script's command and result, then what the removed fallback recorded — the `pac` command and its table, each verbatim.
 const failedScriptLog = () => `${scriptCall().split('\n')[0]}\n  Result: ${failedRead()}`;
 const fellBackLog = ({ note = '', rows } = {}) => `${failedScriptLog()}\n${note}- ${pacTable(rows)}`;
 const SAID = '- Language detection used `pac model list-languages`: the languages script exited 1 (the Azure CLI is not on PATH)\n';
@@ -492,31 +524,25 @@ test('eval 13: a result that parses as the script\u2019s own JSON is read as dat
   assertPass(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', /Result: \{"ok":true[^\n]*/.exec(committed(E13).workflowLog)[0], 'Result: { ok: true, ... }\n  English (United States) (1033, en-US), Arabic (Saudi Arabia) (1025, ar-SA), French (France) (1036, fr-FR)')));
 });
 
-test('eval 13: when the script could not read the languages, the pac fallback after it is what detected them', () => {
-  // The planner falls back to `pac model list-languages` on any non-zero exit of the script and records both. The
-  // failed call found nothing, the fallback found all three, and the plan lists them.
-  const fellBack = mutated(E13, 'workflowLog', scriptCall(), fellBackLog());
-  assertPass(grade(LANGUAGES_OUTPUT, fellBack));
-  assertPass(grade(LANGUAGES_SECTION, fellBack));
-  // Saying so in a line of its own changes nothing.
-  const said = mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ note: SAID }));
-  assertPass(grade(LANGUAGES_OUTPUT, said));
-  assertPass(grade(LANGUAGES_SECTION, said));
-  // The fallback as the planner runs it, pinned to the script's environment, is the same command to the grader — and its table is read the same way.
-  const pinned = mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable()}`);
-  assertPass(grade(LANGUAGES_OUTPUT, pinned));
-  assertPass(grade(LANGUAGES_SECTION, pinned));
-  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable(PAC_ROWS.slice(0, 2))}`)), /lacks LCID 1036/);
-  // A run that stopped at the failed script detected nothing: it is credited with no language it never read, and a
+test('eval 13: when the script could not read the languages nothing is detected — the pac fallback it used to have is gone', () => {
+  // agents/genpage-planner.md: a failed read ends language detection, and the planner reports why and stops. A `pac model list-languages` that
+  // follows a failed script is the removed fallback, so the grader credits it with none of the languages it printed.
+  for (const log of [fellBackLog(), fellBackLog({ note: SAID }), `${failedScriptLog()}\n- ${pinnedPacTable()}`]) {
+    const fellBack = mutated(E13, 'workflowLog', scriptCall(), log);
+    assertFail(grade(LANGUAGES_OUTPUT, fellBack), /lacks LCID 1033, 1025, 1036 \(saw none\)/);
+    assertFail(grade(LANGUAGES_SECTION, fellBack), /detected no languages/);
+  }
+  // A run that stopped at the failed script detected nothing as well: it is credited with no language it never read, and a
   // plan that lists languages has none to be listing.
   const stopped = mutated(E13, 'workflowLog', scriptCall(), failedScriptLog());
   assertFail(grade(LANGUAGES_OUTPUT, stopped), /lacks LCID 1033, 1025, 1036 \(saw none\)/);
   assertFail(grade(LANGUAGES_SECTION, stopped), /detected no languages/);
-  // A fallback that read fewer languages than the plan lists is caught the same way as a script that did.
-  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ rows: PAC_ROWS.slice(0, 2) }))), /lacks LCID 1036/);
+  // The table of a capture made before the script has no failed script ahead of it, so it is read — and a table that lists fewer languages than the plan is caught.
+  assertPass(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), pacTable())));
+  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), pacTable(PAC_ROWS.slice(0, 2)))), /lacks LCID 1036/);
 });
 
-test('eval 13: the whole fixture still grades clean when its language discovery is the pac fallback', () => {
+test('eval 13: the whole fixture still grades clean when its language discovery is a pac table from before the script', () => {
   // Every common assertion and the eval's own expectations, as run-layer-1.js grades a fixture — not one check alone.
   const fs = require('node:fs');
   const { gradeFixture } = require('../run-layer-1.js');
@@ -524,9 +550,7 @@ test('eval 13: the whole fixture still grades clean when its language discovery 
   const ev = evalsData.evals.find((e) => e.id === committed(E13).id);
   const failures = (fixture) => gradeFixture(fixture, ev, evalsData).filter((r) => r.result.status === 'fail').map((r) => `${r.text}: ${r.result.reason}`);
   assert.deepEqual(failures(committed(E13)), []);
-  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), fellBackLog())), []);
-  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ note: SAID }))), []);
-  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable()}`)), []);
+  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), pacTable())), []);
 });
 
 test('eval 13: generated text carries no hardcoded currency symbols or date formats', () => {
@@ -685,29 +709,8 @@ function withoutArtifact(dirName, name) {
   return { ...base, artifacts };
 }
 
-// --- Eval 3 ------------------------------------------------------------------------------------
-
-const E3 = '3-contacts-edit-search-sort';
-
-test('eval 3: apps and pages are offered from the PAC listings, and the restated choice precedes download', () => {
-  const apps = 'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual Display Name and app-id GUID from pac model list output';
-  const pages = 'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output';
-  const restated = 'Edit Phase 1c: Selection is restated to the user before proceeding to download';
-  assertPass(grade(apps, committed(E3)));
-  assertPass(grade(pages, committed(E3)));
-  assertPass(grade(restated, committed(E3)));
-  // The listing names the app differently from the question: the offered name is not the listed one.
-  assertFail(grade(apps, withEvents(E3, (ev) => { event(ev, 'list-apps').result = event(ev, 'list-apps').result.replace('Sales Hub  ', 'Sales Desk '); return ev; })),
-    /offers 11111111-2222-3333-4444-555555555555 without its listed name "Sales Desk"/);
-  assertFail(grade(apps, withEvents(E3, (ev) => { event(ev, 'list-apps').result = event(ev, 'list-apps').result.split('\n').filter((l) => !/Sales Hub/.test(l)).join('\n'); return ev; })),
-    /offers 11111111-2222-3333-4444-555555555555, which the listing does not contain/);
-  // The run downloaded a page that was listed but never offered.
-  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'download').command = event(ev, 'download').command.replace('22222222-3333-4444-5555-666666666666', '33333333-4444-5555-6666-777777777777'); return ev; })),
-    /continued with \(33333333-4444-5555-6666-777777777777\) was not among the offered pages/);
-  assertFail(grade(restated, mutated(E3, 'workflowLog', '- "Editing **Contacts Directory** (22222222-3333-4444-5555-666666666666) in app **Sales Hub** (11111111-2222-3333-4444-555555555555). Continuing to download the existing page code…"', '- Continuing.')),
-    /no restatement of the selected app and page/);
-});
-
+// --- Eval 3: the edit flow (the app and page listing test is in the last section) ---------------
+// Each test grades one expectation of the edit flow against the committed synthetic fixture.
 test('eval 3: config.json dataSources drive RuntimeTypes generation', () => {
   const text = "Edit Phase 3: config.json is read; since dataSources contains 'contact', RuntimeTypes.ts is generated";
   assertPass(grade(text, committed(E3)));
@@ -742,45 +745,6 @@ test('eval 3: Edit Phase 5 reads the edit plan, rules, RuntimeTypes and the page
   assertFail(grade(ui, withFile(E3, 'page.tsx', '<SearchBox', '{/* <SearchBox /> */}<Text')), /no Fluent UI V9 SearchBox/);
 });
 
-// --- Eval 8 ------------------------------------------------------------------------------------
-
-const E8 = '8-account-metrics-new-app';
-
-test('eval 8: zero apps, the create-or-cancel question, and the plan recording the new app', () => {
-  const zero = 'Phase 1 (Planner): pac model list returns zero apps';
-  const asked = 'Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel';
-  const recorded = "Phase 1 (Planner): Plan records 'create new app' decision";
-  for (const text of [zero, asked, recorded]) assertPass(grade(text, committed(E8)));
-  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = { apps: [{ appId: '99999999-0000-4000-8000-000000000000', displayName: 'Old App' }] }; return ev; })),
-    /returned 1 app/);
-  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = {}; return ev; })), /does not record zero apps/);
-  assertFail(grade(asked, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'ask-create-app'))), /no AskUserQuestion offered to create a new app or cancel/);
-  assertFail(grade(recorded, withEvents(E8, (ev) => { event(ev, 'ask-create-app').result.answer = 'Cancel'; return ev; })), /answered "Cancel", not create/);
-  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: create new: Metrics Hub')), /not the app the maker named \("Account Metrics"\)/);
-  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (11111111-2222-3333-4444-555555555555)')), /does not record "App: create new/);
-});
-
-test('eval 8: the solution question runs for the new app and its choice is recorded', () => {
-  const text = 'Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment';
-  assertPass(grade(text, committed(E8)));
-  assertFail(grade(text, mutated(E8, 'genpagePlan', '- Solution: ContosoCore', '- Solution: Default')), /maker answered "Continue in 'Contoso Core'/);
-  assertFail(grade(text, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (1)')), /does not record a new app/);
-});
-
-test('eval 8: the app-id pac model create returned is the one every upload uses', () => {
-  const stored = 'Phase 3: The new app-id returned from pac model create is stored for Phase 6';
-  const used = 'Phase 6: Upload uses the newly created app-id';
-  assertPass(grade(stored, committed(E8)));
-  assertPass(grade(used, committed(E8)));
-  const otherApp = (ev) => { event(ev, 'upload').command = event(ev, 'upload').command.replace("--app-id '44444444-5555-4666-8777-888888888888'", "--app-id '11111111-2222-3333-4444-555555555555'"); return ev; };
-  assertFail(grade(stored, withEvents(E8, otherApp)), /used --app-id 11111111-2222-3333-4444-555555555555, not the created 44444444/);
-  assertFail(grade(used, withEvents(E8, otherApp)), /--app-id 11111111-2222-3333-4444-555555555555 is not the created app/);
-  assertFail(grade(stored, withEvents(E8, (ev) => { delete event(ev, 'app-create').result.appId; return ev; })), /recorded no returned app-id/);
-  assertFail(grade(stored, withEvents(E8, (ev) => { event(ev, 'app-create').command = "pac model create --name 'Account Metrics' --solution 'Default' --publish"; return ev; })),
-    /--solution Default is not the plan's Solution: ContosoCore/);
-  assertFail(grade(used, withEvents(E8, (ev) => { event(ev, 'upload').result.appId = '11111111-2222-3333-4444-555555555555'; return ev; })), /upload result names app 11111111/);
-});
-
 // --- Eval 9 ------------------------------------------------------------------------------------
 
 const E9 = '9-project-tracker-new-entities';
@@ -790,7 +754,7 @@ test('eval 9: both tables are absent, planned with the milestone → project loo
   const lookup = 'Phase 1 (Planner): Plan includes a lookup relationship (cr_milestone → cr_project)';
   const solution = 'Phase 1 (Planner): Solution selection question is asked because new entities will be created';
   for (const text of [absent, lookup, solution]) assertPass(grade(text, committed(E9)));
-  assertFail(grade(absent, withEvents(E9, (ev) => { event(ev, 'list-tables-search').result = 'Logical Name   Display Name\ncr_project     Project'; return ev; })),
+  assertFail(grade(absent, withEvents(E9, (ev) => { event(ev, 'list-tables-search').result = { ok: true, search: ['cr_project', 'cr_milestone'], exact: true, count: 1, tables: [{ logicalName: 'cr_project', displayName: 'Project', schemaName: 'cr_Project', isCustom: true }], missing: ['cr_milestone'] }; return ev; })),
     /does not record cr_project as absent/);
   assertFail(grade(lookup, mutated(E9, 'genpagePlan', '| 1:N lookup | project | project | RemoveLink |', '| none | none | none | none |')), /milestone has no lookup relationship to project/);
   assertFail(grade(solution, mutated(E9, 'genpagePlan', '- Solution: ContosoProjects', '- Solution: FieldSurveys')), /maker answered "Continue in 'ContosoProjects'/);
@@ -966,8 +930,94 @@ test('eval 16: account exists, so the plan uses the no-creation sentence and lis
   assertPass(grade(sentinel, committed(E16)));
   assertPass(grade(existing, committed(E16)));
   assertFail(grade(sentinel, mutated(E16, 'genpagePlan', 'No entity creation required — all entities already exist.', 'No entity creation needed.')), /exact no-entity sentence/);
-  assertFail(grade(sentinel, withEvents(E16, (ev) => { event(ev, 'list-tables').command = "pac model list-tables --search 'contact'"; return ev; })), /no pac model list-tables --search covered account/);
+  assertFail(grade(sentinel, withEvents(E16, (ev) => { event(ev, 'list-tables').command = event(ev, 'list-tables').command.replace("--search 'account'", "--search 'contact'"); return ev; })), /no list-tables --search covered account/);
   assertFail(grade(existing, mutated(E16, 'genpagePlan', '## Existing Entities\naccount', '## Existing Entities\ncontact')), /lists contact, not account/);
-  assertFail(grade(existing, withEvents(E16, (ev) => { event(ev, 'generate-types').command = "pac model genpage generate-types --data-sources 'account,contact' --output-file 'RuntimeTypes.ts'"; return ev; })),
-    /generate-types used contact, which ## Existing Entities does not list/);
+  assertFail(grade(existing, withEvents(E16, (ev) => { event(ev, 'generate-types').command = "pac model genpage generate-types --data-sources 'account,contact' --output-file 'RuntimeTypes.ts'"; return ev; })), /generate-types used contact, which ## Existing Entities does not list/);
+});
+
+// --- Evals 3 and 8: the app listing, and the app create, through apps.js -------------------------
+//
+// All of eval 8's tests are here, and the app-listing test of eval 3; the rest of eval 3 is above. `apps.js list` is read as data (`apps`), and a new app is built from the first page
+// (SKILL.md Phase 6, "A new app") — the first page uploaded with no app, `apps.js create` after it, then every upload naming the app it returned.
+
+test('eval 3: apps and pages are offered from the app and page listings, and the restated choice precedes download', () => {
+  const apps = 'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output';
+  const pages = 'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output';
+  const restated = 'Edit Phase 1c: Selection is restated to the user before proceeding to download';
+  assertPass(grade(apps, committed(E3)));
+  assertPass(grade(pages, committed(E3)));
+  assertPass(grade(restated, committed(E3)));
+  // The listing names the app differently from the question: the offered name is not the listed one.
+  assertFail(grade(apps, withEvents(E3, (ev) => { event(ev, 'list-apps').result.apps[0].name = 'Sales Desk'; return ev; })),
+    /offers 11111111-2222-3333-4444-555555555555 without its listed name "Sales Desk"/);
+  assertFail(grade(apps, withEvents(E3, (ev) => { const listing = event(ev, 'list-apps').result; listing.apps = listing.apps.filter((app) => app.name !== 'Sales Hub'); return ev; })),
+    /offers 11111111-2222-3333-4444-555555555555, which the listing does not contain/);
+  // The run downloaded a page that was listed but never offered.
+  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'download').command = event(ev, 'download').command.replace('22222222-3333-4444-5555-666666666666', '33333333-4444-5555-6666-777777777777'); return ev; })),
+    /continued with \(33333333-4444-5555-6666-777777777777\) was not among the offered pages/);
+  assertFail(grade(restated, mutated(E3, 'workflowLog', '- "Editing **Contacts Directory** (22222222-3333-4444-5555-666666666666) in app **Sales Hub** (11111111-2222-3333-4444-555555555555). Continuing to download the existing page code…"', '- Continuing.')),
+    /no restatement of the selected app and page/);
+});
+
+test('eval 8: the solution question runs for the new app and its choice is recorded', () => {
+  const text = 'Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment';
+  assertPass(grade(text, committed(E8)));
+  assertFail(grade(text, mutated(E8, 'genpagePlan', '- Solution: ContosoCore', '- Solution: Default')), /maker answered "Continue in 'Contoso Core'/);
+  assertFail(grade(text, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (1)')), /does not record a new app/);
+});
+
+test('eval 8: apps.js list returns zero apps, the create-or-cancel question is asked, and the plan records the new app', () => {
+  const zero = 'Phase 1 (Planner): apps.js list returns zero apps';
+  const asked = 'Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel';
+  const recorded = "Phase 1 (Planner): Plan records 'create new app' decision";
+  for (const text of [zero, asked, recorded]) assertPass(grade(text, committed(E8)));
+  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = { ok: true, count: 1, apps: [{ id: '99999999-0000-4000-8000-000000000000', name: 'Old App', uniqueName: 'old_app', description: '', published: true, unpublishedChanges: false }] }; return ev; })),
+    /returned 1 app/);
+  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = {}; return ev; })), /does not record zero apps/);
+  // A listing that failed to read is not an empty one.
+  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = { ok: false, code: 'CONNECTION_ERROR', error: 'the read failed' }; return ev; })), /apps\.js list failed: the read failed/);
+  assertFail(grade(zero, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'app-list'))), /apps\.js list \(or pac model list\) was not run/);
+  assertFail(grade(asked, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'ask-create-app'))), /no AskUserQuestion offered to create a new app or cancel/);
+  assertFail(grade(recorded, withEvents(E8, (ev) => { event(ev, 'ask-create-app').result.answer = 'Cancel'; return ev; })), /answered "Cancel", not create/);
+  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: create new: Metrics Hub')), /not the app the maker named \("Account Metrics"\)/);
+  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (11111111-2222-3333-4444-555555555555)')), /does not record "App: create new/);
+});
+
+test('eval 8: the app is built from the first page — apps.js create after the first upload, then every upload names the app', () => {
+  const made = "Phase 6 (new app): apps.js create --name 'Account Metrics' --solution '<Solution from plan>' --page-id <first page> --publish is run after the first page's upload; --solution is ALWAYS passed (apps.js create refuses a call without it)";
+  const first = 'Phase 6 (new app): The first page is created with no --app-id, and the app-id apps.js create returns is stored for the pages that follow';
+  const used = 'Phase 6: Every upload after the app is created uses the newly created app-id';
+  for (const text of [made, first, used]) assertPass(grade(text, committed(E8)));
+
+  // --solution is mandatory and is the plan's; --name is the plan's app; --publish keeps the app out of draft; --page-id is the page the first upload made.
+  const create = (from, to) => (ev) => { event(ev, 'app-create').command = event(ev, 'app-create').command.replace(from, to); return ev; };
+  assertFail(grade(made, withEvents(E8, create(" --solution 'ContosoCore'", ''))), /apps\.js create is missing --solution/);
+  assertFail(grade(made, withEvents(E8, create("--solution 'ContosoCore'", "--solution 'Default'"))), /--solution Default is not the plan's Solution: ContosoCore/);
+  assertFail(grade(made, withEvents(E8, create("--name 'Account Metrics'", "--name 'Metrics Hub'"))), /--name Metrics Hub is not the app the plan names: Account Metrics/);
+  assertFail(grade(made, withEvents(E8, create(' --publish', ''))), /no --publish, so the new app is left in draft/);
+  assertFail(grade(made, withEvents(E8, create(" --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa'", ''))), /no --page-id/);
+  assertFail(grade(made, withEvents(E8, create("--page-id '66666666-7777-4888-8999-aaaaaaaaaaaa'", "--page-id '11111111-2222-3333-4444-555555555555'"))), /is not the page the first upload created/);
+  // The command it replaced is not the way, and a create that failed made no app.
+  assertFail(grade(made, withEvents(E8, (ev) => { event(ev, 'app-create').command = "pac model create --name 'Account Metrics' --solution 'ContosoCore' --publish"; return ev; })), /not apps\.js create/);
+  assertFail(grade(made, withEvents(E8, (ev) => { event(ev, 'app-create').result = { ok: false, code: 'PAGE_NOT_FOUND', error: 'no such page', written: false }; return ev; })), /apps\.js create did not succeed: no such page/);
+  assertFail(grade(first, withEvents(E8, (ev) => { delete event(ev, 'app-create').result.appId; return ev; })), /recorded no returned appId/);
+  assertFail(grade(made, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'app-create'))), /apps\.js create was not run/);
+
+  // The app is built around a page that exists, so the first upload comes first.
+  const reordered = (ev) => { const [made1] = ev.splice(ev.findIndex((e) => e.id === 'app-create'), 1); ev.splice(ev.findIndex((e) => e.id === 'upload'), 0, made1); return ev; };
+  assertFail(grade(made, withEvents(E8, reordered)), /ran before the first page was uploaded/);
+  assertFail(grade(first, withEvents(E8, reordered)), /the first page was uploaded after the app was created/);
+
+  // The first page has no app yet to name or to be placed in.
+  const firstUpload = (from, to) => (ev) => { event(ev, 'upload').command = event(ev, 'upload').command.replace(from, to); return ev; };
+  assertFail(grade(first, withEvents(E8, firstUpload('--code-file', "--app-id '44444444-5555-4666-8777-888888888888' --code-file"))), /first page's upload passed --app-id 44444444/);
+  assertFail(grade(first, withEvents(E8, firstUpload('--agent-message-file', '--add-to-sitemap --agent-message-file'))), /passed --add-to-sitemap/);
+
+  // The appId apps.js create printed is the one the pages after it name.
+  const pin = (from, to) => (ev) => { event(ev, 'pin-upload').command = event(ev, 'pin-upload').command.replace(from, to); return ev; };
+  const otherApp = pin("--app-id '44444444-5555-4666-8777-888888888888'", "--app-id '11111111-2222-3333-4444-555555555555'");
+  assertFail(grade(first, withEvents(E8, otherApp)), /no upload after apps\.js create used the returned appId 44444444/);
+  assertFail(grade(used, withEvents(E8, otherApp)), /--app-id 11111111-2222-3333-4444-555555555555 is not the created app/);
+  assertFail(grade(used, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'pin-upload'))), /no upload followed apps\.js create/);
+  assertFail(grade(used, withEvents(E8, (ev) => { event(ev, 'pin-upload').result.appId = '11111111-2222-3333-4444-555555555555'; return ev; })), /upload result names app 11111111/);
 });

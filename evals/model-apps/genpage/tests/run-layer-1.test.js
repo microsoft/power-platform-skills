@@ -47,7 +47,7 @@ function mockEval2Artifacts() {
 - read samples/8-dashboard-with-charts.tsx
 - icon verification: grep "react-icons", verified icons against verified-icons.txt
 ## Phase 6
-- pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --model claude-sonnet --name "p" --agent-message "m" --add-to-sitemap
+- node scripts/genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 1 --code-file p.tsx --prompt-file prompt.txt --model claude-sonnet --name-file page-name.txt --agent-message-file agent-message.txt --add-to-sitemap
 `,
     'genpage-plan.md': `# Genpage Plan
 ## User Requirements

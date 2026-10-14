@@ -490,21 +490,31 @@ test('AGENTS.md says a page write whose outcome is not known is never sent again
   }
 });
 
-// What the /genpage skill still tells the agent to do when a pac upload stalls. The code behind those instructions is gone — the skill's advice is replaced when it moves to the page backend, and these
-// assertions go with it: they pin the wording the skill carries until then, and are the skill rewrite's to change.
-test('the genpage skill still carries its advice for an upload that stalled (to be replaced with the skill\'s move to the page backend)', () => {
+// What the /genpage skill tells the agent to do when a page write cannot say what it did. The page is written through the SDK (lib/genpage-sdk.js), so there is no pac process to stall,
+// no time limit of its own and no `pac model genpage upload` to compose: the advice follows what the backend reports (`outcome`, `pageId`, `code`) — AGENTS.md has the behaviour,
+// scripts/tests/genpage-sdk.test.js and genpage-upload.test.js run it, and this pins that the skill says it.
+test('the genpage skill gives the advice for a page write whose answer was lost, in the backend\'s own terms', () => {
   const skill = squash(readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')));
-  assert.match(skill, /A listing or a download that times out is retried once\. An \*\*upload is never sent again by the script\*\*/);
-  assert.match(skill, /sending it again can record the prompt a second time or overwrite a change someone saved in the meantime\. Follow the message the script prints; do not simply re-run the command\./);
-  assert.match(skill, /\*\*An update that timed out, or failed,\*\* "MAY HAVE LANDED" — pac can fail while publishing, after it wrote the page, so neither is sent again by the script\. \(A failure pac reports for its own arguments or files is an ordinary error: fix what it names and re-run\.\) Compare the deployed page with your file first: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage-base\.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>\/<file>\.tsx'`/);
+  assert.match(skill, /\*\*A write whose answer was lost is never sent again blindly\.\*\* `genpage-upload\.js` writes a page as one atomic change set, so a write either landed whole or wrote nothing\./);
+  assert.match(skill, /sends a create at most once more, under the same id — so no second page can exist\./);
+  assert.match(skill, /exit 1 and a JSON object with `error`, the page's `pageId` once the write got as far as the send, `outcome` and the SDK's `code`\. Follow the message; do not simply re-run the command\./);
+  assert.match(skill, /\*\*`"outcome": "nothing"`\*\* — nothing was written \(the SDK refused before it sent anything, or the service rejected the whole change set\): fix what the message names and run the command again\./);
+  // An update that may have landed is compared with the file first, through the base marker.
+  assert.match(skill, /\*\*An update with `"outcome": "unknown"`\*\* "MAY HAVE LANDED" and is not sent again\. Compare the deployed page with your file first: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage-base\.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>\/<file>\.tsx'`/);
   assert.match(skill, /`"contentSame": true` means the update landed: do not upload it again/);
   assert.match(skill, /`"deployed": "unchanged"` means it did not land, and re-running the update is safe\./);
-  assert.match(skill, /\*\*A create that timed out\*\* is an \*uncertain\* create, and is never run again — by the script, or by you\./);
-  assert.match(skill, /If the message says the page was \*\*created as `<page-id>`\*\*, it exists but was stopped before it was published/);
-  assert.match(skill, /Add it to the app's navigation \(in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`\)/);
-  assert.match(skill, /An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on\. A create that \*\*failed\*\* \(not timed out\) after pac had printed a `Page ID` is in the same state: its error says the page was \*\*created as `<page-id>`\*\* and that the create was not run again, with the same two ways on rather than "re-run it as an update"\. The build never re-sends such a create by itself either: every one of these errors is marked as one that is not to be retried\./);
-  assert.match(skill, /The same goes for a message that says the environment could not be listed after the create, so nothing is known about what it made\./);
+  // A create that may have landed is looked for by its id before it is made again: a second run would mint a second page.
+  assert.match(skill, /\*\*A create with `"outcome": "unknown"`\*\* is an \*uncertain\* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page\./);
+  assert.match(skill, /An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for\./);
+  // A create that wrote the page and could not publish or place it is finished by the same command with --page-id, never created twice.
+  assert.match(skill, /\*\*A create that did not finish\.\*\* A create reports `ok: false` \*\*with the page's `pageId`\*\* when the page was written but its publish failed, or — with `--add-to-sitemap` — when it could not be placed in the app\./);
+  assert.match(skill, /Run the \*\*same command again with `--page-id '<page-id>'` added\*\* and nothing else changed \(keep `--add-to-sitemap` if it was given\): that publishes the page and places it, without the check of the app's navigation an ordinary update makes — for that page only/);
+  assert.match(skill, /Never create the page a second time\./);
+  assert.match(skill, /`--add-to-sitemap` is \*\*refused\*\* together with `--page-id` — an update cannot add a sitemap entry, and the page it names is already placed\. The one exception is finishing a page this script created and did not finish/);
+  // What the pac wrapper's advice said is gone with the wrapper: its time limits, its two-step page write, the `Page ID` it printed, and the rules about names it stored.
+  assert.doesNotMatch(skill, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|A pac call that stalls|pac can fail while publishing|pac writes the page|after pac had printed a `Page ID`|created as `<page-id>`/i, 'the genpage skill still describes the pac upload that stalled');
   assert.doesNotMatch(skill, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, 'the genpage skill still says a second send of an update is harmless');
+  assert.doesNotMatch(skill, /pac\.cmd|pac stores each one|upload --help|requires a pac build|PowerPlatform-Scale-AdminTools/, 'the genpage skill still carries a rule of the pac upload');
 });
 
 // Measured against the PAC CLI: `pac model genpage transpile` accepted a `string` assigned to a

@@ -10,7 +10,7 @@ Deployment, runtime, and environment issues. For generation-time anti-patterns
 
 Both skills can create one:
 
-- `/genpage` creates an app to host its pages when the plan chooses a new app (Phase 3 runs `pac model create`), then adds the pages to it.
+- `/genpage` creates an app to host its pages when the plan chooses a new app: it deploys the first page, then creates the app from it with `scripts/apps.js create` (Phase 6), and adds the other pages to it.
 - `/app-builder` builds a whole app from a description: tables, forms, views, the app and its sitemap.
 - An app created in the [Power Apps maker portal](https://make.powerapps.com) (**New App → Start with Design → Blank page with Navigation**) works too; `/genpage` can then add pages to it.
 
@@ -46,14 +46,16 @@ Both skills can create one:
 
 ## Page Upload Fails
 
-- Verify app-id: run `pac model list` to get the correct GUID
+- Verify app-id: run `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` and take the app's `id`
 - Ensure the page's display name is provided for new pages — written to a file and passed with `--name-file`, so a shell never reads it
-- A page display name with a straight double quote (`"`) is refused before anything is uploaded: pac stores each one with a backslash before it (`\"Q3\"`), in the page and in the navigation title it writes. Use typographic quotes (`“Q3”`) or an apostrophe, which are stored exactly
-- An update result with a `warnings` entry about the page's name or model: the script could not read the deployed value — or, for a name, could not send it through a `pac.cmd` shim, which cannot receive `%` or `"` — so pac may have renamed the page to its navigation title or stored an empty model. Re-run the update with `--name-file` or `--model`
+- A page display name is stored exactly as written, a straight double quote (`"`) included: nothing is refused or escaped. (A page an earlier release created through `pac` holds each `"` as `\"` until its name is rewritten.)
+- An update that names no `--name-file`, `--model` or `--data-sources` keeps the page's own name, model and data sources; it never resets one to empty
+- A failed upload exits 1 and prints what it knows: `error`, the page's `pageId` once the write got as far as the send, `outcome` and the SDK's `code`. `"outcome": "nothing"` means nothing was written — fix what the message names and run it again. `"outcome": "unknown"` means the answer was lost and the write may have landed: do not send it again blindly — an update is compared with the file first (`genpage-base.js check`), a create is looked for by its `pageId` first
+- Every page operation signs in with the Azure CLI. `az` missing, signed out, too slow, or signed in to another tenant than the `pac` profile fails the upload with a connection error — run `node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac` to see which
 - `--prompt-file …/prompt.txt is a symbolic link or junction, not a file written in place` (or `is a hard link`,
   for any input file): something other than the skill left a link at that name, and writing it may have changed
   the file it points to. Check that file, delete the link, and re-run; the skill then writes a plain file there
-- Check `.tsx` file exists and has no syntax errors
+- Check `.tsx` file exists and has no syntax errors (a page that does not compile is refused before anything is written)
 - Verify `--data-sources` matches entities used in code
 - Ensure schema was generated for entity-based pages
 - If updating, ensure `--page-id` is correct (get from `pac model genpage list`)
@@ -62,7 +64,8 @@ Both skills can create one:
 
 ## Page Not Appearing in App
 
-- Verify `--add-to-sitemap` was used for new pages
+- Verify the page was placed: `--add-to-sitemap` on its upload into an existing app, or its id in `--page-id` of `apps.js create` for a new app
+- Check `apps.js list`: an app with `published: false` was never published, and `unpublishedChanges: true` means saved edits are waiting for a publish — users see the published layer
 - Refresh the browser / clear cache
 - Check user permissions in Power Apps
 - Verify the app-id is correct for the target app

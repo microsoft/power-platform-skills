@@ -29,25 +29,25 @@ captured agent session. Every command below has an associated result, in order, 
 
 ### Requirements (orchestrator asks; genpage-planner runs discovery headless)
 - AskUserQuestion: Create new page(s) or edit an existing one? → Create new page(s)
-- `pac model list-languages` → 1033 English en-US, RTL: No (English only, no localization)
+- `node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'` → 1033 English en-US, RTL: No (English only, no localization)
 - AskUserQuestion: Will the page use Dataverse entities or mock data? → Dataverse entity: account
 - AskUserQuestion: Any specific requirements? → Account metrics dashboard
 - Connector discovery not needed: Dataverse only, no connector source; the contract stays `No connector bindings.`
 - Custom API discovery not needed: plain Dataverse reads; the contract stays `No custom API bindings.`
 
 ### Entity detection
-- `pac model list-tables --search 'account'` → 4 rows (account, accountleads, adx_accountaccessright, msdyn_accountkpiitem); exact logical-name match: `account` exists
+- `node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'account' --exact` → 1 table: `account` (exact logical-name match, nothing in `missing`): `account` exists
 - Plan records no entity creation required
 
 ### Dominant prefix detection
-- `pac model list-tables` → Custom tables after excluding system prefixes (adx, msdyn): cnt_milestone, cnt_project, cnt_timesheet, new_importbatch
+- `node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --type custom` → 6 custom tables; after excluding system prefixes (adx, msdyn): cnt_milestone, cnt_project, cnt_timesheet, new_importbatch
 - Dominant prefix: `cnt` (3 of 4 custom tables, 75%, at least 3 tables) → detectedPrefix = cnt
 
 ### App detection
-- `pac model list` → no model-driven apps found (0 apps returned)
+- `node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'` → `{"ok":true,"count":0,"apps":[]}`: no model-driven apps (0 apps returned)
 - AskUserQuestion: No model-driven apps found. Would you like to create a new one, or cancel? → Create a new app
 - AskUserQuestion: What should the new model-driven app be called? → Account Metrics
-- Decision recorded for the plan: create new app "Account Metrics" (Phase 3 will run app creation)
+- Decision recorded for the plan: create new app "Account Metrics" (nothing is created in Phase 3; the app is made in Phase 6, from the first page)
 
 ### Solution selection
 - A new app will be created, so the build needs metadata work → solution selection question asked
@@ -70,10 +70,8 @@ captured agent session. Every command below has an associated result, in order, 
 - check-auth.js not run (no entity work); genpage-entity-builder not invoked
 
 ## Phase 3 — App creation
-- Plan decision: create new app "Account Metrics"; `Solution: ContosoCore` read from ## Environment and passed verbatim
-- Command: pac model create --name 'Account Metrics' --solution 'ContosoCore' --publish
-- Result: app created and published in solution ContosoCore; app-id = 44444444-5555-4666-8777-888888888888
-- Stored app-id 44444444-5555-4666-8777-888888888888 for Phase 6
+- Plan decision: create new app "Account Metrics"; `Solution: ContosoCore` read from ## Environment, to be passed verbatim as the unique name
+- Nothing is created in this phase: the platform refuses an app whose navigation is empty, so `apps.js create` needs the first page's id. The app is made in Phase 6, right after the first page is deployed
 
 ## Phase 4 — RuntimeTypes
 - `pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-metrics-dashboard/RuntimeTypes.ts'`
@@ -106,13 +104,28 @@ captured agent session. Every command below has an associated result, in order, 
 - `node 'D:/repo/plugins/model-apps/scripts/genpage-worker-output.js' --file 'D:/work/account-metrics-dashboard/account-metrics.tsx'` → {"ok":true,"problems":[]} (exit 0)
 
 ## Phase 6 — Deploy
-- No connectors.json and no actions.json → no `upload --help` pre-flight needed
+- No connectors.json and no actions.json → the plan's bindings are empty, so the upload carries no `--connectors` / `--actions`
 - Cleared any earlier prompt.txt / agent-message.txt / page-name.txt (none existed, none was a link)
 - Wrote prompt.txt (full `## User Requirements`), agent-message.txt and page-name.txt ("Account Metrics Dashboard") with the file-writing tool
-- Command: `node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '44444444-5555-4666-8777-888888888888' --code-file 'account-metrics.tsx' --name-file 'page-name.txt' --data-sources 'account' --prompt-file 'prompt.txt' --model 'claude-sonnet-4.5' --agent-message-file 'agent-message.txt' --add-to-sitemap`
-- --app-id is the app-id stored from Phase 3 (the newly created Account Metrics app)
-- Prompt scope: full page description from plan's `## User Requirements` (create)
-- Result: page-id = 66666666-7777-4888-8999-aaaaaaaaaaaa, appId = 44444444-5555-4666-8777-888888888888, status = success ({"ok":true,"updated":false})
+
+### A new app: the first page, then the app, then the rest
+1. The first page, with no app
+   - Command: `node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --code-file 'account-metrics.tsx' --name-file 'page-name.txt' --data-sources 'account' --prompt-file 'prompt.txt' --model 'claude-sonnet-4.5' --agent-message-file 'agent-message.txt'`
+   - No `--app-id` and no `--add-to-sitemap`: the app does not exist yet
+   - Prompt scope: full page description from plan's `## User Requirements` (create)
+   - Result: page-id = 66666666-7777-4888-8999-aaaaaaaaaaaa, status = success ({"ok":true,"updated":false})
+2. The app, from that page
+   - Command: `node 'D:/repo/plugins/model-apps/scripts/apps.js' create --env 'https://contoso.crm.dynamics.com' --name 'Account Metrics' --solution 'ContosoCore' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa' --publish`
+   - `Solution: ContosoCore` from ## Environment, passed verbatim as the unique name; `--publish` so the app is not left in draft
+   - Result: app-id = 44444444-5555-4666-8777-888888888888, published true, in solution ContosoCore (app and sitemap), navigation Main / Pages / "Account Metrics Dashboard"
+   - Stored appId 44444444-5555-4666-8777-888888888888 for the rest of the run
+3. The remaining pages: none (a single-page plan)
+4. The first page's tables
+   - Wrote pin-prompt.txt ("Pin the page's tables into the new app") and pin-agent-message.txt with the file-writing tool
+   - Command: `node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '44444444-5555-4666-8777-888888888888' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa' --code-file 'account-metrics.tsx' --prompt-file 'pin-prompt.txt' --agent-message-file 'pin-agent-message.txt'`
+   - --app-id is the appId stored from step 2; no --data-sources, so the page keeps its own; the file is unchanged, so the page is published, not rewritten
+   - Prompt scope: delta only (update)
+   - Result: page-id = 66666666-7777-4888-8999-aaaaaaaaaaaa, appId = 44444444-5555-4666-8777-888888888888, status = success ({"ok":true,"updated":true,"unchanged":true})
 
 ## Phase 6.5 / 6.7
 - Phase 6.5 not applicable (single page, no PAGEREF_ tokens)

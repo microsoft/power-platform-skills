@@ -5,8 +5,8 @@ The orchestrator follows this flow when the `genpage-planner` returns
 to `genpage-edit-planner`, then applies the edit inline.
 
 > **⚠️ CRITICAL — do NOT hallucinate app or page names.** App names and page
-> names are discovered by running `pac model list` and `pac model genpage list
-> --app-id '<id>'`. Never guess them from the repo, the conversation context,
+> names are discovered by running `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` and
+> `pac model genpage list --app-id '<id>'`. Never guess them from the repo, the conversation context,
 > sample app names, or anywhere else. Always run the commands first, then
 > present what the commands returned to the user.
 
@@ -38,26 +38,30 @@ node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
 Keep the returned org URL as `envUrl` for the rest of the edit session.
 
 **CRITICAL — never guess or invent app names or page names.** You must discover
-them by running the PAC CLI commands below. Hallucinating page names from context
+them by running the commands below. Hallucinating page names from context
 (repo names, prior conversation, sample apps) is wrong and confuses the user.
 
 ### 1a. Discover available apps
 
 ```powershell
-pac model list
+node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'
 ```
 
-This returns the list of model-driven apps in the active environment. Parse the
-output for **App ID**, **Display Name**, and **Unique Name** fields.
+`<envUrl>` is the org URL `check-auth.js` returned above (the https origin only). The script prints
+`{ "ok": true, "count": N, "apps": [ { "id", "name", "uniqueName", "description", "published",
+"unpublishedChanges" } ] }` — the model-driven apps of the environment, drafts included. Read each app's
+**id** and **name**. `published` (users can open the app) and `unpublishedChanges` (a saved edit is waiting
+for a publish) are two separate facts: tell the user when an app has never been published
+(`published: false`). If the script fails (exit 1), report why and stop — a failed read is never "no apps".
 
 Behavior by app count:
 - **0 apps:** Tell the user "No model-driven apps found in this environment.
   You can't edit a page that doesn't exist — would you like to create one
   instead?" and stop the edit flow.
-- **1 app:** Confirm with the user: "Found app **[Display Name]** ([app-id]).
+- **1 app:** Confirm with the user: "Found app **[name]** ([app-id]).
   Use this one?" via `AskUserQuestion` with Yes / Cancel options.
 - **N apps:** Present a multi-choice question via `AskUserQuestion`. Each option's
-  label is the app's **Display Name** (truncate to <50 chars). The description
+  label is the app's **name** (truncate to <50 chars). The description
   includes the app-id GUID. Always include an "Other" option for the user to
   type an app-id or name directly.
 
@@ -173,12 +177,12 @@ Also read `config.json.connectorBindings` and `config.json.actionBindings`.
 >   upload — this is a full replace, so omitting it would leave the removed binding
 >   deployed.
 > - **Preserve connectors unchanged:** do not invoke the builder and do not create
->   a replacement `connectors.json`; omit `--connectors` on upload so pac preserves
->   deployed bindings. Still pass the existing `connectorBindings` summary into the
+>   a replacement `connectors.json`; omit `--connectors` on upload so the page keeps
+>   its deployed bindings. Still pass the existing `connectorBindings` summary into the
 >   edit planner so it can preserve connector-backed code correctly.
 > - **Clear all connectors:** write `[]` to `<working-dir>/connectors.json` and a
 >   `connector-bindings.md` body of exactly `No connector bindings.`, then pass
->   `--connectors` during upload so pac clears `config.json.connectorBindings`.
+>   `--connectors` during upload so the page's `config.json.connectorBindings` is cleared.
 >
 > **The builder is headless and may return `{ "action": "needs_input", … }`** (for
 > example, an ambiguous connection or operation choice). When it does, drive the
@@ -219,12 +223,12 @@ Also read `config.json.connectorBindings` and `config.json.actionBindings`.
 >   bindings, or `[]`) plus the matching `custom-api-bindings.md`. Pass `--actions` on
 >   upload — a full replace, so omitting it would leave the removed binding deployed.
 > - **Preserve Custom APIs unchanged:** do not invoke the builder and do not create a
->   replacement `actions.json`; omit `--actions` on upload so pac preserves deployed
+>   replacement `actions.json`; omit `--actions` on upload so the page keeps its deployed
 >   bindings. Still pass the existing `actionBindings` summary into the edit planner so
 >   it can preserve Custom-API-backed code correctly.
 > - **Clear all Custom APIs:** write `[]` to `<working-dir>/actions.json` and a
 >   `custom-api-bindings.md` body of exactly `No custom API bindings.`, then pass
->   `--actions` during upload so pac clears `config.json.actionBindings`.
+>   `--actions` during upload so the page's `config.json.actionBindings` is cleared.
 >
 > **The builder is headless and may return `{ "action": "needs_input", … }`** (for
 > example, when more than one discovered Custom API matches the intent). Drive the same
@@ -426,30 +430,28 @@ Connector binding rules for edit deploy:
 - **Add / replace / discover / remove one connector:** the `genpage-connector-builder`
   agent (Mode: `edit`) has already written the full desired
   binding set to `<working-dir>/connectors.json` (a removal writes the remaining
-  bindings). Pre-flight that `pac model genpage upload --help` contains `--connectors`
-  and include `--connectors '<working-dir>/connectors.json'` in the upload — this is a
+  bindings). Include `--connectors '<working-dir>/connectors.json'` in the upload — this is a
   full replace, so it also deletes any binding left out of the file.
-- **Code/visual-only edit (connectors unchanged):** omit `--connectors`; pac
-  preserves existing bindings.
+- **Code/visual-only edit (connectors unchanged):** omit `--connectors`; the page keeps
+  its existing bindings.
 - **Remove every connector:** write `[]` to `connectors.json` and pass
-  `--connectors` so pac clears `config.json.connectorBindings`.
+  `--connectors` so the page's `config.json.connectorBindings` is cleared.
 - Never write connection IDs.
 
 Custom API binding rules for edit deploy (identical matrix, `--actions` for
 `<working-dir>/actions.json`):
 - **Add / replace / discover / remove one Custom API:** the `genpage-customapi-builder`
   agent (Mode: `edit`) has already gated on the flag and written the full desired binding
-  set to `<working-dir>/actions.json` (a removal writes the remaining bindings). Pre-flight
-  that `pac model genpage upload --help` contains `--actions` and include
+  set to `<working-dir>/actions.json` (a removal writes the remaining bindings). Include
   `--actions '<working-dir>/actions.json'` in the upload — a full replace that also deletes
   any binding left out of the file.
-- **Code/visual-only edit (Custom APIs unchanged):** omit `--actions`; pac preserves
+- **Code/visual-only edit (Custom APIs unchanged):** omit `--actions`; the page keeps its
   existing `actionBindings`.
-- **Remove every Custom API:** write `[]` to `actions.json` and pass `--actions` so pac
-  clears `config.json.actionBindings`.
+- **Remove every Custom API:** write `[]` to `actions.json` and pass `--actions` so the page's
+  `config.json.actionBindings` is cleared.
 
 The edit request is arbitrary user text, and a downloaded prompt is a multi-line conversation
-transcript. Both go to pac BY FILE via `scripts/genpage-upload.js`, never through a shell command:
+transcript. Both go to the upload BY FILE via `scripts/genpage-upload.js`, never through a shell command:
 check and clear `prompt.txt` and `agent-message.txt` as in SKILL.md Phase 6, then write them with
 your file-writing tool — `prompt.txt` holding the edit request (only the changes) and
 `agent-message.txt` the change summary. Then:
@@ -476,18 +478,13 @@ Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Omit `--actions` when Custom API bindings are unchanged.
 
-An update without `--name`/`--name-file` keeps the page's current name: the script reads it from the
-deployed page and sends it again, because pac would otherwise give the page its **sitemap title** as its
-name (measured: a page renamed with `--name-file` reverted to the title on the next update that omitted
-it). So an edit that does not rename the page omits it. To rename a page, pass `--name-file` on this
+An update without `--name`/`--name-file` keeps the page's current name: the SDK writes only what differs from the
+page it has just read, so an edit that does not rename the page omits it. To rename a page, pass `--name-file` on this
 update, and tell the user its navigation title is the app's sitemap entry and is not changed by the
-upload. A name containing a straight double quote (`"`) is refused before anything is uploaded, because
-pac would store each one as `\"`; where pac is installed as a `pac.cmd` shim (Windows), so is a name
-containing `%`. If the current name cannot be read — or cannot be sent, because pac is a `pac.cmd`
-shim and the name holds `%` or `"` — the update still goes ahead and its result carries a `warnings`
-entry; re-run it with `--name-file`.
+upload. A name is stored exactly as written — a straight double quote (`"`) or a `%` included — and none is refused.
+(A page an earlier release created through `pac` holds each `"` of its name as `\"` until the name is rewritten.)
 
-Before the upload, the script downloads the deployed page and compares it with the base marker next to the code file. A refusal is a stop, not a warning:
+Before the upload, the script reads the deployed page and compares it with the base marker next to the code file. A refusal is a stop, not a warning:
 
 - `no-base` — no marker, or the marker is for a different page or app. The file was not recorded after a download or a previous upload of this page.
 - `deployed-changed` — the deployed page no longer matches the marker. The result includes `lines` (`added` / `removed`) and `deployedCopy`, a copy of the deployed page written next to the code file.

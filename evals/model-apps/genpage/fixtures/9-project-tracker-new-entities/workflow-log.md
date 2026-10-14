@@ -38,19 +38,19 @@ working directory, so file arguments are relative to it.
 
 ### Discovery (genpage-planner dispatched via Task as a headless worker)
 - Dispatched `Task genpage-planner` with the requirements, working directory, plugin root, create/edit decision = create, `No connector bindings.` (connectors.json: none — omit --connectors) and `No custom API bindings.` (actions.json: none — omit --actions)
-- Planner ran `pac model list-languages` → English (1033) only, no RTL language
-- Planner ran `pac model list-tables --search 'cr_project,cr_milestone'` → No tables found matching the specified criteria.
-  - Exact logical-name match: cr_project NOT FOUND, cr_milestone NOT FOUND → both confirmed as NOT existing; both need creation
-- Planner ran `pac model list-tables` for dominant prefix detection → 9 Custom tables: cr_contractor, cr_costcenter, cr_expense, cr_invoice, cr_resource, cr_timesheet, cr_vendor, new_feedback, new_survey
+- Planner ran `node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'` → English (1033) only, no RTL language
+- Planner ran `node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'cr_project,cr_milestone' --exact` → 0 tables, missing: cr_project, cr_milestone
+  - Exact logical-name match (`--exact`): cr_project and cr_milestone are both named in `missing` → both confirmed as NOT existing; both need creation
+- Planner ran `node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --type custom` for dominant prefix detection → 9 custom tables: cr_contractor, cr_costcenter, cr_expense, cr_invoice, cr_resource, cr_timesheet, cr_vendor, new_feedback, new_survey
   - Non-system custom prefixes: cr = 7 of 9 (78%, ≥ 3 tables) → dominant prefix detected: `cr` (detectedPrefix = cr, detectedTableCount = 7)
 - Planner ran `node 'D:/repo/plugins/model-apps/scripts/dataverse-request.js' 'https://contoso.crm.dynamics.com' GET 'solutions?$select=uniquename,friendlyname&$expand=publisherid($select=customizationprefix)&$filter=ismanaged eq false and uniquename ne ''Default'' and uniquename ne ''Active'' and isvisible eq true&$top=10'` (request URL https://contoso.crm.dynamics.com/api/data/v9.2/solutions?…)
   - status 200 → ContosoProjects (Contoso Projects, publisher prefix cr), FieldSurveys (Field Surveys, publisher prefix new)
-- Planner ran `pac model list` → 2 apps: Contoso Operations Hub (11111111-2222-3333-4444-555555555555), Field Service Desk (44444444-5555-6666-7777-888888888888)
+- Planner ran `node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'` → 2 apps: Contoso Operations Hub (11111111-2222-3333-4444-555555555555), Field Service Desk (44444444-5555-6666-7777-888888888888); both published, neither with unpublished changes
 - New entities need creating → metadata work → the solution selection question must be asked
 - Planner returned the discovery summary and `{ "action": "needs_input" }` for the app and solution choices; no connector or Custom API need was found
 
 ### App selection
-- AskUserQuestion: Which app should the page be added to? (options from the `pac model list` output: Contoso Operations Hub — 11111111-2222-3333-4444-555555555555; Field Service Desk — 44444444-5555-6666-7777-888888888888; Create a new app) → Contoso Operations Hub (existing app)
+- AskUserQuestion: Which app should the page be added to? (options from the `apps.js list` output: Contoso Operations Hub — 11111111-2222-3333-4444-555555555555; Field Service Desk — 44444444-5555-6666-7777-888888888888; Create a new app) → Contoso Operations Hub (existing app)
 
 ### Solution selection
 - Solution selection question asked (entity creation required: cr_project, cr_milestone)
@@ -103,7 +103,7 @@ working directory, so file arguments are relative to it.
   - Builder returned completion: cr_project (6 columns, 4 sample records), cr_milestone (5 columns incl. lookup, 12 sample records); log at D:/work/project-tracker/genpage-entity-creation-log.md
 
 ## Phase 3 — App
-- SKIPPED app creation: existing app Contoso Operations Hub (11111111-2222-3333-4444-555555555555) selected; `pac model create` not called
+- SKIPPED app creation: existing app Contoso Operations Hub (11111111-2222-3333-4444-555555555555) selected; `apps.js create` not called
 
 ## Phase 4 — RuntimeTypes
 - `pac model genpage generate-types --data-sources 'cr_project,cr_milestone' --output-file 'D:/work/project-tracker/RuntimeTypes.ts'`

@@ -1,0 +1,1 @@
+Pin the page's tables into the new app

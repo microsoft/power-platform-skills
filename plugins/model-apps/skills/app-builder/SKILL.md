@@ -112,8 +112,8 @@ Rules:
   `schemaVersion: 2`) during Phase 1 — its `.tsx` is written in **Phase 1.5 — Generate pages**, after
   plan approval and after the data pre-build creates the tables so `pac model genpage generate-types`
   can emit `RuntimeTypes.ts`. See [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Pages*.
-- The build's `pages` phase uploads each page via `pac model genpage upload` **without
-  `--add-to-sitemap`** — the SDK is the **single sitemap writer**, so a page's nav entry comes from a
+- The build's `pages` phase writes each page through the SDK and never places it in the sitemap
+  itself — the SDK is the **single sitemap writer**, so a page's nav entry comes from a
   `page` subarea in `appShell` (referenced by the page's **`key`**). See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `pages[]`.
 - **Every page in `pages[]` must be sitemap-placed** — validation rejects any page absent from the
@@ -128,8 +128,8 @@ Rules:
   reads a key nothing ever sets.
 - **Three-authority page identity** (build + download + verify all follow this): (1) **IDENTITY** —
   the durable `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own `pages[].pageId`
-  outranks it for that rebuild. (2) **EXISTENCE** — env-wide `pac model genpage list` (crash-safe;
-  decides create-vs-reuse). (3) **MEMBERSHIP** — the app's sitemap `GenPageId` set (placement,
+  outranks it for that rebuild. (2) **EXISTENCE** — the env-wide page list read through the SDK, drafts
+  included (crash-safe; decides create-vs-reuse). (3) **MEMBERSHIP** — the app's sitemap `GenPageId` set (placement,
   download enumeration, verify coverage). All matching is by id — never by display name.
 - **Multi-page navigation uses `PAGEREF_<key>`** (the stable `pages[].key`) as the `pageId`
   placeholder; the build resolves each to the real page GUID in a run-scoped staging copy (the
@@ -186,8 +186,11 @@ unless destructive authority was supplied independently.
 2. **Environment (PAC)** — `pac auth list`. If exactly one / an active profile, **confirm it
    (FYI), don't ask**. If several and none active, **ask** which to use. If none, ask the user
    to `pac auth create`. Capture the org URL (`pac org who`).
-3. **Detect existing** — `pac model list-tables --search …` (exact-match) and `pac model list`
-   to find tables/apps already present; build *around* them.
+3. **Detect existing** — `scripts/list-tables.js --env <envUrl> --search … --exact` and
+   `scripts/apps.js list --env <envUrl>` (`<envUrl>` is the org URL from step 2) to find
+   tables/apps already present; build *around* them. `--exact` keeps only the tables whose
+   logical name is a search term and lists the terms with none in `missing`. A failed read
+   (exit 1) is reported and ends the step — never read it as "nothing exists".
 4. **Levelled authoring** — **first read the App Spec format** so you author to the exact
    shape (do this once; don't go spelunking through scripts):
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
@@ -612,8 +615,8 @@ matches more than one app is refused, listing the candidate unique names rather 
 
 This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
 not everything:**
-- **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (via
-  `pac model genpage download`; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
+- **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (read
+  through the SDK; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
   are included, and each keeps its own name and model) into `pages[]` + their `.tsx`, the referenced
   entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
   carrying the deployed view/chart ids), the icon web resources, and the solution.
@@ -672,7 +675,7 @@ authored stages and activated — this goes through the SDK's generic artifact s
 `workflows` row, so it is NOT subject to the bound-member gate above) →
 **command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
-the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
+the build writes each `pages[]` page through the SDK, without placing it; then
 the SDK rewrites the sitemap once to add the `GenPage` subareas) → **AI features** (opt-in) →
 **security** (one role per `personas[]` entry, sized from its jobs' declared access; injects an
 app-module read privilege and associates the app to each role so it opens for that persona) →
@@ -751,8 +754,8 @@ child view id. Each step emits `[n/total]`.
   object model and activated; see the environment gate above); **security roles** (`personas[]` — one role per
   persona sized from its jobs-to-be-done, with app access so the app opens for non-admins);
   **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
-  placement**; **generative pages** (`pages[]` — the genpage-first default, uploaded via
-  `pac model genpage upload` and surfaced as `GenPage` sitemap subareas; full **create + edit**
+  placement**; **generative pages** (`pages[]` — the genpage-first default, written through the SDK
+  and surfaced as `GenPage` sitemap subareas; full **create + edit**
   round-trip via `download-model-app.js`); **modern command-bar buttons** (`commands[]`) incl.
   **flyout / split-button menus**; **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`);
   **custom grid rendering** (`entities[].columns[].visualization` — radial dial / line chart /

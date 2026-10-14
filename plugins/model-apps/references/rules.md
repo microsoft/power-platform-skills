@@ -185,7 +185,7 @@ const useStyles = makeStyles({
 ## Localization
 
 Localization guidance has been moved to a separate reference that is loaded
-**conditionally** — only when `scripts/list-languages.js` (or its fallback, `pac model list-languages --environment '<envUrl>'`) reports multiple
+**conditionally** — only when `scripts/list-languages.js` reports multiple
 configured languages OR any non-English language. For English-only environments,
 skip this entirely.
 

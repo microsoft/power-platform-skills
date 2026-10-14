@@ -19,35 +19,37 @@
   { "id": "ask-new-or-edit", "command": "AskUserQuestion: Create new page(s) or edit an existing one?", "result": { "answer": "Create new page(s)" } },
   {
     "id": "list-languages",
-    "command": "pac model list-languages",
-    "result": { "languages": [{ "lcid": 1033, "language": "English", "code": "en-US", "rtl": false }] },
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'",
+    "result": { "ok": true, "baseLanguage": { "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }, "languages": [{ "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }], "unmapped": [], "summary": ["1033 en-US \u2014 RTL: No"] },
     "exitCode": 0
   },
   { "id": "ask-data-source", "command": "AskUserQuestion: Will the page use Dataverse entities or mock data?", "result": { "answer": "Dataverse entity: account" } },
   { "id": "ask-requirements", "command": "AskUserQuestion: Any specific requirements?", "result": { "answer": "Account metrics dashboard" } },
   {
     "id": "list-tables-account",
-    "command": "pac model list-tables --search 'account'",
-    "result": { "rows": [
-      { "logicalName": "account", "type": "Standard" },
-      { "logicalName": "accountleads", "type": "Standard" },
-      { "logicalName": "adx_accountaccessright", "type": "Custom" },
-      { "logicalName": "msdyn_accountkpiitem", "type": "Custom" }
-    ], "exactMatches": ["account"] },
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'account' --exact",
+    "result": { "ok": true, "search": ["account"], "exact": true, "count": 1, "tables": [{ "logicalName": "account", "displayName": "Account", "schemaName": "Account", "isCustom": false }], "missing": [] },
     "exitCode": 0
   },
   {
-    "id": "list-tables-all",
-    "command": "pac model list-tables",
+    "id": "list-tables-custom",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --type custom",
     "result": {
-      "customTables": ["adx_accountaccessright", "cnt_milestone", "cnt_project", "cnt_timesheet", "msdyn_accountkpiitem", "new_importbatch"],
-      "prefixCountsExcludingSystem": { "cnt": 3, "new": 1 },
-      "detectedPrefix": "cnt",
-      "detectedTableCount": 3
+      "ok": true,
+      "type": "custom",
+      "count": 6,
+      "tables": [
+        { "logicalName": "adx_accountaccessright", "displayName": "Account Access Right", "schemaName": "adx_accountaccessright", "isCustom": true },
+        { "logicalName": "cnt_milestone", "displayName": "Milestone", "schemaName": "cnt_Milestone", "isCustom": true },
+        { "logicalName": "cnt_project", "displayName": "Project", "schemaName": "cnt_Project", "isCustom": true },
+        { "logicalName": "cnt_timesheet", "displayName": "Timesheet", "schemaName": "cnt_Timesheet", "isCustom": true },
+        { "logicalName": "msdyn_accountkpiitem", "displayName": "Account KPI Item", "schemaName": "msdyn_accountkpiitem", "isCustom": true },
+        { "logicalName": "new_importbatch", "displayName": "Import Batch", "schemaName": "new_ImportBatch", "isCustom": true }
+      ]
     },
     "exitCode": 0
   },
-  { "id": "app-list", "command": "pac model list", "result": { "apps": [] }, "exitCode": 0 },
+  { "id": "app-list", "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'", "result": { "ok": true, "count": 0, "apps": [] }, "exitCode": 0 },
   {
     "id": "ask-create-app",
     "command": "AskUserQuestion: No model-driven apps found. Would you like to create a new one, or cancel?",
@@ -89,12 +91,6 @@
     "exitCode": 0
   },
   {
-    "id": "app-create",
-    "command": "pac model create --name 'Account Metrics' --solution 'ContosoCore' --publish",
-    "result": { "ok": true, "name": "Account Metrics", "appId": "44444444-5555-4666-8777-888888888888", "solution": "ContosoCore", "published": true },
-    "exitCode": 0
-  },
-  {
     "id": "generate-types",
     "command": "pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-metrics-dashboard/RuntimeTypes.ts'",
     "result": { "outputFile": "D:/work/account-metrics-dashboard/RuntimeTypes.ts", "tables": ["account"] },
@@ -127,8 +123,34 @@
   { "id": "write-page-name", "command": "Write page-name.txt", "artifact": "page-name.txt" },
   {
     "id": "upload",
-    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '44444444-5555-4666-8777-888888888888' --code-file 'account-metrics.tsx' --name-file 'page-name.txt' --data-sources 'account' --prompt-file 'prompt.txt' --model 'claude-sonnet-4.5' --agent-message-file 'agent-message.txt' --add-to-sitemap",
-    "result": { "ok": true, "pageId": "66666666-7777-4888-8999-aaaaaaaaaaaa", "appId": "44444444-5555-4666-8777-888888888888", "updated": false },
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --code-file 'account-metrics.tsx' --name-file 'page-name.txt' --data-sources 'account' --prompt-file 'prompt.txt' --model 'claude-sonnet-4.5' --agent-message-file 'agent-message.txt'",
+    "result": { "ok": true, "pageId": "66666666-7777-4888-8999-aaaaaaaaaaaa", "updated": false },
+    "exitCode": 0
+  },
+  {
+    "id": "app-create",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' create --env 'https://contoso.crm.dynamics.com' --name 'Account Metrics' --solution 'ContosoCore' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa' --publish",
+    "result": {
+      "ok": true,
+      "appId": "44444444-5555-4666-8777-888888888888",
+      "uniqueName": "account_metrics_1a2b3c4d",
+      "name": "Account Metrics",
+      "published": true,
+      "unpublishedChanges": false,
+      "solution": "ContosoCore",
+      "addedToSolution": true,
+      "inSolution": ["app", "sitemap"],
+      "sitemapId": "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+      "languageCode": 1033,
+      "navigation": { "area": "Main", "group": "Pages", "pages": [{ "pageId": "66666666-7777-4888-8999-aaaaaaaaaaaa", "title": "Account Metrics Dashboard" }] }
+    },
+    "exitCode": 0
+  },
+  { "id": "write-pin-text", "command": "Write pin-prompt.txt, pin-agent-message.txt", "artifacts": ["pin-prompt.txt", "pin-agent-message.txt"] },
+  {
+    "id": "pin-upload",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '44444444-5555-4666-8777-888888888888' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa' --code-file 'account-metrics.tsx' --prompt-file 'pin-prompt.txt' --agent-message-file 'pin-agent-message.txt'",
+    "result": { "ok": true, "pageId": "66666666-7777-4888-8999-aaaaaaaaaaaa", "appId": "44444444-5555-4666-8777-888888888888", "updated": true, "unchanged": true },
     "exitCode": 0
   },
   { "id": "ask-verify", "command": "AskUserQuestion: Would you like to verify the page(s) in the browser using Playwright?", "result": { "answer": "Skip verification" } }

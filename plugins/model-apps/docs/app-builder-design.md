@@ -548,7 +548,8 @@ The user-facing contract:
   clean teardown+rebuild. **Use `--changed-only` from the first build to opt in.**
 - **Use `--changed-only` consistently.** A plain `--apply` in between invalidates the snapshot (→ next
   `--changed-only` re-baselines via a full build). Mixing the two de-optimizes but never corrupts.
-- **Concurrent Maker edit of the SAME changed page is unsupported** (PAC page upload has no CAS) — the
+- **Concurrent Maker edit of the SAME changed page is unsupported** (a page write is checked against the
+  page's version only between its own read and its write) — the
   fast path re-uploads only the *changed* pages, so an unchanged page is never clobbered; a page you edit
   in both the spec and Maker is overwritten by the spec (the intended deploy). Documented as a follow-up.
 
@@ -674,7 +675,7 @@ deactivate/events/quickviews), app-shell `prerequisiteResolveOnly`/`finalizeSite
 sitemap-solution re-ensure), pages `selectedKeysOnly` (whole-app read-only safety checks retained, only
 changed keys uploaded), views append-only. NO whole-spec publish (`PublishAllXml`) — phase-local publish
 of the touched artifacts only. A pre-mutation live-projection equality check refuses to overwrite a
-Maker-drifted artifact (PAC page upload has no CAS — the residual concurrent-edit race is documented as
+Maker-drifted artifact (a page write is checked against the page's version only between its own read and its write — the residual concurrent-edit race is documented as
 unsupported).
 
 **CONFIRMED landmine (validated against `sdk-build.js`) — the pages-only fast path MUST skip the sitemap
@@ -715,4 +716,4 @@ snapshot **tombstoned then deleted** (0 leftovers). 9. ✅ Docs — design + cap
   artifacts, and all debt entries — not merely the current spec.
 - Debt-clearing verifiers must match the specific debt reason (placement verify can't clear
   event/quick-view debt).
-- Keep crash/failure-injection tests + a live PAC page-upload publication/concurrency test.
+- Keep crash/failure-injection tests + a live page-write publication/concurrency test.

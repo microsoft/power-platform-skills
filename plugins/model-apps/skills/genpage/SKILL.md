@@ -153,10 +153,11 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" '<working-dir>' '<kebab-
 > 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
 > 3. The structured "Create new / Edit existing" question (`AskUserQuestion`)
-> 4. Language detection (`node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'`; when that exits
->    non-zero, `pac model list-languages --environment '<envUrl>'` — the Azure CLI is not needed here) — only on new-page path
-> 5. Entity existence detection (`pac model list-tables --search`)
-> 6. App detection (`pac model list`) with proper selection prompts
+> 4. Language detection (`node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'` — the only source of the
+>    environment's languages: when it fails, report why and stop, never assume the environment is English-only) —
+>    only on new-page path
+> 5. Entity existence detection (`node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search '<entities>' --exact`)
+> 6. App detection (`node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'`) with proper selection prompts
 > 7. Plan-mode presentation and approval (`EnterPlanMode` / `ExitPlanMode`)
 > 8. Telling `genpage-planner` the approval outcome — it writes `genpage-plan.md`
 >    itself — and confirming the file exists before Phase 2
@@ -465,8 +466,11 @@ consolidated pre-flight:
 node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
 ```
 
-Genpage deploys pages via `pac model genpage`, so pass `--require-pac` to keep a missing pac login
-a hard blocker (the app-builder skill omits the flag — its build path only needs the az token).
+`/genpage` signs in and chooses the environment with `pac`, runs the type generator
+(`pac model genpage generate-types`) and falls back to it for connections, connector metadata and
+deployment settings — so pass `--require-pac` to keep a missing pac login a hard blocker (the
+app-builder skill omits the flag — its build path only needs the az token). Pages themselves are
+written through the SDK with the same az token.
 It returns a single JSON object:
 
 ```json
@@ -536,27 +540,19 @@ on a `needs_input` return silently drops the decision the user was asked to make
 Read `genpage-plan.md` for the app decision and the `Solution` line in
 `## Environment`.
 
-**If "create new":**
+**If "create new":** nothing is created in this phase. A new app opens on the pages it is made
+with — the platform refuses an app whose navigation is empty — so `apps.js create` needs the id
+of a page that already exists. The app is therefore created in Phase 6, right after the first page
+is deployed (see "A new app" there). Carry the app's name and the plan's `Solution` into Phase 6:
 
-```powershell
-pac model create --name '<App Name>' --solution '<Solution unique name>' --publish
-```
-
-**`--solution` is mandatory.** `pac model create` errors out with
-`"The given solution name is not valid: ()"` if you omit it — its claimed
-"active solution" fallback does not work in practice.
-
-**`--publish` is mandatory.** Without it the new appmodule stays in draft and
-the genux runtime URL errors with "app not published".
-
-- Use the plan's `Solution` value verbatim. The planner always writes one
-  (default fallback is literally `Default`).
+- Use the plan's `Solution` value verbatim. The planner always writes one (default fallback is
+  literally `Default`).
 - If the plan is somehow missing `Solution`, pass `--solution Default` —
   every Dataverse env has a built-in "Default Solution" by that unique name.
+- `--solution` is mandatory and takes the solution's **unique name**: `apps.js create` refuses
+  a call without it, or with a name no unmanaged solution has.
 
-Store the new app-id for Phase 6.
-
-**If existing app-id:** Use it directly. `pac model create` is not called, so
+**If existing app-id:** Use it directly. `apps.js create` is not called, so
 the `Solution` line is informational only for this phase.
 
 ### Phase 4: Generate RuntimeTypes (Conditional)
@@ -593,7 +589,7 @@ When there are real bindings, the `genpage-connector-builder` agent already wrot
 `<working-dir>/connectors.json` during planning — verify it exists and matches the
 plan table. If it is missing, derive it from the plan table as a **bare JSON
 array** (never the `{ "connectorBindings": [...] }` object wrapper — that is the
-deployed page `config.json` shape that `pac` writes):
+deployed page `config.json` shape, which the upload writes for you):
 
 ```json
 [
@@ -648,7 +644,7 @@ it is missing, derive it as a **bare JSON array** of
 `{ name, isFunction, boundEntityLogicalName?, displayName, parameterKinds }` entries (Action row
 `isFunction:false`, Function `true`; `boundEntityLogicalName` only for an entity-bound, non-
 `(Global)`, row) — see `${PLUGIN_ROOT}/references/custom-api.md`. Never the
-`{ "actionBindings": [...] }` object wrapper (the deployed `config.json` shape `pac` writes).
+`{ "actionBindings": [...] }` object wrapper (the deployed `config.json` shape the upload writes).
 
 ### Phase 4.7: Page Telemetry (Conditional)
 
@@ -886,47 +882,34 @@ exited 0 is not deployed.
 
 For each `.tsx` file produced, deploy to Power Apps.
 
-If Phase 4.5 wrote `<working-dir>/connectors.json`, first pre-flight the active
-PAC CLI:
-
-```powershell
-pac model genpage upload --help
-```
-
-The help output must contain `--connectors`. If it does not, stop and surface:
-"connector deploy requires a pac build with `pac model genpage upload
---connectors` — build from PowerPlatform-Scale-AdminTools or update pac." Do
-not silently drop bindings.
+If Phase 4.5 wrote `<working-dir>/connectors.json`, or Phase 4.6 wrote `<working-dir>/actions.json`,
+pass the file to the upload (`--connectors` / `--actions`). `genpage-upload.js` writes the bindings into
+the page's `config.json` through the SDK, so there is no `--help` to pre-flight and no minimum `pac`
+build for them; a file that is not a JSON array is refused before anything is written. Never silently
+drop bindings.
 
 Connector deployment matrix:
 - **Create (new page):** include `--connectors '<working-dir>/connectors.json'`
-  with the first `upload --add-to-sitemap`.
+  with the page's first upload (the create).
 - **Edit — connectors changed, added, or one removed:** write the full desired
   binding set to `connectors.json` and include `--connectors` with
-  `upload --page-id '<id>'` (full replace).
-- **Edit — no connector change:** omit `--connectors`; pac preserves existing
+  the update (`--page-id '<id>'`) (full replace).
+- **Edit — no connector change:** omit `--connectors`; the page keeps its existing
   bindings. Never pass a stale or empty file on an unrelated edit.
 - **Delete all connectors:** write `[]` to `connectors.json` and pass
-  `--connectors` so pac clears the page's `connectorBindings`.
-
-If Phase 4.6 wrote `<working-dir>/actions.json`, pre-flight the same way — the upload `--help`
-must contain `--actions`; if not, stop and surface "Custom API deploy requires a pac build with
-`pac model genpage upload --actions` (PowerPlatform-Scale-AdminTools)." Don't silently drop bindings.
+  `--connectors`, which clears the page's `connectorBindings`.
 
 Custom API deployment follows the **identical matrix** as connectors, substituting
 `--actions '<working-dir>/actions.json'` for `--connectors`: pass it on create; on an edit only
-when bindings changed/added/removed (full replace); omit it on an unrelated edit (pac preserves
-existing); write `[]` and pass it to clear all `actionBindings`.
+when bindings changed/added/removed (full replace); omit it on an unrelated edit (the page keeps
+its deployed `actionBindings`); write `[]` and pass it to clear all `actionBindings`.
 
-**Deploy through `scripts/genpage-upload.js`, never by composing a raw `pac model genpage upload` command.** The script is a thin wrapper over the same upload path `/app-builder` uses: it hands the prompt and agent-message to pac **by file** (`--prompt-file`/`--agent-message-file`). A prompt is arbitrary user text — quotes, newlines, `%VAR%`, `&`, `|`, non-ASCII — and putting it on a command line means the shell gets to reinterpret it. That failed live with:
-
-```text
-Error: Not a valid command.
-Parse failed on: Inspection
-Was it quote wrapped? No, be sure to wrap values that contain spaces.
-```
-
-…for a prompt containing an ASCII-quoted multiword page name. **Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page would then be built from text the user never approved.
+**Deploy through `scripts/genpage-upload.js`.** It writes the page through the SDK — the same page backend
+`/app-builder` uses, signed in with the Azure CLI — and takes the maker's text **by file**
+(`--prompt-file`/`--agent-message-file`/`--name-file`). A prompt is arbitrary user text — quotes, newlines,
+`%VAR%`, `&`, `|`, non-ASCII — and putting it on a command line means the shell gets to reinterpret it.
+**Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page
+would then be built from text the user never approved.
 
 **Write the prompt, the agent-message and, on a create, the page's display name to files first**, then pass the
 paths. The display name is the maker's text too: substituted into a double-quoted `--name` value, PowerShell expanded `$(…)` in
@@ -950,10 +933,8 @@ foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
 Then write, with the file tool, `<working-dir>/prompt.txt` holding the prompt, `<working-dir>/agent-message.txt` the
 agent message and, on a create, `<working-dir>/page-name.txt` the page's display name — each exactly its text (a
 trailing line break on the name is ignored). `genpage-upload.js` refuses any of them that is a link, a hard link or a
-folder, but only after the write. The name is the one value passed to pac inline. A name containing a straight double
-quote (`"`) is refused before anything is uploaded — pac stores each one as `\"`, in the page and in the navigation
-title it writes — so use typographic quotes (“ ”) or an apostrophe, which are stored exactly. Where pac is installed as
-a `pac.cmd` shim (Windows), a name containing `%` is refused too, so pick one without it.
+folder, but only after the write. The page's name is stored exactly as written: a straight double quote (`"`) or a `%`
+in it is neither refused nor escaped.
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
@@ -965,20 +946,28 @@ a `pac.cmd` shim (Windows), a name containing `%` is refused too, so pick one wi
 ```
 
 When present, the logged command must also include `--connectors '<working-dir>/connectors.json'`
-and/or `--actions '<working-dir>/actions.json'`.
+and/or `--actions '<working-dir>/actions.json'`. A new app's first page is created with no app, so its
+logged command has neither `--app-id` nor `--add-to-sitemap` (see "A new app" below).
 
 #### Prompt semantics
 
-- **First upload** (`--add-to-sitemap`, no `--page-id`): full page description
+- **First upload** (the create: no `--page-id`): full page description
   from plan's `## User Requirements`.
-- **Any subsequent upload** (`--page-id`, no `--add-to-sitemap`): delta only —
+- **Any subsequent upload** (`--page-id`): delta only —
   the changes in this upload, written like a commit message, never a
   re-statement of the original.
 
 `--add-to-sitemap` is **refused** together with `--page-id` — an update cannot add a sitemap
-entry, and the page it names is already placed. If a create is recovered as an update after a
-mid-flight failure, the page is deployed but **not** placed, and that is reported as a failed
-(incomplete) deployment carrying the page id, not as success.
+entry, and the page it names is already placed. The one exception is finishing a page this script
+created and did not finish:
+
+**A create that did not finish.** A create reports `ok: false` **with the page's `pageId`** when the page was
+written but its publish failed, or — with `--add-to-sitemap` — when it could not be placed in the app. The page
+exists, and the base marker beside the code file records that this upload created it and did not finish it. Run
+the **same command again with `--page-id '<page-id>'` added** and nothing else changed (keep `--add-to-sitemap`
+if it was given): that publishes the page and places it, without the check of the app's navigation an ordinary
+update makes — for that page only — and a page that already holds the content is published, not written again.
+Never create the page a second time.
 
 Applies in Phase 6 updates, Phase 6.5 PAGEREF re-uploads, Phase 7.5 fix
 re-deploys, and the entire edit flow.
@@ -1003,18 +992,22 @@ node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
 Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`, and the
 `--actions` line when Phase 4.6 did not write `actions.json`.
 
+**A new app** (the plan says `create new`): there is no app to name yet. Create the app's **first page with no
+`--app-id` and no `--add-to-sitemap`** — a page needs no app, and one created without it is added to none — and make
+the app from that page; see "A new app" below.
+
 `genpage-upload.js` reads the code file and refuses a page whose `makeStyles` writes one of the ten Griffel shorthands
 (Phase 5b step 9): a create outright, before it lists, reads or writes anything, and an update for any key the deployed page
 did not already have (below). The result is `"code":"griffel-shorthand"`, with each key's `file:line:column`, its longhands
 and what each way out does in `error` (and the same list in `problems`). That is the same check as
 `check-griffel-styles.js`, held at the one place every upload passes, so a page that skipped the earlier gate still cannot
 ship a key it added without its border. Fix the page and run the upload again; no flag skips it, and
-`--overwrite-deployed` does not. The upload sends `pac` a copy of the bytes it checked, so a change saved to the file after
-the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: `pac` compiles the
-checked file itself.
+`--overwrite-deployed` does not. The upload reads the code file once and writes exactly the text it checked, so a change saved
+to the file after the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: the SDK
+compiles the checked file itself.
 
 An update is held to what it **adds**. A page deployed before this check existed can already carry such a key — the old
-`borderWidth` grep never caught `borderColor` under `:hover` — and it renders without it today. The script downloads the
+`borderWidth` grep never caught `borderColor` under `:hover` — and it renders without it today. The script reads the
 deployed page anyway (for the base check below) and compares: a key the deployed page already had, set to the same value — the same key
 and value in the same slot and selector, or one that a renamed slot or a moved rule only relocated — goes ahead, and the result's `warnings`
 names each one with both ways out: **delete the key** (nothing changes on screen) or **write the longhands** (the style
@@ -1049,14 +1042,11 @@ replaces or clears connector bindings; otherwise omit it to preserve the
 deployed page's current bindings. The same rule applies to `--actions` for Custom
 API bindings: include it only when this upload intentionally replaces or clears them.
 
-An update without `--name-file` keeps the page's current display name, and one without `--model` its
-current model: pac would otherwise rename the page to its navigation title and store an empty model, so
-the script reads both from the deployed page and sends them again. If either cannot be read — or the
-name cannot be sent, because pac is a `pac.cmd` shim and the name holds `%` or `"` — the update still
-goes ahead and its result carries a `warnings` entry naming what may have changed; re-run with that value
-passed explicitly.
+An update that gives no `--name-file`, `--model`, `--data-sources`, `--connectors` or `--actions` keeps the page's own
+name, model, data sources and bindings: the SDK writes only what differs from the page it has just read, so an edit
+that does not rename the page omits `--name-file`, and nothing is reset to empty.
 
-Before an update, the script downloads the deployed page and compares it with the base marker written beside the code file at the previous upload (or by `genpage-base.js record` in the edit flow). A refusal is a stop, not a warning:
+Before an update, the script reads the deployed page and compares it with the base marker written beside the code file at the previous upload (or by `genpage-base.js record` in the edit flow). A refusal is a stop, not a warning:
 
 - `no-base` — no marker, or the marker is for a different page or app.
 - `deployed-changed` — the deployed page no longer matches the marker. The result includes `lines` (`added` / `removed`) and `deployedCopy`, a copy of the deployed page written next to the code file.
@@ -1066,10 +1056,34 @@ Before an update, the script downloads the deployed page and compares it with th
 
 Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Choice:` line in `workflow-log.md`. Do not re-run `genpage-base.js record` after a successful upload; the upload records the hash of the file it uploaded. When the readback matches (a BOM or a final CRLF is not a difference), the marker source is `upload`. When the readback differs, or cannot be read, the source is `upload-unverified` and still records that uploaded hash — not the bytes the service returned — and the result warns, so the next update refuses `deployed-changed` until the page is compared with `genpage-base.js check`. A seconds-long gap between the check and the upload is not covered.
 
-**A pac call that stalls is stopped, not waited on forever.** Every `pac model genpage` call these scripts make is bounded — 3 minutes to list or download, 10 minutes to upload (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`, 1 second to 60 minutes, allows longer) — and its whole process tree is ended when the time is up. A listing or a download that times out is retried once. An **upload is never sent again by the script**: pac writes the page, records its prompt and agent message, then publishes, so one that was stopped may have done most or all of that, and sending it again can record the prompt a second time or overwrite a change someone saved in the meantime. Follow the message the script prints; do not simply re-run the command.
+**A write whose answer was lost is never sent again blindly.** `genpage-upload.js` writes a page as one atomic change set, so a write either landed whole or wrote nothing. When no usable answer comes back (a dropped connection, a 5xx from something in between) it reads the page to find out which, and sends a create at most once more, under the same id — so no second page can exist. What it still cannot account for it reports as a failure: exit 1 and a JSON object with `error`, the page's `pageId` once the write got as far as the send, `outcome` and the SDK's `code`. Follow the message; do not simply re-run the command.
 
-- **An update that timed out, or failed,** "MAY HAVE LANDED" — pac can fail while publishing, after it wrote the page, so neither is sent again by the script. (A failure pac reports for its own arguments or files is an ordinary error: fix what it names and re-run.) Compare the deployed page with your file first: `node "${PLUGIN_ROOT}/scripts/genpage-base.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'`. `"contentSame": true` means the update landed: do not upload it again — run `genpage-base.js record` for that page and file so the marker matches what is deployed, and confirm in Maker that the page shows your change and is published. `"deployed": "unchanged"` means it did not land, and re-running the update is safe. `"deployed": "changed"` with `"contentSame": false` means someone else saved the page: treat it as the `deployed-changed` refusal above, with its choice and its `Choice:` line.
-- **A create that timed out** is an *uncertain* create, and is never run again — by the script, or by you. If the message says the page was **created as `<page-id>`**, it exists but was stopped before it was published, and before it was placed in the app if you asked for that. Add it to the app's navigation (in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create. Without a page id in the message, wait a few minutes and list the environment's pages (`pac model genpage list --environment '<org-url>' --include-unpublished`): a new page of yours is handled as above, and the create is re-run only when none appeared. The same goes for a message that says the environment could not be listed after the create, so nothing is known about what it made. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on. A create that **failed** (not timed out) after pac had printed a `Page ID` is in the same state: its error says the page was **created as `<page-id>`** and that the create was not run again, with the same two ways on rather than "re-run it as an update". The build never re-sends such a create by itself either: every one of these errors is marked as one that is not to be retried.
+- **`"outcome": "nothing"`** — nothing was written (the SDK refused before it sent anything, or the service rejected the whole change set): fix what the message names and run the command again.
+- **An update with `"outcome": "unknown"`** "MAY HAVE LANDED" and is not sent again. Compare the deployed page with your file first: `node "${PLUGIN_ROOT}/scripts/genpage-base.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'`. `"contentSame": true` means the update landed: do not upload it again — run `genpage-base.js record` for that page and file so the marker matches what is deployed, and confirm in Maker that the page shows your change and is published. `"deployed": "unchanged"` means it did not land, and re-running the update is safe. `"deployed": "changed"` with `"contentSame": false` means someone else saved the page: treat it as the `deployed-changed` refusal above, with its choice and its `Choice:` line.
+- **A create with `"outcome": "unknown"`** is an *uncertain* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page. Look for the page in Maker, or list the environment's pages (`pac model genpage list --environment '<org-url>' --include-unpublished`). If it is there, add it to the app's navigation (in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create. If no page of yours appears after a few minutes, the create is re-run. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for. The first page of a new app has no app yet to be added to: once it is found, go on with step 2 of "A new app" below (`apps.js create --page-id`), and run `genpage-base.js record` with the new app's id before the update in step 4, which is refused `no-base` without a marker.
+- **A create that wrote the page but did not publish or place it** is not an unknown outcome: its result carries the `pageId`, and the way on is "A create that did not finish" above.
+
+#### A new app: the first page, then the app, then the rest
+
+Phase 3 created nothing, because the platform refuses an app whose navigation is empty and `apps.js create` takes the pages the app opens on. When the plan says `create new`, deploy in this order:
+
+1. **The first page, with no app.** Run the create above without `--app-id` and without `--add-to-sitemap`. Note the `pageId` it prints.
+2. **The app, from that page.**
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/apps.js" create `
+     --env '<org-url>' `
+     --name '<App Name>' `
+     --solution '<Solution unique name>' `
+     --page-id '<first-page-id>' `
+     --publish
+   ```
+
+   It makes the app with one area `Main`, one group `Pages` and a sub-area for the page, titled with the page's name; the app and its sitemap join the solution (a system solution such as `Default` already holds every component, so the result says `systemSolution: true` and an empty `inSolution` — a create into `Default` needs no add and did not fail). **`--publish` is mandatory:** without it the new app stays in draft and the genux runtime URL errors with "app not published". It prints `{ "ok": true, "appId", "uniqueName", "published", "unpublishedChanges", "solution", "navigation", … }` — store `appId` for the rest of the run; a `warnings` entry says when the environment could not take the app's new header and navigation setting, and the app was made all the same.
+3. **The remaining pages.** Upload each with `--app-id '<appId>'` and `--add-to-sitemap` (the create above): each becomes a sub-area of the new app.
+4. **The first page's tables.** Upload the first page again as an update that names the app — the update form above with `--app-id '<appId>'` and `--page-id '<first-page-id>'`, a `prompt.txt` that says `Pin the page's tables into the new app` and an `agent-message.txt` that says `Added the page's table views to the app`, and no `--data-sources` (the page keeps its own) — so that the default views of the tables it reads join the app's components (the maker's "/" picker lists a page's tables from them) and the base marker records the app. The file is unchanged, so the page is published, not rewritten, and no turn is recorded. A page that Phase 6.5 re-uploads gets the same from that update, so skip this step for it.
+
+**A create of the app that failed** exits 1 and prints `{ "ok": false, "code", "error", "written", … }`; `code` and `error` are the SDK's own. `"written": false` means nothing was made: fix what the message names and run it again. `"written": true` means the app or its sitemap exists (`appId`, `sitemapId`, `left`, `published` and `unpublishedChanges` say which and in what state): its unique name is taken, so run it again with `--unique-name '<name>'`, or remove the leftovers first — the error says how. `"written": null` means the platform could not be read back, so the outcome is unknown: look in the environment for what `lookFor` names (the unique name, the app id and the sitemap id the create used) before running it again. `stage` says how far it got, and `inSolution` which of the app and its sitemap joined the solution.
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 
@@ -1141,8 +1155,15 @@ Cross-env note: the app (80) pulls the sitemap (62); the GenPage
 is added so bindings resolve. The script discovers both custom-table component
 types from `EntityDefinitions(...).ObjectTypeCode` in the target environment —
 their numeric values are environment-specific and must never be hardcoded. At import the
-deployer supplies env-specific `ConnectionId` per connection reference via
-`pac solution create-settings` + `pac solution import --settings-file`.
+deployer supplies env-specific `ConnectionId` per connection reference through deployment settings:
+`node "${PLUGIN_ROOT}/scripts/solution-settings.js" template --env '<envUrl>' --solution '<solutionUniqueName>' --out '<settings.json>'`
+writes the settings file of the solution (an empty `ConnectionId` for each connection reference, an empty
+`Value` for each environment variable; an existing `--out` is not replaced unless `--force` is given, so a
+file already filled in is not lost), the deployer fills it in, and
+`node "${PLUGIN_ROOT}/scripts/solution-settings.js" import --env '<target-envUrl>' --package '<solution.zip>' --settings '<settings.json>'`
+imports the package and applies the settings in the same import. Each prints one JSON line with
+`source` (`"sdk"`, or `"pac"` with a `fallback` that says why the SDK did not do the work) and never a
+settings value or a connection id.
 
 Custom API bindings need **no** extra ALM step: `config.json`'s `actionBindings` travels
 automatically in the `uxagentprojectfile` rows already pulled with the GenPage. The
@@ -1214,6 +1235,6 @@ For the edit flow (triggered when the `genpage-planner` returns
 `{ "action": "edit" }`), see [edit-flow.md](edit-flow.md) in this folder.
 
 The edit flow has its own 8 phases (Edit Phase 1-8): discover and select target
-app + page via `pac model list` + `pac model genpage list`, download, generate
+app + page via `apps.js list` + `pac model genpage list`, download, generate
 RuntimeTypes if needed, invoke `genpage-edit-planner`, apply the edit inline,
 deploy, verify, summarize.

@@ -1,0 +1,1 @@
+Added the page's table views to the app

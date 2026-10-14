@@ -13,7 +13,7 @@
     "Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested",
     "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md",
     "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts",
-    "Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST pac model genpage upload for each new page passes --prompt with the FULL page description (from plan's ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id, no --add-to-sitemap) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description",
+    "Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST upload (the create) for each new page passes --prompt with the FULL page description (from plan's ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description",
     "Prefix discipline — plan format: Every name in `## Entity Creation Required` (table headings, column Suffix values, choice column suffixes, relationship Lookup Suffix values) is a bare suffix matching `^[a-z][a-z0-9]+$`. No value contains an underscore or a prefix. The prefix lives only in `## Environment` → `Publisher Prefix:`.",
     "Prefix discipline — resolved names: For every operation in `genpage-entity-creation-log.md`, the Resolved Full Name starts with the `Publisher Prefix:` value from the plan's `## Environment` followed by `_` and the bare suffix from the plan (e.g., Publisher Prefix `crb2b` + suffix `playername` → `crb2b_playername`).",
     "Prefix discipline — solution alignment: If the env has a dominant non-system custom prefix (>=50% of custom tables AND >=3 such tables), the planner surfaces this in the solution question and ordered the option whose publisher prefix matches the dominant prefix FIRST as the recommended choice. If the user picks a different-prefix solution, the planner logged a one-line warning before proceeding.",
@@ -56,10 +56,10 @@
           "data_source": "Dataverse entities: account",
           "specific_requirements": "Responsive card layout, each card clickable to open the Account record"
         },
-        "app_selection": "user selects an existing app from pac model list"
+        "app_selection": "user selects an existing app from apps.js list"
       },
       "expectations": [
-        "Phase 1 (Planner): pac model list-tables --search 'account' is run and results are filtered by exact logical-name match",
+        "Phase 1 (Planner): list-tables.js --search 'account' --exact is run and the result is matched by exact logical name",
         "Phase 1 (Planner): Account entity is detected as existing; plan records no entity creation required",
         "Phase 2: Entity-builder is SKIPPED (no entities to create)",
         "Phase 4: pac model genpage generate-types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run",
@@ -68,7 +68,7 @@
         "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
         "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
         "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
-        "Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources 'account', --prompt, --model, --name, --agent-message, --add-to-sitemap",
+        "Phase 6: the upload (genpage-upload.js) includes --app-id, --code-file, --data-sources 'account', --prompt, --model, --name, --agent-message, --add-to-sitemap",
         "Phase 6: --prompt value is the FULL page description (from plan's ## User Requirements) — this is the create-step prompt, NOT a delta"
       ]
     },
@@ -109,8 +109,8 @@
       },
       "expectations": [
         "Phase 1 (Planner): User indicates 'edit existing'; planner returns { action: 'edit' }, skipping Phases 2-8 of the create flow",
-        "Edit Phase 1a: pac model list is run to discover available apps — orchestrator does NOT guess or invent app names",
-        "Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual Display Name and app-id GUID from pac model list output",
+        "Edit Phase 1a: apps.js list is run to discover available apps — orchestrator does NOT guess or invent app names",
+        "Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output",
         "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
         "Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output",
         "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops",
@@ -124,7 +124,7 @@
         "Edit Phase 5: Orchestrator applies edits inline using Edit tool on <working-dir>/<page-id>/page.tsx",
         "Edit Phase 5: Search implementation uses Fluent UI V9 SearchBox or Input; sort uses column header handlers",
         "Edit Phase 5: Existing functionality is preserved per the edit plan's Preservation Constraints",
-        "Edit Phase 6: pac model genpage upload uses --page-id flag; omits --add-to-sitemap",
+        "Edit Phase 6: the upload (genpage-upload.js) uses --page-id flag; omits --add-to-sitemap",
         "Edit Phase 6: --prompt value is the user's edit request (the DELTA of changes — 'Add a search bar and column sorting by company name'), NOT a re-statement of the original page description"
       ]
     },
@@ -141,7 +141,7 @@
         "app_selection": "user selects an existing app"
       },
       "expectations": [
-        "Phase 1 (Planner): pac model list-tables --search 'incident,contact' is run; both entities confirmed as existing",
+        "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing",
         "Phase 2: Entity-builder is SKIPPED",
         "Phase 4: pac model genpage generate-types --data-sources 'incident,contact' is run",
         "Phase 5 (Page Builder): Wizard sample (2-wizard-multi-step.tsx) is read",
@@ -209,7 +209,7 @@
         "app_selection": "user selects an existing app"
       },
       "expectations": [
-        "Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)",
+        "Phase 1 (Planner): list-tables.js --search --exact confirms cr_candidate and cr_jobrequisition do NOT exist (named in missing — an exact logical-name match, not fuzzy)",
         "Phase 1 (Planner): Plan includes entity definitions with columns, types, and a lookup relationship (cr_candidate → cr_jobrequisition)",
         "Phase 1 (Planner): Because entities will be created, the planner asks the solution selection question via AskUserQuestion and records the choice in ## Environment as 'Solution: <uniqueName>' and 'Publisher Prefix: <prefix>'",
         "Phase 2a: Orchestrator runs scripts/check-auth.js; ok:true gate before invoking entity-builder",
@@ -236,16 +236,16 @@
           "data_source": "Dataverse entity: account",
           "specific_requirements": "Account metrics dashboard"
         },
-        "app_selection": "pac model list returns zero apps; user chooses to create a new app named 'Account Metrics'"
+        "app_selection": "apps.js list returns zero apps; user chooses to create a new app named 'Account Metrics'"
       },
       "expectations": [
-        "Phase 1 (Planner): pac model list returns zero apps",
+        "Phase 1 (Planner): apps.js list returns zero apps",
         "Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel",
         "Phase 1 (Planner): Plan records 'create new app' decision",
         "Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment",
-        "Phase 3: pac model create --name 'Account Metrics' --solution '<Solution from plan>' is run; --solution is ALWAYS passed (pac model create errors out without it)",
-        "Phase 3: The new app-id returned from pac model create is stored for Phase 6",
-        "Phase 6: Upload uses the newly created app-id"
+        "Phase 6 (new app): apps.js create --name 'Account Metrics' --solution '<Solution from plan>' --page-id <first page> --publish is run after the first page's upload; --solution is ALWAYS passed (apps.js create refuses a call without it)",
+        "Phase 6 (new app): The first page is created with no --app-id, and the app-id apps.js create returns is stored for the pages that follow",
+        "Phase 6: Every upload after the app is created uses the newly created app-id"
       ]
     },
     {
@@ -317,7 +317,7 @@
         "Phase 5c: Each builder reads the same genpage-plan.md but extracts only its own page specification",
         "Phase 5c: Each builder reads the same RuntimeTypes.ts for column verification",
         "Phase 5c: Cross-page navigation (e.g., candidate list → candidate detail) uses quoted `\"PAGEREF_<filename>\"` placeholders, never invented GUIDs",
-        "Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file",
+        "Phase 6: All 3 pages are deployed via separate genpage-upload.js create uploads, each with the correct --code-file",
         "Phase 6.5: If any .tsx contains PAGEREF_ tokens, orchestrator builds a filename→page-id map sorted by length desc, replaces quoted `\"PAGEREF_<name>\"` tokens with the matching GUID (word-boundary safe), and re-uploads only affected files with the full update flag set",
         "Phase 6.5: Re-upload uses a DELTA --prompt (e.g. 'Resolve cross-page navigation placeholders to real page GUIDs') — NOT a copy of the original page description from Phase 6",
         "Phase 6.5: Unresolved PAGEREF tokens (typos, missing siblings) cause an explicit error to the user — never silently shipped",
@@ -357,7 +357,7 @@
           "specific_requirements": "Contact list display"
         },
         "app_selection": "user selects an existing app",
-        "environment_state": "The environment has English (1033), Arabic (1025) and French (1036) provisioned, which scripts/list-languages.js reports (or pac model list-languages, which the planner runs when that script cannot read them). This eval exercises the localization code path."
+        "environment_state": "The environment has English (1033), Arabic (1025) and French (1036) provisioned, which scripts/list-languages.js reports (it is the only source: a failed read ends language detection, and no language is assumed). This eval exercises the localization code path."
       },
       "expectations": [
         "Phase 1 (Planner): language discovery output includes Arabic (1025) and French (1036) in addition to English",
@@ -454,7 +454,7 @@
           "data_source": "Mock data",
           "specific_requirements": "current weather panel"
         },
-        "app_selection": "user selects an existing app from pac model list"
+        "app_selection": "user selects an existing app from apps.js list"
       },
       "expectations": [
         "Phase 1 (Planner): For a mock-data page, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
@@ -496,13 +496,13 @@
       "data": {
         "question_answers": {
           "new_or_edit": "Edit existing",
-          "app_and_page": "user selects Operations Hub, then the Seattle Weather page, from pac model list / pac model genpage list",
+          "app_and_page": "user selects Operations Hub, then the Seattle Weather page, from the apps.js list / pac model genpage list output",
           "changes": "Bind current conditions to the MSN Weather connector; preserve the five-day forecast"
         }
       },
       "expectations": [
         "Phase 1 (Planner): User indicates 'edit existing'; planner returns { action: 'edit' }, skipping Phases 2-8 of the create flow",
-        "Edit Phase 1a: pac model list is run to discover available apps — orchestrator does NOT guess or invent app names",
+        "Edit Phase 1a: apps.js list is run to discover available apps — orchestrator does NOT guess or invent app names",
         "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
         "Edit Phase 4: genpage-edit-planner agent is invoked via Task tool",
         "Edit Phase 4: genpage-edit-plan.md is written to the working directory root (not inside <page-id>/)",
@@ -515,7 +515,7 @@
     {
       "id": 20,
       "tier": "full",
-      "prompt": "Create Revenue $100 $(Get-Date) using the exact approved file text. Independently edit an existing renamed page without changing its model, data sources, connectors or Custom APIs; refuse a straight-quoted create name before PAC writes.",
+      "prompt": "Create Revenue $100 $(Get-Date) using the exact approved file text. Independently edit an existing renamed page without changing its model, data sources, connectors or Custom APIs; store a straight-quoted create name exactly as approved.",
       "data": { "fixture_kind": "synthetic", "contract_version": 2 },
       "expectations": [
         "Phase 6: Create uploads use name-file and preserve the exact approved name prompt and agent-message text",

@@ -69,7 +69,7 @@ phases (and other agents) read it.
                   │   edit-flow.md         │   <-- loaded conditionally
                   └────────────┬───────────┘
                                │
-                       pac model list
+                       apps.js list
                        pac model genpage list
                        pac model genpage download
                                │
@@ -93,7 +93,7 @@ phases (and other agents) read it.
                   on <working-dir>/<page-id>/page.tsx
                                │
                                v
-                  pac model genpage upload --page-id ...
+                  genpage-upload.js --page-id ...
 ```
 
 ## /genpage — working directory layout

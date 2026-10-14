@@ -42,9 +42,12 @@
   },
   {
     "id": "list-apps",
-    "command": "pac model list",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'",
     "exitCode": 0,
-    "result": "App ID                                Display Name          Unique Name\n11111111-2222-3333-4444-555555555555  Sales Hub             SalesHub\n44444444-5555-6666-7777-888888888888  Customer Service Hub  CustomerServiceHub"
+    "result": { "ok": true, "count": 2, "apps": [
+      { "id": "11111111-2222-3333-4444-555555555555", "name": "Sales Hub", "uniqueName": "SalesHub", "description": "", "published": true, "unpublishedChanges": false },
+      { "id": "44444444-5555-6666-7777-888888888888", "name": "Customer Service Hub", "uniqueName": "CustomerServiceHub", "description": "", "published": true, "unpublishedChanges": false }
+    ] }
   },
   {
     "id": "list-pages",

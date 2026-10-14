@@ -1,6 +1,6 @@
 # Model Apps Plugin
 
-Build and deploy generative pages (genux) for Power Apps model-driven apps. This plugin provides a complete workflow — from validating prerequisites and gathering requirements, through generating React + TypeScript + Fluent code, to deploying via PAC CLI and verifying in the browser.
+Build and deploy generative pages (genux) for Power Apps model-driven apps. This plugin provides a complete workflow — from validating prerequisites and gathering requirements, through generating React + TypeScript + Fluent code, to deploying through the bundled SDK and verifying in the browser.
 
 ## Installation
 
@@ -24,10 +24,10 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
-| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
-| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
+| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Signing in and choosing the environment (`pac auth`, `pac org who`), the `/genpage` type generator (`pac model genpage generate-types`), and the fallbacks of the connection, connector and deployment-settings scripts | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Every Dataverse call — tables, apps, languages, entity creation and generative pages — and the Power Apps service token that reading connections and connector metadata uses | `winget install Microsoft.AzureCLI` |
 
-After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. `az` is what every Dataverse call authenticates with — entity creation, and the generative pages themselves, which are written, read and deleted through the bundled SDK, not through `pac model genpage`. (Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not.)
+After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. `az` is what every Dataverse call authenticates with — listing tables, apps and languages, entity creation, and the generative pages themselves, which are written, read and deleted through the bundled SDK, not through `pac model genpage` — and it signs in the Power Apps service token that the connection and connector-metadata reads use. **Deploying a page needs `az`**, and so does detecting the environment's languages: there is no `pac` fallback for either, so a missing or signed-out `az` ends language detection with the reason, never with an English default. `pac` signs you in and chooses the environment, runs the type generator, and answers the connection, connector and deployment-settings reads only where the SDK cannot (the script's output says so: `connectionsSource`, or `source` with a `fallback`).
 
 Each Azure CLI call (a token, `az account show`) may take up to **60 seconds** — a busy machine can
 take most of that just to start `az`. A call that runs out of time is reported as a timeout (the
@@ -136,10 +136,10 @@ Creates, updates, and deploys generative pages for model-driven Power Apps. Hand
 2. **Authenticate** — verifies PAC CLI auth and `az` (entity creation and page deployment both sign in through `az`)
 3. **Gather requirements** — asks about page type, data source, and specific features
 4. **Create entities** (optional) — uses the plugin's Node.js Web API scripts to create Dataverse tables, columns, relationships, and choice columns when the requested entities don't exist. Asks which solution to land them in
-5. **Create app** (optional) — runs `pac model create` if no model-driven app is targeted
+5. **Choose the app** — lists the environment's apps (`scripts/apps.js list`); when no model-driven app is targeted, the app is created in step 8, from the first page deployed (`scripts/apps.js create`), because an app opens on its pages
 6. **Generate schema** — runs `pac model genpage generate-types` for Dataverse entity pages
 7. **Generate code** — produces a complete single-file `.tsx` component (parallel page-builders for multi-page requests)
-8. **Deploy** — writes the page through the bundled SDK (`scripts/genpage-upload.js`); a page needs no app, and is added to one when you name it
+8. **Deploy** — writes the page through the bundled SDK (`scripts/genpage-upload.js`); a page needs no app, and is added to one when you name it. For a new app the first page is deployed first, then the app is created from it, then the other pages are added
 9. **Verify** — optionally opens the page in Playwright for interactive testing
 
 **Usage:** Invoke directly with `/genpage`, or use any of the keywords below to trigger the skill automatically:
@@ -253,7 +253,7 @@ DoD, China); an unrecognized cloud sends nothing. Then:
 - **Fluent UI V9** — `@fluentui/react-components` for styling and components
 - **Single file architecture** — each page is one `.tsx` file with `export default GeneratedComponent`
 - **DataAPI** — typed CRUD operations against Dataverse tables via `props.dataApi`
-- **PAC CLI** — schema generation (`generate-types`) and deployment (`upload`)
+- **PAC CLI** — sign-in, environment choice and schema generation (`generate-types`); pages are deployed through the bundled SDK
 - **Playwright** — optional browser verification after deployment
 
 ## Documentation

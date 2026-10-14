@@ -27,7 +27,7 @@ section MUST record commands and structured calls verbatim — not just their
 outcomes — because the eval harness greps the log for these tokens. Concretely:
 
 - Every shell command invocation is recorded on its own line as
-  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` ``. Include the literal flag values. Result goes on the next line.
+  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search '<term>'` `` / `` `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` ``. Include the literal flag values. Result goes on the next line.
 - Every `AskUserQuestion` call is recorded as
   `AskUserQuestion: <question text> → <selected option>`. The literal string
   `AskUserQuestion` is required.
@@ -93,7 +93,9 @@ pac org who
 ```
 
 Extract the `Org URL:` line (strip any trailing slash). Store this as `$ENV_URL`
-for use in solution-listing and any downstream build calls.
+for use in solution-listing and any downstream build calls. It is also the `--env`
+of the table and app reads below (`<envUrl>`): the https origin only — no path, no
+trailing slash.
 
 Report: "Working with environment: [name] ([url])" and proceed.
 
@@ -101,25 +103,29 @@ Report: "Working with environment: [name] ([url])" and proceed.
 
 ### Entity Detection
 
-Use `pac model list-tables` to check which entities the user has mentioned or
+Use `scripts/list-tables.js` to check which entities the user has mentioned or
 that are implied by their requirements. Pass requested entity logical names via
-`--search` (comma-separated):
+`--search` (comma-separated) with `--exact`:
 
 ```powershell
-pac model list-tables --search "entity1,entity2"
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search 'entity1,entity2' --exact
 ```
 
-**Important:** `--search` matches **substrings** across logical name, schema name,
-and display name — so `--search "account"` also returns `accountleads`,
-`accountlevelmonitoring`, etc. You **must** post-process the results and compare
-the `Logical Name` column against your requested entities using **exact equality**:
+It prints one JSON line: `{ "ok": true, "search": [...], "exact": true, "count": N,
+"tables": [{ "logicalName", "displayName", "schemaName", "isCustom" }], "missing": [...] }`.
 
-- For each requested entity, look for a row where `Logical Name == <entity>`.
+**Important:** without `--exact`, `--search` matches **substrings** across logical name,
+schema name, and display name — so `--search 'account'` also returns `accountleads`,
+`accountlevelmonitoring`, etc. `--exact` keeps only the tables whose logical name **is** a
+search term (any letter case) and names the terms that have none in `missing`:
+
+- For each requested entity, look for a table whose `logicalName` equals it.
 - If found → mark as **"exists"** (build around it).
-- If not found → mark as **"needs creation"**.
+- If it is in `missing` → mark as **"needs creation"**.
 
-Do NOT trust the raw output as "exists" just because the search returned a match —
-the search is fuzzy; your check must be exact.
+If the script fails (exit 1, `{ "ok": false, "error", "code" }`), entity detection did not
+happen. Report why (most often the Azure CLI is missing, signed out or signed in to another
+tenant) and stop: a failed read is never "no entities exist", and nothing is created on it.
 
 #### Dominant-prefix detection (for solution UX)
 
@@ -127,12 +133,12 @@ Also run a broader scan to detect the env's working prefix. This lets the
 solution question steer the user to a consistent choice:
 
 ```powershell
-pac model list-tables
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --type custom
 ```
 
-From the full output, look at the **Custom** rows only (Type column = Custom).
-Extract each logical name's prefix (everything before the first `_`). Count
-prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
+`--type custom` keeps the custom tables only (`isCustom: true`; a table a managed solution
+brought counts as custom). Extract each `logicalName`'s prefix (everything before the first
+`_`). Count prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
 `mscrm`, `appsource`, `msft`).
 
 - If one non-system prefix accounts for **≥50%** of custom tables AND there
@@ -148,8 +154,15 @@ Store: `detectedPrefix`, `detectedTableCount` for use in solution selection.
 Run:
 
 ```powershell
-pac model list
+node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'
 ```
+
+It prints `{ "ok": true, "count": N, "apps": [{ "id", "name", "uniqueName", "description",
+"published", "unpublishedChanges" }] }`, drafts included. Offer each app by its `name` and `id`.
+`published` (users can open the app) and `unpublishedChanges` (a saved edit is waiting for a
+publish) are two separate facts about it — an app can be both published and have changes — so
+say which applies when it matters. If the script fails (exit 1), report why and stop; a failed
+read is never "no apps".
 
 - **0 apps:** Ask user via `AskUserQuestion`: "No model-driven apps found. Would you
   like to create a new one, or cancel?"
@@ -938,7 +951,7 @@ Mark the "Write app-spec.json and model-app-plan.md" task complete.
 
 - **Do NOT write to Dataverse during authoring.** Table/column/relationship creation and
   record insertion happen in **Phase 2 (Build)**, driven by the `cds-maker-sdk` build engine —
-  not here. Authoring only reads (`pac` discovery) and writes local files.
+  not here. Authoring only reads (`pac auth` / `pac org who` for the environment, `list-tables.js` and `apps.js list` for what exists) and writes local files.
 - **Do NOT hand-write metadata XML or solution ZIP files.** The build engine
   (`build-model-app.js` → `lib/sdk-build.js`) produces all FormXml/FetchXml/sitemap and Web API
   writes via the SDK.

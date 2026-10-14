@@ -33,10 +33,9 @@ function pass() { return { status: 'pass', reason: '' }; }
 
 // The two upload transports, recognised in ONE place.
 //
-// New runs deploy through `scripts/genpage-upload.js`, which hands the prompt to pac BY FILE so a
-// shell cannot reinterpret quotes/newlines (#589). The fixtures checked in here are captured
-// transcripts from before that change and show the raw `pac model genpage upload` form; rewriting a
-// captured transcript to match today's skill would be falsifying the evidence it exists to be.
+// New runs deploy through `scripts/genpage-upload.js`, which takes the prompt BY FILE (so a shell cannot reinterpret quotes/newlines, #589) and writes the page through the SDK. The
+// fixtures checked in here that are captured transcripts from before that change show the raw `pac model genpage upload` form; rewriting a captured transcript to match today's skill
+// would be falsifying the evidence it exists to be.
 //
 // Defined once because the two DID drift: the common assertion was updated and the per-eval Phase
 // expectations were not, so a correct new-transport run failed the evals while a raw
@@ -633,7 +632,7 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST pac model genpage upload for each new page passes --prompt with the FULL page description (from plan\'s ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id, no --add-to-sitemap) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description',
+  'Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST upload (the create) for each new page passes --prompt with the FULL page description (from plan\'s ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -785,12 +784,15 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 1 (Planner): pac model list-tables --search \'account\' is run and results are filtered by exact logical-name match',
+  'Phase 1 (Planner): list-tables.js --search \'account\' --exact is run and the result is matched by exact logical name',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+list-tables/.test(log)) return fail('pac model list-tables not invoked');
+    // scripts/list-tables.js, or `pac model list-tables` in a capture made before it (see LIST_TABLES).
+    if (!evidence.LIST_TABLES.test(log)) return fail('list-tables.js (or pac model list-tables) not invoked');
     if (!/--search/.test(log)) return fail('list-tables invoked without --search');
+    // The script's own `--exact` is what makes the match exact; a pac capture matched by hand (the plan's verdict is graded separately).
+    if (/\blist-tables\.js\b/.test(log) && !/\blist-tables\.js\b[^\n]*--exact\b/.test(log)) return fail('list-tables.js was run without --exact, so its substring matches were not narrowed to the exact logical name');
     return pass();
   }
 );
@@ -900,7 +902,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap',
+  'Phase 6: the upload (genpage-upload.js) includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -999,11 +1001,12 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1a: pac model list is run to discover available apps — orchestrator does NOT guess or invent app names',
+  'Edit Phase 1a: apps.js list is run to discover available apps — orchestrator does NOT guess or invent app names',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+list\b/.test(log)) return fail('pac model list not invoked');
+    // scripts/apps.js list, or `pac model list` in a capture made before it (see LIST_APPS).
+    if (!evidence.LIST_APPS.test(log)) return fail('apps.js list (or pac model list) not invoked');
     return pass();
   }
 );
@@ -1039,7 +1042,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 6: pac model genpage upload uses --page-id flag; omits --add-to-sitemap',
+  'Edit Phase 6: the upload (genpage-upload.js) uses --page-id flag; omits --add-to-sitemap',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -1103,17 +1106,6 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 3: pac model create --name \'Account Metrics\' --solution \'<Solution from plan>\' is run; --solution is ALWAYS passed (pac model create errors out without it)',
-  ({ fixture }) => {
-    const log = fixture.workflowLog;
-    if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+create/.test(log)) return fail('pac model create not invoked');
-    if (!/pac\s+model\s+create[^\n]*--solution/.test(log)) return fail('pac model create missing --solution');
-    return pass();
-  }
-);
-
-PHASE_EXPECTATIONS.set(
   'Phase 2a: If the script returns blocker:\'az_not_logged_in\', orchestrator surfaces the message (\'Run `az login`...\') to the user and halts (entity-builder is NOT invoked)',
   ({ fixture }) => {
     const log = fixture.workflowLog;
@@ -1146,8 +1138,7 @@ PHASE_EXPECTATIONS.set(
 // connector discovery for a page with no connector data source, leaving
 // ## Connector Bindings as the exact sentinel. (Connector authoring has no feature
 // flag and is always available, so the thing worth pinning is that it stays OFF THE PATH when
-// the maker asked for mock data — otherwise every mock page pays for a `pac
-// connection list` round trip and risks inventing a binding nobody asked for.)
+// the maker asked for mock data — otherwise every mock page pays for a connection-list round trip and risks inventing a binding nobody asked for.)
 PHASE_EXPECTATIONS.set(
   "Phase 1 (Planner): For a mock-data page, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
   ({ fixture }) => {
@@ -1264,7 +1255,7 @@ PHASE_EXPECTATIONS.set(
     const discovery = discoveryProblems(fixture, { required: true, needsBinding: true });
     if (discovery.length) return checkProblems(discovery);
 
-    // (c) Same bare-array shape as the create path — `pac` wraps it into config.json itself.
+    // (c) Same bare-array shape as the create path — genpage-upload.js wraps it into the page's `connectorBindings` itself.
     //     Asserted POSITIVELY (the recorded content opens with `[{`) rather than by banning the
     //     string `{ "connectorBindings"`: a log line legitimately names the wrapper in order to
     //     contrast with it, and a negative match cannot tell the two apart.
@@ -1374,10 +1365,12 @@ PHASE_EXPECTATIONS.set(
 // RuntimeTypes.ts — through lib/expectation-evidence.js. It SKIPs only where that artifact is not
 // part of the fixture's shape, and names the exact value that disagrees when it fails.
 
+// The app listing and the app create are `scripts/apps.js list` / `apps.js create`; a capture made before them records the `pac model list` / `pac model create` they replaced, and
+// LIST_APPS / CREATE_APP accept both.
 const {
-  csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, generateTypesCalls, uploadCalls,
+  csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, tableAbsent, searchFailed, generateTypesCalls, uploadCalls,
   provisionCalls, legacyProvisionCalls, planPrefix, planSolution, planEntityBlocks, existingEntities, entityLog,
-  createdTableNames, runtimeEnums, choiceEnum, NOT_FOUND, LIST_LANGUAGES, GENPAGE_LIST, GUID_RE, listingRows, conversationSteps,
+  createdTableNames, runtimeEnums, choiceEnum, LIST_LANGUAGES, LIST_APPS, CREATE_APP, GENPAGE_LIST, GUID_RE, listingRows, conversationSteps,
 } = evidence;
 
 const resultOf = (problems) => (problems.length ? fail(problems[0]) : pass());
@@ -1416,19 +1409,21 @@ function entityBuilderInvoked(fixture) {
 
 // An existing table is confirmed by BOTH halves of discovery: a `list-tables --search` that covered
 // it without reporting it absent, and the plan's verdict (listed under Existing Entities, not
-// scheduled for creation). The list-tables wording varies by capture, so the plan is the
+// scheduled for creation). scripts/list-tables.js answers as data (`tables`, `missing`) and tableAbsent
+// reads that; a capture made before it records prose, which tableAbsent matches. The plan is the
 // structured verdict and the search result is only checked for a contradiction.
 function existingEntityProblems(fixture, names) {
   if (!fixture.genpagePlan) return ['no genpage-plan.md'];
   const searches = listTablesSearches(fixture);
-  if (!searches.length) return ['pac model list-tables --search was not run'];
+  if (!searches.length) return ['list-tables --search was not run'];
   const existing = existingEntities(fixture.genpagePlan);
   const planned = planEntityBlocks(fixture.genpagePlan).map((block) => block.suffix);
   const problems = [];
   for (const name of names) {
     const search = searches.find((s) => s.terms.includes(name));
-    if (!search) problems.push(`no pac model list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
-    else if (NOT_FOUND.test(search.text)) problems.push(`list-tables recorded ${name} as not found`);
+    if (!search) problems.push(`no list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
+    else if (searchFailed(search)) problems.push(`list-tables failed, so ${name} was not confirmed to exist`);
+    else if (tableAbsent(search, name)) problems.push(`list-tables recorded ${name} as not found`);
     if (!existing.includes(name)) problems.push(`plan ## Existing Entities does not confirm ${name}`);
     if (planned.includes(suffixOf(name))) problems.push(`plan schedules ${name} for creation although it exists`);
   }
@@ -1438,25 +1433,40 @@ function existingEntityProblems(fixture, names) {
 // The mirror image for a table the run must create. `exact` additionally requires the verdict to
 // rest on an exact logical-name match: a search for `cr_candidate` can return `cr_candidatenote`,
 // and a fuzzy reading of that hit would skip creating a table that does not exist. A search that
-// returned no rows at all cannot have been misread, so it satisfies `exact` on its own.
+// returned no rows at all cannot have been misread, so it satisfies `exact` on its own. For
+// list-tables.js the match is exact when the run passed `--exact` (the table is then named in
+// `missing`) or when `tables` holds no row of that exact logical name, which is how tableAbsent decides.
 function missingEntityProblems(fixture, names, { exact = false } = {}) {
   if (!fixture.genpagePlan) return ['no genpage-plan.md'];
   const searches = listTablesSearches(fixture);
-  if (!searches.length) return ['pac model list-tables --search was not run'];
+  if (!searches.length) return ['list-tables --search was not run'];
   const existing = existingEntities(fixture.genpagePlan);
   const planned = planEntityBlocks(fixture.genpagePlan).map((block) => block.suffix);
   const problems = [];
   for (const name of names) {
     const search = searches.find((s) => s.terms.includes(name) || s.terms.includes(suffixOf(name)));
-    if (!search) problems.push(`no pac model list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
-    else if (!NOT_FOUND.test(search.text)) problems.push(`list-tables result does not record ${name} as absent`);
-    else if (exact && !/\bexact\b/i.test(search.text) && !/\bNo\s+tables?\s+found\b/i.test(search.text)) {
-      problems.push(`list-tables verdict for ${name} does not rest on an exact logical-name match`);
-    }
+    if (!search) problems.push(`no list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
+    else if (searchFailed(search)) problems.push(`list-tables failed, so ${name} was not confirmed to be absent`);
+    else if (!tableAbsent(search, name)) problems.push(`list-tables result does not record ${name} as absent`);
+    else if (exact && !exactAbsence(search, name)) problems.push(`list-tables verdict for ${name} does not rest on an exact logical-name match`);
     if (!planned.includes(suffixOf(name))) problems.push(`plan ## Entity Creation Required has no "### ${suffixOf(name)}" block for ${name}`);
     if (existing.includes(name)) problems.push(`plan ## Existing Entities lists ${name} although it must be created`);
   }
   return problems;
+}
+
+// Whether a search that found `name` absent said so on an exact logical-name match. A structured
+// list-tables.js result with `ok: true` is exact when it was asked for `--exact` (the table is in
+// `missing`) and also when it returned no row at all; the substring rows it returned beside the name
+// would otherwise be a fuzzy reading. A prose capture states it ("exact logical-name match: NOT FOUND")
+// or returned nothing ("No tables found").
+function exactAbsence(search, name) {
+  const result = resultObject(search.call);
+  if (result && result.ok === true && Array.isArray(result.tables)) {
+    const missing = Array.isArray(result.missing) ? result.missing.map((m) => String(m).toLowerCase()) : [];
+    return (result.exact === true && missing.includes(String(name).toLowerCase())) || result.tables.length === 0;
+  }
+  return /\bexact\b/i.test(search.text) || /\bNo\s+tables?\s+found\b/i.test(search.text);
 }
 
 function generateTypesProblems(fixture, names, { exact = false } = {}) {
@@ -1468,8 +1478,8 @@ function generateTypesProblems(fixture, names, { exact = false } = {}) {
   return [];
 }
 
-// Every upload of the page must bind the tables: the raw `pac` transport persists exactly the
-// `--data-sources` it is given, so an update that drops one silently unbinds the page.
+// Every upload of the page names the tables it binds: the skill passes the page's `--data-sources`
+// on the create and again on each update, so no upload rebinds the page to a different set.
 function uploadSourcesProblems(fixture, names, { exact = false } = {}) {
   const uploads = uploadCalls(fixture);
   if (!uploads.length) return ['no genpage upload command recorded'];
@@ -1647,7 +1657,7 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 4 ------------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  "Phase 1 (Planner): pac model list-tables --search 'incident,contact' is run; both entities confirmed as existing",
+  "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing",
   ({ fixture }) => resultOf(existingEntityProblems(fixture, ['incident', 'contact']))
 );
 
@@ -1730,7 +1740,7 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 7 ------------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  'Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)',
+  'Phase 1 (Planner): list-tables.js --search --exact confirms cr_candidate and cr_jobrequisition do NOT exist (named in missing — an exact logical-name match, not fuzzy)',
   ({ fixture }) => resultOf(missingEntityProblems(fixture, ['cr_candidate', 'cr_jobrequisition'], { exact: true }))
 );
 
@@ -2054,7 +2064,7 @@ function createUploadProblems(fixture, rows) {
 }
 
 PHASE_EXPECTATIONS.set(
-  'Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file',
+  'Phase 6: All 3 pages are deployed via separate genpage-upload.js create uploads, each with the correct --code-file',
   ({ fixture }) => {
     if (!fixture.genpagePlan) return fail('no genpage-plan.md');
     const rows = pageRowsOf(fixture.genpagePlan);
@@ -2099,7 +2109,7 @@ PHASE_EXPECTATIONS.set(
       if (!u.flags['agent-message'] && !u.flags['agent-message-file']) missing.push('agent-message');
       if (missing.length) return fail(`${u.file}: re-upload lacks --${missing.join(', --')}`);
       if (u.flags['add-to-sitemap']) return fail(`${u.file}: re-upload passes --add-to-sitemap`);
-      // Raw pac persists exactly the data sources it is given, so an update that drops them unbinds.
+      // The Phase 6.5 command repeats the page's data sources, as the create named them; a different set would rebind the page.
       const create = uploads.find((c) => !c.update && c.file === u.file);
       if (create && !sameSet(u.sources, create.sources)) return fail(`${u.file}: re-upload --data-sources ${listText(u.sources)} differs from its create (${listText(create.sources)})`);
       if (isGuid(u.flags['page-id']) && !returned.has(u.flags['page-id'].toLowerCase())) return fail(`${u.file}: --page-id ${u.flags['page-id']} was never returned by an upload`);
@@ -2188,12 +2198,12 @@ PHASE_EXPECTATIONS.set(
 
 // LCIDs in the recorded language-discovery output. Four shapes are captured:
 //   {"ok":true,"baseLanguage":{…},"languages":[{"lcid":1033,"code":"en-US",…},…],…}   (scripts/list-languages.js)
-//   {"ok":false,"error":"…","code":"CONNECTION_ERROR"}   (the same script failing — the planner then runs the next shape)
-//   1033 English (United States) en-US No          (the PAC table: a capture made before that script, or the fallback after it)
+//   {"ok":false,"error":"…","code":"CONNECTION_ERROR"}   (the same script failing: it is the only source, so the planner reports why and stops)
+//   1033 English (United States) en-US No          (the PAC table: a capture made before that script, when `pac model list-languages` was its fallback)
 //   English (United States) (1033, en-US), Arabic (Saudi Arabia) (1025, ar-SA)   (a summary)
 // A result that parses as the script's own JSON is read as data and as nothing else. Its `languages` are the
 // PROVISIONED languages — `baseLanguage`, `unmapped` and `summary` are not extra evidence — and a failure found nothing,
-// whatever its error text says: only the fallback after it can. A contract-2 event's result always parses, and so
+// whatever its error text says. A contract-2 event's result always parses, and so
 // does a log's `Result: {…}` line. Falling through to the text shapes for such a result would read an LCID out of the
 // JSON's own punctuation (`"unmapped":[1036],"summary":["1033 en-US …`) and out of an error message. In the text
 // shapes an LCID counts only next to a language tag, so a version or row count never does.
@@ -2204,10 +2214,19 @@ function detectedLanguages(fixture) {
   const calls = commandCalls(fixture, LIST_LANGUAGES);
   if (!calls.length) return null;
   const found = new Set();
+  let scriptFailed = false;
   for (const { call, text } of calls) {
+    const viaScript = /\blist-languages\.js\b/.test(call.command);
+    // The script is the only source. After it fails the planner reports why and stops, so a `pac model list-languages` that follows a failed
+    // script is the removed fallback, not a way of detecting the languages. (One that comes first is a capture made before the script.)
+    if (!viaScript && scriptFailed) continue;
     const result = resultObject(call);
     if (isLanguagesResult(result)) {
-      if (result.ok) for (const language of result.languages) if (Number.isInteger(language?.lcid)) found.add(language.lcid);
+      if (result.ok) {
+        for (const language of result.languages) if (Number.isInteger(language?.lcid)) found.add(language.lcid);
+      } else if (viaScript) {
+        scriptFailed = true;
+      }
       continue;
     }
     for (const m of text.matchAll(/\b(\d{4,5})\b[^\n]{0,60}?\b[a-z]{2,3}-[A-Z]{2,4}\b/g)) found.add(Number(m[1]));
@@ -2219,7 +2238,7 @@ PHASE_EXPECTATIONS.set(
   'Phase 1 (Planner): language discovery output includes Arabic (1025) and French (1036) in addition to English',
   ({ fixture }) => {
     const lcids = detectedLanguages(fixture);
-    if (lcids === null) return fail('language discovery was not run (scripts/list-languages.js, or pac model list-languages as its fallback)');
+    if (lcids === null) return fail('language discovery was not run (scripts/list-languages.js)');
     const missing = [1033, 1025, 1036].filter((id) => !lcids.includes(id));
     return missing.length ? fail(`recorded language-discovery output lacks LCID ${missing.join(', ')} (saw ${listText(lcids)})`) : pass();
   }
@@ -2231,9 +2250,9 @@ PHASE_EXPECTATIONS.set(
     if (!fixture.genpagePlan) return fail('no genpage-plan.md');
     const lcids = detectedLanguages(fixture);
     if (lcids === null) return fail('language discovery was not run, so no languages were detected');
-    // A script that failed and no fallback after it: the discovery ran and read nothing, so a Localization section has
+    // A script that failed ends language detection: the discovery ran and read nothing, so a Localization section has
     // no detected language to be listing — it would otherwise pass for want of anything to compare.
-    if (lcids.length === 0) return fail('language discovery detected no languages (a failed read with no pac fallback after it), so the plan has none to list');
+    if (lcids.length === 0) return fail('language discovery detected no languages (the read failed, and nothing else is read in its place), so the plan has none to list');
     const section = headingSection(fixture.genpagePlan, /^#{2,3}\s+Localization\s*$/i);
     if (section === null) return fail('plan has no Localization section');
     const missing = lcids.filter((id) => !new RegExp(`\\b${id}\\b`).test(section));
@@ -2397,11 +2416,11 @@ PHASE_EXPECTATIONS.set(
     //     - Seattle Weather — `bb223344-2233-2233-2233-bbccddee2345`
     const listed = (c) => c.text.split(/\r?\n/).some((line) => !/\bselect/i.test(line) && line.toLowerCase().includes(page));
     if (!page || !lists.some(listed)) return fail(`page ${page || '(none)'} does not appear in the recorded genpage list output`);
-    const appsAt = at(/\bpac(?:\.exe|\.cmd)?\s+model\s+list(?![\w-])/);
+    const appsAt = at(LIST_APPS);
     // commandCalls re-reads the log, so locate its calls in `calls` by their recorded command text.
     const positionOf = (entry) => calls.findIndex((c) => c.command === entry.call.command);
     const listAt = positionOf(lists[0]);
-    if (appsAt === -1 || appsAt > listAt) return fail('pages were listed before the app was discovered with pac model list');
+    if (appsAt === -1 || appsAt > listAt) return fail('pages were listed before the app was discovered with apps.js list');
     if (listAt > positionOf(download)) return fail('the page was downloaded before pages were listed');
     return pass();
   }
@@ -2436,8 +2455,6 @@ PHASE_EXPECTATIONS.set(
 // plan presentations) in workflow-log.md, so checks read commands through workflowCalls/commandCalls
 // and the conversation through conversationSteps or the log lines.
 
-const PAC_MODEL_LIST = /\bpac(?:\.exe|\.cmd)?\s+model\s+list(?![\w-])/;
-const PAC_MODEL_CREATE = /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b/;
 const GENPAGE_DOWNLOAD = /\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+download\b/;
 const PAGE_FILES_GATE = /\bcheck-page-files\.js\b/;
 const WORKER_STAMP = /\bgenpage-worker-output\.js\b[^\n]*--stamp\b/;
@@ -2471,7 +2488,7 @@ function downloadTarget(fixture) {
   return { entry, app: String(entry.flags['app-id'] || '').toLowerCase(), page: String(entry.flags['page-id'] || '').toLowerCase() };
 }
 
-// The question that follows a PAC listing must offer the listing's own rows — each offered GUID is
+// The question that follows an app or page listing must offer the listing's own rows — each offered GUID is
 // one the listing returned, shown with the name the listing gave it — and the item the run went on
 // with must be one of them. A log may record only the option the maker picked, so the check grades
 // what was offered and chosen, not whether every listed row appeared.
@@ -2554,8 +2571,8 @@ const pageFilesOf = (plan) => pageRowsOf(plan).map((r) => r.file);
 // --- Eval 3 ------------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual Display Name and app-id GUID from pac model list output',
-  ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: PAC_MODEL_LIST, noun: 'app', selected: downloadTarget(fixture)?.app }))
+  'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output',
+  ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: LIST_APPS, noun: 'app', selected: downloadTarget(fixture)?.app }))
 );
 
 PHASE_EXPECTATIONS.set(
@@ -2688,28 +2705,32 @@ PHASE_EXPECTATIONS.set(
 
 function returnedAppId(entry) {
   const result = entry.call.historical ? null : resultObject(entry.call);
-  const id = result?.appId || GUID_RE.exec(entry.text.split(/\r?\n/).slice(1).join('\n'))?.[0];
+  // apps.js create prints `appId` beside the sitemap and page ids, so a structured result is read by that field alone; only a log's prose falls back to the first GUID in it.
+  const id = result ? result.appId : GUID_RE.exec(entry.text.split(/\r?\n/).slice(1).join('\n'))?.[0];
   return id ? String(id).toLowerCase() : null;
 }
 
 PHASE_EXPECTATIONS.set(
-  'Phase 1 (Planner): pac model list returns zero apps',
+  'Phase 1 (Planner): apps.js list returns zero apps',
   ({ fixture }) => {
-    const entry = commandCalls(fixture, PAC_MODEL_LIST)[0];
-    if (!entry) return fail('pac model list was not run');
+    const entry = commandCalls(fixture, LIST_APPS)[0];
+    if (!entry) return fail('apps.js list (or pac model list) was not run');
+    const result = entry.call.historical ? null : resultObject(entry.call);
+    // apps.js list says it as data: { "ok": true, "count": 0, "apps": [] }. A failed listing is { "ok": false, … } and is not an empty one.
+    if (result && result.ok === false) return fail(`apps.js list failed: ${result.error || result.code || 'no reason given'}`);
     const rows = listingRows(entry.call);
-    if (rows.length) return fail(`pac model list returned ${rows.length} app(s)`);
+    if (rows.length) return fail(`apps.js list returned ${rows.length} app(s)`);
     // Zero rows must be STATED, so an unparsed listing is never mistaken for an empty one:
-    //   {"apps":[]}   /   → no model-driven apps found (0 apps returned)
-    return /"apps"\s*:\s*\[\s*\]|\bno model-driven apps\b|\b0 apps\b/i.test(entry.text) ? pass() : fail('pac model list result does not record zero apps');
+    //   {"ok":true,"count":0,"apps":[]}   /   {"apps":[]} (an older capture)   /   → no model-driven apps found (0 apps returned)
+    return /"apps"\s*:\s*\[\s*\]|\bno model-driven apps\b|\b0 apps\b/i.test(entry.text) ? pass() : fail('apps.js list result does not record zero apps');
   }
 );
 
 // The create-or-cancel question asked after an empty app listing, with its recorded answer.
 function createAppDecision(fixture) {
   const steps = conversationSteps(fixture);
-  const listedAt = steps.findIndex((s) => PAC_MODEL_LIST.test(s));
-  if (listedAt === -1) return { problem: 'pac model list was not run' };
+  const listedAt = steps.findIndex((s) => LIST_APPS.test(s));
+  if (listedAt === -1) return { problem: 'apps.js list was not run' };
   const question = steps.slice(listedAt + 1).find((s) => /AskUserQuestion/.test(s) && /\bcreate\b/i.test(s) && /\bcancel\b/i.test(s));
   if (!question) return { problem: 'no AskUserQuestion offered to create a new app or cancel after the app listing' };
   const answer = answerOf(question);
@@ -2748,35 +2769,79 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// A new app is built around its first page (SKILL.md Phase 6, "A new app: the first page, then the app, then the rest"):
+//   1. genpage-upload.js with no --app-id creates the first page,
+//   2. apps.js create --name … --solution … --page-id <that page> --publish makes the app and prints its appId,
+//   3. every page after it carries --app-id <appId> (a create adds --add-to-sitemap; the first page is updated once to pin its tables).
+// Only the script is accepted here: `pac model create` is the command it replaced, and a run that still ran it did not follow the skill.
+const isAppsCreate = (entry) => /\bapps\.js['"]?\s+create\b/.test(entry.call.command);
+
+function newAppRun(fixture) {
+  const create = commandCalls(fixture, CREATE_APP)[0];
+  if (!create) return { problem: 'apps.js create was not run' };
+  if (!isAppsCreate(create)) return { problem: 'the app was made with `pac model create`, not apps.js create' };
+  const result = create.call.historical ? null : resultObject(create.call);
+  if (result && result.ok !== true) return { problem: `apps.js create did not succeed: ${result.error || result.code || 'ok is not true'}` };
+  const appId = returnedAppId(create);
+  if (!appId) return { problem: 'apps.js create recorded no returned appId' };
+  const uploads = uploadCalls(fixture);
+  return { create, appId, uploads, createAt: callIndex(fixture, create), first: uploads.find((u) => !u.update) || null };
+}
+
 PHASE_EXPECTATIONS.set(
-  'Phase 3: The new app-id returned from pac model create is stored for Phase 6',
+  "Phase 6 (new app): apps.js create --name 'Account Metrics' --solution '<Solution from plan>' --page-id <first page> --publish is run after the first page's upload; --solution is ALWAYS passed (apps.js create refuses a call without it)",
   ({ fixture }) => {
-    const create = commandCalls(fixture, PAC_MODEL_CREATE)[0];
-    if (!create) return fail('pac model create was not run');
+    const run = newAppRun(fixture);
+    if (run.problem) return fail(run.problem);
+    const { create, first } = run;
+    for (const flag of ['name', 'solution']) {
+      if (typeof create.flags[flag] !== 'string' || !create.flags[flag].trim()) return fail(`apps.js create is missing --${flag}`);
+    }
     const solution = planSolution(fixture.genpagePlan);
-    if (create.flags.solution !== solution) return fail(`pac model create --solution ${create.flags.solution || 'missing'} is not the plan's Solution: ${solution}`);
-    const appId = returnedAppId(create);
-    if (!appId) return fail('pac model create recorded no returned app-id');
-    const upload = uploadCalls(fixture)[0];
-    if (!upload) return fail('no upload consumed the stored app-id');
-    if (callIndex(fixture, upload) < callIndex(fixture, create)) return fail('the first upload ran before the app was created');
-    const used = String(upload.flags['app-id'] || '').toLowerCase();
-    return used === appId ? pass() : fail(`the first upload used --app-id ${used || 'missing'}, not the created ${appId}`);
+    if (solution && create.flags.solution !== solution) return fail(`apps.js create --solution ${create.flags.solution} is not the plan's Solution: ${solution}`);
+    const planned = /^\s*[-*]?\s*App:\s*create new:\s*(.+?)\s*$/im.exec(planSection(fixture.genpagePlan, 'Environment') || '')?.[1];
+    if (planned && create.flags.name !== planned) return fail(`apps.js create --name ${create.flags.name} is not the app the plan names: ${planned}`);
+    // Without --publish the app stays in draft, and the page's runtime URL errors with "app not published".
+    if (create.flags.publish !== true) return fail('apps.js create has no --publish, so the new app is left in draft');
+    // The app opens on a page that exists: the first page's upload runs first and its pageId is the --page-id.
+    if (!first) return fail('no first page was uploaded (a create with no --app-id) for the app to be built from');
+    if (callIndex(fixture, first) > run.createAt) return fail('apps.js create ran before the first page was uploaded; it needs that page');
+    const pageId = String(create.flags['page-id'] || '').toLowerCase();
+    if (!isGuid(pageId)) return fail('apps.js create has no --page-id');
+    const created = first.call.historical ? null : resultObject(first.call)?.pageId;
+    if (created && pageId !== String(created).toLowerCase()) return fail(`apps.js create --page-id ${pageId} is not the page the first upload created (${created})`);
+    return pass();
   }
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 6: Upload uses the newly created app-id',
+  'Phase 6 (new app): The first page is created with no --app-id, and the app-id apps.js create returns is stored for the pages that follow',
   ({ fixture }) => {
-    const create = commandCalls(fixture, PAC_MODEL_CREATE)[0];
-    if (!create) return fail('pac model create was not run');
-    const appId = returnedAppId(create);
-    if (!appId) return fail('pac model create recorded no returned app-id');
-    const uploads = uploadCalls(fixture);
-    if (!uploads.length) return fail('no genpage upload command recorded');
-    const other = uploads.find((u) => String(u.flags['app-id'] || '').toLowerCase() !== appId);
+    const run = newAppRun(fixture);
+    if (run.problem) return fail(run.problem);
+    const { first, uploads, appId } = run;
+    if (!first) return fail('no first page was uploaded');
+    if (callIndex(fixture, first) > run.createAt) return fail('the first page was uploaded after the app was created');
+    // There is no app yet to name or to place the page in.
+    if (first.flags['app-id']) return fail(`the first page's upload passed --app-id ${first.flags['app-id']}, but the app did not exist yet`);
+    if (first.flags['add-to-sitemap']) return fail("the first page's upload passed --add-to-sitemap, but there was no app to add it to");
+    const later = uploads.filter((u) => callIndex(fixture, u) > run.createAt);
+    if (!later.some((u) => String(u.flags['app-id'] || '').toLowerCase() === appId)) return fail(`no upload after apps.js create used the returned appId ${appId}`);
+    return pass();
+  }
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 6: Every upload after the app is created uses the newly created app-id',
+  ({ fixture }) => {
+    const run = newAppRun(fixture);
+    if (run.problem) return fail(run.problem);
+    const { uploads, appId } = run;
+    const later = uploads.filter((u) => callIndex(fixture, u) > run.createAt);
+    if (!later.length) return fail('no upload followed apps.js create, so the new app was never used');
+    const other = later.find((u) => String(u.flags['app-id'] || '').toLowerCase() !== appId);
     if (other) return fail(`${other.file || 'upload'}: --app-id ${other.flags['app-id'] || 'missing'} is not the created app ${appId}`);
-    const result = uploads.map((u) => (u.call.historical ? null : resultObject(u.call))).find((r) => r?.appId && String(r.appId).toLowerCase() !== appId);
+    const result = later.map((u) => (u.call.historical ? null : resultObject(u.call))).find((r) => r?.appId && String(r.appId).toLowerCase() !== appId);
     return result ? fail(`upload result names app ${result.appId}, not the created ${appId}`) : pass();
   }
 );

@@ -11,7 +11,7 @@ const isAuth = (command) => /\bcheck-auth\.js\b/.test(command);
 const isDiscovery = (command) => /\blist-connections\.js\b/.test(command);
 const isMutation = (command) => isUpload(command)
   || /\b(?:provision-entities|create-table|add-column|create-relationship|create-record|create-connection-reference|add-page-to-solution|provision-solution)\.js\b/.test(command)
-  || /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b|\b(?:create-connection|auth-switch)\b/.test(command)
+  || /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b|\bapps\.js['"]?\s+create\b|\b(?:create-connection|auth-switch)\b/.test(command)
   || /\b(?:Task|Dispatched)\s+genpage-entity-builder\b|\bgenpage-entity-builder\s+invoked\b/i.test(command);
 const isGeneration = (command) => /\b(?:Task|Write|Edit|Generate)\b[^\n]*(?:genpage-page-builder|\.tsx\b)/i.test(command);
 

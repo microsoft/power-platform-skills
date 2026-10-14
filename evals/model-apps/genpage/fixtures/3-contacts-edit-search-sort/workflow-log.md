@@ -42,10 +42,10 @@ top-level page.tsx is the edited `<working-dir>/<page-id>/page.tsx` that was upl
 - envUrl for the rest of the edit session: https://contoso.crm.dynamics.com
 
 ### 1a. App discovery
-- `pac model list` → 2 model-driven apps:
+- `node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'` → 2 model-driven apps, both published with no unpublished changes:
   - Sales Hub — 11111111-2222-3333-4444-555555555555 (SalesHub)
   - Customer Service Hub — 44444444-5555-6666-7777-888888888888 (CustomerServiceHub)
-- AskUserQuestion: Which app contains the page you want to edit? (options are the Display Name + app-id from that output: "Sales Hub" — 11111111-2222-3333-4444-555555555555; "Customer Service Hub" — 44444444-5555-6666-7777-888888888888; Other) → Sales Hub (the user confirmed app-id 11111111-2222-3333-4444-555555555555)
+- AskUserQuestion: Which app contains the page you want to edit? (options are the app name + app-id from that output: "Sales Hub" — 11111111-2222-3333-4444-555555555555; "Customer Service Hub" — 44444444-5555-6666-7777-888888888888; Other) → Sales Hub (the user confirmed app-id 11111111-2222-3333-4444-555555555555)
 
 ### 1b. Page discovery
 - `pac model genpage list --app-id '11111111-2222-3333-4444-555555555555'` → 2 generative pages (non-zero, so the edit can continue):

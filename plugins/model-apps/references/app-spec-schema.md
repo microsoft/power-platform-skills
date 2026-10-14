@@ -1374,11 +1374,11 @@ custom control), but the spec validator emits a warning.
   create (authored by different people/tools), and an unrelated edit (e.g. a form change) must still
   build. The pages phase matches by `pageId`/`key`, never by name, so distinct-id same-name pages
   build correctly; rename one in Maker to disambiguate the navigation.
-- **A straight double quote (`"`) in a page `name`** draws a lint warning: pac stores each one as `\"`
-  on the page's own record, and the backslashes stay there. The navigation shows the page subarea's
-  `title`, which the build writes as given. A download writes the name without pac's backslashes, so a
-  rebuild does not add more. Use typographic quotes (“ ”) or an apostrophe — pac stores those, and
-  every other character, exactly.
+- **A straight double quote (`"`) in a page `name`** draws a lint warning. The name is stored exactly as
+  written, but a page an earlier release created through `pac` holds each one as `\"` on the page's own
+  record until a build rewrites its name. The navigation shows the page subarea's `title`, which the build
+  writes as given. A download reads the name without those backslashes, so a rebuild does not add more.
+  Use typographic quotes (“ ”) or an apostrophe to keep the name the same in every page, old or new.
 - **`pageInput`**: `{ "data": { … } }` — the input this page expects when navigated to.
 - **Durable page manifest.** The build writes a `<app-unique-name>_pagemanifest` web resource
   carrying `{ schemaVersion, pages: [{ key, name, pageId, purpose, dataSources, navigatesTo, pageInput }], design }`.
@@ -1391,16 +1391,20 @@ custom control), but the spec validator emits a warning.
   1. **IDENTITY** — the `<appUnique>_pagemanifest` (`key → pageId` map). For an *edit-snapshot* spec
      (downloaded from a live app), the spec's own `pages[].pageId` is the highest authority and
      outranks the manifest.
-  2. **EXISTENCE** — env-wide `pac model genpage list` (no `--app-id`). This set alone decides
+  2. **EXISTENCE** — the env-wide page list read through the SDK (every page of the environment,
+     drafts included; no app filter). This set alone decides
      whether an id is still live. An unplaced id needs a local creation receipt for this app/key/id
      and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
      never requests a replacement CREATE. The build takes this app's PUBLISHED navigation as proof: a page
      that is only in its saved but unpublished navigation halts with advice to publish the app first. If it is this app's page, add it to the
      app's navigation in the maker, publish the app and re-run; otherwise remove the stale id from the manifest/spec (or delete the
      page) and re-run. A read failure HALTs (`pages-existence-failed`).
-     An uncertain CLI CREATE stops and reports each new candidate's id, stored name and `createdon`.
-     No candidate is automatically adopted, even with a matching name/date. If the candidate is yours,
-     re-run the upload explicitly with `--page-id`; otherwise leave it and re-run the create.
+     A create's identity is written down before the create is sent (a `pending` record in the build
+     workspace), so a create whose answer was lost is settled by the next build and never repeated as a
+     second page: the page found under the name the create sent is adopted (a creation receipt is written)
+     and updated like any page that build created; one found under another name is a
+     `pages-identity-conflict` — neither adopted nor updated; with none found, the create is sent once more
+     under the same id.
   3. **MEMBERSHIP** — the app's sitemap `GenPageId` set (read via `fetchSitemap` —
      fail-closed, discriminated). This set alone decides placement, download enumeration, and verify
      coverage. A read failure HALTs (`pages-sitemap-read-failed`).
@@ -1441,15 +1445,15 @@ custom control), but the spec validator emits a warning.
   app (including Maker-added pages) rebuilds against the correct existing page without duplication.
 - **What a page round-trip carries — and what it does not.** A download brings back each page's
   code, prompt, `dataSources`, the id of the **model** that generated it (`pages[].model`) and its
-  identity; the build re-sends the model with every upload, because pac stores whatever an upload says
-  and an upload without one stored it empty. A page's **connector and Custom API bindings** have no App
-  Spec field, so they are not in the spec. The build uploads without them, and pac leaves a page's
+  identity; the build sends the model with every update, and the page's own is kept when the spec has none
+  (the SDK writes only what differs). A page's **connector and Custom API bindings** have no App
+  Spec field, so they are not in the spec. The build writes pages without them, and the SDK leaves a page's
   existing bindings in place when they are omitted: a rebuild in the **same environment** keeps the
   bindings working, but that is preservation, not reconstruction — the same spec rebuilt in **another
   environment** deploys the page without them (bind them there with `/genpage`).
 - **`model` (optional).** The model id a page was generated with, e.g. `"gpt-4.1"` — letters, digits and
   `. _ : / @ + -`, at most 100 characters. A download writes it (an id outside that shape is left out, with
-  a warning); an authored spec may omit it, and then a rebuild of an existing page stores it empty.
+  a warning); an authored spec may omit it, and then a rebuild of an existing page keeps the model that page has.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is

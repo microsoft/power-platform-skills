@@ -15,14 +15,14 @@ in the page `config.json`, and that Custom API must exist in the target environm
 > **Vocabulary.** Makers author **Custom APIs** (the Dataverse `customapi` artifact); each is
 > either an **Action** (may mutate; call with `executeAction`) or a **Function** (read-only;
 > call with `executeFunction`). The shipped runtime contract uses the technical term
-> *action*: bindings persist into `config.json.actionBindings` and the pac verb is
+> *action*: bindings persist into `config.json.actionBindings` and the upload flag is
 > `--actions`. So the maker-facing skill says "Custom API" while the wire format stays
 > `actionBindings` — the two describe the same thing at different layers.
 
 ## Binding shape: `actions.json` (array) vs page `config.json` (object)
 
 The skill writes a **bare JSON array** of bindings to working-dir `actions.json`.
-`pac model genpage upload --actions <actions.json>` then persists that array into the
+`genpage-upload.js --actions <actions.json>` then persists that array into the
 deployed page's `config.json` under an `actionBindings` property. The two files therefore
 have **different shapes** — do not write the object wrapper to `actions.json`.
 
@@ -46,7 +46,7 @@ have **different shapes** — do not write the object wrapper to `actions.json`.
 ]
 ```
 
-**page `config.json`** — what `pac` writes into the deployed page (the same array wrapped
+**page `config.json`** — what the upload writes into the deployed page (the same array wrapped
 under `actionBindings`; the skill never writes this file directly):
 
 ```json

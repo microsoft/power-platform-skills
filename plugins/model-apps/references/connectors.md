@@ -11,7 +11,7 @@ logical name must exist as a connection reference in the target environment.
 ## Binding shape: `connectors.json` (array) vs page `config.json` (object)
 
 The skill writes a **bare JSON array** of bindings to working-dir
-`connectors.json`. `pac model genpage upload --connectors <connectors.json>` then
+`connectors.json`. `genpage-upload.js --connectors <connectors.json>` then
 persists that array into the deployed page's `config.json` under a
 `connectorBindings` property. The two files therefore have **different shapes** —
 do not write the object wrapper to `connectors.json`.
@@ -36,7 +36,7 @@ do not write the object wrapper to `connectors.json`.
 ]
 ```
 
-**page `config.json`** — what `pac` writes into the deployed page (the same array
+**page `config.json`** — what the upload writes into the deployed page (the same array
 wrapped under `connectorBindings`; the skill never writes this file directly):
 
 ```json
@@ -104,7 +104,7 @@ serialized; parse/format it at the display boundary only when needed.
 
 REST/action connectors do not use `dataset`/`table`. The planner records the
 selected operation, discovered `Parameters`, and discovered `Response` shape in
-`## Connector Bindings` from `get-connector-schema --operation`.
+`## Connector Bindings` from `connector.js schema --operation`.
 
 Rules:
 - Build request parameter objects only from discovered `Parameters` plus the
