@@ -853,7 +853,10 @@ function writeEditProgress(projectRoot, options = {}) {
     @keyframes spin{to{transform:rotate(360deg);}}
     .device-rail{width:420px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
     .device-rail-label{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
-    .device{width:min(300px,calc(100vw - 44px));aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow),0 18px 46px rgba(0,0,0,.22);position:relative;overflow:hidden;flex-shrink:0;}
+    /* Size the phone from the rail height, not a fixed width: the sticky rail is only
+       100vh minus the topbar and footer tall, so a fixed 620px phone overflows it on laptop-height
+       windows and the centred flex column pushes the label, notch, and caption out of view. */
+    .device{height:min(620px,calc(100vh - 65px - var(--footer-h) - 150px));width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow),0 18px 46px rgba(0,0,0,.22);position:relative;overflow:hidden;flex-shrink:0;}
     .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:2;}
     .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
     .device-building,.device-qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 26px;}
@@ -871,13 +874,14 @@ function writeEditProgress(projectRoot, options = {}) {
     .device-progress{width:100%;height:4px;border-radius:4px;background:#eceaea;overflow:hidden;}
     .device-progress span{display:block;height:100%;background:var(--accent);}
     .device-qr{gap:16px;background:#fff;}
-    .device-qr img{width:196px;height:196px;}
+    .device-qr img{width:min(196px,100%);height:auto;}
     .device-url{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:var(--accent);word-break:break-all;}
     .device-caption{font-size:12px;color:var(--text-dim);text-align:center;max-width:320px;min-height:38px;}
     .ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:10;}
     @media(max-width:1180px){
       .shell{flex-direction:column;}
       .device-rail{width:100%;position:static;height:auto;border-left:0;border-top:1px solid var(--border);padding-bottom:72px;}
+      .device{height:auto;width:min(300px,calc(100vw - 44px));}
     }
     @media(max-width:720px){
       .topbar{padding:12px 16px;}
