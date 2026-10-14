@@ -28,7 +28,8 @@ approval gate, or turn a failed verification into success.
 
 ### Progress page
 
-After Step 0, ask `app-docs.js` for a namespaced directory inside the user's OS temp directory:
+As soon as Step 0 resolves `working_dir`, before inferred-plan sync or the first progress write, ask
+`app-docs.js` for a namespaced directory inside the user's OS temp directory:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' temp
@@ -261,6 +262,9 @@ Before any project read or command, execute
 Resolve the absolute `working_dir` once, bind every shell call to it with the
 fail-closed guard, and use absolute paths for file tools. Forward that same root
 to every data child; a previous `cd` or inherited launch cwd is not a handoff.
+Immediately run the edit documentation protocol's `temp` command and bind its returned
+`directory`, `progress`, `progressHtml`, and `sync` paths as `<edit-temp-dir>` values before any
+inferred-plan sync or progress write below.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
@@ -1132,10 +1136,11 @@ Append an edit entry to `memory-bank.md`:
 - Blocks/concerns: <none or list>
 ```
 
-Final summary must say what changed in the app, what verification ran, where the preview is, that
+Final summary must say what changed in the app, what verification ran, where the preview is, whether
 the living app plan was updated to reflect the latest verified changes, and whether a symptom-debug
-handoff was requested. Do not end by saying the codebase was not changed unless this was explicitly
-`--plan-only`.
+handoff was requested. Claim the plan was updated only when the final sync succeeded; otherwise
+state that the app edit verified but the living plan refresh failed and include that concern. Do
+not end by saying the codebase was not changed unless this was explicitly `--plan-only`.
 If any `offlineRetirement` outcome is `pending`, return `DONE_WITH_CONCERNS` and
 state the unfinished decision separately: "App changes completed. The offline
 profile still includes Orders; deciding whether to retain or remove that coverage

@@ -471,6 +471,15 @@ function normalizeEditChanges(options) {
     if (!change || typeof change !== 'object' || Array.isArray(change)) {
       throw new Error(`Edit change ${index + 1} must be an object.`);
     }
+    const diagramInputs = [change, change.dataModel, change.screenGraph]
+      .filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+    if (diagramInputs.some(
+      (value) => Object.hasOwn(value, 'diagram') || Object.hasOwn(value, 'mermaid'),
+    )) {
+      throw new Error(
+        `Edit change ${index + 1} cannot carry raw diagram or Mermaid source; use structured data.`,
+      );
+    }
     const title = String(change.title || change.label || '').trim();
     if (!title) throw new Error(`Edit change ${index + 1} requires a title.`);
     const detail = change.detail ? String(change.detail) : '';
@@ -497,6 +506,20 @@ function normalizeEditChanges(options) {
 function safeMermaidName(value, fallback) {
   const source = value === undefined || value === null ? fallback : String(value);
   return source.replace(/[^A-Za-z0-9_]/g, '_') || fallback;
+}
+
+function uniqueMermaidName(value, fallback, usedNames) {
+  const base = safeMermaidName(value, fallback);
+  let candidate = base;
+  let suffix = 2;
+  // Mermaid merges nodes that share an ID, while normalization can map distinct routes or table
+  // names to the same token. Preserve the original-value lookup and disambiguate only the ID.
+  while (usedNames.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
 }
 
 // Mermaid labels are always emitted inside a quoted string here (`["..."]`,
@@ -552,13 +575,14 @@ function buildDataModelDiagram(change, index) {
     throw new Error(`Data-model edit change ${index + 1} requires tables.`);
   }
   const ids = new Map();
+  const usedNames = new Set();
   const tableLines = tables.map((table, tableIndex) => {
     if (!table || typeof table !== 'object' || Array.isArray(table)) {
       throw new Error(`Data-model table ${tableIndex + 1} must be an object.`);
     }
     const name = String(table.name || table.logicalName || '').trim();
     if (!name) throw new Error(`Data-model table ${tableIndex + 1} requires a name.`);
-    const id = safeMermaidName(name, `Entity${tableIndex + 1}`);
+    const id = uniqueMermaidName(name, `Entity${tableIndex + 1}`, usedNames);
     [name, table.logicalName, table.id].filter(Boolean).forEach((key) => ids.set(String(key), id));
     const columns = Array.isArray(table.columns) ? table.columns
       : Array.isArray(table.fields) ? table.fields : [];
@@ -604,11 +628,16 @@ function buildScreenDiagram(change, index) {
   const screens = Array.isArray(graph.screens) ? graph.screens : [];
   if (!screens.length) throw new Error(`Screen edit change ${index + 1} requires screens.`);
   const ids = new Map();
+  const usedNames = new Set();
   const nodes = screens.map((screen, screenIndex) => {
     const value = screen && typeof screen === 'object' ? screen : { name: screen };
     const name = String(value.name || value.title || value.route || '').trim();
     if (!name) throw new Error(`Screen ${screenIndex + 1} requires a name or route.`);
-    const id = `S_${safeMermaidName(value.id || value.route || name, String(screenIndex + 1))}`;
+    const id = uniqueMermaidName(
+      `S_${value.id || value.route || name}`,
+      `S_${screenIndex + 1}`,
+      usedNames,
+    );
     [value.id, value.route, name].filter(Boolean).forEach((key) => ids.set(String(key), id));
     const route = value.route && value.route !== name
       ? ` · ${safeMermaidLabel(value.route)}`
@@ -1019,7 +1048,7 @@ function writeEditProgress(projectRoot, options = {}) {
 </body>
 </html>`;
 
-  fs.writeFileSync(filePath, html, 'utf8');
+  publishAtomic(filePath, html);
   return filePath;
 }
 

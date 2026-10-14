@@ -342,6 +342,28 @@ test('edit progress renders each operation state and settles when work completes
       },
     }],
   }), /requires navigation edges/);
+  assert.throws(() => writeEditProgress(root, {
+    changes: [{
+      title: 'Raw diagram',
+      rationale: 'Structured data must remain the source of truth.',
+      kind: 'screen',
+      mermaid: 'flowchart LR\nA --> B',
+      screenGraph: {
+        screens: [{ id: 'a', name: 'A' }],
+      },
+    }],
+  }), /cannot carry raw diagram or Mermaid source/);
+  assert.throws(() => writeEditProgress(root, {
+    changes: [{
+      title: 'Nested raw diagram',
+      rationale: 'Structured data must remain the source of truth.',
+      kind: 'data-model',
+      dataModel: {
+        mermaid: 'erDiagram\nA ||--o{ B : contains',
+        tables: [{ name: 'A' }],
+      },
+    }],
+  }), /cannot carry raw diagram or Mermaid source/);
 });
 
 test('screen diagram labels keep Expo dynamic route segments', () => {
@@ -368,6 +390,48 @@ test('screen diagram labels keep Expo dynamic route segments', () => {
   assert.match(html, /\/inspections\/#91;id#93;/);
   assert.match(html, /select #123;row#125;/);
   assert.doesNotMatch(html, /\/inspections\/ id/);
+});
+
+test('diagram node IDs remain distinct when normalized names collide', () => {
+  const root = project('docs-edit-id-collisions');
+  const progress = writeEditProgress(root, {
+    changes: [
+      {
+        title: 'Connect colliding routes',
+        rationale: 'Both routes must remain visible as separate screens.',
+        kind: 'screen',
+        screenGraph: {
+          screens: [
+            { name: 'Hyphen route', route: '/a-b' },
+            { name: 'Slash route', route: '/a/b' },
+          ],
+          edges: [{ from: '/a-b', to: '/a/b' }],
+        },
+      },
+      {
+        title: 'Relate colliding table names',
+        rationale: 'Both tables must remain visible as separate entities.',
+        kind: 'data-model',
+        dataModel: {
+          tables: [{ name: 'a-b' }, { name: 'a/b' }],
+          relationships: [{ from: 'a-b', to: 'a/b', cardinality: 'one-to-many' }],
+        },
+      },
+    ],
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+  assert.match(html, /S__a_b\[&quot;Hyphen route · \/a-b&quot;\]/);
+  assert.match(html, /S__a_b_2\[&quot;Slash route · \/a\/b&quot;\]/);
+  assert.match(html, /S__a_b --&gt; S__a_b_2/);
+  assert.match(html, /a_b \{/);
+  assert.match(html, /a_b_2 \{/);
+  assert.match(html, /a_b \|\|--o\{ a_b_2/);
+});
+
+test('edit progress is published atomically for the auto-refreshing browser', () => {
+  const source = fs.readFileSync(scriptPath, 'utf8');
+  assert.match(source, /publishAtomic\(filePath, html\);/);
+  assert.doesNotMatch(source, /fs\.writeFileSync\(filePath, html/);
 });
 
 test('plan sync creates an inferred full snapshot and replaces changed sections', () => {
@@ -466,7 +530,8 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.match(skill, /Do not hand-author Mermaid source/);
   assert.match(skill, /validated normalized contract[\s\S]*updated screen graph/);
   assert.match(skill, /Do not open or focus it during `\/edit-app`/);
-  assert.match(skill, /living app plan was updated to reflect the latest verified changes/);
+  assert.match(skill, /Claim the plan was updated only when the final sync succeeded/);
+  assert.match(skill, /living plan refresh failed and include that concern/);
   assert.match(skill, /set `approve: waiting`/i);
   assert.match(skill, /set `verify: active`/i);
   assert.match(skill, /`sync-plan: active`/);
@@ -478,6 +543,9 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.match(skill, /phone --stage qr/);
   assert.match(skill, /Run the final\s+`progress` write after this command succeeds/);
   assert.doesNotMatch(skill, /If `native-app-plan\.md` is missing → STOP/);
+  const tempAllocation = skill.indexOf('Immediately run the edit documentation protocol');
+  const inferredPlanSync = skill.indexOf('Create `<edit-temp-dir>/app-plan-sync.json`');
+  assert.ok(tempAllocation > -1 && tempAllocation < inferredPlanSync);
 });
 
 test('the phone CLI carries the full preview, including shared CSS, without rewriting screens', (t) => {
