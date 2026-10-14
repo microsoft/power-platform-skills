@@ -668,7 +668,42 @@ function writeEditProgress(projectRoot, options = {}) {
   const appName = options.appName || (state && state.appName) || path.basename(path.resolve(projectRoot));
   const generatedAt = new Date().toISOString().replace('T', ' ').slice(0, 16);
   const displayPhase = String(phase).replace(/[-_]+/g, ' ');
+  const phasePill = displayPhase.toLowerCase() === status.toLowerCase()
+    ? ''
+    : `<span class="pill pill-phase">${escapeHtml(displayPhase)}</span>`;
   const nonce = crypto.randomBytes(16).toString('base64');
+  const phone = state && state.phone && typeof state.phone === 'object' ? state.phone : {};
+  const qrImage = status === 'done'
+    && phone.stage === 'qr'
+    && typeof phone.qrImage === 'string'
+    && phone.qrImage.startsWith('data:image/png;base64,')
+    ? phone.qrImage
+    : '';
+  const qrUrl = qrImage && typeof phone.qrUrl === 'string' ? phone.qrUrl : '';
+  const deviceContent = qrImage
+    ? `<div class="device-qr"><img src="${escapeHtml(qrImage)}" alt="Metro QR code" />`
+      + `<div class="device-title">Scan to test the changes</div>`
+      + `<div class="device-copy">Open Power Apps Mobile Preview and scan this code. `
+      + `Your phone and this machine need to be on the same network.</div>`
+      + `${qrUrl ? `<div class="device-url">${escapeHtml(qrUrl)}</div>` : ''}</div>`
+    : `<div class="device-building${status === 'failed' ? ' device-failed' : ''}">`
+      + `<div class="device-orbit"><span></span><span></span>`
+      + `<img src="${brandIconDataUri()}" alt="" /></div>`
+      + `<div class="device-title">${status === 'failed' ? 'Edit stopped' : status === 'done'
+        ? 'Device preview unavailable' : 'Applying your changes'}</div>`
+      + `<div class="device-copy">${status === 'failed'
+        ? 'Resolve the failed step before testing this edit on a device.'
+        : status === 'done'
+          ? 'Metro did not provide a QR code. Run the app preview to test this edit on a device.'
+          : 'The scan-to-test QR code will appear here after verification.'}</div>`
+      + `<div class="device-progress"><span style="width:${percent}%"></span></div></div>`;
+  const deviceCaption = qrImage
+    ? 'Edits hot-reload onto the device while Metro is running.'
+    : status === 'done'
+      ? 'The edit is complete, but no active device preview was found.'
+      : status === 'failed'
+        ? 'No device preview was started.'
+        : 'The phone switches to the live QR code when the edit is ready.';
 
   const filePath = path.join(editTempDir(projectRoot), 'edit-app-progress.html');
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -758,7 +793,8 @@ function writeEditProgress(projectRoot, options = {}) {
     .pill-phase{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border);text-transform:capitalize;}
     .pill-done{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
     .pill-failed{background:var(--fail-bg);color:var(--fail);border-color:var(--fail-border);}
-    .layout{display:flex;min-height:calc(100vh - 65px - var(--footer-h));}
+    .shell{display:flex;align-items:flex-start;}
+    .layout{display:flex;min-height:calc(100vh - 65px - var(--footer-h));flex:1;min-width:0;}
     .sidebar{width:240px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;}
     .nav-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
     .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:0;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;text-align:left;}
@@ -815,7 +851,34 @@ function writeEditProgress(projectRoot, options = {}) {
     .item.done .item-copy>span:first-child{color:var(--pass);}
     .item.skipped{opacity:.6;}
     @keyframes spin{to{transform:rotate(360deg);}}
+    .device-rail{width:420px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
+    .device-rail-label{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
+    .device{width:min(300px,calc(100vw - 44px));aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow),0 18px 46px rgba(0,0,0,.22);position:relative;overflow:hidden;flex-shrink:0;}
+    .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:2;}
+    .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
+    .device-building,.device-qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 26px;}
+    .device-building{gap:22px;}
+    .device-orbit{position:relative;width:132px;height:132px;display:grid;place-items:center;}
+    .device-orbit span{position:absolute;border:1px solid rgba(32,31,30,.14);border-radius:50%;animation:device-spin linear infinite;}
+    .device-orbit span:first-child{width:96px;height:96px;animation-duration:9s;}
+    .device-orbit span:nth-child(2){width:132px;height:132px;animation-duration:16s;animation-direction:reverse;border-style:dashed;}
+    .device-orbit img{width:62px;height:62px;animation:device-float 4s ease-in-out infinite;}
+    .device-failed .device-orbit span{border-color:var(--fail-border);animation-play-state:paused;}
+    @keyframes device-spin{to{transform:rotate(360deg);}}
+    @keyframes device-float{0%,100%{transform:translateY(0);}50%{transform:translateY(-6px);}}
+    .device-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+    .device-copy{font-size:12.5px;color:var(--text-dim);line-height:1.55;}
+    .device-progress{width:100%;height:4px;border-radius:4px;background:#eceaea;overflow:hidden;}
+    .device-progress span{display:block;height:100%;background:var(--accent);}
+    .device-qr{gap:16px;background:#fff;}
+    .device-qr img{width:196px;height:196px;}
+    .device-url{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:var(--accent);word-break:break-all;}
+    .device-caption{font-size:12px;color:var(--text-dim);text-align:center;max-width:320px;min-height:38px;}
     .ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:10;}
+    @media(max-width:1180px){
+      .shell{flex-direction:column;}
+      .device-rail{width:100%;position:static;height:auto;border-left:0;border-top:1px solid var(--border);padding-bottom:72px;}
+    }
     @media(max-width:720px){
       .topbar{padding:12px 16px;}
       .layout{flex-direction:column;}
@@ -841,40 +904,50 @@ function writeEditProgress(projectRoot, options = {}) {
       </div>
     </div>
     <div class="topbar-right">
-      <span class="pill pill-phase">${escapeHtml(displayPhase)}</span>
+      ${phasePill}
       <span class="pill ${status === 'done' ? 'pill-done' : status === 'failed' ? 'pill-failed' : ''}">${escapeHtml(status)}</span>
       <span class="pill">${completed} of ${items.length} complete</span>
     </div>
   </header>
-  <div class="layout">
-    <nav class="sidebar" aria-label="Edit plan">
-      <div class="nav-label">Edit plan</div>
-      <button class="nav-btn active" type="button" role="tab" aria-selected="true" data-tab="changes"><span class="nav-icon">&#9998;</span> Changes</button>
-      <button class="nav-btn" type="button" role="tab" aria-selected="false" data-tab="steps"><span class="nav-icon">&#9638;</span> Build steps</button>
-    </nav>
-    <main class="content">
-      <section class="section active" id="tab-changes" role="tabpanel">
-        <h1>Changes</h1>
-        <div class="section-desc">The requested app updates and the activity currently in progress.</div>
-        ${waitingBanner}
-        <div class="summary">
-          <div class="note">${escapeHtml(note)}</div>
-          <div class="status-line">
-            <span>Current phase: <strong>${escapeHtml(displayPhase)}</strong></span>
-            <span>${completed} of ${items.length} operations complete${failed ? `, ${failed} failed` : ''}</span>
+  <div class="shell">
+    <div class="layout">
+      <nav class="sidebar" aria-label="Edit plan">
+        <div class="nav-label">Edit plan</div>
+        <button class="nav-btn active" type="button" role="tab" aria-selected="true" data-tab="changes"><span class="nav-icon">&#9998;</span> Changes</button>
+        <button class="nav-btn" type="button" role="tab" aria-selected="false" data-tab="steps"><span class="nav-icon">&#9638;</span> Build steps</button>
+      </nav>
+      <main class="content">
+        <section class="section active" id="tab-changes" role="tabpanel">
+          <h1>Changes</h1>
+          <div class="section-desc">The requested app updates and the activity currently in progress.</div>
+          ${waitingBanner}
+          <div class="summary">
+            <div class="note">${escapeHtml(note)}</div>
+            <div class="status-line">
+              <span>Current phase: <strong>${escapeHtml(displayPhase)}</strong></span>
+              <span>${completed} of ${items.length} operations complete${failed ? `, ${failed} failed` : ''}</span>
+            </div>
+            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
+              <span class="progress-bar"></span>
+            </div>
           </div>
-          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
-            <span class="progress-bar"></span>
-          </div>
-        </div>
-        ${changeCards}
-      </section>
-      <section class="section" id="tab-steps" role="tabpanel" hidden>
-        <h1>Build steps</h1>
-        <div class="section-desc">Live progress for each operation in the approved edit plan.</div>
-        <ul>${rows}</ul>
-      </section>
-    </main>
+          ${changeCards}
+        </section>
+        <section class="section" id="tab-steps" role="tabpanel" hidden>
+          <h1>Build steps</h1>
+          <div class="section-desc">Live progress for each operation in the approved edit plan.</div>
+          <ul>${rows}</ul>
+        </section>
+      </main>
+    </div>
+    <aside class="device-rail" aria-label="Device preview">
+      <div class="device-rail-label">${qrImage ? 'Test the edited app' : 'Device preview'}</div>
+      <div class="device">
+        <div class="device-notch"></div>
+        <div class="device-screen">${deviceContent}</div>
+      </div>
+      <div class="device-caption">${escapeHtml(deviceCaption)}</div>
+    </aside>
   </div>
   <footer class="ai-footer">AI-generated content may be incorrect</footer>
   <script nonce="${nonce}">

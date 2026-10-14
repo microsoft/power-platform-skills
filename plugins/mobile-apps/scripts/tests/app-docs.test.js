@@ -280,6 +280,10 @@ test('edit progress renders each operation state and settles when work completes
   assert.match(html, /window\.mermaid\.render/);
   assert.doesNotMatch(html, /<pre class="change-diagram">/);
   assert.match(html, /AI-generated content may be incorrect/);
+  assert.match(html, /class="device-rail"/);
+  assert.match(html, /Applying your changes/);
+  assert.match(html, /QR code will appear here after verification/);
+  assert.doesNotMatch(html, /Scan to test the changes/);
   assert.match(html, /Waiting for your input/);
   assert.match(html, /class="item done" data-item-id="inspect"/);
   assert.match(html, /class="item waiting" data-item-id="approve"/);
@@ -288,6 +292,14 @@ test('edit progress renders each operation state and settles when work completes
   assert.match(html, /location\.replace\(fresh\)/);
   assert.match(html, /Waiting for your approval/);
 
+  seeded(root);
+  const state = loadState(root);
+  setPhone(state, {
+    stage: 'qr',
+    qrImage: 'data:image/png;base64,iVBORw0KGgo=',
+    qrUrl: 'exp://192.168.1.4:8081',
+  });
+  save(root, state);
   writeEditProgress(root, {
     phase: 'done',
     status: 'done',
@@ -298,7 +310,13 @@ test('edit progress renders each operation state and settles when work completes
       { id: 'screens', label: 'Update screens', status: 'done' },
     ],
   });
-  assert.doesNotMatch(fs.readFileSync(progress, 'utf8'), /location\.replace\(fresh\)/);
+  const completedHtml = fs.readFileSync(progress, 'utf8');
+  assert.doesNotMatch(completedHtml, /location\.replace\(fresh\)/);
+  assert.match(completedHtml, /Scan to test the changes/);
+  assert.match(completedHtml, /data:image\/png;base64,iVBORw0KGgo=/);
+  assert.match(completedHtml, /exp:\/\/192\.168\.1\.4:8081/);
+  assert.match(completedHtml, /Edits hot-reload onto the device/);
+  assert.doesNotMatch(completedHtml, /pill-phase">done</);
   assert.ok(EDIT_ITEM_STATUSES.has('waiting'));
   assert.throws(() => writeEditProgress(root, {
     items: [{ id: 'inspect', label: 'Inspect app', status: 'unknown' }],
@@ -456,6 +474,9 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.match(skill, /routes\/layouts[\s\S]*generated[\s\S]*src\/native\/[\s\S]*brand\/token/);
   assert.match(skill, /Step 4[\s\S]*app-docs\.js sync --json-file/);
   assert.match(skill, /Step 8[\s\S]*scripts\/app-docs\.js" --working-dir '<working_dir>' sync/);
+  assert.match(skill, /\/create-mobile-app` Step 12/);
+  assert.match(skill, /phone --stage qr/);
+  assert.match(skill, /Run the final\s+`progress` write after this command succeeds/);
   assert.doesNotMatch(skill, /If `native-app-plan\.md` is missing → STOP/);
 });
 

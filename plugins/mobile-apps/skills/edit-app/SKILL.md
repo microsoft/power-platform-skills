@@ -116,7 +116,10 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' progress
 The top-level object also carries `phase`, `status`, `note`, and `waiting`. Set the current row to
 `waiting` and `waiting: true` before every user question. Set completed rows to `done`; do not leave
 the first row active for the whole run. On failure, mark the failed row and top-level status
-`failed`. At Step 8, mark every applicable row settled and top-level status `done`.
+`failed`. The page keeps a phone preview on the right while work is active. At Step 8, put the
+fresh Metro QR into the living plan before the final progress write, then mark every applicable row
+settled and top-level status `done`. The phone switches to the QR so the maker can test the edited
+app on a real device.
 
 Open `<edit-temp-dir>/edit-app-progress.html` once after the first write using the host's file
 opener. If no opener is available, print the absolute path. The page refreshes itself while work
@@ -1080,7 +1083,8 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' sync \
 ```
 
 After the sync succeeds, mark `sync-plan: done`, settle every applicable checklist row, set
-top-level `phase: done` and `status: done`, and run the progress command one last time.
+top-level `phase: done` and `status: done`, and run the progress command one last time, but only
+after the device-test handoff below has updated the phone state.
 Before that final progress write, reconcile each change entry with the verified app state.
 Update data-model tables and relationships from the final normalized contract and update screen
 nodes and edges from the final routes and navigation layouts.
@@ -1091,6 +1095,23 @@ failed.
 Before Step 8, `npx --no-install tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx --no-install tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
 If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
+
+Unless this is `--plan-only`, finish with a real-device handoff. Read
+`/create-mobile-app` Step 12 from **Launch command** through **Put the QR in the plan** and execute
+that sequence from the same `<working_dir>`. Start Metro with the template-owned `npm run dev`,
+capture the URL Expo prints, and generate `.expo/metro-qr.png` with the pinned
+`npx --no-install qrcode`. Then update both documents through the existing phone command:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage qr \
+  --qr-image '<working_dir>/.expo/metro-qr.png' --qr-url "<metro-url>"
+```
+
+Do not open `docs/create-app-plan.html`; its phone changes in the background. Run the final
+`progress` write after this command succeeds so the already-open edit page switches from its
+building state to the same QR code. If Metro or QR generation fails, leave the completed edit page
+in its honest `Device preview unavailable` state, report the preview concern separately, and do
+not turn a verified app edit into a failure.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 
