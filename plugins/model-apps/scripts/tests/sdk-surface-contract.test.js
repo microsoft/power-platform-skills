@@ -73,6 +73,9 @@ const SKILL_SDK_SURFACE = [
   'findArtifact',
   'findColumns',
   'findTables',
+  // `scripts/genpage.js types` writes the RuntimeTypes a page is authored against (lib/genpage-sdk.js `runtimeTypes`): the SDK's own generator, one read of the
+  // tables' metadata that loads no compiler — in place of `pac model genpage generate-types`.
+  'generateGenPageRuntimeTypes',
   'getAiReadiness',
   'getArtifact',
   'getColumnVisualization',

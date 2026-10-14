@@ -44,6 +44,11 @@ const GUID = '([0-9a-fA-F-]{36})';
 
 const json = (status, body, headers = {}) => ({ status, headers, body });
 
+// Two contents are the same when both are absent or hold the same bytes.
+const sameBytes = (a, b) => (a === undefined || b === undefined ? a === b : Buffer.from(a).equals(Buffer.from(b)));
+
+const PAGE_ENTITY_SETS = { uxagentproject: 'uxagentprojects', uxagentprojectfile: 'uxagentprojectfiles', agentconversationmessage: 'agentconversationmessages' };
+
 // A table a page's data sources can name, for `serveTable`: what `EntityDefinitions` answers for `account`, trimmed to the columns the tests use.
 const ACCOUNT_TABLE = {
   logicalName: 'account', schemaName: 'Account', displayName: 'Account', entitySetName: 'accounts', primaryNameAttribute: 'name', primaryIdAttribute: 'accountid', isCustomEntity: false,
@@ -123,6 +128,8 @@ class FakeGenPageServer {
     // in a gateway does. This is what makes "the first send is still in flight when it is read for, and lands after" expressible.
     this.strandBatch = undefined;
     this.stranded = [];
+    // The org's languages, as the SDK's `getEnvironmentLanguages` reads them — the base language, then the provisioned and the available ones (`this.languages`).
+    this.languages = { base: 1033, provisioned: [1033], available: [1033] };
     this.tables = new Map();
     this.clock = 0;
     this.seq = 0;
@@ -143,7 +150,7 @@ class FakeGenPageServer {
 
   seedFile(projectId, id, filename, filetype, content) {
     this.state.files.set(id, {
-      id, projectId, filename, filetype, etag: this.nextEtag(),
+      id, projectId, filename, filetype, etag: this.nextEtag(), version: this.nextVersion(),
       ...(content === undefined ? {} : { content: typeof content === 'string' ? Buffer.from(content, 'utf8') : content }),
     });
   }
@@ -207,6 +214,46 @@ class FakeGenPageServer {
       ...(transport.atomic === false ? {} : { postRaw: (url, body) => this.receiveBatch(url, body) }),
       ...(transport.binary === false ? {} : { patchRaw: (url, body, o) => this.receive('PATCH', url, body, o, false, transport) }),
     };
+  }
+
+  // --- another workspace -----------------------------------------------------------------------------------------------
+
+  // What a PublishXml does to one page. MEASURED: it rotates the project's token and EVERY row's — synchronously — and changes no bytes (a push after a publish sees exactly what it would on a real org).
+  // The `versionnumber` of a file row, read with a plain GET, is a separate measure: a publish moves the version of each file row whose content changed since the last publish, and an unchanged row keeps
+  // its own (a draft-only write of a file's content already moved it, `execute`; publishing that draft moves it again).
+  publishProject(state, id) {
+    this.published.push(id);
+    const project = state.projects.get(id);
+    if (project) project.etag = this.nextEtag();
+    const previous = (this.publishedPages.get(id) || {}).files || [];
+    for (const file of state.files.values()) {
+      if (file.projectId !== id) continue;
+      file.etag = this.nextEtag();
+      if (this.holdPublishedProjection) continue;
+      // A row written as a draft since the last publish moves again when that draft is published (measured), even when it was written with the very bytes it had.
+      const before = previous.find((p) => p.id === file.id);
+      if (file.draft || !(before && before.filename === file.filename && sameBytes(before.content, file.content))) file.version = this.nextVersion();
+      file.draft = false;
+    }
+    if (project && !this.holdPublishedProjection) {
+      this.publishedPages.set(id, {
+        project: { ...project },
+        files: [...state.files.values()].filter((f) => f.projectId === id).map((f) => ({ ...f, ...(f.content ? { content: f.content.slice() } : {}) })),
+      });
+    }
+  }
+
+  // A writer outside the workspace under test — another maker, another machine — writing a page's file as a DRAFT (no publish) and publishing it. `text` replaces the content of the row named `filename`.
+  otherWorkspaceDraft(pageId, filename, text) {
+    const file = this.filesOf(pageId).find((f) => f.filename === filename);
+    file.content = Buffer.from(text, 'utf8');
+    file.etag = this.nextEtag();
+    file.version = this.nextVersion();
+    file.draft = true;
+  }
+
+  otherWorkspacePublishes(pageId) {
+    this.publishProject(this.state, pageId);
   }
 
   // --- the server --------------------------------------------------------------------------------------------------------
@@ -318,6 +365,9 @@ class FakeGenPageServer {
     if (method === 'GET') {
       const entityDefinition = /^\/EntityDefinitions\(LogicalName='([^']+)'\)/.exec(path);
       if (entityDefinition) return this.entityDefinitions(entityDefinition[1], path.slice(entityDefinition[0].length).split('?')[0]);
+      if (path === '/organizations?$select=languagecode') return json(200, { value: [{ languagecode: this.languages.base }] });
+      if (path === '/RetrieveProvisionedLanguages()') return json(200, { RetrieveProvisionedLanguages: this.languages.provisioned });
+      if (path === '/RetrieveAvailableLanguages()') return json(200, { LocaleIds: this.languages.available });
       // A draft is invisible without the header; a PUBLISHED page is served as it was last published.
       const projectRead = new RegExp(`^/uxagentprojects\\(${GUID}\\)`).exec(path);
       if (projectRead) {
@@ -340,11 +390,15 @@ class FakeGenPageServer {
           ? Buffer.from(file.content.buffer, file.content.byteOffset, file.content.byteLength).toString('utf8')
           : Buffer.from(file.content));
       }
-      const filesRead = new RegExp(`^/uxagentprojectfiles\\?.*_uxagentprojectid_value eq ${GUID}`).exec(path);
-      if (filesRead) {
-        const projectId = filesRead[1].toLowerCase();
-        const files = unpublishedVisible ? [...state.files.values()].filter((f) => f.projectId === projectId) : ((this.publishedPages.get(projectId) || {}).files || []);
-        return json(200, { value: files.map((f) => ({ uxagentprojectfileid: f.id, filename: f.filename, filetype: f.filetype, '@odata.etag': `W/"${f.etag}"` })) });
+      const filesRead = /^\/uxagentprojectfiles\?/.test(path) ? [...path.matchAll(new RegExp(`_uxagentprojectid_value eq ${GUID}`, 'g'))].map((m) => m[1].toLowerCase()) : [];
+      if (filesRead.length) {
+        // Every row carries its project and its `versionnumber`. A plain read is the published layer: the rows as the last publish left them, each with the version the row has NOW (MEASURED: a draft-only
+        // write of a file's content moves its versionnumber in the plain read too, and a publish moves the version of each row whose content changed since the last one — `publishProject`).
+        const projects = new Set(filesRead);
+        const files = unpublishedVisible
+          ? [...state.files.values()].filter((f) => projects.has(f.projectId))
+          : [...projects].flatMap((id) => ((this.publishedPages.get(id) || {}).files || []).map((f) => ({ ...f, projectId: id, version: state.files.has(f.id) ? state.files.get(f.id).version : f.version })));
+        return json(200, { value: files.map((f) => ({ uxagentprojectfileid: f.id, filename: f.filename, filetype: f.filetype, versionnumber: f.version, _uxagentprojectid_value: f.projectId, '@odata.etag': `W/"${f.etag}"` })) });
       }
       const messagesRead = new RegExp(`^/agentconversationmessages\\?.*_regardingobjectid_value eq ${GUID}`).exec(path);
       if (messagesRead) {
@@ -370,21 +424,7 @@ class FakeGenPageServer {
       // An exec loop rather than `matchAll`, to keep one idiom with the SDK's own copy of this fake.
       const targets = /<uxagentproject>([^<]+)<\/uxagentproject>/g;
       const xml = String(record.ParameterXml || '');
-      for (let match = targets.exec(xml); match !== null; match = targets.exec(xml)) {
-        const id = match[1].toLowerCase();
-        this.published.push(id);
-        // MEASURED: publishing rotates the project's token and EVERY row's — synchronously — and changes no bytes. Modelled so a
-        // push after a publish sees exactly what it would on a real org.
-        const project = state.projects.get(id);
-        if (project) project.etag = this.nextEtag();
-        for (const file of state.files.values()) if (file.projectId === id) file.etag = this.nextEtag();
-        if (project && !this.holdPublishedProjection) {
-          this.publishedPages.set(id, {
-            project: { ...project },
-            files: [...state.files.values()].filter((f) => f.projectId === id).map((f) => ({ ...f, ...(f.content ? { content: f.content.slice() } : {}) })),
-          });
-        }
-      }
+      for (let match = targets.exec(xml); match !== null; match = targets.exec(xml)) this.publishProject(state, match[1].toLowerCase());
       return json(204);
     }
     if (method === 'POST' && path === '/uxagentprojects') {
@@ -398,7 +438,7 @@ class FakeGenPageServer {
       const bind = ((/\(([^)]+)\)/.exec(String(record['uxagentprojectid@odata.bind'] || '')) || [])[1] || '').toLowerCase();
       if (!state.projects.has(bind)) return json(400, { error: { message: `project ${bind} does not exist` } });
       if (state.files.has(id)) return json(412, { error: { code: '0x80040237', message: 'A record with matching key values already exists.' } });
-      state.files.set(id, { id, projectId: bind, filename: String(record.filename), filetype: Number(record.filetype), etag: this.nextEtag() });
+      state.files.set(id, { id, projectId: bind, filename: String(record.filename), filetype: Number(record.filetype), etag: this.nextEtag(), version: this.nextVersion(), draft: true });
       return json(204, undefined, { 'OData-EntityId': `${API}/uxagentprojectfiles(${id})` });
     }
     if (method === 'POST' && path === '/agentconversationmessages') {
@@ -419,6 +459,9 @@ class FakeGenPageServer {
       file.content = this.mangleContent ? this.mangleContent(bytes) : bytes;
       file.contentName = headers['x-ms-file-name'];
       file.etag = this.nextEtag();
+      // MEASURED: a draft-only write of a file's content moves its versionnumber — in the plain (published-layer) read as well as in the unpublished one.
+      file.version = this.nextVersion();
+      file.draft = true;
       return json(204);
     }
     const fileRow = new RegExp(`^/uxagentprojectfiles\\(${GUID}\\)$`).exec(path);
@@ -432,6 +475,8 @@ class FakeGenPageServer {
         file.filename = String(record.filename === undefined ? file.filename : record.filename);
         file.filetype = Number(record.filetype === undefined ? file.filetype : record.filetype);
         file.etag = this.nextEtag();
+        file.version = this.nextVersion();
+        file.draft = true;
         return json(204);
       }
     }
@@ -462,6 +507,8 @@ class FakeGenPageServer {
   // own `EntityMetadata` ({ logicalName, schemaName, entitySetName, primaryNameAttribute, primaryIdAttribute, attributes: [{
   // logicalName, attributeType, attributeTypeName, choices?, maxLength?, targets? }] }).
   entityDefinitions(logicalName, sub) {
+    // The page tables' own entity sets, for a read of the rows the SDK resolves through `EntityDefinitions` (`queryRecords('uxagentprojectfile', …)`).
+    if (sub === '' && !this.tables.has(logicalName) && PAGE_ENTITY_SETS[logicalName]) return json(200, { LogicalName: logicalName, EntitySetName: PAGE_ENTITY_SETS[logicalName] });
     const table = this.tables.get(logicalName);
     if (!table) return json(404, { error: { message: `Could not find entity ${logicalName}` } });
     const label = (text) => ({ UserLocalizedLabel: text === undefined ? null : { Label: text } });

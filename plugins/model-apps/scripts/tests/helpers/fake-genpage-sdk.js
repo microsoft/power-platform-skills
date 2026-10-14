@@ -17,6 +17,12 @@
 //   publish  an Error / a result        publishArtifact throws it / answers it
 //   list     an Error                   fetchArtifactList throws it
 //   update   an Error                   updateElement / addElement throw it (the SDK refusing an edit before anything is written)
+//   delete   an Error                   deleteRemoteArtifact throws it, deleting nothing
+//            { lose: error }            the page is deleted, and the ANSWER is lost: it throws `error`
+//            { after: error }           the page is deleted, then it throws `error` (the SDK's "history not fully removed")
+//            { keep: true }             the delete is accepted and the page stays
+//   types    an Error / a string        generateGenPageRuntimeTypes throws it / answers it
+//   languages an Error / an object      getEnvironmentLanguages throws it / answers it (default { baseLanguage: 1033, available: [1033], provisioned: [1033] })
 //
 // A fetch hands back the SERVER'S copy and replaces the working copy with it (`overwrite`), a fetch without `overwrite` hands back
 // the working copy when there is one — as the real SDK does. A push commits the working copy (and its pending turn).
@@ -44,10 +50,11 @@ class FakeSdk {
     this.apps = new Map();
     this.local = new Map();
     this.calls = [];
-    this.scripts = { push: [], fetch: [], publish: [], list: [], update: [] };
+    this.scripts = { push: [], fetch: [], publish: [], list: [], update: [], delete: [], types: [], languages: [] };
     this.records = options.records || {};
     this.createError = null;
     this.onGet = options.onGet || (async () => ({ status: 404, body: null }));
+    this.onPublish = options.onPublish;
     this.dataverse = { get: async (url) => { this.calls.push({ name: 'dataverse.get', args: [url] }); return this.onGet(url); } };
   }
 
@@ -194,6 +201,8 @@ class FakeSdk {
     const behaviour = this.next('publish');
     if (behaviour instanceof Error) throw behaviour;
     if (behaviour !== undefined) return behaviour;
+    // What a publish that took effect did to the world the reads answer from (the published navigation of an app, say).
+    if (this.onPublish) await this.onPublish(type, id, this);
     return { type, id, shipped: true, publish: { kind: 'verified' } };
   }
 
@@ -202,6 +211,33 @@ class FakeSdk {
     const source = this.records[entity];
     if (typeof source === 'function') return source(options);
     return source || [];
+  }
+
+  // The SDK's own delete: the server's record, then the local copy. See the `delete` script above for what a test can make it do.
+  async deleteRemoteArtifact(type, id) {
+    this.calls.push({ name: 'deleteRemoteArtifact', args: [type, id] });
+    const behaviour = this.next('delete');
+    if (behaviour instanceof Error) throw behaviour;
+    // `{ keep: true }`: the delete is accepted and nothing is removed — an answer a read-back must not take for a deletion.
+    if (behaviour && behaviour.keep) return;
+    this.storeOf(type).delete(id);
+    this.local.delete(`${type}:${id}`);
+    if (behaviour && behaviour.lose) throw behaviour.lose;
+    if (behaviour && behaviour.after) throw behaviour.after;
+  }
+
+  async generateGenPageRuntimeTypes(dataSources, options) {
+    this.calls.push({ name: 'generateGenPageRuntimeTypes', args: [clone(dataSources), clone(options)] });
+    const behaviour = this.next('types');
+    if (behaviour instanceof Error) throw behaviour;
+    return behaviour !== undefined ? behaviour : `// types of ${dataSources.join(',')}\n`;
+  }
+
+  async getEnvironmentLanguages() {
+    this.calls.push({ name: 'getEnvironmentLanguages', args: [] });
+    const behaviour = this.next('languages');
+    if (behaviour instanceof Error) throw behaviour;
+    return behaviour || { baseLanguage: 1033, available: [1033], provisioned: [1033] };
   }
 }
 

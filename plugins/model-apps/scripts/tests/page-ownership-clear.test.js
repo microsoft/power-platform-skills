@@ -105,8 +105,14 @@ for (const outcome of ['deleted', 'confirmed absent']) {
         if (entity === 'appmodulecomponent') return [{ objectid: sitemapId, componenttype: 62 }];
         if (entity === 'sitemap') return state.app ? [{ sitemapxml: '<SiteMap />' }] : [];
         if (entity === 'webresource') return state.manifest ? [{ webresourceid: 'manifest-id', content: state.manifest }] : [];
-        if (entity === 'uxagentproject') return state.page ? [{ uxagentprojectid: ID, name: 'Overview' }] : [];
         return [];
+      },
+      // The pages in their saved layer, which is where teardown looks for them; the navigation's saved layer is not modelled here, so reading it fails as it does without a client.
+      dataverse: {
+        get: async (url) => {
+          if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`not modelled: ${url}`);
+          return { status: 200, body: { value: state.page ? [{ uxagentprojectid: ID, name: 'Overview', componentstate: 0 }] : [] } };
+        },
       },
       createWebResource: async (o) => { state.manifest = Buffer.from(o.content, 'utf8').toString('base64'); return { id: 'manifest-id' }; },
       updateWebResource: async (id, o) => { state.manifest = Buffer.from(o.content, 'utf8').toString('base64'); },

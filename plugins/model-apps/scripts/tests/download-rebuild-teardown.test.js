@@ -123,6 +123,12 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
       return { status: 200, body: { value: [...state.apps.values()].map((a) => ({ appmoduleid: a.id, appmoduleidunique: a.lookup, uniquename: a.uniquename, componentstate: 0 })) } };
     }
+    // The pages in their saved layer, which is where teardown looks for them. Every page here is published, so each has its one row.
+    if (url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+      return { status: 200, body: { value: [...state.pages].filter((id) => url.includes(`uxagentprojectid eq ${id}`)).map((uxagentprojectid) => ({
+        uxagentprojectid, name: uxagentprojectid === OVERVIEW_ID ? 'Overview' : 'Detail', componentstate: 0,
+      })) } };
+    }
     assert.ok(state.tables.has(logical), `only declared table metadata may be read: ${url}`);
     return { status: 200, body: { LogicalName: logical, EntitySetName: `${logical}s` } };
   } };
@@ -157,9 +163,6 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
       const name = (filter.match(/name eq '([^']+)'/) || [])[1];
       return state.resources.has(name) ? [state.resources.get(name)] : [];
     }
-    if (set === 'uxagentproject') return [...state.pages].filter((id) => filter.includes(`uxagentprojectid eq ${id}`)).map((uxagentprojectid) => ({
-      uxagentprojectid, name: uxagentprojectid === OVERVIEW_ID ? 'Overview' : 'Detail',
-    }));
     return [];
   };
   sdk.createWebResource = async (o) => {

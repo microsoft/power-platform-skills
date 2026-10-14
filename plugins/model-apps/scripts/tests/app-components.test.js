@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  currentAppLayer, currentLayerRow, tableRefs, tableComponentIds, pinAppTables, resolveMainForms,
+  currentAppLayer, currentLayerRow, savedPageRows, tableRefs, tableComponentIds, pinAppTables, resolveMainForms,
   readMainFormMembership, appEntityComponentsFor, collectionRows,
 } = require('../lib/app-components.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
@@ -60,6 +60,56 @@ test('currentLayerRow is the authored layer whichever of a record\u2019s rows co
   assert.equal(name(rows(2, 3)), 'row 0', 'states other than the two layers do not make a row current');
   assert.equal(currentLayerRow([null, { name: 'authored', componentstate: 1 }]).name, 'authored', 'a hole in the list is skipped');
   assert.equal(currentLayerRow([]), undefined, 'no rows, no current one');
+});
+
+// --- savedPageRows: the pages in the SAVED layer, so a page that was never published is found -------------------------------------------
+//   GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> or …
+//   { "value": [ { "uxagentprojectid": "44444444-…", "name": "Overview", "componentstate": 1 } ] }
+const pageId = (n) => `44444444-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const pageRow = (n, state = 0, name = `Page ${n}`) => ({ uxagentprojectid: pageId(n), name, componentstate: state });
+const askedBy = (url) => [...url.matchAll(/uxagentprojectid eq ([0-9a-f-]{36})/g)].map((m) => m[1]);
+
+test('savedPageRows reads the saved layer, 50 ids at a time, and answers every row of an id — a page never published (componentstate 1) included', async () => {
+  const ids = Array.from({ length: 120 }, (_, n) => pageId(n));
+  const calls = [];
+  const client = { get: async (url) => { calls.push(url); return response(askedBy(url).map((id, n) => ({ uxagentprojectid: id, name: `p${n}`, componentstate: 1 }))); } };
+  const rows = await savedPageRows(client, ids);
+  assert.deepEqual(calls.map((url) => askedBy(url).length), [50, 50, 20]);
+  assert.ok(calls.every((url) => url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq ')));
+  assert.deepEqual([...rows.keys()], ids);
+  assert.equal(rows.get(pageId(7))[0].componentstate, 1, 'a page that exists only as a draft is answered');
+});
+
+test('savedPageRows asks once for an id however it is spelled, groups the two layers a pending edit answers with, and leaves an id nobody answers out', async () => {
+  const calls = [];
+  const client = { get: async (url) => { calls.push(url); return response([pageRow(1, 0, 'published'), pageRow(1, 1, 'authored'), pageRow(2)]); } };
+  const rows = await savedPageRows(client, [pageId(1).toUpperCase(), pageId(1), `{${pageId(2)}}`, pageId(3)]);
+  assert.deepEqual(askedBy(calls[0]), [pageId(1), pageId(2), pageId(3)]);
+  assert.deepEqual([...rows.keys()], [pageId(1), pageId(2)], 'the id no row answers to is not in the map');
+  assert.deepEqual(rows.get(pageId(1)).map((r) => r.name), ['published', 'authored']);
+  assert.equal(currentLayerRow(rows.get(pageId(1))).name, 'authored');
+  assert.equal((await savedPageRows(client, [])).size, 0);
+  assert.equal(calls.length, 1, 'no ids, no request');
+});
+
+test('savedPageRows fails — never a shorter answer — for a refusal, an answer that is no list, a row with no page id and an id that is no GUID, with the code its caller asked for', async () => {
+  const read = (get, options) => savedPageRows({ get }, [pageId(1)], options);
+  await assert.rejects(read(async () => response([], 403)), (error) => error.code === 'APP_COMPONENTS_UNVERIFIED' && /the generative pages: HTTP 403/.test(error.message));
+  await assert.rejects(read(async () => response([], 503), { code: 'CONNECTION_ERROR', label: 'the pages of the app' }), (error) => error.code === 'CONNECTION_ERROR' && /the pages of the app: HTTP 503/.test(error.message));
+  await assert.rejects(read(async () => ({ status: 200, body: {} })), /no readable result set/);
+  await assert.rejects(read(async () => ({ status: 200, body: { value: null } })), /no readable result set/);
+  for (const bad of [{ name: 'Overview' }, { uxagentprojectid: '', name: 'Overview' }, { uxagentprojectid: 'not-a-guid' }, null]) {
+    await assert.rejects(read(async () => response([pageRow(1), bad])), (error) => /a row has no readable page id/.test(error.message), JSON.stringify(bad));
+  }
+  await assert.rejects(savedPageRows({ get: async () => response([]) }, ['not-a-guid']), (error) => error.code === 'APP_COMPONENT_ID_INVALID');
+});
+
+test('savedPageRows follows the continuation of a page of rows', async () => {
+  const calls = [];
+  const client = { get: async (url) => { calls.push(url); return url === '/next-pages' ? response([pageRow(2)]) : response([pageRow(1)], 200, { '@odata.nextLink': '/next-pages' }); } };
+  const rows = await savedPageRows(client, [pageId(1), pageId(2)]);
+  assert.deepEqual([...rows.keys()], [pageId(1), pageId(2)]);
+  assert.equal(calls.length, 2);
 });
 
 test('tableRefs resolves MetadataId and EntitySetName together, deduplicating logical names', async () => {

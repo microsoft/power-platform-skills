@@ -2173,12 +2173,14 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     // (lib/app-navigation.js), so the first run builds an app that has an entry that is not a page beside its pages.
     appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview' }, { page: 'detail' }, { url: 'https://contoso.example/help', title: 'Help' }] }] }] },
   };
-  const state = { orgId, app: null, creates: 0, table: null, resources: new Map(), pages: new Map(), failDownload: false };
+  const state = { orgId, app: null, creates: 0, table: null, resources: new Map(), pages: new Map(), failDownload: false, left: [] };
   const { sdk } = makeSimpleMockSdk();
   const writes = [];
   const uploads = [];
   const whoAmI = [];
   const sdkTempDirs = [];
+  // What the last run printed on stderr (see runMain).
+  let lastStderr = '';
   const createArtifact = sdk.createArtifact;
   sdk.createArtifact = (type, def) => {
     if (type !== 'app') return createArtifact(type, def);
@@ -2294,7 +2296,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
         const page = state.pages.get(id);
         return { id, name: page.name, source: page.code, dataSources: [], conversation: [] };
       },
-      dispose: () => { backend.disposed = true; },
+      dispose: () => { backend.disposed = true; return { left: state.left }; },
     };
     backends.push(backend);
     return backend;
@@ -2352,6 +2354,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     await assert.rejects(cli.main(), (e) => e.exitCode === exitCode, cli.stderrText());
     assert.strictEqual(authCli.exitCode, exitCode, 'the real emitter uses effective build/verify success');
     assertCleaned();
+    lastStderr = cli.stderrText();
     return JSON.parse(authCli.stdoutText());
   };
   try {
@@ -2419,7 +2422,11 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
       state.orgId = identity === 'foreign-org' ? '11111111-0000-4000-8000-000000000002' : orgId;
       if (identity === 'foreign-app') state.app.id = appIds[2];
       if (identity === 'deleted') state.app = null;
+      // A page workspace each backend could not remove: the pages phase's own backend and the inline verify's each say so (dispose() answers `{ left }`), and the run still succeeds.
+      state.left = ['C:\\temp\\genpage-x1y2z3'];
       const fallback = await runMain();
+      state.left = [];
+      assert.strictEqual(lastStderr.split('page source may be left on disk: C:\\temp\\genpage-x1y2z3').length - 1, 2, `${identity}: said by the pages phase's backend and by the inline verify's`);
       assert.strictEqual(fallback.ok, true);
       assert.strictEqual(fallback.changedOnly.decision, 'full', `${identity} identity cannot NOOP`);
       assert.strictEqual(fallback.verify.ok, true);

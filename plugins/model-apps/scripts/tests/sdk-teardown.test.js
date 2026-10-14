@@ -1590,10 +1590,10 @@ test('planTeardown trims the persona name in the role step (matches the SDK-crea
 // ---------------------------------------------------------------------------------------------
 
 // A minimal SDK stand-in for the genpage handler: the page manifest (in a web resource) that says
-// which pages this build authored, and the live `uxagentproject` rows used to skip ones already
-// gone. The `uxagentprojectfile` branch exists ONLY so tests can prove the handler never touches
-// it — deleting the project cascades to its files, and deleting them ourselves would gut a page
-// the platform is about to refuse to delete.
+// which pages this build authored, and the live pages (their rows in the SAVED layer, which is what
+// teardown reads) used to skip ones already gone. The `uxagentprojectfile` branch exists ONLY so tests
+// can prove the handler never touches it — deleting the project cascades to its files, and deleting
+// them ourselves would gut a page the platform is about to refuse to delete.
 function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
   const deleted = [];
   const queried = [];
@@ -1605,14 +1605,20 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
       if (entity === 'webresource') {
         return [{ content: Buffer.from(manifestJson, 'utf8').toString('base64') }];
       }
-      if (entity === 'uxagentproject') {
-        return livePages.filter((id) => filter.toLowerCase().includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id, name: id === PAGE_1 ? 'Overview' : 'Contoso Other' }));
-      }
       if (entity === 'uxagentprojectfile') {
         const owner = (/_uxagentprojectid_value eq ([0-9a-f-]+)/i.exec(filter) || [])[1] || '';
         return (files[owner.toLowerCase()] || []).map((id) => ({ uxagentprojectfileid: id }));
       }
       return [];
+    },
+    // The saved layer of the page table: { value: [{ uxagentprojectid, name, componentstate }] }. Any other read is refused, as it is when no Dataverse client is there.
+    dataverse: {
+      async get(url) {
+        if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
+        queried.push('uxagentproject (saved layer)');
+        const asked = (url.match(/uxagentprojectid eq [0-9a-f-]{36}/gi) || []).map((clause) => clause.slice('uxagentprojectid eq '.length).toLowerCase());
+        return { status: 200, body: { value: livePages.filter((id) => asked.includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id, name: id === PAGE_1 ? 'Overview' : 'Contoso Other', componentstate: 0 })) } };
+      },
     },
     async deleteRemoteArtifact(type, id) {
       deleted.push(`${type}:${id}`);
@@ -1751,6 +1757,7 @@ test('genpage deletes nothing when the live-existence query fails, and FAILS the
       if (entity === 'webresource') return [{ content: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }] }), 'utf8').toString('base64') }];
       throw new Error('uxagentproject query failed');
     },
+    dataverse: { async get() { throw new Error('uxagentproject query failed'); } },
     async deleteRemoteArtifact() { throw new Error('nothing may be deleted'); },
   };
   // Not an empty resolution: "none of them" would let the same run delete the manifest naming them.
@@ -1820,14 +1827,18 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
         if (manifestRead) manifestRead();
         return state.resources.has(manifestName.toLowerCase()) ? [{ content: manifest }] : [];
       }
-      if (entity === 'uxagentproject') {
-        if (liveQuery) liveQuery();
-        return [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview' }));
-      }
       if (entity === 'appmodule') return state.app ? [{ appmoduleid: 'app-1', appmoduleidunique: 'app-u-1' }] : [];
       if (entity === 'appmodulecomponent') return [{ objectid: 'sitemap-1', componenttype: 62 }];
       if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><SubArea GenPageId="${PAGE_1}" /></SiteMap>` }];
       return [];
+    },
+    // The pages in their saved layer, which is where teardown looks for them.
+    dataverse: {
+      get: async (url) => {
+        if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
+        if (liveQuery) liveQuery();
+        return { status: 200, body: { value: [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview', componentstate: 0 })) } };
+      },
     },
     deleteRemoteArtifact: async (type, id) => {
       assert.strictEqual(type, 'genPage');

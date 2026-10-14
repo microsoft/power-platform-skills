@@ -17,7 +17,8 @@ const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./hash.js');
 const { resolveAppSource } = require('./app-source-path.js');
 const { readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, creationIds } = require('./page-ownership-records.js');
-const { readPublishedPages, writePublishedPages } = require('./page-publish-records.js');
+const { readPublishedPages, writePublishedPages, sameFileVersions } = require('./page-publish-records.js');
+const { leftOnDiskWarning } = require('./left-on-disk.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
@@ -5554,9 +5555,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
       try { pendingByKey = readPendingCreations(opts.workspaceDir, appUnique, opts.env); } catch (e) {
         throw new BuildHalt(`could not read local records of page creations that were started (${e.message}); refusing to create pages past a record this build cannot read`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
       }
-      for (const [key, records] of pendingByKey) {
+      for (const [key, pendingRecords] of pendingByKey) {
         // A key this spec does not declare is another build's, or an earlier spec's: left as it is, and it keeps blocking `--clear-workspace` until settled.
         if (!declaredKeys.has(key)) continue;
+        // A record whose create was ACKNOWLEDGED — this workspace holds the creation receipt for the same key and id — is what is left of a removal that failed: recordCreate writes the receipt
+        // first and consumes the record after, and a record it could not remove (a scanner holding the file) is a warning, not a halt. The receipt is the stronger evidence, so the record
+        // is consumed here, before any proof by name and source. That proof is the wrong one for such a page: it fails as soon as the page was changed since its create — a maker's save, or a
+        // navigation target created with PAGEREF_ tokens and then rewritten with its links resolved, in the same build — and would halt the build as a conflict over a page this build made and recorded.
+        const records = [];
+        for (const record of pendingRecords) {
+          if (!ownership.created.some((r) => r.key === key && r.pageId === record.pageId)) { records.push(record); continue; }
+          try { completePendingCreations(opts.workspaceDir, appUnique, [record.pageId], opts.env); } catch (e) {
+            if (typeof opts.warn === 'function') opts.warn(`page "${key}": the record of its create (${record.pageId}) could not be removed although the page was recorded as created (${e.message}); a later build removes it`);
+          }
+        }
+        if (!records.length) continue;
         if (records.length > 1) { pendingConflicts.push({ key, reason: 'multiple-pending-creations', pageIds: records.map((r) => r.pageId) }); continue; }
         const [record] = records;
         const resume = () => { resumeIds.set(key, record.pageId); resumeSent.set(key, record.sent); };
@@ -5757,7 +5770,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
           throw Object.assign(new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
         }
         // The receipt is what the page's creation is now known by; the record that stood for it while it was not is consumed after it, never before. One that cannot be
-        // removed is harmless — the next build finds the page, finds the receipt, and removes it — so it is not a halt.
+        // removed is harmless — the next build finds the receipt for the same key and id when it settles the pending records (above), and consumes the record without proving the page again — so it is not a halt.
+        // The record is consumed even when an earlier send of this create is still in flight (the first of two that got no answer, with the resend acknowledged): the page exists, so a late send collides on its id
+        // and makes nothing. What this does not cover is that send landing after the page was DELETED — it would make the page again, and nothing would name it. Accepted, for the reason AGENTS.md gives next
+        // to the pending records: no client can cancel a request it gave up on or know when it can no longer arrive, so a record kept until then could never be consumed.
         try { completePendingCreations(opts.workspaceDir, appUnique, [id], opts.env); } catch (e) {
           if (typeof opts.warn === 'function') opts.warn(`page "${p.name}": the record of its create (${id}) could not be removed after the page was recorded (${e.message}); a later build removes it`);
         }
@@ -5914,26 +5930,40 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // published is a halt — the page exists (the caller has recorded it by now), the runtime still serves the copy it had, and a re-run reuses the page
       // and publishes it (a page that already holds its content is published, not written again — unless this workspace recorded that this very content was
       // published, below, and that record is only ever written after a publish that was seen to take effect).
-      const afterWrite = (p, verb, written) => {
+      const afterWrite = async (p, verb, written) => {
         if (typeof opts.warn === 'function') for (const w of written.warnings || []) opts.warn(`page "${p.name}": ${w}`);
         if (written.publish && written.publish.kind === 'failed') {
           throw new BuildHalt(`page "${p.name}" was ${verb} as ${written.pageId} and saved, but publishing it failed (${written.publish.detail}) — the runtime still serves the previously published copy. Re-run the build once the cause is cleared: the page is reused, not created again`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true });
         }
-        rememberPublished(written);
+        await rememberPublished(written);
       };
 
       // WHICH PAGES ARE KNOWN TO BE PUBLISHED. A page that already holds what the spec asks for is not written, but the backend publishes it unless it is told that exactly this content was
       // published already (`publishedFingerprint`, genpage.update): the server cannot say whether an earlier run's publish of a page finished, and a page whose publish did not finish has to be
-      // published by the next run. Without a record of its own that would publish EVERY unchanged page on EVERY rebuild — one PublishXml of several seconds each, ten pages ten publishes — where an
-      // unchanged page cost no write and no publish before pages went through the SDK. So the build keeps the record (lib/page-publish-records.js): the hash of the content each page was last
-      // published with, written once the publish was SEEN to take effect (`verified`) and never otherwise. A page that is not in it, or is there with other content — new, changed since, saved by a
-      // run whose publish failed or was not proven, or a workspace that is new or cleared — is "not known to be published", and is published. A page a changed-only run leaves alone keeps its entry; the
-      // entry of a page the spec no longer binds is dropped when the next is written.
+      // published by the next run. Without a record of its own that would publish EVERY unchanged page on EVERY rebuild — one PublishXml of several seconds each, ten pages ten publishes. So the build keeps the
+      // record (lib/page-publish-records.js), written once a publish was SEEN to take effect (`verified`) and never otherwise: per page the hash of the content it was published with, and the versionnumber
+      // of each of its file rows read right after that publish.
+      // The hash says what this workspace SENT; it cannot say that nobody has published anything else since — another workspace, another machine or Maker publishing other content and then leaving the
+      // draft equal to the file would match it. The file rows' versions are what moves (measured: publishing new content, or a draft-only save, moves the version of each file row it changes; an unchanged row
+      // keeps its own), so the hash is handed to `update` only while the versions read NOW are exactly the recorded ones (`publishesStillStanding`, below). A page that is not in the record, is there with
+      // other content, has no versions (an earlier record, or a read that failed), or whose files were added, removed or moved — new, changed since, saved by a run whose publish failed or was not proven,
+      // changed from elsewhere, or a workspace that is new or cleared — is "not known to be published", and is published. A page a changed-only run leaves alone keeps its entry; the entry of a page the spec
+      // no longer binds is dropped when the next is written. A full rebuild of the release before pages went through the SDK re-uploaded and re-published every page; this is what spares an unchanged
+      // page that, and what it cannot see is spelled out in the record's header (the page row's own fields, its name).
       const publishedPages = readPublishedPages(opts.workspaceDir, appUnique, opts.env);
       let publishRecordWarned = false;
-      const rememberPublished = (written) => {
+      const rememberPublished = async (written) => {
         if (!opts.workspaceDir || !written.publish || written.publish.kind !== 'verified' || typeof written.fingerprint !== 'string') return;
-        publishedPages.set(String(written.pageId).toLowerCase(), written.fingerprint);
+        const pageId = String(written.pageId).toLowerCase();
+        // The versions of the page's files as they are right after the publish that was seen to take effect. A read that fails, or that is not one consistent set, records none — and the next build publishes the page.
+        let files = null;
+        try {
+          if (typeof genpage.fileVersions === 'function') {
+            const read = await genpage.fileVersions([pageId]);
+            files = read.ok ? read.versions.get(pageId) || null : null;
+          }
+        } catch { files = null; }
+        publishedPages.set(pageId, { fingerprint: written.fingerprint, files });
         const bound = new Set(Array.from(keyToId.values(), (id) => String(id).toLowerCase()));
         try {
           writePublishedPages(opts.workspaceDir, appUnique, opts.env, new Map([...publishedPages].filter(([id]) => bound.has(id))));
@@ -5944,6 +5974,29 @@ async function runSdkBuildPhases(spec, opts, owed) {
             opts.warn(`could not save which pages this build published (${(e && e.message) || e}), so the next build publishes them again`);
           }
         }
+      };
+      // The recorded publishes that still stand: Map<page id, fingerprint> for each page whose file rows read now are exactly the recorded set with the recorded versions. ONE read for all of the pages
+      // that have a record with versions. Anything else is absent from the map and costs the page a publish: a page with no versions in its record, a read that fails (said once), a page whose rows
+      // cannot be read as one consistent set, a row added, removed or moved. The read is the plain one both here and when the versions were recorded (genpage.fileVersions): see the record's header.
+      const publishesStillStanding = async () => {
+        const standing = new Map();
+        const recorded = Array.from(keyToId.values(), (id) => String(id).toLowerCase()).filter((id) => publishedPages.has(id) && publishedPages.get(id).files);
+        if (!recorded.length) return standing;
+        let read;
+        try {
+          read = typeof genpage.fileVersions === 'function' ? await genpage.fileVersions(recorded) : { ok: false, error: 'the page backend cannot read them' };
+        } catch (e) {
+          read = { ok: false, error: String((e && e.message) || e) };
+        }
+        if (!read.ok) {
+          if (typeof opts.warn === 'function') opts.warn(`could not read the versions of the pages' files (${read.error}), so the pages are published again, as they are when nothing is recorded`);
+          return standing;
+        }
+        for (const id of recorded) {
+          const entry = publishedPages.get(id);
+          if (sameFileVersions(entry.files, read.versions.get(id))) standing.set(id, entry.fingerprint);
+        }
+        return standing;
       };
 
       // (2+3) Inside ONE "resolve cross-page navigation" step: create-absent-first for ABSENT nav TARGETS
@@ -5962,7 +6015,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             result.created.pageSourceShas[key] = scannedSha.get(key);
             mintedKeys.add(key);
             await persistNow();
-            afterWrite(p, 'created', up);
+            await afterWrite(p, 'created', up);
           }
           const navSources = new Map();
           for (const p of implemented) if ((p.navigatesTo || []).length) navSources.set(keyOf(p), { code: sourceByKey.get(keyOf(p)) });
@@ -6025,6 +6078,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           report(`generative page "${updatedInPlace.get(String(s.id).toLowerCase()) || s.id}" ${s.text} was taken into another app's navigation while this build was updating it, so its new content ${s.published ? 'shows there too' : 'will show there once that app is published'}. Detach it in Maker, or give this app its own page.`);
         }
       };
+      // Read once, here: the pages the loop below updates are the ones `keyToId` holds, and the cross-page navigation step above has minted its targets by now.
+      const standingPublishes = await publishesStillStanding();
       try {
         for (const p of implemented) {
           const key = keyOf(p);
@@ -6051,8 +6106,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // sent, so a re-upload without one used to wipe a deployed page's model id to ""). A downloaded spec carries the model (pages[].model).
             // `caller: 'build'` words the advice for an UPDATE that may have landed: the build keeps no base marker, and reads every page again when it runs.
             const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
-            // `publishedFingerprint` is what this workspace recorded about the page's last publish (above): a page that already holds this very content is not published again.
-            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', publishedFingerprint: publishedPages.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
+            // `publishedFingerprint` is what this workspace recorded about the page's last publish, handed over only while the page's files still read as they did right after it (`publishesStillStanding`):
+            // a page that already holds this very content, and was not touched from elsewhere since, is not published again.
+            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
             // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
@@ -6066,7 +6122,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
             result.created.pageSourceShas[key] = scannedSha.get(key);
             await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
-            afterWrite(p, requestedId ? 'updated' : 'created', up);
+            await afterWrite(p, requestedId ? 'updated' : 'created', up);
             return up.pageId;
           });
         }
@@ -6135,7 +6191,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
     } finally {
       // Always release the advisory lease, and remove the backend's throwaway workspace (it holds every page's source). The backend is disposed only once the
       // storage calls it had under way have settled (an operation can still be running when a phase halts), so this waits for that before the lease is released.
-      if (ownGenpage && typeof genpage.dispose === 'function') { try { await genpage.dispose(); } catch { /* best-effort */ } }
+      // A folder it could not remove (`{ left }`) still holds page source, so the build says so: a success that left it there would be silent about it.
+      if (ownGenpage && typeof genpage.dispose === 'function') {
+        try {
+          const leftOnDisk = leftOnDiskWarning(await genpage.dispose());
+          if (leftOnDisk && typeof opts.warn === 'function') opts.warn(leftOnDisk);
+        } catch { /* best-effort */ }
+      }
       lease.release();
     }
   } else if (has('pages')) {

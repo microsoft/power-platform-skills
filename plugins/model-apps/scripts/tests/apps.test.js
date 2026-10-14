@@ -25,6 +25,9 @@ const solution = (overrides = {}) => ({ solutionid: '11111111-1111-4111-8111-111
 const world = (overrides = {}) => ({
   solutions: [solution()],
   pages: { [PAGE_A]: 'Overview', [PAGE_B]: 'Details' },
+  // The tables each page reads (page id -> logical names; `null`: a page held as raw files, whose configuration cannot be read) and the default public view of each table (table -> view id).
+  sources: {},
+  views: {},
   apps: [],
   sitemaps: [],
   language: 1033,
@@ -39,7 +42,8 @@ const isPublished = (app) => (app.published === undefined ? app.componentstate =
 // pushArtifact, addSolutionComponent, publishArtifact; `hooks.afterPush(added, { type, id, def })` runs after the push, whichever way it went, and may
 // change the rows the platform now holds (`added.apps`, `added.sitemaps`): a push that threw leaves nothing, as the SDK rolls it back, unless a test
 // says what the rollback left; `hooks.makeSdk(cfg, index)` runs as each SDK is made, and may throw; `hooks.read(path)` runs before each read of
-// the SDK's Dataverse client and may throw, which is how a read fails. `deps` replaces what the throwaway-SDK helper builds the SDK from
+// the SDK's Dataverse client and may throw, which is how a read fails; `hooks.describe(id)` and `hooks.defaultViews(tables)` do the same for the page backend's two reads (the tables a page reads, and
+// the default public view of each table) and `hooks.disposeBackend()` runs as it is disposed. `deps` replaces what the throwaway-SDK helper builds the SDK from
 // (`makerSdk`). The helper itself — the folder, its removal, one client for every instance — is the real one (lib/throwaway-sdk.js); only the SDK and
 // the client it makes are stubs. The stubbed emitResult ends the run the way the real one does (process.exit).
 async function run(argv, w = world(), hooks = {}, deps = {}) {
@@ -48,6 +52,8 @@ async function run(argv, w = world(), hooks = {}, deps = {}) {
   const emitOptions = [];
   const instances = [];
   const held = [];
+  const backends = [];
+  const disposals = [];
   // The rows this run's writes added to the platform, and the apps and site maps it holds now. `w.apps` is read when it is asked for, not before.
   const added = { apps: [], sitemaps: [] };
   const appsNow = () => [...w.apps, ...added.apps];
@@ -140,6 +146,38 @@ async function run(argv, w = world(), hooks = {}, deps = {}) {
     return sdk;
   };
   const requires = {
+    // The page backend (lib/genpage-sdk.js), which the create asks for the tables each page reads and the default public view of each: a stand-in that answers from the world and records its reads
+    // in order with the rest. `disposals` counts how often it was disposed, and `backends` how often one was made, with the options it was made with.
+    './lib/genpage-sdk.js': {
+      makeGenpageSdk: (env, backendDeps) => {
+        backends.push({ env, deps: backendDeps });
+        return {
+          describe: async (id) => {
+            events.push({ type: 'read', what: `genpage describe ${id}` });
+            if (hooks.describe) await hooks.describe(id);
+            const tables = Object.prototype.hasOwnProperty.call(w.sources, id) ? w.sources[id] : [];
+            return { pageId: id, name: w.pages[id], editable: tables !== null, dataSources: tables, fileRows: 4, conversationMessages: 2 };
+          },
+          defaultViews: async (tables) => {
+            events.push({ type: 'read', what: 'genpage defaultViews', detail: tables });
+            if (hooks.defaultViews) await hooks.defaultViews(tables);
+            const views = [];
+            const warnings = [];
+            for (const table of tables) {
+              if (w.views[table]) views.push({ table, viewId: w.views[table] });
+              else warnings.push(`table ${table} has no default public view to pin into the app, so the maker's "/" picker may not list it`);
+            }
+            return { views, warnings };
+          },
+          dispose: async (options) => {
+            disposals.push(options);
+            if (hooks.disposeBackend) await hooks.disposeBackend();
+            // What the real backend answers: the folders it could not remove (`hooks.left`), each still holding page source.
+            return { left: hooks.left || [] };
+          },
+        };
+      },
+    },
     './lib/dataverse-auth.js': {
       ...realAuth,
       emitResult: (ok, payload, options) => {
@@ -177,6 +215,8 @@ async function run(argv, w = world(), hooks = {}, deps = {}) {
     emitOptions,
     exitCode,
     instances,
+    backends,
+    disposals,
     held,
     added,
     writes,
@@ -492,6 +532,7 @@ test('create reads, then writes in order — the app and its sitemap, the app an
     'resolveArtifact app',
     '/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()',
     'queryRecords organization',
+    `genpage describe ${PAGE_A}`,
   ]);
   assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent']);
   assert.ok(!r.writeNames.includes('publishArtifact'), 'no publish without --publish');
@@ -534,6 +575,8 @@ test('create reads, then writes in order — the app and its sitemap, the app an
     sitemapId: def.sitemapId,
     languageCode: 3082,
     navigation: { area: 'Main', group: 'Pages', pages: [{ pageId: PAGE_A, title: 'Overview' }] },
+    dataSources: [],
+    pinnedViews: [],
   });
   assert.deepStrictEqual(r.emitOptions, [{ ascii: true }]);
   assert.strictEqual(r.stderr, '');
@@ -689,6 +732,129 @@ test('the SDK\u2019s notes on a push that succeeded are in the output and on std
   assert.strictEqual(r.exitCode, 0);
   assert.deepStrictEqual(r.payload.warnings, ['App roles: could not associate the System Administrator role with the app.']);
   assert.match(r.stderr, /⚠ App roles: could not associate the System Administrator role with the app\./);
+});
+
+// --- create: the default views of the tables the pages read -------------------------------------------------------------
+// `pac model genpage upload --app-id` pinned the default public view of each table a page reads into the app, so that the maker's "/" picker lists the table. A page made with no app
+// and put in one by this create had nothing to pin them, so the create does — in the create itself, as `components.views` of the app it makes.
+
+const VIEW_ACCOUNT = 'aaaaaaaa-0000-4000-8000-0000000000a1';
+const VIEW_CONTACT = 'aaaaaaaa-0000-4000-8000-0000000000a2';
+const VIEW_TASK = 'aaaaaaaa-0000-4000-8000-0000000000a3';
+const BOTH_PAGES = ['create', '--env', ENV, '--name', 'Two Pages', '--solution', 'ContosoCore', '--page-id', `${PAGE_A},${PAGE_B}`];
+
+test('create pins the default public view of every table the pages read — each table once, in the order the pages name them — as the components.views of the app it creates', async () => {
+  const w = world({
+    sources: { [PAGE_A]: ['account', 'contact'], [PAGE_B]: ['contact', 'task'] },
+    views: { account: VIEW_ACCOUNT, contact: VIEW_CONTACT, task: VIEW_TASK },
+  });
+  const r = await run(BOTH_PAGES, w);
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  assert.deepStrictEqual(r.def.components, { views: [VIEW_ACCOUNT, VIEW_CONTACT, VIEW_TASK] });
+  assert.deepStrictEqual([r.payload.dataSources, r.payload.pinnedViews], [['account', 'contact', 'task'], [VIEW_ACCOUNT, VIEW_CONTACT, VIEW_TASK]]);
+  assert.ok(!('warnings' in r.payload));
+  // The reads are the last of the checks: each page's tables, then the views of all of the tables at once. The SDK that writes is made after them.
+  const reads = r.events.filter((e) => e.type === 'read').map((e) => e.what);
+  assert.deepStrictEqual(reads.slice(-3), [`genpage describe ${PAGE_A}`, `genpage describe ${PAGE_B}`, 'genpage defaultViews']);
+  assert.deepStrictEqual(r.events.find((e) => e.what === 'genpage defaultViews').detail, ['account', 'contact', 'task']);
+  assert.ok(r.events.findIndex((e) => e.what === 'genpage defaultViews') < r.events.findIndex((e) => e.what === 'initWorkspace'), 'before the first write');
+  // The views are part of the create's one push: no later write adds them.
+  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent']);
+});
+
+test('the page backend the create reads the tables through is the page backend\'s own, made once for the environment, and disposed — bounded — whichever way the create ends', async () => {
+  const w = world({ sources: { [PAGE_A]: ['account'] }, views: { account: VIEW_ACCOUNT } });
+  const ok = await run(CREATE, w);
+  assert.deepStrictEqual(ok.backends.map((b) => [b.env, b.deps]), [[ENV, {}]]);
+  assert.deepStrictEqual(ok.disposals, [{ waitMs: 10000 }]);
+  const refused = await run([...CREATE, '--solution', 'Missing'], w);
+  assert.deepStrictEqual([refused.backends.length, refused.disposals.length], [0, 0], 'a create refused before the pages are read makes no backend');
+  const unreadable = await run(CREATE, w, { describe: () => { throw new Error('boom'); } });
+  assert.deepStrictEqual([unreadable.backends.length, unreadable.disposals.length], [1, 1], 'a read that fails still disposes it');
+  const disposing = await run(CREATE, w, { disposeBackend: () => { throw new Error('EBUSY'); } });
+  assert.strictEqual(disposing.exitCode, 0, 'a backend whose cleanup throws does not undo the create');
+});
+
+// dispose() answers `{ left }`: the folders it could not remove, each still holding a page's source. The create dropped the answer and reported success with the source in the temp directory.
+test('a workspace the page backend could not remove is a warning of the create — in the output and on stderr, after the notes on the views — and, for a read that failed, on stderr alone', async () => {
+  const left = ['C:\\temp\\genpage-x1y2z3'];
+  const words = `the page workspace could not be removed, so page source may be left on disk: ${left[0]} — delete the folder by hand`;
+  const w = world({ sources: { [PAGE_A]: ['contact'] } });
+  const r = await run(CREATE, w, { left });
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  assert.deepStrictEqual(r.payload.warnings, ['table contact has no default public view to pin into the app, so the maker\'s "/" picker may not list it', words]);
+  assert.match(r.stderr, new RegExp(`⚠ ${words.replace(/[\\.\-()]/g, '\\$&')}`));
+  const unreadable = await run(CREATE, w, { left, describe: () => { throw new Error('boom'); } });
+  assert.strictEqual(unreadable.exitCode, 1);
+  assert.strictEqual(unreadable.payload.warnings, undefined, 'a refused create has no list of warnings to carry it');
+  assert.ok(unreadable.stderr.includes(`⚠ ${words}\n`), 'so it is on stderr');
+  const clean = await run(CREATE, world({ sources: { [PAGE_A]: [] } }));
+  assert.strictEqual(clean.payload.warnings, undefined);
+});
+
+test('a table with no default public view is left out of the pins and named in the warnings — the create still succeeds, and the warning is on stderr', async () => {
+  const w = world({ sources: { [PAGE_A]: ['account', 'contact'] }, views: { account: VIEW_ACCOUNT } });
+  const r = await run(CREATE, w);
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  assert.deepStrictEqual(r.def.components, { views: [VIEW_ACCOUNT] });
+  assert.deepStrictEqual(r.payload.pinnedViews, [VIEW_ACCOUNT]);
+  assert.deepStrictEqual(r.payload.warnings, ['table contact has no default public view to pin into the app, so the maker\'s "/" picker may not list it']);
+  assert.match(r.stderr, /⚠ table contact has no default public view to pin into the app/);
+});
+
+test('pages that read no table leave the app definition exactly as it was — no components key — and no view is asked for', async () => {
+  const r = await run(CREATE, world({ sources: { [PAGE_A]: [] } }));
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  assert.ok(!('components' in r.def), 'no components key at all');
+  assert.deepStrictEqual([r.payload.dataSources, r.payload.pinnedViews], [[], []]);
+  assert.ok(!r.events.some((e) => e.what === 'genpage defaultViews'), 'nothing to ask the views of');
+  // Tables whose views are all missing pin nothing: the key is still left out.
+  const none = await run(CREATE, world({ sources: { [PAGE_A]: ['account'] }, views: {} }));
+  assert.ok(!('components' in none.def));
+  assert.strictEqual(none.payload.warnings.length, 1);
+});
+
+test('a page the SDK holds as raw files has no tables to read: it is named in the warnings, no view is pinned for it, and the other pages\' tables still are', async () => {
+  const w = world({ sources: { [PAGE_A]: null, [PAGE_B]: ['account'] }, views: { account: VIEW_ACCOUNT } });
+  const r = await run(BOTH_PAGES, w);
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  assert.deepStrictEqual(r.payload.dataSources, ['account']);
+  assert.deepStrictEqual(r.def.components, { views: [VIEW_ACCOUNT] });
+  assert.deepStrictEqual(r.payload.warnings, [`page ${PAGE_A} ("Overview") is held as raw files, so the tables it reads are not known and no view was pinned for it`]);
+});
+
+test('the notes on the views come before the SDK\'s own notes on the push — in the output and on stderr', async () => {
+  const note = 'App roles: could not associate the System Administrator role with the app.';
+  const w = world({ sources: { [PAGE_A]: ['contact'] }, push: { type: 'app', id: APP_ID, saved: true, publish: { kind: 'notRequested' }, warnings: [note] } });
+  const r = await run(CREATE, w);
+  assert.strictEqual(r.payload.warnings.length, 2);
+  assert.match(r.payload.warnings[0], /^table contact has no default public view/);
+  assert.strictEqual(r.payload.warnings[1], note);
+  assert.ok(r.stderr.indexOf('⚠ table contact') < r.stderr.indexOf('⚠ App roles'));
+});
+
+test('a page whose tables cannot be read, or a table whose views cannot, refuses the create before anything is written — with the SDK\'s own code — and the backend is disposed', async () => {
+  const refused = Object.assign(new Error('HTTP 403 from the page tables'), { code: 'CONNECTION_ERROR', statusCode: 403 });
+  const w = world({ sources: { [PAGE_A]: ['account'] }, views: { account: VIEW_ACCOUNT } });
+  for (const [what, hooks] of [['describe', { describe: () => { throw refused; } }], ['defaultViews', { defaultViews: () => { throw refused; } }]]) {
+    const r = await run(CREATE, w, hooks);
+    assert.strictEqual(r.exitCode, 1, what);
+    assert.deepStrictEqual(r.payload, { ok: false, code: 'CONNECTION_ERROR', error: refused.message, written: false }, what);
+    assert.deepStrictEqual(r.writes, [], `${what}: not one write`);
+    assert.strictEqual(r.disposals.length, 1, `${what}: the backend was disposed`);
+    assert.strictEqual(fs.existsSync(r.workspaceDirs[0]), false, `${what}: the workspace is removed`);
+  }
+  const missing = await run(CREATE, w, { describe: () => { throw Object.assign(new Error('page does not exist'), { code: 'GENPAGE_NOT_FOUND' }); } });
+  assert.strictEqual(missing.payload.code, 'GENPAGE_NOT_FOUND');
+  assert.deepStrictEqual(missing.writes, []);
+});
+
+test('a failure after the push still reports what the views were — the notes on them are kept with the failure', async () => {
+  const w = world({ sources: { [PAGE_A]: ['contact'] }, publishResult: { type: 'app', id: APP_ID, shipped: false, publish: { kind: 'failed', error: new Error('another publish is running') } } });
+  const r = await run([...CREATE, '--publish'], w);
+  assert.strictEqual(r.exitCode, 1);
+  assert.strictEqual(r.payload.stage, 'publish');
+  assert.match(r.payload.warnings[0], /^table contact has no default public view/);
 });
 
 // --- create: the refusals, each before the first write ----------------------------------------------------------

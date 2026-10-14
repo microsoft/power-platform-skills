@@ -41,6 +41,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf } = require('./lib/genpage-sdk.js');
+const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
 const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
@@ -388,16 +389,21 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   const genpage = makeBackend(flags.env);
   // The backend's workspace is removed BEFORE anything is reported: emitResult calls process.exit, so a cleanup placed after an emit never
   // runs, and that workspace holds the page's source. dispose() answers when the storage calls the backend had under way have settled and the
-  // folder is gone, so it is awaited.
+  // folder is gone — or says, in `{ left }`, which folder is not (a handle a scanner holds), and that is reported with the result: a success that left
+  // the page's source in the temp directory says so.
   let outcome;
+  let leftOnDisk = null;
   try {
     outcome = await deploy({
       flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal,
       prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap,
     });
   } finally {
-    try { await genpage.dispose(); } catch { /* the backend's own folder; nothing to report */ }
+    try { leftOnDisk = leftOnDiskWarning(await genpage.dispose()); } catch { /* the backend's own folder; nothing to say when it cannot even answer */ }
+    // A deploy that threw has no result to carry it: that failure reaches the caller as it is, so the warning goes to stderr beside it.
+    if (leftOnDisk && !outcome) process.stderr.write(`WARNING: ${leftOnDisk}\n`);
   }
+  if (leftOnDisk) outcome.payload = { ...outcome.payload, warnings: [...(outcome.payload.warnings || []), leftOnDisk] };
   return emit(outcome.ok, outcome.payload);
 }
 
@@ -619,6 +625,14 @@ async function deploy(context) {
         for (const w of placement.warnings || []) warnings.push(w);
       } catch (e) {
         if (addToSitemap) {
+          // A placement the backend SAVED and could not publish, or whose publish it could not see in what runs (`saved: true`), did not fail: the page is in the app's saved navigation, and the app's publish
+          // is what is left. "NOT added … add the page in Maker" sent the user to add a page the navigation already holds.
+          if (e && e.saved === true) {
+            const finish = recorded && finishing
+              ? ` To finish it, run the same command again with --page-id ${pageId} added and nothing else changed: the page is already published and placed, so only the app is published again and checked (the base marker beside ${flags['code-file']} records that it is not done).`
+              : '';
+            return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'} and published, and it is placed in app ${flags['app-id']}'s saved navigation, but the app's publish is not finished: ${(e && e.message) || e}.${finish}`));
+          }
           const again = recorded && finishing
             ? `, or run the same command again with --page-id ${pageId} added and nothing else changed: the page is already published, so only its placement is made, for this page only (the base marker beside ${flags['code-file']} records that it is not done)`
             : '';

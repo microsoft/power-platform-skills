@@ -15,7 +15,10 @@
 //
 // An app is a DRAFT (componentstate 1) until a PublishXml names it, as on the platform; `org.state` is what the platform now holds:
 //   solutions   [{ solutionid, uniquename, friendlyname, ismanaged }]      the solutions that exist
-//   pages       [{ id, name, componentstate }]                             the generative pages (uxagentproject rows)
+//   pages       [{ id, name, componentstate }]                             the generative pages (uxagentproject rows). The page's own tables are `dataSources` (default none), and a page with
+//                                                                          `raw: true` has no file rows at all — a page the SDK holds as raw files, which has no configuration to read. The page
+//                                                                          backend reads a page's rows, files and conversation through the same fake (helpers/fake-genpage-server.js, seeded from this list)
+//   views       [{ savedqueryid, table }]                                  the default public view (querytype 0, isdefault) each table has, by logical name
 //   apps        [{ appmoduleid, name, uniquename, description, componentstate, published }]   one row per app layer. `published` is whether the
 //                                                                          PUBLISHED layer holds the row: by default componentstate 0 does and 1 does
 //                                                                          not (a draft); `{ componentstate: 1, published: true }` is a published app with a
@@ -31,8 +34,9 @@
 // may return a response for any request first (a refusal, a 500), where `req` is the recorded request; `options.pageSize` makes the apps collections
 // answer that many rows at a time, with an absolute `@odata.nextLink`.
 const { randomUUID } = require('node:crypto');
+const { FakeGenPageServer, API: PAGE_API } = require('./fake-genpage-server.js');
 
-const ENTITY_SETS = { solution: 'solutions', organization: 'organizations', webresource: 'webresourceset', sitemap: 'sitemaps', appmodule: 'appmodules', uxagentproject: 'uxagentprojects' };
+const ENTITY_SETS = { solution: 'solutions', organization: 'organizations', webresource: 'webresourceset', sitemap: 'sitemaps', appmodule: 'appmodules', uxagentproject: 'uxagentprojects', savedquery: 'savedqueries' };
 const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const API_ROOT = /^\/api\/data\/v9\.\d/;
 
@@ -139,7 +143,25 @@ function createFakeAppsOrg(options = {}) {
     appSettings: [],
     components: [],
     publishes: [],
+    views: options.views || [],
   };
+  // The page backend reads a page through its own tables (project, files, conversation), which this fake answers by handing those requests to a stateful page fake seeded from `pages`:
+  // every page has the four rows the maker lays out, holding its `dataSources` (none, by default) — unless it is `raw`, a project with no rows.
+  const pageServer = new FakeGenPageServer();
+  for (const page of state.pages) {
+    const id = String(page.id).toLowerCase();
+    if (page.raw) pageServer.seedProject(id, page.name);
+    else pageServer.seedPage(id, { name: page.name, config: { dataSources: page.dataSources || [], model: '' } });
+  }
+  const PAGE_PATH = /^\/(uxagentprojects\(|uxagentprojectfiles|agentconversationmessages)/;
+  // The page fake answers the way the SDK's own HttpClient does (`{ status, headers, body }`); this fake answers the plugin's low-level transport (`{ statusCode, headers, body }`), whose body is text — or,
+  // for a file's content, the bytes as they are.
+  async function pageRequest({ method, headers, body }, where) {
+    const res = await pageServer.receive(method, `${PAGE_API}${where}`, body ? JSON.parse(body) : undefined, { headers }, false, {});
+    const lowered = Object.fromEntries(Object.entries(res.headers || {}).map(([name, value]) => [name.toLowerCase(), value]));
+    const bytes = Buffer.isBuffer(res.body) || res.body instanceof Uint8Array;
+    return { statusCode: res.status, headers: bytes ? lowered : { 'content-type': 'application/json', ...lowered }, body: bytes ? Buffer.from(res.body) : (res.body === undefined ? '' : JSON.stringify(res.body)) };
+  }
   const requests = [];
   const unexpected = [];
   const roleId = randomUUID();
@@ -207,6 +229,12 @@ function createFakeAppsOrg(options = {}) {
       return rows(state.sitemaps.filter((sitemap) => (unique === null || lc(sitemap.sitemapnameunique) === unique) && (!ids.length || ids.includes(lc(sitemap.sitemapid)))));
     }
     if (/^\/roles\?/.test(where)) return rows([{ roleid: roleId, _parentrootroleid_value: roleId }]);
+    // The default public view of a table, as the page backend asks for it (the same read the placement of a page in an app makes):
+    //   GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'account' and querytype eq 0 and isdefault eq true&$top=1
+    if (/^\/savedqueries\?/.test(where)) {
+      const table = equalsText(filter, 'returnedtypecode');
+      return rows(state.views.filter((view) => lc(view.table) === table).map((view) => ({ savedqueryid: view.savedqueryid })));
+    }
     // The setting definitions the environment has, by unique name or by id:
     //   { "settingdefinitionid": "…", "uniquename": "HeaderAndNavigationRefresh", "displayname": "HeaderAndNavigationRefresh" }
     if (/^\/settingdefinitions\?/.test(where)) {
@@ -328,6 +356,7 @@ function createFakeAppsOrg(options = {}) {
     requests.push(recorded);
     const early = options.answer && options.answer(recorded);
     if (early) return early;
+    if (PAGE_PATH.test(where)) return pageRequest({ method, headers, body: isJson ? body : undefined }, where);
     const answered = method === 'GET' ? get(where) : method === 'POST' ? (recorded.operations ? batch(recorded) : post(where, recorded.body || {})) : method === 'DELETE' ? remove(where) : null;
     if (answered) return answered;
     unexpected.push(`${method} ${where}`);

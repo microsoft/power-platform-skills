@@ -99,11 +99,20 @@ function sdkForPages(opts = {}) {
     { key: 'overview', name: 'Overview', pageId: OWN },
     { key: 'draft', name: 'Overview', pageId: OTHER },
   ];
+  // The page table as the SAVED layer holds it (the layer teardown reads): a row is { uxagentprojectid, name }, plus
+  //   draftOnly: true      the page was never published, so only the saved layer has a row for it (componentstate 1)
+  //   publishedName        the page has a pending edit: the published layer still answers this name, the saved one `name`
   const rows = opts.rows || [
     { uxagentprojectid: OWN, name: 'Overview' },
     { uxagentprojectid: OTHER, name: 'Contoso Draft' },
   ];
-  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], draftReads: 0 };
+  const savedRows = (asked) => rows.filter((r) => asked.includes(r.uxagentprojectid.toLowerCase())).flatMap((r) => {
+    const { draftOnly, publishedName, ...row } = r;
+    if (draftOnly) return [{ ...row, componentstate: 1 }];
+    if (publishedName !== undefined) return [{ ...row, name: publishedName, componentstate: 0 }, { ...row, componentstate: 1 }];
+    return [{ ...row, componentstate: 0 }];
+  });
+  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], draftReads: 0, pageReads: [] };
   const membership = opts.membership || [OWN];
   const sdk = {
     resolveArtifact: async (kind, identity) => {
@@ -122,9 +131,9 @@ function sdkForPages(opts = {}) {
       if (entity === 'appmodulecomponent') return [{ objectid: SITEMAP, componenttype: 62 }];
       if (entity === 'sitemap') return state.app ? [{ sitemapxml: `<SiteMap>${membership.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>` }] : [];
       if (entity === 'uxagentproject') {
-        if (opts.nameError) throw new Error('Contoso page row read unavailable');
-        if (Object.prototype.hasOwnProperty.call(opts, 'pageResponse')) return opts.pageResponse;
-        return rows.filter((r) => options.filter.includes(r.uxagentprojectid.toLowerCase()));
+        // A plain read of the page table answers the PUBLISHED layer only: a page that was never published is not in it. Teardown must not decide what exists by this.
+        return rows.filter((r) => !r.draftOnly && options.filter.includes(r.uxagentprojectid.toLowerCase()))
+          .map((r) => ({ uxagentprojectid: r.uxagentprojectid, name: r.publishedName !== undefined ? r.publishedName : r.name }));
       }
       return [];
     },
@@ -143,6 +152,13 @@ function sdkForPages(opts = {}) {
   if (!opts.noDataverse) {
     sdk.dataverse = {
       get: async (url) => {
+        // The pages in their saved layer, whichever of the rows the platform answers (see `rows` above). Not a read of the navigation, so it is not counted in `draftReads`.
+        if (url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+          state.pageReads.push(url);
+          if (opts.nameError) throw new Error('Contoso page row read unavailable');
+          if (Object.prototype.hasOwnProperty.call(opts, 'pageResponse')) return { status: 200, body: { value: opts.pageResponse } };
+          return { status: 200, body: { value: savedRows(url.match(/uxagentprojectid eq [0-9a-f-]{36}/gi).map((clause) => clause.slice('uxagentprojectid eq '.length).toLowerCase())) } };
+        }
         state.draftReads += 1;
         if (opts.draftError) return { status: 503, body: null };
         if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')) {
@@ -372,6 +388,107 @@ test('a pending record alone authorizes no deletion: with the record, the page n
   const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
   assert.equal(r.ok, true, JSON.stringify(r.errors));
   assert.deepEqual(state.deletes, [], 'a record for another environment, or for another app, proves nothing here');
+});
+
+// ── A page that was created and never published exists only in the SAVED layer ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A build killed after the create change set, a publish that was refused and never finished, a standalone create nobody published: each leaves a page with a row in the saved layer and none in the published one,
+// and a plain read of the page table — which answers the published layer only — says "not found". Teardown decided what to delete by that read, so it kept the page and its conversation messages although a
+// pending record or a receipt of this workspace named it, and it consumed the receipt as if the page were gone. The pages are read in the saved layer now (`rows[].draftOnly` is a page with no published row).
+test('teardown finds and deletes a page that was created and never published, under a retained pending id — and consumes the record', async () => {
+  const workspaceDir = workspace();
+  recordPagePending(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV, sha256('x'));
+  const { sdk, state } = sdkForPages({ candidates: [], membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview', draftOnly: true }] });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'the page the create left is found by its record and deleted');
+  assert.deepEqual(r.deleted.genpage, [OWN]);
+  assert.strictEqual(readPendingCreations(workspaceDir, 'contoso_pages', ENV).size, 0, 'and the record is consumed: the page was found and deleted');
+});
+
+test('teardown deletes a receipted page that was never published, and keeps no receipt for a page it did not delete', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview', draftOnly: true }] });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'a draft-only page is a page: the receipt corroborates it by its name');
+  assert.deepEqual(readPageOwnership(workspaceDir, 'contoso_pages', ENV), { created: [], teardown: [] }, 'the receipt is consumed because the page was deleted, not because it was "not found"');
+});
+
+test('a page that was never published and that nothing proves is KEPT and named — not reported as "not found", and its receipt is not consumed', async () => {
+  const workspaceDir = workspace();
+  // A receipt for another key: it corroborates nothing for this page, which the manifest names under "overview".
+  recordPageCreation(workspaceDir, 'contoso_pages', 'detail', OWN, 'Overview', ENV);
+  const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview', draftOnly: true }] });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.deepEqual(state.deletes, [], 'nothing proves it is this app\'s');
+  assert.match(r.skipped.join('\n'), new RegExp(`${OWN}[^\\n]*not proven to belong to this app`), 'it is found, and kept for the reason a published page would be');
+  assert.doesNotMatch(r.skipped.join('\n'), /not found/);
+  assert.equal(readPageOwnership(workspaceDir, 'contoso_pages', ENV).created.length, 1, 'the receipt stays: the page it names exists');
+});
+
+test('a page that was never published is proven by the saved navigation like any other, and a dry run lists it as one it would delete', async () => {
+  const rows = [{ uxagentprojectid: OWN, name: 'Overview', draftOnly: true }];
+  const dry = sdkForPages({ candidates: manifest(OWN).pages, membership: [], draftMembership: [OWN], rows });
+  const plan = (await runTeardown(spec(), { apply: false }, { sdk: dry.sdk })).plan.join('\n');
+  assert.match(plan, new RegExp(`${OWN}[^\\n]*would delete`));
+  assert.doesNotMatch(plan, /not found/, 'a page that exists only as a draft is not "not found — manifest name only"');
+  assert.deepEqual(dry.state.deletes, []);
+  const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages, membership: [], draftMembership: [OWN], rows });
+  const r = await runTeardown(spec(), { apply: true }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }]);
+});
+
+test('teardown asks for the pages in their saved layer, in chunks — never the published-only collection', async () => {
+  const workspaceDir = workspace();
+  const ids = Array.from({ length: 120 }, (_, n) => `aaaaaaaa-0000-4000-8000-${String(n).padStart(12, '0')}`);
+  ids.forEach((id, n) => recordPagePending(workspaceDir, 'contoso_pages', `page${n}`, id, `Page ${n}`, ENV, sha256('x')));
+  const { sdk, state } = sdkForPages({ candidates: [], membership: [], rows: ids.map((id, n) => ({ uxagentprojectid: id, name: `Page ${n}`, draftOnly: n % 2 === 0 })) });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.equal(state.deletes.length, 120, 'every page is found, published or not');
+  assert.equal(state.reads.filter((read) => read.entity === 'uxagentproject').length, 0, 'the published-only collection is not asked');
+  assert.deepEqual(state.pageReads.map((url) => url.match(/uxagentprojectid eq/g).length), [50, 50, 20]);
+  assert.ok(state.pageReads.every((url) => url.includes('$select=uxagentprojectid,name,componentstate')));
+});
+
+test('a page with a pending edit is judged by its current row — the authored one — not by the published row beside it', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  // The published row still holds "Overview"; the authored (saved) row holds what a maker renamed it to. The page is not named as this build named it any more.
+  const renamed = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Renamed in the maker', publishedName: 'Overview' }] });
+  const kept = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk: renamed.sdk });
+  assert.deepEqual(renamed.state.deletes, []);
+  assert.match(kept.skipped.join('\n'), /Renamed in the maker[^\n]*not proven/);
+  // The authored row carries the name the spec asks for (an update whose publish failed): that is the page this build wrote.
+  const written = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview', publishedName: 'Older name' }] });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk: written.sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(written.state.deletes, [{ entity: 'uxagentproject', id: OWN }]);
+});
+
+// ── A receipt corroborates a page by the name the build proved, not only by the spec's current name ──────────────────────────────────────────────────────────────────────────────────────────
+// A page the build adopted but did not use (its key is bound to another page) keeps the name the earlier create sent. When the spec renamed the entry since, the page still holds the receipt's name and
+// not the spec's — and the build had told the user that teardown deletes it.
+test('a receipt corroborates a page by the name it recorded when the spec has renamed the page since, and by no other name', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  const renamedSpec = () => ({ ...spec(), pages: [{ key: 'overview', name: 'Summary' }] });
+  const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }] });
+  const r = await runTeardown(renamedSpec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'named as the receipt recorded it');
+  const other = workspace();
+  recordPageCreation(other, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  const foreign = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Somebody else\'s page' }] });
+  await runTeardown(renamedSpec(), { apply: true, workspaceDir: other }, { sdk: foreign.sdk });
+  assert.deepEqual(foreign.state.deletes, [], 'a name that is neither the spec\'s nor the receipt\'s proves nothing');
+  const current = sdkForPages({ candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Summary' }] });
+  const third = workspace();
+  recordPageCreation(third, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  await runTeardown(renamedSpec(), { apply: true, workspaceDir: third }, { sdk: current.sdk });
+  assert.deepEqual(current.state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'and the spec\'s current name still does, as before');
 });
 
 test('an environment A creation receipt cannot authorize an off-sitemap build update in B', async (t) => {

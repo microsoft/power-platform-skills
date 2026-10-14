@@ -44,6 +44,7 @@ const { envTruthy } = require('./lib/interaction-mode.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
+const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
 // missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
@@ -1169,8 +1170,10 @@ async function main() {
         try {
           return await verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir, isolatedReader }), verifyOpts);
         } finally {
-          // Awaited: a read the pass gave up on can still be running, and the workspace is removed only once the storage calls it had under way have settled.
-          await genpage.dispose();
+          // Awaited: a read the pass gave up on can still be running, and the workspace is removed only once the storage calls it had under way have settled. A folder it could not
+          // remove holds page source, so it is a warning: the verify result is not changed by it.
+          const leftOnDisk = leftOnDiskWarning(await genpage.dispose());
+          if (leftOnDisk) deps.warn(leftOnDisk);
         }
       },
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of

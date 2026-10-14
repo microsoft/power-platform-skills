@@ -276,6 +276,20 @@ function runCli(argv, deps) {
   });
 }
 
+// The real emitter ends the process, so nothing after an emit runs. `runCli`'s emit only resolves, and the script would go on after a refusal; this one stops it the way
+// `process.exit` does, for a test of what a refusal does NOT go on to do.
+async function runCliExiting(argv, deps) {
+  const { main } = loadCli();
+  let result;
+  const exit = new Error('process.exit');
+  try {
+    await main(argv, { ...deps, emit: (ok, payload) => { result = { ok, payload }; throw exit; } });
+  } catch (error) {
+    if (error !== exit) throw error;
+  }
+  return result;
+}
+
 test('record writes a marker from the file, and --deployed-sha256 binds the observed deployed hash', async () => {
   const d = tmp();
   const file = path.join(d, 'page.tsx');
@@ -301,8 +315,79 @@ test('record writes a marker from the file, and --deployed-sha256 binds the obse
   assert.strictEqual(readMarker(file).deployedSha256, observed, 'a rejected hash must not replace the marker');
 });
 
-// A stand-in for the page backend (lib/genpage-sdk.js): what `check` needs of it is `read(pageId)` and `dispose()`.
-function fakeBackend(answer) {
+// A page needs no app, and a first page is created before the app that holds it (apps.js create takes its id): `record` then has no app to name.
+test('record without --app-id records the page alone — a marker with no app key on disk, an output with no appId — and the app the page is placed in later finds it', async () => {
+  const d = tmp();
+  const file = path.join(d, 'page.tsx');
+  fs.writeFileSync(file, PAGE);
+  const r = await runCli(['record', '--page-id', PAGE_ID, '--file', file]);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.ok(!('appId' in r.payload), `no appId in the output: ${JSON.stringify(r.payload)}`);
+  assert.strictEqual(r.payload.pageId, PAGE_ID.toLowerCase());
+  const onDisk = JSON.parse(fs.readFileSync(markerPath(file), 'utf8'));
+  assert.ok(!('appId' in onDisk), `no appId key in the marker: ${JSON.stringify(onDisk)}`);
+  assert.strictEqual(onDisk.pageId, PAGE_ID.toLowerCase());
+  assert.deepStrictEqual([onDisk.deployedSha256, onDisk.localSha256, onDisk.source], [pageHash(PAGE), pageHash(PAGE), 'download']);
+  assert.strictEqual(readMarker(file).appId, undefined);
+
+  // The app the page was put in afterwards asks `check` about it: the marker is the page's, so any app finds it present.
+  const checked = await runCli(
+    ['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file],
+    { makeGenpageSdk: () => fakeBackend(PAGE) },
+  );
+  assert.strictEqual(checked.ok, true, JSON.stringify(checked.payload));
+  assert.strictEqual(checked.payload.marker, 'present');
+  assert.strictEqual(checked.payload.deployed, 'unchanged');
+});
+
+test('record with --app-id still records the app, and a marker with no app is replaced by one that has it — the same file, one marker', async () => {
+  const d = tmp();
+  const file = path.join(d, 'page.tsx');
+  fs.writeFileSync(file, PAGE);
+  const alone = await runCli(['record', '--page-id', PAGE_ID, '--file', file]);
+  assert.strictEqual(alone.ok, true, JSON.stringify(alone.payload));
+  const withApp = await runCli(['record', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file]);
+  assert.strictEqual(withApp.ok, true, JSON.stringify(withApp.payload));
+  assert.strictEqual(withApp.payload.appId, APP_ID.toLowerCase());
+  assert.strictEqual(readMarker(file).appId, APP_ID.toLowerCase());
+});
+
+test('record still needs the page and the file — only the app is optional — and --app-id, when given, needs a value: an empty one is not a request for no app', async () => {
+  const d = tmp();
+  const file = path.join(d, 'page.tsx');
+  fs.writeFileSync(file, PAGE);
+  const noPage = await runCliExiting(['record', '--file', file]);
+  assert.strictEqual(noPage.ok, false);
+  assert.match(noPage.payload.error, /--page-id is required/);
+  const noFile = await runCliExiting(['record', '--page-id', PAGE_ID]);
+  assert.strictEqual(noFile.ok, false);
+  assert.match(noFile.payload.error, /--file is required/);
+  assert.match(noFile.payload.error, /record --page-id <id> --file <page\.tsx> \[--app-id <id>\]/, 'the usage says the app is optional');
+
+  for (const empty of ['', '  ']) {
+    const blank = await runCliExiting(['record', '--app-id', empty, '--page-id', PAGE_ID, '--file', file]);
+    assert.strictEqual(blank.ok, false, JSON.stringify(empty));
+    assert.match(blank.payload.error, /--app-id requires a value/, JSON.stringify(empty));
+  }
+  const bare = await runCliExiting(['record', '--page-id', PAGE_ID, '--file', file, '--app-id']);
+  assert.strictEqual(bare.ok, false);
+  assert.match(bare.payload.error, /--app-id requires a value/);
+  assert.strictEqual(readMarker(file), null, 'and no marker was written by any of them');
+});
+
+test('check still requires the app — it reads the deployed page the way an update of it would — and reads nothing without it', async () => {
+  const d = tmp();
+  const file = path.join(d, 'local.tsx');
+  fs.writeFileSync(file, PAGE);
+  const backend = fakeBackend(PAGE);
+  const r = await runCliExiting(['check', '--env', 'https://contoso.crm.dynamics.com/', '--page-id', PAGE_ID, '--file', file], { makeGenpageSdk: () => backend });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /--app-id is required/);
+  assert.deepStrictEqual(backend.reads, [], 'nothing was read');
+});
+
+// A stand-in for the page backend (lib/genpage-sdk.js): what `check` needs of it is `read(pageId)` and `dispose()`. `left` is what dispose() answers it could not remove.
+function fakeBackend(answer, left = []) {
   const backend = {
     reads: [],
     disposed: 0,
@@ -311,7 +396,7 @@ function fakeBackend(answer) {
       if (answer instanceof Error) throw answer;
       return { source: answer };
     },
-    dispose: () => { backend.disposed += 1; },
+    dispose: () => { backend.disposed += 1; return { left }; },
   };
   return backend;
 }
@@ -383,6 +468,26 @@ test('check: a page that cannot be read — missing, unreadable, or held as raw 
     { makeGenpageSdk: () => { throw new Error('the backend is not made when the local file cannot be read'); } });
   assert.strictEqual(refused.ok, false);
   assert.match(refused.payload.error, /could not read/);
+});
+
+// dispose() answers `{ left }`: the folders it could not remove, each still holding the page's source. `check` dropped the answer, so a check that read a page left its source in the temp directory
+// and said nothing; it is a warning of the result now, on the unreadable page's result as on the one that was read.
+test('check: a backend workspace that could not be removed is a warning of the result — a read page and an unreadable one alike — and nothing is said when none is left', async () => {
+  const d = tmp();
+  const file = path.join(d, 'local.tsx');
+  fs.writeFileSync(file, 'export const n = 1;\n');
+  const left = ['C:\\temp\\genpage-x1y2z3'];
+  const words = `the page workspace could not be removed, so page source may be left on disk: ${left[0]} — delete the folder by hand`;
+  const argv = ['check', '--env', 'https://contoso.crm.dynamics.com/', '--app-id', APP_ID, '--page-id', PAGE_ID, '--file', file];
+  const read = await runCli(argv, { makeGenpageSdk: () => fakeBackend('export const n = 1;\n', left) });
+  assert.strictEqual(read.ok, true, JSON.stringify(read.payload));
+  assert.deepStrictEqual(read.payload.warnings, [words]);
+  const unreadable = await runCli(argv, { makeGenpageSdk: () => fakeBackend(new Error('Transport failure reaching the environment'), left) });
+  assert.strictEqual(unreadable.ok, false);
+  assert.strictEqual(unreadable.payload.code, 'deployed-unreadable');
+  assert.deepStrictEqual(unreadable.payload.warnings, [words]);
+  const clean = await runCli(argv, { makeGenpageSdk: () => fakeBackend('export const n = 1;\n') });
+  assert.strictEqual(clean.payload.warnings, undefined);
 });
 
 test('check: the marker an app-less create wrote is found by the app the page was placed in, and says nothing about the page\'s content until it is compared', async () => {

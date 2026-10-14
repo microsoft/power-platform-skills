@@ -845,7 +845,7 @@ test('#583 the deferred routing-description push refuses a copy holding an earli
   await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
     assert.match(e.message, /holds edits an earlier run did not push/);
-    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run\./, 'the baseline and the approval record are kept');
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run\./, 'the baseline, the approval record and the page records are kept');
     return true;
   });
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
@@ -911,7 +911,7 @@ test('#583 when the workspace copy cannot be reset, the halt names the workspace
   const { sdk } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE', failOverwriteFetch: true });
   await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
-    assert.match(e.message, /then re-run the build\. First reset the workspace, which still holds this run's unpushed copy of the app \(a re-run would refuse to overwrite it\): stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json\./);
+    assert.match(e.message, /then re-run the build\. First reset the workspace, which still holds this run's unpushed copy of the app \(a re-run would refuse to overwrite it\): stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\)\./);
     return true;
   });
 });
@@ -1081,7 +1081,7 @@ test('a push refused for an earlier version\u2019s workspace copy halts with the
   };
   await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'ARTIFACT_PROJECTION_STALE', e.message);
-    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run/);
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run/);
     return true;
   });
 });

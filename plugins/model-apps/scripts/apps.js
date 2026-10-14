@@ -84,6 +84,16 @@
 //           Language. Navigation titles carry a language code. Written in a language the environment has not provisioned, a title does
 //           not show, so the titles use the environment's base language (read from the organization), never an assumed 1033.
 //
+//           Views. `pac model genpage upload --app-id` pinned the default public view of every table a page reads into the app, so that the
+//           maker's "/" picker lists the table; a page made with no app and put in one afterwards by this create had nothing to pin them. So the create
+//           does: it reads each page's tables (the page backend's `describe`: the `dataSources` of its config.json) and the default public view of each
+//           (the page backend's `defaultViews` — the same definition the placement of a page in an app that exists pins), and the views join the app's
+//           components in the create itself: the SDK's `components.views` of the app it creates, written by its AddAppComponents with the sitemap, so a
+//           view the platform refuses undoes the create like any other write. A table with no default public view is left out and named in `warnings`; a page
+//           the SDK holds as raw files has no configuration to read its tables from, which `warnings` says too. These reads come last of the checks, and a
+//           page that cannot be read refuses the create before anything is written. The output says what was pinned (`pinnedViews`, and `dataSources`, the
+//           tables the pages read).
+//
 // Like every script here it emits no telemetry of its own (the plugin's hooks do), and it never prints a token.
 //
 // Usage:
@@ -105,10 +115,14 @@
 //   create  { "ok": true, "appId": "22222222-…", "uniqueName": "account_metrics_1a2b3c4d", "name": "Account Metrics", "published": false,
 //             "unpublishedChanges": true, "solution": "ContosoCore", "addedToSolution": true, "inSolution": ["app", "sitemap"],
 //             "sitemapId": "33333333-…", "languageCode": 1033,
-//             "navigation": { "area": "Main", "group": "Pages", "pages": [ { "pageId": "44444444-…", "title": "Overview" } ] } }
+//             "navigation": { "area": "Main", "group": "Pages", "pages": [ { "pageId": "44444444-…", "title": "Overview" } ] },
+//             "dataSources": ["account"], "pinnedViews": ["55555555-…"] }
 //             `published` and `unpublishedChanges` are the two facts of `list`: with --publish true and false, without it false and true.
 //             In a system solution `inSolution` is empty and "systemSolution": true says why (it holds every component already).
-//             "warnings": [ … ] — the SDK's notes on the push — are added when there are some
+//             `dataSources` are the tables the pages read, each once, and `pinnedViews` the ids of the default public views that joined the app's components with them
+//             (empty when the pages read no table, or a table has no default public view — a warning then says so).
+//             "warnings": [ … ] — the notes on the views, the SDK's notes on the push, and a page workspace the page backend could not remove (page source may still be in
+//             the temp directory; on stderr alone when the create is refused) — are added when there are some
 //   a refusal, or a failure to read:  { "ok": false, "code": "PAGE_NOT_FOUND", "error": "<message>", "written": false }
 //   a failure after the push began, when something may exist: `code` and `error` are the SDK's own, and the rest is READ BACK from the
 //             platform, not inferred from how far the run got — the SDK rolls a partial create back when it can, and a rollback can be refused
@@ -140,10 +154,12 @@ const { randomBytes, randomUUID } = require('node:crypto');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
 const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { pushFailed } = require('./lib/entity-provision.js');
-const { collectionRows, currentLayerRow } = require('./lib/app-components.js');
+const { collectionRows, currentLayerRow, savedPageRows } = require('./lib/app-components.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { odataLit } = require('./lib/odata.js');
 const { genPageSubArea } = require('./lib/genpage-subarea.js');
+const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
+const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 
 const USAGE = [
   'Usage:',
@@ -162,8 +178,6 @@ const DEFAULT_APP_ICON_ID = '953b9fac-1e5e-e611-80d6-00155ded156f';
 // Solution component types (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent).
 const COMPONENT_TYPE_APP = 80;
 const COMPONENT_TYPE_SITEMAP = 62;
-// How many page ids one read names. The SDK's own check of the pages a sitemap opens reads 50 at a time, so the filter stays a URL.
-const PAGE_LOOKUP_CHUNK = 50;
 const AREA_TITLE = 'Main';
 const GROUP_TITLE = 'Pages';
 
@@ -376,25 +390,12 @@ async function readSolution(sdk, uniqueName) {
 // The generative pages named by `ids`, as { id (lower-case), title } in the order of `ids`; a Refusal names every id that is no page.
 // The SDK reads the same collection to check a sitemap's pages when the app is pushed, and refuses a missing one then, but without saying
 // which — and the title of each sub-area is the page's stored name, so the rows are needed here anyway. Its `fetchArtifactList('genPage')`
-// lists every page of the environment, where this asks for just the ids. RetrieveUnpublishedMultiple (rather than a plain read) because a
-// page saved in Maker and not yet published is a page all the same:
-//   { "uxagentprojectid": "44444444-…", "name": "Overview", "componentstate": 0 }
-// With a pending edit the platform can answer with both layers, and only the authored one (componentstate 1) is current.
+// lists every page of the environment, where this asks for just the ids. The saved layer (`savedPageRows`, which says why) rather than a plain
+// read, because a page saved in Maker and not yet published is a page all the same. With a pending edit the platform can answer with both layers,
+// and only the authored one (componentstate 1) is current.
 async function readPages(sdk, ids) {
   const wanted = ids.map((id) => id.toLowerCase());
-  const rowsById = new Map();
-  for (let at = 0; at < wanted.length; at += PAGE_LOOKUP_CHUNK) {
-    const filter = wanted.slice(at, at + PAGE_LOOKUP_CHUNK).map((id) => `uxagentprojectid eq ${id}`).join(' or ');
-    const rows = await readRows(sdk,
-      `/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=${filter}`,
-      'the generative pages');
-    for (const row of rows) {
-      const id = row && typeof row.uxagentprojectid === 'string' ? row.uxagentprojectid.toLowerCase() : '';
-      if (!id) continue;
-      if (!rowsById.has(id)) rowsById.set(id, []);
-      rowsById.get(id).push(row);
-    }
-  }
+  const rowsById = await savedPageRows(sdk.dataverse, wanted, { code: 'CONNECTION_ERROR' });
   const missing = wanted.filter((id) => !rowsById.has(id));
   if (missing.length) {
     throw new Refusal('PAGE_NOT_FOUND',
@@ -440,8 +441,10 @@ async function readBaseLanguage(sdk) {
   return lcid;
 }
 
-// The app the SDK creates. Its sitemap is the one lib/sdk-build.js appDef writes for generative-page entries.
-function appDefinition({ name, description, uniqueName, pages, sitemapId }) {
+// The app the SDK creates. Its sitemap is the one lib/sdk-build.js appDef writes for generative-page entries. `viewIds` are the default public views of the tables the pages read,
+// which the SDK pins as components of the app in the same create (the app artifact's `components.views`); the key is left out when there are none, so an app whose pages read no
+// table is made exactly as it was.
+function appDefinition({ name, description, uniqueName, pages, sitemapId, viewIds = [] }) {
   return {
     name,
     uniqueName,
@@ -462,7 +465,39 @@ function appDefinition({ name, description, uniqueName, pages, sitemapId }) {
         }],
       }],
     },
+    ...(viewIds.length ? { components: { views: viewIds } } : {}),
   };
+}
+
+// The tables the pages read and the default public view of each — what `pac model genpage upload --app-id` pinned into the app on every upload, and what the placement of a page in an app
+// that exists pins (lib/genpage-sdk.js `placeInApp`). An app made around a page that was created with no app has had no upload to pin them, so the create does. Both reads are the page backend's:
+// `describe` for a page's `dataSources` (a page the SDK holds as raw files has none it can read: `null`, which is said, never taken for "no tables") and `defaultViews`, the one definition of
+// "the default public view of a table" that the placement uses too. The backend is the page backend's own — its own throwaway workspace, removed whichever way this ends.
+//   -> { dataSources: [table…] (each once, in the order the pages name them), viewIds: [view id…], warnings: [text…] }
+async function readViewPins(env, httpClient, pages, makeBackend) {
+  const backend = makeBackend(env, httpClient ? { httpClient } : {});
+  let pins = null;
+  try {
+    const warnings = [];
+    const dataSources = [];
+    for (const page of pages) {
+      const described = await backend.describe(page.id);
+      if (described.dataSources === null) warnings.push(`page ${page.id} (${JSON.stringify(page.title)}) is held as raw files, so the tables it reads are not known and no view was pinned for it`);
+      for (const table of described.dataSources || []) if (!dataSources.includes(table)) dataSources.push(table);
+    }
+    const found = dataSources.length ? await backend.defaultViews(dataSources) : { views: [], warnings: [] };
+    pins = { dataSources, viewIds: found.views.map((view) => view.viewId), warnings: [...warnings, ...found.warnings] };
+    return pins;
+  } finally {
+    // dispose() says, in `{ left }`, which folder it could not remove (a handle a scanner holds), and that folder holds page source. The create's outcome is not changed by it. A read that
+    // succeeded carries the warning in its own `warnings`, which the output prints; one that failed has no result to carry it — the create is refused with that failure — so it goes to stderr.
+    let leftOnDisk = null;
+    try { leftOnDisk = leftOnDiskWarning(await backend.dispose({ waitMs: 10000 })); } catch { /* the backend's own throwaway folder; nothing to say when it cannot even answer */ }
+    if (leftOnDisk) {
+      if (pins) pins.warnings.push(leftOnDisk);
+      else process.stderr.write(`⚠ ${leftOnDisk}\n`);
+    }
+  }
 }
 
 /**
@@ -470,7 +505,7 @@ function appDefinition({ name, description, uniqueName, pages, sitemapId }) {
  * begin at all (no throwaway folder, no SDK module), which main() prints in the same shape.
  * @param {object} args - { env, name, solution, pageIds, uniqueName?, description?, publish }
  * @param {object} [httpClient] - the SDK's HttpClient; the az-token one for `args.env` when omitted (a test seam)
- * @param {object} [seams] - { randomHex(), newId() }: the unique name's hex digits and the sitemap's id, for a test
+ * @param {object} [seams] - { randomHex(), newId(), makeGenpageSdk(env, deps) }: the unique name's hex digits, the sitemap's id and the page backend, for a test
  */
 async function createApp(args, httpClient, seams = {}) {
   const refusal = inputRefusal(args);
@@ -485,6 +520,8 @@ async function createApp(args, httpClient, seams = {}) {
       const uniqueName = args.uniqueName !== undefined ? args.uniqueName : deriveUniqueName(args.name, seams.randomHex);
       await assertUniqueNameFree(readSdk, uniqueName);
       plan = { solution, pages, uniqueName, languageCode: await readBaseLanguage(readSdk) };
+      // Last of the reads: a page whose configuration cannot be read refuses the create like any other check, with nothing written.
+      plan.pins = await readViewPins(args.env, httpClient, pages, seams.makeGenpageSdk || makeGenpageSdk);
       // The titles are written in the language the SDK instance is made with, which is why the writer is not the instance that read. It is made
       // here, inside the guarded block, so that an instance the SDK refuses to make is a failure with nothing written, like any other read.
       writer = make({ languageCode: plan.languageCode });
@@ -553,7 +590,7 @@ async function readLeftovers(sdk, { uniqueName, sitemapId, appId, stage }) {
 }
 
 async function writeApp(sdk, args, plan, sitemapId) {
-  const { solution, pages, uniqueName, languageCode } = plan;
+  const { solution, pages, uniqueName, languageCode, pins } = plan;
   const systemSolution = isRestrictedSolution(solution.uniqueName);
   // What the run has done, for the output. `pushBegan`: the first request that can write has been sent, so something may exist, and a failure from
   // then on reads the platform back. `inSolution` is each component as its AddSolutionComponent lands, so a failure between the two says which of
@@ -567,11 +604,15 @@ async function writeApp(sdk, args, plan, sitemapId) {
     inSolution: [...made.inSolution],
     ...(systemSolution ? { systemSolution: true } : {}),
   });
-  const warningFacts = () => (made.warnings.length ? { warnings: made.warnings } : {});
+  // The notes on the views come first (they were made before the push), then the SDK's own.
+  const warningFacts = () => {
+    const all = [...pins.warnings, ...made.warnings];
+    return all.length ? { warnings: all } : {};
+  };
   let stage = 'create';
   try {
     await sdk.initWorkspace();
-    const art = await sdk.createArtifact('app', appDefinition({ name: args.name, description: args.description, uniqueName, pages, sitemapId }));
+    const art = await sdk.createArtifact('app', appDefinition({ name: args.name, description: args.description, uniqueName, pages, sitemapId, viewIds: pins.viewIds }));
     made.appId = art.id;
     made.pushBegan = true;
     const pushed = await sdk.pushArtifact('app', art.id);
@@ -616,6 +657,8 @@ async function writeApp(sdk, args, plan, sitemapId) {
       sitemapId,
       languageCode,
       navigation: { area: AREA_TITLE, group: GROUP_TITLE, pages: pages.map((page) => ({ pageId: page.id, title: page.title })) },
+      dataSources: pins.dataSources,
+      pinnedViews: pins.viewIds,
       ...warningFacts(),
     };
   } catch (err) {

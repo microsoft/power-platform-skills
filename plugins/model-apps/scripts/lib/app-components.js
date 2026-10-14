@@ -82,6 +82,34 @@ function currentLayerRow(rows) {
   return currentLayerRows(rows)[0] || rows[0];
 }
 
+// How many page ids one read names. The SDK's own check of the pages a sitemap opens reads 50 at a time, so the filter stays a URL.
+const PAGE_LOOKUP_CHUNK = 50;
+
+// The generative pages `ids` in the SAVED layer — the current one, a page that was never published included — as Map<id (lower case), the rows the platform answered for it>: one row, or two when a
+// pending edit makes it answer with both layers (`currentLayerRow` picks the one an author sees). An id that no row answers to is not in the map, and a caller that needs one to exist says so.
+// A plain read of the `uxagentproject` collection answers the PUBLISHED layer only, so a page that was created and never published — a build killed after the create change set, a publish that was
+// refused and never finished, a create nobody published — is "not found" by it. A caller that decides whether a page exists, or what to delete, must read this layer:
+//   GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq 4444… or uxagentprojectid eq 5555…
+//   { "value": [ { "uxagentprojectid": "44444444-…", "name": "Overview", "componentstate": 0 } ] }       (componentstate 0 Published, 1 Unpublished: a never-published page has this one row, with 1)
+// A read that fails, an answer that is no list, and a row with no page id are each an error, never a shorter map: the callers prove things from the rows that come back (see collectionRows).
+async function savedPageRows(client, ids, { label = 'the generative pages', code } = {}) {
+  const wanted = [...new Set(ids.map((id) => guidKey(id)))];
+  const rowsById = new Map();
+  for (let at = 0; at < wanted.length; at += PAGE_LOOKUP_CHUNK) {
+    const filter = wanted.slice(at, at + PAGE_LOOKUP_CHUNK).map((id) => `uxagentprojectid eq ${requireGuid(id, 'page id')}`).join(' or ');
+    const rows = await collectionRows(client,
+      `/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=${filter}`,
+      label, code ? { code } : undefined);
+    for (const row of rows) {
+      const id = row && typeof row.uxagentprojectid === 'string' ? guidKey(row.uxagentprojectid) : '';
+      if (!FORM_GUID_RE.test(id)) throw componentError(code || 'APP_COMPONENTS_UNVERIFIED', `${label}: a row has no readable page id`);
+      if (!rowsById.has(id)) rowsById.set(id, []);
+      rowsById.get(id).push(row);
+    }
+  }
+  return rowsById;
+}
+
 async function currentAppLayer(client, appId) {
   try {
     const rows = await collectionRows(client,
@@ -551,7 +579,7 @@ async function appEntityComponentsFor(sdk, appUnique, wanted) {
 }
 
 module.exports = {
-  currentAppLayer, currentLayerRows, currentLayerRow, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
+  currentAppLayer, currentLayerRows, currentLayerRow, savedPageRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
   publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings,
   resolveMainForms, readMainFormMembership, appMainFormsFor, appEntityComponentsFor,
   APP_COMPONENT_ENTITY_SOURCES, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,

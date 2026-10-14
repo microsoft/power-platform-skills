@@ -20,7 +20,7 @@ const { FakeSdk, connectionError, sdkError } = require('./helpers/fake-genpage-s
 const runSdkBuild = (spec, opts) => runBuild(spec, { ...opts, ...(opts.genpageCli ? { genpage: opts.genpageCli } : {}) });
 const { writeBaseline, readBaseline } = require('../lib/deployed-baseline.js');
 const { sha256 } = require('../lib/hash.js');
-const { readPageOwnership, readPendingCreations, recordPagePending } = require('../lib/page-ownership-records.js');
+const { readPageOwnership, readPendingCreations, recordPagePending, recordPageCreation } = require('../lib/page-ownership-records.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
@@ -1318,6 +1318,35 @@ test('deploy: the backend the pages phase makes for itself is disposed when the 
   assert.strictEqual(lent.disposed, 0, 'and the lent one is not disposed by the build');
 });
 
+// dispose() answers `{ left }`: the folders it could not remove, each still holding the page sources. The build dropped the answer and ended as a success with them in the temp directory.
+test('deploy: a workspace the build\'s own page backend could not remove is a warning of the build — finishing or halting — and nothing is said when none is left', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const left = ['C:\\temp\\genpage-x1y2z3'];
+  const words = `the page workspace could not be removed, so page source may be left on disk: ${left[0]} — delete the folder by hand`;
+  let leftOver = left;
+  const genpageModule = {
+    ...require('../lib/genpage-sdk.js'),
+    makeGenpageSdk: () => ({ ...mockGenpageCli(), dispose: async () => ({ left: leftOver }) }),
+  };
+  const engine = loadCli(path.join(__dirname, '..', 'lib', 'sdk-build.js'), { requires: { './genpage-sdk.js': genpageModule } }).exports;
+  for (const [what, options] of [['finishes', {}], ['halts', { malformed: true }]]) {
+    const { appDir, spec } = makeTwoPageApp(options);
+    const warnings = [];
+    try {
+      const run = engine.runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, phases: PHASES, warn: (m) => warnings.push(m) });
+      if (what === 'halts') await assert.rejects(run, (e) => e.code === 'pages-malformed-navref'); else await run;
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+    assert.ok(warnings.includes(words), `${what}: the build says which folder is left — ${JSON.stringify(warnings)}`);
+  }
+  leftOver = [];
+  const { appDir, spec } = makeTwoPageApp();
+  const warnings = [];
+  try {
+    await engine.runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, phases: PHASES, warn: (m) => warnings.push(m) });
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  assert.ok(!warnings.some((m) => /page workspace could not be removed/.test(m)), 'nothing left, nothing said');
+});
+
 test('deploy: a page with the same names only in a comment, a string or an inline style is not refused, and a spec of clean pages builds as it did', async () => {
   const { appDir, spec } = makeTwoPageApp();
   try {
@@ -2044,6 +2073,72 @@ test('deploy: two creations left pending for one key cannot be told apart — th
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// ── A pending record whose create was acknowledged is consumed through its receipt ─────────────────────────────────────────────────────────────────────
+// An acknowledged create writes its receipt first and consumes its pending record after; a record that cannot be removed (a scanner or an indexer holding the file) is a warning, on the footing that the next build
+// finds the receipt and removes it. The next build used to prove the record again by the page's name and source instead, a proof a page edited since its create — a maker's save, or a navigation target created
+// with its tokens and rewritten with them resolved — can no longer pass: the build halted with an identity conflict over a page it had made and recorded.
+test('deploy: a pending record that could not be removed after its create was acknowledged is consumed by the next build through the receipt — a page edited since is no conflict, and a record that still cannot be removed is a warning', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const realUnlink = fs.unlinkSync;
+  // Node's own recursive remove (behind fs.rmSync) keeps the `unlinkSync` it finds the first time it runs, so it is run once before `unlinkSync` is replaced: the clean-up at the end is not held by the replacement.
+  const warmUp = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-rimraf-'));
+  fs.writeFileSync(path.join(warmUp, 'x'), 'x');
+  fs.rmSync(warmUp, { recursive: true, force: true });
+  // The record cannot be removed (EBUSY, as when a scanner or an indexer holds the file).
+  const holdsRecord = () => {
+    fs.unlinkSync = (target, ...rest) => {
+      if (String(target).includes('page-ownership.pending.')) throw Object.assign(new Error(`EBUSY: resource busy or locked, unlink '${target}'`), { code: 'EBUSY' });
+      return realUnlink(target, ...rest);
+    };
+  };
+  const notRemoved = /the record of its create \(\S+\) could not be removed/;
+  try {
+    const firstWarnings = [];
+    holdsRecord();
+    let first;
+    try { first = await buildPages(spec, appDir, realPageBackend(server), { warn: (m) => firstWarnings.push(m) }); } finally { fs.unlinkSync = realUnlink; }
+    const id = first.created.pages.p;
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [id], 'the create was acknowledged: its receipt is written');
+    assert.deepStrictEqual(pendingOf(spec, appDir).get('p').map((r) => r.pageId), [id], 'and its record could not be removed');
+    assert.ok(firstWarnings.some((m) => notRemoved.test(m)), `the build says so: ${JSON.stringify(firstWarnings)}`);
+
+    // A maker saves the page: it no longer holds what the create sent, which is what the record would be proved by.
+    makerSaves(server, id, `${PAGE_SOURCE}// edited in Maker\n`);
+    // The next build still cannot remove the record: it goes on, and says so.
+    const secondWarnings = [];
+    holdsRecord();
+    let second;
+    try { second = await rebuildPages(spec, appDir, server, { p: id }, { warn: (m) => secondWarnings.push(m) }); } finally { fs.unlinkSync = realUnlink; }
+    assert.strictEqual(second.created.pages.p, id);
+    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'one page');
+    assert.strictEqual(server.rowText(id, 'src/pages/page.tsx'), PAGE_SOURCE, 'the build brought the page the edit changed back to the file, as it does any page it made');
+    assert.deepStrictEqual(pendingOf(spec, appDir).get('p').map((r) => r.pageId), [id], 'the record that cannot be removed is still there');
+    assert.ok(secondWarnings.some((m) => notRemoved.test(m)), `and that is a warning, not an identity conflict: ${JSON.stringify(secondWarnings)}`);
+
+    // Once it can be removed, the next build removes it, and the receipt stays: it is what teardown finds the page by.
+    await rebuildPages(spec, appDir, server, { p: id });
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+    assert.deepStrictEqual(receiptsOf(spec, appDir).map((r) => r.pageId), [id]);
+  } finally { fs.unlinkSync = realUnlink; fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a receipt for another key does not settle a pending record — the create is resumed under the id the record names', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const server = new FakeGenPageServer();
+  const EARLIER = '9d3a77c1-0000-4000-8000-0000000000e2';
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', EARLIER, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
+  recordPageCreation(workspaceDir, appUniqueName(spec), 'other', EARLIER, 'Overview', BUILD_ENV);
+  try {
+    const result = await buildPages(spec, appDir, realPageBackend(server));
+    assert.strictEqual(result.created.pages.p, EARLIER, 'the record was not consumed as acknowledged: no page is there, so the create is sent again under its id');
+    assert.deepStrictEqual([...server.state.projects.keys()], [EARLIER]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 // ── A key bound to another page keeps the record of a create that can still land ──────────────────────────────────────────────────────────────────────
 // An absence in one listing is a snapshot, not proof that the request which would make the page cannot still arrive. A build that binds the spec key to another live page does not resume the create — but it must not
 // consume the record either: the page that lands later would have no key, no receipt and no record, and nothing — teardown included — would find it. The record stays until evidence settles it (the page appears, or
@@ -2366,10 +2461,10 @@ test('deploy: a resumed create with another name or source adds a record — the
 
 // ── An unchanged rebuild publishes nothing ────────────────────────────────────────────────────────────────────────────────────────────────────
 // A page that already holds what the spec asks for is not written, but the backend published it all the same — the server cannot say whether an earlier run's publish of it finished, and a page whose
-// publish did not finish has to be published by the next run. So an unchanged rebuild of an app with ten pages made ten PublishXml calls of several seconds each, where an unchanged page cost no write and
-// no publish before pages went through the SDK. The build now keeps what it published in its workspace (lib/page-publish-records.js): the hash of each page's CONTENT, written once a publish was SEEN to take
-// effect, and handed back to the next update, which publishes a page it finds already holding that content only if the hash is not that content's. These tests count what a rebuild asks of the page service,
-// through the real backend over the stateful fake of the page tables.
+// publish did not finish has to be published by the next run. So an unchanged rebuild of an app with ten pages made ten PublishXml calls of several seconds each (the release before pages went through the SDK
+// re-uploaded and re-published every page of a full rebuild, so it paid them too). The build now keeps what it published in its workspace (lib/page-publish-records.js): the hash of each page's CONTENT and the
+// version of each of its file rows, written once a publish was SEEN to take effect, and handed back to the next update — for a page whose file rows still have those versions — which publishes a page it finds
+// already holding that content only if the hash is not that content's. These tests count what a rebuild asks of the page service, through the real backend over the stateful fake of the page tables.
 const { readPublishedPages, publishedRecordPath } = require('../lib/page-publish-records.js');
 const publishedOf = (spec, appDir) => readPublishedPages(path.join(appDir, '.maker-workspace'), appUniqueName(spec), BUILD_ENV);
 // The requests the page service received from `from` on, by kind: change sets (one `$batch` is one atomic write), PublishXml, any other write, and reads.
@@ -2613,12 +2708,171 @@ test('deploy: the record keeps only the pages the spec still binds — a page it
     const workspaceDir = path.join(appDir, '.maker-workspace');
     const stale = 'ffffffff-0000-4000-8000-00000000ffff';
     const { writePublishedPages } = require('../lib/page-publish-records.js');
-    writePublishedPages(workspaceDir, appUniqueName(spec), BUILD_ENV, new Map([...publishedOf(spec, appDir), [stale, sha256('gone')]]));
+    writePublishedPages(workspaceDir, appUniqueName(spec), BUILD_ENV, new Map([...publishedOf(spec, appDir), [stale, { fingerprint: sha256('gone') }]]));
     assert.ok(publishedOf(spec, appDir).has(stale));
     // Beta changes, so its publish writes the record again.
     fs.writeFileSync(path.join(appDir, 'beta.tsx'), fs.readFileSync(path.join(appDir, 'beta.tsx'), 'utf8').replace('>Beta<', '>Beta 2<'), 'utf8');
     await rebuildPages(spec, appDir, server, ids);
     assert.deepStrictEqual([...publishedOf(spec, appDir).keys()].sort(), Object.values(ids).sort(), 'the two pages of the app, and not the one nothing is bound to');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── A page published from somewhere else is published again ────────────────────────────────────────────────────────────────────────────────────
+// The record of a publish is the hash of the content AND the versionnumber of every file row of the page, read (with a plain GET) right after the publish was seen to take effect. The hash says what this
+// workspace sent; the versions say that nothing has moved the page's files since — MEASURED: publishing new content, or saving a file as a draft, moves the version of each file row it changes, and a row
+// that did not change keeps its own. So an unchanged page skips its publish only while its files read as they did, and a page published from another workspace, another machine or Maker — then put back to the
+// file's content as a draft, which the hash alone cannot tell from a page that is live — is published again. The fake page service models those versions (helpers/fake-genpage-server.js).
+const isVersionRead = (requestPath) => /^\/uxagentprojectfiles\?.*versionnumber/.test(requestPath);
+const versionReads = (server, from = 0) => server.requests.slice(from).filter((r) => r.method === 'GET' && isVersionRead(r.path));
+// The versions of a page's file rows as the server holds them right now: what the record is expected to hold after a publish.
+const versionsNow = (server, pageId) => new Map(server.filesOf(pageId).map((f) => [f.id, String(f.version)]));
+const PAGE_FILE = 'src/pages/page.tsx';
+
+test('deploy: the record keeps the version of every file row of each page as it was right after its publish — and an unchanged rebuild reads them all in ONE request and publishes nothing', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    for (const id of Object.values(ids)) {
+      const recorded = publishedOf(spec, appDir).get(id);
+      assert.deepStrictEqual(recorded.files, versionsNow(server, id), `${id}: every file row, with the version it had once the publish had taken effect`);
+      assert.ok(recorded.files.size >= 4, 'the four rows a page is made of, at least');
+    }
+    assert.strictEqual(versionReads(server).length, 2, 'one read of a page\'s versions after each publish');
+
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const rebuilt = requestsOf(server, from);
+    assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes, rebuilt.otherWrites], [0, 0, 0]);
+    assert.strictEqual(versionReads(server, from).length, 1, 'both pages\' versions come in one read, however many pages there are');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a page published from ANOTHER workspace and then put back to the file\'s content as a draft is published again — its draft equals the file, and the hash of what was sent still matches', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    const alphaText = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+    // Another workspace publishes other content, writes the file's content back as a draft and does not publish it (its publish fails, say).
+    server.otherWorkspaceDraft(ids.alpha, PAGE_FILE, 'export default function Alpha() { return <b>somebody else</b>; }\n');
+    server.otherWorkspacePublishes(ids.alpha);
+    server.otherWorkspaceDraft(ids.alpha, PAGE_FILE, alphaText);
+    const served = () => Buffer.from(server.publishedPages.get(ids.alpha).files.find((f) => f.filename === PAGE_FILE).content).toString('utf8');
+    assert.strictEqual(server.rowText(ids.alpha, PAGE_FILE), alphaText, 'the draft is the file');
+    assert.match(served(), /somebody else/, 'and what runs is the other content');
+
+    const publishedBefore = server.published.length;
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const rebuilt = requestsOf(server, from);
+    assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes], [0, 1], 'nothing to write — the draft is the file — and the page is published');
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.alpha], 'that page alone: the page next to it was not touched');
+    assert.strictEqual(served(), alphaText, 'what runs is the file again');
+    assert.deepStrictEqual(publishedOf(spec, appDir).get(ids.alpha).files, versionsNow(server, ids.alpha), 'and the record holds the versions after THIS publish');
+
+    const next = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, next).publishes, 0, 'after which the page is left alone again');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a page saved as a draft from elsewhere is published again even when the save wrote the very bytes the file has — the version moved', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    server.otherWorkspaceDraft(ids.beta, PAGE_FILE, server.rowText(ids.beta, PAGE_FILE));
+    const publishedBefore = server.published.length;
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const rebuilt = requestsOf(server, from);
+    assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes], [0, 1]);
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.beta]);
+    const next = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, next).publishes, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a file row added to a page, or taken away from it, makes the next rebuild publish the page — the set of rows is part of what was recorded', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    const extra = 'f0000000-0000-4000-8000-0000000000e1';
+    const step = async (what) => {
+      const publishedBefore = server.published.length;
+      const from = server.requests.length;
+      await rebuildPages(spec, appDir, server, ids);
+      assert.deepStrictEqual([requestsOf(server, from).changeSets, requestsOf(server, from).publishes], [0, 1], `${what}: nothing to write, one publish`);
+      assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.alpha], `${what}: the page that changed, and no other`);
+      assert.deepStrictEqual(publishedOf(spec, appDir).get(ids.alpha).files, versionsNow(server, ids.alpha), `${what}: and the record is made again`);
+    };
+    server.seedFile(ids.alpha, extra, 'src/styles.css', 200000000, 'body { margin: 0 }');
+    server.otherWorkspacePublishes(ids.alpha);
+    await step('a row added');
+    assert.ok(publishedOf(spec, appDir).get(ids.alpha).files.has(extra), 'the row that was added is in the record now');
+
+    server.state.files.delete(extra);
+    server.otherWorkspacePublishes(ids.alpha);
+    await step('a row removed');
+    assert.ok(!publishedOf(spec, appDir).get(ids.alpha).files.has(extra));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a record with no versions — one of the earlier format, or one made when the versions could not be read — publishes every page it names once, and records them', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    const workspaceDir = path.join(appDir, '.maker-workspace');
+    const file = publishedRecordPath(workspaceDir, appUniqueName(spec), BUILD_ENV);
+    // The record as the release before the versions wrote it: schema version 1, a hash per page.
+    const current = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, JSON.stringify({ ...current, schemaVersion: 1, pages: Object.fromEntries(Object.entries(current.pages).map(([id, entry]) => [id, entry.fingerprint])) }), 'utf8');
+    assert.ok([...publishedOf(spec, appDir).values()].every((entry) => entry.files === null), 'it holds hashes and no versions');
+
+    let from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual([requestsOf(server, from).changeSets, requestsOf(server, from).publishes], [0, 2], 'both pages are published: nothing says their files are as they were');
+    assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).schemaVersion, 2, 'and the record is of the current format now');
+    for (const id of Object.values(ids)) assert.deepStrictEqual(publishedOf(spec, appDir).get(id).files, versionsNow(server, id));
+
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, from).publishes, 0, 'after which an unchanged rebuild publishes nothing');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a read of the versions that FAILS costs the pages a publish and a warning — never the build — and the record made without them publishes once more', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+
+    // The versions cannot be read, before the pages are looked at and after they are published.
+    server.failOn = (method, requestPath) => (method === 'GET' && isVersionRead(requestPath) ? 503 : undefined);
+    const warnings = [];
+    let from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids, { warn: (m) => warnings.push(m) });
+    assert.deepStrictEqual([requestsOf(server, from).changeSets, requestsOf(server, from).publishes], [0, 2], 'both pages are published');
+    assert.strictEqual(warnings.filter((m) => /could not read the versions of the pages' files/.test(m)).length, 1, `said once: ${warnings.join(' | ')}`);
+    assert.ok([...publishedOf(spec, appDir).values()].every((entry) => entry.files === null), 'and what was recorded has no versions, since none could be read');
+
+    server.failOn = undefined;
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, from).publishes, 2, 'a record with no versions publishes once more, and this time the versions are read');
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, from).publishes, 0);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 

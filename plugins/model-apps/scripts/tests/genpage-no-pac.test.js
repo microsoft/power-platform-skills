@@ -11,7 +11,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { SCRIPTS_DIR, scriptsMatching } = require('./helpers/production-scripts.js');
+const { SCRIPTS_DIR, productionScripts, withoutComments, scriptsMatching } = require('./helpers/production-scripts.js');
 
 const CONNECTOR_VERB = '(?:list-connector-operations|get-connector-schema)';
 // The command as text — `pac model genpage upload --environment …`, or `model genpage upload` split into an argument list later — and as an
@@ -42,6 +42,20 @@ test('no production script runs a page verb of `pac model genpage` — only the 
 test('the pac page wrapper is gone, and no script names it', () => {
   assert.strictEqual(fs.existsSync(path.join(SCRIPTS_DIR, 'lib', 'genpage-cli.js')), false);
   assert.deepStrictEqual(scriptsMatching(/genpage-cli|makeGenpageCli|\bgenpageCli\b/), []);
+});
+
+// What the skills still ran through `pac model genpage` — the listing, the download, the type generator, the placement of a page in an app — and what they had no verb for at all
+// (taking a page out of an app, deleting it) is scripts/genpage.js's, through the page backend.
+test('scripts/genpage.js has the page verbs pac used to run, asks the page backend for them, and starts no process', () => {
+  const script = path.join(SCRIPTS_DIR, 'genpage.js');
+  assert.strictEqual(fs.existsSync(script), true);
+  assert.ok(productionScripts().includes(script), 'the scans above read it');
+  const { VERBS } = require('../genpage.js');
+  assert.deepStrictEqual(Object.keys(VERBS), ['list', 'download', 'types', 'add-to-app', 'remove-from-app', 'delete']);
+  const code = withoutComments(fs.readFileSync(script, 'utf8'));
+  assert.match(code, /require\('\.\/lib\/genpage-sdk\.js'\)/, 'it goes through the page backend');
+  assert.doesNotMatch(code, /child_process|\bspawn(?:Sync)?\b|\bexec(?:File)?(?:Sync)?\b|\bpac\b/, 'no process, and no pac, in its code');
+  assert.deepStrictEqual(scriptsMatching(/child_process/).filter((rel) => /^(?:lib\/)?genpage(?:-sdk)?\.js$/.test(rel)), [], 'nor in the page backend it asks');
 });
 
 test('a page is a sub-area of ONE shape: the build and the placement of a page into an app both build it with genPageSubArea', () => {

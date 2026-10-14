@@ -978,7 +978,10 @@ test('completing a placement asks the backend to FINISH it — and the marker st
   answer = 'published, not showing';
   const unproved = await run([...args, ...adviceFor(first)], genpage);
   assert.strictEqual(unproved.ok, false, 'a backend that did not see the page in the published navigation has not finished the placement');
-  assert.match(unproved.payload.error, new RegExp(`but NOT added to app ${APP}'s navigation: app ${APP} was published, but its published navigation does not show page ${NEW_ID} yet`));
+  // The placement IS saved, so the report says so and says what is left — the app's publish — and never that the page was "NOT added" or that it has to be added in Maker.
+  assert.match(unproved.payload.error, new RegExp(`page ${NEW_ID} was saved and published, and it is placed in app ${APP}'s saved navigation, but the app's publish is not finished: app ${APP} was published, but its published navigation does not show page ${NEW_ID} yet`));
+  assert.doesNotMatch(unproved.payload.error, /NOT added/);
+  assert.doesNotMatch(unproved.payload.error, /Add the page to the app navigation in Maker/);
   assert.match(unproved.payload.error, new RegExp(`run the same command again with --page-id ${NEW_ID} added`));
   assert.strictEqual(unproved.payload.pageId, NEW_ID);
   assert.strictEqual(readMarker(file).unfinished, 'place', 'so the page is still unfinished: it can be completed again');
@@ -1028,7 +1031,8 @@ test('completing a publish that failed INTO an app places the page as a first pl
   const into = ['--env', ENV, '--app-id', APP, '--code-file', file, ...NAMED, '--add-to-sitemap', ...adviceFor(first)];
   const second = await run(into, genpage);
   assert.strictEqual(second.ok, false, 'the app could not be published');
-  assert.match(second.payload.error, new RegExp(`but NOT added to app ${APP}'s navigation`));
+  assert.match(second.payload.error, new RegExp(`placed in app ${APP}'s saved navigation, but the app's publish is not finished: the navigation of app ${APP} was saved, but publishing the app failed \\(503\\)`));
+  assert.doesNotMatch(second.payload.error, /NOT added|Add the page to the app navigation in Maker/, 'a placement that is saved is not reported as one that is not');
   assert.deepStrictEqual(genpage.of('placeInApp').map((c) => c.args[1].finish), [undefined], 'a first placement is an ordinary one, even when it completes a page');
   assert.strictEqual(readMarker(file).unfinished, 'place', 'the placement is what is left now');
 
@@ -1095,6 +1099,8 @@ test('REAL BACKEND over the scripted SDK: a completion whose app publish took no
   const second = await run([...args, ...adviceFor(first)], make);
   assert.strictEqual(second.ok, false, 'the publish was accepted and the page is not in what runs: not finished');
   assert.match(second.payload.error, /its published navigation does not show page .* yet/);
+  assert.match(second.payload.error, /it is placed in app \S+'s saved navigation, but the app's publish is not finished/, 'the placement is saved, and what is left is the app\'s publish');
+  assert.doesNotMatch(second.payload.error, /NOT added|Add the page to the app navigation in Maker/, 'the page is in the navigation: it is not to be added in Maker');
   assert.match(second.payload.error, /run the same command again with --page-id/);
   assert.deepStrictEqual(published.publishes, ['failed', 'accepted']);
   assert.strictEqual(readMarker(file).unfinished, 'place', 'still unfinished');
@@ -1173,6 +1179,27 @@ test('the backend is disposed before anything is reported — on success, on a r
   const failed = await run(createArgs(codeFile()), environment({ onCreate: () => { throw new Error('boom'); } }));
   assert.strictEqual(failed.ok, false);
   assert.strictEqual(failed.disposedAtEmit, 1, 'a failed write');
+});
+
+// dispose() answers `{ left }`: the folders it could not remove, each still holding the page's source. The upload dropped the answer, so it reported success with the source in the temp directory
+// and not a word about it. It is a warning of the result now, whichever way the run ends.
+test('a backend workspace that could not be removed is a warning of the result — on success and on a failed write — and nothing is said when none is left', async () => {
+  const left = ['C:\\temp\\genpage-x1y2z3'];
+  const words = `the page workspace could not be removed, so page source may be left on disk: ${left[0]} — delete the folder by hand`;
+  const worked = await run(createArgs(codeFile()), environment({ left }));
+  assert.strictEqual(worked.ok, true);
+  assert.deepStrictEqual(worked.payload.warnings, [words]);
+  const failed = await run(createArgs(codeFile()), environment({ left, onCreate: () => { throw new Error('boom'); } }));
+  assert.strictEqual(failed.ok, false);
+  assert.deepStrictEqual(failed.payload, { error: 'boom', warnings: [words] });
+  const refused = await run(updateArgs(codeFile()), environment({ left }));
+  assert.strictEqual(refused.payload.code, 'no-base');
+  assert.deepStrictEqual(refused.payload.warnings, [words], 'a refusal after the backend was made carries it too');
+  // Beside the backend's own warnings, after them.
+  const noted = await run(createArgs(codeFile()), environment({ left, onCreate: () => ({ warnings: ['the service rewrote the compiled output'] }) }));
+  assert.deepStrictEqual(noted.payload.warnings, ['the service rewrote the compiled output', words]);
+  const clean = await run(createArgs(codeFile()), environment());
+  assert.strictEqual(clean.payload.warnings, undefined);
 });
 
 // ── #673: an update must not replace a deployed page that drifted from its base ─────────────────────────────────────────────────────

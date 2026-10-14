@@ -1018,16 +1018,21 @@ function makeRunner({ emit, total }) {
 
 // How an operator resets a workspace by hand, where the build cannot do it itself. Most of `.maker-workspace`
 // is state a re-run rebuilds — the SDK's copies are re-read from the environment, and without the
-// changed-only snapshot the next `--changed-only` run just does a full build — but two files record things
-// the environment cannot give back:
+// changed-only snapshot the next `--changed-only` run just does a full build — but three kinds of file record
+// things the environment cannot give back:
 //   - last-applied.json, what was last applied or downloaded: the baseline that keeps a nav change made in
 //     the designer from being reverted by a stale spec (AB#6726727);
 //   - destructive-approval.json, the removals a maker approved: without it the next --allow-destructive
-//     authorizes whatever that run finds, not what was shown.
+//     authorizes whatever that run finds, not what was shown;
+//   - page-ownership.*.json, the receipts of the pages this app created, the records of pages a teardown is
+//     deleting, and the `pending` records of page creates that were started and never answered. A pending
+//     record is the only trace of a page that may still land: without it the next build creates a second page
+//     for the spec entry, or nothing ever finds the page that lands late — what the record exists to prevent.
+//     (`teardown-model-app.js --clear-workspace` refuses to clear a workspace that holds one, for the same reason.)
 // And the changed-only snapshot can hold a RUNNING teardown's registration and a build's lease, which are
 // that run's guard against a concurrent one: deleting them under a live run removes it. Every remedy that
 // resets the workspace says exactly this.
-const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-workspace directory (or the --workspace one), then delete everything in it except last-applied.json and destructive-approval.json';
+const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-workspace directory (or the --workspace one), then delete everything in it except last-applied.json, destructive-approval.json and the page-ownership.*.json records (the receipts and pending records of the pages the app created: nothing else can find them)';
 
 // Some SDK refusals end with the SDK call that fixes them — `fetchArtifact(...)` — which an operator of this
 // plugin cannot make. Where the operator's step is known, the halt names it too.

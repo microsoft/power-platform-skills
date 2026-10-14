@@ -8,8 +8,8 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 ## [Unreleased] — 2.15.0
 
 Generative pages, the environment's apps and tables, connections, connector metadata and deployment settings go
-through the bundled SDK instead of `pac`. `pac` is left for signing in and choosing the environment, the type generator
-`/genpage` runs, and the fallbacks where the SDK refuses. A page can be created before the app that will hold it.
+through the bundled SDK instead of `pac`. `pac` is left for signing in and choosing the environment, and the fallbacks
+where the SDK refuses. A page can be created before the app that will hold it.
 
 ### Added
 
@@ -32,6 +32,21 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   another create made under the same unique name is named apart and never reported as this one's; when it cannot read that, it says what it
   knows (a push the SDK saved wrote both rows) and what to look for. A create into `Default` says it needs no add instead of reading like a
   failure. Like every app the SDK creates, the app gets the new header and navigation setting, which `pac model create` did not write.
+- **`scripts/genpage.js`: the page verbs the skills ran through `pac model genpage` — `list`, `download`, `types` (the type generator),
+  `add-to-app` — and two they had no verb for, `remove-from-app` and `delete`** (the skill text still names the `pac` commands; it moves
+  onto this script separately). One pure-ASCII JSON line per command and exit 0 or 1; a mistake in the command line is a usage error with
+  nothing on stdout. `download` reads every page before it writes, so a page that cannot be read leaves the folder as it was, and writes the
+  page's own bytes (`page.tsx`, `config.json`, `prompt.txt`: no byte order mark and no line break appended, which `pac` added — the base
+  marker hashes a page alike either way); `--app-id` is optional. `types` is the SDK's RuntimeTypes generator, so its file is not byte for
+  byte `pac`'s: a self-contained module, without the system and derived read-only columns `pac` typed, in the maker portal's column order.
+  `add-to-app` puts the page in an app's navigation with the default views of its tables, titled in the environment's base language,
+  publishes the app and checks the page shows in it; run again, it finishes a placement that was saved and never published.
+  `remove-from-app` takes the entry out, publishes the app and checks the page is gone from it, and refuses to leave an app with no
+  navigation entry unless `--allow-empty-navigation` says that is meant. `delete` removes a page and its conversation, and refuses while
+  any app's navigation — published or saved — names the page, naming the apps, since Dataverse refuses without saying which.
+- **`apps.js create` pins the default public view of each table the pages read into the app it creates** (as `pac model genpage upload
+  --app-id` did), and **`genpage-base.js record` takes a page with no app** (`--app-id` is optional): a page made before its app is
+  recorded with the page alone, as `genpage-upload.js` already did.
 
 - **`scripts/connector.js` and `scripts/solution-settings.js`.** `connector.js` lists a connector's operations, and reads
   one operation's parameters and response or a tabular connector's table columns. `solution-settings.js template` writes
@@ -90,11 +105,18 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
 - **A rebuild does not publish a page that is already up to date.** A page that already holds what the spec asks for is not
   written, but the server cannot say whether an earlier run's publish of it finished, so a page found up to date is published
   unless the build knows it published exactly that content — otherwise an app of ten pages would pay ten `PublishXml` calls of
-  several seconds each on every rebuild. The build keeps that record in its workspace (`page-published.<hash>.json`): the hash of
-  the content each page was published with (source, name, data sources, model, bindings), written once the publish was seen to
-  take effect. A new or changed page, a page saved by a run whose publish failed or was not proven (a renamed one included), and
-  a missing or damaged record all publish; an unchanged rebuild costs no page write and no `PublishXml`, as in 2.14.0. The first
-  build in a workspace with no record publishes each page once, to make it.
+  several seconds each on every rebuild. The build keeps that record in its workspace (`page-published.<hash>.json`), written once
+  the publish was seen to take effect: per page, the hash of the content it was published with (source, name, data sources, model,
+  bindings) and the version number of every one of the page's file rows as the plain (published-layer) read answered it right
+  after. A page skips its publish only when it holds that content AND its file rows, read now (one request for all the pages), are
+  exactly the recorded set at the recorded versions. A new or changed page, a page saved by a run whose publish failed or was not
+  proven (a renamed one included), a page whose files were changed or published from another workspace, machine or Maker since
+  (their versions moved, even when the content was put back as a draft), a file row added or removed, a read of the versions that
+  fails, a record of an earlier release (it has no versions) and a missing or damaged record all publish. What the versions cannot
+  show is the page row's own fields — its name is not in a file — so a page renamed and published from elsewhere, then renamed back
+  as a draft, is not seen. That residual is new in 2.15.0: 2.14.0 re-uploaded and re-published every page of a full rebuild (through
+  `pac`), paying the publish of every page each time; an unchanged rebuild now costs one read of the files' versions and no page
+  write and no `PublishXml`. The first build in a workspace with no record publishes each page once, to make it.
 - **A page write is one atomic change set.** A create mints its id first, and an unknown outcome is settled by reading it
   (sent once more under the same id — never a second page); an update writes only what differs, so leaving out `--model`,
   `--name` or `--data-sources` keeps the page's own (the CLI blanked the model and renamed the page to its navigation
@@ -111,7 +133,11 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   navigation lists the page. `--add-to-sitemap` and updates still need `--app-id`; with it, the default views of the
   tables the page reads are pinned into the app (as the CLI did).
 - **Verify** reads pages in-process and reports one it cannot read as that page's failed check; **download** writes nothing
-  when a page cannot be read; **teardown** also removes a deleted page's conversation history.
+  when a page cannot be read; **teardown** also removes a deleted page's conversation history. Teardown reads the pages in the
+  saved layer, so a page that was created and never published (a build killed after the create, a publish that was refused and
+  never finished) is found and deleted with its conversation, where a read of the published layer only called it "not found", left
+  it and its history behind and dropped its receipt. A receipt corroborates a page by the name it recorded as well as by the
+  spec's current name, so a page the build adopted but did not use is deleted even when the spec has been renamed since.
 - **A page write says what it did, and nothing more.** "Nothing was written" is said only when the SDK refused the write
   before it sent anything, or the service answered it with a 4xx; any other failure at or after the send — a full disk once
   the service had committed, a dropped connection, a 5xx from a gateway — is `unknown`: the page is read by its minted id, and
@@ -125,7 +151,15 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   is a conflict, not a page to update — and what an earlier create sent that this one did not (another model, an older name) is
   brought up to date by the ordinary update. A record is kept until evidence settles it (the page adopted, or deleted by teardown),
   never because a listing did not show the page; so a key bound to another page keeps its record, and a page that lands late is
-  reported, and found by teardown. A pending record is intent: it never authorizes an update by itself.
+  reported, and found by teardown. A pending record is intent: it never authorizes an update by itself. A record whose create was
+  acknowledged (its receipt exists) and that could not be removed is consumed by the next build through the receipt, not proved
+  again by the page's name and source, which a page edited since can no longer match. A request still in flight when the page it
+  made is deleted can make the page again, and nothing names it: no client can cancel a request it gave up on, so this is accepted
+  (see AGENTS.md).
+- **The manual workspace reset keeps the page records.** Every halt that asks for a reset says to delete everything except
+  `last-applied.json`, `destructive-approval.json` and the `page-ownership.*.json` records: the receipts of the pages the app
+  created and the pending records of creates that were never answered are the only trace of a page that may still land, and
+  deleting them let the next build create a second page for the spec entry.
 - **The build pins the default views of the tables its pages read** into the app's components once the pages are written (the
   CLI did this on every upload): one app operation for all of them, nothing written when every view is already pinned, and a
   failure to pin is a warning.
@@ -133,8 +167,13 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   it created but did not finish (its publish failed, or the placement it was asked for did) is finished by running the same
   command again with `--page-id` added: the base marker beside the code file records that the tool created the page, and
   that marker lets exactly that page be completed. Every other update still has to prove the page is in the app's navigation.
+  A placement that was saved and whose app publish is what is left (it failed, or the published navigation does not show the
+  page yet) is reported as that, not as a page that was not added.
   Completing a placement publishes the app even when its saved navigation already names the page (an earlier run may have saved
-  it and failed to publish), and the marker is cleared only once the app's published navigation shows the page.
+  it and failed to publish), and the marker stays while the app's published navigation can be read and does not show the page.
+  Once the publish was accepted and the page shows — or that navigation cannot be read at all, which is said in a warning — the
+  marker is cleared: keeping it would make every later update of the page need `--add-to-sitemap` and publish the app again for
+  as long as that layer stays unreadable.
 - **A page's source is normalized once**: a file's bytes lose one leading BOM and nothing else, and the Griffel check, the
   navigation resolution, the hashes the build records and the page's write all use that text — a file that starts with two
   marks keeps the second, in what is checked, recorded and stored.
@@ -142,7 +181,9 @@ through the bundled SDK instead of `pac`. `pac` is left for signing in and choos
   the folder once the storage calls under way have settled, so a read still running cannot write a page's source back into
   the temp directory; ending the page reads does the same for the reads' workspace, and the verify command gives the page
   backend a workspace of its own. The final disposal also waits for a cleanup that an earlier one left running (up to 10 s) and
-  prints a warning that names what is still on disk, rather than ending the command while page source is there.
+  prints a warning that names what is still on disk, rather than ending the command while page source is there. Every other
+  command that makes a page backend — the upload, the build and its verify, the base-marker check, `apps.js` and `genpage.js` —
+  now says the same when a folder could not be removed, in the result's `warnings` or on stderr, instead of reporting success.
 
 ### Removed
 

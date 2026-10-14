@@ -17,6 +17,23 @@ function workspace(t) {
 }
 const lib = () => require('../lib/page-ownership-records.js');
 
+// The workspace-reset advice every halt that asks for one gives (`RESET_WORKSPACE`) says to keep the `page-ownership.*.json` records: they are the only trace of a page this app created, of a delete under
+// way, and of a create that was started and never answered (a page that may still land) — and deleting them is the way to the second page for one spec entry that the pending record prevents.
+// The glob it names has to cover every kind of record the module writes.
+test('the workspace-reset advice keeps every kind of ownership record: the three kinds the module writes all carry the name the advice protects', (t) => {
+  const { RESET_WORKSPACE } = require('../lib/entity-provision.js');
+  const dir = workspace(t);
+  lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A, 'a'.repeat(64));
+  lib().recordPageTeardown(dir, APP, [{ id: ID, key: 'overview', name: 'Overview' }], ENV_A);
+  const written = fs.readdirSync(dir);
+  assert.equal(written.length, 3);
+  assert.deepEqual(written.map((name) => name.split('.')[1]).sort(), ['created', 'pending', 'teardown']);
+  assert.ok(written.every((name) => /^page-ownership\..+\.json$/.test(name)), 'every record is page-ownership.<kind>.<hash>.json');
+  assert.match(RESET_WORKSPACE, /except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records/);
+  assert.match(RESET_WORKSPACE, /pending records/);
+});
+
 test('a JSON-named backup beside the records is not a record, and a record retired mid-read blocks nothing', (t) => {
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);

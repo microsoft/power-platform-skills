@@ -2,7 +2,7 @@
 'use strict';
 // Record or check the base marker an upload compares against (#673).
 //
-//   node scripts/genpage-base.js record --app-id <id> --page-id <id> --file <page.tsx>
+//   node scripts/genpage-base.js record --page-id <id> --file <page.tsx> [--app-id <id>]
 //        [--deployed-sha256 <hash>]
 //   node scripts/genpage-base.js check --env <url> --app-id <id> --page-id <id> --file <local.tsx>
 //
@@ -10,14 +10,21 @@
 // so both hashes are the file's. `--deployed-sha256` binds a chosen local file to the hash `check`
 // observed, which is not the local file's hash when the user picked a different base.
 //
+// `--app-id` is optional for `record`: a page needs no app, and a first page is created before the app that
+// will hold it (apps.js create takes the page's id), so such a page is recorded with the page alone — a marker
+// with no app, which lib/genpage-base.js already allows. The first update that names the app the page was
+// then placed in proves the page is in that app's navigation, goes ahead on that marker, and records the app.
+// `check` still takes the app: it reads the deployed page the way an update of it would.
+//
 // `check` reads the deployed page, compares, and — only when the normalized texts differ — writes
 // `<basename>.deployed.tsx` next to the local file for review. The SDK's throwaway workspace is
 // removed before the result is emitted: the real emitter calls `process.exit`, so a cleanup after
-// `emit` would never run.
+// `emit` would never run. A folder it could not remove, which holds the page's source, is a `warnings` entry of the result.
 
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
+const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
 const {
   pageHash,
@@ -30,7 +37,7 @@ const {
   markerPath,
 } = require('./lib/genpage-base.js');
 
-const USAGE = 'Usage: node scripts/genpage-base.js record --app-id <id> --page-id <id> --file <page.tsx> [--deployed-sha256 <hash>]\n'
+const USAGE = 'Usage: node scripts/genpage-base.js record --page-id <id> --file <page.tsx> [--app-id <id>] [--deployed-sha256 <hash>]\n'
   + '       node scripts/genpage-base.js check --env <url> --app-id <id> --page-id <id> --file <local.tsx>';
 
 const RECORD_FLAGS = ['app-id', 'page-id', 'file', 'deployed-sha256'];
@@ -47,7 +54,7 @@ function required(flags, names, emit) {
 }
 
 function record(flags, emit) {
-  const missing = required(flags, ['app-id', 'page-id', 'file'], emit);
+  const missing = required(flags, ['page-id', 'file'], emit);
   if (missing) return missing;
   let text;
   try {
@@ -67,7 +74,8 @@ function record(flags, emit) {
     const body = writeMarker(flags.file, {
       version: 1,
       pageId: flags['page-id'],
-      appId: flags['app-id'],
+      // No key for a page no app holds yet: the marker then records the page alone (see the header).
+      ...(flags['app-id'] ? { appId: flags['app-id'] } : {}),
       deployedSha256,
       localSha256,
       source: 'download',
@@ -76,7 +84,7 @@ function record(flags, emit) {
       ok: true,
       marker: markerPath(flags.file),
       pageId: body.pageId,
-      appId: body.appId,
+      ...(body.appId ? { appId: body.appId } : {}),
       deployedSha256: body.deployedSha256,
       localSha256: body.localSha256,
       source: body.source,
@@ -100,6 +108,7 @@ async function check(flags, emit, deps) {
   let deployedText = null;
   let downloadError = null;
   let genpage;
+  let leftOnDisk = null;
   try {
     genpage = makeBackend(flags.env);
     deployedText = (await genpage.read(flags['page-id'])).source;
@@ -108,7 +117,8 @@ async function check(flags, emit, deps) {
   } finally {
     // Before any emit. emitResult calls process.exit, so a cleanup placed after it never runs
     // and the SDK's throwaway workspace — which holds the page source — stays on disk. Awaited: the folder is removed once the storage calls the backend had under way have settled.
-    try { if (genpage && typeof genpage.dispose === 'function') await genpage.dispose(); } catch { /* leave the temp dir */ }
+    // A folder it could not remove (`{ left }`) is a warning in the result: a check that read a page and left its source in the temp directory says so.
+    try { if (genpage && typeof genpage.dispose === 'function') leftOnDisk = leftOnDiskWarning(await genpage.dispose()); } catch { /* leave the temp dir */ }
   }
 
   const comparison = compareWithMarker(readMarker(flags.file), {
@@ -139,6 +149,7 @@ async function check(flags, emit, deps) {
     ...(lines ? { lines } : {}),
     ...(deployedCopy ? { deployedCopy } : {}),
     ...(copyError ? { copyError } : {}),
+    ...(leftOnDisk ? { warnings: [leftOnDisk] } : {}),
   };
   if (downloadError) {
     return emit(false, {

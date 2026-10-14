@@ -59,6 +59,7 @@ const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.j
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
+const { savedPageRows, currentLayerRow } = require('./app-components.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-sdk.js');
@@ -421,16 +422,16 @@ const KIND_HANDLERS = {
       const lookups = [...candidates, ...pendingOnly.values()];
       if (!lookups.length) return [];
 
-      // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure).
-      let rows;
+      // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure). A page exists when the SAVED layer holds it. A plain read of the page table answers the PUBLISHED
+      // layer only, and a page that was created and never published — a build killed after the create change set, a publish that was refused and never finished, a standalone create nobody
+      // published — has no row there: it was "not found" and kept, with its conversation messages, although this workspace's pending record or receipt names it. The saved layer is what the
+      // build's own listing and apps.js read, so the three agree on which pages there are (savedPageRows says how).
+      let byId;
       try {
-        const filter = lookups.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
-        // uxagentprojects rows: { "uxagentprojectid": "<id>", "name": "Overview" }.
-        // Read the row name, not the editable name carried by the manifest.
-        rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid', 'name'], filter, paginate: true });
-        if (!Array.isArray(rows) || rows.some((r) => !r || typeof r.uxagentprojectid !== 'string' || !FORM_GUID_RE.test(r.uxagentprojectid))) {
-          throw new Error('stored page id results are unreadable');
-        }
+        if (!sdk.dataverse || typeof sdk.dataverse.get !== 'function') throw new Error('the pages cannot be read in their saved layer: no Dataverse client');
+        // Read the row name, not the editable name carried by the manifest. A page with a pending edit is answered in both layers: its current one is the authored row.
+        const found = await savedPageRows(sdk.dataverse, lookups.map((a) => a.id), { label: 'the generative pages' });
+        byId = new Map([...found].map(([id, pageRows]) => [id, currentLayerRow(pageRows)]));
       } catch (err) {
         // Same as the manifest read above: not being able to look deletes nothing and fails the step,
         // so the manifest naming these pages survives for a re-run.
@@ -439,7 +440,6 @@ const KIND_HANDLERS = {
         e.candidates = lookups;
         throw e;
       }
-      const byId = new Map(rows.map((r) => [r.uxagentprojectid.toLowerCase(), r]));
       const present = lookups.filter((p) => byId.has(p.id.toLowerCase()));
       const absent = candidates.filter((p) => !byId.has(p.id.toLowerCase())).map((p) => ({ ...p, absent: true }));
       if (!present.length) return { items: [], kept: [], candidates: absent };
@@ -467,13 +467,17 @@ const KIND_HANDLERS = {
         const nameReadable = typeof row.name === 'string' && row.name.length > 0;
         const item = { id: p.id, key: p.key, name: nameReadable ? unescapePacName(row.name) : '[stored name unreadable]' };
         const receipt = ownership.created.find((r) => r.key === p.key && r.pageId === p.id.toLowerCase());
-        const expectedName = specNames.get(p.key) || (receipt && receipt.name);
+        // The names a receipted page may hold: what the spec calls it now (a build that updated it after a rename brought the page there) and what the receipt recorded when the build made, or adopted,
+        // it. A page the build adopted but did not use — its key is bound to another page, so no update ever renamed it — keeps the name the earlier create sent, which is the receipt's: the build proved
+        // it by that name and its source, told the user "teardown deletes it", and wrote this receipt for it. Comparing with the spec's current name alone kept it as "not proven" when the spec had been
+        // renamed since.
+        const receiptNames = new Set([specNames.get(p.key), receipt && receipt.name].filter(Boolean));
         if (!sitemapReadable) {
           kept.push({ ...item, reason: `app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})` });
         } else if (!nameReadable) {
           kept.push({ ...item, reason: 'stored page name is unreadable' });
           errors.push(`page ${p.id}: stored page name is unreadable`);
-        } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && expectedName === item.name) || (sentNames.has(p.id.toLowerCase()) && sentNames.get(p.id.toLowerCase()).has(item.name))) {
+        } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && receiptNames.has(item.name)) || (sentNames.has(p.id.toLowerCase()) && sentNames.get(p.id.toLowerCase()).has(item.name))) {
           items.push(item);
         } else {
           kept.push({ ...item, reason: p.pending
@@ -1604,7 +1608,9 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
       if (step.kind === 'genpage') {
         completePageDeletions(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);
-        // A page found under the id of a create that was never acknowledged and deleted: what the record stood for is settled. (An id that was only ABSENT is not — the request may still land.)
+        // A page found under the id of a create that was never acknowledged and deleted: what the record stood for is settled — as far as anything can settle it. (An id that was only ABSENT is not: the request may still land.)
+        // A request still in flight when the page is deleted can make it again, and nothing here can tell it cannot: a client can neither cancel a request it gave up on nor know when it can no longer arrive, so a
+        // record kept "until it is settled" could never be consumed and --clear-workspace would wait for it for ever. Accepted, and said next to the build's own account of it (AGENTS.md, the pending records).
         completePendingCreations(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);
         const pending = readPageOwnership(opts.workspaceDir, step.target.appUnique, opts.env).teardown;
         if (pending.length) throw new Error(`proven pages remain undeleted: ${pending.map((p) => p.pageId).join(', ')}; keeping the manifest and solution`);

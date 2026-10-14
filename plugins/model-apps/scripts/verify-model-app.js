@@ -22,6 +22,7 @@ const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
+const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { mapLimit } = require('./lib/entity-provision.js');
 const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
@@ -618,9 +619,8 @@ async function main() {
     // cannot answer must not hold the process for ever, and must not be reported as done while a page's source is on disk).
     try {
       if (genpage && typeof genpage.dispose === 'function') {
-        const disposed = await genpage.dispose({ waitMs: PAGE_READS_END_WAIT_MS });
-        const left = (disposed && disposed.left) || [];
-        if (left.length) process.stderr.write(`WARNING: the page workspace could not be removed, so page source may be left on disk: ${left.join(', ')} — delete the folder by hand\n`);
+        const leftOnDisk = leftOnDiskWarning(await genpage.dispose({ waitMs: PAGE_READS_END_WAIT_MS }));
+        if (leftOnDisk) process.stderr.write(`WARNING: ${leftOnDisk}\n`);
       }
     } catch { /* best-effort */ }
     session.dispose();

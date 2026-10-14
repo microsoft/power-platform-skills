@@ -20,6 +20,12 @@
 //   onUpdate        (id, args) => void | result | throw: the same for `update`
 //   appPages        { [appId]: [{ pageId, name }] } | (appId, options) => { ok, pages, … }: what `enumeratePages` answers
 //   placement       (appId, options) => result | throw: what `placeInApp` answers; default an app edit that added every page asked for
+//   removal         (appId, pageId, options) => result | throw: what `removeFromApp` answers; default a removal of one entry that left one
+//   deletion        (id) => result | throw: what `delete` answers; default the page removed from `pages` and reported as deleted (`fileRows`, from the page, default 4)
+//   types           a string, or (dataSources, options) => string | throw: what `runtimeTypes` answers; default `// types of <tables>`
+//   language        what `baseLanguage` answers (default 1033); `languageError`: an Error it throws instead
+//   left            the folders `dispose` answers it could not remove, as the real backend's `{ left }` (default none)
+//   `describe` answers from `pages`: a page with `raw: true` is not editable and its tables are not known (`null`)
 const DEFAULT_SOURCE = 'export default function Page() { return null; }\n';
 const { sha256 } = require('../../lib/hash.js');
 
@@ -38,6 +44,7 @@ function fakeGenpage(options = {}) {
     actionBindings: p.actionBindings,
     firstPrompt: p.prompt === undefined ? (p.firstPrompt) : p.prompt,
     conversation: p.conversation || (p.prompt === undefined ? [] : [{ sender: 'user', message: p.prompt }]),
+    ...(p.fileRows === undefined ? {} : { fileRows: p.fileRows }),
     raw: Boolean(p.raw),
   });
   for (const p of options.pages || []) pages.set(String(p.pageId || p.id).toLowerCase(), toPage(p));
@@ -51,6 +58,7 @@ function fakeGenpage(options = {}) {
     pages,
     of: (method) => calls.filter((c) => c.method === method),
     disposed: 0,
+    disposeArgs: [],
 
     async enumerateEnv() {
       record('enumerateEnv', []);
@@ -116,8 +124,52 @@ function fakeGenpage(options = {}) {
       return { added, alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: added.length > 0 };
     },
 
-    dispose() {
+    async describe(id) {
+      record('describe', [id]);
+      const page = found(id);
+      if (!page) throw fail('GENPAGE_NOT_FOUND', `page ${id} does not exist in this environment`);
+      return {
+        pageId: page.id.toLowerCase(),
+        name: page.name,
+        editable: !page.raw,
+        dataSources: page.raw ? null : [...page.dataSources],
+        fileRows: page.fileRows === undefined ? 4 : page.fileRows,
+        conversationMessages: page.conversation.length,
+      };
+    },
+
+    async baseLanguage() {
+      record('baseLanguage', []);
+      if (options.languageError) throw options.languageError;
+      return options.language === undefined ? 1033 : options.language;
+    },
+
+    async removeFromApp(appId, pageId, opts) {
+      record('removeFromApp', [appId, pageId, opts]);
+      if (options.removal) return options.removal(appId, pageId, opts);
+      return { removed: [{ area: 'Main', group: 'Pages', count: 1 }], wasInNavigation: true, appEdited: true, published: true, entriesLeft: 1, provedPublished: true, warnings: [] };
+    },
+
+    async delete(id) {
+      record('delete', [id]);
+      if (options.deletion) return options.deletion(id);
+      const page = found(id);
+      if (!page) throw fail('GENPAGE_NOT_FOUND', `page ${id} does not exist in this environment`);
+      pages.delete(String(id).toLowerCase());
+      return { pageId: page.id.toLowerCase(), name: page.name, deleted: true, fileRows: page.fileRows === undefined ? 4 : page.fileRows, conversationMessages: page.conversation.length, historyRemoved: true, verified: true, warnings: [] };
+    },
+
+    async runtimeTypes(dataSources, opts) {
+      record('runtimeTypes', [dataSources, opts]);
+      if (typeof options.types === 'function') return options.types(dataSources, opts);
+      return options.types === undefined ? `// types of ${dataSources.join(',')}\n` : options.types;
+    },
+
+    dispose(opts) {
       backend.disposed += 1;
+      backend.disposeArgs.push(opts);
+      // What the real backend answers: the folders it could not remove, each still holding page source.
+      return { left: options.left || [] };
     },
   };
   return backend;

@@ -230,7 +230,7 @@ test('REAL BUNDLE: create --publish adds exactly one PublishXml, naming the app,
 test('REAL BUNDLE: what the platform holds after a create — the app row, the sitemap\u2019s name and id, and the solution\u2019s two components', async () => {
   const org = orgWithPages();
   const result = await createApp(args({ description: 'KPIs for the team', publish: true }), client(org), seams);
-  assert.deepStrictEqual(Object.keys(result).sort(), ['addedToSolution', 'appId', 'inSolution', 'languageCode', 'name', 'navigation', 'ok', 'published', 'sitemapId', 'solution', 'uniqueName', 'unpublishedChanges']);
+  assert.deepStrictEqual(Object.keys(result).sort(), ['addedToSolution', 'appId', 'dataSources', 'inSolution', 'languageCode', 'name', 'navigation', 'ok', 'pinnedViews', 'published', 'sitemapId', 'solution', 'uniqueName', 'unpublishedChanges']);
   assert.deepStrictEqual([result.published, result.unpublishedChanges, result.inSolution], [true, false, ['app', 'sitemap']]);
   assert.strictEqual(result.uniqueName, 'account_metrics_1a2b3c4d');
   assert.match(result.appId, GUID);
@@ -313,6 +313,86 @@ test('REAL BUNDLE: the sitemap written is byte for byte the one the build\u2019s
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- create: the default views of the tables the pages read ------------------------------------------------------------
+
+const VIEW_ACCOUNT = 'aaaaaaaa-0000-4000-8000-0000000000a1';
+const VIEW_CONTACT = 'aaaaaaaa-0000-4000-8000-0000000000a2';
+const pinOrg = (options = {}) => createFakeAppsOrg({
+  pages: [{ id: PAGE_A, name: 'Overview', dataSources: ['account', 'contact'] }, { id: PAGE_B, name: 'Details', dataSources: ['contact'] }],
+  views: [{ savedqueryid: VIEW_ACCOUNT, table: 'account' }, { savedqueryid: VIEW_CONTACT, table: 'contact' }],
+  ...options,
+});
+const addAppComponents = (org) => org.requests.filter((r) => r.method === 'POST' && r.path === '/AddAppComponents').map((r) => r.body);
+
+test('REAL BUNDLE: create reads each page\'s tables and their default public views, and the SDK pins the views in the same AddAppComponents that adds the sitemap — one write, none after it', async () => {
+  const org = pinOrg();
+  const result = await createApp(args({ pageIds: [PAGE_A, PAGE_B] }), client(org), seams);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
+  assert.deepStrictEqual([result.dataSources, result.pinnedViews], [['account', 'contact'], [VIEW_ACCOUNT, VIEW_CONTACT]]);
+  assert.ok(!('warnings' in result), JSON.stringify(result.warnings));
+  const bodies = addAppComponents(org);
+  assert.strictEqual(bodies.length, 1, 'the views are part of the create, not a second write');
+  const components = JSON.stringify(bodies[0]).toLowerCase();
+  for (const view of [VIEW_ACCOUNT, VIEW_CONTACT]) assert.ok(components.includes(view), `AddAppComponents names the view ${view}: ${components}`);
+  assert.ok(components.includes(result.sitemapId), 'and the sitemap');
+  // The same writes as a create with no views: nothing was added to the sequence.
+  assert.deepStrictEqual(org.writeNames(), ['POST appmodules', 'POST sitemaps', 'POST AddAppComponents', 'POST appmodules/appmoduleroles_association/$ref', 'POST appsettings', 'POST AddSolutionComponent', 'POST AddSolutionComponent']);
+  assert.deepStrictEqual(org.unexpected, []);
+});
+
+test('REAL BUNDLE: every read of the pages\' tables and views comes before the first write — a table\'s default public view is asked for once, as a public (querytype 0) default one', async () => {
+  const org = pinOrg();
+  const result = await createApp(args({ pageIds: [PAGE_A, PAGE_B] }), client(org), seams);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
+  const firstWrite = org.requests.findIndex((r) => r.method !== 'GET');
+  const before = org.requests.slice(0, firstWrite);
+  const views = before.filter((r) => /^\/savedqueries\?/.test(r.path));
+  assert.strictEqual(views.length, 2, 'one read per table, however many pages read it');
+  for (const request of views) assert.match(decodeURIComponent(request.path), /returnedtypecode eq '(account|contact)' and querytype eq 0 and isdefault eq true/);
+  assert.ok(before.some((r) => /^\/uxagentprojectfiles/.test(r.path)), 'the pages\' own rows were read to learn their tables');
+  assert.ok(!org.requests.slice(firstWrite).some((r) => /^\/savedqueries\?/.test(r.path) || /^\/uxagentprojectfiles/.test(r.path)), 'nothing about the pages is read after the first write');
+});
+
+test('REAL BUNDLE: a table with no default public view is named in the warnings and left out, a page that reads no table pins nothing — and the app is made all the same', async () => {
+  const noView = pinOrg({ views: [{ savedqueryid: VIEW_ACCOUNT, table: 'account' }] });
+  const partial = await createApp(args({ pageIds: [PAGE_A] }), client(noView), seams);
+  assert.strictEqual(partial.ok, true, JSON.stringify(partial));
+  assert.deepStrictEqual(partial.pinnedViews, [VIEW_ACCOUNT]);
+  assert.deepStrictEqual(partial.warnings, ['table contact has no default public view to pin into the app, so the maker\'s "/" picker may not list it']);
+
+  const bare = createFakeAppsOrg({ pages: [{ id: PAGE_A, name: 'Overview' }] });
+  const none = await createApp(args(), client(bare), seams);
+  assert.deepStrictEqual([none.ok, none.dataSources, none.pinnedViews], [true, [], []]);
+  assert.ok(!bare.requests.some((r) => /^\/savedqueries\?/.test(r.path)), 'no table, no view asked for');
+  assert.ok(!JSON.stringify(addAppComponents(bare)).toLowerCase().includes('savedquery'), 'and none added to the app');
+});
+
+test('REAL BUNDLE: a page the SDK holds as raw files has no tables to read — it is named in the warnings and the create goes on', async () => {
+  const org = pinOrg({ pages: [{ id: PAGE_A, name: 'Overview', raw: true }, { id: PAGE_B, name: 'Details', dataSources: ['contact'] }] });
+  const result = await createApp(args({ pageIds: [PAGE_A, PAGE_B] }), client(org), seams);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
+  assert.deepStrictEqual(result.pinnedViews, [VIEW_CONTACT]);
+  assert.deepStrictEqual(result.warnings, [`page ${PAGE_A} ("Overview") is held as raw files, so the tables it reads are not known and no view was pinned for it`]);
+});
+
+test('REAL BUNDLE: a page whose rows cannot be read refuses the create before anything is written, with the platform\'s words — and the page backend\'s workspace is removed', async () => {
+  const org = pinOrg({ answer: (req) => (/^\/uxagentprojectfiles/.test(req.path) ? json(403, { error: { code: '0x80040220', message: 'The user is missing a privilege.' } }) : undefined) });
+  const made = [];
+  const mkdtemp = fs.mkdtempSync;
+  fs.mkdtempSync = (prefix, ...rest) => { const dir = mkdtemp(prefix, ...rest); made.push(dir); return dir; };
+  let result;
+  try {
+    result = await createApp(args(), client(org), seams);
+  } finally {
+    fs.mkdtempSync = mkdtemp;
+  }
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.written, false);
+  assert.ok(result.code, 'the failure has a code');
+  assert.deepStrictEqual(org.writeNames(), [], 'not one write');
+  assert.ok(made.length >= 2 && made.every((dir) => !fs.existsSync(dir)), 'every throwaway folder is gone');
 });
 
 test('REAL BUNDLE: two apps of one display name get two unique names, and the second is refused when it names the first', async () => {
@@ -754,7 +834,7 @@ test('REAL BUNDLE: an environment with no HeaderAndNavigationRefresh setting get
   assert.deepStrictEqual(org.writeNames().filter((n) => n === 'POST appsettings'), []);
 });
 
-test('REAL BUNDLE: the throwaway workspace is removed after a create, after a refusal and after a failure', async () => {
+test('REAL BUNDLE: the throwaway workspace is removed after a create, after a refusal and after a failure — the page backend\u2019s own, which a create that reaches the page reads makes, included', async () => {
   const made = [];
   const mkdtemp = fs.mkdtempSync;
   fs.mkdtempSync = (prefix, ...rest) => { const dir = mkdtemp(prefix, ...rest); made.push(dir); return dir; };
@@ -766,7 +846,8 @@ test('REAL BUNDLE: the throwaway workspace is removed after a create, after a re
   } finally {
     fs.mkdtempSync = mkdtemp;
   }
-  assert.strictEqual(made.length, 4);
+  // One folder for each of the four runs, and one more for the page backend of the two creates that got as far as the pages' reads (the refusal did not).
+  assert.deepStrictEqual(made.map((dir) => path.basename(dir).replace(/[A-Za-z0-9]{6}$/, '')).sort(), ['apps-', 'apps-', 'apps-', 'apps-', 'genpage-', 'genpage-']);
   for (const dir of made) assert.strictEqual(fs.existsSync(dir), false, dir);
 });
 
