@@ -22,12 +22,17 @@
  *   step  --working-dir <d> --id <phase-id> --status <pending|active|done|skipped|failed> [--note <t>]
  *   set   --working-dir <d> --section <name> --json <obj> | --json-file <path> [--state proposed|approved]
  *   phone --working-dir <d> --stage building|screens|qr [--preview-file <html> | --screens-file <json>] [--qr-image <png>] [--qr-url <url>]
+ *   progress --working-dir <d> --json-file <path>
+ *   sync --working-dir <d> --json-file <path>
+ *   temp  --working-dir <d>
  *   show  --working-dir <d>
  */
 
 'use strict';
 
 const fs = require('node:fs');
+const crypto = require('node:crypto');
+const os = require('node:os');
 const path = require('node:path');
 
 const { publishAtomic, renderTemplate } = require('./lib/render-template');
@@ -57,6 +62,8 @@ const OUTPUT_FILE = 'create-app-plan.html';
 const TEMPLATE_PATH = path.join(__dirname, '..', 'assets', 'run-plan.html');
 
 const STATUSES = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
+const EDIT_ITEM_STATUSES = new Set(['pending', 'active', 'waiting', 'done', 'skipped', 'failed']);
+const EDIT_PROGRESS_STATUSES = new Set(['active', 'waiting', 'done', 'failed']);
 
 /**
  * Sections the skill records as it learns them. Each is written once by the step that owns
@@ -110,6 +117,14 @@ function statePath(projectRoot) {
 
 function outputPath(projectRoot) {
   return path.join(docsDir(projectRoot), OUTPUT_FILE);
+}
+
+function editTempDir(projectRoot) {
+  const projectHash = crypto.createHash('sha256')
+    .update(path.resolve(projectRoot))
+    .digest('hex')
+    .slice(0, 16);
+  return path.join(os.tmpdir(), 'power-platform-mobile-app', projectHash);
 }
 
 function loadState(projectRoot) {
@@ -408,6 +423,578 @@ function render(projectRoot, state) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function normalizeEditItems(options) {
+  const supplied = Array.isArray(options.items) ? options.items : null;
+  const legacy = Array.isArray(options.checklist)
+    ? options.checklist.map((label, index) => ({
+      id: `item-${index + 1}`,
+      label,
+      status: index === 0 ? 'active' : 'pending',
+    }))
+    : null;
+  const items = supplied || legacy || [
+    { id: 'inspect', label: 'Inspect the current app', status: 'active' },
+    { id: 'plan', label: 'Plan the requested changes', status: 'pending' },
+    { id: 'apply', label: 'Apply the approved changes', status: 'pending' },
+    { id: 'verify', label: 'Verify the edited app', status: 'pending' },
+    { id: 'preview', label: 'Refresh the preview and app plan', status: 'pending' },
+  ];
+  const ids = new Set();
+
+  return items.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`Progress item ${index + 1} must be an object.`);
+    }
+    const id = String(item.id || '').trim();
+    const label = String(item.label || '').trim();
+    const status = String(item.status || 'pending');
+    if (!id || !label) throw new Error(`Progress item ${index + 1} requires id and label.`);
+    if (ids.has(id)) throw new Error(`Duplicate progress item id '${id}'.`);
+    if (!EDIT_ITEM_STATUSES.has(status)) {
+      throw new Error(
+        `Unknown progress item status '${status}'. Known: ${[...EDIT_ITEM_STATUSES].join(', ')}`,
+      );
+    }
+    ids.add(id);
+    return { id, label, status, note: item.note ? String(item.note) : '' };
+  });
+}
+
+function normalizeEditChanges(options) {
+  const changes = Array.isArray(options.changes) ? options.changes : [];
+  return changes.map((change, index) => {
+    if (!change || typeof change !== 'object' || Array.isArray(change)) {
+      throw new Error(`Edit change ${index + 1} must be an object.`);
+    }
+    const title = String(change.title || change.label || '').trim();
+    if (!title) throw new Error(`Edit change ${index + 1} requires a title.`);
+    const detail = change.detail ? String(change.detail) : '';
+    const rationale = change.rationale ? String(change.rationale)
+      : change.reason ? String(change.reason) : '';
+    if (!rationale.trim()) throw new Error(`Edit change ${index + 1} requires a rationale.`);
+    const kind = String(change.kind || '').trim().toLowerCase();
+    if (!['general', 'data-model', 'screen'].includes(kind)) {
+      throw new Error(
+        `Edit change ${index + 1} requires kind general, data-model, or screen.`,
+      );
+    }
+    const diagram = buildEditChangeDiagram(change, kind, index);
+    return {
+      title,
+      detail,
+      rationale: rationale.trim(),
+      kind,
+      diagram,
+    };
+  });
+}
+
+function safeMermaidName(value, fallback) {
+  const source = value === undefined || value === null ? fallback : String(value);
+  return source.replace(/[^A-Za-z0-9_]/g, '_') || fallback;
+}
+
+function safeMermaidLabel(value, fallback = '') {
+  const source = value === undefined || value === null ? fallback : String(value);
+  return source.replace(/["[\]{}<>|]/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
+}
+
+function relationshipConnector(cardinality) {
+  const normalized = String(cardinality || 'one-to-many').toLowerCase();
+  const connectors = {
+    'one-to-many': '||--o{',
+    'many-to-one': '}o--||',
+    'one-to-one': '||--||',
+    'many-to-many': '}o--o{',
+    'optional-to-many': 'o|--o{',
+  };
+  if (!connectors[normalized]) {
+    throw new Error(`Unknown data-model relationship cardinality '${cardinality}'.`);
+  }
+  return connectors[normalized];
+}
+
+function buildDataModelDiagram(change, index) {
+  const model = change.dataModel && typeof change.dataModel === 'object'
+    ? change.dataModel
+    : change;
+  const tables = Array.isArray(model.tables) ? model.tables : [];
+  if (!tables.length) {
+    throw new Error(`Data-model edit change ${index + 1} requires tables.`);
+  }
+  const ids = new Map();
+  const tableLines = tables.map((table, tableIndex) => {
+    if (!table || typeof table !== 'object' || Array.isArray(table)) {
+      throw new Error(`Data-model table ${tableIndex + 1} must be an object.`);
+    }
+    const name = String(table.name || table.logicalName || '').trim();
+    if (!name) throw new Error(`Data-model table ${tableIndex + 1} requires a name.`);
+    const id = safeMermaidName(name, `Entity${tableIndex + 1}`);
+    [name, table.logicalName, table.id].filter(Boolean).forEach((key) => ids.set(String(key), id));
+    const columns = Array.isArray(table.columns) ? table.columns
+      : Array.isArray(table.fields) ? table.fields : [];
+    const columnLines = columns.length
+      ? columns.map((column, columnIndex) => {
+        const value = column && typeof column === 'object' ? column : { name: column };
+        const columnName = safeMermaidName(
+          value.name || value.logicalName,
+          `field${columnIndex + 1}`,
+        );
+        const type = safeMermaidName(value.type || value.dataType || 'string', 'string');
+        const key = value.primaryKey ? ' PK' : value.foreignKey ? ' FK' : '';
+        return `    ${type} ${columnName}${key}`;
+      })
+      : ['    string id PK'];
+    return `  ${id} {\n${columnLines.join('\n')}\n  }`;
+  });
+  const relationships = Array.isArray(model.relationships) ? model.relationships : [];
+  const relationshipLines = relationships.map((relationship, relationshipIndex) => {
+    if (!relationship || typeof relationship !== 'object' || Array.isArray(relationship)) {
+      throw new Error(`Data-model relationship ${relationshipIndex + 1} must be an object.`);
+    }
+    const from = ids.get(String(relationship.from || relationship.parent || ''));
+    const to = ids.get(String(relationship.to || relationship.child || ''));
+    if (!from || !to) {
+      throw new Error(
+        `Data-model relationship ${relationshipIndex + 1} must reference declared tables.`,
+      );
+    }
+    const label = safeMermaidLabel(
+      relationship.label || relationship.name || 'relates to',
+      'relates to',
+    );
+    return `  ${from} ${relationshipConnector(relationship.cardinality)} ${to} : "${label}"`;
+  });
+  return `erDiagram\n${tableLines.concat(relationshipLines).join('\n')}`;
+}
+
+function buildScreenDiagram(change, index) {
+  const graph = change.screenGraph && typeof change.screenGraph === 'object'
+    ? change.screenGraph
+    : change;
+  const screens = Array.isArray(graph.screens) ? graph.screens : [];
+  if (!screens.length) throw new Error(`Screen edit change ${index + 1} requires screens.`);
+  const ids = new Map();
+  const nodes = screens.map((screen, screenIndex) => {
+    const value = screen && typeof screen === 'object' ? screen : { name: screen };
+    const name = String(value.name || value.title || value.route || '').trim();
+    if (!name) throw new Error(`Screen ${screenIndex + 1} requires a name or route.`);
+    const id = `S_${safeMermaidName(value.id || value.route || name, String(screenIndex + 1))}`;
+    [value.id, value.route, name].filter(Boolean).forEach((key) => ids.set(String(key), id));
+    const route = value.route && value.route !== name
+      ? ` · ${safeMermaidLabel(value.route)}`
+      : '';
+    return `  ${id}["${safeMermaidLabel(name)}${route}"]`;
+  });
+  const edges = Array.isArray(graph.edges) ? graph.edges
+    : Array.isArray(graph.navigation) ? graph.navigation : [];
+  if (screens.length > 1 && !edges.length) {
+    throw new Error(
+      `Screen edit change ${index + 1} requires navigation edges for multiple screens.`,
+    );
+  }
+  const links = edges.map((edge, edgeIndex) => {
+    if (!edge || typeof edge !== 'object' || Array.isArray(edge)) {
+      throw new Error(`Screen navigation edge ${edgeIndex + 1} must be an object.`);
+    }
+    const from = ids.get(String(edge.from || ''));
+    const to = ids.get(String(edge.to || ''));
+    if (!from || !to) {
+      throw new Error(`Screen navigation edge ${edgeIndex + 1} must reference declared screens.`);
+    }
+    const label = safeMermaidLabel(edge.label || edge.action || '');
+    return label ? `  ${from} -->|"${label}"| ${to}` : `  ${from} --> ${to}`;
+  });
+  return `flowchart LR\n${nodes.concat(links).join('\n')}`;
+}
+
+function buildEditChangeDiagram(change, kind, index) {
+  if (kind === 'data-model') return buildDataModelDiagram(change, index);
+  if (kind === 'screen') return buildScreenDiagram(change, index);
+  if (change.dataModel || change.screenGraph || change.tables || change.screens) {
+    throw new Error(
+      `General edit change ${index + 1} cannot carry data-model or screen graph data.`,
+    );
+  }
+  return '';
+}
+
+function writeEditProgress(projectRoot, options = {}) {
+  const phase = options.phase || 'review';
+  const note = options.note || 'Working on the approved change';
+  const waiting = Boolean(options.waiting);
+  const status = options.status || (waiting ? 'waiting' : 'active');
+  if (!EDIT_PROGRESS_STATUSES.has(status)) {
+    throw new Error(
+      `Unknown edit progress status '${status}'. Known: ${[...EDIT_PROGRESS_STATUSES].join(', ')}`,
+    );
+  }
+  const items = normalizeEditItems(options);
+  const changes = normalizeEditChanges(options);
+  const completed = items.filter((item) => ['done', 'skipped'].includes(item.status)).length;
+  const failed = items.filter((item) => item.status === 'failed').length;
+  const percent = items.length ? Math.round((completed / items.length) * 100) : 0;
+  const settled = status === 'done' || status === 'failed';
+  const state = loadState(projectRoot);
+  const appName = options.appName || (state && state.appName) || path.basename(path.resolve(projectRoot));
+  const generatedAt = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  const displayPhase = String(phase).replace(/[-_]+/g, ' ');
+  const nonce = crypto.randomBytes(16).toString('base64');
+
+  const filePath = path.join(editTempDir(projectRoot), 'edit-app-progress.html');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+  const rows = items.map((item) => {
+    const itemNote = item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : '';
+    return `  <li class="item ${escapeHtml(item.status)}" data-item-id="${escapeHtml(item.id)}">`
+      + `<span class="bullet"></span><span class="item-copy"><span>${escapeHtml(item.label)}</span>`
+      + `${itemNote}</span><span class="item-status">${escapeHtml(item.status)}</span></li>`;
+  }).join('\n');
+
+  const changeCards = changes.length
+    ? changes.map((change) => {
+      const detail = change.detail
+        ? `<div class="change-detail">${escapeHtml(change.detail)}</div>`
+        : '';
+      const rationale = change.rationale
+        ? `<div class="change-rationale"><strong>Why this matters:</strong> ${escapeHtml(change.rationale)}</div>`
+        : '';
+      const diagram = change.diagram
+        ? `<div class="diagram-block"><div class="diagram-title">`
+          + `${change.kind === 'data-model' ? 'Proposed data model' : 'Proposed screen graph'}`
+          + `</div><div class="diagram-canvas" role="img" aria-label="`
+          + `${change.kind === 'data-model' ? 'Proposed data model diagram' : 'Proposed screen navigation graph'}"></div>`
+          + `<div class="diagram-fallback-note">The interactive diagram could not be rendered.</div>`
+          + `<details class="diagram-source"><summary>View diagram source</summary>`
+          + `<pre>${escapeHtml(change.diagram)}</pre></details></div>`
+        : '';
+      const kindLabel = change.kind ? `<span class="change-kind">${escapeHtml(change.kind)}</span>` : '';
+      return `<article class="change-card"><span class="change-mark"></span><div>`
+        + `<div class="change-header"><div class="change-title">${escapeHtml(change.title)}</div>${kindLabel}</div>`
+        + `${detail}${rationale}${diagram}</div></article>`;
+    }).join('\n')
+    : `<div class="empty">Planned changes will appear here after the current app has been inspected.</div>`;
+  const waitingBanner = waiting
+    ? `<div class="input-banner" role="status"><span class="banner-dot"></span><div>`
+      + `<strong>Waiting for your input</strong>`
+      + `<span>Review the proposed changes or provide the missing details.</span></div></div>`
+    : '';
+  const autoRefresh = settled ? '' : `
+    var RELOAD_MS = 2500;
+    var QUIET_MS = 10000;
+    var lastInteraction = 0;
+    ['scroll', 'keydown', 'pointerdown'].forEach(function (event) {
+      window.addEventListener(event, function () { lastInteraction = Date.now(); }, { passive: true });
+    });
+    setInterval(function () {
+      if (document.hidden || Date.now() - lastInteraction < QUIET_MS) return;
+      var fresh = location.href.split('#')[0].split('?')[0] + '?t=' + Date.now();
+      location.replace(fresh);
+    }, RELOAD_MS);`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none';" />
+  <title>Mobile app edit plan - ${escapeHtml(appName)}</title>
+  <script nonce="${nonce}"
+          src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js"
+          integrity="sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2"
+          crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg:#faf9f8; --surface:#fff; --surface2:#f3f2f1; --border:#e1dfdd;
+      --border-light:#c8c6c4; --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
+      --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+      --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
+      --warn:#ca5010; --warn-bg:#ca50100a; --warn-border:#ca501020;
+      --fail:#a4262c; --fail-bg:#a4262c0a; --fail-border:#a4262c20;
+      --footer-h:38px; --radius:8px;
+      --shadow:0 1.6px 3.6px rgba(0,0,0,.132),0 .3px .9px rgba(0,0,0,.108);
+      --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+    }
+    *{box-sizing:border-box;}
+    body{font-family:var(--sans);margin:0;background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;padding-bottom:var(--footer-h);}
+    button{font:inherit;}
+    .topbar{position:sticky;top:0;z-index:10;background:var(--surface);box-shadow:var(--shadow);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;}
+    .topbar-left{display:flex;align-items:center;gap:14px;min-width:0;}
+    .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+    .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+    .topbar-sub{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--text-dim);}
+    .topbar-sep{opacity:.5;}
+    .topbar-right{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+    .pill{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:600;letter-spacing:.2px;border:1px solid var(--border);color:var(--text-dim);background:var(--surface2);}
+    .pill-phase{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border);text-transform:capitalize;}
+    .pill-done{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
+    .pill-failed{background:var(--fail-bg);color:var(--fail);border-color:var(--fail-border);}
+    .layout{display:flex;min-height:calc(100vh - 65px - var(--footer-h));}
+    .sidebar{width:240px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;}
+    .nav-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
+    .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:0;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;text-align:left;}
+    .nav-btn:hover{color:var(--text);background:var(--surface2);}
+    .nav-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+    .nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+    .nav-icon{font-size:15px;opacity:.55;width:18px;text-align:center;}
+    .content{flex:1;min-width:0;max-width:960px;padding:32px 40px 72px;}
+    .section{display:none;}
+    .section.active{display:block;}
+    h1{font-size:26px;line-height:1.2;letter-spacing:-.3px;margin:0 0 6px;color:var(--text-bright);}
+    .section-desc{font-size:13px;color:var(--text-dim);margin-bottom:22px;max-width:72ch;}
+    .summary{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;box-shadow:var(--shadow);}
+    .note{font-size:16px;line-height:1.55;color:var(--text-bright);}
+    .status-line{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-dim);margin-top:16px;}
+    .progress-track{height:6px;overflow:hidden;border-radius:999px;background:var(--surface2);border:1px solid var(--border);margin-top:9px;}
+    .progress-bar{display:block;height:100%;background:var(--accent);width:${percent}%;}
+    .input-banner{display:flex;align-items:flex-start;gap:10px;margin-bottom:18px;padding:12px 14px;background:#fff8f2;border:1px solid var(--warn-border);border-radius:var(--radius);color:var(--warn);}
+    .input-banner strong,.input-banner span{display:block;}
+    .input-banner span{font-size:12px;color:var(--text-dim);}
+    .banner-dot{width:8px;height:8px;margin-top:7px;border-radius:50%;background:var(--warn);flex-shrink:0;}
+    .change-card{display:grid;grid-template-columns:18px 1fr;gap:12px;align-items:start;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;margin-bottom:10px;box-shadow:var(--shadow);}
+    .change-mark{width:10px;height:10px;border-radius:50%;background:var(--accent);margin-top:6px;}
+    .change-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:3px;flex-wrap:wrap;}
+    .change-title{font-weight:650;color:var(--text-bright);}
+    .change-kind{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);background:var(--accent-bg);border:1px solid var(--accent-border);padding:2px 6px;border-radius:999px;}
+    .change-detail{font-size:12.5px;color:var(--text-dim);margin-top:3px;}
+    .change-rationale{font-size:12.4px;color:var(--text);margin-top:8px;padding:9px 11px;border:1px solid var(--accent-border);background:var(--accent-bg);border-radius:4px;}
+    .change-rationale strong{color:var(--text-bright);}
+    .diagram-block{margin-top:14px;padding-top:13px;border-top:1px solid var(--border);}
+    .diagram-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);margin-bottom:8px;}
+    .diagram-canvas{display:flex;justify-content:center;overflow:auto;min-height:90px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;}
+    .diagram-canvas svg{max-width:100%;height:auto;}
+    .diagram-source{margin-top:8px;font-size:11px;color:var(--text-dim);}
+    .diagram-source summary{cursor:pointer;color:var(--accent);}
+    .diagram-source pre{font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-word;overflow-x:auto;color:var(--text-bright);}
+    .diagram-fallback-note{display:none;margin-top:8px;color:var(--warn);font-size:12px;}
+    .diagram-unavailable .diagram-fallback-note{display:block;}
+    .empty{color:var(--text-dim);font-size:13px;padding:18px 20px;background:var(--surface);border:1px dashed var(--border);border-radius:var(--radius);}
+    ul{list-style:none;padding:0;margin:0;}
+    .item{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:12px;align-items:start;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:15px 18px;margin-bottom:10px;box-shadow:var(--shadow);}
+    .bullet{width:16px;height:16px;border-radius:50%;border:2px solid var(--border-light);display:inline-block;margin-top:2px;}
+    .item-copy { display: flex; flex: 1; flex-direction: column; gap: 2px; }
+    .item-note{color:var(--text-dim);font-size:12px;}
+    .item-status{color:var(--text-dim);font-size:11px;text-transform:uppercase;font-weight:600;letter-spacing:.3px;white-space:nowrap;}
+    .item.active{border-color:var(--accent-border);background:var(--accent-bg);}
+    .item.active .bullet{border-color:var(--accent);border-right-color:transparent;animation:spin 1s linear infinite;}
+    .item.waiting{border-color:var(--warn-border);background:var(--warn-bg);}
+    .item.waiting .bullet{border-color:var(--warn);background:var(--warn);}
+    .item.done .bullet{border-color:var(--pass);background:var(--pass);}
+    .item.failed{border-color:var(--fail-border);background:var(--fail-bg);}
+    .item.failed .bullet{border-color:var(--fail);background:var(--fail);}
+    .item.active .item-copy>span:first-child,.item.waiting .item-copy>span:first-child{color:var(--text-bright);font-weight:650;}
+    .item.done .item-copy>span:first-child{color:var(--pass);}
+    .item.skipped{opacity:.6;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    .ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:10;}
+    @media(max-width:720px){
+      .topbar{padding:12px 16px;}
+      .layout{flex-direction:column;}
+      .sidebar{width:100%;display:flex;padding:8px;border-right:0;border-bottom:1px solid var(--border);position:sticky;top:64px;z-index:9;}
+      .nav-label{display:none;}
+      .nav-btn{width:auto;border-left:0;border-bottom:2px solid transparent;padding:10px 14px;}
+      .nav-btn.active{border-left:0;border-bottom-color:var(--accent);}
+      .content{padding:24px 18px 60px;}
+      .topbar-right{width:100%;}
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <img class="logo" src="${brandIconDataUri()}" alt="Power Apps" />
+      <div>
+        <div class="topbar-title">Mobile app edit plan</div>
+        <div class="topbar-sub">
+          <span>${escapeHtml(appName)}</span><span class="topbar-sep">|</span>
+          <span>Updated ${escapeHtml(generatedAt)} UTC</span>
+        </div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="pill pill-phase">${escapeHtml(displayPhase)}</span>
+      <span class="pill ${status === 'done' ? 'pill-done' : status === 'failed' ? 'pill-failed' : ''}">${escapeHtml(status)}</span>
+      <span class="pill">${completed} of ${items.length} complete</span>
+    </div>
+  </header>
+  <div class="layout">
+    <nav class="sidebar" aria-label="Edit plan">
+      <div class="nav-label">Edit plan</div>
+      <button class="nav-btn active" type="button" role="tab" aria-selected="true" data-tab="changes"><span class="nav-icon">&#9998;</span> Changes</button>
+      <button class="nav-btn" type="button" role="tab" aria-selected="false" data-tab="steps"><span class="nav-icon">&#9638;</span> Build steps</button>
+    </nav>
+    <main class="content">
+      <section class="section active" id="tab-changes" role="tabpanel">
+        <h1>Changes</h1>
+        <div class="section-desc">The requested app updates and the activity currently in progress.</div>
+        ${waitingBanner}
+        <div class="summary">
+          <div class="note">${escapeHtml(note)}</div>
+          <div class="status-line">
+            <span>Current phase: <strong>${escapeHtml(displayPhase)}</strong></span>
+            <span>${completed} of ${items.length} operations complete${failed ? `, ${failed} failed` : ''}</span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
+            <span class="progress-bar"></span>
+          </div>
+        </div>
+        ${changeCards}
+      </section>
+      <section class="section" id="tab-steps" role="tabpanel" hidden>
+        <h1>Build steps</h1>
+        <div class="section-desc">Live progress for each operation in the approved edit plan.</div>
+        <ul>${rows}</ul>
+      </section>
+    </main>
+  </div>
+  <footer class="ai-footer">AI-generated content may be incorrect</footer>
+  <script nonce="${nonce}">
+  (function () {
+    var STORE_TAB = 'mobile-edit-plan-tab';
+    var diagramBlocks = Array.from(document.querySelectorAll('.diagram-block'));
+    function markDiagramUnavailable(block) {
+      block.classList.add('diagram-unavailable');
+    }
+    if (diagramBlocks.length) {
+      if (window.mermaid) {
+        window.mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'base',
+          themeVariables: {
+            primaryColor: '#f3f2f1',
+            primaryTextColor: '#201f1e',
+            primaryBorderColor: '#c8c6c4',
+            lineColor: '#605e5c',
+            tertiaryColor: '#ffffff',
+            fontFamily: 'Segoe UI, sans-serif'
+          }
+        });
+        diagramBlocks.forEach(function (block, index) {
+          var canvas = block.querySelector('.diagram-canvas');
+          var source = block.querySelector('.diagram-source pre').textContent;
+          window.mermaid.render('editDiagram' + index, source).then(function (result) {
+            // The source is derived from allowlisted structured fields and Mermaid runs in strict
+            // security mode, so its SVG output is the only HTML admitted into this local page.
+            canvas.innerHTML = result.svg;
+          }).catch(function () {
+            markDiagramUnavailable(block);
+          });
+        });
+      } else {
+        diagramBlocks.forEach(markDiagramUnavailable);
+      }
+    }
+    function showTab(tab) {
+      document.querySelectorAll('.nav-btn').forEach(function (button) {
+        var selected = button.dataset.tab === tab;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+      });
+      document.querySelectorAll('.section').forEach(function (section) {
+        var selected = section.id === 'tab-' + tab;
+        section.classList.toggle('active', selected);
+        section.hidden = !selected;
+      });
+    }
+    document.querySelectorAll('.nav-btn').forEach(function (button) {
+      button.addEventListener('click', function () {
+        showTab(button.dataset.tab);
+        try { sessionStorage.setItem(STORE_TAB, button.dataset.tab); } catch (error) { /* private mode */ }
+      });
+    });
+    try {
+      var savedTab = sessionStorage.getItem(STORE_TAB);
+      if (savedTab) showTab(savedTab);
+    } catch (error) { /* sessionStorage unavailable; Changes stays selected */ }
+    ${autoRefresh}
+  }());
+  </script>
+</body>
+</html>`;
+
+  fs.writeFileSync(filePath, html, 'utf8');
+  return filePath;
+}
+
+function syncPlanToCurrentApp(projectRoot, options = {}) {
+  const root = path.resolve(projectRoot);
+  const existing = loadState(root);
+  const sections = options.sections || (
+    options.section && options.value !== undefined ? { [options.section]: options.value } : {}
+  );
+  const sectionEntries = Object.entries(sections);
+  const requestedAppName = options.appName || (sections.requirements || {}).appName;
+  const requestedDataPlatform = options.dataPlatform || (sections.architecture || {}).dataPlatform
+    || (sections.requirements || {}).dataPlatform;
+  if (!existing && sectionEntries.length === 0) {
+    throw new Error('A missing plan requires structured current-app sections; refusing a generic shell.');
+  }
+
+  const state = existing || initState(root, {
+    appName: requestedAppName || 'Your app',
+    dataPlatform: requestedDataPlatform || 'unknown',
+  });
+  if (requestedAppName) state.appName = String(requestedAppName);
+  if (requestedDataPlatform) state.dataPlatform = String(requestedDataPlatform);
+  state.sections = state.sections || {};
+  state.sectionStates = state.sectionStates || {};
+
+  // Each supplied section is a current-state snapshot, not a patch. Replacing it is what lets an
+  // edit remove a screen, connector, capability, or table instead of leaving stale rows behind.
+  for (const [name, value] of sectionEntries) {
+    if (!SECTIONS.has(name)) {
+      throw new Error(`Unknown section '${name}'. Known: ${[...SECTIONS].join(', ')}`);
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`Section '${name}' must be a JSON object`);
+    }
+    state.sections[name] = value;
+    const requestedState = (options.sectionStates || {})[name] || options.state || 'approved';
+    if (!SECTION_STATES.has(requestedState)) {
+      throw new Error(`Unknown state '${requestedState}'. Known: ${[...SECTION_STATES].join(', ')}`);
+    }
+    state.sectionStates[name] = requestedState;
+  }
+
+  if (!existing || options.inferred === true) {
+    const requirements = state.sections.requirements || {};
+    state.sections.requirements = {
+      ...requirements,
+      appName: requirements.appName || state.appName,
+      dataPlatform: requirements.dataPlatform || state.dataPlatform,
+      source: requirements.source || 'existing app state',
+      inferred: true,
+      summary: requirements.summary || options.summary
+        || 'Plan inferred from existing app state because no prior create-run plan was present.',
+    };
+    state.sectionStates.requirements = 'approved';
+  }
+
+  if (!existing) {
+    for (const phase of state.phases) {
+      const notApplicable = state.dataPlatform === 'connector-only'
+        && (phase.id === 'data-model' || phase.id === 'dataverse');
+      phase.status = notApplicable ? 'skipped' : 'done';
+      phase.note = notApplicable ? 'Not used by this app' : 'Inferred from the existing app';
+    }
+  }
+
+  state.lastEdit = {
+    summary: options.summary || '',
+    syncedAt: new Date().toISOString(),
+    sections: sectionEntries.map(([name]) => name),
+  };
+  state.updatedAt = new Date().toISOString();
+  save(root, state);
+  return outputPath(root);
+}
+
 /**
  * The brand mark as a `data:` URI.
  *
@@ -442,7 +1029,12 @@ function parseArgs(argv) {
     else if (argument === '--id') options.id = argv[++index];
     else if (argument === '--status') options.status = argv[++index];
     else if (argument === '--note') options.note = argv[++index];
+    else if (argument === '--phase') options.phase = argv[++index];
+    else if (argument === '--summary') options.summary = argv[++index];
+    else if (argument === '--waiting') options.waiting = true;
+    else if (argument === '--checklist') options.checklist = JSON.parse(argv[++index]);
     else if (argument === '--section') options.section = argv[++index];
+    else if (argument === '--value') options.value = JSON.parse(argv[++index]);
     else if (argument === '--json') options.json = argv[++index];
     else if (argument === '--json-file') options.jsonFile = argv[++index];
     else if (argument === '--state') options.state = argv[++index];
@@ -461,7 +1053,7 @@ function parseArgs(argv) {
   }
   options.workingDir = options.workingDir || process.cwd();
   options.command = options.command || 'show';
-  if (!['init', 'step', 'show', 'set', 'phone'].includes(options.command)) {
+  if (!['init', 'step', 'show', 'set', 'phone', 'progress', 'sync', 'temp'].includes(options.command)) {
     throw new Error(`Unknown command: ${options.command}`);
   }
   return options;
@@ -475,6 +1067,15 @@ if (require.main === module) {
     if (options.command === 'show') {
       const state = loadState(root);
       process.stdout.write(`${JSON.stringify(state ? summarize(state) : { total: 0, done: 0 })}\n`);
+    } else if (options.command === 'temp') {
+      const directory = editTempDir(root);
+      fs.mkdirSync(directory, { recursive: true });
+      process.stdout.write(`${JSON.stringify({
+        directory,
+        progress: path.join(directory, 'edit-app-progress.json'),
+        progressHtml: path.join(directory, 'edit-app-progress.html'),
+        sync: path.join(directory, 'app-plan-sync.json'),
+      })}\n`);
     } else if (options.command === 'init') {
       // `--app-name` is the display name the user typed, so it may contain a quote, a backtick
       // or `$(...)`. Passed as a shell argument those break out of the quoting before Node ever
@@ -486,6 +1087,31 @@ if (require.main === module) {
         : options;
       const written = save(root, initState(root, seed));
       process.stdout.write(`${JSON.stringify({ status: 'ok', plan: written })}\n`);
+    } else if (options.command === 'progress') {
+      const payload = options.jsonFile
+        ? JSON.parse(fs.readFileSync(options.jsonFile, 'utf8'))
+        : {
+        phase: options.phase,
+        status: options.status,
+        note: options.note,
+        waiting: options.waiting,
+        checklist: options.checklist,
+        };
+      const filePath = writeEditProgress(root, payload);
+      process.stdout.write(`${JSON.stringify({ status: 'ok', file: filePath })}\n`);
+    } else if (options.command === 'sync') {
+      const payload = options.jsonFile
+        ? JSON.parse(fs.readFileSync(options.jsonFile, 'utf8'))
+        : {
+        appName: options.appName,
+        dataPlatform: options.dataPlatform,
+        summary: options.summary,
+        section: options.section,
+        value: options.value,
+        state: options.state,
+        };
+      const result = syncPlanToCurrentApp(root, payload);
+      process.stdout.write(`${JSON.stringify({ status: 'ok', plan: result })}\n`);
     } else if (options.command === 'phone') {
       const state = loadState(root);
       if (!state) throw new Error('No run plan yet; run `init` first.');
@@ -545,6 +1171,7 @@ module.exports = {
   STATE_FILE,
   applyStep,
   docsDir,
+  editTempDir,
   initState,
   loadState,
   outputPath,
@@ -554,6 +1181,10 @@ module.exports = {
   setPhone,
   setSection,
   summarize,
+  syncPlanToCurrentApp,
+  writeEditProgress,
+  EDIT_ITEM_STATUSES,
+  EDIT_PROGRESS_STATUSES,
   PHONE_STAGES,
   SECTIONS,
 };

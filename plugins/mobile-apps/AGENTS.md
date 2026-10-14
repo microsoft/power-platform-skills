@@ -145,7 +145,7 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 
 ## Decisions made
 
-- ✅ Markdown plan with Mermaid (no HTML rendering)
+- ✅ Markdown plan with Mermaid as the durable source, plus a living HTML plan and edit-progress page for user-visible status
 - ✅ **Architecture-first approval gates** in the planner (data platform + native APIs + connectors → conditional Dataverse model → screen plan)
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
 - ✅ Single `/deploy` skill — `npm run build` + `pa app push`; no local native compile, no OTA in v0

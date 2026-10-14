@@ -8,8 +8,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
-  PHASES, PHONE_STAGES, SECTIONS, applyStep, initState, loadState, outputPath, save, setPhone,
-  setSection, summarize,
+  EDIT_ITEM_STATUSES, PHASES, PHONE_STAGES, SECTIONS, applyStep, initState, loadState, outputPath,
+  save, setPhone, setSection, summarize, syncPlanToCurrentApp, writeEditProgress, editTempDir,
 } = require('../app-docs');
 
 const scriptPath = path.resolve(__dirname, '..', 'app-docs.js');
@@ -203,6 +203,234 @@ test('the CLI refuses a step before init and reports the reason', () => {
   const set = spawnSync(process.execPath, [scriptPath, '--working-dir', root, 'set', '--section', 'auth', '--json', '{"status":"skipped"}'], { encoding: 'utf8' });
   assert.equal(set.status, 0, set.stderr);
   assert.equal(JSON.parse(set.stdout.trim()).section, 'auth');
+});
+
+test('edit progress renders each operation state and settles when work completes', (t) => {
+  const root = project('docs-edit-progress');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+  const progress = writeEditProgress(root, {
+    phase: 'planning',
+    note: 'Waiting for your approval',
+    waiting: true,
+    changes: [
+      {
+        kind: 'data-model',
+        title: 'Add inspection evidence',
+        detail: 'Introduce a child table for captured evidence.',
+        rationale: 'Evidence needs its own lifecycle and can contain multiple files per inspection.',
+        dataModel: {
+          tables: [
+            {
+              name: 'Inspection',
+              columns: [{ name: 'inspectionid', type: 'guid', primaryKey: true }],
+            },
+            {
+              name: 'Evidence',
+              columns: [
+                { name: 'evidenceid', type: 'guid', primaryKey: true },
+                { name: 'inspectionid', type: 'guid', foreignKey: true },
+              ],
+            },
+          ],
+          relationships: [
+            {
+              from: 'Inspection',
+              to: 'Evidence',
+              cardinality: 'one-to-many',
+              label: 'contains',
+            },
+          ],
+        },
+      },
+      {
+        kind: 'screen',
+        title: 'Add inspection detail',
+        detail: 'Introduce a detail route for each inspection.',
+        rationale: 'Inspectors need one place to review findings and open captured evidence.',
+        screenGraph: {
+          screens: [
+            { id: 'list', name: 'Inspections', route: '/inspections' },
+            { id: 'detail', name: 'Inspection detail', route: '/inspections/[id]' },
+          ],
+          edges: [{ from: 'list', to: 'detail', label: 'Select inspection' }],
+        },
+      },
+    ],
+    items: [
+      { id: 'inspect', label: 'Inspect app', status: 'done' },
+      { id: 'approve', label: 'Approve changes', status: 'waiting', note: 'Review the plan delta' },
+      { id: 'screens', label: 'Update screens', status: 'pending' },
+    ],
+  });
+  assert.ok(fs.existsSync(progress));
+  const html = fs.readFileSync(progress, 'utf8');
+  assert.match(html, /Mobile app edit plan/);
+  assert.match(html, /data-tab="changes"/);
+  assert.match(html, /data-tab="steps"/);
+  assert.match(html, /Add inspection detail/);
+  assert.match(html, /Why this matters:/);
+  assert.match(html, /Evidence needs its own lifecycle/);
+  assert.match(html, /class="diagram-canvas" role="img" aria-label="Proposed data model diagram"/);
+  assert.match(html, /<pre>erDiagram/);
+  assert.match(html, /Inspection \|\|--o\{ Evidence : &quot;contains&quot;/);
+  assert.match(html, /aria-label="Proposed screen navigation graph"/);
+  assert.match(html, /<pre>flowchart LR/);
+  assert.match(html, /S_list --&gt;\|&quot;Select inspection&quot;\| S_detail/);
+  assert.match(html, /mermaid@11\.17\.2/);
+  assert.match(html, /window\.mermaid\.render/);
+  assert.doesNotMatch(html, /<pre class="change-diagram">/);
+  assert.match(html, /AI-generated content may be incorrect/);
+  assert.match(html, /Waiting for your input/);
+  assert.match(html, /class="item done" data-item-id="inspect"/);
+  assert.match(html, /class="item waiting" data-item-id="approve"/);
+  assert.match(html, /1 of 3 operations complete/);
+  assert.match(html, /aria-valuenow="33"/);
+  assert.match(html, /location\.replace\(fresh\)/);
+  assert.match(html, /Waiting for your approval/);
+
+  writeEditProgress(root, {
+    phase: 'done',
+    status: 'done',
+    note: 'Edit verified',
+    items: [
+      { id: 'inspect', label: 'Inspect app', status: 'done' },
+      { id: 'approve', label: 'Approve changes', status: 'done' },
+      { id: 'screens', label: 'Update screens', status: 'done' },
+    ],
+  });
+  assert.doesNotMatch(fs.readFileSync(progress, 'utf8'), /location\.replace\(fresh\)/);
+  assert.ok(EDIT_ITEM_STATUSES.has('waiting'));
+  assert.throws(() => writeEditProgress(root, {
+    items: [{ id: 'inspect', label: 'Inspect app', status: 'unknown' }],
+  }), /Unknown progress item status/);
+  assert.throws(() => writeEditProgress(root, {
+    status: 'pending',
+    items: [{ id: 'inspect', label: 'Inspect app', status: 'pending' }],
+  }), /Unknown edit progress status/);
+  assert.throws(() => writeEditProgress(root, {
+    changes: [{ detail: 'Missing title' }],
+  }), /requires a title/);
+  assert.throws(() => writeEditProgress(root, {
+    changes: [{ title: 'Missing rationale', kind: 'general' }],
+  }), /requires a rationale/);
+  assert.throws(() => writeEditProgress(root, {
+    changes: [{
+      title: 'Disconnected screens',
+      rationale: 'Add a detail route.',
+      kind: 'screen',
+      screenGraph: {
+        screens: [{ id: 'list', name: 'List' }, { id: 'detail', name: 'Detail' }],
+        edges: [],
+      },
+    }],
+  }), /requires navigation edges/);
+});
+
+test('plan sync creates an inferred full snapshot and replaces changed sections', () => {
+  const root = project('docs-edit-sync');
+  const inferred = syncPlanToCurrentApp(root, {
+    appName: 'Survey app',
+    dataPlatform: 'dataverse',
+    summary: 'Plan inferred from existing app state because no prior create-run plan was present.',
+    sections: {
+      architecture: {
+        dataPlatform: 'dataverse',
+        nativeCapabilities: [{ name: 'camera', reason: 'Capture evidence' }],
+        connectors: [{ name: 'Office 365 Users', reason: 'Resolve inspectors' }],
+      },
+      dataModel: { tables: [{ logicalName: 'contoso_survey', status: 'reuse' }] },
+      screens: { navigation: 'tabs', list: [{ name: 'Surveys', route: '/surveys' }] },
+      design: { direction: 'Field utility', palette: [] },
+    },
+  });
+  assert.equal(inferred, outputPath(root));
+  const state = loadState(root);
+  assert.equal(state.sections.requirements.source, 'existing app state');
+  assert.equal(state.sectionStates.requirements, 'approved');
+  assert.equal(state.sections.architecture.connectors[0].name, 'Office 365 Users');
+  assert.equal(state.sections.dataModel.tables[0].logicalName, 'contoso_survey');
+  assert.equal(state.sections.screens.list[0].route, '/surveys');
+  assert.equal(summarize(state).percent, 100, 'an imported existing app must not look unbuilt');
+
+  syncPlanToCurrentApp(root, {
+    summary: 'Replaced the surveys screen with survey detail.',
+    sections: {
+      screens: { navigation: 'stack', list: [{ name: 'Survey detail', route: '/surveys/[id]' }] },
+    },
+  });
+  const updated = loadState(root);
+  assert.deepEqual(updated.sections.screens.list, [
+    { name: 'Survey detail', route: '/surveys/[id]' },
+  ]);
+  assert.equal(updated.sections.architecture.connectors[0].name, 'Office 365 Users',
+    'unsupplied sections must remain intact');
+  assert.deepEqual(updated.lastEdit.sections, ['screens']);
+
+  const empty = project('docs-edit-sync-empty');
+  assert.throws(() => syncPlanToCurrentApp(empty, { summary: 'Generic shell' }),
+    /requires structured current-app sections/);
+});
+
+test('edit progress and plan sync CLI commands consume JSON files', (t) => {
+  const root = project('docs-edit-cli');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+  const progressPayload = path.join(root, 'progress.json');
+  fs.writeFileSync(progressPayload, JSON.stringify({
+    phase: 'verifying',
+    status: 'active',
+    note: 'Running TypeScript',
+    items: [{ id: 'verify', label: 'Verify app', status: 'active' }],
+  }));
+  const progress = spawnSync(process.execPath, [
+    scriptPath, '--working-dir', root, 'progress', '--json-file', progressPayload,
+  ], { encoding: 'utf8' });
+  assert.equal(progress.status, 0, progress.stderr);
+  assert.match(fs.readFileSync(path.join(editTempDir(root), 'edit-app-progress.html'), 'utf8'),
+    /Running TypeScript/);
+
+  const syncPayload = path.join(root, 'sync.json');
+  fs.writeFileSync(syncPayload, JSON.stringify({
+    appName: 'Imported app',
+    dataPlatform: 'connector-only',
+    sections: {
+      architecture: {
+        dataPlatform: 'connector-only',
+        nativeCapabilities: [],
+        connectors: [{ name: 'SharePoint', reason: 'Existing list data' }],
+      },
+      screens: { navigation: 'tabs', list: [{ name: 'Home', route: '/' }] },
+    },
+  }));
+  const sync = spawnSync(process.execPath, [
+    scriptPath, '--working-dir', root, 'sync', '--json-file', syncPayload,
+  ], { encoding: 'utf8' });
+  assert.equal(sync.status, 0, sync.stderr);
+  assert.equal(loadState(root).sections.architecture.connectors[0].name, 'SharePoint');
+});
+
+test('edit-app wires progress, imported-app inference, and final plan sync into the workflow', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'edit-app', 'SKILL.md'), 'utf8',
+  );
+  assert.match(skill, /progress \\\n\s+--json-file '<edit-temp-dir>\/edit-app-progress\.json'/);
+  assert.match(skill, /--working-dir '<working_dir>' temp/);
+  assert.match(skill, /user's OS temp directory/);
+  assert.match(skill, /top-level `changes` array/);
+  assert.match(skill, /every entry requires `kind`, `title`, `rationale`/);
+  assert.match(skill, /"dataModel": \{/);
+  assert.match(skill, /"screenGraph": \{/);
+  assert.match(skill, /Do not hand-author Mermaid source/);
+  assert.match(skill, /validated normalized contract[\s\S]*updated screen graph/);
+  assert.match(skill, /Do not open or focus it during `\/edit-app`/);
+  assert.match(skill, /living app plan was updated to reflect the latest verified changes/);
+  assert.match(skill, /set `approve: waiting`/i);
+  assert.match(skill, /set `verify: active`/i);
+  assert.match(skill, /`sync-plan: active`/);
+  assert.match(skill, /Inferred current-state baseline/);
+  assert.match(skill, /routes\/layouts[\s\S]*generated[\s\S]*src\/native\/[\s\S]*brand\/token/);
+  assert.match(skill, /Step 4[\s\S]*app-docs\.js sync --json-file/);
+  assert.match(skill, /Step 8[\s\S]*scripts\/app-docs\.js" --working-dir '<working_dir>' sync/);
+  assert.doesNotMatch(skill, /If `native-app-plan\.md` is missing → STOP/);
 });
 
 test('the phone CLI carries the full preview, including shared CSS, without rewriting screens', (t) => {

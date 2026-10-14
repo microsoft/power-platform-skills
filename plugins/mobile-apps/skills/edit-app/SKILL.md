@@ -16,6 +16,159 @@ Post-generation editor for an existing mobile app. `native-app-plan.md` remains 
 
 Use `--plan-only` only when the user explicitly asks to update planning docs without changing app code. Normal follow-up prompts in Copilot Chat Agent mode should apply the app change end to end.
 
+## Edit documentation protocol
+
+Keep two HTML files current during every edit:
+
+- `<edit-temp-dir>/edit-app-progress.html` shows the live operation checklist.
+- `docs/create-app-plan.html` remains the living description of the app.
+
+Both are best-effort documentation. A rendering failure does not authorize a mutation, cancel an
+approval gate, or turn a failed verification into success.
+
+### Progress page
+
+After Step 0, ask `app-docs.js` for a namespaced directory inside the user's OS temp directory:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' temp
+```
+
+Use the returned `directory`, `progress`, `progressHtml`, and `sync` paths for the rest of the
+run. Do not create progress files inside the project. Create `<edit-temp-dir>/edit-app-progress.json`
+with one row per operation this edit will run.
+Use stable IDs such as `inspect`, `impact`, `plan`, `approve`, `save-plan`, `data`, `native`,
+`design`, `screens`, `verify`, `preview`, and `sync-plan`. Omit operations that do not apply.
+Each row has `id`, `label`, `status` (`pending`, `active`, `waiting`, `done`, `skipped`, or
+`failed`), and an optional `note`.
+Add a top-level `changes` array for the Changes tab.
+Keep it empty during initial inspection.
+After Step 2, every entry requires `kind`, `title`, `rationale`, and optional `detail`.
+Use `kind: general` for text-only changes.
+Use structured diagram data for data-model and screen changes:
+
+```json
+{
+  "changes": [
+    {
+      "kind": "data-model",
+      "title": "Add inspection evidence",
+      "detail": "Create a child table for photos and signatures.",
+      "rationale": "One inspection can have several evidence records with independent metadata.",
+      "dataModel": {
+        "tables": [
+          {
+            "name": "Inspection",
+            "columns": [{ "name": "inspectionid", "type": "guid", "primaryKey": true }]
+          },
+          {
+            "name": "Evidence",
+            "columns": [
+              { "name": "evidenceid", "type": "guid", "primaryKey": true },
+              { "name": "inspectionid", "type": "guid", "foreignKey": true }
+            ]
+          }
+        ],
+        "relationships": [
+          {
+            "from": "Inspection",
+            "to": "Evidence",
+            "cardinality": "one-to-many",
+            "label": "contains"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "screen",
+      "title": "Add inspection detail",
+      "detail": "Add a route that shows findings and evidence.",
+      "rationale": "Inspectors need a focused review surface before updating a record.",
+      "screenGraph": {
+        "screens": [
+          { "id": "list", "name": "Inspections", "route": "/inspections" },
+          { "id": "detail", "name": "Inspection detail", "route": "/inspections/[id]" }
+        ],
+        "edges": [
+          { "from": "list", "to": "detail", "label": "Select inspection" }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Derive data-model tables, columns, and relationships from the validated schema proposal.
+Derive screen nodes and edges from the updated Screen Map and Navigation Contracts.
+When multiple screens are shown, include every navigation edge needed to explain how the user moves
+between them.
+Do not hand-author Mermaid source in the payload.
+`app-docs.js` derives and renders the ER diagram or screen graph from the structured data.
+Retain the approved wording, rationale, and graph data through implementation and verification.
+
+Rewrite that JSON at every numbered step boundary and run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' progress \
+  --json-file '<edit-temp-dir>/edit-app-progress.json'
+```
+
+The top-level object also carries `phase`, `status`, `note`, and `waiting`. Set the current row to
+`waiting` and `waiting: true` before every user question. Set completed rows to `done`; do not leave
+the first row active for the whole run. On failure, mark the failed row and top-level status
+`failed`. At Step 8, mark every applicable row settled and top-level status `done`.
+
+Open `<edit-temp-dir>/edit-app-progress.html` once after the first write using the host's file
+opener. If no opener is available, print the absolute path. The page refreshes itself while work
+is active.
+
+### Living app plan
+
+`app-docs.js sync` accepts a structured snapshot, not a prose summary:
+
+```json
+{
+  "appName": "Field inspections",
+  "dataPlatform": "dataverse",
+  "inferred": false,
+  "summary": "Added inspection detail and evidence capture.",
+  "sections": {
+    "requirements": {},
+    "architecture": { "dataPlatform": "dataverse", "nativeCapabilities": [], "connectors": [] },
+    "dataModel": { "tables": [] },
+    "screens": { "navigation": "", "list": [] },
+    "design": {},
+    "offline": {},
+    "trust": {}
+  },
+  "sectionStates": { "screens": "approved" }
+}
+```
+
+For an existing plan, include every section this edit changed and omit unchanged sections. Serialize
+the complete current section after implementation; the sync command replaces that section so
+removed screens, connectors, capabilities, and tables do not survive as stale rows. Build values
+from the verified app and its durable plan, not from the pre-approval proposal.
+
+Write the payload to `<edit-temp-dir>/app-plan-sync.json`, then run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' sync \
+  --json-file '<edit-temp-dir>/app-plan-sync.json'
+```
+
+If `docs/.run-plan.json` is missing, the payload must cover every section that can be derived from
+the app: routes and layouts for `screens`, generated models/services and the manifest for
+`dataModel`, `power.config.json` plus generated registrations for connectors, `src/native/` and
+template dependencies for native capabilities, and brand/token files for `design`. Mark this first
+snapshot `inferred: true` and use the note `Plan inferred from existing app state because no prior
+create-run plan was present.` Unknown facts stay explicitly unknown; do not guess.
+
+Update `docs/create-app-plan.html` in the background. Do not open or focus it during `/edit-app`.
+Run the sync command after an inferred baseline is created, after approved plan sections are saved,
+and again after Step 8 verification so the page ends on the app's actual current state. Tell the
+user when the living app plan has been updated to reflect the latest verified changes.
+
 ## When to use
 
 - "Improve the search screen to make it easier to use on mobile"
@@ -42,8 +195,8 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 - Explicit implementation-only request → the matching leaf skill under
   [app-edit-routing.md](../../shared/references/app-edit-routing.md); do not infer
   this from a short request or the absence of screen details.
-- The plan file is missing → stop and ask to restore it or confirm a bounded
-  implementation-only operation; never re-scaffold over the existing app.
+- No recognizable generated app root (`package.json` plus `app/`) → stop and ask for the app
+  directory. A missing plan by itself is handled by the inferred-baseline path below.
 
 ## Workflow
 
@@ -108,16 +261,25 @@ to every data child; a previous `cd` or inherited launch cwd is not a handoff.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-test -f native-app-plan.md && echo "OK: plan found" || echo "ERROR: no plan"
+test -f native-app-plan.md && echo "OK: plan found" || echo "INFO: plan will be inferred"
 test -f package.json && echo "OK: package found" || echo "ERROR: no package"
 test -d app && echo "OK: app routes found" || echo "ERROR: no app routes"
 test -f memory-bank.md && echo "OK: memory bank found" || echo "WARN: no memory bank"
 git status --short
 ```
 
-If `native-app-plan.md` is missing → STOP. Ask to restore the existing plan or
-explicitly limit the request to implementation-only work. Do not reconstruct the
-full app plan from one feature request or run `/create-mobile-app` over this app.
+If `package.json` or `app/` is missing, STOP because this is not a recognizable generated app.
+If `native-app-plan.md` is missing, inspect the current app before asking edit questions. Build an
+inferred current-state baseline from routes/layouts, `power.config.json`, generated
+models/services, `.datamodel-manifest.json`, `src/native/`, package dependencies, brand/token
+files, and `memory-bank.md` when present. Write `native-app-plan.md` with every evidenced section,
+label it `Inferred current-state baseline`, and mark unresolved facts as unknown. Do not run
+`/create-mobile-app`, invent missing business intent, or treat inference as mutation approval.
+Create `<edit-temp-dir>/app-plan-sync.json` from the same evidence and run the `sync` command so imported apps
+receive `docs/create-app-plan.html` before planning begins.
+
+Create the edit progress payload now with `inspect: active`, run the `progress` command, and open
+`<edit-temp-dir>/edit-app-progress.html`.
 
 Read if present:
 
@@ -185,6 +347,10 @@ Handle the return per the status protocol (AGENTS.md rule #12):
 - `BLOCKED` → surface the error (usually `app.json` unusable) and stop.
 
 ### Step 1 — Discover intent + inspect existing app
+
+Update `<edit-temp-dir>/edit-app-progress.json`: keep `inspect` active while reading the app, then mark it
+`done` once the existing routes, data surface, native wrappers, and design constraints are known.
+Run the protocol's `progress --json-file` command after each update.
 
 Infer from `$ARGUMENTS` when possible, but do not mutate files until you have a concrete edit brief. This is the mini `/create-mobile-app` requirements phase for one existing-app change.
 
@@ -316,6 +482,11 @@ If a single PDF/signature request requires multiple plan sections, say so and ru
 
 **Telemetry checkpoint: `analyze_edit_impact`**
 
+Before showing the impact question, mark `inspect: done`, set `impact: waiting`, set top-level
+`phase: impact`, `waiting: true`, and run `progress --json-file`. If the user proceeds, change
+`impact` to `done`, set `plan: active`, clear `waiting`, and run it again. A cancellation sets the
+top-level status to `done` with all unstarted operations `skipped`.
+
 Before spawning architects or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors `/create-mobile-app` Step 2c at edit scale.
 
 Compute:
@@ -373,6 +544,10 @@ jump from design refresh straight to verification if screen changes are needed.
 ### Step 2 — Re-plan affected sections
 
 **Telemetry checkpoint: `revise_affected_app_plan`**
+
+Keep `plan: active` while architects or inline planning update the affected sections. If a planner
+needs user context, change `plan` to `waiting`, set `waiting: true`, and run the progress command
+before asking. Restore it to `active` after the answer.
 
 Reuse the same planning primitives as `/create-mobile-app`, but only for the affected surfaces:
 
@@ -457,6 +632,15 @@ app mutation, and unknown first lines are `BLOCKED: malformed agent return`.
 Every Data Model result, including inline output, must pass the shared decision
 validator; `DONE` alone never authorizes Step 3.
 
+Before Step 3, rebuild the progress payload's `changes` array from the completed affected-section
+proposals.
+Every change must explain why it is necessary.
+For a Data Model delta, include the affected tables, relevant columns, and relationships from the
+validated normalized contract so the Changes tab renders the proposed ER diagram.
+For a Screens delta, include the affected existing and proposed screens plus their real navigation
+edges so the Changes tab renders the updated screen graph.
+Run `progress --json-file` after writing this payload and before changing `approve` to `waiting`.
+
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
 - `native-pdf-viewer` 0.2.9+ opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
@@ -481,6 +665,11 @@ server tables/records, and carry the approved removal set through Step 6.5.
 ### Step 3 — Gate intent, plan + app mutation preview
 
 **Telemetry checkpoint: `approve_app_mutation_plan`**
+
+Before asking for approval, mark `plan: done`, set `approve: waiting`, set top-level
+`phase: approval`, `waiting: true`, and run `progress --json-file`. A revision returns `plan` to
+`active`. Approval marks `approve: done`, sets `save-plan: active`, clears `waiting`, and runs the
+command again. Cancellation settles the page with remaining operations `skipped`.
 
 For Dataverse planning, require exit `0` from
 `validate-dataverse-planning-decisions.js` for the current normalized contract
@@ -519,6 +708,12 @@ If `$ARGUMENTS` includes `--plan-only`, change option (a) to "Approve and save p
 
 ### Step 4 — Write plan diff
 
+Keep `save-plan: active` while writing the approved `native-app-plan.md` sections. Build
+`<edit-temp-dir>/app-plan-sync.json` from the complete approved versions of those sections and run
+`app-docs.js sync --json-file` immediately after the Markdown write. This updates the living app
+plan in the background before cloud or app mutations begin. Then mark `save-plan: done` and the first applicable
+implementation operation `active` in the progress page.
+
 Replace the approved section(s) in `native-app-plan.md` with the approved content (preserve all other sections verbatim). Print a unified diff so the user has a record:
 
 ```
@@ -547,6 +742,11 @@ paths. A plan-only save does not create this implementation approval context.
 ### Step 5 — Apply app mutations
 
 **Telemetry checkpoint: `apply_app_mutations`**
+
+Update the progress page after every applicable operation below. Mark each of `data`, `native`, and
+`design` active only while its leaf runs, then `done`, `skipped`, or `failed` from the actual
+result. Run `progress --json-file` after each transition so the checklist identifies the operation
+that is currently running.
 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
@@ -703,6 +903,10 @@ Step 6.5; an `in-sync` result never resolves a pending retirement.
 
 **Telemetry checkpoint: `rebuild_affected_screens`**
 
+Set `screens: active` before route/layout/shared-code work. Update its note after each builder wave,
+for example `Wave 2 of 3 complete`, and run the progress command. Mark it `done` only after the
+navigation/skeleton gate and every required builder wave pass.
+
 Use the plan diff plus the user's request to build the affected screen set:
 
 | Change type | Screens to rebuild |
@@ -812,6 +1016,10 @@ with Step 5.6's addition-only result.
 
 **Telemetry checkpoint: `validate_edited_app`**
 
+Set `verify: active` before the first gate and run the progress command. On a failed gate, keep it
+active while applying the bounded repair and record the failing command in its note. Mark it
+`failed` if verification cannot be completed; mark it `done` only after every required rerun passes.
+
 Run verification after mutations. Batch-fix root causes, then rerun the failed gate once. Verification is selected by what changed, but TypeScript is always required after an app mutation.
 
 Required gates, selected by what changed:
@@ -861,6 +1069,25 @@ If verification fails because the edit exposed stale generated services, rerun t
 
 **Telemetry checkpoint: `refresh_app_preview_and_history`**
 
+Mark `preview: active` while regenerating `preview.html`, or `skipped` when no visible surface
+changed. Then build `<edit-temp-dir>/app-plan-sync.json` from the verified app state and mark
+`sync-plan: active`. The payload must contain complete snapshots for every changed section,
+including removals, plus the preview and verification notes owned by those sections. Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' sync \
+  --json-file '<edit-temp-dir>/app-plan-sync.json'
+```
+
+After the sync succeeds, mark `sync-plan: done`, settle every applicable checklist row, set
+top-level `phase: done` and `status: done`, and run the progress command one last time.
+Before that final progress write, reconcile each change entry with the verified app state.
+Update data-model tables and relationships from the final normalized contract and update screen
+nodes and edges from the final routes and navigation layouts.
+The completed edit page and `docs/create-app-plan.html` must describe the same final structure.
+If sync rendering fails, record the concern but do not misreport the app edit or verification as
+failed.
+
 Before Step 8, `npx --no-install tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx --no-install tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
 If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
@@ -884,7 +1111,10 @@ Append an edit entry to `memory-bank.md`:
 - Blocks/concerns: <none or list>
 ```
 
-Final summary must say what changed in the app, what verification ran, where the preview is, and whether a symptom-debug handoff was requested. Do not end by saying the codebase was not changed unless this was explicitly `--plan-only`.
+Final summary must say what changed in the app, what verification ran, where the preview is, that
+the living app plan was updated to reflect the latest verified changes, and whether a symptom-debug
+handoff was requested. Do not end by saying the codebase was not changed unless this was explicitly
+`--plan-only`.
 If any `offlineRetirement` outcome is `pending`, return `DONE_WITH_CONCERNS` and
 state the unfinished decision separately: "App changes completed. The offline
 profile still includes Orders; deciding whether to retain or remove that coverage
