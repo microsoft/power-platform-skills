@@ -12,22 +12,16 @@ const { readPacAuth } = require("../scripts/lib/telemetry/lib/pac-auth");
 const { readAiAgent, readPacCliVersion } = require("../scripts/lib/telemetry/lib/agent-info");
 const { getSessionId, resolveHostSessionId } = require("../scripts/lib/telemetry/lib/session");
 
-const UNIQUE_SKILLS = new Set([
-  "generate-ppmplugin", "generate-ppmplugin-manifest", "build-android-binary",
-  "build-ios-binary", "assemble-ppmplugin", "audit-ppmplugin",
-]);
-
 function identify(value, pluginHint) {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || (pluginHint && pluginHint !== PLUGIN_NAME)) return null;
   const token = value.trim().replace(/^\//, "");
   const parts = token.split(":");
   if (parts.length === 2) {
     if (parts[0] !== PLUGIN_NAME) return null;
     return TRACKED_SKILLS.includes(parts[1]) ? parts[1] : null;
   }
-  if (parts.length !== 1 || (pluginHint && pluginHint !== PLUGIN_NAME)) return null;
-  if (!TRACKED_SKILLS.includes(token)) return null;
-  return pluginHint === PLUGIN_NAME || UNIQUE_SKILLS.has(token) ? token : null;
+  if (parts.length !== 1) return null;
+  return TRACKED_SKILLS.includes(token) ? token : null;
 }
 
 function invocation(mode, payload) {

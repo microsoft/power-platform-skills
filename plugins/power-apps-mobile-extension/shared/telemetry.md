@@ -115,13 +115,21 @@ No workspace-global hooks are installed. Host hook support and payload formats
 must be validated in each supported host before release; the tests cover the
 known snake_case and camelCase input variants, not an end-to-end host install.
 
-Use qualified invocations such as
-`/power-apps-mobile-extension:generate-native-extension` for reliable attribution.
-Names shared with the first-party plugin require the namespace or an explicit PAM
-plugin hint in the host payload. Unqualified unique packaging names are accepted.
+All 12 tracked workflow skills accept bare names (for example,
+`/generate-native-extension` or the Skill-tool name `generate-native-extension`)
+as well as PAM-qualified names. Explicit other-plugin namespaces or plugin hints
+are rejected, including conflicting hints on PAM-qualified names. The telemetry
+control skill is never tracked.
+
+When a bare name arrives without plugin identity, the hook attributes it to PAM.
+It cannot distinguish another installed plugin reusing that name from the payload
+alone. For installations with overlapping names, use qualified invocations such
+as `/power-apps-mobile-extension:generate-native-extension` where supported, or a
+host that supplies the resolved plugin identity.
+
 Only a leading recognized slash command or a structured Skill-tool invocation is
-tracked; ordinary prose and other plugins are ignored. The telemetry skill itself
-is never tracked.
+tracked; ordinary prose, unknown names and explicitly identified other plugins
+are ignored.
 
 As in the reference hook pattern, a host can emit both a prompt and a Skill-tool
 hook for the same visible run. Each emitted start has its own correlation ID;

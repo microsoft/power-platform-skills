@@ -252,13 +252,64 @@ test("recognizes qualified prompt and both host tool-input shapes", () => {
   assert.equal(invocation("prompt", { prompt: "/generate-native-extension", pluginName: PLUGIN_NAME }), "generate-native-extension");
 });
 
-test("ignores other plugins, prose, telemetry control and ambiguous shared names", () => {
+test("emits a start for every bare workflow skill across prompt and tool payloads", context => {
+  const fixtureData = fixture(context);
+  const captured = [];
+  const options = { ...fixtureData,
+    readAuth: () => null, readAgent: () => ({}), readPacVersion: () => "",
+    emit: event => captured.push(event),
+  };
+  for (const skill of TRACKED_SKILLS) {
+    const invocations = [
+      ["prompt", { prompt: `/${skill} private arguments` }],
+      ["pretool", { tool_name: "Skill", tool_input: { skill } }],
+      ["pretool", { toolName: "skill", toolInput: { skill } }],
+      ["pretool", { toolName: "skill", toolArgs: JSON.stringify({ skill }) }],
+    ];
+    for (const [mode, payload] of invocations) {
+      const before = captured.length;
+      assert.equal(handle(mode, payload, options), true, `${mode}: ${skill}`);
+      assert.equal(captured.length, before + 1);
+      assert.equal(captured[before].name, STREAM_NAME);
+      assert.equal(captured[before].data.eventName, "skill_started");
+      assert.equal(captured[before].data.pluginName, PLUGIN_NAME);
+      assert.equal(captured[before].data.skillName, skill);
+    }
+  }
+  assert.equal(captured.length, TRACKED_SKILLS.length * 4);
+  assert.ok(!JSON.stringify(captured).includes("private arguments"));
+});
+
+test("ignores other plugins, prose, telemetry control and untracked names", () => {
   for (const prompt of ["please /generate-ppmplugin", "/telemetry off", `/${PLUGIN_NAME}:telemetry off`,
-    "/pam-first-party:generate-native-extension", "/power-pages:create-site", "/generate-native-extension"]) {
+    "/pam-first-party:generate-native-extension", "/power-pages:create-site", "/unrelated"]) {
     assert.equal(invocation("prompt", { prompt }), null);
   }
   assert.equal(invocation("pretool", { tool_name: "Bash", tool_input: { skill: `${PLUGIN_NAME}:generate-ppmplugin` } }), null);
   assert.equal(invocation("pretool", { toolArgs: "invalid json" }), null);
+});
+
+test("explicit other-plugin hints skip all telemetry work for every tracked skill", context => {
+  const fixtureData = fixture(context);
+  let work = 0;
+  const unexpected = () => { work++; };
+  const options = { ...fixtureData,
+    readAuth: unexpected, readAgent: unexpected, readPacVersion: unexpected, emit: unexpected,
+  };
+  for (const skill of TRACKED_SKILLS) {
+    for (const name of [skill, `${PLUGIN_NAME}:${skill}`]) {
+      const invocations = [
+        ["prompt", { prompt: `/${name}`, pluginName: "another-plugin" }],
+        ["pretool", { toolName: "skill", toolArgs: { skill: name, pluginName: "another-plugin" } }],
+        ["pretool", { tool_name: "Skill", tool_input: JSON.stringify({ skill: name, plugin_name: "another-plugin" }) }],
+        ["pretool", { toolName: "skill", toolInput: { skill: name }, plugin_name: "another-plugin" }],
+      ];
+      for (const [mode, payload] of invocations) {
+        assert.equal(handle(mode, payload, options), false, `${mode}: ${name}`);
+      }
+    }
+  }
+  assert.equal(work, 0);
 });
 
 test("hook hard-off and untracked invocations skip PAC, agent work and emit", context => {
