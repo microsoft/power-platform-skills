@@ -8,7 +8,7 @@
 // Where each form is answered from:
 //   operations, schema --operation   the bundled SDK first, for an environment in the Public cloud (the Power Apps connectors API through the
 //                                    Business Application Platform, with an Azure CLI token for the Power Apps service; measured identical to
-//                                    pac's answer on real connectors and ten to twenty-five times faster). A connector's path-level parameters
+//                                    pac's answer on real connectors). A connector's path-level parameters
 //                                    (a Swagger path item's own `parameters`, which its operations share) are in the SDK's answer, merged with
 //                                    each operation's own, the operation's winning. As the SDK documents the difference, pac's answer leaves a path
 //                                    item's parameters out, so for a connector that has them the SDK's `parameters` list is pac's plus exactly those.

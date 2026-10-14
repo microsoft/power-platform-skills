@@ -8,7 +8,7 @@
 //   GET /EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,IsCustomEntity
 // — and keeps the tables whose logical name, schema name or display name contains the term, whatever the letter case. That is `pac`'s
 // --search too (a substring over those three names, so `account` also finds `accountleads` and `msdyn_accountkpiitem`): measured against
-// `pac model list-tables`, the same tables for the whole list and for each of five searches, and each read in a third to a seventh of the time.
+// `pac model list-tables`, the same tables for the whole list and for each of five searches.
 //
 // --search takes one term or several, comma-separated, as `pac` did. Each term is one `findTables(term)` — a read of the whole list, which the
 // SDK does not cache — and the reads run a few at a time (at most READ_CONCURRENCY in flight, so a search for many terms is not one long
