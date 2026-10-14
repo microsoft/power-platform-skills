@@ -455,7 +455,7 @@ test('edit progress and plan sync CLI commands consume JSON files', (t) => {
 test('edit-app wires progress, imported-app inference, and final plan sync into the workflow', () => {
   const skill = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'skills', 'edit-app', 'SKILL.md'), 'utf8',
-  );
+  ).replace(/\r\n/g, '\n');
   assert.match(skill, /progress \\\n\s+--json-file '<edit-temp-dir>\/edit-app-progress\.json'/);
   assert.match(skill, /--working-dir '<working_dir>' temp/);
   assert.match(skill, /user's OS temp directory/);
