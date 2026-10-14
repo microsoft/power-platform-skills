@@ -14,6 +14,7 @@ const VALIDATOR = path.join(REPO_ROOT, 'scripts', 'validate-plugin-copies.js');
 const {
   COPY_SETS,
   checkCopySets,
+  topLevelFunctions,
 } = require(VALIDATOR);
 
 const TELEMETRY_PAIR = {
@@ -247,6 +248,83 @@ test('removing a required subset module declaration is reported', () => withTemp
   assert.equal(result.ok, false);
   assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'authTokenMemo'));
 }));
+
+// A retained function can call a helper FUNCTION that is not exported: model-apps' getAuthToken calls readAzToken. Its own text
+// is identical in both copies, so only the helper's absence (or drift) says the copy is broken — at run time, as a ReferenceError.
+function withHelper(root, helperText) {
+  for (const rel of [COPY_SETS[0].subset.source, COPY_SETS[0].subset.copy]) {
+    const full = path.join(root, rel);
+    const text = fs.readFileSync(full, 'utf8')
+      .replace('module.exports = {', `${helperText}\nmodule.exports = {`)
+      .replaceAll('return DATAVERSE_HOST.test', 'return helper() && DATAVERSE_HOST.test');
+    fs.writeFileSync(full, text);
+  }
+  return path.join(root, COPY_SETS[0].subset.copy);
+}
+
+const HELPER = "const deep = 'https://contoso.crm.dynamics.com';\nfunction helper() {\n  return DATAVERSE_HOST.test(deep);\n}\n";
+
+test('a helper function a retained function calls must be in the copy, and so must what the helper uses', () => {
+  withTempRepo((root) => {
+    withHelper(root, HELPER);
+    assert.equal(runCheck(root).ok, true, 'with the helper in both copies');
+  });
+  withTempRepo((root) => {
+    const copyPath = withHelper(root, HELPER);
+    fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace(/function helper\(\) \{\n[\s\S]*?\n\}\n/, ''));
+    const result = runCheck(root);
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'helper'));
+  });
+  withTempRepo((root) => {
+    const copyPath = withHelper(root, HELPER);
+    fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace(/^const deep = .*\n/m, ''));
+    const result = runCheck(root);
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === 'deep'), 'what the helper reads');
+  });
+});
+
+test('a helper function must keep the source text, to its last line — a brace in a literal or a comment does not end it', () => {
+  const tricky = [
+    'function helper(opts = {}) {',
+    "  const close = '}' + \"}\" + `${'}'}` + /}/.source; // }",
+    '  /* } */',
+    '  return DATAVERSE_HOST.test(close) || true;',
+    '}',
+    '',
+  ].join('\n');
+  withTempRepo((root) => {
+    withHelper(root, tricky);
+    assert.equal(runCheck(root).ok, true, 'identical copies');
+  });
+  withTempRepo((root) => {
+    const copyPath = withHelper(root, tricky);
+    fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace('test(close) || true', 'test(close) || false'));
+    const result = runCheck(root);
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some((finding) => finding.kind === 'declaration-drift' && finding.source === 'helper'));
+  });
+});
+
+test("what only the source's emitResult uses is not required of the copy, whose emitResult is its own", () => withTempRepo((root) => {
+  const sourcePath = path.join(root, COPY_SETS[0].subset.source);
+  fs.writeFileSync(sourcePath, fs.readFileSync(sourcePath, 'utf8')
+    .replace('module.exports = {', 'function asciiOnly(value) {\n  return JSON.stringify(value);\n}\nmodule.exports = {')
+    .replace('console.log(JSON.stringify(result));', 'console.log(asciiOnly(result));'));
+  const result = runCheck(root);
+  assert.equal(result.ok, true, result.findings.map((finding) => `${finding.kind}:${finding.source}`).join(', '));
+}));
+
+test('the function finder reads every exported function of the real dataverse-auth copies exactly as the runtime does', () => {
+  for (const rel of [COPY_SETS[0].subset.source, COPY_SETS[0].subset.copy]) {
+    const full = path.join(REPO_ROOT, rel);
+    const found = topLevelFunctions(fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n'));
+    const exported = Object.entries(require(full)).filter(([name, fn]) => typeof fn === 'function' && found.has(name));
+    assert.ok(exported.length >= 10, `${rel}: ${exported.length}`);
+    for (const [name, fn] of exported) assert.equal(found.get(name), String(fn).replace(/\r\n/g, '\n'), `${rel} ${name}`);
+  }
+});
 
 test('pcf emitResult must not match the source and must keep JSON error contract', () => withTempRepo((root) => {
   const copyPath = path.join(root, COPY_SETS[0].subset.copy);
