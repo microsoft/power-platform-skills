@@ -17,12 +17,34 @@ function artifactJson(fixture, name) {
   }
 }
 
+// Recorded command text as tokens. A token is a "double-quoted" or 'single-quoted' run, which loses
+// its quotes, or a run of other text up to a space or a quote; a quote with no partner is dropped.
+//
+// One join: a quoted run right after a `--flag=` token is that flag's value. The shell passes
+// `--env='https://contoso.crm.dynamics.com'` to the script as the ONE argument
+// `--env=https://contoso.crm.dynamics.com`; as two tokens, the URL was the first positional argument,
+// so the graders took it for the verb and missed the write after it (`apps.js --env='…' create`).
+// Nothing else is joined, though a shell would join more: a log writes the command inside markdown
+// backticks (`node … --app-id '…'`), and the closing backtick right after a quoted value is no part
+// of that value.
+function tokenize(text) {
+  const tokens = [];
+  let end = -1;
+  for (const match of text.matchAll(/"[^"]*"|'[^']*'|[^\s"']+/g)) {
+    const quoted = /^["']/.test(match[0]);
+    const value = quoted ? match[0].slice(1, -1) : match[0];
+    if (quoted && match.index === end && /^--[\w-]+=$/.test(tokens.at(-1))) tokens[tokens.length - 1] += value;
+    else tokens.push(value);
+    end = match.index + match[0].length;
+  }
+  return tokens;
+}
+
 function commandInfo(call) {
   // Current evidence may keep argv directly. The fallback only tokenizes recorded command TEXT;
   // it never expands variables, evaluates quotes or executes a shell. Maker text must be in files,
   // so the current transport does not need a shell parser for arbitrary prompt/name contents.
-  const tokens = call.argv || (String(call.command || '').match(/"[^"]*"|'[^']*'|[^\s"']+/g) || [])
-    .map((token) => /^["']/.test(token) ? token.slice(1, -1) : token);
+  const tokens = call.argv || tokenize(String(call.command || ''));
   const flags = {};
   const positional = [];
   const problems = [];

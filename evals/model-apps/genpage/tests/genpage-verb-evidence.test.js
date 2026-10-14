@@ -6,7 +6,8 @@
 //   - a capture that records the pac verbs still passes the expectations about them, and, with the verbs rewritten to the script, earns every verdict it earned before;
 //   - the verb patterns read both forms — the script also when its path is quoted — and nothing that only starts like one (`list-connector-tables` is no `list`);
 //   - `genpage.js add-to-app | remove-from-app | delete` change an app or delete a page, so they are mutations: they need the latest successful auth gate, a current-contract
-//     fixture records an event for each, and a refusal holds none.
+//     fixture records an event for each, and a refusal holds none;
+//   - a flag's value quoted after its `=` (`--env='https://…'`) is one argument, as the shell passes it, so no write verb hides behind it.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,6 +17,7 @@ const { gradeFixture } = require('../run-layer-1.js');
 const { loadFixtures } = require('../lib/fixture-loader.js');
 const { GENERATE_TYPES, GENPAGE_LIST, GENPAGE_DOWNLOAD } = require('../lib/expectation-evidence.js');
 const { isMutation, authGateProblems, refusalProblems, unassociatedCallProblems } = require('../lib/workflow-evidence.js');
+const { commandInfo } = require('../lib/evidence-utils.js');
 const evalsData = require('../evals.json');
 
 const FIXTURES = loadFixtures(path.join(__dirname, '..', 'fixtures'));
@@ -162,6 +164,54 @@ test('a write whose flags come first still needs the latest successful auth gate
     'node scripts/apps.js --env https://contoso.crm.dynamics.com create --name X --solution Default --page-id 1',
     'node scripts/genpage.js --env https://contoso.crm.dynamics.com delete --page-id 2 --allow-destructive',
   ]) {
+    const line = `- \`${command}\`\n`;
+    assert.deepEqual(authGateProblems({ workflowLog: gate(true) + line }), [], command);
+    assert.match(authGateProblems({ workflowLog: gate(false) + line }).join('\n'), /mutation attempted without the latest successful auth gate/, command);
+    const fixture = (events) => ({ contractVersion: 2, workflowLog: line, events });
+    assert.deepEqual(unassociatedCallProblems(fixture([{ command, result: { ok: true } }])), [], command);
+    assert.equal(unassociatedCallProblems(fixture([])).length, 1, command);
+    const refused = { manifest: { expectedOutcome: 'refused', refusal: { stage: 'auth' } }, files: [], workflowLog: gate(false) + line };
+    assert.ok(refusalProblems(refused).includes('refused workflow generated a page or attempted a mutation'), command);
+  }
+});
+
+// A shell joins a quoted value to the text before it, so `--env='https://…'` reaches the script as the ONE argument `--env=https://…`. Split at the quote,
+// the URL read as the first positional argument, so the graders took it for the verb and a write after it went unseen.
+const QUOTED_ENVS = ["--env='https://contoso.crm.dynamics.com'", '--env="https://contoso.crm.dynamics.com"'];
+const writesBehind = (env) => [
+  `node scripts/apps.js ${env} create --name X --solution Default --page-id 1`,
+  ...['add-to-app', 'remove-from-app', 'delete'].map((verb) => `node scripts/genpage.js ${env} ${verb} --app-id 1 --page-id 2`),
+];
+
+test("commandInfo reads a value quoted after its flag's = as one argument, the way the shell passes it", () => {
+  for (const env of QUOTED_ENVS) {
+    const info = commandInfo({ command: `node scripts/apps.js ${env} create --name X` });
+    assert.equal(info.flags.env, 'https://contoso.crm.dynamics.com', env);
+    assert.deepEqual(info.positional, ['node', 'scripts/apps.js', 'create'], env);
+  }
+  const upload = commandInfo({ command: `node scripts/genpage-upload.js --code-file="pages/Account Metrics.tsx" --data-sources='account,contact' --app-id 1` });
+  assert.deepEqual(upload.flags, { 'code-file': 'pages/Account Metrics.tsx', 'data-sources': 'account,contact', 'app-id': '1' });
+  assert.deepEqual(upload.positional, ['node', 'scripts/genpage-upload.js']);
+  // The forms that were read right before are read the same: a value after a space, a quoted path, a bare value after `=`.
+  const before = commandInfo({ command: "node 'D:/repo/plugins/model-apps/scripts/apps.js' --env 'https://contoso.crm.dynamics.com' --solution=Default create" });
+  assert.deepEqual(before.flags, { env: 'https://contoso.crm.dynamics.com', solution: 'Default' });
+  assert.deepEqual(before.positional, ['node', 'D:/repo/plugins/model-apps/scripts/apps.js', 'create']);
+  // A log writes the command inside markdown backticks; the closing one, right after a quoted value, is no part of that value.
+  const logged = commandInfo({ command: "`node scripts/genpage.js --env='https://contoso.crm.dynamics.com' list --app-id '11111111-2222-3333-4444-555555555555'` → 2 pages" });
+  assert.deepEqual(logged.flags, { env: 'https://contoso.crm.dynamics.com', 'app-id': '11111111-2222-3333-4444-555555555555' });
+});
+
+test('a write behind a quoted --flag=value is still a mutation: apps.js create and each genpage.js write; the reads stay reads', () => {
+  for (const env of QUOTED_ENVS) {
+    for (const command of writesBehind(env)) assert.ok(isMutation(command), command);
+    for (const verb of ['list', 'download', 'types']) assert.equal(isMutation(`node scripts/genpage.js ${env} ${verb}`), false, `${verb} ${env}`);
+    assert.equal(isMutation(`node scripts/apps.js ${env} list`), false, `apps.js list ${env}`);
+  }
+});
+
+test('a write behind a quoted --flag=value needs the latest successful auth gate, is matched to its event, and breaks a refusal', () => {
+  const gate = (ok) => `- \`node check-auth.js --require-pac\` → returned \`{ ok: ${ok}, ... }\`\n`;
+  for (const command of QUOTED_ENVS.flatMap((env) => writesBehind(env))) {
     const line = `- \`${command}\`\n`;
     assert.deepEqual(authGateProblems({ workflowLog: gate(true) + line }), [], command);
     assert.match(authGateProblems({ workflowLog: gate(false) + line }).join('\n'), /mutation attempted without the latest successful auth gate/, command);
