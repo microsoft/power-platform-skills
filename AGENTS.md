@@ -90,7 +90,8 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 ## CI
 
 **Only two workflows run on every PR** — `validate-keyword-case` and `validate-repository-metadata`.
-Both are repo-wide and enforce metadata/marketplace rules, not behavior.
+Both are repo-wide and enforce metadata/marketplace rules. `validate-repository-metadata` also
+runs standalone installer regression tests on Linux and Windows.
 
 **Every test workflow is path-filtered** — to a single plugin (`power-pages` → `plugins/power-pages/**`;
 `model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles), or,

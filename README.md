@@ -31,6 +31,11 @@ The installer automatically:
 - Registers the plugin marketplace and installs all listed plugins except `dataverse`
 - Enables auto-update so plugins stay current
 
+The installer validates plugin names in local and downloaded marketplace manifests before
+installation. Names must follow the Open Plugins format: 1–64 lowercase ASCII letters or
+digits, with single dots or hyphens allowed between alphanumeric endpoints. CLI arguments
+are passed directly to executables; Windows batch launchers accept only shell-inert arguments.
+
 To also install the [Dataverse](#dataverse-external) plugin, pass `--include-dataverse`:
 
 ```powershell
