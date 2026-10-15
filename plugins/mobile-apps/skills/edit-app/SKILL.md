@@ -114,6 +114,12 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' progress
   --json-file '<edit-temp-dir>/edit-app-progress.json'
 ```
 
+Every progress payload is a complete snapshot, not a patch.
+Carry every operation row forward and update all rows whose state changed before publishing.
+When the top-level phase advances, no row from an earlier phase may remain `active` or `waiting`.
+In particular, an approval wait must show inspection and planning as complete and the approval row
+as `waiting`.
+
 The top-level object also carries `phase`, `status`, `note`, `waiting`, and
 `devicePreviewReady`. Set the current row to `waiting` and `waiting: true` before every user
 question. Set completed rows to `done`; do not leave the first row active for the whole run. On

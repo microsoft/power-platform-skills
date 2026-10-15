@@ -432,6 +432,24 @@ test('edit progress renders each operation state and settles when work completes
   }), /cannot carry raw diagram or Mermaid source/);
 });
 
+test('coarse progress follows the top-level phase when rows are omitted', (t) => {
+  const root = project('docs-coarse-phase');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+
+  const progress = writeEditProgress(root, {
+    phase: 'approval',
+    status: 'waiting',
+    waiting: true,
+    note: 'Waiting for approval of the proposed changes.',
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /class="item done" data-item-id="inspect"/);
+  assert.match(html, /class="item waiting" data-item-id="plan"/);
+  assert.doesNotMatch(html, /class="item active" data-item-id="inspect"/);
+  assert.match(html, /1 of 5 operations complete/);
+});
+
 test('screen diagram labels keep Expo dynamic route segments', () => {
   // Expo file-based routing names dynamic segments `[id]`, so these brackets are the
   // common case in a screen graph rather than an edge case. Dropping them rewrote the

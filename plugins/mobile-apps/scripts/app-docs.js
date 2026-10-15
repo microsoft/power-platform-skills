@@ -499,6 +499,49 @@ function normalizeEditItems(options) {
   });
 }
 
+function reconcileCoarseEditItems(items, phase, status, waiting) {
+  const coarseIds = ['inspect', 'plan', 'apply', 'verify', 'preview'];
+  if (items.length !== coarseIds.length
+    || items.some((item, index) => item.id !== coarseIds[index])) {
+    return items;
+  }
+
+  // The five-row fallback combines finer workflow gates such as impact and approval into
+  // "Plan". Agents may publish only the new top-level phase and omit a fresh items array; without
+  // this reconciliation the fallback restarts at "Inspect" even though planning is already done.
+  const phaseToItem = new Map([
+    ['review', 'inspect'],
+    ['inspect', 'inspect'],
+    ['impact', 'plan'],
+    ['planning', 'plan'],
+    ['plan', 'plan'],
+    ['approval', 'plan'],
+    ['save-plan', 'apply'],
+    ['implementation', 'apply'],
+    ['apply', 'apply'],
+    ['data', 'apply'],
+    ['native', 'apply'],
+    ['design', 'apply'],
+    ['screens', 'apply'],
+    ['verification', 'verify'],
+    ['verify', 'verify'],
+    ['preview', 'preview'],
+    ['device', 'preview'],
+    ['sync', 'preview'],
+    ['sync-plan', 'preview'],
+  ]);
+  const currentId = phaseToItem.get(String(phase).toLowerCase());
+  if (!currentId || status === 'done' || status === 'failed') return items;
+
+  const currentIndex = coarseIds.indexOf(currentId);
+  return items.map((item, index) => ({
+    ...item,
+    status: index < currentIndex ? 'done'
+      : index === currentIndex ? (waiting ? 'waiting' : 'active')
+        : 'pending',
+  }));
+}
+
 function normalizeEditChanges(options) {
   const changes = Array.isArray(options.changes) ? options.changes : [];
   return changes.map((change, index) => {
@@ -721,7 +764,7 @@ function writeEditProgress(projectRoot, options = {}) {
       `Unknown edit progress status '${status}'. Known: ${[...EDIT_PROGRESS_STATUSES].join(', ')}`,
     );
   }
-  const items = normalizeEditItems(options);
+  const items = reconcileCoarseEditItems(normalizeEditItems(options), phase, status, waiting);
   const changes = normalizeEditChanges(options);
   const completed = items.filter((item) => ['done', 'skipped'].includes(item.status)).length;
   const failed = items.filter((item) => item.status === 'failed').length;
