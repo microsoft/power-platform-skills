@@ -24,7 +24,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const vm = require('node:vm');
 const { loadTypescriptOracle, loadBabelOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
-const { tokenVocabulary, programsFor, cleanSourceFile, readingAt, isElement, REGEX_BODY, AFTER_WITH_CALL, CONTINUATIONS, FRAMES, PRODUCER_FRAMES, TRIVIA_SEPARATORS, SIGNATURE_FRAMES, SIGNATURE_ENDINGS, HIDING_ENDINGS, CERTAIN_ELEMENTS, GUESSED_ELEMENTS, HIDDEN_TEXT_ELEMENTS, UNREAD_LIST_ELEMENTS, MEMBER_ELEMENT_FRAMES, NO_MEMBER_ELEMENT_FRAMES, valuedKeywordElements, DECOYS, signaturePages, elementPages, ELEMENT_FRAMES, elementPage, signaturePage, failingLists, LEFT_LISTS, EXACT_DEFAULTS, defaultLists, exactDefaultLists, commentedDefaultLists, commentedConstraintLists, commentedMemberEndings, commentedArrowContinuations, PROSE_SHAPED_LINES, PROSE_OPEN_LINES, PROSE_HIDING_ELEMENTS, PROSE_HIDING_ENDINGS, PROSE_TYPE_ENDINGS, proseElements } = require('./helpers/angle-frames.js');
+const { tokenVocabulary, programsFor, cleanSourceFile, readingAt, isElement, REGEX_BODY, AFTER_WITH_CALL, CONTINUATIONS, FRAMES, PRODUCER_FRAMES, TRIVIA_SEPARATORS, SIGNATURE_FRAMES, SIGNATURE_ENDINGS, HIDING_ENDINGS, CERTAIN_ELEMENTS, GUESSED_ELEMENTS, HIDDEN_TEXT_ELEMENTS, UNREAD_LIST_ELEMENTS, MEMBER_ELEMENT_FRAMES, NO_MEMBER_ELEMENT_FRAMES, valuedKeywordElements, DECOYS, signaturePages, elementPages, ELEMENT_FRAMES, elementPage, signaturePage, failingLists, LEFT_LISTS, EXACT_DEFAULTS, defaultLists, exactDefaultLists, commentedDefaultLists, commentedConstraintLists, commentedMemberEndings, commentedArrowContinuations, PROSE_SHAPED_LINES, PROSE_OPEN_LINES, PROSE_HIDING_ELEMENTS, PROSE_HIDING_ENDINGS, PROSE_TYPE_ENDINGS, proseElements, KEYWORD_SIGNATURE_HEADS, KEYWORD_HEAD_ELEMENTS, KEYWORD_HIDING_ELEMENTS } = require('./helpers/angle-frames.js');
 const { AMBIGUITY_KINDS, blankNonCodePreservingTemplateExpressions } = require('../lib/source-literals.js');
 const { extractNavTargets, resolvePageRefs, strayPageRefs, navMalformedRefs, reverseResolveNavIdsReport, navigationFrontier } = require('../lib/pageref-resolver.js');
 const { LONG_KEY, MISREAD_PAGES, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
@@ -1081,6 +1081,89 @@ test('sweep (a call or construct signature with no return type, TypeScript parse
   }
 });
 
+// Type parameters that start like an element's head — `<in U>(y)`, `<public U>(y)`, `<>(y)` and the list of a method named `delete`, `typeof`, `void` or `instanceof` (KEYWORD_SIGNATURE_HEADS in helpers/angle-frames.js) — in the members of a type:
+// the parser reads a signature or a method, and the rule for a `<` in an expression reads an element, whose text would run on to the closing tag in a decoy after the type — a string, a template, a comment, a regex that holds it and the
+// text of a call — and take that call for code. Every head in every place a type with members stands, with every ending that ends its member, a decoy after each, and the same heads as elements. A type is read for certain, and the token
+// in the decoy is data; where the type holds the closing tag in a string, a template or a comment, the closing tag could be that one, and the page is a guess.
+test('sweep (type parameters that start with a modifier, an empty list or a method named like an operator, TypeScript parser): the members of a type are read for certain, every token is read where TypeScript reads it, and the decoy after the type is data', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const decoys = Object.entries(DECOYS);
+  // Each head in each frame with each ending, the decoys taken in turn: the whole family is read, after every decoy.
+  const pagesOf = (frames, heads, endings) => {
+    const programs = [];
+    for (const [frameName, frame] of frames) for (const head of heads) for (const ending of endings) {
+      const [decoyName, decoy] = decoys[programs.length % decoys.length];
+      programs.push({ ...signaturePage(frame, head, ending, decoy), label: `${decoyName} / ${frameName} / ${head} / ${JSON.stringify(ending)}` });
+    }
+    return programs;
+  };
+  const base = loadBaseLexer();
+  const types = pagesOf(SIGNATURE_FRAMES, KEYWORD_SIGNATURE_HEADS, SIGNATURE_ENDINGS);
+  const reading = readTokens(ts, types, base);
+  t.diagnostic(`the members of a type: ${describeReading(reading)}`);
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(reading.stats.valid >= 6000, `only ${reading.stats.valid} programs were valid, so the sweep proves little`);
+  assert.strictEqual(reading.stats.guessed, 0, `a signature with no hidden closing tag was guessed at: ${guessSummary(reading.kinds)}: ${JSON.stringify(reading.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(reading.stats.exact, reading.stats.valid, 'every valid page is read exactly');
+  assert.ok(reading.stats.dataTokens >= 6000 && reading.stats.realTokens >= 6000, `${reading.stats.dataTokens} tokens were data and ${reading.stats.realTokens} real`);
+  assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+  if (base) assert.ok(reading.stats.baseMisread >= 1000, `the base misreads only ${reading.stats.baseMisread} of the pages, so the sweep does not show the misread`);
+  // A closing tag in a string, a template or a comment of the type, or a signature of its own in it, could end the head's element: a guess, with every token after it refused.
+  const hiding = pagesOf(SIGNATURE_FRAMES, KEYWORD_SIGNATURE_HEADS, HIDING_ENDINGS);
+  const guessed = readTokens(ts, hiding, base);
+  t.diagnostic(`the same, with a closing tag in the type: ${describeReading(guessed)}`);
+  assert.deepStrictEqual(guessed.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(guessed.stats.valid >= 2000, `only ${guessed.stats.valid} programs with a hidden closing tag were valid`);
+  assert.strictEqual(guessed.stats.guessed, guessed.stats.valid, 'every valid page with a hidden closing tag is refused after a guess');
+  assert.deepStrictEqual([...guessed.kinds.keys()], ['generic'], 'and the guess is the one for a parameter list');
+  // A method with a body, in a class and an object literal, and one with a return type: the same heads of the four methods, and the lists with a modifier or no name.
+  const bodies = [' { return y; }', ': U { return y; }', ' {}', ': void {}', ' { return y; } m() {}', ' { return y; },\n  n: 1', ' { const z = y; return z; }'];
+  const bodyFrames = [['a class', 'class C { @ }'], ['a static method', 'class C { static @ }'], ['an object literal', 'const o = { @ };'], ['an object literal after a property', 'const o = { a: 1, @ };'], ['a class expression', 'const K = class { @ };']];
+  const methods = pagesOf(bodyFrames, ['delete<U>(y)', 'typeof<U>(y)', 'void<U>(y)', 'instanceof<U>(y)', 'delete<in U>(y)', 'typeof<>(y)'], bodies);
+  const withBodies = readTokens(ts, methods, base);
+  t.diagnostic(`methods with a body: ${describeReading(withBodies)}`);
+  assert.deepStrictEqual(withBodies.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(withBodies.stats.valid >= 100, `only ${withBodies.stats.valid} methods were valid`);
+  assert.strictEqual(withBodies.stats.guessed, 0, `a method with a body was guessed at: ${guessSummary(withBodies.kinds)}: ${JSON.stringify(withBodies.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(withBodies.stats.exact, withBodies.stats.valid, 'every valid page is read exactly');
+  // The same heads as elements, in every place an element stands: the text of an element that starts with a parenthesis, read to its closing tag, certain wherever it stands; where the closing tag could be in a comment of the text,
+  // a guess if a member of a type may begin at the head, an element for certain where none can.
+  const elementsIn = (frames, elements) => {
+    const programs = [];
+    for (const [frameName, frame] of frames) for (const element of elements) {
+      const [decoyName, decoy] = decoys[programs.length % decoys.length];
+      programs.push({ ...elementPage(frame, element, decoy), label: `${decoyName} / ${frameName} / ${JSON.stringify(element)}` });
+    }
+    return programs;
+  };
+  const elements = readTokens(ts, elementsIn(ELEMENT_FRAMES, KEYWORD_HEAD_ELEMENTS), base);
+  t.diagnostic(`the heads as elements: ${describeReading(elements)}`);
+  assert.deepStrictEqual(elements.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(elements.stats.valid >= 500, `only ${elements.stats.valid} elements were valid`);
+  assert.strictEqual(elements.stats.guessed, 0, `an element was guessed at: ${guessSummary(elements.kinds)}: ${JSON.stringify(elements.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(elements.stats.exact, elements.stats.valid, 'every valid page is read exactly');
+  assert.deepStrictEqual(elements.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+  const hidingElements = readTokens(ts, elementsIn(MEMBER_ELEMENT_FRAMES, KEYWORD_HIDING_ELEMENTS), base);
+  assert.deepStrictEqual(hidingElements.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(hidingElements.stats.valid >= 60, `only ${hidingElements.stats.valid} elements with a closing tag in a comment were valid`);
+  assert.strictEqual(hidingElements.stats.guessed, hidingElements.stats.valid, 'a closing tag that the comment could hold, where a member may begin: a guess');
+  const certainElements = readTokens(ts, elementsIn(NO_MEMBER_ELEMENT_FRAMES, KEYWORD_HIDING_ELEMENTS), base);
+  assert.deepStrictEqual(certainElements.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(certainElements.stats.valid >= 40, `only ${certainElements.stats.valid} elements were valid`);
+  assert.strictEqual(certainElements.stats.guessed, 0, `an element where no member of a type begins was guessed at: ${guessSummary(certainElements.kinds)}`);
+  assert.strictEqual(certainElements.stats.exact, certainElements.stats.valid, 'every valid page is read exactly');
+  // TypeScript reads a signature or a method for the types, and an element for the elements.
+  for (const page of [...types.filter((program, index) => index % 23 === 0), ...methods.filter((program, index) => index % 7 === 0)]) {
+    const source = cleanSourceFile(ts, page.code);
+    if (source) assert.ok(!isElement(readingAt(ts, source, page.at)), `TypeScript reads type parameters, not an element: ${page.label}`);
+  }
+  for (const page of elementsIn(ELEMENT_FRAMES, KEYWORD_HEAD_ELEMENTS).filter((program, index) => index % 5 === 0)) {
+    const source = cleanSourceFile(ts, page.code);
+    if (source) assert.ok(isElement(readingAt(ts, source, page.at)), `TypeScript reads an element: ${page.label}`);
+  }
+});
+
 // The same text as an element, where it stays certain: JSX text that starts with a parenthesis in every place an element stands, with white space of every kind after the `)`, nested elements with
 // attributes of every kind, containers with strings and objects, and a closing tag in a string, a template, a comment or a regex after it. A closing tag that could be one inside the text
 // itself — a template, a comment — is a guess.
@@ -1321,15 +1404,43 @@ test('sweep (JSX text of lines, one with a `//` in it, and a line that starts wi
   assert.ok(unhidden.stats.valid >= 100, `only ${unhidden.stats.valid} programs with a closing tag in a comment were valid`);
   assert.strictEqual(unhidden.stats.guessed, 0, `an element where no member of a type begins was guessed at: ${guessSummary(unhidden.kinds)}`);
   assert.strictEqual(unhidden.stats.exact, unhidden.stats.valid, 'every valid page is read exactly');
-  // The lines whose `//` stands behind an open `[`, an initializer's `=` after a `?` or a type, or one in a parameter list, and a path on the next line: a regex may begin at the path's `/`, and the closing tag may be inside it, so where a member of a
-  // type may begin at the head both programs compile and the page is a guess. The base read the word that ends the comment for the token before the `/` and resolved them — the pages this lexer cannot read for certain. Where no member begins
-  // the element is the only reading, and is read exactly, as the base reads it.
-  const openElements = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/b', '/ x'], ends: ['</p>'] })];
-  const refusedOpen = readTokens(ts, placed(openElements.flatMap((element) => Array.from({ length: MEMBER_ELEMENT_FRAMES.length * decoys.length }, () => element)), MEMBER_ELEMENT_FRAMES), base);
-  t.diagnostic(`lines that end in an open bracket or an initializer, where a member may begin: ${describeReading(refusedOpen)}`);
-  assert.deepStrictEqual(refusedOpen.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
-  assert.ok(refusedOpen.stats.valid >= 300, `only ${refusedOpen.stats.valid} programs were valid`);
-  assert.strictEqual(refusedOpen.stats.guessed, refusedOpen.stats.valid, 'a regex after the comment could hold the closing tag: a guess');
+  // The lines whose `//` stands behind an open `[`, an initializer's `=` after a `?` or a type, or one in a parameter list, and a path on the next line: a regex may begin at the path's `/`, and the closing tag may be inside it. A type that
+  // has the same text holds that regex for a member's name or initializer, and the base read the word that ends the comment for the token before the `/` and resolved them. The regex is read here, to the `/` of the closing tag (`/b</p>`:
+  // the body `b<`, the flags `p`, or a path of its own, `/a/b</p>`, whose regex is closed and followed by `</`): the `>` that comes next wants an operand, and what follows the tag in these pages (a `;`, a `}`, a `:`) is none, so no type has the
+  // text and only the element compiles. Where a member of a type may begin at the head the pages are read exactly; where none can they always were.
+  const openElements = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/b', '/ x', '/a/b'], ends: ['</p>', '\n</p>'] })];
+  const wonOpen = readTokens(ts, placed(openElements.flatMap((element) => Array.from({ length: MEMBER_ELEMENT_FRAMES.length * decoys.length }, () => element)), MEMBER_ELEMENT_FRAMES), base);
+  t.diagnostic(`lines that end in an open bracket or an initializer, where a member may begin: ${describeReading(wonOpen)}`);
+  assert.deepStrictEqual(wonOpen.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(wonOpen.stats.valid >= 1000, `only ${wonOpen.stats.valid} programs were valid`);
+  assert.strictEqual(wonOpen.stats.guessed, 0, `a regex that ends at the closing tag, with no operand after it, was guessed at: ${guessSummary(wonOpen.kinds)}: ${JSON.stringify(wonOpen.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(wonOpen.stats.exact, wonOpen.stats.valid, 'every valid page is read exactly');
+  assert.deepStrictEqual(wonOpen.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+  // The pages that stay refused after a guess, where a member of a type may begin at the head. A path with a `/` of its own and text after it (`/a/b/c more text</p>`): the regex ends at the second `/`, and what the `/c` that follows
+  // makes of the rest is a parser's to say (a division, two names and a `<` that begins a type or a tag), which the lexer does not read — it reads the first regex and what follows it directly. And a closing tag that an operand follows
+  // on the next line (`/b</p>` and `y`): to a type with the text for its initializer the `>` is a comparison and `y` its right side, to the element `y` is the statement after it — both compile where the line ends the member's initializer
+  // (valid-page-differential.test.js counts the pages where both do). The base resolved them all.
+  const heldElements = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/a/b/c more text'], ends: ['</p>', '\n</p>'] })];
+  const heldPaths = readTokens(ts, placed(heldElements.flatMap((element) => Array.from({ length: MEMBER_ELEMENT_FRAMES.length * decoys.length }, () => element)), MEMBER_ELEMENT_FRAMES), base);
+  t.diagnostic(`a path with a regex of its own and text after it: ${describeReading(heldPaths)}`);
+  assert.deepStrictEqual(heldPaths.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(heldPaths.stats.valid >= 100, `only ${heldPaths.stats.valid} programs were valid`);
+  assert.strictEqual(heldPaths.stats.guessed, heldPaths.stats.valid, 'a regex that the lexer does not follow to its end is a guess');
+  const OPERAND_FRAMES = [['a return', 'function g() { return @\n  y; }', true], ['a block', 'if (a) { @\n  y }', true], ['a default export', 'export default @\n  y;', true], ['a block, a call', 'if (a) { @\n  y(); }', true]];
+  const operandElements = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/b', '/ x'], ends: ['</p>'] })];
+  const heldOperands = readTokens(ts, placed(operandElements.flatMap((element) => Array.from({ length: OPERAND_FRAMES.length * decoys.length }, () => element)), OPERAND_FRAMES), base);
+  t.diagnostic(`a closing tag that an operand follows: ${describeReading(heldOperands)}`);
+  assert.deepStrictEqual(heldOperands.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(heldOperands.stats.valid >= 100, `only ${heldOperands.stats.valid} programs were valid`);
+  assert.strictEqual(heldOperands.stats.guessed, heldOperands.stats.valid, 'a regex that ends at the closing tag, with an operand after it, may be a type\'s: a guess');
+  // ... unless the regex is closed before the tag (a path with a `/` of its own: `/a/b</p>`), where the tag's `</` follows an operand and no type continues there, whatever comes after it.
+  const closedElements = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/a/b'], ends: ['</p>'] })];
+  const closedBeforeTag = readTokens(ts, placed(closedElements.flatMap((element) => Array.from({ length: OPERAND_FRAMES.length * decoys.length }, () => element)), OPERAND_FRAMES), base);
+  t.diagnostic(`a regex that is closed before the closing tag, an operand after it: ${describeReading(closedBeforeTag)}`);
+  assert.deepStrictEqual(closedBeforeTag.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(closedBeforeTag.stats.valid >= 100, `only ${closedBeforeTag.stats.valid} programs were valid`);
+  assert.strictEqual(closedBeforeTag.stats.exact, closedBeforeTag.stats.valid, 'a `</` after a regex is no type\'s: every valid page is read exactly');
+  assert.deepStrictEqual(closedBeforeTag.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
   const certainOpen = readTokens(ts, placed(openElements.flatMap((element) => Array.from({ length: NO_MEMBER_ELEMENT_FRAMES.length * decoys.length }, () => element)), NO_MEMBER_ELEMENT_FRAMES), base);
   t.diagnostic(`the same lines, where no member begins: ${describeReading(certainOpen)}`);
   assert.deepStrictEqual(certainOpen.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');

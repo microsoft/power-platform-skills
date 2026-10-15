@@ -133,6 +133,26 @@ const SIGNATURE_MEMBERS = [
 // The same, where the member holds the closing tag of its head in a string, a template or a comment: the text up to that closing tag is an element too, so the reading is a guess.
 const HIDDEN_CLOSING_MEMBERS = ["<U>(x: U); a: '</U>';", '<U>(x: U); /* </U> */', '<U>(x: U);\n  // </U>\n  a: T;', '<U>(x: U); a: `</U>`;'];
 
+// Type parameters that start like an element's head: a modifier before the name (`<in U>`, `<public U>`), an empty list (`<>`), and a method named `delete`, `typeof`, `void` or `instanceof` that has type parameters. TypeScript's parser takes
+// each as the type parameters of a signature or a method in the members of a type (the checker objects to a modifier that is no variance modifier, and to an empty list), and the rule for a `<` in an expression reads an element: the
+// text after the list tells which, and the base read an element, whose text ran on to the closing tag of a decoy after the type (source-literals.js, signatureHeadFollows). Read for certain as the type's members, with or without a return
+// type, where the text after the list is no element's.
+const KEYWORD_PARAMETER_MEMBERS = [
+  '<in U>(x: U): T;', '<out U>(x: U): T;', '<in out U>(x: U): T;', '<public U>(x: U): T;', '<readonly U>(x: U): T;', '<static U>(x: U): T;', '<accessor U>(x: U): T;', '<>(x: T): T;', '<>(): T;', 'new <in U>(x: U): T;',
+  'new <public U>(x: U): T;', 'new <>(x: T): T;', '<in U, out V>(x: U): V;', '<public U = string>(x: U): T;', '<in U extends X>(x: U): T;',
+  'delete<U>(x: U): T;', 'typeof<U>(x: U): T;', 'void<U>(x: U): T;', 'instanceof<U>(x: U): T;', 'delete<U>(url: string): Promise<U>;', 'readonly delete<U>(x: U): T;',
+  '<in U>(x: U);', '<public U>(x: U);', '<>(x: U);', 'new <in U>(x: U);', 'new <>(x: U);', 'delete<U>(x: U);', 'void<U>(x: U);', '<in U>(x: U);\n  a: T;', '<>(x: U); a: { b: T };', '<in U>(x: U)\n  a: T;', '<in U>(x: U), a: T;',
+];
+// The same, where the member holds the closing tag of its head in a string, a template or a comment: an element has the same text up to that closing tag, so the reading is a guess.
+const KEYWORD_HIDDEN_MEMBERS = ["<in U>(x: U); a: '</in>';", '<public U>(x: U); /* </public> */', '<>(x: U);\n  // </>\n  a: T;', '<out U>(x: U): T; a: `</out>`;', "delete<U>(x: U): T; a: '</U>';", "void<U>(x: U); a: '</U>';"];
+// Elements that have such a head: JSX text that starts with a parenthesis, with a modifier or a keyword in the tag, or none, and the text of a deletion, a `typeof`, a `void` and an `instanceof` of an element.
+const KEYWORD_HEAD_ELEMENTS = [
+  '<in U>(a); see https://x.y</in>', '<out U>(a), text</out>', '<public U>(a)\n  text\n</public>', '<readonly U>(a)</readonly>', '<>(a); see https://x.y</>', '<>(a), text</>', '<in out U>(a); text</in>',
+  'delete <U>(a) text</U>', 'typeof <U>(a); see https://x.y</U>', 'void <U>(a), text</U>', 'a instanceof <U>(a)\n  text\n</U>', 'delete <in U>(a) text</in>', 'void <>(a), text</>',
+];
+// ... and where the closing tag could be in a comment of the text: a type has the same text for its members, so the page is a guess where a member of a type may begin at the head.
+const KEYWORD_HIDING_ELEMENTS = ['<in U>(a); // c </in>', '<public U>(a); /* c </public>', '<>(a), x // c </>', '<out U>(a);\n  // c\n  x // d </out>'];
+
 // Members an interface or a type literal can have.
 const MEMBERS = [
   'a: T;', 'a?: T;', 'readonly a: T;', '[k: string]: T;', 'readonly [k: string]: T;', '[k: number]: T;', 'm(x: T): T;', 'm?(x: T): T;', 'm<U>(x: U): T;', '(x: T): T;', '<U>(x: U): T;', 'new (x: T): T;',
@@ -142,7 +162,7 @@ const MEMBERS = [
   // A method with a quoted name: a string and a call, in an object type that stands in a function type's parameter list.
   "'m'(x: T): T;", '"m"(x: T): T;', '"m"(): T;', "'a\\'b'(x: T, y: U): T;", "'m'(x?: T): T;",
   'a: <T>() => T;', 'a: new <T>() => T;', 'a: abstract new <T>() => T;', 'a: (x: T) => <U>(y: U) => T;', 'a(): <U>(y: U) => T;',
-  ...SIGNATURE_MEMBERS, ...HIDDEN_CLOSING_MEMBERS,
+  ...SIGNATURE_MEMBERS, ...HIDDEN_CLOSING_MEMBERS, ...KEYWORD_PARAMETER_MEMBERS,
 ];
 
 // Elements whose text starts with a parenthesis and a label, where the list that the text would be fails to parse as one — a number and a word (`10 MB`), an object type whose first member is no member (`{user.name}`),
@@ -168,8 +188,13 @@ const PROSE_ELEMENTS = [...proseElements({
 // them by the word that ends the comment, and so does this lexer, by the reading of the type.
 const SHAPED_PROSE_ELEMENTS = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_SHAPED_LINES, paths: ['/b'], ends: ['</p>'] })];
 // The same, where the line before the `//` ends in an open `[`, an initializer's `=` or an operator in one: a regex may begin at the `/` of the next line, which a computed name, a default or an initializer of a type may hold, and the closing tag
-// may be inside it. Where no member of a type begins at the head the element is the only reading (a head after an `=`, a `(`, a `[`, a `:`, an `=>` or a binary operator), and where one may it is a guess (OPEN_LINE_PAGES).
-const PROSE_OPEN_ELEMENTS = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/b'], ends: ['</p>'] })];
+// may be inside it — but the regex that begins there is read, and only the element compiles where it cannot be a type's: a path that its line does not close (the closing tag on the next line), one that ends at the `/` of the closing tag, whose
+// name is its flags and whose `>` is a comparison that no operand follows (`;`, `)`, `}`, `,`, `:`), or one that closes before the closing tag, which follows it directly and which an operand cannot go on with (`/a/b</p>`). So these are resolved
+// wherever they stand, a head where a member of a type may begin included (source-literals.js, regexFailsInAType).
+const PROSE_OPEN_ELEMENTS = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/b', '/ x', '/a/b'], ends: ['</p>', '\n</p>'] })];
+// The same, where the path has a `/` of its own and text after it (`/a/b/c more text`): the regex ends at the second `/`, and what follows it is read as code by a type — a division, then a name, then two names — which only a parser follows.
+// Where no member of a type begins at the head the element is the only reading and is read for certain; where one may it is a guess (HELD_OPEN_LINE_PAGES).
+const HELD_OPEN_ELEMENTS = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/a/b/c more text'], ends: ['</p>', '\n</p>'] })];
 
 // Elements whose text starts with a parenthesis, as a page holds them — a hint after a label, a count, a translated label, a note with a link, several lines — and as a value in every place one stands. Each
 // is JSX text that a call signature with no return type shares the start of: the reading turns on what comes after the `)` and, where a line break or a separator follows it, on the text to the closing tag.
@@ -204,7 +229,7 @@ const PARENTHESISED_ELEMENTS = [
   // Attributes each on a line of its own, as prettier lays a tag out, and a fragment on a line of its own after a tag or a separator: no member of a type has a name and an `=` on two lines, and no operand ends where the fragment begins.
   '<p>(optional){" "}\n  <a\n    href="https://x.y/docs"\n    target="_blank"\n  >\n    see https://x.y\n  </a>\n</p>', '<p>(see\n  <a\n    href="https://x.y/docs"\n    target="_blank"\n  >https://x.y/docs</a>)\n</p>',
   '<p>(optional)\n  <b>x</b>\n  <>it\'s https://x.y</>\n</p>', '<p>(a);\n  <>it\'s here</>\n</p>', '<p>(a), <b>x</b>,\n  <>it\'s https://x.y</>\n</p>',
-  ...FAILING_LIST_ELEMENTS, ...EXACT_INITIALIZER_ELEMENTS, ...PROSE_ELEMENTS, ...SHAPED_PROSE_ELEMENTS, ...JSX_ONLY_ELEMENTS,
+  ...FAILING_LIST_ELEMENTS, ...EXACT_INITIALIZER_ELEMENTS, ...PROSE_ELEMENTS, ...SHAPED_PROSE_ELEMENTS, ...JSX_ONLY_ELEMENTS, ...KEYWORD_HEAD_ELEMENTS,
 ];
 // The same, where something before the `)` may start an expression in a signature's parameter list (a default, a computed name, a decorator, an accessor's body, a constraint) and a `/`,
 // a `<` or a back-tick follows it, which may begin a regex, JSX or a template that holds a `)` of its own, and the scan cannot read it exactly — the default's first token is no regex or element, a `/` follows
@@ -399,9 +424,10 @@ function* validPages() {
   for (const declaration of COMPONENTS) yield { group: 'component or hook', name: declaration, code: page({ body: declaration }) };
   for (const [position, place, member] of VALUE_POSITIONS) {
     for (const element of [...PARENTHESISED_ELEMENTS, ...HIDING_ELEMENTS, ...INITIALIZER_ELEMENTS]) yield { group: 'parenthesised element', name: `${element} / ${position}`, element, member, code: page(place(element)) };
-    // The lines that end in an open `[`, an `=` or an operator, where no member of a type begins: a regex cannot hold the closing tag there, since the text is no member's (the same lines where a member may begin are
-    // OPEN_LINE_PAGES, in the test of what cannot be read for certain).
-    if (!member) for (const element of PROSE_OPEN_ELEMENTS) yield { group: 'parenthesised element', name: `${element} / ${position}`, element, member, code: page(place(element)) };
+    // The lines that end in an open `[`, an `=` or an operator: a regex that begins at the next line's `/` cannot be a type's where it is unterminated or ends at the closing tag (resolved wherever the head stands), and where no
+    // member of a type begins at the head the text is the element's whatever the regex is (HELD_OPEN_LINE_PAGES, in the test of what cannot be read for certain, has the others where one may).
+    for (const element of PROSE_OPEN_ELEMENTS) yield { group: 'parenthesised element', name: `${element} / ${position}`, element, member, code: page(place(element)) };
+    if (!member) for (const element of HELD_OPEN_ELEMENTS) yield { group: 'parenthesised element', name: `${element} / ${position}`, element, member, code: page(place(element)) };
   }
   for (const member of MEMBERS) {
     yield { group: 'interface member', name: member, code: page({ top: `interface P1<T, U> { ${member} }` }) };
@@ -416,10 +442,22 @@ function* validPages() {
   for (const form of PARAMETER_FORMS) yield { group: 'parameter form', name: form, code: page({ top: form }) };
 }
 
-// The lines that end in an open `[`, an `=` or an operator, at a head where a member of a type may begin (the pages of PROSE_OPEN_ELEMENTS that `validPages` leaves out): the text could be the members of a type that holds a regex, which the next line's
-// `/` begins, and the closing tag is inside it — both programs compile, and the lexer refuses after a guess.
-function* openLinePages() {
-  for (const [position, place, member] of VALUE_POSITIONS) if (member) for (const element of PROSE_OPEN_ELEMENTS) yield { group: 'open line', name: `${element} / ${position}`, element, code: page(place(element)) };
+// What an operand starts with: a name, a number, a string, a template, a bracket, a sign, `new` and `this`. A closing tag that one follows on the next line is a comparison's right side to a type that has the text for its initializer, and the
+// statement after an element to the reading in which the element ends there.
+const OPERAND_FOLLOWERS = ['y', '1', "'s'", '`t`', '(y)', '[y]', '{}', '+y', '-y', '!y', 'new Y', 'this'];
+
+// The lines that end in an open `[`, an `=` or an operator, at a head where a member of a type may begin, that the reading of the regex leaves refused after a guess: the pages of HELD_OPEN_ELEMENTS, whose regex ends at its own `/` and
+// is followed by text that a parser reads, and a closing tag that an operand follows on the next line (`/b</p>` and a line break, then `y`), where an initializer holds the regex and the operand — both programs compile where the line
+// ends the initializer's member (`x: A = // note`), and TypeScript's reading of the text is the element's in one and the type's in the other. 2.13.0 resolves them: it takes the word that ends the comment for the token before the `/`.
+// Each page is { group, name, code, text }: `text` is where the element starts, for the programs that put the same text into the members of a type.
+function* heldOpenLinePages() {
+  for (const [position, place, member] of VALUE_POSITIONS) if (member) for (const element of HELD_OPEN_ELEMENTS) yield { group: 'held open line', name: `${element} / ${position}`, text: element, code: page(place(element)) };
+  for (const line of PROSE_OPEN_LINES) {
+    for (const follower of OPERAND_FOLLOWERS) {
+      const text = `<p>(a);\n  ${line}\n  /b</p>\n  ${follower};`;
+      yield { group: 'operand after the closing tag', name: `${line} / ${follower}`, text, code: page({ body: `function mk() { return ${text} }` }) };
+    }
+  }
 }
 
-module.exports = { validPages, openLinePages, functionTypes, NAVIGATION_CALL, page, ARROWS, FUNCTION_VALUES, CASTS, OPERATORS, OPERANDS, MEMBERS, SIGNATURE_MEMBERS, HIDDEN_CLOSING_MEMBERS, PARENTHESISED_ELEMENTS, FAILING_LIST_ELEMENTS, EXACT_INITIALIZER_ELEMENTS, PROSE_ELEMENTS, SHAPED_PROSE_ELEMENTS, PROSE_OPEN_ELEMENTS, HIDING_ELEMENTS, INITIALIZER_ELEMENTS, TYPE_POSITIONS, VALUE_POSITIONS, EVERYDAY };
+module.exports = { validPages, heldOpenLinePages, functionTypes, NAVIGATION_CALL, page, ARROWS, FUNCTION_VALUES, CASTS, OPERATORS, OPERANDS, MEMBERS, SIGNATURE_MEMBERS, HIDDEN_CLOSING_MEMBERS, KEYWORD_PARAMETER_MEMBERS, KEYWORD_HIDDEN_MEMBERS, KEYWORD_HEAD_ELEMENTS, KEYWORD_HIDING_ELEMENTS, PARENTHESISED_ELEMENTS, FAILING_LIST_ELEMENTS, EXACT_INITIALIZER_ELEMENTS, PROSE_ELEMENTS, SHAPED_PROSE_ELEMENTS, PROSE_OPEN_ELEMENTS, HELD_OPEN_ELEMENTS, OPERAND_FOLLOWERS, HIDING_ELEMENTS, INITIALIZER_ELEMENTS, TYPE_POSITIONS, VALUE_POSITIONS, EVERYDAY };

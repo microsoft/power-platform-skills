@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const { loadTypescriptOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
 const { tokenVocabulary } = require('./helpers/angle-frames.js');
-const { RESOLVED_PAGES, REFUSED_PAGES, HIDDEN_CLOSING_TAG_PAGES } = require('./helpers/live-shaped-pages.js');
+const { RESOLVED_PAGES, REFUSED_PAGES, HIDDEN_CLOSING_TAG_PAGES, TYPE_HEAD_PAGES, TYPE_HEAD_HIDDEN_PAGES } = require('./helpers/live-shaped-pages.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES, FUNCTION_TYPE_CALL_LINE, LONG_KEY, lookBehindPage, runnable } = require('./helpers/misread-page.js');
 const { AMBIGUITY_KINDS } = require('../lib/source-literals.js');
 const { pageStructureProblems } = require('../lib/page-structure.js');
@@ -2403,6 +2403,56 @@ test('a signature whose text can hold the closing tag of its head after a number
     const rewritten = pages.filter(({ code }) => base.resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']])).deployment.get('x').split('gp-detail').length - 1 === 2);
     assert.ok(rewritten.length >= 8, `the released lexer rewrites the token that is data in only ${rewritten.length} of the pages`);
   }
+});
+
+// A type whose members start like an element's head — a method named `delete`, `typeof`, `void` or `instanceof` that has type parameters, a modifier before the name of a type parameter, an empty list — and a note after it that holds the closing
+// tag of the head and the text of a navigation call (TYPE_HEAD_PAGES): the type is read for certain, the one real call is rewritten, the token in the note is data (the only stray one), and no guess is named. Where the type holds the closing
+// tag itself (TYPE_HEAD_HIDDEN_PAGES) an element that has the head has the same text up to it: a guess at the head, both tokens stray, nothing rewritten.
+test('a type whose members start like an element\'s head is read for certain, and the note after it that holds the closing tag and a call is data; where the type holds the closing tag itself the page is refused after a guess', (t) => {
+  const ts = loadTypescriptOracle();
+  const base = loadBaseLexer();
+  assert.strictEqual(TYPE_HEAD_PAGES.length, 6);
+  assert.strictEqual(TYPE_HEAD_HIDDEN_PAGES.length, 3);
+  const REAL = '"PAGEREF_detail"';
+  let baseMisread = 0;
+  for (const { name, code } of TYPE_HEAD_PAGES) {
+    assert.strictEqual(navigationFrontier(code), null, `${name}: no guess is involved`);
+    assert.deepStrictEqual(extractNavTargets(code).map((target) => [target.kind, target.key, 'afterFrontier' in target]), [['pageref', 'detail', false]], name);
+    assert.deepStrictEqual(strayPageRefs(code).map((r) => r.start), [code.indexOf('PAGEREF_detail')], `${name}: the token in the note is the one stray token`);
+    const { deployment, unresolved, residual } = resolveOne(code);
+    const resolved = deployment.get('x');
+    // The call is the last token, after the note: it is the one rewritten, and the note is as it was.
+    const real = code.lastIndexOf(REAL);
+    assert.strictEqual(resolved, `${code.slice(0, real)}"gp-detail"${code.slice(real + REAL.length)}`, `${name}: the token of the call is the one rewritten`);
+    assert.deepStrictEqual([unresolved, navMalformedRefs(code), residual.length], [[], [], 1], name);
+    if (ts) {
+      const reading = pageIdTokens(ts, code);
+      assert.ok(reading, `${name}: valid TSX`);
+      assert.deepStrictEqual([reading.real.length, reading.data.length], [1, 1], `${name}: TypeScript reads one real call and one token that is data`);
+    }
+    // The released lexer read the head as an element, and the note's closing tag ended its text: the token in the note is a call to it.
+    if (base) {
+      const there = base.resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']])).deployment.get('x');
+      if (there !== resolved) baseMisread += 1;
+    }
+  }
+  if (base) assert.ok(baseMisread >= 3, `the released lexer misreads only ${baseMisread} of the pages`);
+  for (const { name, code, head } of TYPE_HEAD_HIDDEN_PAGES) {
+    const at = code.indexOf(head);
+    assert.deepStrictEqual(navigationFrontier(code), { start: at, kind: 'generic', ...positionOf(code, at) }, `${name}: the guess is named at the head`);
+    const found = strayPageRefs(code);
+    assert.deepStrictEqual(found.map((r) => r.frontier.kind), ['generic', 'generic'], `${name}: both tokens are stray, after the guess`);
+    const { deployment, unresolved, residual } = resolveOne(code);
+    assert.strictEqual(deployment.get('x'), code, `${name}: nothing is rewritten`);
+    assert.deepStrictEqual([unresolved, navMalformedRefs(code), residual.length], [[], [], 2], name);
+    if (ts) {
+      const reading = pageIdTokens(ts, code);
+      assert.ok(reading, `${name}: valid TSX`);
+      assert.deepStrictEqual([reading.real.length, reading.data.length], [1, 1], `${name}: TypeScript reads one real call and one token that is data`);
+      assert.ok(reading.data.every((token) => found.some((r) => r.start === token)), `${name}: the token that is data is stray`);
+    }
+  }
+  if (!ts) t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the pages');
 });
 
 // A refusal the author can act on names the construct. The page of a live run declared a navigation call that the lexer could not see — `of/2`
