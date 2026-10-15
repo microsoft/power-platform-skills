@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const { sdkFirst, connectivity, connectivityRefusal, connectivityCloudOf, connectivityRouteRefusal, connectivityPreflight, powerAppsPreflight, CONNECTIVITY_REFUSALS } = require('../lib/sdk-first.js');
-const { SdkError, ConnectionError, InvalidArgumentError } = require('../lib/maker-sdk.js');
+const { SdkError, ConnectionError, InvalidArgumentError, withCleanupWarnings, readCleanupWarnings } = require('../lib/maker-sdk.js');
 const { PowerAppsClientError, TOKEN_UNAVAILABLE, URL_REFUSED } = require('../lib/power-apps-service-client.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
@@ -329,6 +329,64 @@ test('a failure of pac is the caller\'s: it is thrown, whatever the SDK refused'
     sdkFirst(ENV, { refusal: connectivityRefusal, fromSdk: async () => { throw sdkError('CONNECTIVITY_CLOUD_UNSUPPORTED'); }, fromPac: async () => { throw pacFailure; } }, { sdkModule: module, httpClient: {} }),
     (thrown) => thrown === pacFailure
   );
+});
+
+test('what the SDK could not clean up before it refused — its cleanup warnings — is carried to the answer of pac, as `warnings`, and the answer is still pac\'s', async () => {
+  const { module } = stubSdkModule();
+  const refusal = { code: 'SOLUTION_STAGING_UNREADABLE', message: 'the staging reply could not be read' };
+  const stagedCopy = 'The staged copy of the package (stagesolutionupload 33333333-3333-4333-8333-333333333333) could not be deleted: HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.0/stagesolutionuploads(33333333-3333-4333-8333-333333333333): denied.';
+  const refused = withCleanupWarnings(err(refusal.code), [stagedCopy, 'another note']);
+  const result = await sdkFirst(ENV, {
+    ...noPreflight,
+    refusal: (error) => (error === refused ? refusal : null),
+    fromSdk: async () => { throw refused; },
+    fromPac: async () => ['from pac'],
+  }, { sdkModule: module, httpClient: {} });
+  assert.deepStrictEqual(result, { source: 'pac', value: ['from pac'], fallback: refusal, warnings: [stagedCopy, 'another note'] });
+  // A copy: what the caller does with the list is not done to the SDK's own.
+  result.warnings.push('added by the caller');
+  assert.deepStrictEqual(readCleanupWarnings(refused), [stagedCopy, 'another note']);
+});
+
+test('and a failure of pac carries them too — the error it throws is the very one pac raised, with the SDK\'s warnings attached the way the SDK attaches them, after any of its own', async () => {
+  const { module } = stubSdkModule();
+  const refusal = { code: 'SOLUTION_STAGING_UNREADABLE', message: 'unreadable' };
+  const pacFailure = withCleanupWarnings(new Error('pac could not run'), ['a note pac\'s failure already had']);
+  await assert.rejects(
+    sdkFirst(ENV, {
+      ...noPreflight,
+      refusal: () => refusal,
+      fromSdk: async () => { throw withCleanupWarnings(err(refusal.code), ['the staged copy stays']); },
+      fromPac: async () => { throw pacFailure; },
+    }, { sdkModule: module, httpClient: {} }),
+    (thrown) => {
+      assert.strictEqual(thrown, pacFailure, 'not a new error');
+      assert.deepStrictEqual(readCleanupWarnings(thrown), ['a note pac\'s failure already had', 'the staged copy stays']);
+      return true;
+    }
+  );
+  // A failure that is not an object cannot carry them, and is thrown as it is.
+  await assert.rejects(
+    sdkFirst(ENV, { ...noPreflight, refusal: () => refusal, fromSdk: async () => { throw withCleanupWarnings(err(refusal.code), ['x']); }, fromPac: async () => { throw 'pac said no'; } }, { sdkModule: module, httpClient: {} }),
+    (thrown) => thrown === 'pac said no'
+  );
+});
+
+test('a refusal with nothing to clean up changes nothing: the answer has no `warnings`, and the error pac raises is not touched — so is a refusal made before any SDK existed', async () => {
+  const { module } = stubSdkModule();
+  const refusal = { code: 'SOLUTION_STAGING_UNREADABLE', message: 'unreadable' };
+  for (const refused of [err(refusal.code), withCleanupWarnings(err(refusal.code), [])]) {
+    const answered = await sdkFirst(ENV, { ...noPreflight, refusal: () => refusal, fromSdk: async () => { throw refused; }, fromPac: async () => 1 }, { sdkModule: module, httpClient: {} });
+    assert.deepStrictEqual(answered, { source: 'pac', value: 1, fallback: refusal });
+    const pacFailure = new Error('pac failed');
+    await assert.rejects(sdkFirst(ENV, { ...noPreflight, refusal: () => refusal, fromSdk: async () => { throw refused; }, fromPac: async () => { throw pacFailure; } }, { sdkModule: module, httpClient: {} }), (thrown) => {
+      assert.strictEqual(thrown, pacFailure);
+      assert.strictEqual(readCleanupWarnings(thrown), undefined, 'nothing was attached');
+      return true;
+    });
+  }
+  const preflight = await sdkFirst(ENV, { refusal: connectivityRefusal, preflight: async () => refusal, fromSdk: async () => { throw new Error('no SDK'); }, fromPac: async () => 2 }, { sdkModule: module });
+  assert.deepStrictEqual(preflight, { source: 'pac', value: 2, fallback: refusal });
 });
 
 test('with the real rule, a response body that carries a refusal\'s code does not send the read to pac — the SDK\'s ConnectionError is thrown as it is', async () => {

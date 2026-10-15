@@ -957,7 +957,9 @@ async function runTemplate(request, deps = {}) {
       ...writeTemplate(request, `${JSON.stringify(settings, null, 2)}\n`, settings, warnings && warnings.length ? { warnings } : {}),
     };
   }
-  return { source: 'pac', ...writeTemplate(request, outcome.value.text, outcome.value.settings, outcome.value.warnings ? { warnings: outcome.value.warnings } : undefined), fallback: outcome.fallback };
+  // The SDK's cleanup warnings of the attempt it refused (carried across the fallback: lib/sdk-first.js) come first, then the note of the folder pac worked in, should it have stayed.
+  const warnings = [...(outcome.warnings || []), ...(outcome.value.warnings || [])];
+  return { source: 'pac', ...writeTemplate(request, outcome.value.text, outcome.value.settings, warnings.length ? { warnings } : undefined), fallback: outcome.fallback };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1147,7 +1149,10 @@ async function runImport(request, deps = {}) {
         ...resendReport(sends),
       };
     }
-    return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize) };
+    // pac did the work, and the SDK's refused attempt may have left something behind it (a staged copy it could not delete): its cleanup warnings were carried across the fallback (lib/sdk-first.js) and
+    // are cleaned here, ONCE, like the ones of an SDK run — they are another party's text. A pac run that succeeded stays a success.
+    const carried = (outcome.warnings || []).map((warning) => sanitize(warning, 'warning'));
+    return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize), ...(carried.length ? { warnings: carried } : {}) };
   } catch (err) {
     throw await importFailure(err, { sanitize, settings, importJobId: sends.jobId, env: request.env, deps, sends });
   }

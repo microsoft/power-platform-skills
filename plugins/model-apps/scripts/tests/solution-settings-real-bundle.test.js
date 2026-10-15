@@ -241,6 +241,54 @@ test('REAL BUNDLE: without --env the zip is read by pac alone, and its folder is
   assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote. Delete it.`]);
 });
 
+// --- what the SDK could not clean up survives the pac fallback ---------------------------------------------------------------------------------
+// The SDK stages a package to read it and deletes the staging copy; a copy it cannot delete is a WARNING it carries on the error it raises, with the upload id, so the maker can delete it. When the SDK then refuses
+// (a staging reply it cannot read) and pac does the work, that error is thrown away — and with it the warning. It is carried across the fallback (lib/sdk-first.js) and reaches the output of the run, whether pac
+// succeeded or failed; a pac run that succeeded is still a success.
+const STAGING_UPLOAD = '33333333-3333-4333-8333-333333333333';
+// A variable the reply lists twice: the SDK will not guess which definition is meant, and refuses (SOLUTION_STAGING_UNREADABLE).
+const UNREADABLE_STAGE = { variables: [{ schemaName: 'new_Mode' }, { schemaName: 'new_Mode' }] };
+const stagingCopyStays = (message = 'Not permitted to delete staging copy') => json(403, { error: { message } });
+const settledAs = (promise) => promise.then((result) => ({ result }), (error) => ({ error }));
+
+for (const command of ['template', 'import']) {
+  for (const pacFails of [false, true]) {
+    test(`REAL BUNDLE: ${command} keeps the SDK's cleanup warning when the staging falls back to pac — pac ${pacFails ? 'fails' : 'succeeds'} — and a successful pac run is still a success`, async () => {
+      const { cloud, http } = world({ stage: UNREADABLE_STAGE, deleteStagingAnswer: stagingCopyStays() });
+      const f = files({ EnvironmentVariables: [{ SchemaName: 'new_Mode', Value: 'enabled' }], ConnectionReferences: [] });
+      const spawn = (name, args) => {
+        if (pacFails) return { status: 1, stdout: '', stderr: 'Error: pac refused the package' };
+        if (command === 'template') fs.writeFileSync(args[args.indexOf('--settings-file') + 1], JSON.stringify({ EnvironmentVariables: [], ConnectionReferences: [] }));
+        return { status: 0, stdout: 'Completed', stderr: '' };
+      };
+      const deps = { http, pac: { spawn } };
+      const outcome = await settledAs(command === 'template' ? ss.runTemplate(templateRequest(f, { packagePath: f.pkg }), deps) : ss.runImport(importRequest(f), deps));
+      assert.strictEqual(Boolean(outcome.error), pacFails, 'a pac run that succeeded is a success, and one that failed a failure');
+      const shown = outcome.result || ss.describeFailure(outcome.error, require('../lib/maker-sdk.js').readCleanupWarnings);
+      assert.strictEqual(shown.fallback.code, 'SOLUTION_STAGING_UNREADABLE', 'pac was asked because the SDK refused');
+      assert.strictEqual(shown.warnings.length, 1, JSON.stringify(shown));
+      assert.match(shown.warnings[0], new RegExp(`The staged copy of the package \\(stagesolutionupload ${STAGING_UPLOAD}\\) could not be deleted: HTTP 403 .*Not permitted to delete staging copy`));
+      assert.strictEqual(cloud.state.imports.length, 0, 'the SDK imported nothing before pac was asked');
+      assert.deepStrictEqual(cloud.state.deletedStaging, [STAGING_UPLOAD], 'it did try to delete its staging copy');
+    });
+  }
+}
+
+test('REAL BUNDLE: the warning that survives the fallback is sanitized once, like the one of a run that did not fall back — a value the platform quoted in it is withheld, whether pac succeeded or failed', async () => {
+  for (const pacFails of [false, true]) {
+    const { http } = world({
+      stage: { variables: [{ schemaName: 'new_Secret', type: '100000005' }, { schemaName: 'new_Secret', type: '100000005' }] },
+      deleteStagingAnswer: stagingCopyStays(`denied for ${SECRET} and ${CONNECTION_ID}`),
+    });
+    const f = files();
+    const spawn = () => (pacFails ? { status: 1, stdout: '', stderr: 'Error: refused' } : { status: 0, stdout: 'ok', stderr: '' });
+    const outcome = await settledAs(ss.runImport(importRequest(f), { http, pac: { spawn } }));
+    const shown = outcome.result || ss.describeFailure(outcome.error, require('../lib/maker-sdk.js').readCleanupWarnings);
+    assert.deepStrictEqual(shown.warnings, [WITHHELD('warning')], `pac ${pacFails ? 'failed' : 'succeeded'}`);
+    assert.ok(!JSON.stringify(shown).includes(SECRET) && !JSON.stringify(shown).includes(CONNECTION_ID), JSON.stringify(shown));
+  }
+});
+
 // --- import -------------------------------------------------------------------------------------------------------------------------
 
 test('REAL BUNDLE: import stages the package to check every filled entry against it, deletes the staging copy, and sends ComponentParameters in the import itself — with pac\'s defaults', async () => {

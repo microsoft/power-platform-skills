@@ -165,10 +165,14 @@ const connectivity = Object.freeze({
  * @param {object} [plan.sdkOptions] - more options for `createMakerSdk`
  * @param {(env: string) => object} [plan.httpClient] - the org's HttpClient, when the read needs other than the plain az-token one
  * @param {object} [deps] - test seams: `sdkModule` ({ createMakerSdk, createNodeWorkspaceStorage }), `httpClient`, and the preflight's token reads
- * @returns {Promise<{ source: 'sdk', value: any } | { source: 'pac', value: any, fallback: {code: string, message: string} }>}
+ * @returns {Promise<{ source: 'sdk', value: any } | { source: 'pac', value: any, fallback: {code: string, message: string}, warnings?: string[] }>}
+ *   `warnings` (only when there are some) are the SDK's cleanup warnings of the refused attempt — what it could not clean up before it refused — carried across the fallback; when pac fails they are
+ *   attached to the error it throws, the way the SDK attaches them to its own (`readCleanupWarnings` reads them).
  */
 async function sdkFirst(env, plan, deps = {}) {
   let refused = plan.preflight ? await plan.preflight(env, deps) : null;
+  // What the SDK could not clean up before it refused (below), carried to pac's answer.
+  let carried = [];
   if (!refused) {
     const workspaceDir = makeTempWorkspace('sdk-first-');
     try {
@@ -183,6 +187,9 @@ async function sdkFirst(env, plan, deps = {}) {
     } catch (error) {
       refused = plan.refusal(error);
       if (!refused) throw error;
+      // The refusal is kept as `{ code, message }` and the error is let go — and with it what the SDK attached to it: the warnings of what it could not clean up before it refused (a staged copy of the
+      // package it could not delete, with its upload id: `readCleanupWarnings`). They say what the maker has left in the environment, so they are read here, before the error is gone, and carried to the end.
+      carried = cleanupWarningsOf(error, deps);
     } finally {
       try {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
@@ -192,7 +199,25 @@ async function sdkFirst(env, plan, deps = {}) {
     }
   }
   // After the throwaway workspace is gone, so a slow pac does not keep it.
-  return { source: 'pac', value: await plan.fromPac(refused), fallback: refused };
+  let value;
+  try {
+    value = await plan.fromPac(refused);
+  } catch (failure) {
+    // A failure of pac is the caller's, as it is: the very error pac raised, with the SDK's warnings attached the way the SDK attaches its own (only an object can carry them).
+    throw carried.length > 0 ? attachCleanupWarnings(failure, carried, deps) : failure;
+  }
+  return { source: 'pac', value, fallback: refused, ...(carried.length > 0 ? { warnings: carried } : {}) };
+}
+
+// The SDK's own ways to read and to attach the cleanup warnings of an error (`readCleanupWarnings` and `withCleanupWarnings`, in errors/index.ts of the vendored SDK): the module a test stands in for
+// the SDK may give them, else the bundle's. A copy is returned, so what a caller does with the list is not done to the SDK's.
+function cleanupWarningsOf(error, deps) {
+  const read = (deps.sdkModule && deps.sdkModule.readCleanupWarnings) || require('./maker-sdk.js').readCleanupWarnings;
+  return [...(read(error) || [])];
+}
+function attachCleanupWarnings(failure, warnings, deps) {
+  const attach = (deps.sdkModule && deps.sdkModule.withCleanupWarnings) || require('./maker-sdk.js').withCleanupWarnings;
+  return attach(failure, warnings);
 }
 
 module.exports = { sdkFirst, connectivity, connectivityRefusal, connectivityCloudOf, connectivityRouteRefusal, connectivityPreflight, powerAppsPreflight, CONNECTIVITY_REFUSALS };
