@@ -4604,7 +4604,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-      "bytes": 8232,
+      "bytes": 8736,
       "imports": [
         {
           "path": "node_modules/zod/v4/index.js",
@@ -4625,7 +4625,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-      "bytes": 40372,
+      "bytes": 46763,
       "imports": [
         {
           "path": "node_modules/pkce-challenge/dist/index.node.js",
@@ -5753,7 +5753,7 @@
           "bytesInOutput": 1464
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-          "bytesInOutput": 6441
+          "bytesInOutput": 6917
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js": {
           "bytesInOutput": 924
@@ -5762,7 +5762,7 @@
           "bytesInOutput": 3474
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-          "bytesInOutput": 21179
+          "bytesInOutput": 24025
         },
         "node_modules/eventsource-parser/dist/index.js": {
           "bytesInOutput": 7757
@@ -5810,7 +5810,7 @@
           "bytesInOutput": 8946
         }
       },
-      "bytes": 1274176
+      "bytes": 1277498
     }
   }
 }

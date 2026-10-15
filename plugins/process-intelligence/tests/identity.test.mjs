@@ -20,7 +20,7 @@ test('public plugin identity and lockfile match the marketplace entry', async ()
   const lock = await json(path.join(root, 'package-lock.json'));
   assert.equal(lock.name, 'process-intelligence');
   assert.equal(lock.packages[''].name, 'process-intelligence');
-  assert.equal(lock.packages[''].dependencies['@modelcontextprotocol/sdk'], '1.30.0');
+  assert.equal(lock.packages[''].dependencies['@modelcontextprotocol/sdk'], '1.31.0');
   assert.deepEqual(Object.keys((await json(path.join(root, '.mcp.json'))).mcpServers), ['process-intelligence']);
   for (const file of ['marketplace.json', '.claude-plugin/marketplace.json']) {
     const index = await json(path.join(workspace, file));
