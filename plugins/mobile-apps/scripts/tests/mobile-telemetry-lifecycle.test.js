@@ -747,6 +747,32 @@ test('run lock serializes parent completion and retry creation across processes'
   const configDir = path.join(projectRoot, 'config');
   const ikeyPath = path.join(configDir, 'ikey.json');
   const cli = path.join(PLUGIN_ROOT, 'scripts', 'emit-telemetry-checkpoint.js');
+  const traceFs = path.join(projectRoot, 'trace-lifecycle-fs.cjs');
+  // The CLI sanitizes failures, so trace fixture I/O errors inside test children.
+  fs.writeFileSync(traceFs, `
+const fs = require('node:fs');
+const path = require('node:path');
+const failures = [];
+for (const operation of ['linkSync', 'rmSync', 'statSync', 'readFileSync']) {
+  const original = fs[operation];
+  fs[operation] = function (...args) {
+    try {
+      return original.apply(this, args);
+    } catch (error) {
+      if (typeof args[0] === 'string') {
+        failures.push({
+          operation, code: error.code, file: path.basename(args[0]),
+          target: typeof args[1] === 'string' && operation === 'linkSync' ? path.basename(args[1]) : undefined,
+        });
+      }
+      throw error;
+    }
+  };
+}
+process.on('exit', () => {
+  for (const failure of failures) process.stderr.write(JSON.stringify(failure) + '\\n');
+});
+`);
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(ikeyPath, JSON.stringify(provisioned));
   const env = {
@@ -756,7 +782,7 @@ test('run lock serializes parent completion and retry creation across processes'
     POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
   };
   const runCli = (args) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, ...args], {
+    const child = spawn(process.execPath, ['--require', traceFs, cli, ...args], {
       cwd: projectRoot,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -806,7 +832,8 @@ test('run lock serializes parent completion and retry creation across processes'
     );
   }
 
-  for (const spanType of ['skill', 'checkpoint']) {
+  for (let retryTrial = 0; retryTrial < 32; retryTrial += 1) {
+    const spanType = retryTrial % 2 === 0 ? 'skill' : 'checkpoint';
     const root = lifecycle.beginSpan({
       projectRoot, configDir, skillName: 'create-mobile-app',
     });
@@ -831,8 +858,9 @@ test('run lock serializes parent completion and retry creation across processes'
       assert.equal(result.code, 0, result.stderr);
       return JSON.parse(result.stdout);
     });
-    assert.equal(attempts.filter((attempt) => attempt.state === 'started').length, 1);
-    assert.equal(attempts.filter((attempt) => attempt.reason === 'invalid_retry').length, 1);
+    const retryResults = `${spanType} retry trial ${retryTrial}: ${JSON.stringify(attempts)}\n${results.map(result => result.stderr).join('\n')}`;
+    assert.equal(attempts.filter((attempt) => attempt.state === 'started').length, 1, retryResults);
+    assert.equal(attempts.filter((attempt) => attempt.reason === 'invalid_retry').length, 1, retryResults);
     const retry = attempts.find((attempt) => attempt.state === 'started');
     lifecycle.finishSpan({ ...options, spanId: retry.spanId, state: 'completed' });
     const repeated = await runCli(args);

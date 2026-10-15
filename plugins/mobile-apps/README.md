@@ -167,11 +167,40 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug.
+
+If creation stops, explicitly ask to continue that creation. The skill checks
+the [memory bank](#glossary), saved build-plan progress, and current artifacts,
+then confirms the unfinished phase. A plan written before app initialization
+is not a completed app. Opening an existing app or asking for a feature change
+does not automatically resume creation, even if a memory bank exists.
 
 ## Quick examples
 
-The plugin is conversational — you describe what you want and the skill drives the rest. Five typical flows:
+The plugin is conversational: slash commands are optional when the agent host
+loads the app guidance and advertises the matching skills. Describe the task
+naturally, such as "Add signature capture", "Connect a data source", or "Upgrade
+this app's dependencies". The agent selects the most specific matching skill by
+description and supported scope, then invokes it after any required entry
+consent rather than asking you to repeat the prompt as a command.
+
+The intent table in the generated app guidance is examples, not a closed
+allowlist. Future or custom skills advertised by your host are eligible too.
+An ambiguous scope prompts clarification; a missing plugin requires approval
+before installation or enabling. Opening the folder alone starts nothing, and
+`edit-app` is not the default for every request. Existing approval gates and
+fresh-template safeguards still apply.
+
+There is no extra approval just to select or load a clearly matching skill.
+Approvals cover the work: integration scope/cost, Dataverse schema/data changes,
+installations, native builds, and deployment. Dataverse workflows validate the
+app root and selected environment/tenant, inspect existing inventory, and show
+the proposed changes before mutation approval. Missing skills or unresolved
+targets block that work instead of falling back to ad-hoc commands. Approval to
+install a plugin never authorizes its Dataverse changes; current approvals are
+reused only for the same target and scope.
+
+Five typical flows:
 
 ### 1. Create a new app from a one-liner
 
@@ -281,7 +310,29 @@ separate approval. Cloud-flow integration is not supported.
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
-Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx --no-install tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
+Use `/edit-app` for post-generation improvements. Users can invoke it directly
+or ask naturally, for example, "This app already exists; add an asset detail
+screen." For a natural-language existing-app feature request, the generated app
+guidance asks whether the user wants **Implementation only**, **Full app
+integration**, or **Cancel**. Full integration invokes `/edit-app` with the
+original request; it does not merely recommend the command or ask the user to
+repeat the prompt. Reported failures still go to `/debug-app`, dependency or
+template upgrades go to `/check-updates`, and small app-owned fixes remain
+small.
+
+A fresh starter is not an already-generated app. Native-control requests such
+as "Add signature capture" use `/add-native` and its standalone prerequisites;
+they do not automatically start `/edit-app` or full app creation. An existing
+app with a missing plan is not considered fresh and must not be re-scaffolded.
+
+`/edit-app` first inspects the existing app and asks only for missing intent
+details (which screen, table, scanned field, launch point, brand source, etc.).
+Then it updates `native-app-plan.md` when the request changes the plan, applies
+the generated app edits, runs the relevant verification, updates
+`memory-bank.md`, and regenerates `preview.html` when UI changed. You do not
+need to manually run `npm run generate-schemas`,
+`npx --no-install tsc --noEmit`, or `/preview-screens` after each edit unless
+you are doing diagnostics outside the skill.
 
 Common follow-ups:
 

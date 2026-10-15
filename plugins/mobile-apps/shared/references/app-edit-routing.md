@@ -17,6 +17,14 @@ or starting a planner; do not broaden the available CLI surface.
 
 ## Direct requests
 
+Distinguish a confirmed fresh starter from an existing or customized app using
+the supplied intent and minimal local markers. Shipped starter routes alone do
+not prove generation, and a missing plan alone does not prove freshness. If
+unclear, ask before choosing creation or editing. A native-control request in a
+confirmed fresh starter stays with `/add-native` and its standalone prerequisites
+and approval gates; do not invoke `/edit-app` or silently start full app creation.
+Current approved create/edit children retain their owner even when a plan exists.
+
 For an existing mobile app, use a lightweight **entry-choice gate** before loading
 or invoking `/edit-app`. Check only the supplied request/caller context and local
 project markers needed to identify the app. Do not run health/type checks, scan

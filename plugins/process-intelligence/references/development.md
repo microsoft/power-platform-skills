@@ -10,7 +10,6 @@ process-intelligence/
   .claude-plugin/plugin.json
   .mcp.json
   AGENTS.md
-  CLAUDE.md
   README.md
   references/
   skills/
