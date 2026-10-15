@@ -114,13 +114,13 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' progress
   --json-file '<edit-temp-dir>/edit-app-progress.json'
 ```
 
-The top-level object also carries `phase`, `status`, `note`, and `waiting`. Set the current row to
-`waiting` and `waiting: true` before every user question. Set completed rows to `done`; do not leave
-the first row active for the whole run. On failure, mark the failed row and top-level status
-`failed`. The page keeps a phone preview on the right while work is active. At Step 8, put the
-fresh Metro QR into the living plan before the final progress write, then mark every applicable row
-settled and top-level status `done`. The phone switches to the QR so the maker can test the edited
-app on a real device.
+The top-level object also carries `phase`, `status`, `note`, `waiting`, and
+`devicePreviewReady`. Set the current row to `waiting` and `waiting: true` before every user
+question. Set completed rows to `done`; do not leave the first row active for the whole run. On
+failure, mark the failed row and top-level status `failed`. The page keeps a phone preview on the
+right while work is active. Keep `devicePreviewReady: false` until this edit's Step 8 phone command
+succeeds. Then set it to `true` in the final progress write, mark every applicable row settled, and
+set top-level status `done`. A QR left by an earlier run is never current-run preview evidence.
 
 Open `<edit-temp-dir>/edit-app-progress.html` once after the first write using the host's file
 opener. If no opener is available, print the absolute path. The page refreshes itself while work
@@ -732,7 +732,10 @@ diff --git native-app-plan.md native-app-plan.md
 + | 🆕 Create (Tier 2) | contoso_case | Lookup → account, severity, status |
 ```
 
-If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print the exact follow-up commands, and stop. Otherwise continue immediately.
+If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, mark `save-plan: done`,
+mark every implementation, verification, preview, and device-handoff row `skipped`, set top-level
+`phase: done`, `status: done`, and `devicePreviewReady: false`, and publish one final progress
+write. Then print the exact follow-up commands and stop. Otherwise continue immediately.
 
 The saved plan describes approved intent, not successful application. When the
 Data Model changed, merge its newly accepted `_dm_section.md` proposal here;
@@ -1112,10 +1115,11 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --
 ```
 
 Do not open `docs/create-app-plan.html`; its phone changes in the background. Run the final
-`progress` write after this command succeeds so the already-open edit page switches from its
-building state to the same QR code. If Metro or QR generation fails, leave the completed edit page
-in its honest `Device preview unavailable` state, report the preview concern separately, and do
-not turn a verified app edit into a failure.
+`progress` write with `devicePreviewReady: true` after this command succeeds so the already-open
+edit page switches from its building state to the same QR code. If Metro or QR generation fails,
+keep `devicePreviewReady: false`; the completed edit page then shows `Device preview unavailable`
+even when the living plan contains a QR from an earlier run. Report the preview concern separately,
+and do not turn a verified app edit into a failure.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 

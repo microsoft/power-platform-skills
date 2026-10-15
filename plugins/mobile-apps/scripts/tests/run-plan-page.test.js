@@ -1053,6 +1053,16 @@ test('the plan carries the same AI disclaimer as every other plan page', () => {
   assert.match(template, /\.rail\{[^}]*top:var\(--topbar-h\);height:calc\(100vh - var\(--topbar-h\) - var\(--footer-h\)\)/);
 });
 
+test('the short-phone container query overrides the default QR copy sizes', () => {
+  const template = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8',
+  );
+  const compact = template.indexOf('@container (max-height:520px)');
+  assert.ok(compact > template.indexOf('.qr-title{font-size:16px'));
+  assert.ok(compact > template.indexOf('.qr-sub{font-size:12.5px'));
+  assert.ok(compact > template.indexOf('.qr-url{font-family:var(--mono);font-size:11px'));
+});
+
 test('the carousel says the mockups are not the built app, and only while they are shown', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-note-'));
   const state = initState(root, { appName: 'Note', dataPlatform: 'dataverse' });

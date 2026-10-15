@@ -304,6 +304,7 @@ test('edit progress renders each operation state and settles when work completes
     phase: 'done',
     status: 'done',
     note: 'Edit verified',
+    devicePreviewReady: true,
     items: [
       { id: 'inspect', label: 'Inspect app', status: 'done' },
       { id: 'approve', label: 'Approve changes', status: 'done' },
@@ -317,6 +318,23 @@ test('edit progress renders each operation state and settles when work completes
   assert.match(completedHtml, /exp:\/\/192\.168\.1\.4:8081/);
   assert.match(completedHtml, /Edits hot-reload onto the device/);
   assert.doesNotMatch(completedHtml, /pill-phase">done</);
+
+  writeEditProgress(root, {
+    phase: 'done',
+    status: 'done',
+    note: 'Edit verified without a current device preview',
+    devicePreviewReady: false,
+    items: [
+      { id: 'inspect', label: 'Inspect app', status: 'done' },
+      { id: 'approve', label: 'Approve changes', status: 'done' },
+      { id: 'screens', label: 'Update screens', status: 'done' },
+    ],
+  });
+  const unavailableHtml = fs.readFileSync(progress, 'utf8');
+  assert.match(unavailableHtml, /Device preview unavailable/);
+  assert.doesNotMatch(unavailableHtml, /Scan to test the changes/);
+  assert.doesNotMatch(unavailableHtml, /data:image\/png;base64,iVBORw0KGgo=/);
+
   assert.ok(EDIT_ITEM_STATUSES.has('waiting'));
   assert.throws(() => writeEditProgress(root, {
     items: [{ id: 'inspect', label: 'Inspect app', status: 'unknown' }],
@@ -353,6 +371,19 @@ test('edit progress renders each operation state and settles when work completes
       },
     }],
   }), /cannot carry raw diagram or Mermaid source/);
+  for (const cardinality of ['constructor', '__proto__']) {
+    assert.throws(() => writeEditProgress(root, {
+      changes: [{
+        title: 'Invalid relationship',
+        rationale: 'Only allowlisted relationship shapes can render.',
+        kind: 'data-model',
+        dataModel: {
+          tables: [{ name: 'A' }, { name: 'B' }],
+          relationships: [{ from: 'A', to: 'B', cardinality }],
+        },
+      }],
+    }), /Unknown data-model relationship cardinality/);
+  }
   assert.throws(() => writeEditProgress(root, {
     changes: [{
       title: 'Nested raw diagram',
@@ -541,8 +572,10 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.match(skill, /Step 8[\s\S]*scripts\/app-docs\.js" --working-dir '<working_dir>' sync/);
   assert.match(skill, /\/create-mobile-app` Step 12/);
   assert.match(skill, /phone --stage qr/);
-  assert.match(skill, /Run the final\s+`progress` write after this command succeeds/);
+  assert.match(skill, /Run the final\s+`progress` write with `devicePreviewReady: true` after this command succeeds/);
   assert.doesNotMatch(skill, /If `native-app-plan\.md` is missing → STOP/);
+  assert.match(skill, /devicePreviewReady: false[\s\S]*earlier run/);
+  assert.match(skill, /`--plan-only`[\s\S]*mark `save-plan: done`[\s\S]*publish one final progress/);
   const tempAllocation = skill.indexOf('Immediately run the edit documentation protocol');
   const inferredPlanSync = skill.indexOf('Create `<edit-temp-dir>/app-plan-sync.json`');
   assert.ok(tempAllocation > -1 && tempAllocation < inferredPlanSync);

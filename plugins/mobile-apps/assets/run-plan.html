@@ -122,10 +122,10 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
    phone is short. Without this the code slides under the notch and the Metro URL is cut off. */
 .qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:16px;background:#fff;padding:30px 22px 18px;text-align:center;}
 .qr img{flex:0 1 196px;min-height:84px;max-height:196px;width:auto;max-width:100%;aspect-ratio:1/1;object-fit:contain;}
-@container (max-height:520px){.qr{gap:8px;padding:28px 12px 14px;}.qr-title{font-size:14px;}.qr-sub{font-size:11px;line-height:1.4;}.qr-url{font-size:10px;}}
 .qr-title{font-size:16px;font-weight:700;color:#201f1e;}
 .qr-sub{font-size:12.5px;color:#605e5c;line-height:1.55;}
 .qr-url{font-family:var(--mono);font-size:11px;color:#0078d4;word-break:break-all;}
+@container (max-height:520px){.qr{gap:8px;padding:28px 12px 14px;}.qr-title{font-size:14px;}.qr-sub{font-size:11px;line-height:1.4;}.qr-url{font-size:10px;}}
 @media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{flex:none;height:auto;width:min(300px,calc(100vw - 44px));}}
 .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
 .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}

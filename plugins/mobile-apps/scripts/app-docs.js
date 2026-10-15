@@ -560,7 +560,7 @@ function relationshipConnector(cardinality) {
     'many-to-many': '}o--o{',
     'optional-to-many': 'o|--o{',
   };
-  if (!connectors[normalized]) {
+  if (!Object.hasOwn(connectors, normalized)) {
     throw new Error(`Unknown data-model relationship cardinality '${cardinality}'.`);
   }
   return connectors[normalized];
@@ -703,6 +703,7 @@ function writeEditProgress(projectRoot, options = {}) {
   const nonce = crypto.randomBytes(16).toString('base64');
   const phone = state && state.phone && typeof state.phone === 'object' ? state.phone : {};
   const qrImage = status === 'done'
+    && options.devicePreviewReady === true
     && phone.stage === 'qr'
     && typeof phone.qrImage === 'string'
     && phone.qrImage.startsWith('data:image/png;base64,')
