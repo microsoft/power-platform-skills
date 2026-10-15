@@ -450,6 +450,28 @@ test('coarse progress follows the top-level phase when rows are omitted', (t) =>
   assert.match(html, /1 of 5 operations complete/);
 });
 
+test('explicit coarse progress preserves skipped operations', (t) => {
+  const root = project('docs-explicit-coarse');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+  const progress = writeEditProgress(root, {
+    phase: 'verification',
+    status: 'active',
+    items: [
+      { id: 'inspect', label: 'Inspect', status: 'done' },
+      { id: 'plan', label: 'Plan', status: 'done' },
+      { id: 'apply', label: 'Apply', status: 'skipped' },
+      { id: 'verify', label: 'Verify', status: 'active' },
+      { id: 'preview', label: 'Preview', status: 'skipped' },
+    ],
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /class="item skipped" data-item-id="apply"/);
+  assert.match(html, /class="item active" data-item-id="verify"/);
+  assert.match(html, /class="item skipped" data-item-id="preview"/);
+  assert.doesNotMatch(html, /class="item done" data-item-id="apply"/);
+});
+
 test('the device preview follows the active checklist operation', (t) => {
   const root = project('docs-device-phase');
   t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
@@ -692,6 +714,9 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   const skill = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'skills', 'edit-app', 'SKILL.md'), 'utf8',
   ).replace(/\r\n/g, '\n');
+  const previewSkill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'preview-screens', 'SKILL.md'), 'utf8',
+  ).replace(/\r\n/g, '\n');
   assert.match(skill, /progress \\\n\s+--json-file '<edit-temp-dir>\/edit-app-progress\.json'/);
   assert.match(skill, /--working-dir '<working_dir>' temp/);
   assert.match(skill, /user's OS temp directory/);
@@ -709,10 +734,15 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.match(skill, /`sync-plan: active`/);
   assert.match(skill, /Inferred current-state baseline/);
   assert.match(skill, /routes\/layouts[\s\S]*generated[\s\S]*src\/native\/[\s\S]*brand\/token/);
-  assert.match(skill, /Step 4[\s\S]*app-docs\.js sync --json-file/);
+  const step4 = skill.slice(skill.indexOf('### Step 4'), skill.indexOf('### Step 5'));
+  assert.doesNotMatch(step4, /app-docs\.js sync --json-file/);
+  assert.match(step4, /keep `docs\/create-app-plan\.html` unchanged until Step 8 verifies/);
   assert.match(skill, /Step 8[\s\S]*scripts\/app-docs\.js" --working-dir '<working_dir>' sync/);
   assert.match(skill, /\/create-mobile-app` Step 12/);
   assert.match(skill, /MOBILE_APP_ORCHESTRATING=1/);
+  assert.match(skill, /MOBILE_APP_EMBED_PREVIEW=1/);
+  assert.match(previewSkill, /\| `MOBILE_APP_EMBED_PREVIEW=1` \| Print the link and stop/);
+  assert.doesNotMatch(previewSkill, /\| `MOBILE_APP_ORCHESTRATING=1` \|/);
   assert.match(skill, /phone --stage screens[\s\S]*--preview-file '<working_dir>\/preview\.html'/);
   assert.match(skill, /without opening a separate browser page/);
   assert.match(skill, /phone --stage qr/);
@@ -732,9 +762,8 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   const tempAllocation = skill.indexOf('Immediately run the edit documentation protocol');
   const inferredPlanSync = skill.indexOf('Create `<edit-temp-dir>/app-plan-sync.json`');
   assert.ok(tempAllocation > -1 && tempAllocation < inferredPlanSync);
-  const step4 = skill.slice(skill.indexOf('### Step 4'), skill.indexOf('### Step 5'));
   assert.ok(step4.indexOf('If this is `--plan-only`') < step4.indexOf('For an implementation run'),
-    'plan-only must return before approved intent is synced into the current-app plan');
+    'plan-only must return before implementation work begins');
 });
 
 test('the phone CLI carries the full preview, including shared CSS, without rewriting screens', (t) => {

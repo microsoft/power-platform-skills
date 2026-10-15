@@ -518,6 +518,10 @@ function reconcileCoarseEditItems(items, phase, status, waiting, supplied) {
     return items;
   }
 
+  // An explicit snapshot is authoritative, including skipped and failed rows. Phase inference is
+  // only for the five-row fallback generated when the caller omits operation details.
+  if (supplied) return items;
+
   // The five-row fallback combines finer workflow gates such as impact and approval into
   // "Plan". Agents may publish only the new top-level phase and omit a fresh items array; without
   // this reconciliation the fallback restarts at "Inspect" even though planning is already done.
@@ -542,7 +546,7 @@ function reconcileCoarseEditItems(items, phase, status, waiting, supplied) {
     ['sync', 'preview'],
     ['sync-plan', 'preview'],
   ]);
-  if (status === 'done' && !supplied) {
+  if (status === 'done') {
     return items.map((item) => ({ ...item, status: 'done' }));
   }
   const currentId = phaseToItem.get(String(phase).toLowerCase());

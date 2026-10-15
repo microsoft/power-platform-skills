@@ -750,11 +750,12 @@ write. Keep `docs/create-app-plan.html` unchanged because it describes the curre
 `native-app-plan.md` holds the approved but unapplied intent. Then print the exact follow-up
 commands and stop.
 
-For an implementation run, build `<edit-temp-dir>/app-plan-sync.json` from the complete approved
-versions of the changed sections and run `app-docs.js sync --json-file` immediately after the
-Markdown write. This updates the living app plan in the background before cloud or app mutations
-begin. Then mark `save-plan: done` and the first applicable implementation operation `active` in
-the progress page.
+For an implementation run, keep `docs/create-app-plan.html` unchanged until Step 8 verifies the
+implemented state.
+The approved proposal belongs in `native-app-plan.md` and the edit progress page, not in the living
+current-app plan.
+Mark `save-plan: done` and the first applicable implementation operation `active` in the progress
+page.
 
 The saved plan describes approved intent, not successful application. When the
 Data Model changed, merge its newly accepted `_dm_section.md` proposal here;
@@ -1122,7 +1123,7 @@ Before Step 8, `npx --no-install tsc --noEmit` must be clean after all code edit
 
 If any UI, design, navigation, native interaction, or visible data state changed - or if the user
 explicitly asked for a preview - read and execute `/preview-screens` after verification with
-`MOBILE_APP_ORCHESTRATING=1`.
+`MOBILE_APP_ORCHESTRATING=1` and `MOBILE_APP_EMBED_PREVIEW=1`.
 This regenerates `preview.html` without opening a separate browser page.
 After the file is written, put the same screens in the phone rail and publish the progress page:
 
