@@ -24,12 +24,19 @@
 // and `app.mainForms` narrows the Main forms the SDK derives for it), so it never opens an edit.
 //
 // WHAT IT DOES NOT READ. The limit knows the one request the bundle sends today (below), and it finds the action by the PATH of the address, never by text elsewhere in it. While an edit is
-// open, a request that IS the action but not in that shape is REFUSED — the action in another spelling (lower case, a trailing slash, a namespace), a body that is JSON text or has no list, a
-// view that is only a reference — and so is one that does not carry every view the edit pins. It is not forwarded: that would send the SDK's whole derived list, which is what this holds back.
+// open, a request that IS the action but not in that shape is REFUSED — the action in another spelling (lower case, a trailing slash, a namespace), a `post` body that is JSON text (the SDK gives a `post`
+// an object), a body that has no list, a view that is only a reference — and so is one that does not carry every view the edit pins. It is not forwarded: that would send the SDK's whole derived list, which
+// is what this holds back.
 // And it is not answered as done: a pin it could not read would be dropped and reported as made. It is refused with the bundle's SdkError (`APP_COMPONENTS_NOT_LIMITED`). The SDK catches every
 // error of that request and reports it as a warning of the push ("one or more components were not pinned (…)"), so the navigation the edit saved stays saved, the warning says what was not added,
-// and nothing unlimited reaches the app. A `$batch` (`postRaw`) is not parsed — its parts are text in a multipart envelope — so while an edit is open one that names the action is refused too:
-// a part of a batch cannot be limited, the bundle does not send this action in one, and passing it on would send the SDK's whole derived list.
+// and nothing unlimited reaches the app.
+//
+// WHAT IS RAW. `postRaw` is a real POST — the plugin's transport sends it with a body it does not touch (text, or bytes) — and not only the way the SDK sends a `$batch`, so a request to the action's address
+// could arrive that way too (a bundle that sent it so, or another caller). It is told by its ADDRESS exactly as a `post` is. One to the action's address is limited as the object form is when its body is JSON
+// text of the same { AppId, Components } (or the bytes of it, or an object, which the plugin's transport serializes as it does for `post`): the list is cut to what the edit owns, and goes on in the form it came in.
+// JSON text is what a raw body is by its contract, so it is read; it is refused, as the object form is, when it cannot be read that way, and when the address is another spelling of the action. A `$batch` is not
+// parsed — its parts are text in a multipart envelope — so while an edit is open a raw POST to any other address whose body names the action is refused: a part of a batch cannot be limited, the bundle does not
+// send this action in one, and passing it on would send the SDK's whole derived list.
 //
 // The SDK reads the app's tables back after the post and reports a table its sitemap opens that is not a component (`APP_COMPONENTS_NOT_PERSISTED`) as a warning of the push — which is
 // what a page edit of an app whose navigation opens a table the app does not hold still says: the edit does not add it.
@@ -79,8 +86,8 @@ function kindOf(address) {
   return ACTION_NAME.test(last) ? 'lookalike' : 'other';
 }
 
-// AddAppComponents answers 204 No Content; the SDK reads nothing but the status of the answer.
-const NO_CONTENT = () => ({ status: 204, headers: {}, body: undefined });
+// AddAppComponents answers 204 No Content; the SDK reads nothing but the status of the answer. A raw request (`postRaw`) is answered with the body as the text it arrived as, which for no content is ''.
+const NO_CONTENT = (raw) => ({ status: 204, headers: {}, body: raw ? '' : undefined });
 
 // The error of a request this will not send. It is the bundle's own class, loaded when the first one is made: the SDK's client passes an SdkError on as it is and re-wraps an error of any other class
 // as a failure to reach the service (`Transport failure reaching …`), which this is not.
@@ -97,14 +104,44 @@ function namesAction(body) {
   return /addappcomponents/i.test(text);
 }
 
+// A raw body (`postRaw`) as the object `post` is given, so that one limit serves both. JSON text of the object, or the bytes of that text, is parsed — JSON exchanged between systems is UTF-8
+// (https://www.rfc-editor.org/rfc/rfc8259#section-8.1) — and an object is its own, as the plugin's transport serializes it as it does for `post`. What is not JSON text of anything is `undefined`, which the
+// limit refuses as it refuses a `post` with no body. The SDK's request, as a raw body:
+//   {"AppId":"<guid>","Components":[{"@odata.type":"Microsoft.Dynamics.CRM.savedquery","savedqueryid":"<guid>"}]}
+function objectOf(body) {
+  const text = typeof body === 'string' ? body : body instanceof Uint8Array ? Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString('utf8') : null;
+  if (text === null) return body;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+// The object a raw body was read as, after the limit has cut it, in the form the body came in: the text of it, or its bytes. An object goes on as the object.
+function inFormOf(body, object) {
+  if (typeof body === 'string') return JSON.stringify(object);
+  return body instanceof Uint8Array ? Buffer.from(JSON.stringify(object), 'utf8') : object;
+}
+
+// The options of a request whose body was cut. The body is shorter, so a `Content-Length` the caller wrote for the whole of it (the SDK writes one for the bytes it patches) is no longer true of it and is written
+// again, or the request would wait for bytes that never come; everything else is the caller's as it was. An object is serialized by the transport, which counts its own bytes.
+function optionsFor(cut, options) {
+  const headers = options && options.headers;
+  const name = headers && Object.keys(headers).find((key) => key.toLowerCase() === 'content-length');
+  if (!name || !(typeof cut === 'string' || cut instanceof Uint8Array)) return options;
+  return { ...options, headers: { ...headers, [name]: String(Buffer.byteLength(cut)) } };
+}
+
 function makeAppComponentScope() {
   // app id (lower case) -> the ids of the views the edit under way owns
   const open = new Map();
   // app id -> the end of the last edit queued for it; edits of one app run one after the other, so an edit never reads another's list
   const queue = new Map();
 
-  // What to send for a post while some edit is open: `{ send }` — the body to send, or null when nothing is left to send — or a throw, for a request that is the action and that this cannot limit.
-  // Only an entry that names a `savedqueryid` the edit pins stays: a table, a form, a dashboard, a chart or any other view does not. A request that is not the action, or is another app's, is sent as it is.
+  // What to send for a post while some edit is open — a raw POST's body is passed read as the object it holds (`objectOf`): `{ send }` — the body to send, or null when nothing is left to send — or a throw, for a request
+  // that is the action and that this cannot limit. Only an entry that names a `savedqueryid` the edit pins stays: a table, a form, a dashboard, a chart or any other view does not. A request that is not the action,
+  // or is another app's, is sent as it is.
   function limited(address, body) {
     const kind = kindOf(address);
     if (kind === 'other') return { send: body };
@@ -139,9 +176,21 @@ function makeAppComponentScope() {
         const { send } = limited(url, body);
         return send === null ? NO_CONTENT() : client.post(url, send, options);
       };
+      // A raw POST is told by its address as a `post` is (WHAT IS RAW, above): one that IS the action, or is another spelling of it, goes through the same `limited` with its body read as the object it holds,
+      // and what is sent is that object, cut to what the edit owns, in the form the body came in. To any other address it is not the action's, but a `$batch` may NAME the action in its text, which cannot be limited.
       const postRaw = typeof client.postRaw === 'function' ? async (url, body, options) => {
-        if (open.size !== 0 && namesAction(body)) throw refusal('it is part of a $batch that names that action, and a batch cannot be limited part by part');
-        return client.postRaw(url, body, options);
+        if (open.size === 0) return client.postRaw(url, body, options);
+        if (kindOf(url) === 'other') {
+          if (namesAction(body)) throw refusal('it is part of a $batch that names that action, and a batch cannot be limited part by part');
+          return client.postRaw(url, body, options);
+        }
+        const read = objectOf(body);
+        const { send } = limited(url, read);
+        if (send === null) return NO_CONTENT(true);
+        // What was not cut goes on as the very text, bytes or object it was, with the options it had.
+        if (send === read) return client.postRaw(url, body, options);
+        const cut = inFormOf(body, send);
+        return client.postRaw(url, cut, optionsFor(cut, options));
       } : undefined;
       return new Proxy({}, {
         get: (_, key) => {

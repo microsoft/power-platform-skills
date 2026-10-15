@@ -5,6 +5,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { makeAppComponentScope } = require('../lib/app-component-scope.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { SdkError } = require('../lib/maker-sdk.js');
 
 const APP = '22222222-2222-4222-8222-222222222222';
@@ -193,8 +194,31 @@ const refused = (promise) => assert.rejects(promise, (error) => {
   return true;
 });
 
+// How an address names the action, as the tests below tell them apart — for a `post` and for a raw post alike, which are classified by the same rule.
+//   the action, as the SDK or a client that adds the API root itself would address it
+const ACTION_ADDRESSES = [ADD, `${ADD}?x=1`, ADD.replace('v9.0', 'v9.2'), '/AddAppComponents', new URL(ADD), new URL(`${ADD}?x=1#top`), 'https://crm.contoso.com/org/api/data/v9.0/AddAppComponents'];
+//   not the action: its path is another one, whatever the query string or the fragment says
+const OTHER_ADDRESSES = [
+  `${ROOT}/OtherAction?note=/AddAppComponents`,
+  `${ROOT}/OtherAction#x=/AddAppComponents`,
+  `${ROOT}/accounts?$filter=name eq '/AddAppComponents'`,
+  `${ROOT}/AddAppComponentsLog`,
+  `${ROOT}/AddAppComponents/extra`,
+];
+//   the action in a spelling the limit does not read, which the service may well accept as the action
+const LOOKALIKE_ADDRESSES = [
+  ADD.replace('AddAppComponents', 'addappcomponents'),
+  ADD.replace('AddAppComponents', '%41ddAppComponents'),
+  `${ADD}/`,
+  `${ADD}//`,
+  ADD.replace('/AddAppComponents', '//AddAppComponents'),
+  `${ROOT}/Microsoft.Dynamics.CRM.AddAppComponents`,
+  `${ROOT}/ADDAPPCOMPONENTS?x=1`,
+  new URL(ADD.replace('AddAppComponents', 'addappcomponents')),
+];
+
 test('the request is found by its PATH — in the SDK\'s spelling, at any API version or host, with a query string or without, whether the address is text or a URL', async () => {
-  for (const address of [ADD, `${ADD}?x=1`, ADD.replace('v9.0', 'v9.2'), '/AddAppComponents', new URL(ADD), new URL(`${ADD}?x=1#top`), 'https://crm.contoso.com/org/api/data/v9.0/AddAppComponents']) {
+  for (const address of ACTION_ADDRESSES) {
     const scope = makeAppComponentScope();
     const { client, calls } = transport();
     await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).post(address, derived()));
@@ -211,13 +235,7 @@ test('the request is found by its PATH — in the SDK\'s spelling, at any API ve
 });
 
 test('another request is not taken for the action because its query or its fragment says so — it is the service\'s to answer, and is sent as it is', async () => {
-  for (const address of [
-    `${ROOT}/OtherAction?note=/AddAppComponents`,
-    `${ROOT}/OtherAction#x=/AddAppComponents`,
-    `${ROOT}/accounts?$filter=name eq '/AddAppComponents'`,
-    `${ROOT}/AddAppComponentsLog`,
-    `${ROOT}/AddAppComponents/extra`,
-  ]) {
+  for (const address of OTHER_ADDRESSES) {
     const scope = makeAppComponentScope();
     const { client, calls } = transport(() => ({ status: 200, headers: {}, body: { answeredBy: 'the service' } }));
     const body = derived();
@@ -229,16 +247,7 @@ test('another request is not taken for the action because its query or its fragm
 });
 
 test('the action in a spelling the limit does not read is REFUSED while an edit is open — not sent whole, not answered as done, and nothing reaches the service', async () => {
-  for (const address of [
-    ADD.replace('AddAppComponents', 'addappcomponents'),
-    ADD.replace('AddAppComponents', '%41ddAppComponents'),
-    `${ADD}/`,
-    `${ADD}//`,
-    ADD.replace('/AddAppComponents', '//AddAppComponents'),
-    `${ROOT}/Microsoft.Dynamics.CRM.AddAppComponents`,
-    `${ROOT}/ADDAPPCOMPONENTS?x=1`,
-    new URL(ADD.replace('AddAppComponents', 'addappcomponents')),
-  ]) {
+  for (const address of LOOKALIKE_ADDRESSES) {
     for (const AppId of [APP, OTHER_APP]) {
       const scope = makeAppComponentScope();
       const { client, calls } = transport();
@@ -351,4 +360,221 @@ test('a $batch that names the action is REFUSED while an edit is open — a part
   assert.strictEqual(sent.length, 1, 'with no edit open a batch is nobody\'s to read');
   // A client with no postRaw has none after it is wrapped: the SDK asks for it, and refuses what needs it, as it did.
   assert.strictEqual(scope.wrap({ post: async () => ({}) }).postRaw, undefined);
+});
+
+// ── A raw POST is told by its address as a post is ───────────────────────────────────────────────────────────────────────────────────────────────────
+// `postRaw` is a real POST, not only the SDK's `$batch`: the plugin's transport sends it as `call('POST', url, body, options, { rawBody: true })`, with a body that is text, or the bytes of it, that it
+// does not touch. The bundle sends the action through `post` today. A request to the action's address through `postRaw` — a drift of the bundle, or another caller — is limited exactly as the object
+// form is when its body is JSON text of the same { AppId, Components } (or the bytes of it), and is refused as the object form is when it is not. It is never forwarded whole.
+
+// A transport whose `postRaw` records what reaches it, as `transport` does for `post`.
+function rawTransport(answer = () => ({ status: 204, headers: {}, body: '' })) {
+  const calls = [];
+  const client = {
+    get: async () => ({ status: 200, headers: {}, body: {} }),
+    post: async () => ({ status: 204, headers: {}, body: undefined }),
+    postRaw: async (url, body, options) => { calls.push([url, body, options]); return answer(url, body); },
+  };
+  return { client, calls };
+}
+// A request as each form of body a raw POST may have is made — [label, encode(request), decode(what was forwarded) -> the request it carries]. An object is no raw body by the SDK's contract, but the
+// plugin's transport serializes it as it does for `post`, so it is the same request.
+const RAW_FORMS = [
+  ['JSON text', (request) => JSON.stringify(request), (sent) => { assert.strictEqual(typeof sent, 'string'); return JSON.parse(sent); }],
+  ['a Buffer', (request) => Buffer.from(JSON.stringify(request)), (sent) => { assert.ok(Buffer.isBuffer(sent)); return JSON.parse(sent.toString('utf8')); }],
+  ['a Uint8Array', (request) => new Uint8Array(Buffer.from(JSON.stringify(request))), (sent) => { assert.ok(sent instanceof Uint8Array); return JSON.parse(Buffer.from(sent).toString('utf8')); }],
+  ['an object', (request) => request, (sent) => sent],
+];
+
+test('a raw POST to the action\'s address is limited as a post is — to the views the edit owns, in the form the body came in, to the address and with the options it had', async () => {
+  const options = { headers: { 'Content-Type': 'application/json' } };
+  for (const address of ACTION_ADDRESSES) {
+    for (const [label, encode, decode] of RAW_FORMS) {
+      const scope = makeAppComponentScope();
+      const { client, calls } = rawTransport();
+      const answer = await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(address, encode(derived()), options));
+      assert.strictEqual(answer.status, 204, `${label}: ${address}`);
+      assert.strictEqual(calls.length, 1, `${label}: ${address}`);
+      assert.strictEqual(calls[0][0], address, `${label}: addressed as it was`);
+      assert.deepStrictEqual(decode(calls[0][1]), { AppId: APP, Components: [view(VIEW)] }, `${label}: the table, the form, the other view and the chart are not sent: ${address}`);
+      assert.strictEqual(calls[0][2], options, `${label}: the options are the caller's`);
+    }
+  }
+});
+
+test('a raw POST that holds nothing but what the edit owns is sent as it is — the same text, the same bytes, the same object, not a copy', async () => {
+  const only = { AppId: APP, Components: [view(VIEW)] };
+  for (const body of [JSON.stringify(only), Buffer.from(JSON.stringify(only)), new Uint8Array(Buffer.from(JSON.stringify(only))), only]) {
+    const scope = makeAppComponentScope();
+    const { client, calls } = rawTransport();
+    await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(ADD, body));
+    assert.strictEqual(calls[0][1], body);
+  }
+});
+
+test('a raw POST that is cut is shorter — a Content-Length the caller wrote for the whole of it is written again, the other options are the caller\'s and not changed — and one that is not cut keeps its options', async () => {
+  for (const [label, encode] of RAW_FORMS.slice(0, 3)) {
+    const options = { headers: { 'content-length': String(Buffer.byteLength(encode(derived()))), 'Content-Type': 'application/json', 'If-Match': '1' } };
+    const before = JSON.stringify(options);
+    const scope = makeAppComponentScope();
+    const { client, calls } = rawTransport();
+    await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(ADD, encode(derived()), options));
+    const [, sent, forwarded] = calls[0];
+    assert.strictEqual(forwarded.headers['content-length'], String(Buffer.byteLength(sent)), `${label}: the length of what is sent`);
+    assert.notStrictEqual(forwarded.headers['content-length'], options.headers['content-length'], `${label}: not the whole body's`);
+    assert.deepStrictEqual({ ...forwarded.headers, 'content-length': '' }, { ...options.headers, 'content-length': '' }, `${label}: the other headers are as they were`);
+    assert.strictEqual(JSON.stringify(options), before, `${label}: the caller's options are not changed`);
+  }
+  const only = JSON.stringify({ AppId: APP, Components: [view(VIEW)] });
+  const same = { headers: { 'Content-Length': String(Buffer.byteLength(only)) } };
+  const scope = makeAppComponentScope();
+  const { client, calls } = rawTransport();
+  await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(ADD, only, same));
+  assert.strictEqual(calls[0][2], same, 'nothing was cut: the options are the caller\'s own');
+});
+
+test('an edit that owns no view posts nothing through postRaw either — the SDK is answered with the service\'s 204, whose raw body is empty, and no request is made', async () => {
+  for (const [label, encode] of RAW_FORMS) {
+    const scope = makeAppComponentScope();
+    const { client, calls } = rawTransport();
+    const answer = await scope.limit(APP, { views: [] }, () => scope.wrap(client).postRaw(ADD, encode(derived())));
+    assert.deepStrictEqual(answer, { status: 204, headers: {}, body: '' }, label);
+    assert.deepStrictEqual(calls, [], label);
+  }
+});
+
+test('another app\'s raw request to the action goes through as it is, in any shape — an edit of one app does not limit another\'s', async () => {
+  const scope = makeAppComponentScope();
+  const { client, calls } = rawTransport();
+  const wrapped = scope.wrap(client);
+  const sent = [JSON.stringify(derived(OTHER_APP)), Buffer.from(JSON.stringify({ AppId: OTHER_APP })), JSON.stringify({ AppId: OTHER_APP, Components: 'x' }), derived(OTHER_APP)];
+  await scope.limit(APP, { views: [VIEW] }, async () => { for (const body of sent) await wrapped.postRaw(ADD, body); });
+  assert.strictEqual(calls.length, sent.length);
+  calls.forEach((call, i) => assert.strictEqual(call[1], sent[i], `as it was: ${i}`));
+});
+
+test('a raw body the limit cannot read is REFUSED as a post\'s is — not JSON, not an object, nobody\'s app, no list — and nothing is sent', async () => {
+  for (const [label, body] of [
+    ['text that is not JSON', 'AppId=22222222&Components=x'],
+    ['JSON text cut short', JSON.stringify(derived()).slice(0, -3)],
+    ['an empty text', ''],
+    ['no body', undefined],
+    ['null', null],
+    ['JSON text of null', 'null'],
+    ['JSON text of an array', JSON.stringify([derived()])],
+    ['JSON text of a number', '7'],
+    ['JSON text with no app', JSON.stringify({ Components: derived().Components })],
+    ['JSON text with an app that is not text', JSON.stringify({ AppId: 7, Components: derived().Components })],
+    ['JSON text with no list', JSON.stringify({ AppId: APP })],
+    ['JSON text with a list that is not one', JSON.stringify({ AppId: APP, Components: 'x' })],
+    ['bytes that are not JSON', Buffer.from([0xff, 0xfe, 0x00, 0x7b])],
+    ['the bytes of JSON text in UTF-16', Buffer.from(JSON.stringify(derived()), 'utf16le')],
+    ['a body of a kind no transport sends', new ArrayBuffer(8)],
+    ['a number', 7],
+  ]) {
+    const scope = makeAppComponentScope();
+    const { client, calls } = rawTransport();
+    await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(ADD, body)));
+    assert.deepStrictEqual(calls, [], `nothing was sent: ${label}`);
+  }
+});
+
+test('a raw POST to the action in a spelling the limit does not read is REFUSED too — whatever its body is, even one it could read — and nothing is sent', async () => {
+  const bodies = [JSON.stringify(derived()), JSON.stringify(derived(OTHER_APP)), Buffer.from(JSON.stringify(derived())), derived(), 'not JSON', undefined];
+  for (const address of LOOKALIKE_ADDRESSES) {
+    for (const body of bodies) {
+      const scope = makeAppComponentScope();
+      const { client, calls } = rawTransport();
+      await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(address, body)));
+      assert.deepStrictEqual(calls, [], `nothing was sent: ${address}`);
+    }
+  }
+});
+
+test('a pin a raw request does not carry is a failure and never a no-op — the view is only a reference, or is not in the list, or only some of the views are', async () => {
+  const MISSING = '66666666-6666-4666-8666-66666666666a';
+  for (const [label, views, components, absent] of [
+    ['a view that is an OData reference', [VIEW], [{ '@odata.id': `savedqueries(${VIEW})` }], [VIEW]],
+    ['a view that is not in the list', [VIEW], [table, form(FORM), chart(CHART)], [VIEW]],
+    ['one of two views', [VIEW, MISSING], [table, view(VIEW)], [MISSING]],
+  ]) {
+    for (const [shape, encode] of RAW_FORMS) {
+      const scope = makeAppComponentScope();
+      const { client, calls } = rawTransport();
+      await assert.rejects(scope.limit(APP, { views }, () => scope.wrap(client).postRaw(ADD, encode({ AppId: APP, Components: components }))), (error) => {
+        assert.strictEqual(error.code, 'APP_COMPONENTS_NOT_LIMITED', `${label}, ${shape}`);
+        assert.match(error.message, /was NOT sent/, `${label}, ${shape}`);
+        for (const id of absent) assert.ok(error.message.includes(id), `${label}, ${shape}: names ${id}: ${error.message}`);
+        return true;
+      });
+      assert.deepStrictEqual(calls, [], `nothing was sent: ${label}, ${shape}`);
+    }
+  }
+});
+
+test('a raw POST to another address is not taken for the action because its query or its fragment says so — it is sent as it is, whatever its body, unless the body is a batch that names the action', async () => {
+  for (const address of OTHER_ADDRESSES) {
+    const scope = makeAppComponentScope();
+    const { client, calls } = rawTransport(() => ({ status: 200, headers: {}, body: 'answered by the service' }));
+    const body = 'a body nobody reads';
+    const answer = await scope.limit(APP, { views: [] }, () => scope.wrap(client).postRaw(address, body));
+    assert.strictEqual(calls.length, 1, `sent: ${address}`);
+    assert.strictEqual(calls[0][1], body, `as it was: ${address}`);
+    assert.strictEqual(answer.body, 'answered by the service', `not answered by this tool: ${address}`);
+    await refused(scope.limit(APP, { views: [] }, () => scope.wrap(client).postRaw(address, `POST ${ADD} HTTP/1.1`)));
+    assert.strictEqual(calls.length, 1, `a batch that names the action is not sent: ${address}`);
+  }
+});
+
+test('with no edit open a raw request is not read at all — whatever its address or body, it is sent as it is', async () => {
+  const scope = makeAppComponentScope();
+  const { client, calls } = rawTransport();
+  const wrapped = scope.wrap(client);
+  const sent = [[LOOKALIKE_ADDRESSES[0], JSON.stringify(derived())], [ADD, 'not JSON'], [ADD, JSON.stringify(derived())], [ADD, undefined], [new URL(ADD), Buffer.from('x')], [`${ROOT}/$batch`, `POST ${ADD} HTTP/1.1`]];
+  for (const [address, body] of sent) await wrapped.postRaw(address, body);
+  assert.strictEqual(calls.length, sent.length);
+  calls.forEach((call, i) => assert.ok(call[0] === sent[i][0] && call[1] === sent[i][1], `sent as it was: ${i}`));
+});
+
+// Over the plugin's own transport (lib/sdk-http-client.js), with only the token and the network replaced: what reaches `request` is what would go on the wire.
+function overTheWire() {
+  const wire = [];
+  const scope = makeAppComponentScope();
+  const client = scope.wrap(createAzHttpClient('https://contoso.crm.dynamics.com', {
+    getToken: () => 'token-for-the-test',
+    request: async ({ url, method, body }) => { wire.push({ url: String(url), method, body }); return { statusCode: 204, headers: {}, body: '' }; },
+    sleep: async () => {},
+  }));
+  return { scope, client, wire };
+}
+
+test('over the plugin\'s own transport, a raw POST of the action as JSON text puts on the wire only the views the edit owns — and nothing at all for an edit that owns none', async () => {
+  const options = { headers: { 'Content-Type': 'application/json' } };
+  const body = JSON.stringify(derived());
+  const owner = overTheWire();
+  const answer = await owner.scope.limit(APP, { views: [VIEW] }, () => owner.client.postRaw(ADD, body, options));
+  assert.strictEqual(answer.status, 204);
+  assert.strictEqual(owner.wire.length, 1, 'one request');
+  assert.deepStrictEqual({ method: owner.wire[0].method, url: owner.wire[0].url }, { method: 'POST', url: ADD });
+  assert.deepStrictEqual(JSON.parse(owner.wire[0].body), { AppId: APP, Components: [view(VIEW)] });
+  for (const id of [FORM, VIEW_2, CHART]) assert.ok(!owner.wire[0].body.includes(id), `${id} is not on the wire`);
+
+  const none = overTheWire();
+  assert.strictEqual((await none.scope.limit(APP, { views: [] }, () => none.client.postRaw(ADD, body, options))).status, 204);
+  assert.deepStrictEqual(none.wire, [], 'an edit that owns no view sends nothing');
+
+  // With no edit open the build's own request goes on the wire whole.
+  const build = overTheWire();
+  await build.client.postRaw(ADD, body, options);
+  assert.strictEqual(build.wire.length, 1);
+  assert.deepStrictEqual(JSON.parse(build.wire[0].body), derived());
+});
+
+test('over the plugin\'s own transport what cannot be limited stays off the wire — the action as JSON text through post, a $batch that names it, a raw action whose body is not JSON', async () => {
+  const { scope, client, wire } = overTheWire();
+  const batch = `--batch_1\r\nContent-Type: application/http\r\n\r\nPOST ${ADD} HTTP/1.1\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(derived())}\r\n--batch_1--\r\n`;
+  await refused(scope.limit(APP, { views: [VIEW] }, () => client.post(ADD, JSON.stringify(derived()))));
+  await refused(scope.limit(APP, { views: [VIEW] }, () => client.postRaw(`${ROOT}/$batch`, batch, { headers: { 'Content-Type': 'multipart/mixed;boundary=batch_1' } })));
+  await refused(scope.limit(APP, { views: [VIEW] }, () => client.postRaw(ADD, 'not JSON', { headers: { 'Content-Type': 'application/json' } })));
+  assert.deepStrictEqual(wire, []);
 });
