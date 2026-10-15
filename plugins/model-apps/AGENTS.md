@@ -506,8 +506,27 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   in one envelope at the start of the app step, before anything publishes the app
   (`publishReconciledTables`). Measured live: a `PublishXml` naming only the app, sent after an existing
   form's save and before its table's publish, leaves the form's label changes unpublished for good, while
-  the structure saved with them goes live. The enrichment's default views (columns only) wait for the
-  bulk publish. A table whose early publish the SDK refuses stops the build before the app is written
+  the structure saved with them goes live. That does not depend on who saved the label, so with `--publish`
+  the same step publishes EVERY table the spec names (`specTables`: the tables it declares, `existing` ones
+  included, and those its forms, views, charts, `app.tables` and navigation name) in ONE `PublishXml` that
+  names them all, the reconciled tables among them (`publishTablesBeforeApp`, with `lib/table-publish.js`),
+  still before anything publishes the app. It goes by name through the raw client, because the SDK's artifact
+  publish names a table only through a form, view or chart it holds, and a table nothing in the spec saves has
+  none. That closes a label a maker saved and never published on a table the build does not change, and it
+  publishes a chart's description (a PATCH of the saved row in the charts phase, which waited for phase 8,
+  after the app's own publish; whether the platform holds it back as it holds a form's labels was not measured)
+  with its table. The request takes the place of the reconciled tables' envelope, so a rebuild whose views or
+  forms exist sends the same three publishes as before (the tables, the app's finalize, phase 8) and a build
+  that reconciled nothing, a first build for one, sends one more. A raw publish does not re-baseline the SDK's
+  workspace copies of the views and forms it publishes; nothing pushes one again in the run, and the next run
+  fetches each before it edits it (`publish-by-name-sdk-state.test.js` runs that against the real SDK). If the
+  request is refused, nothing is assumed published: the reconciled tables go through the SDK as before, and
+  the other tables — what other people saved, not what the build did — get a warning that says what is left
+  to do, because stopping every build over a table it never changed would be out of proportion. Without
+  `--publish` it is not made, and an SDK with no raw client (a test double) publishes the reconciled tables as
+  before. The enrichment's default views (columns only) wait for the bulk publish as far as the reconciled
+  tables' record goes: their table is published with the other tables. A table whose
+  early publish the SDK refuses stops the build before the app is written
   (`reconciled-publish-failed`), since the app's publish would strand its labels; the halt carries what
   is owed, so the CLI's retry, or its settle once no retry follows, publishes the table without the app.
   A deferred publish is recorded as owed, and a build that halts before the publish phase hands what is
@@ -524,7 +543,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   wrote), each name once: a first build creates them all and defers no publish for them, so its record
   would otherwise name only the default views and the line would read as if only the generated pair
   were not live. Those names are labels only and stay out of the owed record, which is what a halted
-  build publishes, so the warning after a halt names what was deferred. Settling covers
+  build publishes, so the line for a publish a halt settles names what was deferred. A table's publish ships
+  everything saved on the table, whoever saved it, and a created artifact is owed no publish, so that line is
+  not all that is saved and not live: after the settle, for a build with a publish phase (an apply with
+  `--publish`) whose halt is final and not a halt before anything was written (a retried transient halt
+  reads nothing), the CLI hands the spec's tables to the settle, which reads the SAVED layer of their views,
+  forms and charts (`readSavedNotPublished`: `RetrieveUnpublishedMultiple` of each collection, a record whose
+  `componentstate` is 1 Unpublished or 3 Deleted Unpublished) and adds one line naming what it found, table by
+  table — a maker's saved edit and what the build created, which nothing deferred, included. The read comes
+  after the publishes, so what they made live is not claimed. If it cannot be read, or an answer carries no
+  state, the line says that and names the tables to publish, never a partial list; and it says that columns
+  and other kinds of change were not read. Settling covers
   a halt the build THROWS. A process killed outright (Ctrl-C, a crash, a closed terminal) settles
   nothing, so what a reconcile had saved stays saved but unpublished until the next build, which
   publishes it (a clean workspace copy is still published, below): no marker outlives the process, the
@@ -1761,6 +1790,7 @@ scripts/
     app-components.js          ← shared current/published app layers (`currentLayerRows`, and `currentLayerRow` — the authored layer wins — for a listing), component inventory, hidden-table pin/proof, Main-form resolution/membership and push directives, `collectionRows`, the one reader of a paged collection, and `savedPageRows`, the one reader of the generative-page rows in the SAVED layer (RetrieveUnpublishedMultiple, 50 ids a read): a plain read of the page table answers the published layer only, so a page that was created and never published is "not found" by it — `apps.js` and teardown read pages here
     solution-membership.js     ← one read of a solution's components (the types the build adds, plus its tables: a table held with all its subcomponents vouches for its views, forms and charts, which have no rows of their own), so a rebuild adds just what the solution is not PROVEN to hold; every doubt reads as "add"
     unsynced-edits.js          ← the SDK's own dirty tracking (`diffArtifact`) as the one proof that a reconcile has nothing to push; every doubt reads as "push"
+    table-publish.js           ← the tables a spec names (`specTables`), the ONE `PublishXml` that publishes tables by name (`publishTablesXml`: the build's pre-app publish of every table the spec names, and the lookup-label repair's), and the read of which of their views, forms and charts are saved but not published (`readSavedNotPublished`, the SAVED layer through `RetrieveUnpublishedMultiple`, `componentstate` 1 and 3) with the line a halted build prints from it (`describeSavedNotPublished`); every doubt in a read says so and names the tables, never a shorter list
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
@@ -3851,7 +3881,10 @@ a table the maker has since re-segmented must all still get their adds. The fake
 charts, forms, solution components and `PublishXml` — it throws, naming the request, on anything else
 — and it answers the way the platform does: table rows carry the `rootcomponentbehavior` and the
 table's MetadataId, the subcomponents of a whole table get no row, and `$select` is honoured.
-`unpublished()` answers "was every saved change published?".
+`unpublished()` answers "was every saved change published?", and the saved layer of a collection
+(`RetrieveUnpublishedMultiple`, `componentstate` 0 or 1 by the same test) is what a halted build's warning is compared with
+(`publish-halt-warning.test.js`; `table-publish.test.js` pins the pieces, and the order and count of the publishes before the app
+are pinned in `sdk-build.test.js`).
 `rebuild-writes-reuse-sites.test.js` and the `rebuild writes:` tests in `sdk-build.test.js` pin each
 reuse site (rule, flow, role, app, sitemap, page manifest) the same way; `solution-membership.test.js`
 and `unsynced-edits.test.js` pin the two helpers' contracts, every doubt of which reads as "add" and

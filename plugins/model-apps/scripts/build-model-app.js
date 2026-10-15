@@ -17,6 +17,7 @@ const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
+const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
@@ -691,8 +692,11 @@ async function buildModelApp(spec, opts, deps) {
       //
       // First publish the views and forms this build's attempts had saved and no publish phase paid: no
       // retry follows now (see settleOwedPublishes, sdk-build.js). Best-effort, so the halt below is still
-      // what this run reports.
-      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn);
+      // what this run reports. The spec's tables ride along so the settle can say what they still hold saved and
+      // not published — but only for a build that HAS a publish phase it stopped before (an apply with --publish
+      // and the phase in its range), and not for a halt before anything was written.
+      const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight');
+      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
       await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
       if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });

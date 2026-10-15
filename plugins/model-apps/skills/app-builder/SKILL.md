@@ -467,9 +467,14 @@ hold page-ownership receipts and the baseline) and run again. The same environme
 (`<org>.api.crm…` against `<org>.crm…`) also halts: re-run with the host the halt names. The standalone verifier
 never opens that workspace either, so it verifies any environment the app is deployed to.
 
-With `--publish`, the edits a build makes to existing views and forms go live in one publish of their tables, made
-before the build publishes the app, and the final publish covers them again.
-A build that **halts with an error** publishes what it had already saved before it stops (best effort).
+With `--publish`, every table the spec names is published in one request before the build publishes the app: the
+tables whose existing views and forms the build edited, and the others too, such as an `existing` table, because a
+label someone saved and did not publish on a table's form would stay unpublished once the app is published. That is
+one more publish for a build that edits no existing view or form; the final publish covers all of them again.
+A build that **halts with an error** publishes the views and forms it had deferred (best effort), then lists the forms,
+views and charts of the spec's tables that are still saved but not published — what it created, and anything anyone saved
+there — or says it could not read them and names the tables to publish. Columns and other kinds of change are not in that
+list.
 One that is **killed** — Ctrl-C, a crash, a closed terminal — after those edits are saved but before
 that publish cannot, so they stay saved but not live until the next build. Run the same full build
 again: it publishes them without writing them again.
@@ -707,9 +712,11 @@ child view id. Each step emits `[n/total]`.
   the Web API using an `az`-token HttpClient. No relay, no designer tab.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
   *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
-  app). With `--publish` that one publish also carries the default-view enrichment, and the tables touched
-  by the reconcile of an existing form or view, form events and quick-view placement are published
-  together once more, before the app is, so none of them publishes on its own. It
+  app). With `--publish` that one publish also carries the default-view enrichment, and every table the
+  spec names is published together once more, in one request before the app is: the tables touched by the
+  reconcile of an existing form or view, form events and quick-view placement, so none of them publishes on
+  its own, and the others (an `existing` table, one whose only change is a chart's description), so a label
+  saved and not published there is not held back by the app's publish. It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
   takes effect: without `--publish`, reconciling an existing form or view, wiring form events and
   placing quick-views each publish that one artifact, and with or without it, re-syncing an existing

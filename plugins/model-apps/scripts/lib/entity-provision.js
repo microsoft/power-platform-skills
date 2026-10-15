@@ -31,6 +31,8 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
 const { odataLit } = require('./odata.js');
+// The one PublishXml that publishes tables by name (also the pre-app publish of sdk-build.js).
+const { publishTablesXml } = require('./table-publish.js');
 const { readRelationshipsOf, findRelationshipHolder, sameRelationship, describeRelationship, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
 // Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
 // construction-time option, so the LCID must be known before the SDK that would normally read it.
@@ -2356,8 +2358,7 @@ async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, l
 // anything publishes the app: a PublishXml naming only the app, sent after a form's label change and before its table's
 // own publish, leaves the form's labels unpublished for good (measured for forms; see publishReconciledTables,
 // sdk-build.js), and a relabelled table is published first here for the same reason.
-// The request:
-//   POST /PublishXml  { ParameterXml: "<importexportxml><entities><entity>contoso_task</entity></entities></importexportxml>" }
+// The request is `publishTablesXml`'s (lib/table-publish.js), the one that publishes tables by name.
 // Best-effort: the labels are saved whatever it answers, so a failure is a warning that says how to show them.
 async function publishRelabelledTables(client, tables, warn) {
   const notLive = (why) => {
@@ -2365,15 +2366,8 @@ async function publishRelabelledTables(client, tables, warn) {
     const which = tables.length > 1 ? `tables ${tables.join(', ')}` : `table ${tables[0]}`;
     warn(`the new lookup label(s) on ${which} are saved but not published (${why}), so the app still shows the old ones: publish ${tables.length > 1 ? 'those tables' : 'that table'} in Power Apps`);
   };
-  if (!client || typeof client.post !== 'function') { notLive('no client to publish with'); return; }
-  try {
-    const response = await client.post('/PublishXml', {
-      ParameterXml: `<importexportxml><entities>${tables.map((t) => `<entity>${t}</entity>`).join('')}</entities></importexportxml>`,
-    });
-    if (!response || response.status < 200 || response.status >= 300) notLive(`PublishXml answered HTTP ${response && response.status}`);
-  } catch (e) {
-    notLive((e && e.message) || String(e));
-  }
+  const outcome = await publishTablesXml(client, tables);
+  if (!outcome.ok) notLive(outcome.reason);
 }
 
 // Factory for entity-set resolver: fresh tables cached in `entities` (from data-model
