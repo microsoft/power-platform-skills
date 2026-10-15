@@ -801,10 +801,17 @@ function writeEditProgress(projectRoot, options = {}) {
         + `${detail}${rationale}${diagram}</div></article>`;
     }).join('\n')
     : `<div class="empty">Planned changes will appear here after the current app has been inspected.</div>`;
+  // Mirror the create-app plan: a small floating pill pinned to the top-right rather than a
+  // full-width bar. The answer is wanted in the terminal, so the page only needs a persistent
+  // marker that survives a tab switch, not a banner that displaces the content.
+  const waitingPrompt = waiting ? (note || 'Review the proposed changes or provide the missing details.') : '';
   const waitingBanner = waiting
-    ? `<div class="input-banner" role="status"><span class="banner-dot"></span><div>`
-      + `<strong>Waiting for your input</strong>`
-      + `<span>Review the proposed changes or provide the missing details.</span></div></div>`
+    ? `<div class="input-banner" id="inputBanner" role="status" data-prompt="${escapeHtml(waitingPrompt)}">`
+      + `<span class="input-banner-icon">&#9679;</span>`
+      + `<div class="input-banner-text"><b>Waiting for your input</b>`
+      + `<small>${escapeHtml(waitingPrompt)}</small></div>`
+      + `<button type="button" class="input-banner-close" id="inputBannerClose" aria-label="Dismiss">&times;</button>`
+      + `</div>`
     : '';
   const autoRefresh = settled ? '' : `
     var RELOAD_MS = 2500;
@@ -876,10 +883,15 @@ function writeEditProgress(projectRoot, options = {}) {
     .status-line{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-dim);margin-top:16px;}
     .progress-track{height:6px;overflow:hidden;border-radius:999px;background:var(--surface2);border:1px solid var(--border);margin-top:9px;}
     .progress-bar{display:block;height:100%;background:var(--accent);width:${percent}%;}
-    .input-banner{display:flex;align-items:flex-start;gap:10px;margin:18px 28px 0;padding:12px 14px;background:#fff8f2;border:1px solid var(--warn-border);border-radius:var(--radius);color:var(--warn);}
-    .input-banner strong,.input-banner span{display:block;}
-    .input-banner span{font-size:12px;color:var(--text-dim);}
-    .banner-dot{width:8px;height:8px;margin-top:7px;border-radius:50%;background:var(--warn);flex-shrink:0;}
+    .input-banner{position:fixed;top:calc(var(--topbar-h, 65px) + 13px);right:24px;z-index:100;display:flex;align-items:center;gap:12px;background:#fff8f2;border:1px solid var(--warn-border);color:var(--warn);padding:12px 14px 12px 18px;border-radius:999px;font-size:13.5px;max-width:min(380px,calc(100vw - 48px));box-shadow:0 6px 20px rgba(0,0,0,.12);}
+    .input-banner[hidden]{display:none;}
+    .input-banner-icon{font-size:11px;flex-shrink:0;animation:bannerPulse 1.6s ease-in-out infinite;}
+    .input-banner-text{line-height:1.35;flex:1;min-width:0;}
+    .input-banner-text b{display:block;font-weight:650;}
+    .input-banner-text small{display:block;font-size:12px;opacity:.85;margin-top:2px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .input-banner-close{width:24px;height:24px;border:0;border-radius:50%;background:rgba(202,80,16,.12);color:var(--warn);cursor:pointer;font-size:17px;line-height:1;flex-shrink:0;}
+    .input-banner-close:hover{background:rgba(202,80,16,.22);}
+    @keyframes bannerPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
     .change-card{display:grid;grid-template-columns:18px 1fr;gap:12px;align-items:start;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;margin-bottom:10px;box-shadow:var(--shadow);}
     .change-mark{width:10px;height:10px;border-radius:50%;background:var(--accent);margin-top:6px;}
     .change-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:3px;flex-wrap:wrap;}
@@ -1022,6 +1034,34 @@ function writeEditProgress(projectRoot, options = {}) {
   (function () {
     var STORE_TAB = 'mobile-edit-plan-tab';
     var STORE_SCROLL = 'mobile-edit-plan-scroll';
+    // The page republishes itself every few seconds, so a dismissal held only in memory would
+    // reappear on the next reload. Keying it to the prompt text means closing one gate's pill does
+    // not suppress the next gate's.
+    var STORE_DISMISSED = 'mobile-edit-plan-dismissed-prompt';
+    var banner = document.getElementById('inputBanner');
+    var bannerPrompt = banner ? banner.getAttribute('data-prompt') || '' : '';
+    // The topbar wraps its pills onto a second row in a narrow window, so a fixed offset would
+    // park the pill on top of them. Track the rendered height instead.
+    function syncTopbarHeight() {
+      var topbar = document.querySelector('.topbar');
+      if (!topbar) return;
+      document.documentElement.style.setProperty('--topbar-h', topbar.getBoundingClientRect().height + 'px');
+    }
+    syncTopbarHeight();
+    window.addEventListener('resize', syncTopbarHeight, { passive: true });
+    try {
+      if (!bannerPrompt) {
+        sessionStorage.removeItem(STORE_DISMISSED);
+      } else if (banner && sessionStorage.getItem(STORE_DISMISSED) === bannerPrompt) {
+        banner.hidden = true;
+      }
+    } catch (error) { /* private mode; the pill simply stays visible */ }
+    if (banner) {
+      document.getElementById('inputBannerClose').addEventListener('click', function () {
+        banner.hidden = true;
+        try { sessionStorage.setItem(STORE_DISMISSED, bannerPrompt); } catch (error) { /* private mode */ }
+      });
+    }
     var diagramBlocks = Array.from(document.querySelectorAll('.diagram-block'));
     function markDiagramUnavailable(block) {
       block.classList.add('diagram-unavailable');

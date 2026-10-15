@@ -311,8 +311,10 @@ test('edit progress renders each operation state and settles when work completes
   assert.match(html, /Waiting for your input/);
   assert.ok(
     html.indexOf('class="input-banner"') < html.indexOf('<div class="shell">'),
-    'the input banner must stay visible above both tabs and the phone rail',
+    'the pill must sit outside both tab panels so it stays visible on Build steps',
   );
+  assert.match(html, /position:fixed;top:calc\(var\(--topbar-h, 65px\) \+ 13px\);right:24px/);
+  assert.match(html, /id="inputBannerClose"/);
   assert.match(html, /class="item done" data-item-id="inspect"/);
   assert.match(html, /class="item waiting" data-item-id="approve"/);
   assert.match(html, /1 of 3 operations complete/);
