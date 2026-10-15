@@ -551,8 +551,11 @@ test('the names an earlier attempt recorded for a debt are kept when a later att
 
 // What a failed attempt still owes for the primary name column of a table it created (`owedLengths`, from runSdkBuild in sdk-build.js) is
 // carried the same way: handed to the next attempt, replaced by what that attempt reports, and — for what no attempt got as far as —
-// settled once no retry follows.
-const lengthDebt = (table = 'new_ticket', extra = {}) => ({ table, column: 'new_name', asked: 120, tried: false, ...extra });
+// settled once no retry follows. A debt holds the MetadataId of the table the attempt created, which the settle checks before it writes
+// (a table of that name that is not that one is not the build's to change).
+const TICKET_ID = '3f2a9c10-0000-4000-8000-00000000a001';
+const NAME_ID = '3f2a9c10-0000-4000-8000-00000000a002';
+const lengthDebt = (table = 'new_ticket', extra = {}) => ({ table, column: 'new_name', asked: 120, tried: false, tableId: TICKET_ID, columnId: NAME_ID, ...extra });
 const owingLengths = (message, owedLengths) => Object.defineProperties(new Error(message), { owedLengths: { value: owedLengths } });
 async function attemptsOf(errors, { spec = desk, configure } = {}) {
   const { sdk } = mockSdk();
@@ -570,14 +573,25 @@ async function attemptsOf(errors, { spec = desk, configure } = {}) {
     .then((result) => ({ result }), (error) => ({ error }));
   return { handed, warnings, attempts: n, ...outcome };
 }
-// The support desk with a name column length asked of its Ticket table, and an SDK that can read and set it.
+// The support desk with a name column length asked of its Ticket table, and an SDK that can read and set it. `reads` are the reads of the
+// column's length, `identity` the reads of which table answers to the name, and `tableId` is the one that does.
 const deskAskingALength = () => { const spec = jclone(desk); spec.entities.find((e) => e.schemaName === 'new_ticket').primaryAttribute.maxLength = 120; return spec; };
-function lengthSdk(sdk, { current = 850, update } = {}) {
+function lengthSdk(sdk, { current = 850, update, tableId = TICKET_ID } = {}) {
   const writes = [];
   const reads = [];
-  sdk.dataverse = { get: async (url) => { reads.push(url); return { status: 200, headers: {}, body: { MaxLength: current } }; } };
+  const identity = [];
+  sdk.dataverse = {
+    get: async (url) => {
+      if (/\?\$select=MetadataId,PrimaryNameAttribute$/.test(url)) {
+        identity.push(url);
+        return { status: 200, headers: {}, body: { MetadataId: tableId, PrimaryNameAttribute: 'new_name' } };
+      }
+      reads.push(url);
+      return { status: 200, headers: {}, body: { MaxLength: current, MetadataId: NAME_ID } };
+    },
+  };
   sdk.updateColumn = async (table, column, changes) => { writes.push([table, column, changes]); if (update) await update(); };
-  return { writes, reads };
+  return { writes, reads, identity };
 }
 
 test('the name column lengths a failed attempt still owes are handed to the next attempt, and what that attempt reports takes their place', async () => {
@@ -606,8 +620,21 @@ test('a halt no retry follows sets the length of a table whose debt no attempt t
   assert.match(out.error.message, /bad request/, 'the halt is what is reported');
   assert.strictEqual(out.attempts, 2);
   assert.deepStrictEqual(spy.writes, [['new_ticket', 'new_name', { maxLength: 120 }]], 'the length asked, written once');
-  assert.strictEqual(spy.reads.length, 1, 'after one read of the column');
+  assert.strictEqual(spy.identity.length, 1, 'after one read of which table answers to the name');
+  assert.strictEqual(spy.reads.length, 1, 'and one read of the column');
   assert.deepStrictEqual(out.warnings, []);
+});
+
+test('a halt no retry follows leaves a table that is not the one the debt records alone, says so, and reports the halt', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], {
+    spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk, { tableId: '3f2a9c10-0000-4000-8000-00000000b001' }); },
+  });
+  assert.match(out.error.message, /bad request/, 'the halt is what is reported');
+  assert.deepStrictEqual(spy.writes, [], 'the table another maker made again is not written to');
+  assert.deepStrictEqual(spy.reads, [], 'nor is its column read');
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /^did not set the length of the primary name column new_ticket\.new_name to 120 — the table new_ticket is not the one this build created /);
 });
 
 test('what an attempt already tried is not settled again, and a build that owes nothing settles nothing', async () => {
@@ -620,7 +647,7 @@ test('what an attempt already tried is not settled again, and a build that owes 
     let spy;
     const out = await attemptsOf(errors, { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
     assert.match(out.error.message, /bad request/, what);
-    assert.deepStrictEqual([spy.reads, spy.writes], [[], []], `${what}: nothing is read or written`);
+    assert.deepStrictEqual([spy.identity, spy.reads, spy.writes], [[], [], []], `${what}: nothing is read or written`);
     assert.deepStrictEqual(out.warnings, [], what);
   }
 });
@@ -629,7 +656,7 @@ test('a build that succeeds after a retry settles nothing: what the retry owed i
   let spy;
   const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), null], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
   assert.strictEqual(out.result.ok, true);
-  assert.deepStrictEqual([spy.reads, spy.writes], [[], []]);
+  assert.deepStrictEqual([spy.identity, spy.reads, spy.writes], [[], [], []]);
 });
 
 test('a settle that cannot set the length warns, names the table and the length, and the halt is still what is reported', async () => {

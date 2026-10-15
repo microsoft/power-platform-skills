@@ -92,6 +92,9 @@ function computeTotal(input, opts) {
 // Build a dry-run plan (list of steps that would be executed).
 function buildPlan(input, opts) {
   const plan = [];
+  // The language the apply labels in, as far as the plan can know it: the command line's, else the input's. A key's order depends on it
+  // (keyWaitsForNameLength); left unknown, the environment's own base language is what the apply uses, which a plan made offline cannot read.
+  const planLanguage = normalizeLanguageCode(opts && opts.languageCode) || normalizeLanguageCode(input && input.languageCode) || undefined;
   
   plan.push(`solution ${input.solution.uniqueName}`);
   
@@ -111,7 +114,7 @@ function buildPlan(input, opts) {
       plan.push(`status reason ${e.schemaName}: ${sr.label}`);
     }
     for (const k of e.alternateKeys || []) {
-      if (!keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+      if (!keyWaitsForNameLength(e, k, planLanguage)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
     }
   }
   
@@ -133,7 +136,7 @@ function buildPlan(input, opts) {
   // (keyWaitsForNameLength), where a table it creates has it. computeTotal counts them with the other keys.
   for (const e of input.entities || []) {
     for (const k of e.alternateKeys || []) {
-      if (keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+      if (keyWaitsForNameLength(e, k, planLanguage)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
     }
   }
 

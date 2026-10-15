@@ -605,3 +605,39 @@ test('a key over the name column of a table whose length is set waits for it: th
   assert.strictEqual(done[done.length - 1].n, done[0].total, 'the last step is the total');
   assert.strictEqual(done[done.length - 1].label, 'alt key cr_candidate.cr_name_key');
 });
+
+test('a key over the name column whose label is a map of the build\'s language alone waits like a string; one that names another language keeps its place', async () => {
+  const keyed = (displayName, languageCode) => ({
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    ...(languageCode ? { languageCode } : {}),
+    entities: [{
+      schemaName: 'cr_candidate', displayName: 'Candidate', primaryAttribute: { schemaName: 'cr_name', maxLength: 120 }, columns: [],
+      alternateKeys: [{ schemaName: 'cr_name_key', columns: ['cr_name'], displayName }],
+    }],
+    relationships: [],
+  });
+  const waits = ['solution Default', 'table cr_candidate', 'primary column length cr_candidate.cr_name', 'alt key cr_candidate.cr_name_key'];
+  const keeps = ['solution Default', 'table cr_candidate', 'alt key cr_candidate.cr_name_key', 'primary column length cr_candidate.cr_name'];
+  for (const [what, spec, opts, expected] of [
+    ['a string', keyed('Name Key'), {}, waits],
+    ['a map of one language where no language is named', keyed({ 1033: 'Name Key' }), {}, waits],
+    ['a map of the spec\'s language', keyed({ 3082: 'Clave' }, 3082), {}, waits],
+    ['a map of the language the command line names', keyed({ 3082: 'Clave' }), { languageCode: 3082 }, waits],
+    ['a map of another language than the spec\'s', keyed({ 1033: 'Name Key' }, 3082), {}, keeps],
+    ['a map of another language than the command line\'s', keyed({ 3082: 'Clave' }, 3082), { languageCode: 1033 }, keeps],
+    ['a map of several languages', keyed({ 1033: 'Name Key', 3082: 'Clave' }, 1033), {}, keeps],
+  ]) {
+    const dry = await provisionEntities(spec, { apply: false, ...opts }, mockDeps());
+    assert.deepStrictEqual(dry.plan, expected, what);
+  }
+
+  // The apply orders it the same way: the length is set, and then the key is made.
+  const d = mockDeps();
+  const order = [];
+  d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: 850 } } : { status: 404, body: null }) };
+  d.sdk.updateColumn = async () => { order.push('updateColumn'); return {}; };
+  d.sdk.createAlternateKey = async (table, options) => { order.push(`createAlternateKey ${options.schemaName}`); return {}; };
+  const r = await provisionEntities(keyed({ 1033: 'Name Key' }), { apply: true }, { sdk: d.sdk, provision: d.provision, emit: () => {}, warn: () => {} });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(order, ['updateColumn', 'createAlternateKey cr_name_key']);
+});

@@ -879,26 +879,46 @@ function askedPrimaryNameLength(entity) {
   return asked === undefined || asked === null ? undefined : asked;
 }
 
-// Whether an alternate key must wait for its table's primary name column to get the length the spec asks for. The one rule behind the
-// data-model phase and both plans, so that they cannot disagree about where such a key is made: true when the spec asks the name
-// column for a length (askedPrimaryNameLength), the key holds that column, and the key's label is a plain string, not a language map.
-//
-// The platform validates a key when it is created, and a key may hold at most 900 bytes — 2 for each character of a text column.
+// Whether an alternate key is over its table's primary name column while the spec asks that column for a length (askedPrimaryNameLength):
+// the key is then in the way of the length. The platform validates a key when it is created, and a key may hold at most 900 bytes — 2 for
+// each character of a text column.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 // A new table's name column is created asking for a length, but some environments make it 850 characters (1,700 bytes) whatever is
 // asked (DEFAULT_PRIMARY_NAME_LENGTH, lib/entity-provision.js), so a key over it can be created only once the build has set the
-// length the spec asks for. The build does that LAST in the phase: the SDK's update reads the column with its labels, and a read that
-// carries labels ahead of a create that carries several languages is what makes Dataverse keep only the base one. A key labelled with
-// a plain string carries one language, which such a read has nothing to strip, so it may follow the step; a key labelled with a language
-// map keeps the place it has always had, ahead of it (as every label map is treated in this file: `isLocalizedLabelMap`).
+// length the spec asks for. Matched case-insensitively: a column's logical name is its schema name in lower case.
+function keyNeedsNameLength(entity, key) {
+  if (askedPrimaryNameLength(entity) === undefined || !key || !Array.isArray(key.columns)) return false;
+  const name = String(entity.primaryAttribute.schemaName || '').toLowerCase();
+  return name !== '' && key.columns.some((column) => String(column).toLowerCase() === name);
+}
+
+// Whether the label a key goes out with is ONE label, in the language the build writes in. The SDK sends a plain string as one
+// `LocalizedLabels` entry in the build's language and a language map as one entry per language it names, so a string and a map that
+// holds only the build's language are the same request, byte for byte (what counts is what is sent, not the shape of the value). A map
+// that names any other language, or more than one, is not. `languageCode` is the language the build writes in; where it is not known —
+// a plan is made before the build has resolved it from the environment — the one language of a map is taken to be it.
+function labelIsInBuildLanguageOnly(value, languageCode) {
+  if (!isLocalizedLabelMap(value)) return true;
+  const languages = Object.keys(value);
+  if (languages.length !== 1 || !/^[1-9]\d*$/.test(languages[0])) return false;
+  const language = normalizeLanguageCode(languageCode);
+  return language === null || Number(languages[0]) === language;
+}
+
+// Whether an alternate key must wait for its table's primary name column to get the length the spec asks for. The one rule behind the
+// data-model phase and both plans, so that they cannot disagree about where such a key is made: true when the key needs the length
+// (keyNeedsNameLength) and its label is ONE label in the build's language (labelIsInBuildLanguageOnly).
+//
+// The build sets the length LAST in the phase: the SDK's update reads the column with its labels, and a read that carries labels ahead of
+// a create that carries several languages is what makes Dataverse keep only the base one. A key with one label has nothing for such a read
+// to strip, so it may follow the step; a key labelled in more than that keeps the place it has always had, ahead of it — and where the
+// platform then refuses it for the length of its column, the build says so (alternateKeyAheadOfLength, lib/entity-provision.js).
 //
 // This is the half of the rule the spec decides. The other half is the build's: a table that already existed is never written to, so
 // its keys are made where they always were, and only a table whose length is still to be set (one this build created, or one a failed
 // attempt of the same build left unset) makes its keys wait.
-function keyWaitsForNameLength(entity, key) {
-  if (askedPrimaryNameLength(entity) === undefined || !key || isLocalizedLabelMap(key.displayName) || !Array.isArray(key.columns)) return false;
-  const name = String(entity.primaryAttribute.schemaName || '').toLowerCase();
-  return name !== '' && key.columns.some((column) => String(column).toLowerCase() === name);
+function keyWaitsForNameLength(entity, key, languageCode) {
+  return keyNeedsNameLength(entity, key) && labelIsInBuildLanguageOnly(key.displayName, languageCode);
 }
 
 // The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
@@ -4252,6 +4272,7 @@ module.exports = {
   PRIMARY_NAME_MAX_LENGTH,
   primaryNameLengthProblem,
   askedPrimaryNameLength,
+  keyNeedsNameLength,
   keyWaitsForNameLength,
   validateSampleDataRows,
   normalizePageSource,

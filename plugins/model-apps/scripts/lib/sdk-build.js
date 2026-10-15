@@ -513,7 +513,7 @@ function planFor(spec, opts) {
       }
       for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
       for (const k of e.alternateKeys || []) {
-        if (!keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
+        if (!keyWaitsForNameLength(e, k, spec && spec.languageCode)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
       }
     }
     // The relationships in the order the data-model phase creates them (relationshipsInCreateOrder): localized
@@ -547,11 +547,12 @@ function planFor(spec, opts) {
       if (askedPrimaryNameLength(e) !== undefined) items.push({ phase: 'data-model', label: `primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}` });
     }
     // Then the alternate keys over a name column whose length is set: the build makes such a key once that length is right
-    // (keyWaitsForNameLength). The plan lists it where a table the build creates has it; a table that already exists is not written to, and
+    // (keyWaitsForNameLength, which also needs to know the language the build writes in: the spec's, where it names one). The plan lists it
+    // where a table the build creates has it; a table that already exists is not written to, and
     // its keys are made with the table — the same steps, in another place, so the count holds.
     for (const e of spec.entities) {
       for (const k of e.alternateKeys || []) {
-        if (keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
+        if (keyWaitsForNameLength(e, k, spec && spec.languageCode)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
       }
     }
   }
@@ -2203,13 +2204,16 @@ const detachAdvice = (commands) => `Detach it from the other app — ask the use
 //    `owedPaid` when this run's publish phase completed — which pays what an earlier attempt of the same
 //    build owed too, since every attempt saves the same tables (see settleOwedPublishes);
 //  - the primary name column lengths of the tables it created and did not finish setting: `owedLengths`, the
-//    records the data-model phase keeps (provisionDataModel), which the caller hands to the next attempt as
-//    `opts.owedLengths` and which that attempt pays at the end of its own data-model phase. What is on the
-//    halt is everything still owed: what the attempt was handed and did not pay, and what it created.
+//    records the data-model phase keeps (provisionDataModel) — each with the MetadataId of the table the attempt
+//    created, which tells it from another that comes to answer to the same name — which the caller hands to the
+//    next attempt as `opts.owedLengths` and which that attempt pays at the end of its own data-model phase, to the
+//    table it was recorded for. What is on the halt is everything still owed: what the attempt was handed and did
+//    not pay, and what it created.
 async function runSdkBuild(spec, opts = {}) {
   // tables: entity logical -> [type, id, names] of a saved view or form that owes its publish, and the names of
   // what is deferred onto that table: its reconciled views and forms, and its enriched default views
-  // (oweTablePublish). lengths: table logical -> { table, column, asked, tried } of a name column whose length is owed.
+  // (oweTablePublish). lengths: table logical -> { table, column, asked, tried, tableId, columnId? } of a name column whose
+  // length is owed.
   const owed = { tables: new Map(), paid: false, lengths: new Map() };
   // A record this attempt was handed is a debt it has not tried to pay yet, whatever an earlier attempt did with it.
   let carriedIn = 0;

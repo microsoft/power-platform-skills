@@ -22,6 +22,7 @@ const {
   lookupParentNeedsEnvironment,
   isOldLookupColumnLabel,
   askedPrimaryNameLength,
+  keyNeedsNameLength,
   keyWaitsForNameLength,
   PRIMARY_NAME_MAX_LENGTH,
 } = require('./app-spec.js');
@@ -311,14 +312,25 @@ function primaryNameLength(primaryAttribute) {
   return asked !== undefined ? asked : DEFAULT_PRIMARY_NAME_LENGTH;
 }
 
-// The MaxLength of one text column, from ONE typed request: MaxLength is a member of StringAttributeMetadata, so the attribute
-// is addressed through that cast and nothing else is selected — no labels, the kind of narrow read the build keeps ahead of
-// its labelled writes (findExistingColumns). Dataverse answers
+// A MetadataId as Dataverse writes one, in lower case — or undefined for anything else. The ids a debt is held to are compared in this form.
+const GUID_RE = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const guidOf = (value) => (typeof value === 'string' && GUID_RE.test(value) ? value.toLowerCase() : undefined);
+
+// How an answer that is not a success reads in a message: its status and, when the platform gave one, its own message.
+function answerWhy(res) {
+  if (!res) return 'no answer';
+  const detail = res.body && res.body.error && res.body.error.message;
+  return `HTTP ${res.status}${detail ? `: ${detail}` : ''}`;
+}
+
+// The MaxLength of one text column — and the column's MetadataId, which the same answer carries — from ONE typed request: MaxLength is a
+// member of StringAttributeMetadata, so the attribute is addressed through that cast and nothing else is selected — no labels, the kind of
+// narrow read the build keeps ahead of its labelled writes (findExistingColumns). Dataverse answers
 //   { "@odata.context": "...", "MaxLength": 850, "MetadataId": "..." }
 // The attribute of a table created a moment ago can trail the table (the lag confirmInlineColumns also waits out), so a 404 is
 // asked again, twice; any other answer will not change by asking again. Throws, with the reason, when the length cannot be read.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api#retrieve-attributes
-async function readTextColumnLength(provision, tableLogical, columnLogical, { sleep } = {}) {
+async function readTextColumn(provision, tableLogical, columnLogical, { sleep } = {}) {
   const raw = provision && provision.dataverse;
   if (!raw || typeof raw.get !== 'function') throw new Error('there is no Dataverse client to read the column with');
   const wait = typeof sleep === 'function' ? sleep : ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -329,12 +341,11 @@ async function readTextColumnLength(provision, tableLogical, columnLogical, { sl
     if (attempt > 0) await wait(1000);
     const res = await raw.get(url);
     if (res && res.status >= 200 && res.status < 300) {
-      if (res.body && Number.isInteger(res.body.MaxLength)) return res.body.MaxLength;
+      if (res.body && Number.isInteger(res.body.MaxLength)) return { maxLength: res.body.MaxLength, metadataId: guidOf(res.body.MetadataId) };
       throw new Error('the answer to the read of the column\'s length carries no MaxLength');
     }
-    const detail = res && res.body && res.body.error && res.body.error.message;
     status = res && res.status;
-    why = `HTTP ${status}${detail ? `: ${detail}` : ''}`;
+    why = answerWhy(res);
     if (!res || res.status !== 404) break;
   }
   const failure = new Error(`could not read the column's length (${why})`);
@@ -344,20 +355,79 @@ async function readTextColumnLength(provision, tableLogical, columnLogical, { sl
   throw failure;
 }
 
+// Which table answers to a logical name right now: its MetadataId and its primary name column, from ONE narrow request by name — the way
+// the update of the column that follows addresses it (the SDK's updateColumn resolves the column by name). Dataverse answers
+//   { "@odata.context": "...", "MetadataId": "00000000-0000-0000-0000-000000000000", "PrimaryNameAttribute": "new_name" }
+// and 404 when no table has the name, which is the answer `null`. Any other answer is an error that carries its status, the way a read
+// of the column's length does (readTextColumn). Not asked again on a 404, unlike that read: it is made only for a table an earlier attempt
+// created, and a build retries after pausing for at least three seconds (build-model-app.js), which is longer than a table created
+// a moment ago takes to show.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api#query-the-entitymetadata-entity-type
+async function readTableIdentity(provision, tableLogical) {
+  const raw = provision && provision.dataverse;
+  if (!raw || typeof raw.get !== 'function') throw new Error('there is no Dataverse client to read the table with');
+  const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(tableLogical)}')?$select=MetadataId,PrimaryNameAttribute`);
+  if (res && res.status >= 200 && res.status < 300) {
+    const metadataId = guidOf(res.body && res.body.MetadataId);
+    if (!metadataId) throw new Error('the answer to the read of the table carries no MetadataId');
+    return { metadataId, primaryName: String((res.body && res.body.PrimaryNameAttribute) || '').toLowerCase() };
+  }
+  if (res && res.status === 404) return null;
+  const failure = new Error(`could not read the table (${answerWhy(res)})`);
+  if (res && res.status) failure.statusCode = res.status;
+  throw failure;
+}
+
 // What the narrated step of a name column length says when an earlier attempt created the table and left the length unset (see
 // alignPrimaryNameLength): the step runs for a table that exists, which the build otherwise leaves as it finds it.
 const OWED_LENGTH = 'owed by the attempt that created the table';
 
+// The warning for a length the build owed and does not set, because it must not write to the table that answers to the name now
+// (checkOwedTable). `debt` is what was recorded: the column and the length asked, which is what the warning is about.
+const keptWarning = (logical, debt, why) => `did not set the length of the primary name column ${logical}.${debt.column} to ${debt.asked} — ${why}, so the column is left as it is (change it in Maker if the length matters)`;
+
+// Whether the table that answers to a debt's name now is the table the debt was recorded for. A debt is paid to that table and to no other.
+// It records the names of the table and of its name column and the length asked, and the MetadataId of the table the attempt created (and
+// of its name column, when that attempt read it), because the same logical name can come to answer for another table: the build pauses
+// between two attempts, another maker can delete the table and make it again in that time, and the build never writes to the name column
+// of a table it did not create — a rebuild must not shorten a column that may hold data. A table that is not the one is left as it is.
+//
+// The answer is `{}` when the table is proved to be the one; `{ left: { step, why } }` when it is proved not to be — or cannot be: nothing
+// records which table the build created, or the spec no longer asks what the debt records — and the column is then left alone; and
+// `{ unread }` when the read that would prove it failed: nothing is written, and it is a failed step, as an unreadable length is. The
+// column's own id is checked by the caller, once it has read the column, which carries it.
+//
+// This is the one extra request a debt costs, made only for a debt an earlier attempt carried: the attempt that created the table has
+// just made it, and a build that owes nothing asks nothing.
+async function checkOwedTable({ provision, debt, logical, primaryLogical, asked }) {
+  const left = (step, why) => ({ left: { step, why } });
+  if (!debt || debt.column !== primaryLogical || debt.asked !== asked) {
+    return left('no longer what the spec asks', `the spec no longer asks what the build owed (${debt && debt.column} at ${debt && debt.asked} characters; it now asks ${primaryLogical} at ${asked})`);
+  }
+  const owedId = guidOf(debt.tableId);
+  if (!owedId) return left('nothing shows which table the build created', 'nothing shows which table this build created, and it never writes to a table it did not create');
+  let seen;
+  try { seen = await readTableIdentity(provision, logical); } catch (err) { return { unread: err }; }
+  if (!seen) return left('the table the build created is gone', `the table ${logical} this build created is no longer there`);
+  if (seen.metadataId !== owedId) {
+    return left('not the table the build created', `the table ${logical} is not the one this build created (it was deleted and created again, or replaced, after the build created it), and the build never writes to a table it did not create`);
+  }
+  if (seen.primaryName !== primaryLogical) return left('not the name column the build created', `the primary name column of table ${logical} is ${seen.primaryName || 'not known'} now, not ${primaryLogical}`);
+  return {};
+}
+
 // Sets the primary name column of a table THIS build created — in this attempt, or in an earlier attempt of the same build that did
-// not finish the step (`owed`, see provisionDataModel) — to the length the spec asks for. The table is created with a
+// not finish the step (`carried`, see provisionDataModel) — to the length the spec asks for. The table is created with a
 // request that carries nothing but that column, and some environments ignore the length asked of a plain text name column in
 // such a request (see DEFAULT_PRIMARY_NAME_LENGTH), so the length is read back — one typed request — and only a column that is not
 // already the asked length is updated, with the SDK's updateColumn (the documented PUT of the typed column). Exactly one narrated
 // step, a skip when nothing needed changing (an environment that keeps the length asked). A read or an update that fails is a
 // FAILED step that names the table, the length asked and the length the platform made, plus a warning, the way a failed column
 // update is reported elsewhere in this file: the build goes on, and the column is never left at the wrong length without saying so.
-// The answer is `{ ok: true }` when the column has the length now, and `{ ok: false, error }` when it could not be read or set — which
-// an alternate key over the column needs to know (provisionDataModel creates it only after a step that succeeded).
+// The answer is `{ ok: true }` when the column has the length now; `{ ok: false, error, columnId? }` when it could not be read or set —
+// which an alternate key over the column needs to know (provisionDataModel creates it only after a step that succeeded) — with the id of
+// the column when the read before the update answered it, for the debt to keep; and `{ ok: false, left: true }` when the table is not
+// the one the debt was recorded for (checkOwedTable), which is left alone.
 //
 // It is the LAST thing the data-model phase does (provisionDataModel calls it once every table, column, status reason, alternate
 // key and relationship has been created), not the first thing after the table. The SDK's updateColumn starts by reading the column
@@ -372,31 +442,61 @@ const OWED_LENGTH = 'owed by the attempt that created the table';
 // first attempt from — comes after the read of the attempt that set the length; the loss was measured only for a create straight
 // after the read, so whether it reaches across the pause between two attempts is not known.
 //
+// `debt` is the record of what is owed for the table (see provisionDataModel). `carried` says an earlier attempt created the table: its
+// step is worded so, because a reader would otherwise take the length of a table that exists for one the build had no business to touch,
+// and the table is proved to be the one the debt was recorded for before anything is written.
 // `halted` says the phase stopped before this step: the warning for a length that could not be set then cannot promise that the build
 // continues, and says what a re-run does instead (it finds the table and leaves an existing table's name column as it is).
-// `owed` says an earlier attempt created the table: its step is worded so, because a reader would otherwise take the length of a
-// table that exists for one the build had no business to touch.
-async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted = false, owed = false }) {
+// `keys` are the alternate keys that wait for this step: where there are any, the warning is worded from them — the build does not
+// continue past a key it cannot create (createWaitingKeys) — and not from the best-effort case, where the rest of the build does.
+async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted = false, debt = null, carried = false, keys = [] }) {
   const primaryLogical = String(entity.primaryAttribute.schemaName).toLowerCase();
   const label = `primary column length ${entity.schemaName}.${entity.primaryAttribute.schemaName}`;
-  let actual;
-  let unread;
-  try { actual = await readTextColumnLength(provision, logical, primaryLogical, { sleep }); } catch (err) { unread = err; }
-  if (!unread && actual === asked) {
-    runner.skip('data-model', `${label} (already ${asked}${owed ? `; ${OWED_LENGTH}` : ''})`);
+  const owedNote = carried ? `; ${OWED_LENGTH}` : '';
+  const leave = ({ step, why }) => {
+    runner.skip('data-model', `${label} (${step} — kept)`);
+    if (typeof warn === 'function') warn(keptWarning(logical, { column: (debt && debt.column) || primaryLogical, asked: (debt && debt.asked) || asked }, why));
+    return { ok: false, left: true };
+  };
+  let unconfirmed;
+  if (carried) {
+    const checked = await checkOwedTable({ provision, debt, logical, primaryLogical, asked });
+    if (checked.left) return leave(checked.left);
+    unconfirmed = checked.unread;
+  }
+  let read;
+  let unread = unconfirmed;
+  if (!unread) {
+    try { read = await readTextColumn(provision, logical, primaryLogical, { sleep }); } catch (err) { unread = err; }
+  }
+  // The column the debt recorded, once the table is proved: the read of the column carries its id. A column whose id is not the one
+  // recorded — or cannot be read, so that it cannot be told — is not one the build may write to.
+  if (read && carried && debt && debt.columnId !== undefined && (!read.metadataId || read.metadataId !== guidOf(debt.columnId))) {
+    return leave({ step: 'not the name column the build created', why: `${primaryLogical} is not the column this build created in ${logical}` });
+  }
+  if (read && read.maxLength === asked) {
+    runner.skip('data-model', `${label} (already ${asked}${owedNote})`);
     return { ok: true };
   }
+  const actual = read && read.maxLength;
+  const waiting = keys.length ? `alt key${keys.length > 1 ? 's' : ''} ${keys.map((k) => `${entity.schemaName}.${k}`).join(', ')}` : '';
+  const be = keys.length > 1 ? 'are' : 'is';
   const afterwards = halted
-    ? 'because the data-model phase stopped, and a run that finds the table already there leaves its name column as it is, change the length in Maker if it matters'
-    : 'the rest of the build continues';
+    ? `because the data-model phase stopped, and a run that finds the table already there leaves its name column as it is, change the length in Maker if it matters${waiting ? ` — it does for ${waiting}, which ${be} over that column and ${be} refused while the column is that long` : ''}`
+    : waiting
+      ? `the build stops at ${waiting}, which ${be} over that column and cannot be created while the column is that long`
+      : 'the rest of the build continues';
   let failure;
   await runBestEffort(
     runner,
     'data-model',
-    `${label} -> ${asked}${owed ? ` (${OWED_LENGTH})` : ''}`,
+    `${label} -> ${asked}${carried ? ` (${OWED_LENGTH})` : ''}`,
     async () => {
       try {
-        if (unread) throw new Error(`asked ${asked}, the length the platform made is unknown: ${(unread && unread.message) || unread}`, { cause: unread });
+        if (unread) {
+          const what = unconfirmed ? 'it could not be confirmed that the table is the one this build created' : 'the length the platform made is unknown';
+          throw new Error(`asked ${asked}, ${what}: ${(unread && unread.message) || unread}`, { cause: unread });
+        }
         try {
           await sdk.updateColumn(logical, primaryLogical, { maxLength: asked });
         } catch (err) {
@@ -411,7 +511,7 @@ async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical,
     warn,
     `could not set the length of the primary name column ${logical}.${primaryLogical} to ${asked} — it keeps the length the platform gave it, and ${afterwards}`
   );
-  return failure ? { ok: false, error: failure } : { ok: true };
+  return failure ? { ok: false, error: failure, ...(read && read.metadataId ? { columnId: read.metadataId } : {}) } : { ok: true };
 }
 
 // The primary name column of a table that was found after the create that made it: the answer to that create was lost, or somebody
@@ -427,7 +527,7 @@ async function reportFoundPrimaryNameLength({ runner, provision, entity, logical
   const why = 'the answer to that create was lost or another maker created the table first, so nothing shows that this build made it and its name column is left alone';
   let actual;
   try {
-    actual = await readTextColumnLength(provision, logical, primaryLogical, { sleep });
+    actual = (await readTextColumn(provision, logical, primaryLogical, { sleep })).maxLength;
   } catch (err) {
     runner.skip('data-model', `${label} (${found}; its length could not be read)`);
     if (typeof warn === 'function') warn(`could not read the length of the primary name column ${logical}.${primaryLogical} (${(err && err.message) || err}), so the ${asked} the spec asks for is not confirmed — the table was found after its create, and ${why}`);
@@ -677,7 +777,7 @@ async function createColumnsInOneRequest({ sdk, provision, table, tableSchemaNam
 async function confirmInlineColumns(provision, table, columns, { warn, sleep, attempts = 3 } = {}) {
   const confirmed = new Map();
   const raw = provision && provision.dataverse;
-  const byId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(table && table.metadataId));
+  const byId = GUID_RE.test(String(table && table.metadataId));
   if (!columns.length || !raw || typeof raw.get !== 'function' || (!byId && !(table && table.logicalName))) return confirmed;
   const tableKey = byId ? `(${table.metadataId})` : `(LogicalName='${odataLit(table.logicalName)}')`;
   const wait = typeof sleep === 'function' ? sleep : ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -1333,12 +1433,16 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
 // the steps did not halt, creating the alternate keys that were waiting for those lengths (createWaitingKeys).
 //
 // Last, because that step's read carries labels, and nothing labelled in more than one language may be created after a read like that
-// (see alignPrimaryNameLength). A key that waits is labelled with a plain string, one language (keyWaitsForNameLength), which a read has nothing to strip.
+// (see alignPrimaryNameLength). A key that waits has ONE label, in the build's language (keyWaitsForNameLength), which a read has nothing to strip.
 //
-// What the phase owes is `owedLengths`, a Map from a table's logical name to `{ table, column, asked, tried }`. A table THIS run
-// creates whose spec asks for a length goes in it the moment it exists and comes out once its length is right; a table an earlier attempt
-// of the same build created and did not finish is in it when the phase starts (runSdkBuild reads it from the halt of that attempt,
-// and the build's retry hands it on — the way what an attempt owes for the views it saved is carried, see build-model-app.js).
+// What the phase owes is `owedLengths`, a Map from a table's logical name to
+//   { table, column, asked, tried, tableId, columnId? }
+// — the names, the length asked, and the MetadataId of the table the attempt created and, when that attempt read the column before its step
+// failed, of the column. The ids are what tell the table that was created from another that comes to answer to the same name: the build
+// pauses between two attempts, and another maker can replace the table in that time, which the build must not shorten (checkOwedTable).
+// A table THIS run creates whose spec asks for a length goes in the Map the moment it exists and comes out once its length is right; a table
+// an earlier attempt of the same build created and did not finish is in it when the phase starts (runSdkBuild reads it from the halt of that
+// attempt, and the build's retry hands it on — the way what an attempt owes for the views it saved is carried, see build-model-app.js).
 // `tried` says that this attempt's step ran for the table and did not come right, so a build that stops for good does not try it
 // again (settleOwedLengths). A caller that passes no Map gets one of its own and throws it away: one attempt, and nothing to carry.
 //
@@ -1357,33 +1461,39 @@ async function provisionDataModel(args) {
   try {
     result = await provisionDataModelSteps(args, { owed, carriedIn, waitingKeys });
   } catch (err) {
-    await payOwedLengths(args, owed, carriedIn, { halted: true });
+    await payOwedLengths(args, owed, carriedIn, { halted: true, waitingKeys });
     throw err;
   }
-  const outcomes = await payOwedLengths(args, owed, carriedIn, { halted: false });
+  const outcomes = await payOwedLengths(args, owed, carriedIn, { halted: false, waitingKeys });
   await createWaitingKeys(args, waitingKeys, outcomes);
   return result;
 }
 
 // Sets the primary name column length of every table the phase owes one, in table order — the length steps are the last the phase
-// takes — and answers what each came to: `Map<logical name, { ok, error? }>`, for the keys that wait for them. A table whose length is
-// right comes out of `owed`; one whose step failed stays in it, marked `tried`. A debt for a table whose spec asks for no length (the
-// spec cannot change within one build, so this is a record that does not match it) is dropped, and one for a table the spec does not
-// declare is left alone: it is not this phase's.
-async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owed, carriedIn, { halted }) {
+// takes — and answers what each came to: `Map<logical name, { ok, error?, left? }>`, for the keys that wait for them. A table whose length
+// is right comes out of `owed`; so does one that turned out not to be the table the debt was recorded for (`left`: it is left alone, see
+// checkOwedTable — only a debt an earlier attempt carried is held to that); one whose step failed stays in it, marked `tried`, with the
+// id of the column when the step read it. A debt for a table whose spec asks for no length (the spec cannot change within one build, so
+// this is a record that does not match it) is dropped, and said if it was carried; one for a table the spec does not declare is left
+// alone: it is not this phase's. `waitingKeys` are the keys that wait for the steps, which the warning of a step that fails names.
+async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owed, carriedIn, { halted, waitingKeys }) {
   const outcomes = new Map();
   for (const entity of (spec && spec.entities) || []) {
     const logical = entity.schemaName.toLowerCase();
     const debt = owed.get(logical);
     if (!debt) continue;
+    const carried = carriedIn.has(logical);
     const asked = askedPrimaryNameLength(entity);
     if (asked === undefined) {
       owed.delete(logical);
+      if (carried && typeof warn === 'function') warn(keptWarning(logical, debt, 'the spec no longer asks the table\'s name column for a length'));
       continue;
     }
     debt.tried = true;
-    const outcome = await alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted, owed: carriedIn.has(logical) });
-    if (outcome.ok) owed.delete(logical);
+    const keys = waitingKeys.filter((waiting) => waiting.logical === logical).map((waiting) => waiting.key.schemaName);
+    const outcome = await alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted, debt, carried, keys });
+    if (outcome.ok || outcome.left) owed.delete(logical);
+    else if (outcome.columnId) debt.columnId = outcome.columnId;
     outcomes.set(logical, outcome);
   }
   return outcomes;
@@ -1398,11 +1508,40 @@ function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
     { recoverable: true, skipIf: isAlreadyExists });
 }
 
+// An alternate key over the name column of a table whose length is still to be set that cannot wait for it, because its label is in more
+// than the build's language (keyWaitsForNameLength): it is made where it always was, ahead of the length step, so that the read that carries
+// labels, which setting the length starts with, does not come before a create that carries several languages. Where the platform then
+// refuses it — a key may hold at most 900 bytes, which a name column of the 850 characters some environments give a new table is far
+// over — the build says why this key was made first and what to do, because the platform's refusal says nothing of the length. The build
+// sets the length as the last step before it stops (provisionDataModel), so the run that follows finds the table with it and makes the key.
+// Said only when the key fails: where the environment keeps the length asked the key is made, and nothing is wrong.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, languageCode, warn }) {
+  try {
+    await alternateKeyStep({ runner, sdk, entity, logical, key, languageCode });
+  } catch (err) {
+    if (typeof warn === 'function') {
+      const column = String(entity.primaryAttribute.schemaName).toLowerCase();
+      const named = isLocalizedLabelMap(key.displayName) ? Object.keys(key.displayName).join(', ') : String(languageCode);
+      warn(
+        `alt key ${entity.schemaName}.${key.schemaName} was not created. It is over the name column ${column} of a table this build created, and its label is in ${named}, `
+        + `more than the build's language (${languageCode}), so the build creates it before it sets that column to ${askedPrimaryNameLength(entity)} characters `
+        + '(setting the length reads the column with its labels, which would keep only one of the languages). If the platform refused it for its size — a key may hold '
+        + 'at most 900 bytes, 2 for each character of text, and some environments make a new name column 850 characters long — run the build again: the length is set '
+        + 'as the build stops, so the key is created then. A key labelled in the build\'s language alone is created after the length is set.',
+      );
+    }
+    throw err;
+  }
+}
+
 // The alternate keys that waited for their table's name column length (keyWaitsForNameLength), in the order the phase met them, made
 // once every length step has run. A key whose table's step did not come right is not asked for: the platform would refuse it for the
 // length it is left at — a key may hold at most 900 bytes, which a name column of 850 characters is far over — in words that say
 // nothing of the length, and the step that failed has already said why in its own. So the key is a failed step of its own, naming
-// both, and the build stops there as it does for a key the platform refuses.
+// both, and the build stops there as it does for a key the platform refuses. A table that turned out not to be the one the length was
+// owed for (`left`, see checkOwedTable) is not one the build set the length of at all: its key is made as the key on any table the build
+// found is, and the platform decides.
 //
 // That stop is retried when the step failed the way a build's retry rides out (a 429, a lock, a 503) and not otherwise, because the
 // halt carries the status the step failed with — the build's check reads a status on the halt it is given and on its `cause`
@@ -1412,7 +1551,7 @@ function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
 async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
   for (const { entity, logical, key, languageCode } of waitingKeys) {
     const outcome = outcomes.get(logical);
-    if (outcome && !outcome.ok) {
+    if (outcome && !outcome.ok && !outcome.left) {
       const column = String(entity.primaryAttribute.schemaName).toLowerCase();
       const asked = askedPrimaryNameLength(entity);
       const why = (outcome.error && outcome.error.message) || String(outcome.error);
@@ -1437,7 +1576,8 @@ async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
 // length no attempt got as far as setting (`debts`: the records a halt carries, see provisionDataModel; one with `tried` was set about
 // by an attempt, whose step has said what became of it, and is not repeated). One more try, best-effort: a step that cannot set the
 // length is a warning, the way it is in the phase, and never replaces the halt the caller is about to report. Not narrated, like the
-// publishes settled in the same place (settleOwedPublishes, sdk-build.js).
+// publishes settled in the same place (settleOwedPublishes, sdk-build.js). Each debt is paid like the one the retry pays — to the table
+// it was recorded for and to no other (checkOwedTable): a table that turned out not to be that one is left as it is, and said.
 async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {}) {
   const debts = (Array.isArray(owed) ? owed : []).filter((debt) => debt && typeof debt === 'object' && typeof debt.table === 'string' && debt.tried !== true);
   if (!debts.length) return;
@@ -1447,7 +1587,7 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
     const asked = askedPrimaryNameLength(entity);
     if (!entity || asked === undefined) continue;
     try {
-      await alignPrimaryNameLength({ runner, sdk, provision, entity, logical: debt.table.toLowerCase(), asked, warn, sleep, halted: true, owed: true });
+      await alignPrimaryNameLength({ runner, sdk, provision, entity, logical: debt.table.toLowerCase(), asked, warn, sleep, halted: true, debt, carried: true });
     } catch { /* alignPrimaryNameLength does not throw; and nothing here may replace the halt */ }
   }
 }
@@ -1590,9 +1730,12 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     let lengthPending = false;
     if (askedLength !== undefined) {
       if (createdTable) {
-        // The table this attempt made owes its length from now on, whatever an earlier attempt owed for a table of that name.
+        // The table this attempt made owes its length from now on, whatever an earlier attempt owed for a table of that name. The record
+        // keeps the MetadataId the create answered, which tells this table from another that comes to answer to the same name (checkOwedTable);
+        // the column's id is added by the step, if it reads the column and cannot finish.
         carriedIn.delete(logical);
-        owed.set(logical, { table: logical, column: String(e.primaryAttribute.schemaName).toLowerCase(), asked: askedLength, tried: false });
+        const tableId = guidOf(createdTable.metadataId);
+        owed.set(logical, { table: logical, column: String(e.primaryAttribute.schemaName).toLowerCase(), asked: askedLength, tried: false, ...(tableId ? { tableId } : {}) });
         lengthPending = true;
       } else if (carriedIn.has(logical)) {
         lengthPending = true;
@@ -1805,12 +1948,19 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // alternate keys — idempotent: the SDK has no key lister, so a re-run that hits an
     // already-exists error is treated as a skip (not a halt) via skipIf.
     //
-    // A key over the name column of a table whose length is still to be set waits for that step (keyWaitsForNameLength): it
-    // is made at the end of the phase, once the length is right, because a key over the column an environment made 850 characters
-    // long is refused for its size. Every other key is made here, with its table, as it always was.
+    // A key over the name column of a table whose length is still to be set waits for that step when its label is ONE label in the
+    // build's language (keyWaitsForNameLength): it is made at the end of the phase, once the length is right, because a key over the
+    // column an environment made 850 characters long is refused for its size. A key over that column whose label is in more than the
+    // build's language cannot wait — the read that sets the length carries labels — and is made here, ahead of the step, where the
+    // build says what to do if the platform refuses it (alternateKeyAheadOfLength). Every other key is made here, with its table, as
+    // it always was.
     for (const k of e.alternateKeys || []) {
-      if (lengthPending && keyWaitsForNameLength(e, k)) {
+      if (lengthPending && keyWaitsForNameLength(e, k, resolvedLanguageCode)) {
         waitingKeys.push({ entity: e, logical, key: k, languageCode: resolvedLanguageCode });
+        continue;
+      }
+      if (lengthPending && keyNeedsNameLength(e, k)) {
+        await alternateKeyAheadOfLength({ runner, sdk, entity: e, logical, key: k, languageCode: resolvedLanguageCode, warn });
         continue;
       }
       await alternateKeyStep({ runner, sdk, entity: e, logical, key: k, languageCode: resolvedLanguageCode });
