@@ -4,6 +4,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const { validateFlags, parseArgs } = require('../lib/dataverse-auth.js');
@@ -12,6 +14,18 @@ const { nearestName } = require('../lib/nearest-name.js');
 const PLUGIN = path.join(__dirname, '..', '..');
 const script = (n) => path.join(PLUGIN, 'scripts', n);
 const SPEC = path.join(PLUGIN, 'samples', 'app-spec.project-tracker.json');
+// A build opens its workspace — by default `.maker-workspace` beside the spec — and the SDK binds it to the first
+// environment that opens it. The spec here is a committed sample, so a run that used the default would leave a
+// workspace bound to the placeholder environment in `samples/`, where a later real build using that folder as its app
+// folder would be halted. These runs name a temporary one instead.
+const SAMPLES_WORKSPACE = path.join(PLUGIN, 'samples', '.maker-workspace');
+const workspaces = [];
+function tempWorkspace() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'validate-flags-ws-'));
+  workspaces.push(dir);
+  return dir;
+}
+test.after(() => { for (const dir of workspaces) fs.rmSync(dir, { recursive: true, force: true }); });
 
 function run(args) {
   try {
@@ -83,7 +97,8 @@ test('nearestName declines a suggestion beyond a single edit', () => {
 // --- End-to-end: the dangerous case this whole change exists for -------------------------------
 
 test('build-model-app rejects a typo\'d phase selector instead of planning every phase', () => {
-  const base = ['--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC, '--no-live-plan'];
+  const existed = fs.existsSync(SAMPLES_WORKSPACE);
+  const base = ['--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC, '--no-live-plan', '--workspace', tempWorkspace()];
   const good = run([script('build-model-app.js'), ...base, '--stage', 'ui']);
   assert.strictEqual(good.code, 0, good.stderr);
   const planned = JSON.parse(good.stdout).planItems.length;
@@ -93,6 +108,7 @@ test('build-model-app rejects a typo\'d phase selector instead of planning every
   assert.match(typo.stderr, /unknown flag\(s\): --stagee \(did you mean --stage\?\)/);
   // The regression being pinned: before this guard the typo planned strictly MORE than --stage ui.
   assert.ok(planned > 0 && planned < 9, `--stage ui should plan a subset, planned ${planned}`);
+  assert.strictEqual(fs.existsSync(SAMPLES_WORKSPACE), existed, 'the run left no workspace in the committed samples folder');
 });
 
 test('teardown-model-app rejects an unknown flag rather than ignoring it', () => {
@@ -108,7 +124,9 @@ test('verify-model-app rejects an unknown flag rather than ignoring it', () => {
 });
 
 test('a correct invocation still succeeds after the guard', () => {
-  const r = run([script('build-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC, '--no-live-plan', '--stage', 'ui']);
+  const existed = fs.existsSync(SAMPLES_WORKSPACE);
+  const r = run([script('build-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC, '--no-live-plan', '--stage', 'ui', '--workspace', tempWorkspace()]);
   assert.strictEqual(r.code, 0, r.stderr);
   assert.strictEqual(JSON.parse(r.stdout).dryRun, true);
+  assert.strictEqual(fs.existsSync(SAMPLES_WORKSPACE), existed, 'the run left no workspace in the committed samples folder');
 });

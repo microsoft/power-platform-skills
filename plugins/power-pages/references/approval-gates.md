@@ -470,7 +470,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (22 calls: 15 gates + 7 not-a-gates)
+### 6.13 `create-site` (24 calls: 15 gates + 9 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -491,6 +491,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone, identity inspection, dependency installation, build/output validation, or code-site upload failed - choose retry, from-scratch fallback, or stop | partial-template-clone |
 | `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
 | `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
+| `create-site:1.5.seed-currency` | not-a-gate | - | 1.5 | Read-only seed planning found financial rows — choose an existing active currency with unchanged amounts or skip sample data before background writes | - |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood / Brand"* - four sub-prompts sharing this gate, plus a free-text brand follow-up (website URL, or colors and logo) when the user has a brand to match; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | Localized HTML plan rendered with agent verification separated from maker review — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |

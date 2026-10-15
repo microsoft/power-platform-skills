@@ -17,6 +17,7 @@ const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro']);
 const AUDIENCES = new Set(['internal', 'external']);
 const ERROR_CLASSES = new Set([
   'ImportSolutionAsync',
+  'PacSolutionImport',
   'PacPagesClone',
   'NpmInstall',
   'NpmBuild',

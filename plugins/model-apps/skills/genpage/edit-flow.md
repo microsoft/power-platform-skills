@@ -370,11 +370,50 @@ or approved edit plan when the edit touches connector data access.
 
 Do NOT rewrite the entire file. Use the minimum necessary `Edit` operations.
 
-Before Edit Phase 6, Grep the edited `page.tsx` with
-`['"]?borderWidth['"]?\s*:`. Griffel rejects that shorthand only at runtime;
-the regex also catches quoted keys and whitespace before the colon. Replace every match with
-`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
-`borderLeftWidth`. Do not upload while any match remains.
+Before Edit Phase 6, check the edited page for the Griffel shorthands that
+`makeStyles` drops at runtime:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx'
+```
+
+Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
+runtime: the page type-checks, transpiles and deploys, then renders without the
+border, color or reset. They are `all`, `borderColor`, `borderStyle`,
+`borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`,
+`borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands
+instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per
+side, `border` + `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width`
+(`borderWidth` → `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`,
+`borderLeftWidth`); `borderBlock`, `borderInline` and their `Start` and `End`
+forms become the `Width`, `Style` and `Color` longhands of the sides they name
+(`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`,
+`borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…`
+ones); `all` has no longhands, so set the properties you need one by one. Every
+other shorthand (`padding`, `margin`, `border`, `borderRadius`, `gap`,
+`outline`) is supported, and an inline `style={{ … }}` is not Griffel at all.
+
+`check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a
+`makeStyles` call, at any depth, with its line, column and longhands, or a call
+or a style object it cannot read, with what to change — and exits 3 while any is
+left: fix what it reports and run it again, and do not transpile or upload the page
+until it exits 0. It reads the style objects written inline in the call,
+`makeStyles({ … })`, so write them there: one passed or spread in from elsewhere
+(`makeStyles(styles)`, `...base`) is reported, because the check cannot see its
+keys, and so is a key computed from an expression (`[key]: …`), whose name it cannot
+see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
+`...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+
+A page that was deployed before this check existed can already hold such a key, so the
+checker may report one that your edit did not add. The deployed page renders without it
+today, which is why there are two ways out: **delete the key** — nothing changes on
+screen, so it is the edit that preserves the page — or **write the longhands**, which
+makes the style start to render, so the page changes. Delete it unless the user asked for
+that change, and say in the summary which you did. (`genpage-upload.js` refuses only a key
+the deployed page did not already have — or one it had, given another value — and lets one it did have, set
+the same, go ahead with a
+`warnings` entry, but the page then goes on rendering without it — do not rely on that to
+skip this step.)
 
 ## Edit Phase 6: Deploy Updated Page
 

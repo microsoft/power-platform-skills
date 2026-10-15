@@ -29,10 +29,19 @@ async function freshSdk(capture, meta) {
   tempDirs.push(dir);
   const httpClient = {
     get: async (url) => {
-      // EntityDefinitions attribute metadata lookup (drives classId/label defaulting on push).
+      // EntityDefinitions attribute metadata lookup (drives classId/label defaulting on push). The SDK reads
+      // only the columns a form binds, as a filtered collection —
+      //   EntityDefinitions(LogicalName='new_customer')/Attributes?$select=LogicalName,AttributeType,DisplayName
+      //     &$filter=LogicalName eq 'new_name' or LogicalName eq 'new_ownerid'
+      // — answered `{ value: [...] }`; older bundles read the whole entity (`Attributes` on the entity body).
+      // Both shapes are answered so the test pins the defaulting, not the request form.
       const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
       if (m && meta && meta[m[1]]) {
         const attrs = Object.entries(meta[m[1]]).map(([logicalName, AttributeType]) => ({ LogicalName: logicalName, AttributeType }));
+        if (/\)\/Attributes\?/.test(url)) {
+          const asked = [...decodeURIComponent(url).matchAll(/LogicalName eq '([^']+)'/g)].map((x) => x[1]);
+          return { status: 200, headers: {}, body: { value: attrs.filter((a) => asked.includes(a.LogicalName)) } };
+        }
         return { status: 200, headers: {}, body: { LogicalName: m[1], EntitySetName: `${m[1]}s`, Attributes: attrs } };
       }
       return { status: 200, headers: {}, body: {} };

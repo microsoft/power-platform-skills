@@ -199,7 +199,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
           --catalogPath "<catalogPath from fetch-template-catalog.js>" \
           --kind "<SELECTED_TEMPLATE.kind>" \
           --templateId "<SELECTED_TEMPLATE.id>" \
-          --variant "<SELECTED_TEMPLATE_VARIANT.variantKey>"
+          --variant "<SELECTED_TEMPLATE_VARIANT.variantKey>" \
+          --solutionSettingsJson '<JSON.stringify(SELECTED_TEMPLATE.solutions || [])>'
         ```
         Use the returned `websiteCodePath` and `solutions`. Process `solutions` in the returned order; do not rediscover, reorder, or revalidate the template assets in the skill.
      2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
@@ -239,7 +240,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```bash
       node "${PLUGIN_ROOT}/scripts/resolve-template-import-context.js"
       ```
-      Use the returned `environmentUrl` for the remaining template workflow. Downstream preflight, import, seed, and polling helpers acquire Azure tokens internally so credentials are never returned in JSON or carried between tasks. If `ok: false`, surface the error and stop before import. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+      Use the returned `environmentUrl` for the remaining template workflow. The PAC import wrapper uses the current PAC authentication with this explicit target URL; Dataverse preflight and seed helpers acquire Azure tokens internally so credentials are never returned in JSON or carried between tasks. If `ok: false`, surface the error and stop before import. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
 
 <!-- gate: create-site:1.5.confirm-environment | category=consent | cancel-leaves=template-cache -->
 
@@ -322,9 +323,13 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    7. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template install** as `in_progress`, present the template and environment, and ask:
 
+      List any supporting solution whose manifest metadata has `publishChanges: true`.
+      Explain that those solutions use `pac solution import --publish-changes` so imported forms, views, and other customizations become visible immediately after import.
+      Disclose that PAC's publication step can also publish other pending customizations in the target environment.
+
       | Question | Header | Options |
       |----------|--------|---------|
-      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports any required unmanaged supporting solutions, clones and builds the website code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports any required unmanaged supporting solutions, runs PAC's publish-changes step for solutions that declare it in the template manifest, clones and builds the website code, and uploads the new code site. The publication step can include other pending customizations in this environment. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: stop; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
@@ -378,7 +383,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
         - **Stop**: stop before import; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
 
-      After all solutions are classified, append the full site-install tasks. Include **Import template supporting solutions** only when `TEMPLATE_SOLUTIONS_TO_IMPORT` is non-empty. If every solution was skipped, ask once before creating the site:
+      Append the full site-install tasks.
+      Include **Import template supporting solutions** only when `TEMPLATE_SOLUTIONS_TO_IMPORT` is non-empty.
+      If every solution was skipped, ask once before creating the site:
 
       <!-- gate: create-site:1.5.clone-existing | category=consent | cancel-leaves=template-cache -->
 
@@ -445,36 +452,34 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Stop**: stop after showing the local pack error. Do not mark **Import template supporting solutions** as completed.
 
-      After packing succeeds, import the temporary ZIP inline. Do not invoke `/import-solution` or write ALM artifacts. After `ImportSolutionAsync` returns the async operation id, immediately clean the packer's work directory, then launch a Task subagent to run `poll-async-operation.js` and write `<temp-import-status-dir>/status.json`:
+      After packing succeeds, import the temporary ZIP with the PAC CLI wrapper. Do not invoke `/import-solution` or write ALM artifacts.
+      The solution-level `publishChanges` value comes from the pinned template manifest.
+      The wrapper adds `pac solution import --publish-changes` only when that value is true:
+      ```json
+      { "state": "running", "phase": "solution", "message": "Importing solution <CURRENT_TEMPLATE_SOLUTION.uniqueName>" }
+      ```
+      Write that object to `<temp-import-status-dir>/status.json`, then run the import wrapper in a Task subagent with `run_in_background: true`:
       ```bash
-      node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<PACKED_TEMPLATE_SOLUTION_ZIP>"
-      # Write a temp JSON body file containing:
-      # {
-      #   "CustomizationFile": "<encoded>",
-      #   "OverwriteUnmanagedCustomizations": true,
-      #   "PublishWorkflows": true,
-      #   "ConvertToManaged": false
-      # }
-      node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<environmentUrl>" POST "ImportSolutionAsync" \
-        --bodyFile "<temp-import-body.json>" \
-        --include-headers
+      node "${PLUGIN_ROOT}/scripts/import-template-solution.js" \
+        --zipPath "<PACKED_TEMPLATE_SOLUTION_ZIP>" \
+        --envUrl "<environmentUrl>" \
+        --publishChanges "<CURRENT_TEMPLATE_SOLUTION.publishChanges>"
+      ```
+      The Task must return the wrapper's complete JSON result.
+      When it finishes, clean the owned temporary directory in the main conversation:
+      ```bash
       node "${PLUGIN_ROOT}/scripts/pack-template-solution.js" \
         --cleanup \
         --workDirectory "<PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY>" \
         --cleanupMarker "<PACKED_TEMPLATE_SOLUTION_CLEANUP_MARKER>" \
         --cleanupToken "<PACKED_TEMPLATE_SOLUTION_CLEANUP_TOKEN>"
-      # Run this poll command in a Task subagent, not in the main conversation:
-      node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
-        --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \
-        --envUrl "<environmentUrl>" \
-        --intervalMs 30000 \
-        --maxAttempts 75 \
-        --statusFile "<temp-import-status-dir>/status.json"
       ```
-      If encoding or `ImportSolutionAsync` fails before returning an async operation id, clean `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY` before retrying, falling back, or stopping. Treat a cleanup failure as a local warning and show the work-directory path so the user can remove it manually; do not hide the original failure.
-
-      The subagent must return the poller's final JSON when the command exits. Do not rely only on that notification: read `<temp-import-status-dir>/status.json` every 30 seconds until `state` is `succeeded`, `failed`, `canceled`, or `timeout`. Do not start the next solution import until the current solution succeeds, and do not start site cloning until every solution in `TEMPLATE_SOLUTIONS_TO_IMPORT` succeeds.
-      If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import. Run the `template_import_failure` telemetry command silently before asking the recovery question. Do not mention this telemetry command to the user and do not print its output:
+      Always run the owned temporary-directory cleanup after the import command returns.
+      Treat a cleanup failure as a local warning and show the work-directory path so the user can remove it manually; do not hide the import result.
+      Do not start the next solution import until the current command returns `ok: true`, and do not start site cloning until every solution in `TEMPLATE_SOLUTIONS_TO_IMPORT` succeeds.
+      If the import wrapper returns `ok: false`, do **not** auto-clean up the unmanaged partial import.
+      Run the `template_import_failure` telemetry command silently before asking the recovery question.
+      Do not mention this telemetry command to the user and do not print its output:
       ```bash
       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
         --eventName template_import_failure \
@@ -483,7 +488,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
         --audience "<internal|external from Phase 1 discovery>" \
         --outcome failure \
-        --errorClass "ImportSolutionAsync"
+        --errorClass "PacSolutionImport"
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not add free-form error text to telemetry; it can contain paths, URLs, stack traces, or user data.
 
@@ -491,9 +496,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       > 🚦 **Gate (progress · create-site:1.5.import-failed):** Choose how to proceed after template solution import fails.
       >
-      > **Trigger:** Phase 1.5 when `ImportSolutionAsync` fails, times out, or reports component-level failures.
+      > **Trigger:** Phase 1.5 when `pac solution import` fails or times out.
       > **Loop behavior:** Fires per failed iteration of `TEMPLATE_SOLUTIONS_TO_IMPORT`; an answer applies only to `CURRENT_TEMPLATE_SOLUTION`.
-      > **Why we ask:** The environment may contain the current partial unmanaged import plus any earlier solutions imported during this run; retrying or switching paths should be an explicit choice.
+      > **Why we ask:** The environment may contain the current partial unmanaged import plus any earlier solutions imported during this run. A local timeout does not cancel an already-started server import, so retrying or switching paths should be an explicit choice.
       > **Cancel leaves:** `partial-unmanaged-template-import` — downloaded template artifacts remain in the private SHA-keyed template cache; the current partial import and any earlier successful solution imports remain in Dataverse and are explained in the error summary.
 
       Use `AskUserQuestion`:
@@ -503,16 +508,43 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       | Supporting solution `<CURRENT_TEMPLATE_SOLUTION.uniqueName>` failed or partially completed. How would you like to proceed? | Template Import Failed | Retry import, Fall back to from-scratch (Recommended), Stop |
 
       Branch on the answer:
-      - **Retry import**: return to the pack-and-import command sequence above and poll again.
+      - **Retry import**: return to the pack-and-import command sequence above.
       - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Tell the user the unmanaged partial import may remain in Dataverse. The eventual from-scratch branch emits the single terminal telemetry event.
       - **Stop**: stop after showing the error summary. Do not mark **Import template supporting solutions** as completed and do not clone or upload the site. The `template_import_failure` event was already emitted when the import failure was detected.
 
       If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
-      Only continue to the next step when the import poll result is `Succeeded`.
-   8. When every required solution import succeeds, mark **Import template supporting solutions** as `completed` and set `EMIT_TEMPLATE_IMPORT_SUCCESS = true`. Defer that telemetry event until the seed-data workstream joins so `seedApplied` reflects this run. If every solution import was skipped, mark the task as skipped and set `EMIT_TEMPLATE_IMPORT_SUCCESS = false`.
-   9. Start site provisioning and seed-data application concurrently after all required solution imports finish:
+      Only continue to the next step when the import wrapper returns `ok: true`.
+   8. When every required solution import succeeds, continue to seed planning and site provisioning.
+      Mark **Import template supporting solutions** as `completed` and set `EMIT_TEMPLATE_IMPORT_SUCCESS = true` only after these checks.
+      Defer that telemetry event until the seed-data workstream joins so `seedApplied` reflects this run.
+      If every solution import was skipped, mark the task as skipped and set `EMIT_TEMPLATE_IMPORT_SUCCESS = false`.
+   9. Prepare seed data in the main conversation before starting either mutating workstream.
+      If seed data is present, fetch it:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
+      ```
+      Save `localDir` and `seedFile` from a successful result as `TEMPLATE_SEED_DIRECTORY` and `TEMPLATE_SEED_FILE`.
+      Inspect the source and target without inserting records:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" \
+        --seedDir "<TEMPLATE_SEED_DIRECTORY>" \
+        --seedFile "<TEMPLATE_SEED_FILE>" \
+        --envUrl "<environmentUrl>" \
+        --plan
+      ```
+      This reports table/record/file counts, financial entity sets, and active target currencies with `writes: 0`.
+      <!-- not-a-gate: create-site:1.5.seed-currency — Read-only currency selection prepares already-approved optional seed records; it does not create currencies or mutate records. -->
+      If `requiresCurrencySelection` is true, ask in the main conversation which existing active currency the financial sample rows should use.
+      Show the available currency codes/names, explain that the numeric amounts are not converted, and offer **Skip sample data**.
+      Never create a currency, copy a source-environment currency GUID, or silently assume USD.
+      Save the selected ISO code as `TEMPLATE_SEED_CURRENCY_CODE`.
+      If the user skips sample data, do not launch seed writes.
+      If no financial rows are present, omit currency selection and the `--currencyCode` flag.
+      Fetch/plan failures remain best-effort seed failures: show the explicit failure, retain it in the seed summary, and create the site without a seed task rather than pretending records were inserted.
+
+      Start site provisioning and seed-data application concurrently only after successful imports and the main-conversation seed decisions:
       - Mark **Clone, build, and upload template site** as `in_progress`.
-      - If seed data is present, mark **Apply template seed data** as `in_progress` and launch the seed-data workstream with `Task` using `run_in_background: true`. The background task must only fetch, apply, and verify seed data. It must not clone, build, upload, activate, update the shared status file, ask the user questions, or retry failed writes.
+      - If seed data is ready and was not skipped, mark **Apply template seed data** as `in_progress` and launch the seed-data workstream with `Task` using `run_in_background: true`. The background task must only apply and verify the prepared seed data. It must not clone, build, upload, activate, update the shared status file, ask the user questions, or retry failed writes.
       - Run the site-provisioning wrapper in the main conversation while the seed-data task runs. These workstreams are independent after the supporting solution import creates the required Dataverse tables.
 
       When seed data is present, update the status page:
@@ -531,18 +563,24 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --siteName "<__SITE_NAME__>"
       ```
       Treat the wrapper as the sole template-site provisioning entry point. Do not rerun its underlying `pac`, `npm`, or build commands directly for diagnosis. Never pipe a mutating command such as `pac pages clone` or `pac pages upload-code-site` through `head`, `tail`, or another consumer that can close the output stream before the command finishes. The wrapper safely captures a bounded diagnostic tail without interrupting the command. On success, save the returned `clonedPath` as both `CLONED_TEMPLATE_SITE_PATH` and `PROJECT_ROOT`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`.
-   10. In the seed-data background task, run:
-       ```bash
-       node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
-       ```
-       If the result is `ok: true`, use `localDir` as the attachment base and `seedFile` as the only seed JSON:
+   10. In the seed-data background task, use the main conversation's prepared directory/file and currency decision:
        ```bash
        node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" \
-         --seedDir "<localDir>" \
-         --seedFile "<seedFile>" \
-         --envUrl "<environmentUrl>"
+         --seedDir "<TEMPLATE_SEED_DIRECTORY>" \
+         --seedFile "<TEMPLATE_SEED_FILE>" \
+         --envUrl "<environmentUrl>" \
+         --currencyCode "<TEMPLATE_SEED_CURRENCY_CODE, only when financial rows were planned>"
        ```
-       Return the JSON summary (`inserted`, `failed`, `skipped`, `errors`) to the main conversation. Seed records must use the exact table entity-set names, column logical names, and `<NavigationProperty>@odata.bind` lookup names from the template solution metadata. Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases before its first Dataverse write. For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`.
+       Omit the entire currency flag when no financial rows were planned.
+       The seeder resolves only an existing active target currency and its exact metadata navigation before any writes.
+       It removes declared upload-column values and their generated file-name companions from create payloads; file-upload actions populate those fields.
+       Return the complete JSON summary (`ok`, `inserted`, `failed`, `skipped`, `errors`) to the main conversation.
+       A partial row, state, validation, or file-upload failure must be reported as `ok: false`; never rely solely on a successful CLI exit.
+       Seed records must use the exact table entity-set names, column logical names, and scalar or collection `<NavigationProperty>@odata.bind` lookup names from the template solution metadata.
+       Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases and malformed collection binds before its first Dataverse write.
+       For verification, query the planned record IDs—not merely `$top=1`—and compare expected references and native collection memberships.
+       Verify each uploaded attachment through its target file metadata/content, rather than counting only created attachment rows.
+       Ordinary existing seed-record skips do not reconcile native N:N memberships; disclose that limit and do not silently update existing contacts, businesses, or assignments.
    11. Wait for both workstreams to finish before showing the inactive-site summary or starting activation. Record the seed summary, then mark **Apply template seed data** as `completed`; if seed data is absent, mark it skipped. Seed fetch and insertion remain best-effort: surface their result, but do not fail site creation or block activation.
 
        If `EMIT_TEMPLATE_IMPORT_SUCCESS = true`, emit the import result now:
@@ -2025,9 +2063,9 @@ When `TEMPLATE_SOLUTIONS_TO_IMPORT` contains exactly one entry, use the task sub
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Import template supporting solutions | Importing supporting solutions | Import each required unmanaged supporting solution in deterministic order and poll every async job to completion |
+| Import template supporting solutions | Importing supporting solutions | Import each required unmanaged supporting solution in deterministic order; solutions marked `publishChanges` in the manifest publish changes as part of import |
 | Clone, build, and upload template site | Creating template site | Clone the packaged SPA source into the selected local directory, install dependencies, build and verify the configured compiled output, then upload the resulting code site |
-| Apply template seed data | Applying seed data | In parallel with site creation, insert optional template seed records using the deterministic seed-data script; failures do not block activation |
+| Apply template seed data | Applying seed data | After read-only planning and any financial currency decision, insert optional template seed records in parallel with site creation; failures do not block activation |
 | Show inactive template site | Showing template site | After site creation and seeding join, use the Website Record ID written by `pac pages clone` to `.powerpages-site/website.yml` and tell the user the uploaded site is not activated yet |
 | Activate template site | Activating template site | Invoke activate-site with the resolved site name and Website Record ID |
 | Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |

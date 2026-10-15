@@ -1,8 +1,8 @@
 # AGENTS.md — power-automate plugin
 
 Guidance for AI agents (Copilot CLI, Claude Code, Cursor) operating inside this
-plugin. The authoritative reference is this plugin's `CLAUDE.md` and the
-`references/` docs; this file is the plugin-local routing rule.
+plugin. The authoritative reference is the `references/` docs; this file is the
+plugin-local routing rule.
 
 ## Tool routing (read first)
 
@@ -34,9 +34,17 @@ this plugin's `.mcp.json` / the install steps in `README.md`.
   manifests
 - `.mcp.json` — MCP server wiring (FlowAgent + Microsoft Learn)
 
-The flow-definition rules, auth model, error reference, and known issues live in
-this plugin's `CLAUDE.md` and `references/` docs, and apply whether you call via
-MCP or shell.
+The flow-definition rules, auth model (Azure CLI + MSAL), error reference, and
+known issues live in the `references/` docs — see `definition-reference.md`,
+`connection-patterns.md`, and `error-troubleshooting.md`. They apply whether you
+call via MCP or shell. Read them before building or editing flows.
+
+## Engine vs plugin
+
+This folder is the **plugin**: skills, references, MCP wiring, and a
+self-contained MCP engine bundled at `server/mcp.mjs`. `.mcp.json` loads that
+bundle through a small Node bootstrap that resolves the plugin's installation
+directory and reports an actionable error if the bundle is missing.
 
 ## Documentation lookup (hybrid pattern)
 

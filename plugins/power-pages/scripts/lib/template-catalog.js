@@ -15,6 +15,7 @@ const DEFAULT_CATALOG_PATH = 'templates/manifest.json';
 const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro', 'none', 'other']);
 const TEMPLATE_KINDS = new Set(['spa', 'traditional']);
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/i;
 const CACHE_MARKER_FILE = '.powerpages-template-cache.json';
 const CACHE_MARKER_VERSION = 1;
 
@@ -189,6 +190,33 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function validateSolutionSettings(solutions, templateId) {
+  if (solutions === undefined) return null;
+  if (!Array.isArray(solutions)) return `template ${templateId} solutions must be an array`;
+  const names = new Set();
+  for (const [index, solution] of solutions.entries()) {
+    if (!solution || typeof solution !== 'object' || Array.isArray(solution)) {
+      return `template ${templateId} solution at index ${index} is not an object`;
+    }
+    const keys = Object.keys(solution);
+    if (keys.some(key => !['uniqueName', 'publishChanges'].includes(key))) {
+      return `template ${templateId} solution ${solution.uniqueName || index} has unsupported fields`;
+    }
+    if (!isNonEmptyString(solution.uniqueName) || !IDENTIFIER_PATTERN.test(solution.uniqueName)) {
+      return `template ${templateId} solution ${index} uniqueName must be a Dataverse identifier`;
+    }
+    if (typeof solution.publishChanges !== 'boolean') {
+      return `template ${templateId} solution ${solution.uniqueName} publishChanges must be boolean`;
+    }
+    const normalizedName = solution.uniqueName.toLowerCase();
+    if (names.has(normalizedName)) {
+      return `template ${templateId} has duplicate solution uniqueName: ${solution.uniqueName}`;
+    }
+    names.add(normalizedName);
+  }
+  return null;
+}
+
 function isNestedFamilyTemplate(template) {
   return template && typeof template.variants === 'object' && template.variants && !Array.isArray(template.variants);
 }
@@ -211,6 +239,9 @@ function validateCatalogShape(catalog) {
   //       "keywords": ["311", "citizen-services"],
   //       "audience": ["makers", "developers"],
   //       "requiredDataverseLanguages": [1033],
+  //       "solutions": [
+  //         { "uniqueName": "SupplierPortal", "publishChanges": true }
+  //       ],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
   //       "seedDataPath": "spa/311-portal/seed/data.json",
   //       "author": "Microsoft" }
@@ -255,6 +286,8 @@ function validateCatalogShape(catalog) {
     if (!Array.isArray(template.previewImages)) {
       return `template ${template.id} previewImages must be an array`;
     }
+    const solutionSettingsError = validateSolutionSettings(template.solutions, template.id);
+    if (solutionSettingsError) return solutionSettingsError;
     if (isNestedFamilyTemplate(template)) {
       const seenFrameworks = new Set();
       const variantEntries = Object.entries(template.variants);
@@ -267,6 +300,9 @@ function validateCatalogShape(catalog) {
         if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return `template ${template.id} variant ${framework} is not an object`;
         if (variant.solutionPath !== undefined || variant.websiteCodePath !== undefined) {
           return `template ${template.id} variant ${framework} must not define derivable solutionPath or websiteCodePath`;
+        }
+        if (variant.solutions !== undefined) {
+          return `template ${template.id} solution settings must be defined at the family level`;
         }
         if (variant.previewImages !== undefined && !Array.isArray(variant.previewImages)) {
           return `template ${template.id} variant ${framework} previewImages must be an array`;
@@ -350,6 +386,7 @@ function normalizeCatalogFamilies(catalog = {}) {
         requiredDataverseLanguages: template.requiredDataverseLanguages || [],
         previewImages: template.previewImages || [],
         ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
+        ...(template.solutions?.length ? { solutions: template.solutions } : {}),
         author: template.author,
         variants: [{
           familyId: template.id,
@@ -364,6 +401,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           requiredDataverseLanguages: template.requiredDataverseLanguages || [],
           previewImages: template.previewImages || [],
           ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
+          ...(template.solutions?.length ? { solutions: template.solutions } : {}),
           author: template.author,
         }],
       };
@@ -378,6 +416,7 @@ function normalizeCatalogFamilies(catalog = {}) {
       requiredDataverseLanguages: template.requiredDataverseLanguages || [],
       previewImages: template.previewImages || [],
       ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
+      ...(template.solutions?.length ? { solutions: template.solutions } : {}),
       author: template.author,
       variants: Object.entries(template.variants).map(([framework, variant]) => {
         const variantKey = framework.toLowerCase();
@@ -394,6 +433,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           requiredDataverseLanguages: variant.requiredDataverseLanguages || template.requiredDataverseLanguages || [],
           previewImages: Array.isArray(variant.previewImages) ? variant.previewImages : (template.previewImages || []),
           ...(variant.seedDataPath || template.seedDataPath ? { seedDataPath: variant.seedDataPath || template.seedDataPath } : {}),
+          ...(template.solutions?.length ? { solutions: template.solutions } : {}),
           author: template.author,
         };
       }),
@@ -981,6 +1021,23 @@ function inspectTemplateSolutions(localSolutionsPath, kind, deps = {}) {
   return { ok: true, solutions };
 }
 
+function applySolutionSettings(solutions, solutionSettings = []) {
+  const settingsByName = new Map(solutionSettings.map(solution => [
+    solution.uniqueName,
+    solution,
+  ]));
+  const discoveredNames = new Set(solutions.map(solution => solution.uniqueName));
+  for (const setting of solutionSettings) {
+    if (!discoveredNames.has(setting.uniqueName)) {
+      throw new Error(`Template manifest declares unknown solution: ${setting.uniqueName}`);
+    }
+  }
+  return solutions.map(solution => ({
+    ...solution,
+    publishChanges: settingsByName.get(solution.uniqueName)?.publishChanges || false,
+  }));
+}
+
 function inspectTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
   const websiteCodePath = path.join(localVariantPath, 'website-code');
   const websiteCodeError = validateWebsiteCodeDirectory(websiteCodePath, { kind }, deps);
@@ -997,7 +1054,13 @@ function validateTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
 }
 
 function downloadTemplateVariant(options = {}, deps = {}) {
-  const { catalogPath = DEFAULT_CATALOG_PATH, kind, templateId, variant } = options;
+  const {
+    catalogPath = DEFAULT_CATALOG_PATH,
+    kind,
+    templateId,
+    variant,
+    solutionSettings = [],
+  } = options;
   try {
     const familyRoot = templateFamilyRoot({ catalogPath, kind, templateId });
     const variantRoot = templateVariantRoot({ catalogPath, kind, templateId, variant });
@@ -1023,7 +1086,7 @@ function downloadTemplateVariant(options = {}, deps = {}) {
       ok: true,
       variantPath: variantResult.localPath,
       websiteCodePath: inspectedVariant.websiteCodePath,
-      solutions: inspectedSolutions.solutions,
+      solutions: applySolutionSettings(inspectedSolutions.solutions, solutionSettings),
       cached: variantResult.cached && solutionsResult.cached,
     };
   } catch (err) {
@@ -1120,6 +1183,7 @@ module.exports = {
   templateFamilyRoot,
   templateVariantRoot,
   inspectTemplateSolutions,
+  applySolutionSettings,
   inspectTemplateVariantDirectory,
   validateTemplateVariantDirectory,
   validateCatalogShape,

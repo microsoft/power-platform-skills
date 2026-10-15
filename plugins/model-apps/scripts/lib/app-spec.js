@@ -5,6 +5,7 @@ const path = require('node:path');
 const { isAppSourcePath } = require('./app-source-path.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
+const { AUTO_TAB_NAME, AUTO_SECTION_NAME, placementOf, resolvePlacement } = require('./form-subgrid-placement.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -289,7 +290,8 @@ function resolveParentRelationship(spec, parentEntity, childEntity, wanted) {
 // auto-layout and default-view enrichment call this to surface the parent links (otherwise the
 // parent lookup is invisible on the form/grid). N:N relationships use an intersect table and place
 // no lookup column on either side, so they're excluded. Deduped by logical name; declared order
-// preserved. Returns [{ logical, displayName }].
+// preserved. Returns [{ logical, displayName, source, rel }] — `displayName` is the label the column
+// carries (see lookupLabelFor), `source` where it came from, and `rel` the relationship it belongs to.
 function lookupColumnsFor(spec, entityLogical) {
   const child = String(entityLogical || '').toLowerCase();
   const seen = new Set();
@@ -300,9 +302,115 @@ function lookupColumnsFor(spec, entityLogical) {
     const logical = String((r.lookup && r.lookup.schemaName) || '').toLowerCase();
     if (!logical || seen.has(logical)) continue;
     seen.add(logical);
-    out.push({ logical, displayName: labelText((r.lookup && r.lookup.displayName), spec && spec.languageCode) || (r.lookup && r.lookup.schemaName) || logical });
+    const { label, source } = lookupLabelFor(spec, r);
+    out.push({ logical, displayName: labelText(label, spec && spec.languageCode) || (r.lookup && r.lookup.schemaName) || logical, source, rel: r });
   }
   return out;
+}
+
+// --- 1:N lookup column labels (ADO 6691205) ------------------------------------------------------
+//
+// A relationship's lookup column is labelled by `relationships[].lookup.displayName`. When the author
+// omits it the label used to be whatever the SDK fell back to: the build passed `lookupDisplayName:
+// undefined` and the vendored SDK substitutes the REFERENCED table's LOGICAL name —
+//     DisplayName: label(opts.lookupDisplayName ?? opts.referencedEntity, lcid)      // "new_project"
+// — so the column read "new_project" where a maker expects "Project", and so did every form cell: the
+// SDK derives a bound control's label from the column's DisplayName when it pushes. The maker portal
+// does the opposite and labels a new lookup with the related table's display name.
+//
+// ONE rule serves every consumer — the build (what is sent), the form/preview/doc/eval surfaces (what
+// is shown) and the rebuild repair (what an old default becomes) — so none can disagree. In order:
+//   1. an explicit `lookup.displayName`, string or LCID map, kept as written ('explicit');
+//   2. the referenced table's own `displayName` when entities[] declares it, string or LCID map, kept
+//      as the map: the SDK serializes a map into one LocalizedLabel per language ('table');
+//   3. the display name the ENVIRONMENT reports for a parent whose name the spec cannot give: a table
+//      it does not declare — account, contact, systemuser… — or one it declares WITHOUT a displayName
+//      that the build does not create (see lookupParentNeedsEnvironment). Only a caller that read it can
+//      supply `liveReferencedLabel`, so offline surfaces skip this step ('environment');
+//   4. a humanized form of the table's name ("contoso_ProjectPhase" -> "Project Phase"), only when
+//      nothing above applies: an offline surface, a failed environment read, or a declared table that
+//      has no displayName of its own and is created by the build ('derived').
+// A blank explicit label counts as omitted, because every create site already treats it that way
+// (`x.displayName || x.schemaName`), so "" and undefined reach Dataverse identically.
+//
+// `liveReferencedLabel` is ignored when it is only the table's own identifier — its logical name, or its
+// schema name as written (exact, case-sensitive: "Contact" is a name, "contact" is not). That is what a
+// build writes as the label of a table whose spec sets no displayName, so reading it back is no more a
+// name than the humanized fallback is, and using it would reproduce the very label this rule replaces.
+function lookupLabelFor(spec, rel, opts = {}) {
+  const explicit = rel && rel.lookup && rel.lookup.displayName;
+  if (!labelIsMissing(explicit)) return { label: explicit, source: 'explicit' };
+  const wanted = String((rel && rel.referenced) || '').toLowerCase();
+  const parent = ((spec && spec.entities) || []).find((e) => e && String(e.schemaName || '').toLowerCase() === wanted);
+  if (parent && !labelIsMissing(parent.displayName)) return { label: parent.displayName, source: 'table' };
+  const live = opts && opts.liveReferencedLabel;
+  if (typeof live === 'string' && live.trim() && live !== wanted && !(parent && live === parent.schemaName)) return { label: live, source: 'environment' };
+  return { label: humanizeTableName(parent ? parent.schemaName : rel && rel.referenced), source: 'derived' };
+}
+
+// Must a build ask the ENVIRONMENT for this lookup's parent name? (It does the asking — this file does no
+// I/O.) Meaningful only when the lookup sets no label of its own.
+//   * a parent the spec does not declare: always — account, contact, systemuser… have no displayName here;
+//   * a parent the spec declares WITH a displayName: never — the spec names it (lookupLabelFor, step 2);
+//   * a parent declared WITHOUT one: when the build did not create it. `existing: true` says the table
+//     pre-exists (incident is "Case", systemuser is "User", which a humanized "Incident"/"Systemuser" would
+//     contradict), and `reused` — the declared tables, lower-case, that the data-model phase found already
+//     in the environment — covers one that merely was there. `existing` records ownership, not presence,
+//     so a flagged table the build had to create is still labelled by what the build wrote (its schema
+//     name, which lookupLabelFor discards) and falls through to the humanized name.
+// A declared table the build creates with no displayName has nothing worth reading: it is labelled with
+// its own schema name, so the answer would only ever be the identifier.
+function lookupParentNeedsEnvironment(spec, rel, { reused } = {}) {
+  const wanted = String((rel && rel.referenced) || '').toLowerCase();
+  const parent = ((spec && spec.entities) || []).find((e) => e && String(e.schemaName || '').toLowerCase() === wanted);
+  if (!parent) return true;
+  if (!labelIsMissing(parent.displayName)) return false;
+  return parent.existing === true || !!(reused && reused.has(wanted));
+}
+
+// A person's name for a table, from its Dataverse name:
+//   contoso_ProjectPhase -> "Project Phase"      new_project -> "Project"      account -> "Account"
+//   contoso_work_item    -> "Work Item"          contoso_SLA -> "SLA"
+// A Dataverse table name is `<publisher prefix>_<name>`; the prefix is bookkeeping, not part of what a
+// person calls the table, and a name with no underscore (`account`) has none. A cased schema name
+// ("ProjectPhase") splits on its capitals; an all-lowercase logical name has nothing to split on, so
+// "budgetline" stays one word — the reason this is the LAST resort rather than the rule.
+function humanizeTableName(name) {
+  const parts = String(name == null ? '' : name).trim().split('_').filter(Boolean);
+  const words = [];
+  for (const part of parts.length > 1 ? parts.slice(1) : parts) {
+    for (const word of part.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(' ')) {
+      if (word) words.push(word.charAt(0).toUpperCase() + word.slice(1));
+    }
+  }
+  return words.join(' ');
+}
+
+// The strings a lookup was labelled with when no label was supplied. All of them are identifiers, never
+// something a person writes as a label, which is what lets a rebuild repair them without risking a label a maker
+// chose. Which strings count depends on what carries the label, because each is exactly what some build wrote
+// THERE and nothing else is:
+//   * the COLUMN: the referenced table's LOWER-CASE logical name — what the vendored SDK substitutes for an
+//     omitted `lookupDisplayName` (this plugin hands it `referenced` lower-cased). No build wrote anything else on
+//     a column, so a column labelled with the lookup's own name is somebody's label, and is never repaired;
+//   * the form FIELD: that same name, inherited from the column, or — when the SDK cannot resolve the column at
+//     push — the field's own LOWER-CASE logical name, because its control normalization defaults `label` to
+//     `fieldName`, which is the lower-case logical name, not the schema name the spec spells with capitals.
+//
+// Exactly those strings, not their case variants. A match that ignored case would call a correct "Contact"
+// (the display name of the table `contact`) an old default: every rebuild would read the label and then the
+// table's name to find out it was already right, and a maker's "Contact" on a table the org later renamed
+// would be overwritten. A map is never the default either: the old default was written in one language only,
+// so a label carrying several was touched since.
+const lowerName = (n) => (n == null ? '' : String(n).toLowerCase());
+const isExactlyOneOf = (label, names) => typeof label === 'string' && label !== '' && names.includes(label);
+
+function isOldLookupColumnLabel(rel, label) {
+  return isExactlyOneOf(label, [lowerName(rel && rel.referenced)]);
+}
+
+function isOldLookupFieldLabel(rel, label) {
+  return isExactlyOneOf(label, [lowerName(rel && rel.referenced), lowerName(rel && rel.lookup && rel.lookup.schemaName)]);
 }
 
 // The child relationships to show as sub-grids on `entityLogical`'s (parent) form: every 1:N where
@@ -391,6 +499,17 @@ function manyToManySchemaName(rel, publisherPrefix) {
   }
   const [a, b] = [String(rel.entity1 || '').toLowerCase(), String(rel.entity2 || '').toLowerCase()].sort();
   return prefixedRelationshipName(a, b, publisherPrefix);
+}
+
+// The relationship a form's sub-grid for `childEntity` shows — a 1:N where the child holds the lookup, else an N:N
+// — as the schema name the grid control carries (`RelationshipName`), or null when the two tables have none. One
+// definition for the build, which writes the control, and `--verify`, which looks for it by that name.
+function subgridRelationshipName(spec, formEntity, childEntity) {
+  const prefix = spec && spec.solution && spec.solution.publisherPrefix;
+  const oneToMany = relationshipFor(spec, formEntity, childEntity);
+  if (oneToMany) return relationshipSchemaName(oneToMany, prefix);
+  const manyToMany = manyToManyFor(spec, formEntity, childEntity);
+  return manyToMany ? manyToManySchemaName(manyToMany, prefix) : null;
 }
 
 // Effective schema name, or null when the entry cannot name one. An explicit schemaName wins
@@ -733,6 +852,32 @@ const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
   languageCode: ' — the authoring language is build-wide, not per-table: set the spec-level `languageCode`, which applies to every table',
   localizedLabels: ' — write the LCID map on the label FIELD itself (e.g. "displayName": { "1033": "Baseline", "3082": "Línea base" }), not in a separate per-table block; see references/app-spec-schema.md → "Localized labels"',
 });
+
+// The most characters a table's primary name column may be asked for. A single line of text elsewhere in a table takes up
+// to 4,000, but the name column of a table does not: asked for more than 850 in a table create that also carried other columns, the
+// platform refuses it — HTTP 400, "The maximum length of Primary attribute 'new_name' is 4000. The maximum allowed limit
+// is 850." (live-measured, with 4000 asked for). `primaryAttribute.maxLength` was accepted and ignored until the build
+// began sending it, so a value the platform cannot take is refused at the spec gate rather than part-way through a build.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-fields
+const PRIMARY_NAME_MAX_LENGTH = 850;
+
+// Why a `primaryAttribute.maxLength` cannot be used, or null when it can; an omitted one is fine (the build then asks for
+// 100, as it always has). The ONE rule behind both gates — validateAppSpec and the
+// provision-entities input validator, the entry point of /genpage and /app-builder — so that neither accepts what the other
+// refuses. `!== undefined`, so an explicit null or 0 is refused rather than read as "not given".
+function primaryNameLengthProblem(length) {
+  if (length === undefined) return null;
+  if (Number.isInteger(length) && length >= 1 && length <= PRIMARY_NAME_MAX_LENGTH) return null;
+  return `primaryAttribute.maxLength must be a whole number from 1 to ${PRIMARY_NAME_MAX_LENGTH} (got ${describeSpecValue(length)})`;
+}
+
+// The length the spec asks for a table's primary name column, or undefined when it does not ask. The build, its dry-run plan
+// and its progress total all key on this one answer — it decides whether the build has a "primary column length" step for
+// the table — so they cannot disagree about it (the same arrangement as quickCreateEnabledFor).
+function askedPrimaryNameLength(entity) {
+  const asked = entity && entity.primaryAttribute && entity.primaryAttribute.maxLength;
+  return asked === undefined || asked === null ? undefined : asked;
+}
 
 // The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
 // ENTITY_KEYS (#537). The levels name their title differently — areas and groups take `label`,
@@ -1411,6 +1556,126 @@ function authoredTabNames(formSpec) {
   const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
   tabs.forEach((t, ti) => { if (t && typeof t === 'object') names.add(String(t.name || generatedTabName(ti)).toLowerCase()); });
   return names;
+}
+
+// The tabs, form-columns and sections a form's layout DECLARES, under the names the compiler gives them,
+// lower-cased — the vocabulary `subgrids[].tab/after/before` is written in, and what the build, verify and the
+// wireframe resolve a placement against (lib/form-subgrid-placement.js). Unlike the name sets above it keeps the
+// STRUCTURE, because "right after this section" and "in this tab's second form-column" need to know which
+// column a section is in. An auto layout (no `tabs`) is its one tab, holding one section.
+function formLayoutNames(formSpec) {
+  if (!formSpec || !Array.isArray(formSpec.tabs)) return [{ name: AUTO_TAB_NAME, columns: [{ sections: [AUTO_SECTION_NAME] }] }];
+  return formSpec.tabs.map((t, ti) => ({
+    name: String((t && t.name) || generatedTabName(ti)).toLowerCase(),
+    columns: formColumnsOf(t).map((col, ci) => ({
+      sections: ((col && Array.isArray(col.sections)) ? col.sections : [])
+        .map((s, si) => String((s && s.name) || generatedSectionName(ti, ci, si)).toLowerCase()),
+    })),
+  }));
+}
+
+// The keys a `subgrids[]` entry reads. The build ignores any other, so a mistyped placement key (`After`,
+// `afterSection`) would leave the grid at the end of the form with nothing said — hence a warning. A warning,
+// not an error: entries written before the placement keys existed carry whatever extra keys their authors
+// tried, and the build never read them, so refusing those now would break a spec that built.
+const SUBGRID_KEYS = ['childEntity', 'view', 'label', 'tab', 'column', 'after', 'before'];
+
+// The keys of a `subgrids[]` entry that nothing reads, as messages that start with the entry (the caller adds
+// the form) — with the key it most likely meant when the name differs only in case or by a suffix.
+function subgridUnknownKeys(sg) {
+  if (!sg || typeof sg !== 'object' || Array.isArray(sg)) return [];
+  return Object.keys(sg).filter((k) => !SUBGRID_KEYS.includes(k)).map((k) => {
+    const lower = k.toLowerCase();
+    const meant = SUBGRID_KEYS.find((known) => lower === known.toLowerCase() || (known.length >= 3 && lower.startsWith(known.toLowerCase())));
+    return `subgrid '${sg.childEntity}' has the key '${k}', which nothing reads${meant ? ` — did you mean '${meant}'?` : ''} (the keys are ${SUBGRID_KEYS.join(', ')})`;
+  });
+}
+
+// What is wrong with where a `subgrids[]` entry places its grid, as messages that start with the entry (the
+// caller adds the form). Empty for an entry that places nothing. The spec gate and the standalone lint both ask
+// this one function, so they cannot disagree about what is a valid placement — a placement that validates here
+// is one the build resolves, and one it resolves is one `--verify` can check.
+//
+// Types are checked first and stop the rest: a placement whose values are not names or a whole number cannot be
+// resolved against the layout, and a second message about it would only restate the first.
+function subgridPlacementProblems(formSpec, sg) {
+  const out = [];
+  if (!sg || typeof sg !== 'object' || Array.isArray(sg)) return out;
+  const who = `subgrid '${sg.childEntity}'`;
+  for (const key of ['tab', 'after', 'before']) {
+    if (sg[key] !== undefined && !(typeof sg[key] === 'string' && sg[key].trim() !== '')) {
+      out.push(`${who} has ${key} ${JSON.stringify(sg[key])} — it must be the name of a ${key === 'tab' ? 'tab' : 'section'} on this form, as a non-empty string`);
+    }
+  }
+  if (sg.column !== undefined && (!Number.isInteger(sg.column) || sg.column < 0)) {
+    out.push(`${who} has column ${JSON.stringify(sg.column)} — it must be a whole number from 0, the first form-column of its tab`);
+  }
+  if (out.length) return out;
+  const placement = placementOf(sg);
+  if (!placement) return out;
+  const layout = formLayoutNames(formSpec);
+  const resolved = resolvePlacement(layout, placement);
+  if (resolved.ok) return out;
+  const explicit = Array.isArray(formSpec && formSpec.tabs);
+  const tabs = layout.map((t) => t.name).join(', ');
+  const sections = layout.flatMap((t) => t.columns.flatMap((c) => c.sections)).join(', ');
+  const autoNote = explicit ? '' : ` (an auto layout has the one tab '${AUTO_TAB_NAME}' holding the one section '${AUTO_SECTION_NAME}' — declare tabs[] for more)`;
+  switch (resolved.code) {
+    case 'both':
+      out.push(`${who} sets both 'after' and 'before' — give one: the grid goes right after a section or right before one, not both`);
+      break;
+    case 'tab':
+      out.push(`${who} places the grid in tab '${sg.tab}', which this form does not declare (its tabs: ${tabs})${autoNote}`);
+      break;
+    case 'column':
+      out.push(`${who} places the grid in column ${sg.column} of tab '${layout[resolved.tabIndex].name}', which has ${resolved.columns} form-column(s) — count from 0`);
+      break;
+    case 'anchor':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which this form does not declare (its sections: ${sections || 'none'})${autoNote}`);
+      break;
+    case 'anchor-tab':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which is in tab '${resolved.actualTab}', not in tab '${sg.tab}' — the grid goes in its anchor's tab, so drop 'tab' or name the right one`);
+      break;
+    case 'anchor-column':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which is in form-column ${resolved.actualColumn} of its tab, not ${sg.column} — the grid goes in its anchor's column, so drop 'column' or name the right one`);
+      break;
+    default:
+      break;
+  }
+  return out;
+}
+
+// The entries of a form's `subgrids[]` that name ONE relationship, as { errors, warnings } of messages that start with
+// the entry (the caller adds the form). A form holds one grid per relationship — the build finds a grid by it, and an
+// entry whose grid is already there adds nothing — so of several entries only one can say where the grid goes, and the
+// others' placement could never be honoured, silently: a check looks a grid up by its relationship, so every entry
+// for it would read the same grid and pass or fail together.
+//
+// An ERROR when any of the entries declares where the grid goes. Those keys are new, so no spec that built before can
+// carry one. A repeat that places nothing is a WARNING: specs have always been able to carry it and the build has always
+// ignored the extra entry, so refusing it now would break a spec that built. Entries are grouped by the relationship
+// they resolve to (subgridRelationshipName — what the build writes and verify looks for), so the same table spelled in
+// another case counts, and an entry with no relationship is left to the error it already gets. The gate and the lint
+// both ask this one function.
+function subgridDuplicateProblems(spec, formSpec) {
+  const out = { errors: [], warnings: [] };
+  const groups = new Map();
+  (Array.isArray(formSpec && formSpec.subgrids) ? formSpec.subgrids : []).forEach((sg, index) => {
+    if (!sg || typeof sg !== 'object' || Array.isArray(sg) || typeof sg.childEntity !== 'string') return;
+    const relationship = subgridRelationshipName(spec, formSpec.entity, sg.childEntity);
+    if (!relationship) return;
+    const key = relationship.toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ index, sg });
+  });
+  for (const entries of groups.values()) {
+    if (entries.length < 2) continue;
+    const which = entries.map((e) => `subgrids[${e.index}]`).join(', ');
+    const said = `subgrids lists the sub-grid for '${entries[0].sg.childEntity}' more than once (${which}) — a form holds one grid per relationship`;
+    if (entries.some((e) => placementOf(e.sg))) out.errors.push(`${said}, so only one entry can say where it goes; keep one`);
+    else out.warnings.push(`${said}, so the build adds one and ignores the rest`);
+  }
+  return out;
 }
 
 // The plugin's own version, read from its manifest, for the `minimumPluginVersion` capability gate.
@@ -2153,6 +2418,12 @@ function validateAppSpec(spec, opts = {}) {
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
     }
+    // The length of the table's name column, asked for when the table is created (an existing table's column is left as it
+    // is).
+    if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
+      const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
+      if (lengthProblem) errors.push(`entity ${e.schemaName}: ${lengthProblem}`);
+    }
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
     }
@@ -2463,6 +2734,7 @@ function validateAppSpec(spec, opts = {}) {
             errors.push(`form ${f.entity}: a subgrid is missing childEntity`);
             continue;
           }
+          for (const message of subgridUnknownKeys(sg)) warnings.push(`form ${f.entity}: ${message}`);
           if (badEntityRef(sg.childEntity, `form ${f.entity}: subgrid childEntity`)) continue;
           if (!entityByLower.has(String(sg.childEntity).toLowerCase())) {
             errors.push(`form ${f.entity}: subgrid references unknown childEntity '${sg.childEntity}'`);
@@ -2473,6 +2745,17 @@ function validateAppSpec(spec, opts = {}) {
               `form ${f.entity}: no OneToMany or ManyToMany relationship between '${f.entity}' and subgrid childEntity '${sg.childEntity}'`
             );
           }
+          // Where the grid goes (tab / column / after / before). A non-Main form already fails for hosting a
+          // grid at all, so its placement is not judged on top of that.
+          if (formType === 'Main') {
+            for (const message of subgridPlacementProblems(f, sg)) errors.push(`form ${f.entity}: ${message}`);
+          }
+        }
+        // …and a relationship listed more than once (an error when an entry places the grid, else a warning).
+        if (formType === 'Main') {
+          const duplicates = subgridDuplicateProblems(spec, f);
+          for (const message of duplicates.errors) errors.push(`form ${f.entity}: ${message}`);
+          for (const message of duplicates.warnings) warnings.push(`form ${f.entity}: ${message}`);
         }
       }
     }
@@ -3939,7 +4222,14 @@ module.exports = {
   formColumnsOf,
   authoredSectionNames,
   authoredTabNames,
+  formLayoutNames,
+  subgridPlacementProblems,
+  subgridDuplicateProblems,
+  subgridUnknownKeys,
   validateAppSpec,
+  PRIMARY_NAME_MAX_LENGTH,
+  primaryNameLengthProblem,
+  askedPrimaryNameLength,
   validateSampleDataRows,
   normalizePageSource,
   normalizeLanguageCode,
@@ -3991,6 +4281,11 @@ module.exports = {
   relationshipFor,
   resolveParentRelationship,
   lookupColumnsFor,
+  lookupLabelFor,
+  lookupParentNeedsEnvironment,
+  humanizeTableName,
+  isOldLookupColumnLabel,
+  isOldLookupFieldLabel,
   // Exported so every raw-spec form reader — including the offline eval harness — goes through the
   // one helper that understands BOTH tab shapes. A reader that opens `tab.sections` directly silently
   // skips every multi-column tab, which is exactly how a lint rule came to report such a tab as
@@ -4001,6 +4296,7 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  subgridRelationshipName,
   relationshipNameCollisions,
   relationshipCollisionMessage,
   specDeclaresAttribute,

@@ -5,11 +5,42 @@ customer feature code in `app/` and app-owned `src/` files. Read
 [CUSTOMIZATION.md](CUSTOMIZATION.md) before changing root configuration.
 Microsoft packages are consumed dependencies, not part of this app's source.
 
-## Choose an available mobile-app skill
+## Route natural-language requests to available skills
 
 Check the skills advertised by the current agent host. Do not search private
 plugin caches, assume a plugin is installed, or invent skill invocations.
 Use a matching available skill and its workflow rather than duplicating it here.
+
+Users do not need to type a slash command or know a skill name. Opening the
+folder alone does not start a workflow. For each actionable request:
+
+1. Match the original intent and app state against advertised skill descriptions
+   and supported scope. Prefer the most specific matching workflow, not
+   `edit-app` for every request. Honor an explicitly requested available skill
+   within its supported scope.
+2. Use the exact advertised skill name and namespace and respect its invocation
+   restrictions. Hidden implementation helpers stay owned by their entry skill;
+   do not invoke them directly.
+3. Apply the app-state, integration-choice, and approval rules below. Once the
+   route is clear and required entry consent is captured, invoke the matching
+   skill through the host's skill mechanism. Do not merely suggest its command
+   or ask the user to repeat the request.
+4. Forward the original request, resolved `working_dir` when applicable, supplied
+   answers, and current approval/owner context. Routing is not mutation consent.
+   Do not restart routing once a matching skill is running, including explicit
+   invocations and approved children; let that skill own its workflow.
+
+Do not add a separate approval prompt just to choose or load a matching skill
+for a clear request. Keep the workflow's existing scope/cost gates, including
+the full-app integration choice below. Explicit skill invocation is not blanket
+permission for the operations it can perform.
+
+The table lists common examples, not an exhaustive list or closed allowlist.
+Future or custom skills advertised by the host can match without a table entry.
+If multiple workflows fit but differ in scope, ask before choosing; do not invoke
+several speculatively. If none matches, continue only authorized bounded work or
+explain the missing workflow. For an unavailable mobile-app workflow, follow the
+opt-in installation flow below; never install or enable skills automatically.
 
 | Intent | Skill |
 | --- | --- |
@@ -29,13 +60,83 @@ Use a matching available skill and its workflow rather than duplicating it here.
 | Report a plugin or Microsoft native-package problem | `report-issue` |
 
 Keep a small app-owned fix small. Do not route explanations, typo fixes, or
-bounded bug fixes through full app planning. For an existing-app feature whose
-integration scope is undecided, ask through the host's question tool before
-loading planners, discovering cloud metadata, or generating previews:
-**Implementation only**, **Full app integration**, or **Cancel**.
-Explain that full integration takes more time and cost. Reuse a choice already
-made for this request; an approved create/edit child call must not ask again or
-start another orchestration. An integration choice does not approve mutations.
+bounded bug fixes through full app planning.
+
+## Keep operation approvals separate from routing
+
+These boundaries apply to every selected workflow, including future/custom skills:
+
+- Confirm the exact target and proposed scope before cloud/data mutations,
+  dependency or plugin installation/enabling, native builds/runs, destructive
+  actions, or deployment. Reuse explicit approval already given for that same
+  operation and scope; changed targets or expanded scope need renewed approval.
+- Dataverse work must use a matching data-workflow skill and its existing
+  app-root, environment, schema, and generated-service checks. Bind the absolute
+  app root, validate the selected environment and tenant, and inspect existing
+  inventory for reuse before proposing changes. Show the exact schema, record,
+  connection, or app-binding changes and obtain the workflow's mutation approval
+  before writing. If the target is missing or conflicting, stop and clarify;
+  never guess or silently switch the environment.
+- Read-only discovery, selecting a skill, and choosing full integration do not
+  approve writes. Honor `--plan-only`. Never fabricate `approved_scope`, approval
+  receipts, or caller context from automatic routing or an old plan.
+- An approved child retains its current owner, target, and scope without asking
+  again. Cancellation, dismissal, or unclear consent stops the pending operation;
+  never default to approval.
+
+## Identify the app state first
+
+Resolve the absolute app root and inspect only minimal local markers:
+`package.json`, `native-app-plan.md`, `memory-bank.md`, `.datamodel-manifest.json`,
+and generated services. The shipped starter routes and this guidance alone do
+not prove that an app has been generated. Honor current approved create/edit
+caller context first; creation can already have a plan without being finished.
+
+- **Confirmed fresh starter** — do not invoke `edit-app` merely because the
+  template is open. A native-control request uses the available `add-native`
+  entry point with its standalone prerequisites and approval gates. Do not
+  silently widen it to full app creation.
+- **Existing or customized app** — use the existing-app routing below. A missing
+  plan does not make the app fresh; ask to restore the plan or approve bounded
+  implementation-only work rather than re-scaffolding it.
+- **Unclear state or intent** — ask before choosing creation or editing. Do not
+  infer a fresh starter solely from missing generated markers.
+
+## Trigger edit-app for existing-app feature work
+
+For mobile-app feature work in an existing generated app that requires full
+integration, use the advertised `edit-app` workflow. Specific matching entry
+skills retain their own routing; do not force other intents or custom workflows
+through `edit-app`.
+Do not merely suggest that the user run it, ask them to repeat the request, or
+send them through `create-mobile-app`.
+
+Native-control prompts such as "Add signature capture" use the available
+`add-native` entry point and its shared routing. Full integration enters
+`edit-app`, which calls `add-native` with approved child context; it does not
+restart the entry-choice gate.
+
+For an existing-app feature whose integration scope is undecided, ask through
+the host's question tool before loading or invoking `edit-app`, loading planners,
+discovering cloud metadata, scanning the whole app, or generating previews:
+**Implementation only**, **Full app integration**, or **Cancel**. Explain that
+full integration takes more time and cost.
+
+- **Full app integration** — invoke the available `edit-app` skill and pass the
+  original request, resolved absolute app root as `working_dir`, and
+  `entry_choice: full-integration`. Do not ask the user to restate intent or
+  repeat the mode question.
+- **Implementation only** — do not invoke `edit-app`; use the matching bounded
+  app-owned or leaf-skill workflow within the approved scope.
+- **Cancel** — stop without loading `edit-app` or changing files.
+
+A direct `edit-app` invocation needs no mode question, but it still keeps its
+impact, plan, and mutation approval gates. Reuse a choice already made for the
+current request; an approved create/edit child call must not ask again or start
+another orchestration. An integration choice does not approve mutations.
+
+Route reported runtime or build problems to `debug-app`, dependency/template
+upgrades to `check-updates`, and genuinely new apps to `create-mobile-app`.
 
 ## Trigger debug-app for reported issues
 
@@ -109,6 +210,11 @@ not app changes, cloud mutations, builds, or deployment.
 If declined, do not repeatedly prompt. Continue only already-approved, bounded
 app-owned work that does not require a missing skill. Otherwise explain the
 blocked step and stop instead of silently recreating its workflow.
+
+If a required data-workflow skill is unavailable or cannot load, do not replace
+it with a generic editor or ad-hoc CLI/HTTP mutations. Dataverse work remains
+blocked until the required workflow and prerequisites are available, even when
+the user approved installing the plugin.
 
 ## Respect code ownership
 

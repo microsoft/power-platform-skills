@@ -192,6 +192,37 @@ const MISREAD_PAGES = {
       '}',
     ),
   },
+  // A line comment ends in the last word of its text, which is trivia: after `1 + // fallback` the last token is the `+`, so the `/` on the next line begins a regex, whose `)` is not the one that
+  // ends the parameter list. A lexer that took that `/` for a division — the last word is a name — ended the list at the `)`, read the string after it, which holds a closing tag and the text of a
+  // call, as code, and rewrote the token in it. The guess is reported at the `<` (`generic`), so the text in the string, and the call after it, are refused.
+  'generic, a regex after a line comment': {
+    kind: 'generic',
+    frontier: (code) => code.indexOf('<T>'),
+    code: page(
+      'export default function Page() {',
+      `  ${CALL}`,
+      '  interface Callable { <T>(a = 1 + // fallback',
+      `  /[)]/); m: '</T>;${CALL}//' }`,
+      `  ${CALL}`,
+      '  return null;',
+      '}',
+    ),
+  },
+  // The same after a call signature with no return type, whose text is read up to a closing tag: a later member's default holds, after a line comment, a regex that holds the closing tag and the
+  // text of a call. Read as a division, the `/` hid the closing tag no more, and the text after it was read as code.
+  'generic, a regex that holds a closing tag after a line comment': {
+    kind: 'generic',
+    frontier: (code) => code.indexOf('<T>'),
+    code: page(
+      'export default function Page() {',
+      `  ${CALL}`,
+      '  interface Callable { <T>(x); m(a = 1 + // fallback',
+      `  /[</T>;${CALL}//]/): void }`,
+      `  ${CALL}`,
+      '  return null;',
+      '}',
+    ),
+  },
   // After the cut `>=`, TypeScript reads `<T extends X>(x: T): text</T>` as an element whose text starts with a parenthesis — and reads the same text as an arrow with a return type in
   // another program (`let x: A<number>= <T extends X>(y: T): T => y`). Which program this is cannot be told for the `>` and `=` that may be a cut, so the element is read and the guess
   // reported (`operator`), and the regex after it, which holds a token, is refused. With no parameter list, `<T extends X>text</T>` is an element in every program that parses — an

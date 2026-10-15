@@ -120,10 +120,13 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     fabricate the four-approval create-only execution receipt for an edit.
 23. **Feature entry points share one edit owner** — Direct native, connector,
     data-model, and design requests on existing apps choose implementation-only,
-    full integration, or cancellation before costly work. Approved children
-    reuse their current owner/root/phase/scope and never recurse into another
-    edit. Follow [app-edit-routing.md](shared/references/app-edit-routing.md);
-    the choice enters a workflow, not permission to mutate.
+    full integration, or cancellation before costly work. Natural-language
+    existing-app feature requests preserve the original prompt and invoke
+    `/edit-app` after full-integration consent; never merely suggest the command
+    or send an existing app through `/create-mobile-app`. Approved children reuse
+    their current owner/root/phase/scope and never recurse into another edit.
+    Follow [app-edit-routing.md](shared/references/app-edit-routing.md); the
+    choice enters a workflow, not permission to mutate.
 24. **Shared entry policy is not copied into every skill** — Every new public
     app workflow starts with a read-first link to `shared/shared-instructions.md`
     and allows `Read`. The shared preflight classifies feature work before
@@ -131,6 +134,16 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     cover newly added skills automatically. These static checks verify the
     instruction contract, not model compliance; do not claim smaller-model or
     host reliability without agent-run evidence.
+25. **Natural-language routing is not a fixed skill list** — App guidance selects
+    the most specific host-advertised skill by description and supported scope,
+    including future/custom workflows not in the example table. Invoke rather
+    than merely recommend it after required entry consent. Preserve exact
+    namespaces, invocation restrictions, current owners, and all approval gates;
+    do not route every request through `/edit-app`.
+    Selection needs no extra invocation-approval prompt, but Dataverse and other
+    consequential actions keep their target/scope checks and mutation approvals.
+    Never fabricate approval context or substitute ad-hoc mutations for an
+    unavailable domain workflow.
 
 ## Telemetry
 

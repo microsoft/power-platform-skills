@@ -18,7 +18,8 @@
 - `pac model list-tables --search 'contact'` — contact entity exists
 
 ### Language discovery
-- `pac model list-languages` returned: English (United States) (1033, en-US), Arabic (Saudi Arabia) (1025, ar-SA), French (France) (1036, fr-FR)
+- `node "${PLUGIN_ROOT}/scripts/list-languages.js" --env 'https://contosobapenv0002.crm10.dynamics.com'`
+  Result: {"ok":true,"baseLanguage":{"lcid":1033,"code":"en-US","name":"English (United States)","rtl":false},"languages":[{"lcid":1033,"code":"en-US","name":"English (United States)","rtl":false},{"lcid":1025,"code":"ar-SA","name":"Arabic (Saudi Arabia)","rtl":true},{"lcid":1036,"code":"fr-FR","name":"French (France)","rtl":false}],"unmapped":[],"summary":["1033 en-US \u2014 RTL: No","1025 ar-SA \u2014 RTL: Yes","1036 fr-FR \u2014 RTL: No"]}
 - Multiple non-English languages detected → planner activates localization code path
 - Arabic detected as RTL language
 

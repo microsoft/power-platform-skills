@@ -323,7 +323,37 @@ After plan-mode approval (before the full build):
    rather than omitted — the page-builder treats a missing line as the same fail-closed value, but
    an explicit line is what makes the dispatch contract checkable.
 
-5. **Validate + commit the transition (transactional)** — never flip `source` by hand, and never
+5. **Check styles, then validate + commit the transition (transactional)** — the workers have no
+   shell, so first check every generated page for the Griffel shorthands that `makeStyles` drops at
+   runtime, one command per page (`<file>` is the page's file from step 3):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <working-dir>/<file>
+   ```
+   Griffel does not support ten CSS shorthands, and `makeStyles` drops them at runtime: the page
+   type-checks, transpiles and deploys, then renders without the border, color or reset. They are
+   `all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock`, `borderBlockStart`,
+   `borderBlockEnd`, `borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands
+   instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per side, `border` +
+   `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width` (`borderWidth` →
+   `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`); `borderBlock`,
+   `borderInline` and their `Start` and `End` forms become the `Width`, `Style` and `Color` longhands
+   of the sides they name (`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`,
+   `borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…` ones); `all` has no
+   longhands, so set the properties you need one by one. Every other shorthand (`padding`, `margin`,
+   `border`, `borderRadius`, `gap`, `outline`) is supported, and an inline `style={{ … }}` is not
+   Griffel at all.
+
+   `check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a `makeStyles`
+   call, at any depth, with its line, column and longhands, or a call or a style object it cannot
+   read, with what to change — and exits 3 while any is left: fix what it reports and run it again,
+   and do not transpile or upload the page until it exits 0. It reads the style objects written
+   inline in the call, `makeStyles({ … })`, so write them there: one passed or spread in from
+   elsewhere (`makeStyles(styles)`, `...base`) is reported, because the check cannot see its keys,
+   and so is a key computed from an expression (`[key]: …`), whose name it cannot see (a template
+   that starts with `--`, `&`, `:` or `@` is read); Fluent's `...shorthands.*(…)` and
+   `...typographyStyles.*` may be spread as they are.
+
+   Then validate and commit the transition — never flip `source` by hand, and never
    flip pages one at a time as workers return. Run:
    ```bash
    node "${PLUGIN_ROOT}/scripts/promote-intent-pages.js" \
@@ -404,14 +434,40 @@ deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (
 retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
-gates the final *bulk* publish** — edit/finalize paths still publish their one targeted artifact so the
-change takes effect (see *Notes & limits*).
+gates the final *bulk* publish**, which also carries the edits made to existing views and forms.
+Without it those edits — and always an existing app's sitemap re-sync — still publish their one
+targeted artifact so the change takes effect (see *Notes & limits*).
 
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`). There is no apply-safe
 `--from <phase>` shortcut; a full rerun is the correct and safe recovery path. One exception: an
 `already-exists` halt recurs on a rerun until that workspace directory is deleted — follow its message.
+Another: that workspace belongs to the environment it was first opened for. Only `--apply` opens it — a dry
+run works in a temporary workspace, so it binds nothing, previews from any folder, and warns when an `--apply`
+there would be stopped. A build pointed at a different `--env` **halts before reading or writing anything in
+it** and names both environments. It is never cleared or re-bound for you — that discards the SDK's saved copies
+of the other environment's artifacts, including any edit made in them that was never pushed, and the
+page-ownership receipts and baseline kept beside them are that environment's too. Build against the
+environment the halt names, or use a fresh app folder (copy `app-spec.json` and the files it names) or a new
+`--workspace`. Only if that environment's copy of the app is no longer wanted, tear it down there with the
+`--clear-workspace` command the halt prints, which keeps the folder while a page-ownership receipt remains. The
+halt prints the folder on a line of its own, and that command takes it as `--workspace` — pass it exactly as
+printed, quoted for your shell (inside double quotes PowerShell and bash expand a `$` in the path). A folder that
+holds nothing a build saved — the SDK's empty folders only, which an earlier preview or a build that stopped at
+its start leaves — is described as exactly that: nothing was built in that environment, so there is nothing to go
+back to or tear down, and the folder can simply be deleted or moved aside. A folder whose `manifest.json` names
+no usable environment, or is not valid JSON, halts too: move it aside (rename it rather than delete it — it can
+hold page-ownership receipts and the baseline) and run again. The same environment under its other host name
+(`<org>.api.crm…` against `<org>.crm…`) also halts: re-run with the host the halt names. The standalone verifier
+never opens that workspace either, so it verifies any environment the app is deployed to.
+
+With `--publish`, the edits a build makes to existing views and forms go live in one publish of their tables, made
+before the build publishes the app, and the final publish covers them again.
+A build that **halts with an error** publishes what it had already saved before it stops (best effort).
+One that is **killed** — Ctrl-C, a crash, a closed terminal — after those edits are saved but before
+that publish cannot, so they stay saved but not live until the next build. Run the same full build
+again: it publishes them without writing them again.
 
 ### Phase 3 — Verify & iterate
 **`--apply --verify` already reconciled the spec against what deployed** (Phase 2) — the build appends a
@@ -476,11 +532,21 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     the manifest web resource and rebuild from scratch.
   - `pages-removed` — a live page was dropped from the spec. Re-add it, or pass `--allow-destructive`
     to detach it from the nav (the page record stays deployed; rebuild finalizes the sitemap).
-  - `pages-shared-across-apps` — the page appears in another app's sitemap. Detach it in Maker.
-    `--allow-destructive` does **not** bypass this halt.
+  - `pages-shared-across-apps` — the page appears in another app's sitemap, published or only saved (not yet
+    published — an app that was never published counts). Detach it in Maker. `--allow-destructive` does **not** bypass this halt.
+    The build checks again right before it updates pages in place, so a page another app takes in while the build runs halts it
+    there too ("became shared across apps while this build ran"); one taken in while the pages upload is reported after them as a
+    warning naming the app, since it is written by then.
   - `pages-shared-check-failed` / `pages-existence-failed` / `pages-sitemap-read-failed` — a
     prerequisite read failed; the build can't proceed safely. Retry on a transient error; check
     permissions on a persistent one.
+  - `pages-griffel-shorthand` — a page's `makeStyles` writes a CSS shorthand Griffel drops at runtime, so the page
+    would deploy without its border, color or reset. The message names the page, each key's line and column, and the
+    longhands to write; fix the page's source and re-run. Nothing was uploaded. It is raised for a page the build would
+    create and for a page whose source changed since the last build; a page you did not touch that already has one is sent
+    again as it is, with a warning (it renders without the key today). Deleting a key keeps the page looking as it does;
+    writing the longhands makes the style start to render. The same halt reports a `makeStyles` call the check cannot read
+    for certain as that — not as CSS Griffel drops — and says what to change in the code.
 - **`--non-interactive`** — suppress interactive prompts (for automation / CI). A non-interactive
   build that encounters an existing app **fails** instead of warning-and-proceeding, unless
   `--allow-destructive` is also set. Does **not** grant destructive authority on its own — only
@@ -560,7 +626,19 @@ Then:
 1. **Always pull fresh at the start of an edit session** — someone may have changed the app in Maker. The
    build reads an etag when it hydrates, so a write against an artifact changed since the pull throws a
    version conflict → **re-pull and retry**, never clobber.
-2. Edit `app-spec.json` (and any page `.tsx`) for the requested change.
+2. Edit `app-spec.json` (and any page `.tsx`) for the requested change. A page you edit by hand is
+   checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx>`
+   on it before you rebuild (the rule and the ten shorthands are in Phase 1.5, step 5) and fix what it
+   reports. A key the page already had when it was downloaded is reported too: the deployed page renders
+   without it today, so deleting it keeps the page looking as it does, while writing the longhands makes
+   the style start to render — delete it unless the user wants that change. The build runs the same
+   check on every page it uploads that is new or that you changed since the last successful apply of this app, and halts as
+   `pages-griffel-shorthand` — naming the page, each key's line and column, and the longhands — so a page
+   you changed does not reach the app with one. "Changed" is measured against the source that apply recorded for the page in
+   `.maker-workspace/last-applied.json` (a successful full or changed-only apply, or a download, writes it; a failed or partial build records nothing).
+   A page you did not touch is sent again as it is, and a
+   key it already has only draws a warning — and so does a page you changed in a workspace that holds no record of it (a new or moved one, or
+   another environment), where the build cannot tell what was sent: run the checker on that page yourself.
 3. **If the edit ADDS a page** (or resets a page's `source` back to `intent` to regenerate it),
    **re-run Phase 1.5 before Phase 2** — a downloaded spec contains only `kind: "tsx"` pages, so an
    added `intent` page has no code and Phase 2's `deploy` profile rejects it. Phase 1.5 is safe to
@@ -612,12 +690,16 @@ child view id. Each step emits `[n/total]`.
   the Web API using an `az`-token HttpClient. No relay, no designer tab.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
   *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
-  app, which also carries the default-view enrichment's publish, deferred to it). It
+  app). With `--publish` that one publish also carries the default-view enrichment, and the tables touched
+  by the reconcile of an existing form or view, form events and quick-view placement are published
+  together once more, before the app is, so none of them publishes on its own. It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
-  takes effect — reconciling an existing form or view, wiring form events, placing quick-views,
-  re-syncing an existing app's sitemap, and finalizing the sitemap after generative pages each publish
-  that one artifact (an unpublished edit to a live artifact is invisible). A fresh build without
-  `--publish` still leaves new tables/columns/relationships staged-but-unpublished in the solution.
+  takes effect: without `--publish`, reconciling an existing form or view, wiring form events and
+  placing quick-views each publish that one artifact, and with or without it, re-syncing an existing
+  app's sitemap and finalizing the sitemap after generative pages publish the app, and repairing a
+  lookup column still labelled with an old default publishes its table (an unpublished edit
+  to a live artifact is invisible). A fresh build without `--publish` still leaves new
+  tables/columns/relationships staged-but-unpublished in the solution.
 - **Idempotent — but not full desired-state convergence.** Existing
   solution/tables/columns/relationships/views/charts/forms/commands/dashboards are detected and
   **reused**, so re-runs and existing-table envs work without collisions. **The caveat for EDITS:** a
@@ -656,7 +738,8 @@ child view id. Each step emits `[n/total]`.
   **Boolean `defaultValue`**, whole-number **`integerFormat`** (incl. `Duration`), and per-column
   **write permissions** (`isValidForCreate` / `isValidForUpdate` / `isValidForRead` — this is how you
   make a column read-only), all applied on **create and on rebuild**; adaptive
-  main forms with **1:N / N:N sub-grids**; **per-field form control** (`readOnly` / `hidden` /
+  main forms with **1:N / N:N sub-grids** (placed between sections or in a tab / form-column with
+  `tab` / `column` / `after` / `before`, and moved into place on rebuild); **per-field form control** (`readOnly` / `hidden` /
   `after` positioning, plus `prune: false` to edit a subset of a form non-destructively);
   **quick-create / quick-view forms** (`formType`) + **quick-view placement**
   (`forms[].quickViews[]`); **per-form security roles** (`forms[].securityRoles` — name the

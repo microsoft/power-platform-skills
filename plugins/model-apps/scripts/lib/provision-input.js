@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage, primaryNameLengthProblem } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -131,6 +131,13 @@ function validateProvisionInput(input) {
       errors.push(`entity '${e.schemaName}': primaryAttribute is required and must be an object`);
     } else if (!e.primaryAttribute.schemaName || typeof e.primaryAttribute.schemaName !== 'string') {
       errors.push(`entity '${e.schemaName}': primaryAttribute.schemaName is required and must be a string`);
+    }
+    // The length of the name column goes into BOTH table creates as the request's MaxLength, so a value the platform would
+    // refuse — or a string, which it would be sent as — has to stop here, before the solution is written. It is the rule
+    // validateAppSpec applies (one function), because this gate is the only one /genpage and /app-builder pass through.
+    if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
+      const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
+      if (lengthProblem) errors.push(`entity '${e.schemaName}': ${lengthProblem}`);
     }
 
     // Validate columns

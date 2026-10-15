@@ -21,7 +21,7 @@
  *   init  --working-dir <d> --app-name <n> [--data-platform dataverse|connector-only]
  *   step  --working-dir <d> --id <phase-id> --status <pending|active|done|skipped|failed> [--note <t>]
  *   set   --working-dir <d> --section <name> --json <obj> | --json-file <path> [--state proposed|approved]
- *   phone --working-dir <d> --stage building|screens|qr [--screens-file <path>] [--qr-image <png>] [--qr-url <url>]
+ *   phone --working-dir <d> --stage building|screens|qr [--preview-file <html> | --screens-file <json>] [--qr-image <png>] [--qr-url <url>]
  *   show  --working-dir <d>
  */
 
@@ -152,7 +152,14 @@ function setPhone(state, update) {
     }
     state.phone.stage = update.stage;
   }
-  if (update.screens !== undefined) state.phone.screens = update.screens;
+  if (update.screens !== undefined) {
+    state.phone.screens = update.screens;
+    delete state.phone.previewHtml;
+  }
+  if (update.previewHtml !== undefined) {
+    state.phone.previewHtml = update.previewHtml;
+    state.phone.screens = [];
+  }
   if (update.qrImage !== undefined) state.phone.qrImage = update.qrImage;
   if (update.qrHref !== undefined) state.phone.qrHref = update.qrHref;
   if (update.qrUrl !== undefined) state.phone.qrUrl = update.qrUrl;
@@ -441,6 +448,12 @@ function parseArgs(argv) {
     else if (argument === '--state') options.state = argv[++index];
     else if (argument === '--stage') options.stage = argv[++index];
     else if (argument === '--screens-file') options.screensFile = argv[++index];
+    else if (argument === '--preview-file') {
+      options.previewFile = argv[++index];
+      if (!options.previewFile || options.previewFile.startsWith('--')) {
+        throw new Error('--preview-file requires an HTML file path.');
+      }
+    }
     else if (argument === '--qr-image') options.qrImage = argv[++index];
     else if (argument === '--qr-url') options.qrUrl = argv[++index];
     else if (!argument.startsWith('--') && !options.command) options.command = argument;
@@ -476,7 +489,16 @@ if (require.main === module) {
     } else if (options.command === 'phone') {
       const state = loadState(root);
       if (!state) throw new Error('No run plan yet; run `init` first.');
+      if (options.previewFile && options.screensFile) {
+        throw new Error('Provide --preview-file or --screens-file, not both.');
+      }
       const update = { stage: options.stage, qrUrl: options.qrUrl };
+      if (options.previewFile) {
+        // Retain the whole document: screen fragments alone lose shared CSS, root tokens,
+        // and ancestor selectors. The page extracts each .screen inside an isolated viewport.
+        update.previewHtml = fs.readFileSync(options.previewFile, 'utf8');
+        if (!update.previewHtml.trim()) throw new Error('The screen preview HTML is empty.');
+      }
       if (options.screensFile) {
         update.screens = JSON.parse(fs.readFileSync(options.screensFile, 'utf8'));
       }

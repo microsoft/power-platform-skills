@@ -41,3 +41,55 @@ test('mapLimit rethrows the first failure when several in-flight items fail', as
     (err) => err === first,
   );
 });
+
+// verify and download fan out READS whose report must not depend on which response came back first.
+test('the runner and the module export are one limiter', () => {
+  assert.strictEqual(require('../lib/entity-provision.js').mapLimit, mapLimit);
+});
+
+test('firstInOrder rethrows the failure of the lowest-indexed item, not the first to settle', async () => {
+  const low = new Error('item 0 (slow to fail)');
+  const high = new Error('item 1 (fails first)');
+  const started = [];
+  await assert.rejects(
+    mapLimit(['slow', 'quick', 'never'], 2, async (item) => {
+      started.push(item);
+      if (item === 'slow') { await sleep(40); throw low; }
+      await sleep(2);
+      throw high;
+    }, { firstInOrder: true }),
+    (err) => err === low,
+  );
+  assert.deepStrictEqual(started, ['slow', 'quick'], 'nothing is started after a failure');
+});
+
+test('without firstInOrder the same two failures report the first to settle (the build contract)', async () => {
+  const low = new Error('item 0 (slow to fail)');
+  const high = new Error('item 1 (fails first)');
+  await assert.rejects(
+    mapLimit(['slow', 'quick'], 2, async (item) => {
+      if (item === 'slow') { await sleep(40); throw low; }
+      await sleep(2);
+      throw high;
+    }),
+    (err) => err === high,
+  );
+});
+
+test('firstInOrder keeps the output order and the drain-before-report rule', async () => {
+  const out = await mapLimit([30, 5, 15], 2, async (ms, idx) => { await sleep(ms); return idx; }, { firstInOrder: true });
+  assert.deepStrictEqual(out, [0, 1, 2]);
+  const events = [];
+  const failure = new Error('item 1');
+  await assert.rejects(
+    mapLimit(['ok-slow', 'fails', 'later'], 2, async (item) => {
+      if (item === 'fails') { await sleep(2); events.push('failed'); throw failure; }
+      if (item === 'ok-slow') { await sleep(40); events.push('slow landed'); return item; }
+      events.push('started after the failure');
+      return item;
+    }, { firstInOrder: true }),
+    (err) => err === failure,
+  );
+  events.push('reported');
+  assert.deepStrictEqual(events, ['failed', 'slow landed', 'reported']);
+});

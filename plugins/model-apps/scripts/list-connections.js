@@ -59,18 +59,35 @@ function extractConnectorId(connectionId) {
   return match ? match[1] : '';
 }
 
+// `pac connection list` prints a GRID: after PAC's auth banner, a header row and one row per connection, every column as wide as its widest cell — the header
+// name included — plus one space (live capture, PAC CLI 2.12.2; every value here is synthetic):
+//   Connected as [maker001]
+//   Id                               Name       API Id                                                      Status
+//   00000000000000000000000000000001 Weather    /providers/Microsoft.PowerApps/apis/shared_msnweather       Connected
+//   00000000000000000000000000000002 SharePoint /providers/Microsoft.PowerApps/apis/shared_sharepointonline Connected
+// So the gap between two header names is not fixed: it is wide while some cell is longer than the name, and ONE space when none is. A name of four characters or
+// fewer leaves "Name" the widest cell of its column, and an environment with no connections leaves every header name the widest cell of its column:
+//   Id                               Name API Id                                               Status
+//   00000000000000000000000000000001 mail /providers/Microsoft.PowerApps/apis/shared_office365 Connected        (one connection, named "mail")
+//   Id Name API Id Status                                                                                       (no connections: the header alone, and no message)
+// The last two are how PAC builds the grid — no capture of either exists. A header read by two-space gaps between its names missed both, and the empty one is the answer
+// that matters, so the grid's header is recognised by its WORDS: the four names, in this order, and nothing else on the line, whatever the padding between them.
+const PAC_GRID_HEADER = /^Id\s+Name\s+API\s+Id\s+Status$/i;
+
 // Whether a row of column names is a connection table's header. A header proves the output is a table, and a table with no rows is an
 // EMPTY listing — the answer that sends connection setup on to create a duplicate of a connection the maker already has — so a header is
 // recognised only by a COMPLETE column set PAC prints, compared normalized (case and punctuation ignored), and never by one column that
 // looks like an id column. A diagnostic that has such a column, or only mentions a connector, is prose:
 //   Connection Id  could not be read.
 //   Warning: failed to retrieve connector metadata.
-// The column sets are the first from a live capture of `pac connection list` and the others from the layouts the fixtures in
-// tests/list-connections.test.js cover:
+// The first column set is the header of the grid above, which parseWhitespaceTable reads by its words (PAC_GRID_HEADER); here the same names are accepted
+// under a dashed separator, where the columns are cut by the dashes. The others come from the layouts the fixtures in tests/list-connections.test.js cover:
 //   Id  Name  API Id  Status                         no dashed separator
 //   Connection Name  Connector Id  Connection Id      the default fixed-width table, and the plain whitespace one
 //   Connection Id  Connector Id                       the two-column fixed-width table
-// A build that prints another column set is refused as unreadable, which costs a re-run of `pac connection list`; a guess costs a duplicate.
+// A build that prints another column set is refused as unreadable, which costs a re-run of `pac connection list`; a guess costs a duplicate. PAC's resources hold a
+// `ConnectionListHeader` string too ("Connection ID,Connector ID,Created By"), but this command does not print it — its header is `ConnectionsListHeader`,
+// "Id,Name,API Id,Status", as the grid above shows — so a table with those columns is not accepted.
 const CONNECTION_TABLE_COLUMNS = new Set(['id,name,apiid,status', 'connectionname,connectorid,connectionid', 'connectionid,connectorid']);
 function isConnectionHeader(names) {
   return CONNECTION_TABLE_COLUMNS.has(names.map(normalizeHeader).filter(Boolean).join(','));
@@ -100,21 +117,21 @@ function parseJsonConnections(raw) {
   return usableConnectionRows(rows.map(mapConnectionRow), 'JSON');
 }
 
-// PAC's auth banner, printed before any listing, and its one "nothing to list" message:
+// PAC's auth banner, printed before any listing:
 //   Connected as maker@contoso.onmicrosoft.com       (the form most PAC commands print)
 //   Connected as [maker001]                          (the form `pac connection list` printed in a live capture)
-//   No connections found.
-// Each is recognised by its exact shape and nothing broader. The banner is a WHOLE line — `Connected as`, then one word or one bracketed
-// alias (a word that opens a bracket must close it), and nothing after it — because a prefix test swallowed a diagnostic joined to it:
+// It is recognised by its exact shape and nothing broader: a WHOLE line — `Connected as`, then one word or one bracketed alias (a word that opens a bracket must
+// close it), and nothing after it — because a prefix test swallowed a diagnostic joined to it:
 //   Connected as [maker001] Warning: failed to retrieve connections.
-// A failure worded like the empty-state message —
-//   No connections could be found because the request failed.
-// — matched the earlier pattern ("no connections ... found") and read as an EMPTY environment, the answer that
-// sends connection setup on to create a duplicate of a connection the maker already has. The trailing period is
-// optional so a build that drops it is not refused, but no other wording is taken for emptiness: a build that
-// words its empty state differently is refused as unreadable, which costs a re-run, not a duplicate.
+//
+// There is NO "nothing to list" sentence in this parser, on purpose. `pac connection list` says an environment has no connections by printing the grid's header with
+// no rows under it (see PAC_GRID_HEADER), never a sentence. PAC's resources do hold one — `ConnectionNotFound`, "No connections were found in the passed
+// environment." — but the command does not print it (PAC CLI 2.12.2: nothing refers to that string), and an earlier version of this script took "No connections found."
+// for the same job, a wording that is in none of PAC's resources. A sentence taken for emptiness is how a failure becomes "no connections" — an earlier, broader pattern
+// read "No connections could be found because the request failed." that way — and that answer sends connection setup on to create a duplicate of a connection the
+// maker already has. A sentence PAC never prints cannot be one that is needed, so a build that does print one is refused as unreadable, which costs a re-run, until a
+// capture shows its exact wording.
 const PAC_BANNER = /^connected as (?:[^\s[]\S*|\[[^\]\r\n]+\])$/i;
-const NO_CONNECTIONS_MESSAGE = /^no connections found\.?$/i;
 // A line ends at CRLF, a bare CR or LF, and PAC's output is split on all three everywhere. Deleting the CRs instead joined the line a bare
 // CR ended to the next one: `Connected as [maker001]\rWarning: …` became a single line that began like the banner.
 const LINE_BREAK = /\r\n|\r|\n/;
@@ -158,26 +175,20 @@ function requireBannerPreamble(lines, layout) {
 // there — a header followed by
 //   Warning: failed to retrieve connections.
 // was read as an empty listing (the line has no API path) or as a connection (its words filled the id cells).
-// Blank lines and dashed separators are layout, and PAC's own empty-state message is the one non-row line
-// allowed — only when no row is listed, since it would contradict one. Anything else refuses the listing, the
+// Blank lines and dashed separators are layout. Anything else that is not a row refuses the listing, the
 // wrapped tail of a long name that older builds print on a second line included: a refusal costs a re-run of
 // `pac connection list`, where a guess costs a duplicate connection.
 function readTableRows(lines, readRow, layout) {
   const rows = [];
-  let emptyMessage = null;
   for (const line of lines) {
     const text = line.trim();
     // The auth banner is recognised wherever it falls; any other text is not.
     if (!text || /^[\s-]+$/.test(text) || PAC_BANNER.test(text)) continue;
-    if (NO_CONNECTIONS_MESSAGE.test(text)) { emptyMessage = text; continue; }
     const row = readRow(line);
     if (!row || !isConnectionRow(row)) {
       throw new Error(unreadableListing(null, `unrecognized connection listing — a line under the ${layout} table header is not a connection row`, text));
     }
     rows.push(row);
-  }
-  if (emptyMessage && rows.length) {
-    throw new Error(unreadableListing(null, `unrecognized connection listing — the ${layout} table lists connections and also says there are none`, emptyMessage));
   }
   return rows;
 }
@@ -210,19 +221,21 @@ function parseFixedWidthTable(raw) {
 
 function parseWhitespaceTable(raw) {
   const lines = raw.split(LINE_BREAK).filter((line) => line.trim());
-  const headerIndex = lines.findIndex((line) => /Connection Name|Connection Id|Connector|API Id/i.test(line)
-    && isConnectionHeader(line.trim().split(/\s{2,}/)));
+  // The grid `pac connection list` prints is found by the words of its header, whatever the padding between them; the other layouts by two-space gaps.
+  const headerIndex = lines.findIndex((line) => PAC_GRID_HEADER.test(line.trim())
+    || (/Connection Name|Connection Id|Connector|API Id/i.test(line) && isConnectionHeader(line.trim().split(/\s{2,}/))));
   if (headerIndex === -1) return null; // no table here — not the same as a table with no rows
   const headers = lines[headerIndex].trim().split(/\s{2,}/);
   const normalizedHeaders = headers.map(normalizeHeader);
-  const isIdNameApi = normalizedHeaders.join(',') === 'id,name,apiid,status';
+  const isIdNameApi = PAC_GRID_HEADER.test(lines[headerIndex].trim()) || normalizedHeaders.join(',') === 'id,name,apiid,status';
   requireBannerPreamble(lines.slice(0, headerIndex), isIdNameApi ? 'Id/Name/API Id' : 'whitespace');
-  // Current PAC builds emit:
+  // Current PAC builds emit the grid described at PAC_GRID_HEADER:
   //   Id  Name  API Id  Status
   // with no dashed separator. Names may contain spaces, so splitting each row on
   // whitespace loses the boundary. The connector API path is the stable delimiter.
   if (isIdNameApi) {
-    // A row is `<id> <name, which may hold spaces> <API path> [<status, which may be several words or none>]`:
+    // A row is `<id> <name, which may hold spaces> <API path> [<status, which may be several words or none>]`, however many spaces PAC left between the cells — one
+    // when a cell is the widest of its column, as in `00000000000000000000000000000001 mail /providers/Microsoft.PowerApps/apis/shared_office365 Connected`:
     //   00000000000000000000000000000001 Contoso Dataverse  /providers/Microsoft.PowerApps/apis/shared_commondataservice  Not connected
     // A line that does not match — a warning, JSON cut short, a connection row in a changed layout — is not a row,
     // and readTableRows refuses the listing for it.
@@ -259,7 +272,7 @@ function unreadableListing(raw, why, line, label = line === undefined ? 'first l
 
 // What PAC wrote to stderr on a zero exit. A real `pac connection list` that exits 0 writes nothing there, so text on it means the
 // run had something to report that the table on stdout does not show — and a failed listing can still exit 0:
-//   stdout   Id  Name  API Id  Status                          (a header and no rows)
+//   stdout   Id Name API Id Status                           (a header and no rows)
 //   stderr   Warning: failed to retrieve connections.
 // Read from stdout alone, that was an empty environment, the answer that sends connection setup on to create a duplicate. Blank lines are
 // not text, so a stderr that is only a trailing newline is clean; the first line that is not blank refuses the listing, quoted.
@@ -301,10 +314,9 @@ function parsePacConnectionList(raw) {
   if (fixed) return fixed;
   const loose = parseWhitespaceTable(text);
   if (loose) return loose;
-  // No table and no JSON: only PAC's own message says there is nothing to list.
-  const lines = text.split(LINE_BREAK).map((l) => l.trim()).filter((l) => l && !PAC_BANNER.test(l));
-  if (lines.length && lines.every((l) => NO_CONNECTIONS_MESSAGE.test(l))) return [];
-  throw new Error(unreadableListing(text, lines.length ? 'no connection table, JSON list or "no connections found" message' : 'it printed no listing at all'));
+  // No table and no JSON: nothing here says "no connections" (an empty environment is a header with no rows, read above), so whatever this is, it is refused.
+  const hasText = text.split(LINE_BREAK).some((l) => l.trim() && !PAC_BANNER.test(l.trim()));
+  throw new Error(unreadableListing(text, hasText ? 'no connection table or JSON list' : 'it printed no listing at all'));
 }
 
 function sameConnectionId(a, b) {

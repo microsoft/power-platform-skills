@@ -133,12 +133,21 @@ async function withPathFirst(dir, fn, { only = false } = {}) {
 // real one is, and an executable script elsewhere. By default it writes a multibyte character in two
 // pieces 200 ms apart, then its argv, then an error, and exits 3. With `--big` it writes 1.5 MiB.
 // With `--late` it starts a process that shares its stdout and writes 300 ms after the fake exits.
+// With FAKE_PAC_HANG set to a file name it prints the start of a listing, records its own pid there and then runs for 30 s (a pac
+// that never finishes its answer).
 const BIG_OUTPUT_BYTES = 1536 * 1024;
 function makeFakePac() {
   const dir = scratch('genpage-cli-fakepac-');
   const script = path.join(dir, 'fake-pac.js');
   fs.writeFileSync(script, [
-    `if (process.argv.includes('--big')) process.stdout.write('x'.repeat(${BIG_OUTPUT_BYTES}));`,
+    'if (process.env.FAKE_PAC_HANG) {',
+    // Half a listing first — what a pac that is ended while it is still answering has already printed — and the pid only once
+    // that has been written, so a test that sees the pid knows the partial output is on its way to the runner.
+    "  process.stdout.write('Found 2 generated page(s):\\n6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 Ove', () => {",
+    "    require('fs').writeFileSync(process.env.FAKE_PAC_HANG, String(process.pid));",
+    '  });',
+    '  setTimeout(() => {}, 30000);',
+    `} else if (process.argv.includes('--big')) process.stdout.write('x'.repeat(${BIG_OUTPUT_BYTES}));`,
     "else if (process.argv.includes('--late')) {",
     "  require('child_process').spawn(process.execPath, ['-e', \"setTimeout(() => process.stdout.write('late'), 300)\"],",
     "    { stdio: ['ignore', 'inherit', 'inherit'], detached: true, windowsHide: true }).unref();",
@@ -219,6 +228,227 @@ test('runPac resolves with a non-zero status and the launch error when pac canno
   assert.notStrictEqual(r.status, 0);
   assert.strictEqual(r.stdout, '');
   assert.match(r.stderr, /ENOENT/, `the failure must say why; got ${JSON.stringify(r)}`);
+});
+
+// A caller that stops needing pac's answer — a verify pass that failed — must be able to END it. pac has no timeout of its
+// own, and on Windows it is usually a batch shim: Node's own kill of the cmd.exe it started leaves pac itself running.
+// The fake records its pid and then hangs, so these tests see whether the process that matters is gone.
+const processAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+async function waitUntil(condition, ms = 5000) {
+  for (const end = Date.now() + ms; Date.now() < end;) {
+    if (await condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+const withHangingPac = async (fn) => {
+  const pidFile = path.join(scratch('genpage-cli-pid-'), 'pac.pid');
+  process.env.FAKE_PAC_HANG = pidFile;
+  try {
+    return await withPathFirst(makeFakePac(), () => fn(pidFile));
+  } finally {
+    delete process.env.FAKE_PAC_HANG;
+  }
+};
+const readPid = (pidFile) => Number(fs.readFileSync(pidFile, 'utf8'));
+const endsWithin = (promise, ms) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('still running'), ms))]);
+
+test('runPac ends pac, and everything it started, when its signal aborts — the answer is a failed, output-free result marked ended', async () => {
+  await withHangingPac(async (pidFile) => {
+    const controller = new AbortController();
+    const run = runPac(['model', 'genpage', 'list'], { signal: controller.signal });
+    assert.ok(await waitUntil(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8')), 'pac started');
+    const pid = readPid(pidFile);
+    assert.ok(processAlive(pid));
+    // The half of a listing that pac printed before it hung has reached the runner by now; an ended run hands back none of it.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    controller.abort();
+    const r = await endsWithin(run, 5000);
+    assert.notStrictEqual(r, 'still running', 'the run answers at once once it is ended');
+    assert.notStrictEqual(r.status, 0);
+    assert.strictEqual(r.ended, true);
+    assert.strictEqual(r.stdout, '', 'a half-read listing is never handed back, where a caller could parse it');
+    assert.match(r.stderr, /pac was ended/);
+    assert.ok(await waitUntil(() => !processAlive(pid)), 'pac itself is gone — not only the shell that started it');
+  });
+});
+
+test('runPac with a signal that has already aborted starts no pac at all', async () => {
+  await withHangingPac(async (pidFile) => {
+    const controller = new AbortController();
+    controller.abort();
+    const r = await runPac(['model', 'genpage', 'list'], { signal: controller.signal });
+    assert.strictEqual(r.ended, true);
+    assert.notStrictEqual(r.status, 0);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.ok(!fs.existsSync(pidFile), 'pac was never started');
+  });
+});
+
+test('a pac run nobody aborts is not marked ended, and a signal that never fires changes nothing', async () => {
+  const controller = new AbortController();
+  const r = await withPathFirst(makeFakePac(), () => runPac(['model', 'genpage', 'list', '--big'], { signal: controller.signal }));
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.ended, undefined);
+  assert.strictEqual(r.stdout.length, BIG_OUTPUT_BYTES);
+});
+
+test('the client\'s abort() ends the pac runs it has in flight and a listing that was ended is not retried — and the client is usable afterwards', async () => {
+  const sleeps = [];
+  const cli = realMakeGenpageCli('https://contoso.crm.dynamics.com', { attempts: 3, sleep: async (ms) => { sleeps.push(ms); } });
+  await withHangingPac(async (pidFile) => {
+    const listing = cli.enumerateEnv();
+    assert.ok(await waitUntil(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8')), 'pac started');
+    const pid = readPid(pidFile);
+    cli.abort();
+    const r = await endsWithin(listing, 5000);
+    assert.notStrictEqual(r, 'still running');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /was ended/);
+    assert.deepStrictEqual(sleeps, [], 'no retry: the attempt that was ended is not followed by the pause and the new attempt a flake would get');
+    assert.ok(await waitUntil(() => !processAlive(pid)), 'pac is gone');
+  });
+  // Runs started after an abort are not affected.
+  const after = await withPathFirst(makeFakePac(), () => cli.enumerateEnv());
+  assert.strictEqual(after.ok, false);
+  assert.doesNotMatch(String(after.error), /was ended/, 'it failed for the reason the fake pac fails (exit 3), not because the client was ended');
+  assert.strictEqual(sleeps.length, 2, 'an ordinary failure is retried as before');
+});
+
+// A call that failed once pauses before it asks again, and an abort() that lands in that pause finds nothing in flight to end — so
+// the attempt after the pause used to start a pac run that nothing would ever end (pac has no timeout of its own). A call that
+// began before the abort starts nothing more, whichever call it is; a call that begins afterwards is an ordinary one.
+const flakyRun = (runs) => async (args) => { runs.push(args); return { status: 1, stdout: '', stderr: 'Error: flaky' }; };
+
+test('abort() during the pause between two attempts of a listing stops the call: no further pac run is started — and the client is usable afterwards', async () => {
+  const listings = [
+    ['the env-wide listing', (cli) => cli.enumerateEnv(), /^pac genpage list \(env-wide\) was ended/],
+    ['an app\'s listing', (cli) => cli.enumeratePages('app-1'), /^pac genpage list was ended/],
+  ];
+  for (const [what, call, wanted] of listings) {
+    const runs = [];
+    const pauses = [];
+    let abortInPause = true;
+    let cli;
+    cli = realMakeGenpageCli('https://contoso.crm.dynamics.com', { attempts: 3, run: flakyRun(runs), sleep: async (ms) => { pauses.push(ms); if (abortInPause) cli.abort(); } });
+    const answer = await call(cli);
+    assert.strictEqual(runs.length, 1, `${what}: the attempt after the pause was never started`);
+    assert.strictEqual(answer.ok, false, what);
+    assert.match(answer.error, wanted, what);
+    assert.deepStrictEqual(pauses, [500], `${what}: and the call does not pause again for an attempt it will not make`);
+    // A call that begins after the abort is an ordinary one, retried like any other.
+    abortInPause = false;
+    runs.length = 0;
+    const later = await call(cli);
+    assert.strictEqual(runs.length, 3, `${what}: a later call makes all its attempts`);
+    assert.doesNotMatch(String(later.error), /was ended/, what);
+  }
+});
+
+test('abort() during the pause between two attempts of an upload stops it as well: a create never starts — and an update that failed has no pause to stop, since it is never sent again', async () => {
+  const runs = [];
+  const pauses = [];
+  let cli;
+  cli = realMakeGenpageCli('https://contoso.crm.dynamics.com', { attempts: 3, run: flakyRun(runs), sleep: async (ms) => { pauses.push(ms); cli.abort(); } });
+  await assert.rejects(
+    cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'page.tsx', name: 'Overview' }),
+    /pac genpage upload for 'Overview' failed \(Error: flaky\) — the UPDATE of page [^ ]+ MAY HAVE LANDED/,
+  );
+  assert.strictEqual(runs.length, 1, 'the update is sent once');
+  assert.deepStrictEqual(pauses, [], 'and nothing waits for an attempt that will not be made');
+  // A create takes its snapshot of the environment first: that listing is the call that is paused, and the create is never started.
+  runs.length = 0;
+  await assert.rejects(
+    cli.upload({ appId: 'app-1', codeFile: 'page.tsx', name: 'Overview' }),
+    /cannot snapshot the environment before create.*was ended/,
+  );
+  assert.strictEqual(runs.length, 1, 'only the listing attempt ran; no `upload` command was ever sent');
+  assert.ok(!runs.some((args) => args.includes('upload')));
+});
+
+// The reconciliation of an uncertain create lists the environment again, and that listing must start nothing either once an abort has come.
+test('abort() during the pause between two attempts of a create makes the reconciliation listing that follows an ended one, not a new pac run', async () => {
+  const runs = [];
+  let cli;
+  const run = async (args) => {
+    runs.push(args.includes('list') ? 'list' : 'upload');
+    return args.includes('list') ? { status: 0, stdout: LIST_EMPTY, stderr: '' } : { status: 1, stdout: '', stderr: 'Error: flaky' };
+  };
+  cli = realMakeGenpageCli('https://contoso.crm.dynamics.com', { attempts: 3, run, sleep: async () => { cli.abort(); } });
+  await assert.rejects(
+    cli.upload({ appId: 'app-1', codeFile: 'page.tsx', name: 'Overview' }),
+    /had an uncertain result and env enumeration failed.*was ended/,
+  );
+  assert.deepStrictEqual(runs, ['list', 'upload', 'list'], 'the snapshot, the create, its first reconciliation — and nothing after the abort');
+});
+
+test('abort() during the pause between two attempts of a listing, with a real pac, starts no second pac — the one an abort could not have ended', async () => {
+  const pidFile = path.join(scratch('genpage-cli-pid-'), 'pac.pid');
+  let cli;
+  cli = realMakeGenpageCli('https://contoso.crm.dynamics.com', {
+    attempts: 3,
+    sleep: async () => {
+      // From here on a pac that is started would hang, so one started after the abort is one nobody ends.
+      process.env.FAKE_PAC_HANG = pidFile;
+      cli.abort();
+    },
+  });
+  try {
+    await withPathFirst(makeFakePac(), async () => {
+      const answer = await endsWithin(cli.enumerateEnv(), 8000);
+      assert.notStrictEqual(answer, 'still running', 'the call answers: it did not wait for a second pac');
+      assert.strictEqual(answer.ok, false);
+      assert.match(answer.error, /was ended/);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.ok(!fs.existsSync(pidFile), 'no pac was started after the abort');
+    });
+  } finally {
+    delete process.env.FAKE_PAC_HANG;
+    cli.abort(); // ends the pac a client that starts one after an abort would have left behind
+  }
+});
+
+test('abort() ends a download that is running: it fails at once with the reason, and its whole process tree is gone', async () => {
+  const cli = realMakeGenpageCli('https://contoso.crm.dynamics.com');
+  await withHangingPac(async (pidFile) => {
+    const download = cli.download({ appId: 'app-1', outputDir: scratch('genpage-cli-out-'), pageIds: [GP_A] }).then(() => 'resolved', (error) => error);
+    assert.ok(await waitUntil(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8')), 'pac started');
+    const pid = readPid(pidFile);
+    cli.abort();
+    const failure = await endsWithin(download, 5000);
+    assert.notStrictEqual(failure, 'still running');
+    assert.match(failure.message, /^pac genpage download failed: .*was ended/);
+    assert.ok(await waitUntil(() => !processAlive(pid)), 'pac is gone');
+  });
+});
+
+test('a verify pass that fails while pac is still listing pages ends that pac — the whole process tree — before it throws', async () => {
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const { readerFor } = require('../verify-model-app.js');
+  await withHangingPac(async (pidFile) => {
+    const pacStarted = () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8');
+    const sdk = {
+      queryRecords: async () => [],
+      // The first check fails once pac is running, so the page check's listing is what the pass gives up on.
+      findTables: async () => { await waitUntil(pacStarted); throw new Error('the environment could not be read'); },
+    };
+    const spec = {
+      schemaVersion: 2,
+      solution: { uniqueName: 'verify_pac', publisherPrefix: 'new' },
+      app: { name: 'Verify Pac', uniqueName: 'new_verifypac' },
+      entities: [{ schemaName: 'new_t0', columns: [] }],
+      pages: [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'overview.tsx' } }],
+      appShell: { areas: [] },
+    };
+    const cli = realMakeGenpageCli('https://contoso.crm.dynamics.com');
+    const reader = readerFor(sdk, 'new_verifypac', { genpageCli: cli });
+    // The membership read is the first of the page reads; the existence listing — the pac run — comes next.
+    reader.sitemapPageIds = async () => [GP_A];
+    const outcome = await endsWithin(verifySpec(spec, reader, { concurrency: 4 }).then(() => ({}), (error) => ({ error })), 15000);
+    assert.notStrictEqual(outcome, 'still running', 'the pass does not wait for the pac listing');
+    assert.match(outcome.error.message, /the environment could not be read/);
+    assert.ok(await waitUntil(() => !processAlive(readPid(pidFile)), 2000), 'pac, and not only the shell that started it, is gone by the time the pass is over');
+  });
 });
 
 test('parsePageId extracts the guid from upload output', () => {
@@ -323,19 +553,23 @@ test('upload cleans up its temp files even when it throws after exhausting retri
   const fs = require('node:fs');
   let promptPath = null;
   let agentPath = null;
+  let creates = 0;
   const run = async (args) => {
+    // A CREATE whose every attempt fails outright and leaves nothing in the listing — the one kind of upload that is retried — so the wrapper throws after
+    // `attempts`. (An UPDATE that fails is not retried at all: it may have landed.) The finally must still remove the temp dir.
+    if (args.includes('list')) return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+    creates += 1;
     const pi = args.indexOf('--prompt-file');
     const ai = args.indexOf('--agent-message-file');
     if (pi >= 0) promptPath = args[pi + 1];
     if (ai >= 0) agentPath = args[ai + 1];
-    // UPDATE path (caller pageId) so there is no CREATE reconcile — every attempt just fails and the
-    // wrapper throws after `attempts`. The finally must still remove the temp dir.
     return { status: 1, stdout: '', stderr: 'boom' };
   };
   await assert.rejects(
-    makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
-    /pac genpage upload failed/i
+    makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }),
+    /pac genpage upload failed for 'Overview': boom/
   );
+  assert.strictEqual(creates, 3, 'every attempt was spent');
   assert.ok(promptPath && !fs.existsSync(promptPath), 'prompt temp file removed on the retry-exhaustion throw');
   assert.ok(agentPath && !fs.existsSync(agentPath), 'agent-message temp file removed on the retry-exhaustion throw');
 });
@@ -364,13 +598,16 @@ test('upload with a pageId updates in place (adds --page-id)', async () => {
   assert.ok(calls[0].includes('--page-id') && calls[0].includes(GUID));
 });
 
-test('upload retries a transient pac failure then succeeds', async () => {
+// A failed UPDATE is no proof that nothing landed: pac writes the page, records the prompt and the agent message, prints its Page ID, then publishes — so a failure in the
+// publish comes after everything else is written, and a re-send records the prompt again. It is not sent again, flake or not. (A CREATE that failed outright and left
+// nothing behind is still retried: see the uncertain-CREATE tests.)
+test('upload does not send a failed UPDATE again, even when the failure may be a flake', async () => {
   let n = 0;
   const run = async () => { n += 1; return n === 1 ? { status: 1, stdout: '', stderr: 'flaky help dump' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; };
-  // Use GUID as pageId (UPDATE path): no CREATE reconcile, I7 guard matches returned GUID.
-  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' });
-  assert.strictEqual(r.pageId, GUID);
-  assert.ok(n >= 2, 'retried after the transient failure');
+  await assert.rejects(
+    makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
+    /pac genpage upload for 'Overview' failed \(flaky help dump\) — the UPDATE of page 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 MAY HAVE LANDED: /);
+  assert.strictEqual(n, 1, 'one send');
 });
 
 // The diff discovers a candidate, not authority to turn a failed CREATE into an UPDATE.
@@ -569,15 +806,18 @@ test('upload: an uncertain CREATE whose enumeration shows ZERO matches safely re
 
 // ── Task 4: I7 upload-id guard (UPDATE returned id must equal pid) ───────────────────────────────
 
-test('upload (I7): direct UPDATE with caller-provided pageId returns wrong Page ID → throws', async () => {
+test('upload (I7): direct UPDATE with caller-provided pageId returns wrong Page ID → throws, as an error the build never retries', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
   const WRONG_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
   const run = async () => ({ status: 0, stdout: `Page ID: ${WRONG_ID}`, stderr: '' });
   const cli = makeGenpageCli('env', { run, sleep: async () => {}, request: createdPage() });
-  // pageId: GUID but pac returns WRONG_ID → mismatch must halt
-  await assert.rejects(
-    cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'x.tsx', name: 'Overview' }),
-    /unexpected Page ID|mismatched/i
-  );
+  // pageId: GUID but pac returns WRONG_ID → mismatch must halt. The send did something, and the message quotes the page's name — user text, here one that reads as a
+  // SQL timeout to the build's check of a transient halt — so it carries `transient: false`.
+  const error = await cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'x.tsx', name: 'SQL Timeouts' }).then(() => null, (e) => e);
+  assert.match(String(error && error.message), /unexpected Page ID|mismatched/i);
+  assert.strictEqual(error.transient, false);
+  assert.strictEqual(isTransientHalt(error), false);
+  assert.strictEqual(isTransientHalt(new Error(error.message)), true, 'the control: the words alone read as transient');
 });
 
 // Stop before any candidate update; the explicit-update returned-id guard remains above.
@@ -1075,24 +1315,26 @@ test('a malformed summary line makes the listing unrecognized, not empty', () =>
 // update — where the caller supplies `pageId`, so `pid` is truthy from the first attempt — sat
 // through every attempt on a fault that can never resolve itself, burying the real message under
 // "after 3 attempt(s)". The correct test is whether the NEXT attempt runs the SAME command.
-test('a deterministic failure on an ORDINARY update stops after one attempt', async () => {
+test('a deterministic failure on an ORDINARY update stops after one attempt, as an ordinary error: pac refused it before it sent anything', async () => {
   let attempts = 0;
   const run = async () => {
     attempts += 1;
     // Real pac wording for an argument fault — retrying cannot change the outcome.
     return { status: 1, stdout: '', stderr: "Error: The value passed to '--code-file' is invalid. The file 'o.tsx' could not be found." };
   };
-  await assert.rejects(
-    makeGenpageCli('https://x', { run, sleep: async () => {} })
-      .upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
-    /pac genpage upload failed/i);
+  const error = await makeGenpageCli('https://x', { run, sleep: async () => {} })
+    .upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }).then(() => null, (e) => e);
+  assert.match(String(error && error.message), /^pac genpage upload failed for 'Overview': Error: The value passed to '--code-file' is invalid/);
+  assert.doesNotMatch(error.message, /MAY HAVE LANDED/, 'pac checks its arguments before it sends anything, so nothing can have landed');
+  assert.notStrictEqual(error.transient, false);
   assert.strictEqual(attempts, 1,
     `a deterministic UPDATE fault must not be retried; ran ${attempts} attempt(s)`);
 });
 
-// The control: a TRANSIENT failure on the same ordinary update is still retried, so the guard did
-// not simply disable retries for updates.
-test('a transient failure on an ordinary update is still retried', async () => {
+// The control: a failure that is NOT about pac's arguments — a service message that invites a retry — is no proof that nothing was written (pac can fail in the
+// publish, after the page and its messages are written), so an update is not sent again for it either: it is told as one that may have landed. Only a CREATE that
+// failed outright and left nothing in the listing is retried.
+test('a transient-looking failure on an ordinary update is not retried: it is reported as one that may have landed', async () => {
   let attempts = 0;
   const run = async () => {
     attempts += 1;
@@ -1101,9 +1343,9 @@ test('a transient failure on an ordinary update is still retried', async () => {
   await assert.rejects(
     makeGenpageCli('https://x', { run, sleep: async () => {} })
       .upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
-    /pac genpage upload failed/i);
-  assert.ok(attempts > 1,
-    `a transient fault must still be retried; ran ${attempts} attempt(s)`);
+    /failed \(Error: The service is temporarily unavailable\. Please try again\.\) — the UPDATE of page [^ ]+ MAY HAVE LANDED/);
+  assert.strictEqual(attempts, 1,
+    `a failed UPDATE must not be sent again; ran ${attempts} attempt(s)`);
 });
 
 // Even a deterministic-looking failure can leave a row, but its id does not authorize another mutation.
@@ -1139,4 +1381,778 @@ test('enumeratePages can include unpublished app-scoped pages without changing t
   assert.ok(!seen[0].includes('--include-unpublished'), 'default enumerate call is unchanged for existing callers');
   assert.ok(seen[1].includes('--app-id') && seen[1].includes('app-1'), 'option still combines with --app-id');
   assert.ok(seen[1].includes('--include-unpublished'), 'the requested option reaches pac argv');
+});
+
+// ── A pac call has a time limit ──────────────────────────────────────────────────────────────────────────────────────────────────
+// A page upload once stalled — no CPU, no network — for 17 minutes, until the process was killed by hand. So a pac call waits a bounded time, ends the WHOLE
+// process tree when it runs out, and reports `{ status: null, timedOut: true }`, which no exit code is, so a caller can tell a stalled call from a failed one.
+// What each caller does about it follows from what the call can have done before it was stopped (pac's upload writes the page, records its prompt and agent message,
+// prints `Page ID`, then publishes):
+//   list, download    read only                                              → retried once
+//   upload (UPDATE)   may have landed, or be landing                         → NOT retried: a second send can record the prompt twice and overwrite a later change; reported as one that may have landed
+//   upload (CREATE)   may have been created, or still be being created       → an UNCERTAIN create: reported, and it is NEVER re-run; a Page ID already printed names the page it made
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+const { setTimeout: sleepMs } = require('node:timers/promises');
+const { PAC_TIMEOUT_ENV } = require('../lib/cli-failure.js');
+
+// The deadline of a pac call, in the test's hands: runPac arms it with the budget it was given, and `fire()` is the moment that time passes. No test here waits for a real timer.
+function manualClock() {
+  const clock = {
+    callback: null,
+    armedFor: null,
+    setTimeout(callback, ms) { clock.callback = callback; clock.armedFor = ms; return clock; },
+    clearTimeout() { clock.callback = null; },
+    unref() { return clock; },
+    get armed() { return clock.callback !== null; },
+    fire() {
+      const callback = clock.callback;
+      assert.ok(callback, 'the deadline is armed');
+      clock.callback = null;
+      callback();
+    },
+  };
+  return clock;
+}
+// A pac that is never going to finish by itself: pipes to write to, a pid, and nothing else happens until the test says so.
+function stalledChild(pid = 4242) {
+  const child = new EventEmitter();
+  child.pid = pid;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.unrefs = 0;
+  child.unref = () => { child.unrefs += 1; };
+  return child;
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+// Waits for something that will happen, and ends the moment it does; the bound only turns a hang into a failure that says what never happened.
+async function until(condition, what, limitMs = 60000) {
+  const deadline = Date.now() + limitMs;
+  while (!condition()) {
+    if (Date.now() > deadline) assert.fail(`${what} did not happen within ${limitMs}ms`);
+    await sleepMs(10);
+  }
+}
+const timedOutRun = (ms = 180000, command = 'pac model genpage list') => ({ status: null, timedOut: true, timeoutMs: ms, command, stdout: '', stderr: '' });
+
+test('runPac gives up on a pac that never finishes: partial output kept, the tree killed once, and a result that says it timed out', async () => {
+  const clock = manualClock();
+  const child = stalledChild();
+  const killed = [];
+  const results = [];
+  const call = runPac(['model', 'genpage', 'upload', '--code-file', 'a.tsx'], { timeoutMs: 600000, clock, spawn: () => child, killTree: (c) => killed.push(c) })
+    .then((r) => { results.push(r); return r; });
+  assert.strictEqual(clock.armedFor, 600000, 'armed with the budget it was given');
+  child.stdout.write('Connected as tester\n');
+  child.stderr.write('Warning: slow response\n');
+  await settle();
+  assert.strictEqual(results.length, 0, 'still waiting: a slow call is not a stalled one');
+  clock.fire();
+  const r = await call;
+  assert.strictEqual(r.status, null, 'no exit code, because there was no exit');
+  assert.strictEqual(r.timedOut, true);
+  assert.strictEqual(r.timeoutMs, 600000);
+  assert.strictEqual(r.command, 'pac model genpage upload');
+  assert.strictEqual(r.stdout, 'Connected as tester\n', 'what pac printed before it stalled is kept');
+  assert.match(r.stderr, /Warning: slow response/);
+  assert.deepStrictEqual(killed, [child], 'the whole tree is ended, once');
+  assert.ok(child.stdout.destroyed && child.stderr.destroyed, 'the pipes are released, so a survivor that holds them cannot keep this process alive');
+  assert.ok(child.unrefs >= 1, 'and the child no longer holds the event loop open');
+  // A child that closes, or fails, after its time was up cannot settle the call a second time or be killed again.
+  child.emit('error', new Error('late failure'));
+  child.emit('close', 0);
+  await settle();
+  assert.strictEqual(results.length, 1, 'resolved once');
+  assert.strictEqual(results[0], r);
+  assert.strictEqual(r.status, null, 'the result is unchanged by the late close');
+  assert.strictEqual(killed.length, 1);
+});
+
+test('runPac leaves a call that ends in time alone: no kill, and the deadline is disarmed', async () => {
+  const clock = manualClock();
+  const child = stalledChild();
+  const killed = [];
+  const call = runPac(['model', 'genpage', 'list'], { timeoutMs: 60000, clock, spawn: () => child, killTree: (c) => killed.push(c) });
+  child.stdout.write('Found 0 generated page(s):\n');
+  child.stdout.end();
+  child.stderr.end();
+  await settle();
+  child.emit('close', 0);
+  const r = await call;
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, 'Found 0 generated page(s):\n');
+  assert.strictEqual(r.timedOut, undefined, 'a result that did not time out does not say so');
+  assert.strictEqual(clock.armed, false, 'a deadline left armed would kill a later reader of the same pipes');
+  assert.deepStrictEqual(killed, []);
+  // A non-zero exit is still just an exit code.
+  const failing = stalledChild();
+  const failed = runPac(['model', 'genpage', 'list'], { timeoutMs: 60000, clock: manualClock(), spawn: () => failing, killTree: () => assert.fail('nothing to kill') });
+  failing.emit('close', 3);
+  assert.strictEqual((await failed).status, 3);
+});
+
+test('runPac never arms a deadline for a pac that could not be started, and every pac call is bounded by default', async () => {
+  const clock = manualClock();
+  const r = await runPac(['model', 'genpage', 'list'], { timeoutMs: 600000, clock, spawn: () => { throw new Error('spawn pac ENOENT: not found on PATH'); }, killTree: () => assert.fail('nothing to kill') });
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /ENOENT/);
+  assert.strictEqual(r.timedOut, undefined);
+  assert.strictEqual(clock.armed, false);
+  // No budget given: the read budget applies, so no call is ever unbounded.
+  const unbounded = manualClock();
+  const child = stalledChild();
+  const call = runPac(['model', 'genpage', 'list'], { clock: unbounded, spawn: () => child, killTree: () => {} });
+  assert.strictEqual(unbounded.armedFor, 180000);
+  child.emit('close', 0);
+  await call;
+});
+
+// The real thing, because a stub that "kills" a fake proves only what its author believed. On Windows pac is a `pac.cmd` shim, so the tree is
+// cmd.exe → node (the stalled pac) → node (a process it started): ending the shim alone would leave the other two running. Each of the two writes a
+// heartbeat file every 50 ms; a process that is gone stops writing — which, unlike asking whether a pid exists, cannot be fooled by a zombie or a reused pid.
+function makeHangingPac() {
+  const dir = scratch('genpage-cli-hangingpac-');
+  const script = path.join(dir, 'hanging-pac.js');
+  // Both processes end by themselves after a minute, so a run in which the kill failed (or never came) leaves nothing running on the machine.
+  fs.writeFileSync(script, [
+    "const fs = require('fs');",
+    "const base = process.argv[process.argv.indexOf('--hang') + 1];",
+    "const beat = \"const fs = require('fs'); setTimeout(() => process.exit(0), 60000); setInterval(() => fs.writeFileSync(process.argv[1], String(process.hrtime.bigint())), 50);\";",
+    "require('child_process').spawn(process.execPath, ['-e', beat, base + '.grandchild'], { stdio: 'ignore', windowsHide: true });",
+    'setTimeout(() => process.exit(0), 60000);',
+    "setInterval(() => fs.writeFileSync(base + '.pac', String(process.hrtime.bigint())), 50);",
+    '',
+  ].join('\n'), 'utf8');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'pac.cmd'), `@"${process.execPath}" "${script}" %*\r\n`, 'utf8');
+  } else {
+    fs.writeFileSync(path.join(dir, 'pac'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  }
+  return dir;
+}
+const readBeat = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
+
+test('runPac: a real stalled pac, and the process it started, are both ended when the time is up', async () => {
+  const dir = makeHangingPac();
+  const base = path.join(scratch('genpage-cli-beats-'), 'beat');
+  const files = [`${base}.pac`, `${base}.grandchild`];
+  const clock = manualClock();
+  const result = await withPathFirst(dir, async () => {
+    const call = runPac(['model', 'genpage', 'upload', '--hang', base], { timeoutMs: 600000, clock });
+    // Both are running — each has beaten at least twice — before the deadline passes, so what is ended below is two live processes, however slow this machine is.
+    const firstSeen = files.map(() => null);
+    await until(() => files.every((file, i) => {
+      const beat = readBeat(file);
+      if (beat !== null && firstSeen[i] === null) firstSeen[i] = beat;
+      return beat !== null && beat !== firstSeen[i];
+    }), 'the stalled pac and the process under it starting');
+    clock.fire();
+    return call;
+  });
+  assert.strictEqual(result.timedOut, true);
+  assert.strictEqual(result.status, null);
+  await sleepMs(300); // a beat already in flight lands
+  const after = files.map(readBeat);
+  await sleepMs(500); // ten beats of a live process
+  assert.deepStrictEqual(files.map(readBeat), after, 'neither the stalled pac nor the process under it is still running');
+});
+
+// ── What the callers do with a timeout ───────────────────────────────────────────────────────────────────────────────────────────
+
+test('every pac call gets the budget of its kind: 3 min to list or download, 10 min to upload, or the environment override', async () => {
+  const seen = [];
+  const run = async (args, options) => {
+    seen.push([args[2], options && options.timeoutMs]);
+    if (args[2] === 'list') return { status: 0, stdout: LIST_ONE, stderr: '' };
+    return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
+  };
+  const exercise = async (processEnv) => {
+    seen.length = 0;
+    const cli = makeGenpageCli('https://x', { run, sleep: async () => {}, processEnv });
+    await cli.enumerate({ appId: 'a' });
+    await cli.enumeratePages('a', { includeUnpublished: true });
+    await cli.enumerateEnv();
+    await cli.list({ appId: 'a' });
+    await cli.download({ appId: 'a', outputDir: 'out' });
+    await cli.upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' });
+    return seen.map(([kind, ms]) => `${kind}:${ms}`);
+  };
+  assert.deepStrictEqual(await exercise({}), ['list:180000', 'list:180000', 'list:180000', 'list:180000', 'download:180000', 'upload:600000']);
+  assert.deepStrictEqual(await exercise({ [PAC_TIMEOUT_ENV]: '45000' }), ['list:45000', 'list:45000', 'list:45000', 'list:45000', 'download:45000', 'upload:45000']);
+  assert.deepStrictEqual(await exercise({ [PAC_TIMEOUT_ENV]: 'soon' }), ['list:180000', 'list:180000', 'list:180000', 'list:180000', 'download:180000', 'upload:600000'], 'an unusable value keeps the defaults');
+});
+
+test('a listing that times out is retried once, then reported as a timeout — never as an empty app or environment', async () => {
+  const calls = {
+    enumerate: (cli) => cli.enumerate({ appId: 'app-1' }),
+    enumeratePages: (cli) => cli.enumeratePages('app-1', { includeUnpublished: true }),
+    enumerateEnv: (cli) => cli.enumerateEnv(),
+  };
+  for (const [name, call] of Object.entries(calls)) {
+    let n = 0;
+    const recovers = makeGenpageCli('env', { run: async () => { n += 1; return n === 1 ? timedOutRun() : { status: 0, stdout: LIST_ONE, stderr: '' }; }, sleep: async () => {}, attempts: 3 });
+    const ok = await call(recovers);
+    assert.strictEqual(ok.ok, true, `${name}: the retry reads the listing`);
+    assert.strictEqual(n, 2, `${name}: one retry`);
+
+    n = 0;
+    const stalls = makeGenpageCli('env', { run: async () => { n += 1; return timedOutRun(); }, sleep: async () => {}, attempts: 3 });
+    const r = await call(stalls);
+    assert.strictEqual(r.ok, false, `${name}: a listing that never answers is not an empty one`);
+    assert.strictEqual(n, 2, `${name}: it stops after the second timeout, though the ordinary budget is three attempts`);
+    assert.match(r.error, /failed after 2 attempt\(s\): `pac model genpage list` did not finish within 180 s and was stopped/, name);
+    assert.match(r.error, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS=/, `${name}: and says how to allow it longer`);
+    assert.doesNotMatch(r.error, /null/, `${name}: no "exited null"`);
+  }
+  // Ordinary failures keep the ordinary budget, and a timeout among them counts once.
+  let n = 0;
+  const mixed = makeGenpageCli('env', { run: async () => { n += 1; return n === 1 ? timedOutRun() : n === 2 ? { status: 1, stdout: '', stderr: 'flake' } : { status: 0, stdout: LIST_ONE, stderr: '' }; }, sleep: async () => {}, attempts: 3 });
+  assert.strictEqual((await mixed.enumerateEnv()).ok, true);
+  assert.strictEqual(n, 3);
+});
+
+test('a download that times out is retried once with the same arguments; any other failure is still reported at once', async () => {
+  const seen = [];
+  let n = 0;
+  const recovers = makeGenpageCli('env', { run: async (args) => { seen.push(args); n += 1; return n === 1 ? timedOutRun(180000, 'pac model genpage download') : { status: 0, stdout: '', stderr: '' }; }, sleep: async () => {} });
+  assert.strictEqual(await recovers.download({ appId: 'app-1', outputDir: 'out', pageIds: [GP_A] }), true);
+  assert.strictEqual(seen.length, 2);
+  assert.deepStrictEqual(seen[1], seen[0], 'a read is repeated exactly');
+
+  n = 0;
+  const stalls = makeGenpageCli('env', { run: async () => { n += 1; return timedOutRun(180000, 'pac model genpage download'); }, sleep: async () => {} });
+  await assert.rejects(stalls.download({ appId: 'app-1', outputDir: 'out' }), /pac genpage download failed: `pac model genpage download` did not finish within 180 s and was stopped/);
+  assert.strictEqual(n, 2, 'one retry, then the timeout is reported');
+
+  n = 0;
+  const fails = makeGenpageCli('env', { run: async () => { n += 1; return { status: 1, stdout: '', stderr: 'Error: boom' }; }, sleep: async () => {} });
+  await assert.rejects(fails.download({ appId: 'app-1', outputDir: 'out' }), /pac genpage download failed: Error: boom/);
+  assert.strictEqual(n, 1, 'an ordinary failure is not retried, as before');
+});
+
+// An UPDATE names the page it writes (`--page-id`), but a second send is not harmless for that: pac writes the page, records the prompt and the agent message in two separate
+// requests, prints `Page ID`, then publishes — so a call stalled in the publish has already written everything, and a re-send records the prompt twice and goes out minutes after
+// the caller's own checks, overwriting whatever the maker saved meanwhile. So it is reported, with what to look at, and the caller's own guards decide a re-run.
+test('an UPDATE that times out is NOT sent again: it is reported as one that may have landed, with the check to run before anything is re-run', async () => {
+  const seen = [];
+  const run = async (args) => { seen.push(args); return seen.length === 1 ? timedOutRun(600000, 'pac model genpage upload') : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; };
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {}, attempts: 3 });
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'out/overview.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /^pac genpage upload for 'Overview' timed out after 600 s and was stopped — the UPDATE of page 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 MAY HAVE LANDED: /);
+    assert.match(e.message, /pac writes the page, then records the prompt and the agent message, then publishes/, 'what it may have got through');
+    assert.match(e.message, /It was NOT sent again: a second send can record the prompt twice, and would overwrite a change made to the page since\./);
+    assert.match(e.message, /genpage-base\.js check --env https:\/\/contoso\.crm\.dynamics\.com --app-id app-1 --page-id 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 --file out\/overview\.tsx/, 'the check to run, with this call\'s own values');
+    assert.match(e.message, /"contentSame": true means the update landed; "deployed": "unchanged" means it did not/);
+    assert.match(e.message, /re-run the upload: its own checks decide whether it may go ahead\./);
+    assert.match(e.message, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS=1200000 allows a slow upload longer\./);
+    assert.doesNotMatch(e.message, /retry\b/i, 'a stalled upload is not told to "retry"');
+    return true;
+  });
+  assert.strictEqual(seen.length, 1, 'one send, though the ordinary budget is three attempts: it is not run a second time, and nothing is listed or snapshotted around it');
+  assert.strictEqual(seen[0][2], 'upload');
+  assert.ok(seen[0].includes('--page-id') && seen[0].includes(GUID));
+  // An update that FAILED is not sent again either (the tests of a failed UPDATE below): only how it is told differs.
+  let n = 0;
+  const flaky = makeGenpageCli('https://x', { run: async () => { n += 1; return n === 1 ? { status: 1, stdout: '', stderr: 'flaky' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; }, sleep: async () => {} });
+  await assert.rejects(flaky.upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }), /failed \(flaky\) — the UPDATE of page [^ ]+ MAY HAVE LANDED/);
+  assert.strictEqual(n, 1, 'a failure that is not a timeout is not sent again either');
+});
+
+test('an UPDATE that timed out after pac printed the Page ID says the page was written and the stall came while it published; at the longest budget no longer one is offered', async () => {
+  const run = async () => ({ ...timedOutRun(3600000, 'pac model genpage upload'), stdout: `Connected as tester@contoso.com\r\nUploading page...\r\nPage ID: ${GUID}\r\n` });
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /MAY HAVE LANDED: pac had printed the Page ID, which it does once the page and its messages are written, so the stall came while it was publishing\./);
+    assert.doesNotMatch(e.message, /pac writes the page, then records/, 'the general account is replaced by the specific one');
+    assert.match(e.message, /It was NOT sent again/);
+    assert.doesNotMatch(e.message, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS/, 'at the longest budget there is no longer one to suggest');
+    return true;
+  });
+  // A Page ID cut off mid-token is not one.
+  const cut = async () => ({ ...timedOutRun(600000, 'pac model genpage upload'), stdout: 'Page ID: 6e0c28a2-cdbf-41ec-91' });
+  await assert.rejects(makeGenpageCli('https://x', { run: cut, sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }), /pac writes the page, then records the prompt/);
+});
+
+// The check is a command the user — or the agent — pastes, so a code file under a folder with a space in its name (a Windows profile folder is often one) has to stay one
+// argument in it, and a path with shell syntax in it (an untrusted checkout) must not run any of it: such a path is single-quoted, and one no shell can be given unchanged
+// (a quote or a line break in it, say) is not written into the command at all — a placeholder is, and the path is named as data.
+test('the check an UPDATE that timed out points to is a whole command, and keeps a code file path one literal argument — or names it outside the command', async () => {
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async () => timedOutRun(600000, 'pac model genpage upload'), sleep: async () => {} });
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'C:\\Users\\Dev User\\pages\\overview.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /First see what is deployed: node scripts\/genpage-base\.js check --env https:\/\/contoso\.crm\.dynamics\.com --app-id app-1 --page-id 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 --file 'C:\\Users\\Dev User\\pages\\overview\.tsx' \("contentSame"/);
+    return true;
+  });
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'out/overview.tsx', name: 'Overview' }), /--file out\/overview\.tsx \("contentSame"/, 'a plain path is shown as it is');
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'pages/x;rm -rf ~;$(curl e.vil).tsx', name: 'Overview' }), (e) => {
+    assert.ok(e.message.includes("--file 'pages/x;rm -rf ~;$(curl e.vil).tsx' (\"contentSame\""), 'shell syntax in a path stays inside single quotes');
+    return true;
+  });
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: "pages/it's;echo x.tsx", name: 'Overview' }), (e) => {
+    assert.ok(e.message.includes('--file <file> ("contentSame"'), 'a path with a quote is not written into the command');
+    assert.ok(e.message.includes('<file> is "pages/it\'s;echo x.tsx"; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell. Then re-run the upload'), e.message);
+    assert.ok(!e.message.includes("--file 'pages/it"), 'never as an argument');
+    return true;
+  });
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'pages/x"y.tsx', name: 'Overview' }), (e) => {
+    assert.ok(e.message.includes('--file <file> ("contentSame"'), 'Windows PowerShell would drop the double quote on its way to node');
+    assert.ok(e.message.includes('<file> is "pages/x\\"y.tsx"; it is not written into the command'), e.message);
+    return true;
+  });
+});
+
+// The upload script sends pac a COPY of the bytes it checked (removed once pac answers) and passes the file the caller named as `sourceFile`: the check the message points to is
+// about that file — the one its base marker belongs to — never the copy, which is gone by the time anyone reads the message.
+test('the check an UPDATE that timed out points to names the caller\'s file (sourceFile), never the copy pac read', async () => {
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async () => timedOutRun(600000, 'pac model genpage upload'), sleep: async () => {} });
+  const copy = 'C:\\Users\\Dev User\\AppData\\Local\\Temp\\genpage-code-x1y2z3\\overview.tsx';
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: copy, sourceFile: 'C:\\Users\\Dev User\\pages\\overview.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /--file 'C:\\Users\\Dev User\\pages\\overview\.tsx' \("contentSame"/);
+    assert.ok(!e.message.includes('genpage-code-'), 'the copy is not named');
+    return true;
+  });
+});
+
+// The build is a different caller: it writes no base marker, so `genpage-base.js check` could only answer "unknown" about what is deployed, and the code file it hands pac — for
+// every page — is a STAGING copy that the build deletes when it ends, so the command the standalone script is told to run fails on a missing file. The build's message sends the reader
+// to the deployed page through the download the build already uses, and says what running the build again does (sdk-build.js passes `caller: 'build'`).
+test('an UPDATE that times out under the BUILD is told to read the deployed page with pac\'s download and to run the build again — never to check a file the build deletes', async () => {
+  const seen = [];
+  const run = async (args) => { seen.push(args); return seen.length === 1 ? timedOutRun(600000, 'pac model genpage upload') : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; };
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {}, attempts: 3 });
+  const staging = 'C:\\Users\\Dev User\\crm\\.maker-workspace\\.pageref-deploy\\0c9b6f1e\\overview.tsx';
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: staging, name: 'Overview', caller: 'build' }), (e) => {
+    assert.match(e.message, /^pac genpage upload for 'Overview' timed out after 600 s and was stopped — the UPDATE of page 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 MAY HAVE LANDED: /);
+    assert.match(e.message, /pac writes the page, then records the prompt and the agent message, then publishes/, 'what it may have got through is still said');
+    assert.match(e.message, /It was NOT sent again: a second send can record the prompt twice, and would overwrite a change made to the page since\./);
+    assert.match(e.message, /First see what is deployed: pac model genpage download --environment https:\/\/contoso\.crm\.dynamics\.com --app-id app-1 --page-id 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 --output-directory <folder>, then read the page\.tsx in the folder under <folder> that is named for the page id \(pac writes the id in its own letter case, so look for it without regard to case; /);
+    // pac names the downloaded folder with ITS casing of the id, which need not be the one the caller typed (genpage-base.js findDownloadedPageDir), so no path is built from the id as it was typed.
+    assert.doesNotMatch(e.message, /<folder>[\\/]6e0c28a2/, 'no path spelled with the id as typed: on a case-sensitive file system it can name a folder that is not there');
+    assert.match(e.message, /a page that links to another shows that page's id where its source in the app folder has a PAGEREF_ name/);
+    assert.match(e.message, /Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the stalled send did land, the page's history now records its prompt a second time, and anything saved to the page in Maker since is replaced by the app folder's version\. Look first if either matters\./);
+    assert.match(e.message, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS=1200000 allows a slow upload longer\./);
+    // Nothing the build cannot support: no check on a file it deletes, no base marker it never wrote, no upload script to re-run.
+    assert.doesNotMatch(e.message, /genpage-base\.js|contentSame|"deployed"|base marker|re-run the upload|its own checks decide/);
+    assert.ok(!e.message.includes(staging) && !e.message.includes('.pageref-deploy'), 'the staging copy is not named');
+    assert.doesNotMatch(e.message, /retry\b/i, 'a stalled upload is not told to "retry"');
+    assert.strictEqual(e.transient, false, 'marked so that nothing retries it');
+    return true;
+  });
+  assert.strictEqual(seen.length, 1, 'one send, as for any caller: it is not sent again');
+  assert.strictEqual(seen[0][2], 'upload');
+  // The advice's command is whole: the download it names takes exactly the arguments the wrapper's own download passes.
+  const download = [];
+  await makeGenpageCli('https://contoso.crm.dynamics.com', { run: async (args) => { download.push(args); return { status: 0, stdout: '', stderr: '' }; }, sleep: async () => {} }).download({ appId: 'app-1', outputDir: '<folder>', pageIds: [GUID] });
+  assert.deepStrictEqual(download[0].slice(0, 3), ['model', 'genpage', 'download']);
+  for (const part of ['--environment', 'https://contoso.crm.dynamics.com', '--app-id', 'app-1', '--page-id', GUID, '--output-directory']) assert.ok(download[0].includes(part), part);
+  // Any other caller — the upload script, which names no caller — keeps the check against its code file and the re-run through its own guards.
+  for (const caller of [undefined, 'upload', 'other']) {
+    await assert.rejects(makeGenpageCli('https://x', { run: async () => timedOutRun(600000, 'pac model genpage upload'), sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'out/p.tsx', name: 'N', caller }),
+      /First see what is deployed: node scripts\/genpage-base\.js check --env https:\/\/x --app-id a --page-id [^ ]+ --file out\/p\.tsx[\s\S]*Then re-run the upload: its own checks decide whether it may go ahead\./, String(caller));
+  }
+});
+
+// A stalled upload must never be sent again by anything — and the build has a retry of its own for a halt it judges transient (isTransientHalt, build-model-app.js), which would be a re-send.
+// Neither message may read as transient, with or without the marker the error carries.
+test('the message of an UPDATE that timed out is not one the build retries, for either caller', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  for (const caller of ['build', undefined]) {
+    const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async () => timedOutRun(600000, 'pac model genpage upload'), sleep: async () => {} });
+    const error = await cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'out/overview.tsx', name: 'Overview', caller }).then(() => null, (e) => e);
+    assert.ok(error, String(caller));
+    // The way the build reports it: wrapped by the runner, with the error as its cause.
+    assert.strictEqual(isTransientHalt(new BuildHalt(`pages failed: ${error.message}`, { phase: 'pages', code: 'sdk-error', cause: error })), false, `${String(caller)}: wrapped`);
+    // The words alone, as an error that does not carry the marker.
+    assert.strictEqual(isTransientHalt(new Error(error.message)), false, `${String(caller)}: the text itself`);
+  }
+});
+
+// An UPDATE that FAILS is in the same state as one that stalled: pac can fail in the publish, after it wrote the page and recorded the prompt and the agent message, so a
+// second send records them again and can overwrite a change saved in between. It is not sent again, and is told as one that may have landed — what pac had printed says how far
+// it got — with each caller's own look-first advice. An exit 0 with no Page ID is one too, whatever its words: pac said it succeeded. Only a non-zero exit for pac's own
+// arguments or files is an ordinary failure (the deterministic tests above): pac checks those before it sends anything.
+test('an UPDATE that FAILS is NOT sent again: it is reported as one that may have landed, with how far pac got and the check to run', async () => {
+  const cases = [
+    ['a non-zero exit', { status: 1, stdout: '', stderr: 'Error: Something went wrong.' },
+      /^pac genpage upload for 'Overview' failed \(Error: Something went wrong\.\) — the UPDATE of page 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 MAY HAVE LANDED: pac writes the page, then records the prompt and the agent message, then publishes, so the failure can have come after any of those\. /],
+    ['a non-zero exit after pac printed the Page ID', { status: 1, stdout: `Uploading page...\r\nPage ID: ${GUID}\r\nPublishing...\r\n`, stderr: 'Error: Publish failed.' },
+      /failed \(Error: Publish failed\.\) — the UPDATE of page [^ ]+ MAY HAVE LANDED: pac had printed the Page ID, which it does once the page and its messages are written, so the failure came while it was publishing\. /],
+    ['an exit 0 with no Page ID', { status: 0, stdout: 'Uploading page...\r\n', stderr: '' },
+      /failed \(returned no Page ID: Uploading page\.\.\.\) — the UPDATE of page [^ ]+ MAY HAVE LANDED: pac writes the page/],
+    ['an exit 0 with no Page ID, in words that read like a refused file', { status: 0, stdout: "Error: The file 'x.tsx' could not be found.\r\n", stderr: '' },
+      /failed \(returned no Page ID: Error: The file 'x\.tsx' could not be found\.\) — the UPDATE of page [^ ]+ MAY HAVE LANDED/],
+    // After the Page ID pac's only step is the publish, whose error carries the server's own text — which can read like a refused file. The Page ID proves the page and its
+    // messages were written, so it is no refusal of pac's arguments, whatever the words.
+    ['a non-zero exit after pac printed the Page ID, in words that read like a refused file', { status: 1, stdout: `Page ID: ${GUID}\r\n`, stderr: 'Error: Required file not found.' },
+      /failed \(Error: Required file not found\.\) — the UPDATE of page [^ ]+ MAY HAVE LANDED: pac had printed the Page ID, which it does once the page and its messages are written, so the failure came while it was publishing\. /],
+  ];
+  for (const [what, result, wanted] of cases) {
+    const seen = [];
+    const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async (args) => { seen.push(args); return result; }, sleep: async () => {}, attempts: 3 });
+    await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'tmp/copy/overview.tsx', sourceFile: 'out/overview.tsx', name: 'Overview' }), (e) => {
+      assert.match(e.message, wanted, what);
+      assert.match(e.message, /It was NOT sent again: a second send can record the prompt twice, and would overwrite a change made to the page since\./, what);
+      assert.match(e.message, /First see what is deployed: node scripts\/genpage-base\.js check --env https:\/\/contoso\.crm\.dynamics\.com --app-id app-1 --page-id 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 --file out\/overview\.tsx /, `${what}: the caller's file, never the copy pac read`);
+      assert.match(e.message, /Then re-run the upload: its own checks decide whether it may go ahead\.$/, what);
+      assert.doesNotMatch(e.message, /PAC_TIMEOUT_MS|timed out/, `${what}: a failure is not a timeout, and no longer budget is offered`);
+      assert.strictEqual(e.transient, false, what);
+      return true;
+    });
+    assert.strictEqual(seen.length, 1, `${what}: one send, though the budget is three attempts`);
+    assert.ok(seen[0].includes('--page-id') && seen[0].includes(GUID), what);
+  }
+  // Under the build: it keeps no base marker and deletes its staging copies, so it is told to read the deployed page with pac's download, and what a re-run of the build costs.
+  const built = makeGenpageCli('https://x', { run: async () => ({ status: 1, stdout: '', stderr: 'Error: Something went wrong.' }), sleep: async () => {} });
+  await assert.rejects(built.upload({ appId: 'a', pageId: GUID, codeFile: 'staging/p.tsx', name: 'Overview', caller: 'build' }), (e) => {
+    assert.match(e.message, /First see what is deployed: pac model genpage download --environment https:\/\/x --app-id a --page-id 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 --output-directory <folder>/);
+    assert.match(e.message, /Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the failed send did land, the page's history now records its prompt a second time/);
+    assert.doesNotMatch(e.message, /genpage-base\.js|re-run the upload/, 'no advice the build cannot follow');
+    return true;
+  });
+});
+
+// The same for every error that follows a CREATE that was sent. Their text quotes the page's name — user text, so a page called "SQL Timeouts" reads as a SQL timeout to the build's check of a transient
+// halt — and, for a listing that failed, pac's own words ("… try again later"); a re-run of the build is a second create. Each carries `transient: false`, which that check reads on the error and on
+// the halt that wraps it. The words alone DO read as transient (the control), so it is the marker that is tested.
+test('every error that follows a CREATE that was sent is one the build never retries — whatever the page is called, whatever pac said', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const TRY_AGAIN_LATER = 'Error: The service is unavailable. Please try again later.';
+  const stalled = (stdout = '') => ({ ...timedOutRun(600000, 'pac model genpage upload'), stdout });
+  const failed = (stdout = '', stderr = 'Error: the upload failed') => ({ status: 1, stdout, stderr });
+  const nothing = () => ({ status: 0, stdout: LIST_EMPTY, stderr: '' });
+  const broken = () => ({ status: 1, stdout: '', stderr: TRY_AGAIN_LATER });
+  const shows = (name) => ({ status: 0, stdout: listText([{ pageId: GUID, name }]), stderr: '' });
+  const scenarios = [
+    ['stalled, nothing visible yet', () => stalled(), nothing, /UNCERTAIN create/],
+    ['stalled, the listing then fails with "try again later"', () => stalled(), broken, /env enumeration failed/],
+    ['stalled, its page then shows up', () => stalled(), shows, /ambiguous ownership/],
+    ['stalled after pac printed the Page ID', () => stalled(`Page ID: ${GUID}`), nothing, /CREATED the page as/],
+    ['failed, the listing then fails with "try again later"', () => failed(), broken, /env enumeration failed/],
+    ['failed, its page then shows up', () => failed(), shows, /ambiguous ownership/],
+    ['failed after pac printed the Page ID, saying "try again later"', () => failed(`Page ID: ${GUID}`, TRY_AGAIN_LATER), nothing, /CREATED the page as/],
+  ];
+  let controls = 0;
+  for (const pageName of ['SQL Timeouts', 'Concurrent Deletes', 'Overview']) {
+    for (const [what, create, after, says] of scenarios) {
+      const uploads = [];
+      let lists = 0;
+      const run = async (args) => {
+        if (args[2] === 'list') { lists += 1; return lists === 1 ? { status: 0, stdout: LIST_EMPTY, stderr: '' } : after(pageName); }
+        uploads.push(args);
+        return create();
+      };
+      const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {}, attempts: 3, request: createdPage(pageName) });
+      const error = await cli.upload({ appId: 'app-1', codeFile: 'o.tsx', name: pageName }).then(() => null, (e) => e);
+      const label = `${what}, page "${pageName}"`;
+      assert.ok(error, label);
+      assert.match(error.message, says, label);
+      assert.strictEqual(uploads.length, 1, `${label}: one create`);
+      assert.strictEqual(error.transient, false, `${label}: marked`);
+      assert.strictEqual(isTransientHalt(error), false, `${label}: bare`);
+      assert.strictEqual(isTransientHalt(new BuildHalt(`pages failed: ${error.message}`, { phase: 'pages', code: 'sdk-error', cause: error })), false, `${label}: as the runner wraps it`);
+      // The words alone, with no marker: what the check would have made of them.
+      if (isTransientHalt(new Error(error.message))) controls += 1;
+    }
+  }
+  assert.ok(controls >= 10, `the marker is what stops the retry: without it ${controls} of these read as transient`);
+  // Not a blanket: a listing that fails BEFORE any create was sent leaves nothing to duplicate, and stays an error the build may retry.
+  const snapshotFails = makeGenpageCli('https://x', { run: async () => ({ status: 1, stdout: '', stderr: TRY_AGAIN_LATER }), sleep: async () => {}, attempts: 3 });
+  const early = await snapshotFails.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }).then(() => null, (e) => e);
+  assert.match(early.message, /cannot snapshot the environment before create/);
+  assert.notStrictEqual(early.transient, false);
+  assert.strictEqual(isTransientHalt(early), true);
+});
+
+// A run its caller ENDED (abort(), runPac's `signal`) says as little about what it did as one that timed out: pac may have written the page, may still be writing it, or may never have started.
+// So an upload that ends that way is held to the same rule — told like a stalled one, never sent again by the client's own attempts, and never by the build's re-run of a halt that reads as
+// transient — in the UPDATE branch and in every branch of an uncertain CREATE.
+test('an upload whose run was ENDED is never sent again — an UPDATE, and a CREATE in every branch — and each error is one the build never retries', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const TRY_AGAIN_LATER = 'Error: The service is unavailable. Please try again later.';
+  const ended = (stdout = '') => ({ status: 1, stdout, stderr: 'pac was ended: its answer is no longer needed', ended: true });
+  const nothing = () => ({ status: 0, stdout: LIST_EMPTY, stderr: '' });
+  const broken = () => ({ status: 1, stdout: '', stderr: TRY_AGAIN_LATER });
+  const shows = (name) => ({ status: 0, stdout: listText([{ pageId: GUID, name }]), stderr: '' });
+  const neverRetried = (error, label) => {
+    assert.strictEqual(error.transient, false, `${label}: marked`);
+    assert.strictEqual(isTransientHalt(error), false, `${label}: bare`);
+    assert.strictEqual(isTransientHalt(new BuildHalt(`pages failed: ${error.message}`, { phase: 'pages', code: 'sdk-error', cause: error })), false, `${label}: as the runner wraps it`);
+    assert.doesNotMatch(error.message, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS/, `${label}: a longer budget is no answer to a run that was ended, not stalled`);
+  };
+
+  // An UPDATE: one send, no pause for a second, and the error says it may have landed.
+  const sent = [];
+  const pauses = [];
+  const update = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async (args) => { sent.push(args); return ended(); }, sleep: async (ms) => { pauses.push(ms); }, attempts: 3 });
+  const updateError = await update.upload({ appId: 'app-1', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }).then(() => null, (e) => e);
+  assert.match(updateError.message, /^pac genpage upload failed for 'Overview': pac was ended: its answer is no longer needed — the UPDATE of page 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 may have landed before it was ended, and it was NOT sent again: look at the page before running it again$/);
+  assert.strictEqual(sent.length, 1, 'one send, though the ordinary budget is three attempts');
+  assert.deepStrictEqual(pauses, [], 'and no pause for an attempt that will not be made');
+  neverRetried(updateError, 'an UPDATE that was ended');
+
+  // A CREATE. Each scenario is what the environment answers after the create was ended: nothing yet, a listing that fails, a page that shows up, and a Page ID pac had already printed.
+  const scenarios = [
+    ['nothing visible yet', () => ended(), nothing, /was ended before it answered — an UNCERTAIN create: no new page is visible in the environment yet/],
+    ['the listing then fails with "try again later"', () => ended(), broken, /was ended before it answered, and had an uncertain result and env enumeration failed/],
+    ['its page then shows up', () => ended(), shows, /was ended before it answered, and had an uncertain create \(ambiguous ownership\)/],
+    ['after pac printed the Page ID', () => ended(`Page ID: ${GUID}`), nothing, /failed after it had CREATED the page as 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35/],
+  ];
+  for (const pageName of ['SQL Timeouts', 'Overview']) {
+    for (const [what, create, after, says] of scenarios) {
+      const uploads = [];
+      let lists = 0;
+      const run = async (args) => {
+        if (args[2] === 'list') { lists += 1; return lists === 1 ? { status: 0, stdout: LIST_EMPTY, stderr: '' } : after(pageName); }
+        uploads.push(args);
+        return create();
+      };
+      const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {}, attempts: 3, request: createdPage(pageName) });
+      const error = await cli.upload({ appId: 'app-1', codeFile: 'o.tsx', name: pageName }).then(() => null, (e) => e);
+      const label = `${what}, page "${pageName}"`;
+      assert.ok(error, label);
+      assert.match(error.message, says, label);
+      assert.strictEqual(uploads.length, 1, `${label}: one create, never a second`);
+      neverRetried(error, label);
+    }
+  }
+
+  // The contrast: a create that FAILED outright (not ended) and left nothing is still safe to run again.
+  let creates = 0;
+  const failed = makeGenpageCli('https://x', { run: async (args) => { if (args[2] === 'list') return nothing(); creates += 1; return creates === 1 ? { status: 1, stdout: '', stderr: 'flaky' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; }, sleep: async () => {}, attempts: 3 });
+  assert.strictEqual((await failed.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' })).pageId, GUID);
+  assert.strictEqual(creates, 2);
+});
+
+// An UPDATE is never paused between two attempts: one that failed is not sent again (the tests of a failed UPDATE above), so it is reported at once — and its error is one
+// the build never retries, whatever the page is called and whatever pac said. The words alone DO read as transient (the control), so it is the marker that is tested.
+test('an UPDATE that fails is never paused for or sent again, and its error is one the build never retries — whatever the page is called, whatever pac said', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  for (const caller of ['build', undefined]) {
+    const runs = [];
+    const pauses = [];
+    const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async (args) => { runs.push(args); return { status: 1, stdout: '', stderr: 'Error: The service is busy, try again later.' }; }, sleep: async (ms) => { pauses.push(ms); }, attempts: 3 });
+    const error = await cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'o.tsx', name: 'SQL Timeouts', caller }).then(() => null, (e) => e);
+    assert.match(String(error && error.message), /^pac genpage upload for 'SQL Timeouts' failed \(Error: The service is busy, try again later\.\) — the UPDATE of page [^ ]+ MAY HAVE LANDED/, String(caller));
+    assert.strictEqual(runs.length, 1, `${String(caller)}: one send`);
+    assert.deepStrictEqual(pauses, [], `${String(caller)}: no pause for an attempt that will not be made`);
+    assert.strictEqual(error.transient, false, String(caller));
+    assert.strictEqual(isTransientHalt(error), false, String(caller));
+    assert.strictEqual(isTransientHalt(new BuildHalt(`pages failed: ${error.message}`, { phase: 'pages', code: 'sdk-error', cause: error })), false, `${String(caller)}: wrapped`);
+    assert.strictEqual(isTransientHalt(new Error(error.message)), true, `${String(caller)}: the control — the text alone reads as transient`);
+  }
+});
+
+// A CREATE that timed out may have landed, may be landing, or may never have started. The env-wide id diff reports what is already visible; what is not visible YET
+// proves nothing, because the service may still be working — so a timed-out create is never run again, whatever the diff shows. And what is said to do next must not be
+// "update it" or "create it again" when the page the stalled create left behind is not in the app's navigation: an update of such a page is refused, a create duplicates it.
+// `printed` is what pac had written to stdout when it was stopped; `lists` counts the environment listings made.
+function createRun({ afterShows = [], uploads, listFails = false, printed = '', lists = { n: 0 } }) {
+  return async (args) => {
+    if (args[2] === 'list') {
+      lists.n += 1;
+      if (lists.n > 1 && listFails) return { status: 1, stdout: '', stderr: 'list failed' };
+      return { status: 0, stdout: lists.n === 1 || !afterShows.length ? LIST_EMPTY : listText(afterShows), stderr: '' };
+    }
+    uploads.push(args);
+    return { ...timedOutRun(600000, 'pac model genpage upload'), stdout: printed };
+  };
+}
+const ADD_PAGE = (id, app = 'a') => new RegExp(`add page ${id} to the app's navigation — in Maker, or with \`pac model genpage add --environment https://x --app-id ${app} --page-id ${id} --publish\``);
+
+test('a CREATE that times out is an uncertain create: its candidates are reported, and no create or update follows', async () => {
+  const uploads = [];
+  const cli = makeGenpageCli('https://x', { run: createRun({ afterShows: [{ pageId: GUID, name: 'Overview' }], uploads }), sleep: async () => {}, request: createdPage() });
+  await assert.rejects(cli.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /timed out and was stopped, and had an uncertain create \(ambiguous ownership\)/);
+    assert.ok(e.message.includes(`${GUID}: stored name "Overview"`));
+    // A candidate that appeared after a stalled create is most likely not in the app's navigation, so the advice places it first — an update of it would be refused.
+    assert.match(e.message, ADD_PAGE(GUID), 'it says how to place the page');
+    assert.match(e.message, new RegExp(`re-run the upload as an update with --page-id ${GUID} \\(a build: set that page's pageId to ${GUID} in the App Spec\\); or delete page ${GUID} and re-run the create`));
+    assert.match(e.message, /otherwise leave them and re-run the create\./, 'and a page that is not yours is left alone');
+    assert.doesNotMatch(e.message, /If it is yours, re-run the upload as an update/, 'update-it-straight-away is not the way on for a page the stalled create left out of the navigation');
+    return true;
+  });
+  assert.strictEqual(uploads.length, 1, 'the one create; neither a second create nor an update of the candidate');
+  assert.ok(!uploads[0].includes('--page-id'));
+  // Two candidates: the advice does not pick one for the maker.
+  const other = '5c0a4889-45fd-46ea-91a8-ff876914d644';
+  const several = makeGenpageCli('https://x', { run: createRun({ afterShows: [{ pageId: GUID, name: 'Overview' }, { pageId: other, name: 'Detail' }], uploads: [] }), sleep: async () => {}, request: createdPage() });
+  await assert.rejects(several.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), (e) => ADD_PAGE('<its id>').test(e.message) && e.message.includes(GUID) && e.message.includes(other));
+});
+
+test('a CREATE that times out with nothing visible yet is NOT run again — the service may still be creating it', async () => {
+  const uploads = [];
+  const cli = makeGenpageCli('https://x', { run: createRun({ uploads }), sleep: async () => {}, attempts: 3 });
+  await assert.rejects(cli.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /pac genpage upload for 'Overview' timed out/);
+    assert.match(e.message, /UNCERTAIN create/);
+    assert.match(e.message, /may still be (?:creating|running)/);
+    assert.match(e.message, /Refusing to re-run the create/);
+    assert.match(e.message, /pac model genpage list --environment https:\/\/x --include-unpublished/, 'it says how to look');
+    // If the page does appear it is the unplaced page of a stalled create: placing it comes before any update, and deleting it before another create.
+    assert.match(e.message, ADD_PAGE('<its id>'), 'and what to do if the page appears');
+    assert.match(e.message, /; or delete page <its id> and re-run the create; if none appears, re-run the create\./);
+    assert.match(e.message, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS=1200000 allows a slow upload longer\./);
+    return true;
+  });
+  assert.strictEqual(uploads.length, 1, 'never a second create, though the ordinary budget is three attempts');
+  // The contrast that pins the rule: a create that FAILED (not timed out) and left nothing is still safe to run again.
+  let creates = 0;
+  const failed = makeGenpageCli('https://x', { run: async (args) => { if (args[2] === 'list') return { status: 0, stdout: LIST_EMPTY, stderr: '' }; creates += 1; return creates === 1 ? { status: 1, stdout: '', stderr: 'flaky' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; }, sleep: async () => {}, attempts: 3 });
+  assert.strictEqual((await failed.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' })).pageId, GUID);
+  assert.strictEqual(creates, 2);
+});
+
+// pac prints `Page ID: <id>` after it has written the page and its messages and before it publishes, and before `--add-to-sitemap` places it. A create stopped after that has
+// CREATED the page: it is reported as that page, whatever else is visible, and the way on is to place it or delete it — never "update it" (refused: not in the app's
+// navigation), and never "run the create again" (a duplicate).
+test('a CREATE that times out after pac printed the Page ID is reported as created as that page, stalled before it was published or placed', async () => {
+  const uploads = [];
+  const lists = { n: 0 };
+  const printed = `Connected as tester@contoso.com\r\nUploading page 'Overview'...\r\nPage ID: ${GUID}\r\n`;
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: createRun({ uploads, printed, lists }), sleep: async () => {}, attempts: 3 });
+  await assert.rejects(cli.upload({ appId: 'app-9', codeFile: 'o.tsx', name: 'Overview', addToSitemap: true }), (e) => {
+    assert.match(e.message, /^pac genpage upload for 'Overview' timed out after 600 s and was stopped after it had CREATED the page as 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 /);
+    assert.match(e.message, /stalled before the page was published, and before it was added to the app's navigation if that was asked for\./);
+    assert.match(e.message, /The create was NOT run again: a second create would make a duplicate page\./);
+    assert.match(e.message, new RegExp(`add page ${GUID} to the app's navigation — in Maker, or with \`pac model genpage add --environment https://contoso\\.crm\\.dynamics\\.com --app-id app-9 --page-id ${GUID} --publish\``));
+    assert.match(e.message, new RegExp(`re-run the upload as an update with --page-id ${GUID} \\(a build: set that page's pageId to ${GUID} in the App Spec\\); or delete page ${GUID} and re-run the create\\.`));
+    assert.match(e.message, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS=1200000 allows a slow upload longer\./);
+    // The one way to run the create again comes only after the page has been deleted — never as the way on from a page that is still there.
+    assert.doesNotMatch(e.message, /if none appears|UNCERTAIN create|Wait a few minutes/, 'no wait-and-see: the page is known to exist');
+    assert.strictEqual((e.message.match(/re-run the create/g) || []).length, 1);
+    return true;
+  });
+  assert.strictEqual(uploads.length, 1, 'never a second create, though the ordinary budget is three attempts');
+  assert.strictEqual(lists.n, 1, 'only the snapshot before the create: the page is named by what pac printed, so nothing is listed to find it');
+  // pac's partial output is read the way a finished one is: the id must be a whole GUID, and not the start of a longer token.
+  for (const cut of ['Page ID: 6e0c28a2-cdbf-41ec-91', `Page ID: ${GUID}f`, 'Page ID: ', '']) {
+    const lists2 = { n: 0 };
+    const unsure = makeGenpageCli('https://x', { run: createRun({ uploads: [], printed: cut, lists: lists2 }), sleep: async () => {}, attempts: 3 });
+    await assert.rejects(unsure.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), /an UNCERTAIN create: no new page is visible/, JSON.stringify(cut));
+    assert.strictEqual(lists2.n, 2, `${JSON.stringify(cut)}: no usable id, so the environment is listed to look for the page`);
+  }
+  // A page id printed by a create that FAILED is the same: pac prints it once the page is written, so the page exists — even when the environment's listing does not show it yet — and the
+  // create is not run again. (A failure with no usable id is an ordinary uncertain create: the next test.)
+  const failedLists = { n: 0 };
+  const failedUploads = [];
+  const failed = makeGenpageCli('https://x', { run: async (args) => {
+    if (args[2] === 'list') { failedLists.n += 1; return { status: 0, stdout: LIST_EMPTY, stderr: '' }; }
+    failedUploads.push(args);
+    return { status: 1, stdout: `Page ID: ${GUID}`, stderr: 'boom' };
+  }, sleep: async () => {}, attempts: 3 });
+  await assert.rejects(failed.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), /failed after it had CREATED the page as 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35/);
+  assert.strictEqual(failedUploads.length, 1, 'one create, though the ordinary budget is three attempts');
+  assert.strictEqual(failedLists.n, 1, 'only the snapshot before the create: the page is named by what pac printed');
+});
+
+test('a CREATE that times out after pac printed the Page ID is reported as that page even when the environment cannot be listed', async () => {
+  const uploads = [];
+  const cli = makeGenpageCli('https://x', { run: createRun({ uploads, listFails: true, printed: `Page ID: ${GUID}` }), sleep: async () => {}, attempts: 3 });
+  await assert.rejects(cli.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), /after it had CREATED the page as 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35/);
+  assert.strictEqual(uploads.length, 1);
+});
+
+// A create that FAILS (exits non-zero) after pac printed `Page ID` is in the same state as one that stalled after it: pac has written the page, and the publish — or the placement — did not
+// finish. So it is reported as that page and never sent again, whatever the environment's listing shows (the page need not be in it yet). And the page is then not in the app's navigation,
+// so "re-run the upload as an update with --page-id" — what 2.13.0 said for such a create — is refused by genpage-upload.js ("not in the app's navigation", no base marker), and the build
+// cannot bind it. The way on is the one a stalled create gets: place the page, or delete it.
+test('a CREATE that FAILS after pac printed the Page ID is reported as created as that page and never sent again, whatever the listing shows — told to place it or delete it', async () => {
+  const printed = `Connected as tester@contoso.com\r\nPage ID: ${GUID}\r\n`;
+  for (const [what, listing] of [
+    ['the listing does not show the page yet', () => LIST_EMPTY],
+    ['the listing shows the page', () => listText([{ pageId: GUID, name: 'Overview' }])],
+    ['the listing cannot be read', null],
+  ]) {
+    const lists = { n: 0 };
+    const uploads = [];
+    const run = async (args) => {
+      if (args[2] === 'list') {
+        lists.n += 1;
+        if (lists.n > 1 && !listing) return { status: 1, stdout: '', stderr: 'list failed' };
+        return { status: 0, stdout: lists.n === 1 || !listing ? LIST_EMPTY : listing(), stderr: '' };
+      }
+      uploads.push(args);
+      return { status: 1, stdout: printed, stderr: 'Error: the page could not be published' };
+    };
+    const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {}, attempts: 3, request: createdPage() });
+    await assert.rejects(cli.upload({ appId: 'app-9', codeFile: 'o.tsx', name: 'Overview' }), (e) => {
+      assert.match(e.message, /^pac genpage upload for 'Overview' failed after it had CREATED the page as 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 \(pac prints the Page ID once the page is written\) — /, what);
+      assert.match(e.message, /it stopped before the page was published, or before it was added to the app's navigation if that was asked for \(Error: the page could not be published\)\./, `${what}: what pac said`);
+      assert.match(e.message, /The create was NOT run again: a second create would make a duplicate page\./, what);
+      assert.match(e.message, new RegExp(`To finish it, add page ${GUID} to the app's navigation — in Maker, or with \`pac model genpage add --environment https://contoso\\.crm\\.dynamics\\.com --app-id app-9 --page-id ${GUID} --publish\``), `${what}: how to place it`);
+      assert.match(e.message, new RegExp(`and then re-run the upload as an update with --page-id ${GUID} \\(a build: set that page's pageId to ${GUID} in the App Spec\\); or delete page ${GUID} and re-run the create\\.$`), `${what}: update only after it is placed`);
+      assert.doesNotMatch(e.message, /timed out|POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|ambiguous ownership|If it is yours, re-run the upload as an update/, `${what}: it did not stall, and names no candidate`);
+      assert.strictEqual(e.transient, false, `${what}: nothing re-runs it`);
+      return true;
+    }, what);
+    assert.strictEqual(uploads.length, 1, `${what}: the create is not run again, though the ordinary budget is three attempts`);
+    assert.strictEqual(lists.n, 1, `${what}: only the snapshot before the create — the page is named by what pac printed`);
+  }
+});
+
+// With no usable id printed the page can only be found by the listing, and what it shows decides what is said. The same advice applies to a candidate: place it, or delete it.
+test('a CREATE that FAILS with no Page ID printed and leaves a candidate behind is told to place the page or delete it, never to update it, which would be refused', async () => {
+  for (const [what, stdout] of [['nothing printed', 'No page id returned'], ['a page id cut off mid-token', 'Page ID: 6e0c28a2-cdbf-41ec-91']]) {
+    const lists = { n: 0 };
+    const uploads = [];
+    const run = async (args) => {
+      if (args[2] === 'list') { lists.n += 1; return { status: 0, stdout: lists.n === 1 ? LIST_EMPTY : listText([{ pageId: GUID, name: 'Overview' }]), stderr: '' }; }
+      uploads.push(args);
+      return { status: 1, stdout, stderr: 'Error: the page could not be published' };
+    };
+    const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {}, attempts: 3, request: createdPage() });
+    await assert.rejects(cli.upload({ appId: 'app-9', codeFile: 'o.tsx', name: 'Overview' }), (e) => {
+      assert.match(e.message, /had an uncertain create \(ambiguous ownership\)/, what);
+      assert.doesNotMatch(e.message, /timed out|CREATED the page as/, `${what}: it did not stall, and no id was printed`);
+      assert.ok(e.message.includes(`${GUID}: stored name "Overview"`), what);
+      assert.match(e.message, new RegExp(`If one is yours, add page ${GUID} to the app's navigation — in Maker, or with \`pac model genpage add --environment https://contoso\\.crm\\.dynamics\\.com --app-id app-9 --page-id ${GUID} --publish\``), `${what}: how to place it`);
+      assert.match(e.message, new RegExp(`and then re-run the upload as an update with --page-id ${GUID} \\(a build: set that page's pageId to ${GUID} in the App Spec\\); or delete page ${GUID} and re-run the create; otherwise leave them and re-run the create\\.`), `${what}: update only after it is placed`);
+      assert.doesNotMatch(e.message, /If it is yours, re-run the upload as an update/, `${what}: the advice that is refused is gone`);
+      assert.strictEqual(e.transient, false, `${what}: nothing re-runs it`);
+      return true;
+    }, what);
+    assert.strictEqual(uploads.length, 1, `${what}: the create is not run again`);
+  }
+});
+
+test('a CREATE that times out while the environment cannot be listed refuses to go on, as every uncertain create does — and says how to find out whether it made a page', async () => {
+  const uploads = [];
+  const cli = makeGenpageCli('https://x', { run: createRun({ uploads, listFails: true }), sleep: async () => {}, attempts: 3 });
+  await assert.rejects(cli.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /^pac genpage upload for 'Overview' timed out after 600 s and was stopped, and had an uncertain result and env enumeration failed — refusing to retry \(would risk a duplicate\): pac genpage list \(env-wide\) failed after 3 attempt\(s\): list failed\. /);
+    // Nothing is known about what the create made, so the way on is to look: wait, list, and place a page that is there — before anything is created again.
+    assert.match(e.message, /The create may have made a page\. Wait a few minutes, then run `pac model genpage list --environment https:\/\/x --include-unpublished`: if a new page with this name appears and it is yours, /);
+    assert.match(e.message, ADD_PAGE('<its id>'));
+    assert.match(e.message, /; or delete page <its id> and re-run the create; if none appears, re-run the create\. POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS=1200000 allows a slow upload longer\.$/);
+    assert.strictEqual(e.transient, false);
+    return true;
+  });
+  assert.strictEqual(uploads.length, 1);
+  // A create that FAILED (did not stall) and cannot be checked says the same, without the words about a stall or a longer budget.
+  const failedUploads = [];
+  let lists = 0;
+  const failed = makeGenpageCli('https://x', { run: async (args) => {
+    if (args[2] === 'list') { lists += 1; return lists === 1 ? { status: 0, stdout: LIST_EMPTY, stderr: '' } : { status: 1, stdout: '', stderr: 'list failed' }; }
+    failedUploads.push(args);
+    return { status: 1, stdout: '', stderr: 'Error: the upload failed' };
+  }, sleep: async () => {}, attempts: 3 });
+  await assert.rejects(failed.upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /^pac genpage upload for 'Overview' had an uncertain result and env enumeration failed — refusing to retry/);
+    assert.doesNotMatch(e.message, /timed out|POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS/);
+    assert.match(e.message, /The create may have made a page\. Wait a few minutes, then run `pac model genpage list/);
+    assert.strictEqual(e.transient, false);
+    return true;
+  });
+  assert.strictEqual(failedUploads.length, 1);
+});
+
+test('a listing that times out BEFORE a create stops it before anything is created', async () => {
+  const uploads = [];
+  const run = async (args) => { if (args[2] === 'list') return timedOutRun(); uploads.push(args); return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; };
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }),
+    /cannot snapshot the environment before create[\s\S]*did not finish within 180 s[\s\S]*refusing to create/);
+  assert.deepStrictEqual(uploads, [], 'no create was issued');
 });

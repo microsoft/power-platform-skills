@@ -2186,24 +2186,42 @@ PHASE_EXPECTATIONS.set(
 
 // --- Eval 13 -----------------------------------------------------------------------------------
 
-// LCIDs in the recorded `pac model list-languages` output. Two shapes are captured:
-//   1033 English (United States) en-US No          (the PAC table)
+// LCIDs in the recorded language-discovery output. Four shapes are captured:
+//   {"ok":true,"baseLanguage":{…},"languages":[{"lcid":1033,"code":"en-US",…},…],…}   (scripts/list-languages.js)
+//   {"ok":false,"error":"…","code":"CONNECTION_ERROR"}   (the same script failing — the planner then runs the next shape)
+//   1033 English (United States) en-US No          (the PAC table: a capture made before that script, or the fallback after it)
 //   English (United States) (1033, en-US), Arabic (Saudi Arabia) (1025, ar-SA)   (a summary)
-// An LCID counts only next to a language tag, so a version or row count never does.
+// A result that parses as the script's own JSON is read as data and as nothing else. Its `languages` are the
+// PROVISIONED languages — `baseLanguage`, `unmapped` and `summary` are not extra evidence — and a failure found nothing,
+// whatever its error text says: only the fallback after it can. A contract-2 event's result always parses, and so
+// does a log's `Result: {…}` line. Falling through to the text shapes for such a result would read an LCID out of the
+// JSON's own punctuation (`"unmapped":[1036],"summary":["1033 en-US …`) and out of an error message. In the text
+// shapes an LCID counts only next to a language tag, so a version or row count never does.
+const isLanguagesResult = (result) => Boolean(result)
+  && ((result.ok === true && Array.isArray(result.languages)) || (result.ok === false && typeof result.error === 'string'));
+
 function detectedLanguages(fixture) {
   const calls = commandCalls(fixture, LIST_LANGUAGES);
   if (!calls.length) return null;
-  const text = calls.map((c) => c.text).join('\n');
-  return [...new Set([...text.matchAll(/\b(\d{4,5})\b[^\n]{0,60}?\b[a-z]{2,3}-[A-Z]{2,4}\b/g)].map((m) => Number(m[1])))];
+  const found = new Set();
+  for (const { call, text } of calls) {
+    const result = resultObject(call);
+    if (isLanguagesResult(result)) {
+      if (result.ok) for (const language of result.languages) if (Number.isInteger(language?.lcid)) found.add(language.lcid);
+      continue;
+    }
+    for (const m of text.matchAll(/\b(\d{4,5})\b[^\n]{0,60}?\b[a-z]{2,3}-[A-Z]{2,4}\b/g)) found.add(Number(m[1]));
+  }
+  return [...found];
 }
 
 PHASE_EXPECTATIONS.set(
-  'Phase 1 (Planner): pac model list-languages output includes Arabic (1025) and French (1036) in addition to English',
+  'Phase 1 (Planner): language discovery output includes Arabic (1025) and French (1036) in addition to English',
   ({ fixture }) => {
     const lcids = detectedLanguages(fixture);
-    if (lcids === null) return fail('pac model list-languages was not run');
+    if (lcids === null) return fail('language discovery was not run (scripts/list-languages.js, or pac model list-languages as its fallback)');
     const missing = [1033, 1025, 1036].filter((id) => !lcids.includes(id));
-    return missing.length ? fail(`recorded list-languages output lacks LCID ${missing.join(', ')} (saw ${listText(lcids)})`) : pass();
+    return missing.length ? fail(`recorded language-discovery output lacks LCID ${missing.join(', ')} (saw ${listText(lcids)})`) : pass();
   }
 );
 
@@ -2212,7 +2230,10 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     if (!fixture.genpagePlan) return fail('no genpage-plan.md');
     const lcids = detectedLanguages(fixture);
-    if (lcids === null) return fail('pac model list-languages was not run, so no languages were detected');
+    if (lcids === null) return fail('language discovery was not run, so no languages were detected');
+    // A script that failed and no fallback after it: the discovery ran and read nothing, so a Localization section has
+    // no detected language to be listing — it would otherwise pass for want of anything to compare.
+    if (lcids.length === 0) return fail('language discovery detected no languages (a failed read with no pac fallback after it), so the plan has none to list');
     const section = headingSection(fixture.genpagePlan, /^#{2,3}\s+Localization\s*$/i);
     if (section === null) return fail('plan has no Localization section');
     const missing = lcids.filter((id) => !new RegExp(`\\b${id}\\b`).test(section));

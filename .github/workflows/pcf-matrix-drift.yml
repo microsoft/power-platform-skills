@@ -1,0 +1,37 @@
+# Weekly drift check for the PCF compatibility matrix. A failure here means the
+# published PCF toolchain moved; update plugins/pcf/compatibility-matrix.json
+# and committed lockfiles using the procedure in plugins/pcf/docs/pcf-design.md.
+name: pcf-matrix-drift
+
+on:
+    schedule:
+        - cron: '17 6 * * 1'
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    check-pcf-matrix-drift:
+        runs-on: ubuntu-latest
+        # Installs every template and recipe at the latest published versions; the cap turns a hung
+        # install into a failed run instead of holding a runner for the six-hour default.
+        timeout-minutes: 45
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: setup-node
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: 20
+                  cache: npm
+                  cache-dependency-path: |
+                      plugins/pcf/lock/standard/package-lock.json
+                      plugins/pcf/lock/virtual/package-lock.json
+
+            - name: probe-published-pcf-toolchain
+              shell: bash
+              run: node plugins/pcf/scripts/pcf-ci-build.js --all --latest

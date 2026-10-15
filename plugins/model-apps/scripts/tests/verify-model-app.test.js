@@ -303,6 +303,10 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
   const made = new Set();
   const fakeFs = {
     mkdirSync: (dir, opts) => { made.add(dir); events.push({ type: 'mkdirSync', dir, opts }); },
+    // The throwaway workspace verify's SDK works in: created by name, removed when the run ends. Recorded so a test
+    // can tell it from the app folder's workspace, which verify never creates or opens.
+    mkdtempSync: (prefix) => { const dir = `${prefix}x1y2z3`; made.add(dir); events.push({ type: 'mkdtempSync', dir }); return dir; },
+    rmSync: (dir, opts) => { events.push({ type: 'rmSync', dir, opts }); },
     // The workspace check inspects the final component, then creates a missing directory and
     // inspects it again. A double that only records mkdir would throw here and hide the call.
     lstatSync: (dir) => {
@@ -480,16 +484,24 @@ test('verify CLI prints per-check status and aliases missing checks into emitRes
   assert.match(stderr, /✗ verify FAIL — 1 missing \(1\/2 present\)/);
   assert.strictEqual(emitted.ok, false);
   assert.deepStrictEqual(emitted.payload.errors, ['view:new_ticket.Open Tickets']);
-  assert.ok(harness.events.some((e) => e.type === 'mkdirSync' && /\\.test-workspace\\verify$/.test(e.dir)));
+  // `--workspace` names only where the build's baseline is read from: verify creates nothing there, and its SDK
+  // works in a throwaway workspace of its own, removed before the result is printed.
+  assert.ok(!harness.events.some((e) => e.type === 'mkdirSync' && /\.test-workspace/.test(e.dir)), 'the named workspace is not created');
   assert.ok(harness.events.some((e) => e.type === 'initWorkspace'));
+  const sdkRoot = harness.events.find((e) => e.type === 'createMakerSdk').cfg.workspaceStorage.__mockWorkspaceRoot;
+  assert.doesNotMatch(sdkRoot, /\.test-workspace/, 'the SDK is not opened on the named workspace');
+  const removed = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === sdkRoot);
+  assert.ok(removed > -1, 'the throwaway workspace is removed');
+  assert.ok(removed < harness.events.findIndex((e) => e.type === 'emitResult'), 'before emitResult ends the process');
 });
 
-test('verify CLI accepts a positional spec, uses the default workspace, and prints PASS', async () => {
+test('verify CLI accepts a positional spec, leaves the default workspace alone, and prints PASS', async () => {
   // Build the path with `path.join` rather than a hard-coded `D:\...` literal: the CLI derives the
   // default workspace via path.join, so on a POSIX runner it produces `samples/.maker-workspace`
   // and a backslash-anchored assertion could never match (this test failed on every non-Windows CI
   // runner for that reason, not because the CLI was wrong).
   const specPath = path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json');
+  const defaultWorkspace = path.join(__dirname, '..', '..', 'samples', '.maker-workspace');
   const harness = loadVerifyCli({
     parseResult: { positional: [specPath], flags: { env: 'https://org.example' } },
     verifyResult: {
@@ -506,7 +518,11 @@ test('verify CLI accepts a positional spec, uses the default workspace, and prin
   assert.match(stderr, /✓ verify PASS \(1\/1 present\)/);
   assert.strictEqual(emitted.ok, true);
   assert.deepStrictEqual(emitted.payload.missing, []);
-  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
+  // The default workspace is the build's, and belongs to the environment it was first opened for: verify neither
+  // opens it for its SDK nor creates it (a read-only run must not bind a folder that has no workspace yet).
+  const sdkRoots = harness.events.filter((e) => e.type === 'createMakerSdk').map((e) => e.cfg.workspaceStorage.__mockWorkspaceRoot);
+  assert.ok(sdkRoots.length >= 1 && sdkRoots.every((root) => root !== defaultWorkspace && path.dirname(root) === os.tmpdir()), `the SDK works in a throwaway workspace: ${JSON.stringify(sdkRoots)}`);
+  assert.ok(!harness.events.some((e) => e.type === 'mkdirSync' && e.dir === defaultWorkspace), 'the default workspace is not created');
 });
 
 test('verify CLI still verifies an older colliding spec and names the holder', async () => {

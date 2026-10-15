@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest>
+  <control namespace="Contoso.Controls" constructor="StarRating" version="0.0.1" display-name-key="StarRating" description-key="StarRating_Description" control-type="standard">
+    <external-service-usage enabled="false" />
+    <property name="sampleProperty" display-name-key="Property_Display_Key" description-key="Property_Desc_Key" of-type="SingleLine.Text" usage="bound" required="true" />
+    <resources>
+      <code path="index.ts" order="1" />
+      <css path="css/StarRating.css" order="1" />
+      <resx path="strings/StarRating.1033.resx" version="1.0.0" />
+    </resources>
+    <!-- Features are declared only when this control's code uses them. -->
+  </control>
+</manifest>

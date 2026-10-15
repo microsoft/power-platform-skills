@@ -40,6 +40,9 @@ const SKILL_SDK_SURFACE = [
   'createAlternateKey',
   'createArtifact',
   'createColumn',
+  // A new table's ordinary columns follow the table in ONE atomic change set (entity-provision.js), which needs the
+  // transport's `postRaw` (lib/sdk-http-client.js); a refusal falls back to `createColumn` per column.
+  'createColumns',
   'createCustomerColumn',
   'createGlobalOptionSet',
   'createPersonaRole',
@@ -57,6 +60,9 @@ const SKILL_SDK_SURFACE = [
   'deleteSolution',
   'deleteTable',
   'deleteWebResource',
+  // A reconcile pushes an artifact only when its workspace copy differs from the last-synced snapshot
+  // (unsynced-edits.js). The check fails open: without this method the engine writes as it always did.
+  'diffArtifact',
   'disassociateRecords',
   'enrichDefaultViews',
   'fetchArtifact',
@@ -68,6 +74,13 @@ const SKILL_SDK_SURFACE = [
   'getArtifact',
   'getColumnVisualization',
   'getEntityPrivileges',
+  // `scripts/list-languages.js` reads the environment's languages (the planner's language detection, in place of
+  // `pac model list-languages`): LCIDs only — three GETs, no workspace — and maps them to culture codes itself.
+  'getEnvironmentLanguages',
+  // The dry run's read-only question to the app folder's workspace (workspaceBindingNote in lib/workspace-binding.js): which
+  // environment it belongs to. It reads manifest.json and nothing else — unlike `listArtifacts`, which also parses every
+  // saved copy it lists.
+  'getManifest',
   'getSolution',
   'initWorkspace',
   'insertStatusValue',

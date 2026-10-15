@@ -439,6 +439,13 @@ is optional — omit it to title the grid with the child entity's `pluralName` (
 supply it to override. To ship only your form and hide the blank stock "Information" form, set
 `"deactivateOtherMainForms": true` on the form (opt-in; only affects tables this build owns).
 
+By default a grid's section goes at the **end** of the form. To put it elsewhere — a full-width
+related-records grid between two sections, say — declare the form's layout (`tabs[].name` /
+`sections[].name`) and name where the grid goes: `"after": "<section>"` or `"before": "<section>"`, or
+`"tab": "<tab>"` (with `"column": <n>` for a form-column of that tab). A grid is as wide as the
+form-column it is in, so for a full-width grid use a tab of one form-column. The wireframe draws a
+placed grid where it will land; see app-spec-schema.md (*Where a sub-grid goes*).
+
 **Choosing auto vs an explicit layout.** `auto` is the right default and already adapts: it puts
 the primary field first and switches to **two columns above six fields** (Quick Create stays one
 column, which Dataverse requires). What it cannot do is *group by task*.
@@ -508,6 +515,19 @@ field the user actually prioritizes by. Direct-column filters on the view's own
 table are supported, including current-user (`ownerid` / `eq-userid`) and relative
 dates; a filter **through a related table** is not expressible and must not be
 faked — say so and propose a supported alternative.
+
+A filter on a Choice column may name the option by its label, in any language it has. The build
+resolves the label against the options the environment holds for that column, and stops — before it
+writes anything where the environment already shows the label is wrong, and in any case before any
+view is written — when a label matches no option (the error lists the valid ones), so spell it exactly
+as the column does, or use the option's integer value. (Where your spec numbers the options — inline
+`options[]`, or a global choice you declare — an option a maker renamed in the environment still resolves
+to the number your spec gave it, with a warning, unless the environment shows the options are numbered
+otherwise, as when you added options after the column was built; then it stops.) A spec with a localized
+label is checked only
+in the views phase, after the tables and columns are written, because reading option labels ahead of
+creating a multi-language label can cost it every language but the base one. This covers a column of a
+table you reuse (`account.industrycode`) without declaring it.
 
 Two edit-time limits worth stating up front, because both bite silently:
 an authored view whose name collides with the table's stock default view MERGES

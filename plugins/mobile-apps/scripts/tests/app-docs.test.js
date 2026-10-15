@@ -205,6 +205,61 @@ test('the CLI refuses a step before init and reports the reason', () => {
   assert.equal(JSON.parse(set.stdout.trim()).section, 'auth');
 });
 
+test('the phone CLI carries the full preview, including shared CSS, without rewriting screens', (t) => {
+  const root = project('docs-phone-preview');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  seeded(root);
+  const preview = '<!doctype html><html><head><style>:root{--brand:#0078d4}.card{display:flex}</style>'
+    + '</head><body><div class="screen" id="products">Products</div>'
+    + '<div class="screen" id="detail">Detail</div></body></html>';
+  const previewPath = path.join(root, '_plan_preview.html');
+  fs.writeFileSync(previewPath, preview);
+  const result = spawnSync(process.execPath, [
+    scriptPath, '--working-dir', root, 'phone', '--stage', 'screens', '--preview-file', previewPath,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(loadState(root).phone.previewHtml, preview);
+  const html = fs.readFileSync(outputPath(root), 'utf8');
+  const phone = JSON.parse(html.match(/<script id="phoneData" type="application\/json">([\s\S]*?)<\/script>/)[1]);
+  assert.equal(phone.previewHtml, preview);
+});
+
+test('replacing a full preview with legacy screens cannot leave stale markup selected', (t) => {
+  const root = project('docs-phone-source');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = initState(root, { appName: 'Screens' });
+  const screens = [{ name: 'Products', html: '<div>Products</div>' }];
+  setPhone(state, { stage: 'screens', previewHtml: '<div class="screen">Old</div>' });
+  setPhone(state, { screens });
+  assert.equal(state.phone.previewHtml, undefined);
+  assert.deepEqual(state.phone.screens, screens);
+  setPhone(state, { previewHtml: '<div class="screen">New</div>' });
+  assert.deepEqual(state.phone.screens, []);
+  assert.match(state.phone.previewHtml, /New/);
+});
+
+test('the phone CLI rejects conflicting or empty preview inputs without changing the plan', (t) => {
+  const root = project('docs-phone-input');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  seeded(root);
+  const previewPath = path.join(root, '_plan_preview.html');
+  fs.writeFileSync(previewPath, ' \n');
+  const previous = loadState(root);
+  const run = (...args) => spawnSync(process.execPath, [
+    scriptPath, '--working-dir', root, 'phone', '--stage', 'screens', ...args,
+  ], { encoding: 'utf8' });
+  const empty = run('--preview-file', previewPath);
+  assert.equal(empty.status, 1);
+  assert.match(empty.stderr, /preview HTML is empty/);
+  const conflicting = run('--preview-file', previewPath, '--screens-file', 'unused.json');
+  assert.equal(conflicting.status, 1);
+  assert.match(conflicting.stderr, /not both/);
+  const missing = run('--preview-file');
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /requires an HTML file path/);
+  assert.deepEqual(loadState(root), previous);
+});
+
 test('the data model tab carries the power-pages colour vocabulary', () => {
   const template = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8',
@@ -365,7 +420,7 @@ test('a section nobody is asked to approve does not raise the waiting banner', (
   assert.match(summarize(state).awaitingInput, /Review the data model/);
 });
 
-test('the skill marks a phase failed before it stops', () => {
+test('the skill records creation failures without mutating routing exits', () => {
   const skill = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
   );
@@ -374,7 +429,8 @@ test('the skill marks a phase failed before it stops', () => {
   // issuing it left the last phase `active`, so a terminal STOP produced a plan that reloaded
   // forever reporting work in progress on a run that had ended.
   assert.match(skill, /step --id <phase> --status failed/);
-  assert.match(skill, /Mark the phase `failed` before you stop/);
+  assert.match(skill, /Mark the active creation phase `failed` before stopping on a creation error/);
+  assert.match(skill, /Step 0 routing exits leave existing creation history untouched/);
 
   // And nothing may switch the protocol off: the plan is how an abandoned run explains itself.
   assert.doesNotMatch(skill, /Skip the protocol entirely when/);
@@ -569,6 +625,13 @@ test('a stopped plan names the failed phase by id, and a resume reopens it', () 
   const resume = skill.slice(skill.indexOf('### Step 0 '), skill.indexOf('### Step 1 '));
   assert.match(resume, /step --id <failedPhase> --status active/);
   assert.match(resume, /docs\/create-app-plan\.html/, 'a resume skips 2b, so it must reopen the plan');
+  assert.match(resume, /Reopen the build plan only after continuation approval/);
+  assert.match(resume, /failedPhase` matching the approved continuation/);
+  assert.ok(
+    resume.indexOf('return without entering Step 1 or modifying creation progress')
+      < resume.indexOf('step --id <failedPhase> --status active'),
+    'Existing-app routing must return before reopening a creation phase',
+  );
 });
 
 test('every waiting note is taken down by the step that set it', () => {

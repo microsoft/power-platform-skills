@@ -12,7 +12,7 @@
 // cases written by hand (an attribute string with a backslash-quote, so that JavaScript's strings and JSX's end in different places). A seeded generator
 // makes a failure reproducible.
 
-const { CALL, DECOYS, SIGNATURE_FRAMES, ELEMENT_FRAMES } = require('./angle-frames.js');
+const { CALL, DECOYS, SIGNATURE_FRAMES, ELEMENT_FRAMES, PROSE_COMMENT_LINES, PROSE_PATHS } = require('./angle-frames.js');
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -361,6 +361,17 @@ const HIDING_MEMBERS = [
   // A string right after a keyword, with no white space between: its quote is no apostrophe.
   "readonly'a</NAME>': number", "m: keyof'a</NAME>'", "m: T extends'a</NAME>' ? 1 : 2", "m: { [K in'a</NAME>']: T }", "m: { get'a</NAME>'(): T }",
 ];
+// Members of a type that read like the prose of an element — a URL or a label, a name and a note, with the closing tag of the head in the comment, and a type on the next line that makes it one — and the same without the closing tag.
+const PROSE_HIDING_MEMBERS = ['https: // </NAME>\n  string', 'see: // </NAME>\n  T', 'a // </NAME>\n  b: T', 'type: // </NAME>\n  string', 'default: // </NAME>\n  string', 'new // </NAME>\n  x: T', 'readonly // </NAME>\n  x: T',
+  'a:\n  // </NAME>\n  string', 'a: b // </NAME>\n  c: d', 'a? // </NAME>\n  : T', 'a: A\n  | B // </NAME>', 'x: https: // </NAME>\n  string'];
+const PROSE_TYPE_MEMBERS = ['https: // c\n  string', 'see: // c\n  T', 'a // c\n  b: T', 'type: // c\n  string', 'a: b // c\n  c: d', 'a? // c\n  : T', 'a: A\n  | B // c', 'a\n  // c\n  b'];
+
+// What a reader of a page writes after `(a);`: lines of prose with a comment in them and a path (PROSE_COMMENT_LINES, PROSE_PATHS), which no type has for its members, so that an element reads it for certain wherever it compiles
+// (typeMembersFail). The text ends with a line break, so that the closing tag after it is in no comment.
+function proseTail(rng, decided) {
+  const lines = Array.from({ length: between(rng, 1, 3) }, () => (chance(rng, 0.35) ? pick(rng, PROSE_PATHS) : pick(rng, PROSE_COMMENT_LINES)));
+  return { text: `${lines.join(pick(rng, ['\n  ', '\n']))}\n`, plain: true, risky: !decided, prose: decided };
+}
 
 // One piece of JSX text, with whether the lexer may be unable to read it to its end (a back-tick or a slash that could hide the closing tag; a container it does not read).
 function jsxPiece(rng) {
@@ -373,19 +384,21 @@ function jsxPiece(rng) {
   return [pick(rng, NESTED_ELEMENTS), false];
 }
 
-// What follows the head's `)` and the separator: JSX text (40%), members (45%), or a bit of each. `plain` is JSX alone; `risky` is where the lexer may say nothing.
+// What follows the head's `)` and the separator: prose with comments and paths (15%), JSX text (30%), members (45%), or a bit of each. `plain` is JSX alone; `risky` is where the lexer may say nothing.
 function signatureTail(rng, name) {
   const roll = rng();
   const jsx = (n) => Array.from({ length: n }, () => jsxPiece(rng));
   const members = (n) => Array.from({ length: n }, () => {
     const kind = rng();
-    return kind < 0.3 ? pick(rng, TYPE_MEMBERS) : kind < 0.5 ? pick(rng, HIDING_MEMBERS) : pick(rng, memberForms(rng, 1))();
+    return kind < 0.25 ? pick(rng, TYPE_MEMBERS) : kind < 0.4 ? pick(rng, HIDING_MEMBERS) : kind < 0.5 ? pick(rng, PROSE_HIDING_MEMBERS) : kind < 0.55 ? pick(rng, PROSE_TYPE_MEMBERS) : pick(rng, memberForms(rng, 1))();
   });
   let tail;
-  if (roll < 0.4) {
+  if (roll < 0.15) {
+    tail = proseTail(rng, chance(rng, 0.8));
+  } else if (roll < 0.45) {
     const pieces = jsx(between(rng, 0, 4));
     tail = { text: pieces.map(([text]) => text).join(pick(rng, ['', ' ', '\n'])), plain: true, risky: pieces.some(([, risky]) => risky) };
-  } else if (roll < 0.85) {
+  } else if (roll < 0.88) {
     tail = { text: members(between(rng, 0, 3)).join(pick(rng, ['; ', ',\n  ', '\n  ', ';\n  ', ', ', ' '])), plain: false, risky: true };
   } else {
     const pieces = jsx(between(rng, 1, 2));
@@ -422,6 +435,7 @@ function* signaturePrograms(seed, count) {
     yield {
       kind: 'element', code: `${elementFrame.replace('@', `${head}${parameters}${separator}${tail.text}</${name}>`)}\n${decoy}\n${CALL};\n`, at, after: at + name.length + 2, name,
       precise: tail.plain && !tail.risky && !head.includes('/') && !separator.includes('/') && !parameters.includes('<') && !MAY_HOLD_EXPRESSION.test(parameters) && !COLON_NEXT.test(`${separator}${tail.text}`),
+      prose: tail.prose === true,
     };
   }
 }
@@ -537,7 +551,7 @@ function judgeSignatures(ts, { opens, children }, programs) {
     programs: 0, valid: 0, failing: 0,
     signature: { valid: 0, code: 0, guess: 0, element: 0 },
     element: { valid: 0, code: 0, guess: 0, element: 0 },
-    precise: { valid: 0, guessed: [] },
+    precise: { valid: 0, prose: 0, guessed: [] },
     unsound: [], unjustified: [],
   };
   for (const program of programs) {
@@ -552,6 +566,7 @@ function judgeSignatures(ts, { opens, children }, programs) {
       if (program.kind === 'signature' ? side === 'element' : side === 'code') stats.unsound.push({ kind: program.kind, code: program.code });
       if (program.kind === 'element' && program.precise) {
         stats.precise.valid += 1;
+        if (program.prose) stats.precise.prose += 1;
         if (side !== 'element') stats.precise.guessed.push(program.code);
       }
     } else if (program.kind === 'element' && side === 'code') {

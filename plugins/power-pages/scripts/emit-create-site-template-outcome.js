@@ -13,7 +13,7 @@ const { formatJsonResult } = require('./lib/template-cli-args');
 // Accepted argv shape:
 //   --eventName template_used --templateId company-portal --templateKind spa --framework react --audience internal
 //   --eventName template_import_success --templateId company-portal --templateKind spa --framework react --audience internal --seedApplied true
-//   --eventName template_import_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass ImportSolutionAsync
+//   --eventName template_import_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass PacSolutionImport
 //   --eventName template_clone_success --templateId company-portal --templateKind spa --framework react --audience internal
 //   --eventName template_clone_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass PacPagesClone
 // Scratch branch sends:

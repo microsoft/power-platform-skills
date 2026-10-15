@@ -434,19 +434,99 @@ test('eval 11: the Phase 8 summary lists every page with its deployed entities a
 
 // --- Eval 13 -----------------------------------------------------------------------------------
 
-test('eval 13: list-languages output and the plan Localization section carry every detected LCID', () => {
-  const output = 'Phase 1 (Planner): pac model list-languages output includes Arabic (1025) and French (1036) in addition to English';
-  const section = 'Phase 1 (Planner): Plan includes a Localization section listing detected languages';
-  assertPass(grade(output, committed('13-contact-localization')));
-  assertPass(grade(section, committed('13-contact-localization')));
-  assertFail(grade(output, mutated('13-contact-localization', 'workflowLog', ', French (France) (1036, fr-FR)', '')), /lacks LCID 1036/);
-  // The PAC table shape is read too.
-  const table = mutated('13-contact-localization', 'workflowLog', /- `pac model list-languages`[^\n]*/.exec(committed('13-contact-localization').workflowLog)[0],
-    '`pac model list-languages`\nLCID Language                Code  RTL\n1033 English (United States) en-US No\n1025 Arabic (Saudi Arabia)   ar-SA Yes\n1036 French (France)          fr-FR No');
-  assertPass(grade(output, table));
-  assertFail(grade(section, mutated('13-contact-localization', 'genpagePlan', '## Localization', '## Notes')), /no Localization section/);
-  assertFail(grade(section, mutated('13-contact-localization', 'genpagePlan', '(1036, fr-FR)', '(fr-FR)')), /does not list detected LCID 1036/);
-  assertFail(grade(section, mutated('13-contact-localization', 'workflowLog', 'pac model list-languages', 'language discovery')), /list-languages was not run/);
+const E13 = '13-contact-localization';
+const LANGUAGES_OUTPUT = 'Phase 1 (Planner): language discovery output includes Arabic (1025) and French (1036) in addition to English';
+const LANGUAGES_SECTION = 'Phase 1 (Planner): Plan includes a Localization section listing detected languages';
+// The committed capture records scripts/list-languages.js and its JSON line — the command and its `Result:` — whose
+// `languages` are read as data.
+const scriptCall = () => /- `node "\$\{PLUGIN_ROOT\}\/scripts\/list-languages\.js"[^\n]*\n[^\n]*/.exec(committed(E13).workflowLog)[0];
+const FRENCH = ',{"lcid":1036,"code":"fr-FR","name":"French (France)","rtl":false}';
+// The same capture, edited as text, one replacement after another.
+const withLog = (...replacements) => replacements.reduce((fixture, [from, to]) => ({ ...fixture, workflowLog: edit(fixture.workflowLog, from, to) }), committed(E13));
+
+// What the script prints when it cannot read the languages (a missing Azure CLI), as the real script prints it, for the
+// environment the capture's own command names.
+const originOf13 = () => /--env '([^']+)'/.exec(scriptCall())[1];
+const failedRead = () => `{"ok":false,"error":"Transport failure reaching ${originOf13()}/api/data/v9.0/organizations?$select=languagecode: Could not get an Azure CLI token for ${originOf13()}: Azure CLI (\`az\`) is not on PATH. Install it from https://aka.ms/azure-cli and run \`az login\`.","code":"CONNECTION_ERROR"}`;
+// What `pac model list-languages` prints for the same environment.
+const PAC_ROWS = ['1033 English (United States) en-US No', '1025 Arabic (Saudi Arabia)   ar-SA Yes', '1036 French (France)         fr-FR No'];
+const pacTable = (rows = PAC_ROWS) => `\`pac model list-languages\`\nLCID Language                Code  RTL\n${rows.join('\n')}`;
+// The planner pins the fallback to the environment the script was given (`--environment '<envUrl>'`); to the grader that is the same command.
+const pinnedPacTable = (rows) => pacTable(rows).replace('`pac model list-languages`', `\`pac model list-languages --environment '${originOf13()}'\``);
+// The log of a run whose script failed, the way the planner records it: the script's command and result, then the
+// `pac` command and its table, each verbatim (agents/genpage-planner.md, "Detect Configured Languages").
+const failedScriptLog = () => `${scriptCall().split('\n')[0]}\n  Result: ${failedRead()}`;
+const fellBackLog = ({ note = '', rows } = {}) => `${failedScriptLog()}\n${note}- ${pacTable(rows)}`;
+const SAID = '- Language detection used `pac model list-languages`: the languages script exited 1 (the Azure CLI is not on PATH)\n';
+
+test('eval 13: language-discovery output and the plan Localization section carry every detected LCID', () => {
+  assertPass(grade(LANGUAGES_OUTPUT, committed(E13)));
+  assertPass(grade(LANGUAGES_SECTION, committed(E13)));
+  assertFail(grade(LANGUAGES_OUTPUT, withLog([FRENCH, ''])), /lacks LCID 1036/);
+  // A language the script could not name is still a detected one — written the way the script writes it: the LCID stays,
+  // its code is null, it is listed in `unmapped` and its summary line says unknown.
+  const unnamed = withLog(
+    [FRENCH, ',{"lcid":1036,"code":null,"name":null,"rtl":null}'],
+    ['"unmapped":[]', '"unmapped":[1036]'],
+    ['"1036 fr-FR \\u2014 RTL: No"', '"1036 unknown \\u2014 RTL: unknown"']
+  );
+  assertPass(grade(LANGUAGES_OUTPUT, unnamed));
+  // The PAC table of a capture made before that script is read too.
+  assertPass(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), pacTable())));
+  assertFail(grade(LANGUAGES_SECTION, mutated(E13, 'genpagePlan', '## Localization', '## Notes')), /no Localization section/);
+  assertFail(grade(LANGUAGES_SECTION, mutated(E13, 'genpagePlan', '(1036, fr-FR)', '(fr-FR)')), /does not list detected LCID 1036/);
+  assertFail(grade(LANGUAGES_SECTION, mutated(E13, 'workflowLog', '/scripts/list-languages.js', '/scripts/language-discovery.js')), /language discovery was not run/);
+});
+
+test('eval 13: a result that parses as the script\u2019s own JSON is read as data and as nothing else', () => {
+  // Only `languages` — the PROVISIONED ones — count. Read as text, the JSON would give up LCIDs it merely mentions: the
+  // base language, a `summary` line, and any number within sixty characters of a language tag.
+  const notProvisioned = [FRENCH, ''];
+  assertFail(grade(LANGUAGES_OUTPUT, withLog(notProvisioned, ['"baseLanguage":{"lcid":1033,"code":"en-US"', '"baseLanguage":{"lcid":1036,"code":"fr-FR"'])), /lacks LCID 1036/);
+  assertFail(grade(LANGUAGES_OUTPUT, withLog(notProvisioned)), /lacks LCID 1036/);
+  assertFail(grade(LANGUAGES_OUTPUT, withLog(notProvisioned, ['"unmapped":[]', '"unmapped":[1036]'], ['"1036 fr-FR \\u2014 RTL: No"', '"1036 unknown \\u2014 RTL: unknown"'])), /lacks LCID 1036/);
+  // A failed read detected nothing, whatever its error text says — even text that names languages.
+  const error = '{"ok":false,"error":"HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.0/RetrieveProvisionedLanguages(): 1033 en-US, 1025 ar-SA and 1036 fr-FR cannot be read by this user","code":"CONNECTION_ERROR"}';
+  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', /Result: \{"ok":true[^\n]*/.exec(committed(E13).workflowLog)[0], `Result: ${error}`)), /saw none/);
+  // A `Result:` that is not the script's shape (an abbreviation) is not decisive: the text around it still is read.
+  assertPass(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', /Result: \{"ok":true[^\n]*/.exec(committed(E13).workflowLog)[0], 'Result: { ok: true, ... }\n  English (United States) (1033, en-US), Arabic (Saudi Arabia) (1025, ar-SA), French (France) (1036, fr-FR)')));
+});
+
+test('eval 13: when the script could not read the languages, the pac fallback after it is what detected them', () => {
+  // The planner falls back to `pac model list-languages` on any non-zero exit of the script and records both. The
+  // failed call found nothing, the fallback found all three, and the plan lists them.
+  const fellBack = mutated(E13, 'workflowLog', scriptCall(), fellBackLog());
+  assertPass(grade(LANGUAGES_OUTPUT, fellBack));
+  assertPass(grade(LANGUAGES_SECTION, fellBack));
+  // Saying so in a line of its own changes nothing.
+  const said = mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ note: SAID }));
+  assertPass(grade(LANGUAGES_OUTPUT, said));
+  assertPass(grade(LANGUAGES_SECTION, said));
+  // The fallback as the planner runs it, pinned to the script's environment, is the same command to the grader — and its table is read the same way.
+  const pinned = mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable()}`);
+  assertPass(grade(LANGUAGES_OUTPUT, pinned));
+  assertPass(grade(LANGUAGES_SECTION, pinned));
+  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable(PAC_ROWS.slice(0, 2))}`)), /lacks LCID 1036/);
+  // A run that stopped at the failed script detected nothing: it is credited with no language it never read, and a
+  // plan that lists languages has none to be listing.
+  const stopped = mutated(E13, 'workflowLog', scriptCall(), failedScriptLog());
+  assertFail(grade(LANGUAGES_OUTPUT, stopped), /lacks LCID 1033, 1025, 1036 \(saw none\)/);
+  assertFail(grade(LANGUAGES_SECTION, stopped), /detected no languages/);
+  // A fallback that read fewer languages than the plan lists is caught the same way as a script that did.
+  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ rows: PAC_ROWS.slice(0, 2) }))), /lacks LCID 1036/);
+});
+
+test('eval 13: the whole fixture still grades clean when its language discovery is the pac fallback', () => {
+  // Every common assertion and the eval's own expectations, as run-layer-1.js grades a fixture — not one check alone.
+  const fs = require('node:fs');
+  const { gradeFixture } = require('../run-layer-1.js');
+  const evalsData = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'evals.json'), 'utf8'));
+  const ev = evalsData.evals.find((e) => e.id === committed(E13).id);
+  const failures = (fixture) => gradeFixture(fixture, ev, evalsData).filter((r) => r.result.status === 'fail').map((r) => `${r.text}: ${r.result.reason}`);
+  assert.deepEqual(failures(committed(E13)), []);
+  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), fellBackLog())), []);
+  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ note: SAID }))), []);
+  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable()}`)), []);
 });
 
 test('eval 13: generated text carries no hardcoded currency symbols or date formats', () => {

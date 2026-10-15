@@ -35,7 +35,7 @@ For precise control (game boards, fixed dashboards):
       Height: =300
     Children:
       - Button1:
-          Control: Button
+          Control: ModernButton
           Properties:
             X: =0
             Y: =0
@@ -119,9 +119,7 @@ field groups over an overlapping horizontal input strip.
 ## Grid layout
 
 GridLayout needs coordinated column, row and height math; a stale row count can produce a
-valid but visibly wrong screen. When planning a `GroupContainer` with
-`Variant: GridLayout`, use `${PLUGIN_ROOT}/references/GridLayoutGuide.md` and put its exact formulas in
-the screen brief. Builders do not read that conditional reference.
+valid but visibly wrong screen. For a `GroupContainer` with `Variant: GridLayout`, the brief specifies data bounds, ordering, responsive intent, and preserved/shared constraints. The builder reads `${PLUGIN_ROOT}/references/GridLayoutGuide.md`, chooses file-local formulas, and reports actual numeric layout evidence. Exact formulas belong in the brief only for approved literal edits or preserved/shared bindings.
 
 ## Galleries are Classic — their rows do not reflow
 
@@ -249,7 +247,7 @@ Drive empty-state visibility from the source/filter count, never `Self.AllItems`
 
 ## Give labelled controls room for their longest value
 
-A `Badge`, status pill, or KPI value sized for `"New"` clips `"Implemented"`. When such a
+A `ModernBadge`, status pill, or KPI value sized for `"New"` clips `"Implemented"`. When such a
 control sits in a horizontal row, set `FillPortions: =0` plus a `Width` (or
 `LayoutMinWidth`) that fits the longest value it can display, and set `Wrap: =false` on
 single-line text so it cannot silently become two lines.

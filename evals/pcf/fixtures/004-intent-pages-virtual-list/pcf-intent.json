@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "control": {
+    "namespace": "Contoso.Controls",
+    "name": "StarRating",
+    "displayName": "Star rating",
+    "description": "Shows a whole number as stars",
+    "template": "field-virtual"
+  },
+  "hosts": [
+    "model",
+    "pages"
+  ],
+  "connectivity": "online",
+  "properties": [
+    {
+      "name": "value",
+      "usage": "bound",
+      "type": "Whole.None",
+      "required": true
+    },
+    {
+      "name": "max",
+      "usage": "input",
+      "type": "Whole.None",
+      "required": false,
+      "default": "5"
+    }
+  ],
+  "features": [],
+  "deploy": {
+    "solution": "ContosoCore",
+    "publisherPrefix": null,
+    "environment": "https://contoso.crm.dynamics.com"
+  },
+  "bindings": [
+    {
+      "kind": "field",
+      "table": "account",
+      "form": "Account",
+      "formType": "main",
+      "target": {
+        "column": "new_rating"
+      },
+      "clients": [
+        "web",
+        "phone",
+        "tablet"
+      ],
+      "parameters": {
+        "value": {
+          "column": "new_rating"
+        },
+        "max": {
+          "static": "5",
+          "type": "Whole.None"
+        }
+      }
+    }
+  ],
+  "pages": {
+    "journeys": [
+      "list",
+      "form-sub-grid",
+      "dataset"
+    ]
+  }
+}

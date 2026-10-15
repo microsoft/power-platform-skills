@@ -19,6 +19,7 @@
   - `img-src data:` only - the brand mark and the QR are both inlined, so no image is ever
     fetched, and an injected `<img src=...>` cannot call out.
   - No `connect-src`, `frame-src` or `object-src`: the plan never talks to the network.
+    The phone uses an inline `srcdoc` document, not a fetched frame.
 -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"/>
 <title>__PLAN_TITLE__ - __APP_NAME__</title>
@@ -76,7 +77,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .device{width:300px;height:620px;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;flex-shrink:0;}
 .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
 .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
-.device-screen iframe{width:100%;height:100%;border:0;}
+.device-screen iframe{border:0;}
 /* Stage 1 - building */
 .bld{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#faf9f8;padding:0 28px;text-align:center;}
 .bld-orbit{position:relative;width:132px;height:132px;display:grid;place-items:center;}
@@ -96,18 +97,17 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 @keyframes railFade{to{opacity:1;}}
 /* Stage 2 - carousel */
 .car{position:absolute;inset:0;background:#fff;}
-.car-frame{position:absolute;inset:0;overflow:auto;contain:layout paint;}
-/* `contain: paint` makes this a containing block for absolutely AND fixed positioned
-   descendants, so an injected `style="position:fixed;inset:0"` in a mockup is trapped in the
-   phone frame instead of covering the plan. Attribute styles survive sanitizing because they
-   are what makes a mockup look like the screen; this is what keeps them local.
-   https://developer.mozilla.org/en-US/docs/Web/CSS/contain */
-.car-nav{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(to top,rgba(0,0,0,.55),transparent);z-index:4;}
-.car-btn{width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,255,255,.92);color:#201f1e;font-size:15px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow-4);}
+.car-frame{position:absolute;inset:0;overflow:hidden;contain:layout paint;}
+/* A 375 x 812 viewport is scaled, not reflowed into the smaller rail. Its sandboxed document
+   keeps mockup selectors, media queries, and fixed tab bars independent of the plan.
+   https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe#sandbox */
+.car-frame iframe{position:absolute;width:375px;height:812px;transform-origin:top left;}
+.car-nav{width:300px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.car-btn{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-bright);font-size:15px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow-4);}
 .car-btn:disabled{opacity:.35;cursor:default;}
 .car-dots{display:flex;gap:5px;}
-.car-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.45);}
-.car-dot.on{background:#fff;}
+.car-dot{width:6px;height:6px;border-radius:50%;background:var(--border-light);}
+.car-dot.on{background:var(--accent);}
 .rail-caption{font-size:12px;color:var(--text-dim);text-align:center;min-height:32px;padding:0 10px;}
 /* Stage 3 - QR */
 .qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#fff;padding:0 26px;text-align:center;}
@@ -492,6 +492,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     <div class="device-notch"></div>
     <div class="device-screen" id="deviceScreen"></div>
   </div>
+  <div id="railControls" hidden></div>
   <div class="rail-caption" id="railCaption"></div>
   <div class="rail-note" id="railNote" hidden></div>
   <div id="railPreviewLink"></div>
@@ -791,12 +792,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
   // Elements that execute, navigate, or reach the network. `link`/`meta`/`base` are included
   // because a mockup is a fragment of a document and must not redefine this one's head.
-  // `STYLE` is here for a different reason from the rest. The others execute or navigate; a
-  // stylesheet cannot, but its selectors are global, so a mockup carrying one could restyle the
-  // approval banner or the trust report - hiding or spoofing the very UI a reviewer is reading.
-  // The CSP cannot refuse it: `style-src 'unsafe-inline'` is required for this page's own
-  // stylesheet and for Mermaid's. Mockups keep their `style=` attributes, which only ever affect
-  // the element carrying them; see `.car-frame` for how those are kept inside the phone.
+  // Styles are permitted only in isolated screen documents and Mermaid's scoped SVG.
+  // Inserting a mockup stylesheet into the plan itself would let its selectors hide approvals.
   // `ANIMATE` and `SET` are SVG animation elements, which can rewrite another element's `href`
   // after this pass has checked it.
   var MOCKUP_BANNED_TAGS = ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM', 'STYLE',
@@ -813,14 +810,21 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
    * page's CSP already refuses unnonced scripts and inline handlers; this is the second line, so
    * a policy that is ever loosened does not immediately become an execution path.
    *
-   * Parsed into a `<template>`, whose content is an inert fragment: nothing executes and no
-   * resource is fetched while it is being cleaned.
+   * Fragments use an inert `<template>`; complete screen documents use a detached DOMParser
+   * document so html/body attributes survive. Neither is inserted into the live plan.
    */
   function sanitizeMockup(markup, options) {
     var keepStyle = !!(options && options.keepStyle);
-    var holder = document.createElement('template');
-    holder.innerHTML = String(markup == null ? '' : markup);
-    var nodes = holder.content.querySelectorAll('*');
+    var source = String(markup == null ? '' : markup);
+    var content;
+    if (options && options.asDocument) {
+      content = new DOMParser().parseFromString(source, 'text/html');
+    } else {
+      var holder = document.createElement('template');
+      holder.innerHTML = source;
+      content = holder.content;
+    }
+    var nodes = content.querySelectorAll('*');
     for (var i = 0; i < nodes.length; i++) {
       var node = nodes[i];
       // `tagName` is upper case only for HTML elements. Inside inline SVG an element keeps its
@@ -839,21 +843,82 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         var value = attrs[j].value.replace(/[\u0000-\u0020]/g, '');
         // Every event handler, however it is spelled.
         if (/^on/i.test(name)) { node.removeAttribute(name); continue; }
+        // Screens are static: even a safe link must not navigate the sandbox to a remote page.
+        // Local SVG references such as href="#check" remain available for icon rendering.
+        if (options && options.asDocument && /^(href|xlink:href)$/i.test(name) && value.charAt(0) !== '#') {
+          node.removeAttribute(name);
+          continue;
+        }
         if (/^(href|src|xlink:href|action|formaction)$/i.test(name) && MOCKUP_BANNED_URL.test(value)) {
           node.removeAttribute(name);
         }
       }
     }
-    return holder.content;
+    return content;
+  }
+
+  function previewScreens(markup) {
+    var source = sanitizeMockup(markup, { keepStyle: true, asDocument: true });
+    var tabs = Array.from(source.querySelectorAll('[data-screen]'));
+    return Array.from(source.querySelectorAll('.screen')).map(function (entry) {
+      var root = source.documentElement.cloneNode(false);
+      var head = document.createElement('head');
+      source.querySelectorAll('style').forEach(function (style) { head.appendChild(style.cloneNode(true)); });
+      var body = source.body.cloneNode(false);
+      var selected = entry.cloneNode(true);
+      selected.classList.add('active');
+      selected.removeAttribute('hidden');
+      selected.style.setProperty('display', 'flex', 'important');
+      // Preserve ancestor classes and inline tokens, but leave out the gallery's tabs, labels,
+      // notch and home indicator: the plan already supplies its own phone shell.
+      for (var ancestor = entry.parentElement; ancestor && ancestor !== source.body; ancestor = ancestor.parentElement) {
+        var wrapper = ancestor.cloneNode(false);
+        wrapper.appendChild(selected);
+        selected = wrapper;
+      }
+      body.appendChild(selected);
+      root.appendChild(head);
+      root.appendChild(body);
+      var reset = document.createElement('style');
+      reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;min-height:0!important;overflow:hidden;}'
+        + '.phone{width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;}'
+        + '.screen-wrap{border-radius:0!important;}';
+      head.appendChild(reset);
+      var tab = tabs.find(function (button) { return button.getAttribute('data-screen') === entry.id; });
+      return {
+        name: (tab && tab.textContent.trim()) || entry.getAttribute('data-name') || entry.getAttribute('aria-label') || entry.id,
+        html: '<!DOCTYPE html>' + root.outerHTML,
+      };
+    });
+  }
+
+  function mockupDocument(markup) {
+    var source = sanitizeMockup(markup, { keepStyle: true, asDocument: true });
+    var policy = source.createElement('meta');
+    policy.setAttribute('http-equiv', 'Content-Security-Policy');
+    policy.setAttribute('content', "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'");
+    source.head.prepend(policy);
+    return '<!DOCTYPE html>' + source.documentElement.outerHTML;
   }
 
   function renderPhone() {
+    if (phone.stage === 'screens' && phone.previewHtml) phone.screens = previewScreens(phone.previewHtml);
     railPreviewLink();
     var screen = document.getElementById('deviceScreen');
     var title = document.getElementById('railTitle');
     var caption = document.getElementById('railCaption');
+    var controls = document.getElementById('railControls');
     screen.textContent = '';
     caption.textContent = '';
+    controls.textContent = '';
+    controls.hidden = true;
+
+    if (phone.stage === 'screens' && phone.previewHtml && !phone.screens.length) {
+      title.textContent = 'Screen preview unavailable';
+      caption.textContent = 'The preview contains no .screen blocks. Regenerate _plan_preview.html.';
+      console.error(caption.textContent);
+      return;
+    }
 
     if (phone.stage === 'qr' && phone.qrImage) {
       title.textContent = 'Open it on your phone';
@@ -875,6 +940,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       var index = 0;
       var car = el('div', 'car');
       var frame = el('div', 'car-frame');
+      var viewport = document.createElement('iframe');
+      viewport.setAttribute('sandbox', '');
+      viewport.setAttribute('referrerpolicy', 'no-referrer');
+      frame.appendChild(viewport);
       var nav = el('div', 'car-nav');
       var prev = el('button', 'car-btn', '\u2039');
       prev.setAttribute('aria-label', 'Previous screen');
@@ -882,16 +951,28 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       next.setAttribute('aria-label', 'Next screen');
       var dots = el('div', 'car-dots');
       nav.appendChild(prev); nav.appendChild(dots); nav.appendChild(next);
-      car.appendChild(frame); car.appendChild(nav);
+      car.appendChild(frame);
       screen.appendChild(car);
+      controls.appendChild(nav);
+      controls.hidden = false;
+
+      var fit = function () {
+        var scale = Math.min(frame.clientWidth / 375, frame.clientHeight / 812);
+        viewport.style.transform = 'scale(' + scale + ')';
+        viewport.style.left = (frame.clientWidth - 375 * scale) / 2 + 'px';
+        viewport.style.top = (frame.clientHeight - 812 * scale) / 2 + 'px';
+      };
+      fit();
+      window.addEventListener('resize', fit);
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fit).observe(frame);
 
       var show = function (i) {
         index = Math.max(0, Math.min(phone.screens.length - 1, i));
         var current = phone.screens[index] || {};
-        // Replaced wholesale each time, then refilled from the sanitized fragment. Assigning
-        // innerHTML directly would put unexamined markup into the document.
-        frame.textContent = '';
-        frame.appendChild(sanitizeMockup(current.html));
+        // No allow-scripts or allow-same-origin: the retained stylesheet belongs only to this
+        // frame. The child CSP also blocks fetches, including CSS imports and external images.
+        viewport.setAttribute('title', current.name || 'Screen preview');
+        viewport.srcdoc = mockupDocument(current.html);
         caption.textContent = (current.name ? current.name + '  \u00b7  ' : '')
           + (index + 1) + ' of ' + phone.screens.length;
         prev.disabled = index === 0;

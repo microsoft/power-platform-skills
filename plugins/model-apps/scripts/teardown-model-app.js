@@ -88,6 +88,7 @@ async function teardownModelApp(spec, opts, deps) {
     return { ok: false, errors: v.errors };
   }
   const log = deps.log || (() => undefined);
+  const warn = deps.warn || ((message) => log(`⚠ teardown warning: ${message}`));
   const counts = { ok: 0, skip: 0, error: 0 };
   const emit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   // Fail-closed: a teardown --apply DELETES real artifacts (app, tables, solution), so it now requires
@@ -139,7 +140,7 @@ async function teardownModelApp(spec, opts, deps) {
   }
   let r;
   try {
-    r = await runTeardown(spec, { apply: opts.apply, workspaceDir: opts.workspaceDir, env: opts.env }, { sdk: deps.sdk, emit });
+    r = await runTeardown(spec, { apply: opts.apply, workspaceDir: opts.workspaceDir, env: opts.env }, { sdk: deps.sdk, emit, warn });
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     // Every teardown that FINISHES drops its entry from the tombstone's list of teardowns in flight — a

@@ -1,0 +1,736 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { loadCli } = require('./helpers/cli-harness.js');
+const { loadMatrix, dependencySet } = require('../lib/pcf-matrix.js');
+const { planScaffold } = require('../lib/pcf-scaffold.js');
+
+const {
+  checkToolchain,
+  checkProject,
+  collectProject,
+  dependencyFamily,
+  pcfprojBuildMode,
+  parsePacHelpVersion,
+} = require('../lib/pcf-doctor.js');
+
+const ROOT = path.join(__dirname, '..', '..');
+const MATRIX = loadMatrix();
+const cliPath = path.join(__dirname, '..', 'pcf-doctor.js');
+
+function renderedPcfproj() {
+  const plan = planScaffold({
+    template: 'field-standard',
+    namespace: 'Contoso.Controls',
+    name: 'StarRating',
+  });
+  return plan.files.find((file) => file.relPath === 'StarRating.pcfproj').content;
+}
+
+function manifestModel(controlType = 'standard', platformLibraries = []) {
+  return {
+    control: { controlType },
+    resources: { platformLibraries },
+  };
+}
+
+function standardState(overrides = {}) {
+  const deps = dependencySet(MATRIX, 'standard');
+  return {
+    projectPath: 'D:\\Projects\\controls\\StarRating',
+    packageJson: {
+      dependencies: { ...deps.dependencies },
+      devDependencies: { ...deps.devDependencies },
+    },
+    hasLockfile: true,
+    hasNodeModules: true,
+    pcfprojText: renderedPcfproj(),
+    eslintFiles: ['eslint.config.mjs'],
+    manifestModels: [manifestModel()],
+    outStray: [],
+    ...overrides,
+  };
+}
+
+function ids(findings) {
+  return findings.map((finding) => finding.id);
+}
+
+function byId(findings, id) {
+  return findings.find((finding) => finding.id === id);
+}
+
+function withProcessRunnerStub(stub, fn) {
+  const pacExecPath = require.resolve('../lib/pac-exec.js');
+  const processRunnerPath = require.resolve('../lib/process-runner.js');
+  const priorPacExec = require.cache[pacExecPath];
+  const priorProcessRunner = require.cache[processRunnerPath];
+  delete require.cache[pacExecPath];
+  require.cache[processRunnerPath] = {
+    id: processRunnerPath,
+    filename: processRunnerPath,
+    loaded: true,
+    exports: stub,
+  };
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      delete require.cache[pacExecPath];
+      if (priorPacExec) require.cache[pacExecPath] = priorPacExec;
+      if (priorProcessRunner) require.cache[processRunnerPath] = priorProcessRunner;
+      else delete require.cache[processRunnerPath];
+    });
+}
+
+test('pcfprojBuildMode reports production only when the property is after Microsoft.Common.props', () => {
+  const production = renderedPcfproj();
+  const missing = production.replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n');
+  const development = production.replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>');
+  const beforeImport = production
+    .replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /(\s*<Import Project="\$\(MSBuildExtensionsPath\)\\\$\(MSBuildToolsVersion\)\\Microsoft\.Common\.props" \/>)/,
+      '  <PropertyGroup>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n$1',
+    );
+
+  assert.equal(pcfprojBuildMode(production).status, 'production');
+  assert.equal(pcfprojBuildMode(missing).status, 'missing');
+  assert.equal(pcfprojBuildMode(development).status, 'development');
+  assert.equal(pcfprojBuildMode(beforeImport).status, 'ineffective');
+  assert.ok(pcfprojBuildMode(beforeImport).modeOffset < pcfprojBuildMode(beforeImport).importOffset);
+});
+
+test('pcfprojBuildMode ignores comments and lets the last unconditioned post-import value win', () => {
+  const pcfproj = renderedPcfproj()
+    .replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>')
+    .replace(
+      '</PropertyGroup>',
+      '</PropertyGroup>\n  <!-- <PropertyGroup><PcfBuildMode>production</PcfBuildMode></PropertyGroup> -->\n'
+        + '  <PropertyGroup>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n'
+        + '  <PropertyGroup>\n    <PcfBuildMode>development</PcfBuildMode>\n  </PropertyGroup>',
+    );
+
+  const result = pcfprojBuildMode(pcfproj);
+  assert.equal(result.status, 'development');
+  assert.equal(result.value, 'development');
+  assert.ok(result.occurrences.every((item) => item.endOffset > item.offset));
+  assert.equal(result.occurrences.some((item) => item.value === 'production'), true);
+  assert.ok(result.importEndOffset > result.importOffset);
+});
+
+test('pcfprojBuildMode treats conditioned values as ineffective because pac pcf push builds Debug', () => {
+  const conditionedOnly = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition="\'$(Configuration)|$(Platform)\'==\'Release|AnyCPU\'">\n    <Name>',
+  );
+  const conditionedAfterProduction = renderedPcfproj().replace(
+    /<\/PropertyGroup>\s*<PropertyGroup>\s*<TargetFrameworkVersion>/,
+    '</PropertyGroup>\n  <PropertyGroup Condition="\'$(Configuration)\'==\'Release\'">\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n\n  <PropertyGroup>\n    <TargetFrameworkVersion>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(conditionedOnly)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(conditionedAfterProduction)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
+test('pcfprojBuildMode accepts single-quoted Condition attributes on groups and elements', () => {
+  const singleQuotedGroup = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition=\'"$(Configuration)" == "Release"\'>\n    <Name>',
+  );
+  const singleQuotedElement = renderedPcfproj().replace(
+    '<PcfBuildMode>production</PcfBuildMode>',
+    '<PcfBuildMode Condition=\'"$(Configuration)" == "Release"\'>production</PcfBuildMode>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(singleQuotedGroup)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(singleQuotedElement)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
+test('pcfprojBuildMode accepts double-quoted Condition values containing single quotes', () => {
+  const doubleQuotedWithSingles = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition="\'$(Configuration)\' == \'Release\'">\n    <Name>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(doubleQuotedWithSingles)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
+test('pcfprojBuildMode preserves Conditions whose quoted value contains a greater-than comparison', () => {
+  const greaterThanCondition = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition="\'$(Configuration)\' == \'Release\' And \'1\' > \'0\'">\n    <Name>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(greaterThanCondition)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
+test('pcfprojBuildMode finds Microsoft.Common.props when a quoted greater-than is in the Import condition', () => {
+  // A Condition before Project, with a quoted '>', used to hide the Import from the regex scanner.
+  // An early PcfBuildMode then looked like production because a missing import is treated as "no
+  // import to be before". Both attribute orders are valid MSBuild.
+  const commonProps = '<Import Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" />';
+  const withoutMode = renderedPcfproj().replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>/, '');
+  const conditionFirst = withoutMode.replace(
+    commonProps,
+    '<PcfBuildMode>production</PcfBuildMode>\n  <Import Condition="\'$(Foo)\' == \'>\'" Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" />',
+  );
+  const projectFirst = withoutMode.replace(
+    commonProps,
+    '<Import Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" Condition="\'$(Foo)\' == \'>\'" />\n    <PcfBuildMode>production</PcfBuildMode>',
+  );
+
+  const hiddenImport = pcfprojBuildMode(conditionFirst);
+  assert.notEqual(hiddenImport.importOffset, -1);
+  assert.equal(hiddenImport.status, 'ineffective');
+  assert.equal(hiddenImport.reason, 'before-import');
+  assert.ok(hiddenImport.modeOffset < hiddenImport.importOffset);
+
+  const projectFirstMode = pcfprojBuildMode(projectFirst);
+  assert.notEqual(projectFirstMode.importOffset, -1);
+  assert.equal(projectFirstMode.status, 'production');
+  assert.ok(projectFirstMode.modeOffset > projectFirstMode.importOffset);
+});
+
+test('pcfprojBuildMode reports conditioned overrides after unconditioned production as ineffective', () => {
+  const conditionedAfterProduction = renderedPcfproj().replace(
+    /<\/PropertyGroup>\s*<PropertyGroup>\s*<TargetFrameworkVersion>/,
+    '</PropertyGroup>\n  <PropertyGroup Condition="\'$(Configuration)\'==\'Release\'">\n    <PcfBuildMode>development</PcfBuildMode>\n  </PropertyGroup>\n\n  <PropertyGroup>\n    <TargetFrameworkVersion>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(conditionedAfterProduction)),
+    { status: 'ineffective', reason: 'conditioned', value: 'development' },
+  );
+});
+
+test('pcfprojBuildMode treats conditioned PcfBuildMode attributes as ineffective', () => {
+  const conditionedProperty = renderedPcfproj().replace(
+    '<PcfBuildMode>production</PcfBuildMode>',
+    '<PcfBuildMode Condition="\'$(Configuration)\'==\'Release\'">production</PcfBuildMode>',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(conditionedProperty)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
+test('pcfprojBuildMode treats Choose and Target ancestors as conditioned execution paths', () => {
+  const choose = renderedPcfproj()
+    .replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /<\/Project>/,
+      '  <Choose>\n    <When Condition="\'$(Configuration)\'==\'Release\'">\n      <PropertyGroup>\n        <PcfBuildMode>production</PcfBuildMode>\n      </PropertyGroup>\n    </When>\n    <Otherwise>\n      <PropertyGroup>\n        <PcfBuildMode>development</PcfBuildMode>\n      </PropertyGroup>\n    </Otherwise>\n  </Choose>\n</Project>',
+    );
+  const target = renderedPcfproj()
+    .replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /<\/Project>/,
+      '  <Target Name="AfterBuild">\n    <PropertyGroup>\n      <PcfBuildMode>production</PcfBuildMode>\n    </PropertyGroup>\n  </Target>\n</Project>',
+    );
+
+  assert.deepEqual(pickMode(pcfprojBuildMode(choose)), { status: 'ineffective', reason: 'conditioned', value: 'development' });
+  assert.deepEqual(pickMode(pcfprojBuildMode(target)), { status: 'ineffective', reason: 'conditioned', value: 'production' });
+});
+
+test('pcfprojBuildMode ignores commented-out production before reporting missing', () => {
+  const commented = renderedPcfproj().replace(
+    /\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/,
+    '\n    <!-- <PcfBuildMode>production</PcfBuildMode> -->\n',
+  );
+
+  assert.equal(pcfprojBuildMode(commented).status, 'missing');
+});
+
+test('pcfprojBuildMode reports before-import production with a reason', () => {
+  const beforeImport = renderedPcfproj()
+    .replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /(\s*<Import Project="\$\(MSBuildExtensionsPath\)\\\$\(MSBuildToolsVersion\)\\Microsoft\.Common\.props" \/>)/,
+      '  <PropertyGroup>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n$1',
+    );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(beforeImport)),
+    { status: 'ineffective', reason: 'before-import', value: 'production' },
+  );
+});
+
+test('pcfprojBuildMode treats an unconditioned production after a conditioned one as effective', () => {
+  const pcfproj = renderedPcfproj().replace(
+    '<PcfBuildMode>production</PcfBuildMode>',
+    '<PcfBuildMode Condition="\'$(Configuration)\'==\'Release\'">development</PcfBuildMode>\n    <PcfBuildMode>production</PcfBuildMode>',
+  );
+
+  assert.equal(pcfprojBuildMode(pcfproj).status, 'production');
+});
+
+test('pcfprojBuildMode keeps conditioned findings when there is no unconditioned value after import', () => {
+  const conditionedOnly = renderedPcfproj().replace(
+    /<PropertyGroup>\s*<Name>/,
+    '<PropertyGroup Condition="\'$(Configuration)|$(Platform)\'==\'Release|AnyCPU\'">',
+  );
+
+  assert.deepEqual(
+    pickMode(pcfprojBuildMode(conditionedOnly)),
+    { status: 'ineffective', reason: 'conditioned', value: 'production' },
+  );
+});
+
+function pickMode(result) {
+  return { status: result.status, reason: result.reason, value: result.value };
+}
+
+test('collectProject does not flag complete processed PCF output as stale', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-doctor-output-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    const controlDir = path.join(projectDir, 'StarRating');
+    const outDir = path.join(projectDir, 'out', 'controls', 'StarRating');
+    fs.mkdirSync(controlDir, { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'package.json'), JSON.stringify({
+      dependencies: {},
+      devDependencies: dependencySet(MATRIX, 'standard').devDependencies,
+    }));
+    fs.writeFileSync(path.join(projectDir, 'StarRating.pcfproj'), renderedPcfproj());
+    const manifest = `<manifest><control namespace="Contoso.Controls" constructor="StarRating" version="1.0.0" display-name-key="Star" description-key="Star"><resources><code path="bundle.js" order="1" /><css path="css/control.css" order="1" /></resources></control></manifest>`;
+    fs.writeFileSync(path.join(controlDir, 'ControlManifest.Input.xml'), manifest);
+    fs.writeFileSync(path.join(outDir, 'ControlManifest.xml'), manifest);
+    fs.mkdirSync(path.join(outDir, 'css'), { recursive: true });
+    fs.writeFileSync(path.join(outDir, 'bundle.js'), 'bundle');
+    fs.writeFileSync(path.join(outDir, 'css', 'control.css'), 'css');
+
+    const findings = checkProject(collectProject(projectDir), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+    assert.equal(ids(findings).includes('PROJ_OUT_STALE'), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('checkToolchain uses matrix thresholds and downgrades optional push tools when only build is needed', () => {
+  const buildOnly = checkToolchain({
+    node: '18.19.0',
+    npm: null,
+    pac: null,
+    dotnet: null,
+    platform: 'win32',
+  }, MATRIX, { needs: ['build'] });
+
+  assert.equal(byId(buildOnly, 'TOOL_NODE_OLD').severity, 'error');
+  assert.equal(byId(buildOnly, 'TOOL_NPM_MISSING').severity, 'error');
+  assert.equal(byId(buildOnly, 'TOOL_PAC_MISSING').severity, 'info');
+  assert.equal(byId(buildOnly, 'TOOL_DOTNET_MISSING').severity, 'info');
+  assert.match(byId(buildOnly, 'TOOL_NODE_OLD').fix, /20\.0\.0/);
+
+  const push = checkToolchain({
+    node: '22.13.1',
+    npm: '10.9.9',
+    pac: '1.36.0',
+    dotnet: null,
+    platform: 'win32',
+  }, MATRIX, { needs: ['push'] });
+
+  assert.equal(byId(push, 'TOOL_PAC_OLD').severity, 'error');
+  assert.equal(byId(push, 'TOOL_DOTNET_MISSING').severity, 'error');
+});
+
+test('checkToolchain reports pac development builds without blocking on minimum comparison', () => {
+  const findings = checkToolchain({
+    node: '22.13.1',
+    npm: '10.9.9',
+    pac: '0.1.0-dev',
+    dotnet: '8.0.100',
+    platform: 'linux',
+  }, MATRIX, { needs: ['push'] });
+
+  assert.deepEqual(ids(findings), ['TOOL_PAC_DEV_BUILD']);
+  assert.equal(findings[0].severity, 'warning');
+  assert.match(findings[0].message, /development build/i);
+});
+
+test('parsePacHelpVersion reads the Version line from pac help defensively', () => {
+  assert.equal(parsePacHelpVersion('Microsoft PowerPlatform CLI\nVersion: 1.51.1+gabcdef\nUsage: pac [admin]'), '1.51.1+gabcdef');
+  assert.equal(parsePacHelpVersion('Microsoft PowerPlatform CLI\nVersion: 1.51.1-dev\nUsage: pac [admin]'), '1.51.1-dev');
+  assert.equal(parsePacHelpVersion('Usage only'), null);
+});
+
+test('checkProject reports dependency, lockfile, node_modules, eslint, build mode, out, and path findings', () => {
+  const deps = dependencySet(MATRIX, 'standard');
+  const packageJson = {
+    dependencies: { ...deps.dependencies },
+    devDependencies: { ...deps.devDependencies },
+  };
+  packageJson.devDependencies['pcf-scripts'] = `^0.0.1`;
+
+  const pcfproj = renderedPcfproj()
+    .replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>')
+    .replace(/Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+"/, 'Microsoft.PowerApps.MSBuild.Pcf" Version="1.*"');
+
+  const findings = checkProject(standardState({
+    projectPath: 'C:\\Users\\maker\\OneDrive - Contoso\\' + 'a'.repeat(190),
+    packageJson,
+    hasLockfile: false,
+    hasNodeModules: false,
+    pcfprojText: pcfproj,
+    eslintFiles: ['.eslintrc.json'],
+    outStray: ['out\\controls\\StarRating\\debug.map'],
+  }), MATRIX, { hosts: ['model'], needs: ['build'], platform: 'win32' });
+
+  assert.ok(byId(findings, 'PROJ_NO_LOCKFILE'));
+  assert.equal(byId(findings, 'PROJ_NODE_MODULES_MISSING').severity, 'error');
+  assert.ok(byId(findings, 'PROJ_DEP_DRIFT'));
+  assert.ok(byId(findings, 'PROJ_FLOATING_RANGE'));
+  assert.ok(byId(findings, 'PROJ_ESLINT_LEGACY'));
+  assert.ok(byId(findings, 'PROJ_BUILDMODE_NOT_PRODUCTION'));
+  assert.ok(byId(findings, 'PROJ_MSBUILD_PCF_FLOATING'));
+  assert.ok(byId(findings, 'PROJ_OUT_STALE'));
+  assert.ok(byId(findings, 'PROJ_PATH_ONEDRIVE'));
+  assert.ok(byId(findings, 'PROJ_PATH_LONG'));
+});
+
+test('checkProject reports ineffective PcfBuildMode and pinned MSBuild package drift separately', () => {
+  const pcfproj = renderedPcfproj()
+    .replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>\r?\n/, '\n')
+    .replace(
+      /(\s*<Import Project="\$\(MSBuildExtensionsPath\)\\\$\(MSBuildToolsVersion\)\\Microsoft\.Common\.props" \/>)/,
+      '  <PropertyGroup>\n    <PcfBuildMode>production</PcfBuildMode>\n  </PropertyGroup>\n$1',
+    )
+    .replace(/Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+"/, 'Microsoft.PowerApps.MSBuild.Pcf" Version="1.0.0"');
+
+  const findings = checkProject(standardState({ pcfprojText: pcfproj }), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+  assert.match(byId(findings, 'PROJ_BUILDMODE_NOT_PRODUCTION').message, /set but ineffective — move it below the Microsoft\.Common\.props import/);
+  assert.match(byId(findings, 'PROJ_DEP_DRIFT').message, /Microsoft\.PowerApps\.MSBuild\.Pcf/);
+});
+
+test('checkProject distinguishes conditioned PcfBuildMode and reads MSBuild Pcf child Version elements', () => {
+  const pcfproj = renderedPcfproj()
+    .replace(/<PropertyGroup>\s*<Name>/, '<PropertyGroup Condition="\'$(Configuration)\'==\'Release\'">\n    <Name>')
+    .replace(/<PackageReference Include="Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+" \/>/, '<PackageReference Include="Microsoft.PowerApps.MSBuild.Pcf">\n      <Version>1.*</Version>\n    </PackageReference>');
+
+  const findings = checkProject(standardState({ pcfprojText: pcfproj }), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+  assert.match(byId(findings, 'PROJ_BUILDMODE_NOT_PRODUCTION').message, /make it unconditional/i);
+  assert.ok(byId(findings, 'PROJ_MSBUILD_PCF_FLOATING'));
+});
+
+test('checkProject reads single-quoted MSBuild Pcf PackageReference attributes', () => {
+  const pcfproj = renderedPcfproj().replace(
+    /<PackageReference Include="Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+" \/>/,
+    "<PackageReference Include='Microsoft.PowerApps.MSBuild.Pcf' Version='1.*' />",
+  );
+
+  const findings = checkProject(standardState({ pcfprojText: pcfproj }), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+  assert.ok(byId(findings, 'PROJ_MSBUILD_PCF_FLOATING'));
+});
+
+test('checkProject ignores commented-out MSBuild Pcf PackageReference examples', () => {
+  const pcfproj = renderedPcfproj().replace(
+    /<PackageReference Include="Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+" \/>/,
+    '<!-- <PackageReference Include="Microsoft.PowerApps.MSBuild.Pcf" Version="1.*" /> -->',
+  );
+
+  const findings = checkProject(standardState({ pcfprojText: pcfproj }), MATRIX, { hosts: ['model'], needs: ['build'] });
+
+  assert.equal(byId(findings, 'PROJ_MSBUILD_PCF_FLOATING'), undefined);
+  assert.equal(byId(findings, 'PROJ_DEP_DRIFT'), undefined);
+});
+
+test('checkProject chooses the virtual dependency family and reports platform-library and Pages conflicts', () => {
+  const deps = dependencySet(MATRIX, 'virtual');
+  const packageJson = {
+    dependencies: { ...deps.dependencies, react: '0.0.1' },
+    devDependencies: { ...deps.devDependencies },
+  };
+  const findings = checkProject(standardState({
+    packageJson,
+    manifestModels: [manifestModel('virtual', [{ name: 'Fluent', version: '9.68.0' }])],
+  }), MATRIX, { hosts: ['model', 'pages'], needs: ['build'] });
+
+  assert.ok(byId(findings, 'PROJ_DEP_DRIFT'));
+  assert.ok(byId(findings, 'PROJ_PLATFORM_LIB'));
+  assert.equal(byId(findings, 'PROJ_HOST_CONFLICT').severity, 'error');
+  assert.match(byId(findings, 'PROJ_PLATFORM_LIB').fix, /PLATFORM_LIB_VERSION|Remove platform-library/);
+});
+
+test('dependencyFamily derives the PCF dependency set from manifest control types', () => {
+  assert.equal(dependencyFamily([manifestModel('standard')]), 'standard');
+  assert.equal(dependencyFamily([manifestModel('standard'), manifestModel('virtual')]), 'virtual');
+  assert.equal(dependencyFamily([]), 'standard');
+  assert.equal(dependencyFamily(null), 'standard');
+});
+
+test('checkProject is clean for a matrix-aligned scaffold state', () => {
+  assert.deepEqual(checkProject(standardState(), MATRIX, { hosts: ['model'], needs: ['build'] }), []);
+});
+
+test('collectProject reports unsafe pcfconfig outDir through resolveOutRoot without touching outside paths', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-doctor-unsafe-'));
+  try {
+    const controlDir = path.join(dir, 'Star');
+    fs.mkdirSync(controlDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Star.pcfproj'), renderedPcfproj());
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(standardState().packageJson));
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3 }));
+    fs.mkdirSync(path.join(dir, 'node_modules'));
+    fs.writeFileSync(path.join(dir, 'pcfconfig.json'), JSON.stringify({ outDir: '..' }));
+    fs.writeFileSync(path.join(controlDir, 'ControlManifest.Input.xml'), '<?xml version="1.0"?><manifest><control namespace="Contoso.Controls" constructor="Star" version="1.0.0" display-name-key="Star" description-key="Star"><resources><code path="index.ts" /></resources></control></manifest>');
+
+    const state = collectProject(dir);
+    const findings = checkProject(state, MATRIX, { hosts: ['model'], needs: ['build'] });
+
+    assert.equal(byId(findings, 'PROJ_OUT_UNSAFE').severity, 'error');
+    assert.match(byId(findings, 'PROJ_OUT_UNSAFE').fix, /pcfconfig\.json/);
+    assert.match(byId(findings, 'PROJ_OUT_UNSAFE').fix, /out\/controls/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('collectProject parses UTF-8 BOM package.json while preserving project bytes for upgrade', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-doctor-bom-package-'));
+  try {
+    const controlDir = path.join(dir, 'Star');
+    fs.mkdirSync(controlDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Star.pcfproj'), renderedPcfproj());
+    fs.writeFileSync(path.join(dir, 'package.json'), `\uFEFF${JSON.stringify(standardState().packageJson)}\n`);
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3 }));
+    fs.mkdirSync(path.join(dir, 'node_modules'));
+    fs.writeFileSync(path.join(controlDir, 'ControlManifest.Input.xml'), '<?xml version="1.0"?><manifest><control namespace="Contoso.Controls" constructor="Star" version="1.0.0" display-name-key="Star" description-key="Star"><resources><code path="index.ts" /></resources></control></manifest>');
+
+    const state = collectProject(dir);
+
+    assert.equal(state.packageJson.devDependencies['pcf-scripts'], dependencySet(MATRIX, 'standard').devDependencies['pcf-scripts']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('required doctor finding ids have the expected severity and a concrete fix', () => {
+  const toolFindings = checkToolchain({
+    node: '18.0.0',
+    npm: null,
+    pac: null,
+    dotnet: null,
+    platform: 'win32',
+  }, MATRIX, { needs: ['push'] });
+  toolFindings.push(...checkToolchain({
+    node: '22.13.1',
+    npm: '10.9.9',
+    pac: '1.36.0',
+    dotnet: '1.0.0',
+    platform: 'win32',
+  }, MATRIX, { needs: ['push'] }));
+  toolFindings.push(...checkToolchain({
+    node: '22.13.1',
+    npm: '10.9.9',
+    pac: '0.1.0-dev',
+    dotnet: '8.0.100',
+    platform: 'win32',
+  }, MATRIX, { needs: ['push'] }));
+
+  const deps = dependencySet(MATRIX, 'standard');
+  const projectFindings = checkProject(standardState({
+    projectPath: 'C:\\Users\\maker\\OneDrive - Contoso\\' + 'a'.repeat(190),
+    packageJson: {
+      dependencies: { ...deps.dependencies },
+      devDependencies: { ...deps.devDependencies, 'pcf-scripts': '^0.0.1' },
+    },
+    hasLockfile: false,
+    hasNodeModules: false,
+    pcfprojText: renderedPcfproj()
+      .replace('<PcfBuildMode>production</PcfBuildMode>', '<PcfBuildMode>development</PcfBuildMode>')
+      .replace(/Microsoft\.PowerApps\.MSBuild\.Pcf" Version="[^"]+"/, 'Microsoft.PowerApps.MSBuild.Pcf" Version="1.*"'),
+    eslintFiles: ['.eslintrc.json'],
+    manifestModels: [manifestModel('virtual', [{ name: 'Fluent', version: '9.68.0' }])],
+    outStray: ['out\\controls\\Star\\debug.map'],
+    outUnsafe: 'pcfconfig.json outDir must resolve inside the project',
+  }), MATRIX, { hosts: ['model', 'pages'], needs: ['build'], platform: 'win32' });
+
+  const all = [...toolFindings, ...projectFindings];
+  const expected = new Map([
+    ['TOOL_NODE_OLD', 'error'],
+    ['TOOL_NPM_MISSING', 'error'],
+    ['TOOL_PAC_MISSING', 'error'],
+    ['TOOL_PAC_OLD', 'error'],
+    ['TOOL_PAC_DEV_BUILD', 'warning'],
+    ['TOOL_DOTNET_MISSING', 'error'],
+    ['TOOL_DOTNET_OLD', 'error'],
+    ['PROJ_NO_LOCKFILE', 'warning'],
+    ['PROJ_NODE_MODULES_MISSING', 'error'],
+    ['PROJ_DEP_DRIFT', 'warning'],
+    ['PROJ_FLOATING_RANGE', 'warning'],
+    ['PROJ_ESLINT_LEGACY', 'warning'],
+    ['PROJ_BUILDMODE_NOT_PRODUCTION', 'warning'],
+    ['PROJ_MSBUILD_PCF_FLOATING', 'warning'],
+    ['PROJ_PLATFORM_LIB', 'error'],
+    ['PROJ_HOST_CONFLICT', 'error'],
+    ['PROJ_OUT_STALE', 'warning'],
+    ['PROJ_OUT_UNSAFE', 'error'],
+    ['PROJ_PATH_ONEDRIVE', 'warning'],
+    ['PROJ_PATH_LONG', 'warning'],
+  ]);
+
+  for (const [id, severity] of expected) {
+    const item = byId(all, id);
+    assert.ok(item, `${id} should be produced by coverage fixtures`);
+    assert.equal(item.severity, severity, id);
+    assert.match(item.fix, /\S/, `${id} fix should be non-empty`);
+    assert.match(item.fix, /(?:npm|Install|[Uu]pdate|Run|Edit|Move|Target|Delete|Remove|Use|Manual|pcf-upgrade|pcfconfig)/, `${id} fix should be concrete`);
+  }
+});
+
+async function runCli(argv, stubs) {
+  const emitted = { stdout: '', stderr: '', exitCode: null };
+  const realAuth = require('../lib/dataverse-auth.js');
+  const cli = loadCli(cliPath, {
+    argv,
+    requires: {
+      './lib/dataverse-auth': {
+        parseArgs: realAuth.parseArgs,
+        validateFlags: realAuth.validateFlags,
+        emitResult: (ok, payload) => {
+          if (ok) emitted.stdout += `${JSON.stringify(payload)}\n`;
+          else if (payload && typeof payload === 'object') emitted.stdout += `${JSON.stringify(payload)}\n`;
+          else emitted.stderr += `${String(payload)}\n`;
+          emitted.exitCode = ok ? 0 : 1;
+          const err = new Error(`process.exit(${emitted.exitCode})`);
+          err.exitCode = emitted.exitCode;
+          throw err;
+        },
+      },
+      ...stubs,
+    },
+  });
+  cli.emitted = emitted;
+  assert.equal(typeof cli.main, 'function');
+  try {
+    await cli.main(argv);
+  } catch (err) {
+    if (!String(err && err.message).startsWith('process.exit(')) throw err;
+  }
+  return cli;
+}
+
+test('CLI validates flags before probing and prints usage on errors', async () => {
+  const cli = await runCli(['--need', 'push'], {});
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(cli.stdoutText(), '');
+  assert.match(cli.stderrText(), /node scripts[/\\]pcf-doctor\.js/);
+  assert.match(cli.stderrText(), /did you mean --needs/i);
+});
+
+test('CLI rejects unknown or empty needs and hosts before probing tools', async () => {
+  for (const [argv, pattern] of [
+    [['--needs', 'pussh'], /--needs contains unknown value 'pussh'/],
+    [['--needs', ','], /--needs must include at least one value/],
+    [['--hosts', 'model,console'], /--hosts contains unknown value 'console'/],
+    [['--hosts', ','], /--hosts must include at least one value/],
+  ]) {
+    let probed = false;
+    const cli = await runCli(argv, {
+      './lib/pcf-matrix': { loadMatrix: () => MATRIX },
+      './lib/pcf-doctor': {
+        collectToolchain: () => { probed = true; return {}; },
+        checkToolchain: () => [],
+        collectProject: () => ({}),
+        checkProject: () => [],
+        hasErrors: () => false,
+      },
+    });
+
+    assert.equal(cli.exitCode, 1, argv.join(' '));
+    assert.match(cli.stderrText(), pattern, argv.join(' '));
+    assert.equal(cli.stdoutText(), '', argv.join(' '));
+    assert.equal(probed, false, argv.join(' '));
+  }
+});
+
+test('CLI emits JSON and makes pac optional for build but required for push', async () => {
+  const processRunnerCalls = [];
+  const processRunner = {
+    spawnResultSync: (name, args, options) => {
+      processRunnerCalls.push({ name, args, options });
+      if (name === 'pac') return { status: 1, stdout: '', stderr: 'pac missing', signal: null };
+      if (name === 'dotnet') return { status: 0, stdout: '8.0.100\n', stderr: '', signal: null };
+      throw new Error(`unexpected process-runner command ${name}`);
+    },
+  };
+  const stubs = {
+    './lib/node-tool': {
+      runNpm: (args, opts) => {
+        assert.deepEqual(args, ['--version']);
+        assert.equal(opts.npmCli, 'D:\\tools\\npm-cli.js');
+        return { status: 0, stdout: '10.9.9\n', stderr: '' };
+      },
+    },
+    './lib/process-runner': processRunner,
+  };
+
+  const buildOnly = await withProcessRunnerStub(processRunner, () => runCli(['--needs', 'build', '--npm-cli', 'D:\\tools\\npm-cli.js'], {
+    ...stubs,
+    './lib/pac-exec': require('../lib/pac-exec.js'),
+  }));
+  assert.equal(buildOnly.emitted.exitCode, 0);
+  const buildPayload = JSON.parse(buildOnly.emitted.stdout);
+  assert.equal(buildPayload.ok, true);
+  assert.equal(byId(buildPayload.toolchain, 'TOOL_PAC_MISSING').severity, 'info');
+
+  const push = await withProcessRunnerStub(processRunner, () => runCli(['--needs', 'push', '--npm-cli', 'D:\\tools\\npm-cli.js'], {
+    ...stubs,
+    './lib/pac-exec': require('../lib/pac-exec.js'),
+  }));
+  assert.equal(push.emitted.exitCode, 1);
+  const pushPayload = JSON.parse(push.emitted.stdout);
+  assert.equal(pushPayload.ok, false);
+  assert.equal(byId(pushPayload.toolchain, 'TOOL_PAC_MISSING').severity, 'error');
+  assert.deepEqual(processRunnerCalls.map((call) => [call.name, call.args, call.options]), [
+    ['pac', ['help'], { encoding: 'utf8' }],
+    ['dotnet', ['--version'], { encoding: 'utf8' }],
+    ['pac', ['help'], { encoding: 'utf8' }],
+    ['dotnet', ['--version'], { encoding: 'utf8' }],
+  ]);
+});
+
+test('collectToolchain probes dotnet through process-runner instead of bare child_process', () => {
+  const calls = [];
+  const { collectToolchain } = require('../lib/pcf-doctor.js');
+
+  const probes = collectToolchain({}, {
+    runNpm: () => ({ status: 0, stdout: '10.9.9\n', stderr: '' }),
+    runPac: () => ({ status: 0, stdout: 'Microsoft PowerPlatform CLI\nVersion: 1.51.1\n', stderr: '' }),
+    spawnResultSync: (name, args, options) => {
+      calls.push({ name, args, options });
+      return { status: 0, stdout: '8.0.100\n', stderr: '' };
+    },
+  });
+
+  assert.deepEqual(calls, [{ name: 'dotnet', args: ['--version'], options: { encoding: 'utf8' } }]);
+  assert.equal(probes.dotnet, '8.0.100');
+});
