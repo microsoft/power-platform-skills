@@ -214,6 +214,8 @@ test('edit temp paths are stable, private, and reject redirected namespaces', (t
   assert.equal(prepareEditTempDir(root), directory, 'separate invocations must reuse the namespace');
   assert.equal(fs.lstatSync(directory).isSymbolicLink(), false);
   if (process.platform !== 'win32') {
+    assert.equal(path.basename(path.dirname(directory)), `power-platform-mobile-app-uid-${process.getuid()}`,
+      'shared POSIX temp roots need one private parent per user');
     assert.equal(fs.statSync(directory).mode & 0o077, 0, 'project namespace must be owner-only');
     assert.equal(fs.statSync(path.dirname(directory)).mode & 0o077, 0,
       'stable parent namespace must be owner-only');
@@ -603,6 +605,7 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.doesNotMatch(skill, /If `native-app-plan\.md` is missing → STOP/);
   assert.match(skill, /devicePreviewReady: false[\s\S]*earlier run/);
   assert.match(skill, /`--plan-only`[\s\S]*mark `save-plan: done`[\s\S]*publish one final progress/);
+  assert.match(skill, /Keep `docs\/create-app-plan\.html` unchanged because it describes the current app/);
   assert.match(skill, /Every branch that ends the workflow must publish a terminal progress write/);
   assert.match(skill, /configuration-only request[\s\S]*`configure-insights` checklist row/);
   assert.match(skill, /planning-phase handoff[\s\S]*validated proposal was returned to the owning workflow/);
@@ -612,6 +615,9 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   const tempAllocation = skill.indexOf('Immediately run the edit documentation protocol');
   const inferredPlanSync = skill.indexOf('Create `<edit-temp-dir>/app-plan-sync.json`');
   assert.ok(tempAllocation > -1 && tempAllocation < inferredPlanSync);
+  const step4 = skill.slice(skill.indexOf('### Step 4'), skill.indexOf('### Step 5'));
+  assert.ok(step4.indexOf('If this is `--plan-only`') < step4.indexOf('For an implementation run'),
+    'plan-only must return before approved intent is synced into the current-app plan');
 });
 
 test('the phone CLI carries the full preview, including shared CSS, without rewriting screens', (t) => {

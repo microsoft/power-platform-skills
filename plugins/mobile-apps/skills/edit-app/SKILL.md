@@ -724,11 +724,7 @@ If `$ARGUMENTS` includes `--plan-only`, change option (a) to "Approve and save p
 
 ### Step 4 — Write plan diff
 
-Keep `save-plan: active` while writing the approved `native-app-plan.md` sections. Build
-`<edit-temp-dir>/app-plan-sync.json` from the complete approved versions of those sections and run
-`app-docs.js sync --json-file` immediately after the Markdown write. This updates the living app
-plan in the background before cloud or app mutations begin. Then mark `save-plan: done` and the first applicable
-implementation operation `active` in the progress page.
+Keep `save-plan: active` while writing the approved `native-app-plan.md` sections.
 
 Replace the approved section(s) in `native-app-plan.md` with the approved content (preserve all other sections verbatim). Print a unified diff so the user has a record:
 
@@ -744,7 +740,15 @@ diff --git native-app-plan.md native-app-plan.md
 If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, mark `save-plan: done`,
 mark every implementation, verification, preview, and device-handoff row `skipped`, set top-level
 `phase: done`, `status: done`, and `devicePreviewReady: false`, and publish one final progress
-write. Then print the exact follow-up commands and stop. Otherwise continue immediately.
+write. Keep `docs/create-app-plan.html` unchanged because it describes the current app, while
+`native-app-plan.md` holds the approved but unapplied intent. Then print the exact follow-up
+commands and stop.
+
+For an implementation run, build `<edit-temp-dir>/app-plan-sync.json` from the complete approved
+versions of the changed sections and run `app-docs.js sync --json-file` immediately after the
+Markdown write. This updates the living app plan in the background before cloud or app mutations
+begin. Then mark `save-plan: done` and the first applicable implementation operation `active` in
+the progress page.
 
 The saved plan describes approved intent, not successful application. When the
 Data Model changed, merge its newly accepted `_dm_section.md` proposal here;

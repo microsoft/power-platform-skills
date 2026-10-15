@@ -124,7 +124,8 @@ function editTempDir(projectRoot) {
     .update(path.resolve(projectRoot))
     .digest('hex')
     .slice(0, 16);
-  return path.join(os.tmpdir(), 'power-platform-mobile-app', projectHash);
+  const userNamespace = typeof process.getuid === 'function' ? `uid-${process.getuid()}` : 'user';
+  return path.join(os.tmpdir(), `power-platform-mobile-app-${userNamespace}`, projectHash);
 }
 
 function ensurePrivateDirectory(directory) {
