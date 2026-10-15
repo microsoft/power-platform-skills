@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  specTables, preAppTables, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents,
+  specTables, appWriteTables, preAppTables, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents,
   tableList, publishTablesXml, readSavedNotPublished, describeSavedNotPublished,
 } = require('../lib/table-publish.js');
 
@@ -55,46 +55,96 @@ test("specTables: a page's data sources are named too, declared or not: validati
   assert.deepStrictEqual(specTables({ pages: 'nope' }), []);
 });
 
+// --- appWriteTables ----------------------------------------------------------------------------------------------------------
+//
+// The tables whose Main forms the build's own write of the app adds to the app. The SDK enumerates the active Main forms of the tables of the sitemap's
+// Entity subareas, and only those (publish-scope-real-bundle.test.js runs the real SDK to pin that), so these are the navigation's tables: from the spec,
+// because the forms the write is about to add cannot be read from the app's component list before it.
+
+test("appWriteTables: the tables of the navigation's entity entries, lower-cased, once each, in the order the navigation gives them", () => {
+  const spec = {
+    entities: [{ schemaName: 'new_declared_only' }],
+    forms: [{ entity: 'new_form_only' }],
+    app: { tables: ['new_hidden'] },
+    pages: [{ key: 'overview', dataSources: ['new_page_ds'] }],
+    appShell: { areas: [{ groups: [{ subAreas: [
+      { entity: 'New_Ticket', title: 'Tickets' }, { entity: 'new_task' }, { page: 'overview', title: 'Overview' }, { dashboard: 'Home' }, { url: 'https://contoso.example' }, { entity: 'new_ticket' },
+    ] }, { subAreas: [{ entity: 'new_note' }] }] }] },
+  };
+  assert.deepStrictEqual(appWriteTables(spec, undefined), ['new_ticket', 'new_task', 'new_note'], 'not a page, a dashboard, a link, a declared table, an `app.tables` pin or a page\u2019s data source');
+});
+
+test('appWriteTables: an entry that names a page, a dashboard or a link is not a table entry even when it also names a table, as the build writes the sitemap', () => {
+  // appDef reads a dashboard before a page, a page before a url, and anything else is a table.
+  const spec = { appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'new_a', page: 'p' }, { entity: 'new_b', dashboard: 'd' }, { entity: 'new_c', url: 'https://contoso.example' }, { entity: 'new_d' }] }] }] } };
+  assert.deepStrictEqual(appWriteTables(spec), ['new_d']);
+});
+
+test('appWriteTables: a Main-form list restricts a table to the forms it names, and a table counts only if at least one of its forms will be in the app', () => {
+  const spec = { appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'new_listed' }, { entity: 'new_empty' }, { entity: 'new_unlisted' }] }] }] } };
+  const lists = { new_listed: ['33333333-0000-4000-8000-000000000001'], new_empty: [] };
+  assert.deepStrictEqual(appWriteTables(spec, lists), ['new_listed', 'new_unlisted'], 'a table with a list of forms adds them, one with an empty list adds none, one with no list adds its active Main forms');
+  assert.deepStrictEqual(appWriteTables(spec, {}), ['new_listed', 'new_empty', 'new_unlisted'], 'no restriction at all');
+  assert.deepStrictEqual(appWriteTables(spec, undefined), ['new_listed', 'new_empty', 'new_unlisted'], 'the spec has no Main-form list');
+  assert.deepStrictEqual(appWriteTables(spec, { NEW_EMPTY: [] }), ['new_listed', 'new_empty', 'new_unlisted'], 'the resolved list is keyed by lower-case names, as resolveMainForms makes it');
+});
+
+test('appWriteTables: a spec of any shape names none, and a name that cannot be a table\u2019s is left out', () => {
+  for (const spec of [undefined, null, {}, 'x', { appShell: null }, { appShell: { areas: 'nope' } }, { appShell: { areas: [null, { groups: null }, { groups: [null, { subAreas: [null, {}, { entity: 5 }] }] }] } }]) {
+    assert.deepStrictEqual(appWriteTables(spec, undefined), [], JSON.stringify(spec));
+  }
+  assert.deepStrictEqual(appWriteTables({ appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'x</entity><entity>y' }, { entity: 'two words' }, { entity: '' }, { entity: 'new_ok' }] }] }] } }, 'nope'), ['new_ok']);
+});
+
 // --- preAppTables ------------------------------------------------------------------------------------------------------------
 //
 // The tables the build publishes before the app are the ones the app's publish would otherwise leave a saved label on: the tables whose existing
-// views and forms the build reconciled (what the SDK's own publish of them covered), the tables of the charts it wrote, and the tables whose forms
-// or charts the app is proven to hold. The spec decides none of it: `specTables` is the wider list the spec names, which a halted build reads.
+// views and forms the build reconciled (what the SDK's own publish of them covered), the tables of the charts it wrote, the tables whose Main forms its
+// own write of the app adds, and the tables whose forms or charts the app is proven to hold. `specTables` is the wider list the spec names, which a
+// halted build reads.
 const sorted = (list) => [...list].sort();
 
-test('preAppTables: the tables the build reconciled, the tables of the charts it wrote and the tables whose forms or charts the app holds, once each, in name order', () => {
+test('preAppTables: the tables the build reconciled, the tables of the charts it wrote, the tables its write of the app adds forms of and the tables whose forms or charts the app holds, once each, in name order', () => {
   assert.deepStrictEqual(
-    preAppTables({ reconciled: ['new_view', 'New_Form'], charted: ['new_chart', 'new_form'], held: new Set(['new_retained', 'new_view']) }),
-    ['new_chart', 'new_form', 'new_retained', 'new_view'],
+    preAppTables({ reconciled: ['new_view', 'New_Form'], charted: ['new_chart', 'new_form'], added: ['new_nav', 'new_view'], held: new Set(['new_retained', 'new_view']) }),
+    ['new_chart', 'new_form', 'new_nav', 'new_retained', 'new_view'],
   );
-  assert.deepStrictEqual(preAppTables({ reconciled: new Set(['new_b', 'new_a']) }), ['new_a', 'new_b'], 'the order does not depend on which reconcile finished first');
+  assert.deepStrictEqual(preAppTables({ reconciled: new Set(['new_b', 'new_a']), added: new Set(['new_c']) }), ['new_a', 'new_b', 'new_c'], 'the order does not depend on which reconcile finished first');
 });
 
-test('preAppTables: what the app holds is optional: without it the request names exactly what the build changed', () => {
+test('preAppTables: what the app holds is optional: without it the request names what the build changed and what its write of the app adds', () => {
   assert.deepStrictEqual(preAppTables({ reconciled: ['new_b'], charted: ['new_a'] }), ['new_a', 'new_b']);
   assert.deepStrictEqual(preAppTables({ reconciled: ['new_b'], charted: ['new_a'], held: undefined }), ['new_a', 'new_b']);
+  assert.deepStrictEqual(preAppTables({ reconciled: ['new_b'], charted: ['new_a'], added: ['new_nav'], held: undefined }), ['new_a', 'new_b', 'new_nav'], 'what the write adds needs no proof from the server');
   assert.deepStrictEqual(preAppTables({ reconciled: ['new_b'], charted: ['new_a'], held: ['new_held'] }), ['new_a', 'new_b'], 'a list is not a Set: nothing was proven');
 });
 
-test('preAppTables: nothing changed and nothing held is no table, and a name that cannot be a table\u2019s is left out', () => {
+test('preAppTables: nothing changed, added or held is no table, and a name that cannot be a table\u2019s is left out', () => {
   assert.deepStrictEqual(preAppTables(), []);
   assert.deepStrictEqual(preAppTables({}), []);
-  assert.deepStrictEqual(preAppTables({ reconciled: ['x</entity><entity>y', 'two words', '', 5], charted: [null], held: new Set(['9starts_with_digit']) }), []);
+  assert.deepStrictEqual(preAppTables({ reconciled: ['x</entity><entity>y', 'two words', '', 5], charted: [null], added: ['9starts_with_digit'], held: new Set(['9starts_with_digit']) }), []);
 });
 
 // --- readAppFormChartTables --------------------------------------------------------------------------------------------------
 //
 // The tables whose forms or charts an existing app is PROVEN to hold: the app's component list on the server, and the table of each form and chart in
-// it. A table component alone, or a view, proves nothing about a form or a chart, so neither is read. The read counts only when it is complete.
+// it, looked up in the SAVED layer (the component list is the saved layer's, so a form a maker added to the app and never published is in it). A table
+// component alone, or a view, proves nothing about a form or a chart, so neither is read. The read counts only when it is complete and unambiguous.
 
 const APP_ID = '22222222-0000-4000-8000-000000000001';
 const LAYER_ID = '22222222-0000-4000-8000-000000000002';
 const guid = (n) => `33333333-0000-4000-8000-${String(n).padStart(12, '0')}`;
 // An SDK double for the reads of what an app holds: the app's layer, its components by type, a table component's metadata and the table of a view,
 // form or chart component. `tables` maps a logical name to its MetadataId; `assets` maps `<componenttype>` to { id: table }; `reads` keeps every
-// request; `shape(type, rows)` changes the rows the platform answers a lookup of a component's table with.
-function appSdk({ tables = {}, assets = {}, layer = true, failType, shape = (type, rows) => rows } = {}) {
+// request; `shape(type, rows)` changes the rows the platform answers a lookup of a component's table with; `failLookup` is a component type whose
+// lookup the platform refuses.
+// The lookup is the SAVED layer's, as the build makes it:
+//   GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq <id> or formid eq <id>
+// A PLAIN read of the record (`queryRecords` of its entity) answers the published layer only, so a record never published has no row in it. The double
+// fails that read loudly, so a regression to it shows as itself and not as a quiet hole.
+function appSdk({ tables = {}, assets = {}, layer = true, failType, failLookup, shape = (type, rows) => rows } = {}) {
   const tableOf = { 26: ['savedquery', 'savedqueryid', 'returnedtypecode'], 59: ['savedqueryvisualization', 'savedqueryvisualizationid', 'primaryentitytypecode'], 60: ['systemform', 'formid', 'objecttypecode'] };
+  const collections = { savedqueries: 26, savedqueryvisualizations: 59, systemforms: 60 };
   const reads = [];
   return {
     reads,
@@ -103,6 +153,13 @@ function appSdk({ tables = {}, assets = {}, layer = true, failType, shape = (typ
         reads.push(url);
         if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
           return layer ? { status: 200, body: { value: [{ appmoduleid: APP_ID, appmoduleidunique: LAYER_ID, componentstate: 1 }] } } : { status: 500, body: { error: { message: 'the platform refused' } } };
+        }
+        const saved = /^\/(savedqueries|savedqueryvisualizations|systemforms)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?\$select=[^&]+&\$filter=(.*)$/.exec(url);
+        if (saved) {
+          const type = collections[saved[1]];
+          if (type === failLookup) return { status: 500, body: { error: { message: 'the platform refused the lookup' } } };
+          const [, idField, tableField] = tableOf[type];
+          return { status: 200, body: { value: shape(type, Object.entries(assets[type] || {}).filter(([id]) => saved[2].includes(id)).map(([id, table]) => ({ [idField]: id, [tableField]: table }))) } };
         }
         const name = Object.keys(tables).find((logical) => url.includes(`EntityDefinitions(${tables[logical]})`));
         return name ? { status: 200, body: { LogicalName: name, IsCustomEntity: true } } : { status: 404, body: null };
@@ -117,13 +174,13 @@ function appSdk({ tables = {}, assets = {}, layer = true, failType, shape = (typ
         if (type === 1) return Object.values(tables).map((objectid) => ({ objectid, componenttype: 1 }));
         return Object.keys(assets[type] || {}).map((objectid) => ({ objectid, componenttype: type }));
       }
-      const entry = Object.entries(tableOf).find(([, [name]]) => name === set);
-      const [, [, idField, tableField]] = entry;
-      const type = Number(entry[0]);
-      return shape(type, Object.entries(assets[type] || {}).filter(([id]) => filter.includes(id)).map(([id, table]) => ({ [idField]: id, [tableField]: table })));
+      throw new Error(`a plain read of ${set} answers the published layer only: a record the app holds that was never published has no row in it`);
     },
   };
 }
+// The collections the lookups of the tables went to, in order, and the ids each asked about.
+const lookupsOf = (sdk) => sdk.reads.filter((read) => /^\/(savedqueries|savedqueryvisualizations|systemforms)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(read));
+const askedIn = (url) => [...url.matchAll(/ eq (33333333-[0-9a-f-]{27})/g)].map((m) => m[1]);
 
 test('readAppFormChartTables: the tables of the forms and charts the app holds, lower-cased, and of its forms alone; a dashboard is no table', async () => {
   const sdk = appSdk({
@@ -142,27 +199,96 @@ test('readAppFormChartTables: it reads the form and chart components and their t
   const sdk = appSdk({ tables: { contoso_table: guid(1) }, assets: { 26: { [guid(10)]: 'contoso_view' }, 59: { [guid(11)]: 'contoso_chart' }, 60: { [guid(12)]: 'contoso_form' } } });
   await readAppFormChartTables(sdk, APP_ID);
   assert.deepStrictEqual(sdk.reads.filter((read) => read.startsWith('appmodulecomponent:')).map((read) => Number((/componenttype eq (\d+)/.exec(read) || [])[1])), [59, 60]);
-  assert.deepStrictEqual(sdk.reads.filter((read) => /^(savedquery|savedqueryvisualization|systemform): /.test(read)).map((read) => read.split(':')[0]), ['savedqueryvisualization', 'systemform']);
+  assert.deepStrictEqual(lookupsOf(sdk).map((read) => read.split('/')[1]), ['savedqueryvisualizations', 'systemforms']);
   assert.ok(!sdk.reads.some((read) => read.includes('EntityDefinitions')), 'a table component is never resolved to its table');
+});
+
+test('readAppFormChartTables: the tables are looked up in the SAVED layer, so a form or chart the app holds that was never published is identified', async () => {
+  // The double answers the saved layer only and fails a plain read: a record never published is no row in the published layer.
+  const sdk = appSdk({ assets: { 59: { [guid(11)]: 'contoso_chart_draft' }, 60: { [guid(12)]: 'contoso_form_draft' } } });
+  const read = await readAppFormChartTables(sdk, APP_ID);
+  assert.strictEqual(read.ok, true, read.reason);
+  assert.deepStrictEqual(sorted(read.tables), ['contoso_chart_draft', 'contoso_form_draft']);
+  assert.deepStrictEqual(lookupsOf(sdk), [
+    `/savedqueryvisualizations/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=savedqueryvisualizationid,primaryentitytypecode&$filter=savedqueryvisualizationid eq ${guid(11)}`,
+    `/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq ${guid(12)}`,
+  ]);
+});
+
+test('readAppFormChartTables: components are looked up twenty to a request, and every answer counts', async () => {
+  const ids = Array.from({ length: 46 }, (_, i) => guid(100 + i));
+  const sdk = appSdk({ assets: { 60: Object.fromEntries(ids.map((id, i) => [id, i % 2 ? 'contoso_odd' : 'contoso_even'])) } });
+  const read = await readAppFormChartTables(sdk, APP_ID);
+  assert.deepStrictEqual(lookupsOf(sdk).map((url) => askedIn(url).length), [20, 20, 6]);
+  assert.deepStrictEqual([...read.tables].sort(), ['contoso_even', 'contoso_odd']);
 });
 
 test('readAppFormChartTables: a component nothing identifies makes the whole read incomplete, and a partial list is never handed back', async () => {
   const assets = { 59: { [guid(11)]: 'contoso_chart' }, 60: { [guid(12)]: 'contoso_form', [guid(13)]: 'contoso_unresolved' } };
-  // The component list names two forms and the lookup of their tables answers one: a stale component, a record the caller cannot read, a draft.
+  // The component list names two forms and the lookup of their tables answers one: a stale component, a record the caller cannot read.
   const missing = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => (type === 60 ? rows.filter((r) => r.formid !== guid(13)) : rows) }), APP_ID);
   assert.strictEqual(missing.ok, false);
   assert.match(missing.reason, /^tables derived from app component type 60 could not be fully identified \(no systemform record answered for 33333333-0000-4000-8000-000000000013\)$/);
   assert.strictEqual(missing.tables, undefined, 'what was identified is not offered: a caller that publishes it would be guessing about the rest');
-  const noTable = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => rows.map((r) => (r.formid === guid(13) ? { formid: r.formid, objecttypecode: '' } : r)) }), APP_ID);
-  assert.strictEqual(noTable.ok, false, 'a row that names no table identifies nothing');
+  for (const [what, named] of [['an empty table', ''], ['no table at all', undefined], ['a null table', null]]) {
+    const noTable = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => rows.map((r) => (r.formid === guid(13) ? { formid: r.formid, objecttypecode: named } : r)) }), APP_ID);
+    assert.strictEqual(noTable.ok, false, `${what}: a row that names no table identifies nothing`);
+  }
   const noId = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => rows.map((r) => (type === 59 ? { primaryentitytypecode: r.primaryentitytypecode } : r)) }), APP_ID);
   assert.strictEqual(noId.ok, false, 'a row that carries no id cannot be matched to a component');
   assert.match(noId.reason, /^tables derived from app component type 59 could not be fully identified \(no savedqueryvisualization record answered for 33333333-0000-4000-8000-000000000011\)$/);
 });
 
+test('readAppFormChartTables: a row for an id the component list never named, or with no readable id, says nothing of this app and adds no table', async () => {
+  const assets = { 60: { [guid(12)]: 'contoso_form' } };
+  for (const [what, extra] of [
+    ['a record the list never named', { formid: guid(90), objecttypecode: 'contoso_lookup' }],
+    ['a row with no id', { objecttypecode: 'contoso_lookup' }],
+    ['a row whose id is not text', { formid: 12, objecttypecode: 'contoso_lookup' }],
+    ['a row with an unreadable id', { formid: '   ', objecttypecode: 'contoso_lookup' }],
+    ['a row that is not an object', null],
+  ]) {
+    const read = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => [extra, ...rows, extra] }), APP_ID);
+    assert.strictEqual(read.ok, true, `${what}: the component that was asked about is identified, so the read is complete`);
+    assert.deepStrictEqual(sorted(read.tables), ['contoso_form'], `${what}: the table it names is not the app's`);
+    assert.deepStrictEqual(sorted(read.forms), ['contoso_form'], what);
+  }
+});
+
+test('readAppFormChartTables: an id answered twice with the same table is one record in two layers; with two tables it is an answer that cannot be relied on, and lets neither in', async () => {
+  const assets = { 60: { [guid(12)]: 'contoso_form', [guid(13)]: 'contoso_held' } };
+  // A record with a saved edit can be answered once per layer, the same table both times, whatever the spelling of the id or the case of the table.
+  const layers = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => [...rows, ...rows.map((r) => ({ formid: `{${r.formid.toUpperCase()}}`, objecttypecode: ` ${r.objecttypecode.toUpperCase()} ` }))] }), APP_ID);
+  assert.strictEqual(layers.ok, true, layers.reason);
+  assert.deepStrictEqual(sorted(layers.tables), ['contoso_form', 'contoso_held']);
+  const conflict = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => [...rows, { formid: guid(13), objecttypecode: 'contoso_lookup' }] }), APP_ID);
+  assert.strictEqual(conflict.ok, false);
+  assert.strictEqual(conflict.reason, `tables derived from app component type 60 could not be fully identified (the systemform answer for ${guid(13)} names more than one table)`);
+  assert.strictEqual(conflict.tables, undefined, 'neither of the two tables is offered');
+  const reversed = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => [{ formid: guid(13), objecttypecode: 'contoso_lookup' }, ...rows] }), APP_ID);
+  assert.strictEqual(reversed.ok, false, 'whichever row comes first');
+});
+
+test('readAppFormChartTables: a table that is not a table\u2019s name is no answer, even next to a row that names one: whitespace, a number, two words, a digit first, an object', async () => {
+  const assets = { 60: { [guid(12)]: 'contoso_form', [guid(13)]: 'contoso_held' } };
+  for (const [what, value, shown] of [
+    ['whitespace', '   ', '"   "'], ['a number', 12345, '12345'], ['two words', 'two words', '"two words"'], ['a digit first', '9table', '"9table"'],
+    ['a boolean', true, 'true'], ['an object', { LogicalName: 'contoso_held' }, '{"LogicalName":"contoso_held"}'],
+  ]) {
+    const alone = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => rows.map((r) => (r.formid === guid(13) ? { ...r, objecttypecode: value } : r)) }), APP_ID);
+    assert.strictEqual(alone.ok, false, what);
+    assert.strictEqual(alone.reason, `tables derived from app component type 60 could not be fully identified (the systemform answer for ${guid(13)} names no usable table (${shown}))`, what);
+    assert.strictEqual(alone.tables, undefined, `${what}: no table is offered, the held one included`);
+    const beside = await readAppFormChartTables(appSdk({ assets, shape: (type, rows) => [...rows, { formid: guid(13), objecttypecode: value }] }), APP_ID);
+    assert.strictEqual(beside.ok, false, `${what}: a valid row for the same id does not make up for it`);
+  }
+});
+
 test('readAppFormChartTables: a component of a non-table form (a dashboard answers `none`) is identified', async () => {
-  const read = await readAppFormChartTables(appSdk({ assets: { 60: { [guid(13)]: 'none' } } }), APP_ID);
-  assert.deepStrictEqual({ ok: read.ok, tables: [...read.tables] }, { ok: true, tables: [] });
+  for (const named of ['none', 'None', ' none ']) {
+    const read = await readAppFormChartTables(appSdk({ assets: { 60: { [guid(13)]: named } } }), APP_ID);
+    assert.deepStrictEqual({ ok: read.ok, tables: [...read.tables] }, { ok: true, tables: [] }, named);
+  }
 });
 
 test('readAppFormChartTables: a read that failed says which, and an app that cannot be found says so, each with no tables', async () => {
@@ -173,6 +299,40 @@ test('readAppFormChartTables: a read that failed says which, and an app that can
   const refused = await readAppFormChartTables(appSdk({ layer: false }), APP_ID);
   assert.strictEqual(refused.ok, false);
   assert.match(refused.reason, /the platform refused/);
+  const lookup = await readAppFormChartTables(appSdk({ assets: { 59: { [guid(11)]: 'contoso_chart' }, 60: { [guid(12)]: 'contoso_form' } }, failLookup: 60 }), APP_ID);
+  assert.strictEqual(lookup.ok, false, 'the lookup of the forms\u2019 tables is refused: the chart\u2019s table that was identified is not offered alone');
+  assert.match(lookup.reason, /^tables derived from app component type 60 could not be read \(the saved systemform records of the app's components: HTTP 500: the platform refused the lookup\)$/, 'which read, without the URL');
+  assert.strictEqual(lookup.tables, undefined);
+});
+
+test('readAppFormChartTables: every read it rests on, refused, malformed or lost, makes the app unreadable, with a reason and no table offered', async () => {
+  const assets = { 59: { [guid(11)]: 'contoso_chart' }, 60: { [guid(12)]: 'contoso_form' } };
+  const dataverseModes = {
+    refused: () => ({ status: 403, body: { error: { message: 'injected denial' } } }),
+    malformed: () => ({ status: 200, body: { value: {} } }),
+    lost: () => { throw new Error('injected transport loss'); },
+  };
+  const queryModes = { refused: () => { throw new Error('HTTP 403: injected denial'); }, malformed: () => ({}), lost: () => { throw new Error('injected transport loss'); } };
+  for (const [what, matches] of [['the app\u2019s layer', (url) => url.startsWith('/appmodules/')], ['the lookup of the charts\u2019 tables', (url) => url.startsWith('/savedqueryvisualizations/')], ['the lookup of the forms\u2019 tables', (url) => url.startsWith('/systemforms/')]]) {
+    for (const [mode, answer] of Object.entries(dataverseModes)) {
+      const sdk = appSdk({ assets });
+      const get = sdk.dataverse.get;
+      sdk.dataverse.get = async (url) => (matches(url) ? answer() : get(url));
+      const read = await readAppFormChartTables(sdk, APP_ID);
+      assert.strictEqual(read.ok, false, `${what} ${mode}`);
+      assert.ok(read.reason && read.tables === undefined && read.forms === undefined, `${what} ${mode}: a reason and no table`);
+    }
+  }
+  for (const type of [59, 60]) {
+    for (const [mode, answer] of Object.entries(queryModes)) {
+      const sdk = appSdk({ assets });
+      const query = sdk.queryRecords;
+      sdk.queryRecords = async (set, options) => (set === 'appmodulecomponent' && new RegExp(`componenttype eq ${type}\\b`).test(options.filter) ? answer() : query(set, options));
+      const read = await readAppFormChartTables(sdk, APP_ID);
+      assert.strictEqual(read.ok, false, `the component list of type ${type} ${mode}`);
+      assert.ok(read.reason && read.tables === undefined, `the component list of type ${type} ${mode}: a reason and no table`);
+    }
+  }
 });
 
 test('readAppFormChartTables: no app, no client, a client that throws: none of them throws', async () => {
@@ -215,6 +375,18 @@ test('describePreAppRefusal: a table that carries this build\u2019s write AND a 
   assert.match(text, /may have to be saved again/);
 });
 
+test('describePreAppRefusal: a table whose Main forms the build\u2019s own write of the app adds is worded "or adds", and one the app already holds a form of is not', () => {
+  const text = describePreAppRefusal({ reason: 'x', tables: ['new_nav', 'new_held', 'new_plain'], forms: new Set(['new_held']), added: ['new_nav', 'new_held'] });
+  assert.match(text, /The app holds, or this build's write of it adds, forms of new_nav, new_held: a label someone saved on a form there and did not publish may stay unpublished/);
+  assert.ok(!/forms of [^:]*new_plain/.test(text), 'a table the app holds no form of and the build adds none to carries no form risk');
+  const heldOnly = describePreAppRefusal({ reason: 'x', tables: ['new_held'], forms: new Set(['new_held']), added: ['new_held'] });
+  assert.match(heldOnly, /The app holds forms of new_held: a label/, 'a table that is both held and added is held: the plain wording');
+  assert.ok(!/or this build's write/.test(heldOnly));
+  const addedOnly = describePreAppRefusal({ reason: 'x', tables: ['new_nav'], added: new Set(['new_nav']) });
+  assert.match(addedOnly, /The app holds, or this build's write of it adds, forms of new_nav: a label/, 'with nothing proven held, and the build\u2019s additions given as a Set');
+  assert.ok(!/this build's write of it adds/.test(describePreAppRefusal({ reason: 'x', tables: ['new_a'], added: undefined, forms: undefined })), 'nothing added, nothing said');
+});
+
 test('describePreAppRefusal: only what applies is said', () => {
   const own = describePreAppRefusal({ reason: 'x', tables: ['new_a'], saved: new Map([['new_a', ['view A', 'form B']]]) });
   assert.match(own, /^could not publish table new_a before the app \(x\), so .* what is saved on it did not apply\. This build saved view A, form B on new_a; they go out with the build's final publish/);
@@ -230,14 +402,23 @@ test('describePreAppRefusal: only what applies is said', () => {
   assert.strictEqual(describePreAppRefusal({ reason: 'x', tables: [] }), null);
 });
 
-test('describeUnreadAppComponents: says which proof failed and that only what the build changed was published, and recommends no publication of a table it could not prove', () => {
-  const text = describeUnreadAppComponents({ reason: 'app component type 60 could not be read (HTTP 500)' });
-  assert.match(text, /^could not tell which tables the forms and charts the app already holds belong to \(app component type 60 could not be read \(HTTP 500\)\), so only the tables this build changed were published before the app's own publish\./);
-  assert.match(text, /Any other table the app holds a form or chart of was not published first: a label someone saved on a form there and did not publish may stay unpublished once the app is published/);
+test('describeUnreadAppComponents: says which proof failed and what was published anyway, and recommends no publication of a table it could not prove', () => {
+  const text = describeUnreadAppComponents({ reason: 'app component type 60 could not be read (HTTP 500)', added: ['new_nav'] });
+  assert.match(text, /^could not tell which tables the forms and charts the app already holds belong to \(app component type 60 could not be read \(HTTP 500\)\), so before the app's own publish it published only the tables this build changed and the navigation's tables, whose Main forms its own write of the app adds\./);
+  assert.match(text, /Any other table the app holds a form or chart of \(one a maker added to it in the designer, say\) was not published first: a label someone saved on a form there and did not publish may stay unpublished once the app is published/);
   assert.match(text, /a later publish of the table does not release it, as measured for forms\), so one that does not show may have to be saved again\./);
   assert.match(text, /Run the build again once the cause is cleared: it then publishes the tables whose forms or charts the app holds before the app's own publish\.$/);
   assert.ok(!/publish (that|those|these|the) tables? in Power Apps/i.test(text), 'nothing tells a maker to publish a table the build could not prove is the app\u2019s');
-  assert.ok(!/new_/.test(text), 'and no table is named');
+  assert.ok(!/new_/.test(text), 'and no table is named, the navigation\u2019s included');
+});
+
+test('describeUnreadAppComponents: a build whose write adds no form says it published only what it changed, and claims nothing of the navigation', () => {
+  for (const added of [undefined, [], new Set()]) {
+    const text = describeUnreadAppComponents({ reason: 'x', added });
+    assert.match(text, /^could not tell which tables the forms and charts the app already holds belong to \(x\), so before the app's own publish it published only the tables this build changed\. Any other table/, String(added));
+    assert.ok(!/navigation/.test(text), 'no table is said to have been published that was not');
+  }
+  assert.match(describeUnreadAppComponents({ reason: 'x', added: new Set(['new_nav']) }), /and the navigation's tables, whose Main forms its own write of the app adds/, 'a Set of the tables, as well as a list');
 });
 
 // --- publishTablesXml --------------------------------------------------------------------------------------------------------

@@ -26,7 +26,7 @@
 // Wire shapes mirrored (abridged):
 //   GET  /savedqueries(<id>)?$select=savedqueryid                                    -> ETag header (the row token)
 //   GET  /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=…  -> the row + "@odata.etag"
-//   GET  /savedqueries/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$filter=returnedtypecode eq 'x' or …  -> the saved layer, `componentstate` 0 or 1
+//   GET  /savedqueries/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$filter=returnedtypecode eq 'x' or …  -> the saved layer, `componentstate` 0 or 1 (`$filter` by table, or by id: `savedqueryid eq <guid> or …`)
 //   GET  /EntityDefinitions(LogicalName='x')?$select=MetadataId,EntitySetName        -> the table's metadata
 //   GET  /solutioncomponents?$select=objectid,componenttype,rootcomponentbehavior&$filter=_solutionid_value eq <id> and (componenttype eq 26 or …)
 //   PATCH /savedqueries(<id>)?$select=savedqueryid   If-Match, Prefer: return=representation -> 200 + ETag
@@ -159,13 +159,17 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
     }
     // The saved layer of a whole collection: one row per record, `componentstate` 0 (Published) when its saved version is the one last
     // published and 1 (Unpublished) when a save, or the creation, has not been published (the shape `apps.js` documents for the app
-    // collection). `$filter` is `<field> eq '<table>'` terms joined by `or`.
+    // collection). `$filter` is `<field> eq '<table>'` terms joined by `or`, or `<id field> eq <guid>` terms joined by `or`, the lookup of
+    // records by id that the inventory of what an app holds makes; both, or neither, are honoured as the platform does.
     if ((m = /^\/(savedqueries|systemforms|savedqueryvisualizations)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)$/.exec(p))) {
       if (failUnpublished) return reply(500, { error: { code: '0x80040E14', message: 'simulated failure' } });
-      const wanted = [...String(query.get('$filter') || '').matchAll(/ eq '([^']*)'/g)].map((term) => term[1]);
+      const filter = String(query.get('$filter') || '');
+      const wanted = [...filter.matchAll(/ eq '([^']*)'/g)].map((term) => term[1]);
+      const wantedIds = [...filter.matchAll(new RegExp(`${KINDS[m[1]].id} eq (${GUID})`, 'gi'))].map((term) => normId(term[1]));
       const select = String(query.get('$select') || '').split(',').map((name) => name.trim()).filter(Boolean);
       const rows = [...tables[m[1]].values()]
         .filter((row) => !wanted.length || wanted.includes(row.data[KINDS[m[1]].entity]))
+        .filter((row) => !wantedIds.length || wantedIds.includes(normId(row.data[KINDS[m[1]].id])))
         .map((row) => {
           const full = { ...clone(row.data), componentstate: row.publishedVersion === row.version ? 0 : 1 };
           return select.length ? Object.fromEntries(Object.entries(full).filter(([name]) => select.includes(name))) : full;

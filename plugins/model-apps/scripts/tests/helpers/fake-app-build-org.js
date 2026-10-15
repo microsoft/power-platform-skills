@@ -17,8 +17,9 @@
 //                             fake's own answer, until the returned function is called: a refused read, or an answer that leaves a row out
 //
 // An app is a draft until a PublishXml names it. The generated app icon and the roles exist already, as in an environment that has built
-// an app before. The read of a view, form or chart by id answers every saved record of the fake, published or not; the platform's plain
-// read answers the published layer only, so a test about a record that was never published answers that read itself (`intercept`).
+// an app before. A plain read of a view, form or chart by id answers the published layer only, as the platform's does: a record that was never published
+// has no row in it, and only the saved layer (RetrieveUnpublishedMultiple, which the fake of views, forms and charts answers) has it. A test about a
+// record the app holds that no read answers can answer that read itself (`intercept`).
 const assert = require('node:assert/strict');
 const { createFakeDataverse } = require('./fake-dataverse.js');
 
@@ -91,10 +92,12 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
       const logical = Object.keys(entities || {}).find((name) => fake.entityId(name).toLowerCase() === m[1].toLowerCase());
       return logical ? response({ LogicalName: logical, IsCustomEntity: true }) : { status: 404, body: null };
     }
-    // The table of a view, form or chart component, asked by id: `$filter=savedqueryid eq <id> or savedqueryid eq <id>`.
+    // The table of a view, form or chart component, asked by id with a PLAIN read: `$filter=savedqueryid eq <id> or savedqueryid eq <id>`. The platform answers
+    // the published layer only, so a record that was never published (a form a maker added to the app in the designer and did not publish) has no row in it;
+    // the saved layer, which RetrieveUnpublishedMultiple answers, has.
     if (method === 'GET' && (m = /^\/(savedqueries|systemforms|savedqueryvisualizations)\?/.exec(p)) && /\$filter=[a-z]+id eq [0-9a-f-]{36}( or [a-z]+id eq [0-9a-f-]{36})*$/i.test(p)) {
       const wanted = [...p.matchAll(new RegExp(`${ID_FIELD[m[1]]} eq (${GUID})`, 'gi'))].map((x) => x[1].toLowerCase());
-      return rows(fake.rows(m[1]).map((row) => row.data).filter((data) => wanted.includes(String(data[ID_FIELD[m[1]]]).toLowerCase())));
+      return rows(fake.rows(m[1]).filter((row) => row.publishedVersion !== null).map((row) => row.data).filter((data) => wanted.includes(String(data[ID_FIELD[m[1]]]).toLowerCase())));
     }
     if (method === 'POST' && /^\/appmodules(\?|$)/.test(p)) {
       app = { ...body, componentstate: 1 };

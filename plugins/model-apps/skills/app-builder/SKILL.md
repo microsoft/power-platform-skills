@@ -467,18 +467,21 @@ hold page-ownership receipts and the baseline) and run again. The same environme
 (`<org>.api.crm…` against `<org>.crm…`) also halts: re-run with the host the halt names. The standalone verifier
 never opens that workspace either, so it verifies any environment the app is deployed to.
 
-With `--publish`, the tables the build changed, and the tables whose forms or charts the app is known to hold, are published in one
-request before the build publishes the app: the tables whose existing views and forms the build edited, the tables of the
-charts it wrote, and — for an app that already exists — the tables of the form and chart components its component list on the
-server names, whether or not the spec names the table (a form a maker added to it, say). A label someone saved and did not
-publish on a form of one of them would otherwise stay unpublished once the app is published. A table the app is not known to hold
-a form or chart of is not published by it, so what a maker left unfinished there stays unfinished: a table only declared in
-`entities` (the target of a lookup column, say), one that only a page reads, or one the app only lists in its navigation. A first
-build has no app to read, so it publishes only the tables it changed. If the app's components cannot be read completely, the
-build publishes only the tables it changed and says which read failed; run it again once the cause is cleared. That is one more
-publish for a build that edits no existing view or form; the final publish covers the tables the build has artifacts of.
+With `--publish`, the tables the build changed, and the tables whose forms or charts the app holds or is about to hold, are published in one
+request before the build writes or publishes the app: the tables whose existing views and forms the build edited, the tables of the
+charts it wrote, the navigation's tables when the build writes the app (the SDK adds their active Main forms to it, so a form that
+is live with a label saved and not published would otherwise be pinned and published with the app before its table was: the first
+build and the build that pins a form are covered the same way), and — for an app that already exists — the tables of the form and
+chart components its saved component list names, whether or not the spec names the table (a form a maker added to it, say, one never
+published included). A label someone saved and did not publish on a form of one of them would otherwise stay unpublished once the app
+is published. A table the app is not known to hold a form or chart of is not published by it, so what a maker left unfinished there
+stays unfinished: a table only declared in `entities` (the target of a lookup column, say), one that only a page reads, or one that
+only `app.tables` pins. If the app's components cannot be read completely, or a read of them is ambiguous, the build publishes only
+the tables it changed and the navigation's, and says which read failed; run it again once the cause is cleared. That is one more
+publish for a build that edits no existing view or form (a first build included); the final publish covers the tables the build has
+artifacts of.
 If that request is refused the build goes on, and says so: it names what it saved on those tables, the forms the app holds
-there whose labels someone else may have saved, and what the app's publish may leave out as a result.
+there, or its write adds, whose labels someone else may have saved, and what the app's publish may leave out as a result.
 A build that **halts with an error** publishes the views and forms it had deferred (best effort), then — when it stopped
 before the publish phase — lists the forms, views and charts of the spec's tables (the tables its pages read included) that
 are still saved but not published, what it created and anything anyone saved there, or says it could not read them and names
@@ -722,14 +725,18 @@ child view id. Each step emits `[n/total]`.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
   *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
   app). With `--publish` that one publish also carries the default-view enrichment, and the tables the build
-  changed, with the tables whose forms or charts the app is known to hold, are published together once more, in one
-  request before the app is: the tables touched by the reconcile of an existing form or view, form events
-  and quick-view placement, so none of them publishes on its own, the tables of the charts the build wrote
-  (a chart's description is saved on the unpublished layer), and — for an app that already exists — the tables of the
-  form and chart components its component list names, so a label saved and not published
-  there is not held back by the app's publish. A table the app is not known to hold a form or chart of is not named
-  (declared only, a lookup column's target, read only by a page, or only in the navigation): a table's publish
-  ships everything saved on it, whoever saved it. It
+  changed, with the tables whose forms or charts the app holds or is about to hold, are published together once
+  more, in one request before the app is: the tables touched by the reconcile of an existing form or view, form
+  events and quick-view placement, so none of them publishes on its own, the tables of the charts the build wrote
+  (a chart's description is saved on the unpublished layer), the navigation's tables when the build writes the
+  app (the SDK adds their active Main forms to it, and a form that is live with a label saved and not published
+  would otherwise be pinned and published with the app before its table was; a table whose `app.mainForms` list
+  keeps no form adds none), and — for an app that already exists — the tables of the form and chart components
+  its saved component list names, a form a maker added to it and never published included, so a label saved and
+  not published there is not held back by the app's publish. A table the app is not known to hold a form or chart
+  of is not named (declared only, a lookup column's target, read only by a page, or only pinned in `app.tables`):
+  a table's publish ships everything saved on it, whoever saved it. If the app's components cannot be read
+  completely the build publishes only what it changed and what its write adds, and says which read failed. It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
   takes effect: without `--publish`, reconciling an existing form or view, wiring form events and
   placing quick-views each publish that one artifact, and with or without it, re-syncing an existing

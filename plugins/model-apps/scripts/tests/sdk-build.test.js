@@ -1508,11 +1508,22 @@ test('with --publish, an early publish refused with a 429 or a 503 halts as tran
 const HELD_APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000aa';
 const HELD_LAYER_ID = 'a1b2c3d4-0000-4000-8000-0000000000bb';
 function withRawPublish(mock, { answer, holds } = {}) {
+  const component = (type, n) => `f${type}00000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const held = holds && { 60: (holds.forms || []).map((table, i) => [component(60, i + 1), table]), 59: (holds.charts || []).map((table, i) => [component(59, i + 1), table]) };
+  // The table of each form and chart component is looked up in the SAVED layer (RetrieveUnpublishedMultiple, which answers a record that was never published):
+  //   GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq <id> or …
+  const asset = { systemforms: [60, 'formid', 'objecttypecode'], savedqueryvisualizations: [59, 'savedqueryvisualizationid', 'primaryentitytypecode'] };
   mock.sdk.dataverse = {
     get: async (url) => {
       mock.calls.push({ name: 'dataverse.get', args: [url] });
       if (holds && url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
         return { status: 200, body: { value: [{ appmoduleid: HELD_APP_ID, appmoduleidunique: HELD_LAYER_ID, componentstate: 1 }] } };
+      }
+      const saved = holds && /^\/(systemforms|savedqueryvisualizations)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?\$select=[^&]+&\$filter=(.*)$/.exec(url);
+      if (saved) {
+        const [type, idField, tableField] = asset[saved[1]];
+        mock.calls.push({ name: 'readComponentTables', args: [saved[1]] });
+        return { status: 200, body: { value: held[type].filter(([id]) => saved[2].includes(id)).map(([id, table]) => ({ [idField]: id, [tableField]: table })) } };
       }
       return { status: 404, body: null };
     },
@@ -1522,9 +1533,6 @@ function withRawPublish(mock, { answer, holds } = {}) {
     },
   };
   if (holds) {
-    const component = (type, n) => `f${type}00000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-    const held = { 60: (holds.forms || []).map((table, i) => [component(60, i + 1), table]), 59: (holds.charts || []).map((table, i) => [component(59, i + 1), table]) };
-    const asset = { systemform: [60, 'formid', 'objecttypecode'], savedqueryvisualization: [59, 'savedqueryvisualizationid', 'primaryentitytypecode'] };
     const query = mock.sdk.queryRecords;
     mock.sdk.queryRecords = async (set, options) => {
       const filter = (options && options.filter) || '';
@@ -1532,11 +1540,6 @@ function withRawPublish(mock, { answer, holds } = {}) {
         const type = Number(/componenttype eq (\d+)/.exec(filter)[1]);
         mock.calls.push({ name: 'readComponents', args: [type] });
         return (held[type] || []).map(([objectid]) => ({ objectid, componenttype: type }));
-      }
-      const [type, idField, tableField] = asset[set] || [];
-      if (type && options.select && options.select.join() === `${idField},${tableField}`) {
-        mock.calls.push({ name: 'readComponentTables', args: [set] });
-        return held[type].filter(([id]) => filter.includes(id)).map(([id, table]) => ({ [idField]: id, [tableField]: table }));
       }
       return query(set, options);
     };
@@ -1567,8 +1570,9 @@ const readsOfAppComponents = (calls) => calls.filter((c) => c.name === 'readComp
   || (c.name === 'dataverse.get' && c.args[0].startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()'))).length;
 
 // Customer (a form, in the navigation) and Ticket (a view and a chart) are tables whose existing artifacts the reconcile publishes. Note only
-// has a chart, whose description the build writes. Hub is only in the navigation, and Region only declared (the target of a lookup, say):
-// nothing the build saves is on either, and the app holds no form or chart of them.
+// has a chart, whose description the build writes. Hub is only in the navigation: the SDK's write of the app adds its active Main forms, so it is
+// published before the app is written, though the build saves nothing there and the app holds nothing of it yet. Region is only declared (the target
+// of a lookup, say): the build saves nothing on it, the app holds no form or chart of it, and nothing adds one.
 function publishSpec() {
   const base = makeSpec();
   const table = (schemaName, displayName, extra) => ({ schemaName, displayName, primaryAttribute: { schemaName: 'new_title', displayName: 'Title' }, columns: [], ...extra });
@@ -1586,8 +1590,12 @@ function publishSpec() {
 // What the build itself changed on a rebuild of publishSpec: Customer and Ticket (reconciled) and Note (a chart description). A first build changes
 // only what it creates a chart on: Ticket and Note.
 const CHANGED = ['new_customer', 'new_note', 'new_ticket'];
+// What the build's write of the app adds the Main forms of: the navigation's tables.
+const ADDED = ['new_customer', 'new_hub'];
+// Everything the request names when the build writes the app and the app holds nothing else: what it changed, and what its write adds.
+const NAMED = ['new_customer', 'new_hub', 'new_note', 'new_ticket'];
 
-test('a first build publishes, in one request before the new app is created, the tables of the charts it wrote: the app does not exist, so nothing on the server is proven', async () => {
+test('a first build publishes, in one request before the new app is created, the tables of the charts it wrote and the navigation\u2019s tables, whose Main forms the creation adds: the app does not exist, so nothing on the server is proven', async () => {
   // The forms, views and charts do not exist yet, and neither does the app: the new app is created holding what the spec authors.
   const mock = withRawPublish(mockSdk());
   mock.sdk.publishArtifacts = async (targets) => { mock.calls.push({ name: 'publishArtifacts', args: [targets] }); return targets.map(({ type, id }) => ({ type, id, shipped: true, publish: { kind: 'verified' } })); };
@@ -1595,8 +1603,8 @@ test('a first build publishes, in one request before the new app is created, the
   const { calls } = mock;
   const boundary = calls.findIndex((c) => c.name === 'createArtifact' && c.args[0] === 'app');
   assert.ok(boundary > 0, 'the app is created');
-  assert.deepStrictEqual(publishRequests(calls.slice(0, boundary)), ['tables new_note, new_ticket'], 'one request, in name order, naming neither the navigation\u2019s tables nor the declared ones');
-  assert.deepStrictEqual(tablePublishes(calls), [['new_note', 'new_ticket']], 'and no other request names a table');
+  assert.deepStrictEqual(publishRequests(calls.slice(0, boundary)), [`tables ${NAMED.join(', ')}`], 'one request, in name order: the charts\u2019 tables and the navigation\u2019s, and not the declared Region');
+  assert.deepStrictEqual(tablePublishes(calls), [NAMED], 'and no other request names a table');
   assert.strictEqual(readsOfAppComponents(calls.slice(0, boundary)), 0, 'there is no app to read the components of');
 });
 
@@ -1606,22 +1614,33 @@ test('the tables of a page\u2019s data sources are not published: a table only a
   const spec = publishSpec();
   spec.pages = [{ key: 'insights', name: 'Insights', dataSources: ['new_page_ds', 'new_region'], source: { kind: 'tsx', codeFile: 'Insights.tsx' } }];
   await runSdkBuild(spec, { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES.filter((p) => p !== 'pages'), genpageCli: noPages });
-  assert.deepStrictEqual(tablePublishes(mock.calls), [['new_note', 'new_ticket']]);
+  assert.deepStrictEqual(tablePublishes(mock.calls), [NAMED], 'neither the undeclared source nor the declared one: no form or chart of either is in the app');
 });
 
-test('with --publish, one PublishXml names the tables a rebuild reconciled, the charts it wrote and the tables whose forms or charts the app holds \u2014 whatever the spec names \u2014 before the app is written', async () => {
-  // The app holds a form of Customer (reconciled) and of Elsewhere (a table the spec never names), and a chart of Ticket and of Note. It does not hold
-  // anything of Hub, which the navigation only lists, or of Region, which only a lookup column names.
+test('with --publish, one PublishXml names the tables a rebuild reconciled, the charts it wrote, the navigation\u2019s tables its write of the app adds forms of, and the tables whose forms or charts the app holds \u2014 whatever the spec names \u2014 before the app is written', async () => {
+  // The app holds a form of Customer (reconciled) and of Elsewhere (a table the spec never names), and a chart of Ticket and of Note. It holds nothing
+  // of Hub yet, which the navigation lists and whose Main forms the build's write adds, or of Region, which only a lookup column names.
   const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer', 'new_elsewhere'], charts: ['new_ticket', 'new_note'] }));
   const warnings = [];
   await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
   const { calls } = mock;
-  const named = ['new_customer', 'new_elsewhere', 'new_note', 'new_ticket'];
+  const named = ['new_customer', 'new_elsewhere', 'new_hub', 'new_note', 'new_ticket'];
   assert.ok(firstAppWrite(calls) > 0, 'the build writes the app');
   assert.deepStrictEqual(beforeApp(calls), [`tables ${named.join(', ')}`], 'one request before the first write that can publish the app, in name order');
-  assert.deepStrictEqual(tablePublishes(calls), [named], 'the app is never named in it, and neither are Hub (only a navigation entry) and Region (only a lookup\u2019s target)');
+  assert.deepStrictEqual(tablePublishes(calls), [named], 'the app is never named in it, and neither is Region (only a lookup\u2019s target)');
   assert.deepStrictEqual(readsOfAppComponents(calls), 3, 'the app\u2019s layer, its form components and its chart components: nothing else is read of it');
   assert.deepStrictEqual(warnings.filter((w) => /could not (publish|tell|read)/.test(w)), []);
+});
+
+// The forms the write adds are only those of a build that WRITES the app through the SDK. A build that publishes an existing app and leaves its
+// sitemap alone (a changed-only re-upload of pages) adds none, so the navigation's tables are named only for what the app holds.
+test('a build that does not write the existing app\u2019s sitemap adds no form to it, so the navigation\u2019s tables are named only when the app is proven to hold a form or chart of them', async () => {
+  const quiet = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }));
+  await runSdkBuild(publishSpec(), { sdk: quiet.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, changedOnly: { skipSitemapFinalize: true } });
+  assert.deepStrictEqual(tablePublishes(quiet.calls), [CHANGED], 'Hub is not named: the app holds nothing of it and this build adds nothing');
+  const writing = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }));
+  await runSdkBuild(publishSpec(), { sdk: writing.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assert.deepStrictEqual(tablePublishes(writing.calls), [NAMED], 'the same app and spec, with the sitemap written: Hub is named');
 });
 
 // The chart's description is a PATCH of the saved layer (the build never pushes an existing chart), and it was published only with the
@@ -1643,8 +1662,19 @@ test('a chart description written on a table the reconcile also publishes goes o
   spec.charts[0].description = 'Tickets by priority.'; // Ticket's view is reconciled, so its table is one the reconcile publishes
   await runSdkBuild(spec, { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
   assert.ok(mock.calls.some((c) => c.name === 'updateRecord' && c.args[2].description === 'Tickets by priority.'), 'the description is written');
-  assert.deepStrictEqual(beforeApp(mock.calls), [`tables ${CHANGED.join(', ')}`]);
-  assert.deepStrictEqual(tablePublishes(mock.calls), [CHANGED]);
+  assert.deepStrictEqual(beforeApp(mock.calls), [`tables ${NAMED.join(', ')}`]);
+  assert.deepStrictEqual(tablePublishes(mock.calls), [NAMED]);
+});
+
+test('a build that does not write the existing app\u2019s sitemap and cannot read what the app holds says it published only what it changed, and claims nothing of the navigation', async () => {
+  const mock = writesChartDescriptions(withRawPublish(publishingSdk({ envelope: true, appId: HELD_APP_ID })));
+  const warnings = [];
+  await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, changedOnly: { skipSitemapFinalize: true }, warn: (w) => warnings.push(String(w)) });
+  assert.deepStrictEqual(tablePublishes(mock.calls), [CHANGED], 'what it changed, and no navigation table: nothing adds a form');
+  const unread = warnings.filter((w) => /could not tell which tables/.test(w));
+  assert.strictEqual(unread.length, 1, warnings.join('\n'));
+  assert.match(unread[0], /so before the app's own publish it published only the tables this build changed\. Any other table/);
+  assert.ok(!/navigation/.test(unread[0]));
 });
 
 // The count and the order are part of the contract: the 3 publishes of an unchanged rebuild are the tables, the app's finalize, and
@@ -1666,32 +1696,37 @@ test('a rebuild with tables the reconcile does not publish sends the same number
   await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
   const requests = publishRequests(mock.calls);
   assert.strictEqual(requests.length, 3, requests.join(' | '));
-  assert.strictEqual(requests[0], 'tables new_customer, new_elsewhere, new_note, new_ticket');
+  assert.strictEqual(requests[0], 'tables new_customer, new_elsewhere, new_hub, new_note, new_ticket');
   assert.match(requests[1], /^one app /, 'the app\u2019s own publish follows');
   assert.match(requests[2], new RegExp(`^envelope .* app ${HELD_APP_ID}$`), 'and phase 8 publishes the app last');
 });
 
-// What the app holds is a proof, not a guess: when it cannot be read, or not all of it can be identified, the request names exactly what the build
-// changed — what the SDK's publish of the reconciled tables covered, and the charts it wrote — and the build says which proof failed.
+// What the app holds is a proof, not a guess: when it cannot be read, or not all of it can be identified, the request names what the build changed
+// and what its write of the app adds — which no read is needed to know — and the build says which proof failed.
 for (const [what, holds, said] of [
   ['cannot be read at all', undefined, /current layer of app '[0-9a-f-]+': HTTP 404/],
   ['cannot be fully identified', { forms: ['new_elsewhere'], charts: ['new_ticket'], hide: true }, /could not be fully identified \(no systemform record answered for/],
+  ['cannot be told apart (one form answered with two tables)', { forms: ['new_elsewhere'], charts: ['new_ticket'], conflict: true }, /could not be fully identified \(the systemform answer for f6000000-0000-4000-8000-000000000001 names more than one table\)/],
 ]) {
-  test(`a rebuild whose app's forms and charts ${what} publishes exactly the tables it changed, once, and says which proof failed`, async () => {
+  test(`a rebuild whose app's forms and charts ${what} publishes what it changed and what its write adds, once, and says which proof failed`, async () => {
     const mock = writesChartDescriptions(withRawPublish(publishingSdk({ envelope: true, appId: HELD_APP_ID }), { holds: holds && { forms: holds.forms, charts: holds.charts } }));
-    if (holds && holds.hide) {
-      const query = mock.sdk.queryRecords;
-      mock.sdk.queryRecords = async (set, options) => (set === 'systemform' && options.select && options.select.join() === 'formid,objecttypecode' ? [] : query(set, options));
+    if (holds && (holds.hide || holds.conflict)) {
+      const get = mock.sdk.dataverse.get;
+      mock.sdk.dataverse.get = async (url) => {
+        const answered = await get(url);
+        if (!url.startsWith('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) return answered;
+        return { ...answered, body: { value: holds.hide ? [] : [...answered.body.value, { formid: answered.body.value[0].formid, objecttypecode: 'new_other' }] } };
+      };
     }
     const warnings = [];
     await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
-    assert.deepStrictEqual(tablePublishes(mock.calls), [CHANGED], 'the reconciled tables and the chart\u2019s, and no table the build cannot prove the app holds');
+    assert.deepStrictEqual(tablePublishes(mock.calls), [NAMED], 'the reconciled tables, the chart\u2019s and the navigation\u2019s, and no table the build cannot prove the app holds');
     assert.strictEqual(publishRequests(mock.calls).length, 3, 'the count does not change');
     const unread = warnings.filter((w) => /could not tell which tables/.test(w));
     assert.strictEqual(unread.length, 1, warnings.join('\n'));
     assert.match(unread[0], said);
-    assert.match(unread[0], /so only the tables this build changed were published before the app's own publish/);
-    assert.ok(!/new_elsewhere|new_hub|new_region/.test(unread[0]), 'no table it could not prove is named, so none can be taken for a recommendation');
+    assert.match(unread[0], /so before the app's own publish it published only the tables this build changed and the navigation's tables, whose Main forms its own write of the app adds/);
+    assert.ok(!/new_elsewhere|new_hub|new_region/.test(unread[0]), 'no table is named, so none can be taken for a recommendation');
     assert.ok(!/Publish (that|those|the)[^.]* in Power Apps/i.test(unread[0]));
   });
 }
@@ -1767,6 +1802,19 @@ for (const [how, answer, said] of [
     assert.match(line, /or run the build again once the cause is cleared: it sends this request first again\.$/);
   });
 }
+
+test('a PublishXml of the tables that is refused names the navigation\u2019s tables its write of the app adds forms of, in the label risk, even when the app holds none of them yet', async () => {
+  // Hub is only in the navigation and the app holds nothing of it: the build's write of the app is about to add its Main forms, and the request that
+  // would have published them first was refused, so a label saved on one is exposed exactly as it is on a form the app already holds.
+  const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket', 'new_note'] }, { answer: () => ({ status: 500, body: { error: { message: 'internal error' } } }) }));
+  const warnings = [];
+  const result = await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
+  assert.strictEqual(result.ok, true);
+  const line = warnings.find((w) => /could not publish tables new_hub, new_note before the app/.test(w));
+  assert.ok(line, warnings.join('\n'));
+  assert.match(line, /The app holds, or this build's write of it adds, forms of new_hub: a label someone saved on a form there and did not publish may stay unpublished once the app is published/);
+  assert.ok(!/forms of [^:]*new_note/.test(line), 'a table the app holds a chart of and the build adds no form to is not described as holding one');
+});
 
 test('a PublishXml of the tables that is refused, and a refusal by the SDK of the reconciled tables too, stop the build before the app', async () => {
   const mock = rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }, { answer: () => ({ status: 500, body: null }), outcome: (type, id) => (type === 'form' ? refusedPublish(type, id) : null) });

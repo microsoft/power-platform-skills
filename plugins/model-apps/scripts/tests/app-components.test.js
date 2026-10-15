@@ -506,6 +506,13 @@ function inventorySdk({ tables = {}, assets = {}, shape = (type, rows) => rows }
       get: async (url) => {
         reads.push(url);
         if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) return response([layer(CURRENT, 1)]);
+        // The SAVED layer's lookup of the tables of components, by id (`savedLayer`): answers every record the double holds, never published ones included.
+        const saved = /^\/(savedqueries|savedqueryvisualizations|systemforms)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?\$select=[^&]+&\$filter=(.*)$/.exec(url);
+        if (saved) {
+          const type = { savedqueries: 26, savedqueryvisualizations: 59, systemforms: 60 }[saved[1]];
+          const source = ASSET_SOURCES[type];
+          return response(shape(type, Object.entries(assets[type] || {}).filter(([id]) => saved[2].includes(id)).map(([id, table]) => ({ [source.id]: id, [source.table]: table }))));
+        }
         const m = /^\/EntityDefinitions\(([0-9a-f-]{36})\)/.exec(url);
         return m && tables[m[1]] ? { status: 200, body: { LogicalName: tables[m[1]], IsCustomEntity: true } } : { status: 404, body: null };
       },
@@ -585,4 +592,73 @@ test('requireIdentified: an id spelled with braces or capitals in the answer is 
   assert.deepEqual(same.notes, []);
   const other = await readAppComponentInventory(inventorySdk({ assets: { 60: { [id]: 'contoso_form' } }, shape: (type, rows) => rows.map((row) => ({ ...row, formid: compId(31) })) }), APP, { componentTypes: [60], requireIdentified: true });
   assert.equal(other.notes.length, 1);
+});
+
+// --- readAppComponentInventory: the saved layer, and the strict reading of its answer -------------------------------------------
+//   GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq <id> or formid eq <id>
+//   { "value": [ { "formid": "44444444-…", "objecttypecode": "contoso_item" } ] }
+
+test('savedLayer looks the tables of the components up in the SAVED layer, twenty ids to a request, and never with a plain read: a component never published is identified', async () => {
+  const ids = Array.from({ length: 46 }, (_, i) => compId(100 + i));
+  const sdk = inventorySdk({ assets: { 60: Object.fromEntries(ids.map((id, i) => [id, i % 2 ? 'contoso_odd' : 'contoso_even'])) } });
+  const inventory = await readAppComponentInventory(sdk, APP, { componentTypes: [60], requireIdentified: true, savedLayer: true });
+  const lookups = sdk.reads.filter((read) => read.startsWith('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()'));
+  assert.deepEqual(lookups.map((url) => (url.match(/formid eq /g) || []).length), [20, 20, 6]);
+  assert.ok(lookups.every((url) => url.startsWith('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq ')));
+  assert.ok(!sdk.reads.some((read) => /^(savedquery|savedqueryvisualization|systemform): /.test(read)), 'no plain read of the records: it answers the published layer only');
+  assert.deepEqual(inventory.notes, []);
+  assert.deepEqual(inventory.assetTables.sort(), ['contoso_even', 'contoso_odd']);
+  assert.deepEqual([...inventory.assetTablesByType.get(60)].sort(), ['contoso_even', 'contoso_odd']);
+});
+
+test('savedLayer is off by default: the download keeps reading the published records with a plain read, and its answer is read as it always was', async () => {
+  const sdk = inventorySdk({ assets: { 60: { [compId(12)]: 'contoso_form' } } });
+  const inventory = await readAppComponentInventory(sdk, APP, { componentTypes: [60] });
+  assert.ok(sdk.reads.some((read) => read.startsWith('systemform: formid eq ')), 'a plain read');
+  assert.ok(!sdk.reads.some((read) => read.includes('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')));
+  assert.deepEqual(inventory.assetTables, ['contoso_form']);
+  // The lenient reading is unchanged: every row adds its table, whatever id it carries and however it is spelled.
+  const shape = (type, rows) => [...rows, { formid: compId(99), objecttypecode: 'Contoso_Other' }, { objecttypecode: 'contoso_idless' }];
+  const lenient = await readAppComponentInventory(inventorySdk({ assets: { 60: { [compId(12)]: 'contoso_form' } }, shape }), APP, { componentTypes: [60] });
+  assert.deepEqual(lenient.assetTables.sort(), ['contoso_form', 'contoso_idless', 'contoso_other'], 'unchanged: not the strict reading');
+  assert.deepEqual(lenient.notes, []);
+});
+
+test('savedLayer: a refused or unreadable lookup is a note saying which read it was, and never a shorter inventory taken for a complete one', async () => {
+  const id = compId(40);
+  const refused = inventorySdk({ assets: { 60: { [id]: 'contoso_form' } } });
+  const get = refused.dataverse.get;
+  refused.dataverse.get = async (url) => (url.startsWith('/systemforms/') ? { status: 500, body: { error: { message: 'simulated refusal' } } } : get(url));
+  const read = await readAppComponentInventory(refused, APP, { componentTypes: [60], requireIdentified: true, savedLayer: true });
+  assert.equal(read.notes.length, 1);
+  assert.match(read.notes[0].reason, /^tables derived from app component type 60 could not be read \(the saved systemform records of the app's components: HTTP 500 from \/systemforms\/.*: simulated refusal\)$/);
+  assert.deepEqual(read.assetTables, []);
+  for (const body of [{}, { value: null }, { value: 'x' }]) {
+    const sdk = inventorySdk({ assets: { 60: { [id]: 'contoso_form' } } });
+    const original = sdk.dataverse.get;
+    sdk.dataverse.get = async (url) => (url.startsWith('/systemforms/') ? { status: 200, body } : original(url));
+    const bad = await readAppComponentInventory(sdk, APP, { componentTypes: [60], requireIdentified: true, savedLayer: true });
+    assert.match(bad.notes[0].reason, /could not be read \(the saved systemform records of the app's components: no readable result set\)/, JSON.stringify(body));
+  }
+});
+
+test('requireIdentified reads the answer strictly: a row counts for an id the component list asked about and for no other, and two tables for one id, or a value no table has, keep the read from being complete', async () => {
+  const held = compId(50);
+  const form = compId(51);
+  const assets = { 60: { [held]: 'contoso_held', [form]: 'contoso_form' } };
+  const read = (shape) => readAppComponentInventory(inventorySdk({ assets, shape }), APP, { componentTypes: [60], requireIdentified: true, savedLayer: true });
+  const surplus = await read((type, rows) => [...rows, { formid: compId(52), objecttypecode: 'contoso_lookup' }, { objecttypecode: 'contoso_idless' }, null]);
+  assert.deepEqual(surplus.notes, [], 'a row for a record nobody asked about adds nothing and costs nothing');
+  assert.deepEqual(surplus.assetTables.sort(), ['contoso_form', 'contoso_held']);
+  const twice = await read((type, rows) => [...rows, ...rows.map((row) => ({ ...row }))]);
+  assert.deepEqual(twice.notes, [], 'one record answered once per layer, the same table');
+  const conflict = await read((type, rows) => [...rows, { formid: held, objecttypecode: 'contoso_lookup' }]);
+  assert.deepEqual(conflict.notes, [{ kind: 'tables', reason: `tables derived from app component type 60 could not be fully identified (the systemform answer for ${held} names more than one table)` }]);
+  assert.deepEqual(conflict.assetTables, ['contoso_form'], 'neither table of the contradicted record is let in; the unambiguous one stays');
+  const unusable = await read((type, rows) => rows.map((row) => (row.formid === held ? { ...row, objecttypecode: '   ' } : row)));
+  assert.deepEqual(unusable.notes, [{ kind: 'tables', reason: `tables derived from app component type 60 could not be fully identified (the systemform answer for ${held} names no usable table ("   "))` }]);
+  assert.deepEqual(unusable.assetTables, ['contoso_form']);
+  const everything = await read((type, rows) => [{ formid: compId(53), objecttypecode: 'contoso_lookup' }, ...rows.filter((row) => row.formid !== form), { formid: held, objecttypecode: 12345 }]);
+  assert.equal(everything.notes.length, 1, 'one note for the type, with every reason in it');
+  assert.equal(everything.notes[0].reason, `tables derived from app component type 60 could not be fully identified (no systemform record answered for ${form}; the systemform answer for ${held} names no usable table (12345))`);
 });

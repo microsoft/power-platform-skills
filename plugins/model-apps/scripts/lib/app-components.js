@@ -13,10 +13,15 @@ const { compareText } = require('./compare-text.js');
 const guidKey = (id) => String(id || '').replace(/^\{|\}$/g, '').toLowerCase();
 const reasonOf = (error) => String((error && error.message) || error || 'read failed');
 const APP_COMPONENT_ENTITY_SOURCES = [
-  { componentType: 26, set: 'savedquery', idField: 'savedqueryid', entityField: 'returnedtypecode' },
-  { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
-  { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
+  { componentType: 26, set: 'savedquery', collection: 'savedqueries', idField: 'savedqueryid', entityField: 'returnedtypecode' },
+  { componentType: 59, set: 'savedqueryvisualization', collection: 'savedqueryvisualizations', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
+  { componentType: 60, set: 'systemform', collection: 'systemforms', idField: 'formid', entityField: 'objecttypecode' },
 ];
+
+// What Dataverse accepts as a table's logical name: lower case letters, digits and underscores, not starting with a digit. A table name goes into an XML body
+// (a table's PublishXml: lib/table-publish.js), so one that is not shaped like this is left out rather than sent: the platform has no table by that name. An
+// answer that names a table of a component in any other shape is not a table either, and a read that must be complete does not take it for one.
+const TABLE_NAME = /^[a-z_][a-z0-9_]*$/;
 
 function componentError(code, message, status) {
   const error = new Error(message);
@@ -391,16 +396,61 @@ async function appMainFormsFor(sdk, appUnique, tables) {
   }
 }
 
+// How `requireIdentified` reads the answer to the lookup of the tables of one component type's records. The component list names ids and the proof is per id, so
+// a row counts for an id the list asked about and for no other: a row with no readable id, or for an id nobody asked about, says nothing of this app and is left out
+// before it can add a table. A row for an id that was asked about has to name its table in a shape a table can have, or `none` (a dashboard's: it names no table);
+// a value that is neither ('   ', 12345, 'two words') is an answer that cannot be relied on, and so are two rows of one id that name different tables: a record has
+// one table, and the platform answers it twice only for its other layer, with the same table. Neither lets a table in, and either keeps the read from being complete.
+//   { "value": [ { "formid": "33333333-0000-4000-8000-000000000012", "objecttypecode": "contoso_item" } ] }
+function strictAssetAnswers(askedAbout, source) {
+  const asked = new Set(askedAbout);
+  const answered = new Map(); // id -> the table its rows name (`none` for a dashboard)
+  const conflicting = new Set(); // ids whose rows name different tables
+  const unusable = new Map(); // id -> the value that names its table, as answered, when no table can be named so
+  const list = (ids) => `${ids.slice(0, 3).join(', ')}${ids.length > 3 ? ` and ${ids.length - 3} more` : ''}`;
+  return {
+    add(row) {
+      const given = row && typeof row === 'object' ? row[source.idField] : undefined;
+      const id = typeof given === 'string' ? guidKey(given) : '';
+      if (!asked.has(id)) return;
+      const value = row[source.entityField];
+      // Nothing named at all: the row answers nothing about this id, as if the platform had sent none.
+      if (value === undefined || value === null || value === '') return;
+      const table = typeof value === 'string' ? value.trim().toLowerCase() : '';
+      if (table !== 'none' && !TABLE_NAME.test(table)) { unusable.set(id, value); return; }
+      if (!answered.has(id)) answered.set(id, table);
+      else if (answered.get(id) !== table) conflicting.add(id);
+    },
+    // `tables`: those of the ids whose rows all agree on one table. `problem`: what keeps the answer from being complete, or undefined.
+    outcome() {
+      const tables = new Set();
+      for (const [id, table] of answered) if (table !== 'none' && !conflicting.has(id) && !unusable.has(id)) tables.add(table);
+      const missing = [...asked].filter((id) => !answered.has(id) && !unusable.has(id));
+      const reasons = [];
+      if (missing.length) reasons.push(`no ${source.set} record answered for ${list(missing)}`);
+      if (unusable.size) reasons.push(`the ${source.set} answer for ${list([...unusable.keys()])} names no usable table (${String(JSON.stringify([...unusable.values()][0])).slice(0, 40)})`);
+      if (conflicting.size) reasons.push(`the ${source.set} answer for ${list([...conflicting])} names more than one table`);
+      return { tables, problem: reasons.length ? reasons.join('; ') : undefined };
+    },
+  };
+}
+
 // What an app holds, from the server's CURRENT (saved) layer of it: its table components (resolved to logical names), and the tables of the views, forms and charts
 // it holds, resolved through the collection of each. The download builds its spec from this; the build's publish before the app reads the form and chart
 // components of it (table-publish.js readAppFormChartTables).
 //   options.componentTypes     read only these component types (1 table, 26 view, 59 chart, 60 form); all four when omitted. A table component costs one
 //                              metadata read EACH, and a view lookup one read per 20 views, so a caller that does not use them does not pay for them.
-//   options.requireIdentified  also note an asset component whose table the lookup did not answer for. Each component id must come back as a row of its own that names a
-//                              table (a dashboard's is `none`); an id with no row (a stale component, a record the caller may not read, one never published: a plain read answers
-//                              the published layer) or a row with no id or no table is a hole in the inventory, and a caller that proves something from what the inventory does hold
+//   options.requireIdentified  also note an asset component whose table the lookup did not answer for, and read the answer strictly (strictAssetAnswers). Each component
+//                              id must come back as a row of its own that names a table (a dashboard's is `none`); an id with no row (a stale component, a record the caller
+//                              may not read) or a row with no id or no table is a hole in the inventory, and a caller that proves something from what the inventory does hold
 //                              must not read it as complete. Off by default: the download reports what it has always reported.
-async function readAppComponentInventory(sdk, appId, { componentTypes, requireIdentified = false } = {}) {
+//   options.savedLayer         look the records up in their SAVED layer (RetrieveUnpublishedMultiple) instead of the published one a plain read answers. The component
+//                              list is the saved layer's (above), so a component a maker added in the designer and never published is in it, and a plain read of the record
+//                              does not answer for it: the saved layer does, with the table it belongs to. Off by default, as the download reads it.
+//                                GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq 33333333-… or formid eq 44444444-…
+//                              The function is bound to these collections and composable with `$select` and `$filter`:
+//                              https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrieveunpublishedmultiple
+async function readAppComponentInventory(sdk, appId, { componentTypes, requireIdentified = false, savedLayer = false } = {}) {
   const inventory = {
     layer: { ok: false, reason: 'app id is missing' }, components: new Map(), componentProblems: new Map(),
     tables: new Map(), logicalNames: [], assetTables: [], assetTablesByType: new Map(), notes: [],
@@ -461,22 +511,25 @@ async function readAppComponentInventory(sdk, appId, { componentTypes, requireId
     const source = APP_COMPONENT_ENTITY_SOURCES.find((candidate) => candidate.componentType === componentType);
     const tablesOfType = new Set();
     inventory.assetTablesByType.set(componentType, tablesOfType);
-    const identified = new Set();
+    const strict = requireIdentified ? strictAssetAnswers(ids, source) : null;
     try {
       for (let start = 0; start < ids.length; start += 20) {
         const filter = ids.slice(start, start + 20).map((id) => `${source.idField} eq ${requireGuid(id, 'asset component objectid')}`).join(' or ');
-        const rows = await sdk.queryRecords(source.set, { select: [source.idField, source.entityField], filter, paginate: true });
+        const rows = savedLayer
+          ? await collectionRows(sdk.dataverse, `/${source.collection}/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${source.idField},${source.entityField}&$filter=${filter}`,
+            `the saved ${source.set} records of the app's components`)
+          : await sdk.queryRecords(source.set, { select: [source.idField, source.entityField], filter, paginate: true });
         if (!Array.isArray(rows)) throw componentError('APP_COMPONENTS_UNVERIFIED', `${source.set} returned no readable result set`);
         for (const row of rows) {
+          if (strict) { strict.add(row); continue; }
           const logical = row && row[source.entityField] ? String(row[source.entityField]).toLowerCase() : '';
           if (logical && logical !== 'none') { assetTables.add(logical); tablesOfType.add(logical); }
-          if (logical) identified.add(guidKey(row[source.idField]));
         }
       }
-      const unidentified = ids.filter((id) => !identified.has(id));
-      if (requireIdentified && unidentified.length) {
-        inventory.notes.push({ kind: 'tables', reason: `tables derived from app component type ${componentType} could not be fully identified `
-          + `(no ${source.set} record answered for ${unidentified.slice(0, 3).join(', ')}${unidentified.length > 3 ? ` and ${unidentified.length - 3} more` : ''})` });
+      if (strict) {
+        const { tables, problem } = strict.outcome();
+        for (const table of tables) { assetTables.add(table); tablesOfType.add(table); }
+        if (problem) inventory.notes.push({ kind: 'tables', reason: `tables derived from app component type ${componentType} could not be fully identified (${problem})` });
       }
     } catch (error) {
       inventory.notes.push({ kind: 'tables', reason: `tables derived from app component type ${componentType} could not be read (${reasonOf(error)})` });
@@ -607,5 +660,5 @@ module.exports = {
   currentAppLayer, currentLayerRows, currentLayerRow, savedPageRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
   publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings,
   resolveMainForms, readMainFormMembership, appMainFormsFor, appEntityComponentsFor,
-  APP_COMPONENT_ENTITY_SOURCES, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,
+  APP_COMPONENT_ENTITY_SOURCES, TABLE_NAME, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,
 };

@@ -26,14 +26,19 @@ for (const publish of [false, true]) {
     assert.deepEqual(fake.pushes[0].components.mainFormsByTable, { contoso_item: [FORM_A] });
     const firstPush = fake.events.findIndex(([event]) => event === 'push');
     const pin = fake.events.findIndex(([event, action]) => event === 'post' && action === '/AddAppComponents');
-    // The PublishXml that names the app: with --publish the build first publishes the tables it changed and the app is proven to hold forms or charts of.
+    // The PublishXml that names the app: with --publish the build first publishes the tables it changed, those whose Main forms its own write of the app adds,
+    // and those the app is proven to hold forms or charts of.
     const republish = fake.events.findIndex(([event, action, body]) => event === 'post' && action === '/PublishXml' && /<appmodule>/.test(body.ParameterXml));
     assert.ok(pin > firstPush, JSON.stringify(fake.events));
     assert.ok(republish > pin, 'a fresh create already published before pinning; its hidden tables must not be left pending');
-    // This build changes no table and the app does not exist yet, so there is nothing to publish before it is created, with or without --publish: a table
-    // the spec only navigates to or pins is not proven to hold a form or a chart.
-    const tablePublishes = fake.events.filter(([event, action, body]) => event === 'post' && action === '/PublishXml' && !/<appmodule>/.test(body.ParameterXml));
-    assert.deepEqual(tablePublishes, []);
+    // This build changes no table and the app does not exist yet, so with --publish the one table it publishes before the app is created is the navigation's:
+    // the SDK adds its active Main forms when it creates the app. The table the spec only pins in `app.tables` is a table component, which the SDK expands no
+    // form of, so it is not named. Without --publish nothing is published ahead of the app.
+    const tableEvents = fake.events.filter(([event, action, body]) => event === 'post' && action === '/PublishXml' && !/<appmodule>/.test(body.ParameterXml));
+    assert.deepEqual(tableEvents.map(([, , body]) => body.ParameterXml), publish ? ['<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>'] : []);
+    if (publish) {
+      assert.ok(fake.events.indexOf(tableEvents[0]) < fake.events.findIndex(([event]) => event === 'create'), 'and it is published before the app is created');
+    }
     assert.equal(fake.pending, false);
     assert.equal(fake.events.filter(([event, url]) => event === 'get' && url.includes("objecttypecode eq 'contoso_item'")).length, 1,
       'resolve the directive once per run, even across a fetch and finalizer push');
