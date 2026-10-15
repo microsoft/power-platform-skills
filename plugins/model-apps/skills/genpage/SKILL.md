@@ -489,7 +489,7 @@ It returns a single JSON object:
 - **`ok: true` and `identitiesMatch: true`** → proceed to 2b.
 - **`ok: true` and `identitiesMatch: false`** → proceed to 2b but surface the
   `message` to the user as an inline warning ("az is X, pac is Y — WhoAmI works
-  for now, but if entity creation later returns 403, run the suggested
+  for now, but if a later step returns 403, run the suggested
   `az login --username` to align them").
 - **`ok: false`** → show the `message` field to the user verbatim and
   **stop the workflow**. The script already includes a fix-it command for every
