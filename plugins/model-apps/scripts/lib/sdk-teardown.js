@@ -449,6 +449,9 @@ const KIND_HANDLERS = {
       // current layer is read only when the published one leaves a present page unproven. Unlike the build,
       // teardown may take the saved layer as proof: a DELETE of a page another app's saved navigation still
       // references is refused by the platform (see isDependencyBlocked), and that refusal is a skip here.
+      // An app that was never published has no published layer at all — the plain read of it answers "not found",
+      // as it does for an app that is gone — so its saved navigation is the only proof there is: navigationProof
+      // looks for the app in its saved layer, and reads its navigation there when it finds it (`neverPublished`).
       const membership = await navigationProof(sdk, target.appUnique, published, present.map((p) => p.id));
       const savedNavUnread = !!(membership.currentNavigation && !membership.currentNavigation.ok);
       const unreadDraft = savedNavUnread
@@ -456,6 +459,9 @@ const KIND_HANDLERS = {
         : '';
       // Confirmed app absence permits only local proof, never a name-only substitute for navigation.
       const sitemapReadable = membership.ok || membership.reason === 'app-not-found';
+      // An app with no published layer has only its saved navigation, so that is what could not be read: "app sitemap unreadable (appmodule-query-failed)" alone would send an operator looking for a
+      // published sitemap that was never going to be there. A published app's message is exactly what it was.
+      const sitemapUnread = sitemapReadable ? '' : `app sitemap unreadable (${membership.neverPublished ? 'the app was never published, so its navigation is the one it saved, and that could not be read: ' : ''}${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`;
       const placed = new Set(membership.ok ? membership.ids : []);
       const specNames = new Map((target.pageEntries || []).map((p) => [p.key, p.name]));
       const pending = new Set(ownership.teardown.map((p) => p.pageId));
@@ -473,7 +479,7 @@ const KIND_HANDLERS = {
         // renamed since.
         const receiptNames = new Set([specNames.get(p.key), receipt && receipt.name].filter(Boolean));
         if (!sitemapReadable) {
-          kept.push({ ...item, reason: `app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})` });
+          kept.push({ ...item, reason: sitemapUnread });
         } else if (!nameReadable) {
           kept.push({ ...item, reason: 'stored page name is unreadable' });
           errors.push(`page ${p.id}: stored page name is unreadable`);
@@ -490,7 +496,7 @@ const KIND_HANDLERS = {
           if (savedNavUnread) errors.push(`page ${p.id}: cannot be proven or ruled out while the app's saved but unpublished navigation is unreadable (${membership.currentNavigation.reason})`);
         }
       }
-      if (!sitemapReadable) errors.push(`app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`);
+      if (!sitemapReadable) errors.push(sitemapUnread);
       return { items, kept, candidates: [...items, ...kept, ...absent], ...(errors.length ? { readError: errors.join('; ') } : {}) };
     },
     // Is the page REALLY gone? A "not found" from the delete is not proof, for the reason the app handler gives above: deleteStep tolerates it as "already gone" unless the handler can check, and for a page that is still there that would consume

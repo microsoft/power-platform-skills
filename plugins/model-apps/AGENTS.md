@@ -969,8 +969,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   deletion; names alone do not. A receipt corroborates a page named as the spec calls it now or as the receipt recorded it when
   the build made, or adopted, the page (a page adopted but not used keeps the earlier name). Navigation is either layer: the published sitemap, and the saved but
   unpublished one when the published layer leaves a page unproven (`navigationProof`, the layer a download reads);
-  when that saved layer cannot be read and a page stays unproven, the app is left intact for a re-run. The BUILD
-  binds a page by its published navigation or a receipt only; a page only in the saved layer halts with advice to
+  when that saved layer cannot be read and a page stays unproven, the app is left intact for a re-run. An app that was **never
+  published** has no published layer at all — a plain read answers "not found" for it, as for an app that was deleted — so its saved
+  navigation is the only proof there is. When the published read finds no app, `navigationProof` asks the SDK's own app lookup (the one
+  the app step deletes by), which reads the saved layer, whether the app is there: it reads the current layer's sitemap there, through
+  the layer's sitemap component or, when the layer has none, the sitemap that carries the app's unique name (the rule the scan of the
+  other apps follows), and the pages it names are proven like any navigation member. An app in neither layer — the re-run of a teardown
+  that deleted it — costs that one look and is left to this workspace's records, as it was. A saved navigation that cannot be read is an
+  error that keeps every page, as an unreadable published sitemap does (the message says the app was never published, and what failed to
+  read), and the app stays for a re-run. A page another app's navigation still references is refused by the platform and kept, as for any
+  app. The BUILD binds a page by its published navigation or a receipt only; a page only in the saved layer halts with advice to
   publish the app first (the build's shared-page scan reads OTHER apps' saved navigation as well — see above). The verified ownership set is persisted locally before app deletion,
   so a page-less retry still has proof after the app is gone. Unreadable proof or a failed record write
   leaves the app intact. Proven pages still undeleted, including dependency-blocked pages, keep the
@@ -1004,7 +1012,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (counts pinned in `scripts/tests/sdk-resend-layers.test.js`).
   Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
-  drives a mock and would stay green through a regression here.
+  drives a mock and would stay green through a regression here. The teardown of an app that was created and never
+  published (its pages proven by the saved sitemap, the platform's refusal of a page another app references, a saved navigation
+  that cannot be read) is pinned against the real bundle too, in `scripts/tests/teardown-never-published-real-bundle.test.js`:
+  the app is made by `createApp` and left unpublished, so the sitemap that holds its pages is the one the SDK writes.
   The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
@@ -1706,7 +1717,7 @@ scripts/
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
-    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof from either app layer) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries)
+    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries)
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
     deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there, each page with the hash of the source the pages phase read and sent (what the build's Griffel check compares a later source with)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode

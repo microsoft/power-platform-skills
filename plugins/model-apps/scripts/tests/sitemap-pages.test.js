@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { sitemapGenPages, sitemapGenPageIds, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap } = require('../lib/sitemap-pages.js');
+const { sitemapGenPages, sitemapGenPageIds, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -832,4 +832,224 @@ test('fetchSitemap: includeSitemapId adds the sitemap id the read resolved, and 
   assert.deepStrictEqual(plain, { ok: true, xml: XML, ids: [GP_OVERVIEW, GP_DETAIL].sort() }, 'the default result has no sitemapId');
   const withId = await fetchSitemap(sdk, 'contoso_app', { includeSitemapId: true });
   assert.deepStrictEqual(withId, { ...plain, sitemapId: SITEMAP_ID }, 'lower-cased, without braces, so it matches a row of the saved read');
+});
+
+// ── navigationProof: this app's navigation as ownership proof for page ids ─────────────────────────────────────────────────────
+// `published` is the fetchSitemap result for the PUBLISHED app. The saved layer is read when it can prove something the published one did not — a candidate that is not among its ids — and for an app with NO published
+// layer at all: `app-not-found` is how a plain read answers for an app that was never published, and for one that is gone. A never-published app's navigation exists only in its saved layer, so the SDK's own lookup of the
+// app, which reads that layer, says which of the two it is: an app it does not find is in neither layer, and the published answer stands.
+const PROOF_APP = '9d1b0a52-0000-4000-8000-000000000001';
+const PROOF_LAYER = '9d1b0a52-0000-4000-8000-000000000002';
+const PROOF_SITEMAP = '9d1b0a52-0000-4000-8000-000000000003';
+const NOT_PUBLISHED = { ok: false, reason: 'app-not-found' };
+const BOTH_PAGES = [GP_OVERVIEW, GP_DETAIL].sort();
+
+// What a teardown hands it: the SDK's app resolver (the SAVED layer), its plain reads (the PUBLISHED layer) and its Dataverse client (RetrieveUnpublishedMultiple). `calls` is every request it made, in order.
+//   publishedApps   what the plain read of the app returns (nothing, for an app that was never published)
+//   layer, sitemap, saved   the answers of the three RetrieveUnpublishedMultiple reads — the app's layers, a sitemap by id, and every sitemap — each `{ status, body }`
+function proofEnv({ apps = [{ id: PROOF_APP, name: 'Contoso App', appModuleIdUnique: PROOF_LAYER }], publishedApps = [], resolveError, components, componentError, layer, sitemap, saved, noDataverse } = {}) {
+  const calls = { resolved: [], queries: [], gets: [] };
+  const rows = (value) => ({ status: 200, body: { value } });
+  const sdk = {
+    resolveArtifact: async (kind, identity) => {
+      calls.resolved.push(`${kind}:${identity.uniqueName}`);
+      if (resolveError) throw new Error(resolveError);
+      return apps;
+    },
+    queryRecords: async (entity, opts) => {
+      calls.queries.push({ entity, filter: opts && opts.filter });
+      if (entity === 'appmodule') return publishedApps;
+      if (entity === 'appmodulecomponent') {
+        if (componentError) throw new Error(componentError);
+        return components !== undefined ? components : [{ objectid: PROOF_SITEMAP, componenttype: 62 }];
+      }
+      return [];
+    },
+  };
+  if (!noDataverse) {
+    sdk.dataverse = {
+      get: async (url) => {
+        calls.gets.push(url);
+        if (url.startsWith('/appmodules/')) return layer || rows([{ appmoduleid: PROOF_APP, appmoduleidunique: PROOF_LAYER, componentstate: 1 }]);
+        if (url.includes('sitemapnameunique')) return saved || rows([{ sitemapid: PROOF_SITEMAP, sitemapnameunique: 'contoso_app', sitemapxml: XML, componentstate: 1 }]);
+        if (url.startsWith('/sitemaps/')) return sitemap || rows([{ sitemapxml: XML, componentstate: 1 }]);
+        throw new Error(`unexpected read ${url}`);
+      },
+    };
+  }
+  return { sdk, calls };
+}
+
+test('navigationProof: a published app whose navigation names every candidate is answered as it is, with no read at all', async () => {
+  const published = { ok: true, xml: XML, ids: BOTH_PAGES };
+  const { sdk, calls } = proofEnv();
+  assert.strictEqual(await navigationProof(sdk, 'contoso_app', published, [GP_OVERVIEW.toUpperCase()]), published);
+  assert.strictEqual(await navigationProof(sdk, 'contoso_app', published, []), published);
+  assert.deepStrictEqual(calls, { resolved: [], queries: [], gets: [] });
+});
+
+test('navigationProof: a published app is read in its saved layer, through its own id, for the candidates the published navigation does not name — and is never asked whether it was published', async () => {
+  const published = { ok: true, xml: '<SiteMap/>', ids: [GP_OVERVIEW] };
+  const { sdk, calls } = proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }] });
+  const r = await navigationProof(sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL]);
+  assert.deepStrictEqual(r, { ...published, ids: BOTH_PAGES, currentNavigation: { ok: true, ids: BOTH_PAGES } });
+  assert.deepStrictEqual(calls.resolved, [], 'the published read found it: nothing asks whether it was ever published');
+  assert.deepStrictEqual(calls.queries.map((q) => q.entity), ['appmodule', 'appmodulecomponent']);
+  assert.ok(calls.gets[0].includes(`appmoduleid eq ${PROOF_APP}`));
+  // A saved layer that cannot be read proves nothing more: the published proof stands, and says why.
+  const refused = proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }], layer: { status: 503, body: null } });
+  const unread = await navigationProof(refused.sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL]);
+  assert.deepStrictEqual(unread.ids, [GP_OVERVIEW]);
+  assert.strictEqual(unread.ok, true);
+  assert.strictEqual(unread.currentNavigation.ok, false);
+  assert.match(unread.currentNavigation.reason, /appmodule-query-failed|saved|503/);
+});
+
+test('navigationProof: an app with no published layer is proven by its saved navigation — the sitemap its saved layer holds, found through its own id and layer key', async () => {
+  const { sdk, calls } = proofEnv();
+  const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW.toUpperCase()]);
+  assert.deepStrictEqual(r, { ok: true, neverPublished: true, ids: BOTH_PAGES, currentNavigation: { ok: true, ids: BOTH_PAGES } });
+  assert.deepStrictEqual(calls.resolved, ['app:contoso_app']);
+  assert.deepStrictEqual(calls.queries.map((q) => q.entity), ['appmodulecomponent'], 'never the published app or sitemap, which are not there');
+  assert.ok(calls.queries[0].filter.includes(PROOF_LAYER), 'the component hangs off the layer key of the saved layer');
+  assert.strictEqual(calls.gets.length, 2);
+  assert.ok(calls.gets[0].startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && calls.gets[0].includes(`appmoduleid eq ${PROOF_APP}`));
+  assert.ok(calls.gets[1].startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && calls.gets[1].includes(`sitemapid eq ${PROOF_SITEMAP}`));
+});
+
+test('navigationProof: an app that is in neither layer is answered as the published read said — one look for it, and no read of any navigation', async () => {
+  const { sdk, calls } = proofEnv({ apps: [] });
+  assert.strictEqual(await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]), NOT_PUBLISHED);
+  assert.deepStrictEqual(calls, { resolved: ['app:contoso_app'], queries: [], gets: [] });
+});
+
+test('navigationProof: every answer that is not "app not found", and a proof with nothing to prove, are returned as they are, with no read', async () => {
+  const { sdk, calls } = proofEnv();
+  for (const published of [
+    { ok: false, reason: 'appmodule-query-failed', detail: 'HTTP 503' },
+    { ok: false, reason: 'sitemap-component-not-found' },
+    { ok: false, reason: 'sitemap-xml-unreadable' },
+    { ok: false, reason: 'malformed' },
+    { ok: false, reason: 'app identity unavailable' },
+    undefined,
+  ]) {
+    assert.strictEqual(await navigationProof(sdk, 'contoso_app', published, [GP_OVERVIEW]), published, JSON.stringify(published));
+  }
+  assert.strictEqual(await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, []), NOT_PUBLISHED, 'no candidate, nothing to prove');
+  assert.deepStrictEqual(calls, { resolved: [], queries: [], gets: [] });
+});
+
+test('navigationProof: a saved navigation of an app with no published layer that cannot be read is { ok:false, neverPublished:true } with the reason — never "no pages"', async () => {
+  const two = [{ appmoduleid: PROOF_APP, appmoduleidunique: PROOF_LAYER, componentstate: 1 }, { appmoduleid: PROOF_APP, appmoduleidunique: '9d1b0a52-0000-4000-8000-000000000004', componentstate: 1 }];
+  const cases = [
+    ['the layer read is refused', { layer: { status: 503, body: null } }, 'appmodule-query-failed', /HTTP 503/],
+    ['the layer is two current rows', { layer: { status: 200, body: { value: two } } }, 'appmodule-query-failed', /no single current layer among 2 app row\(s\)/],
+    ['the sitemap component read fails', { componentError: 'socket hang up' }, 'sitemap-component-query-failed', /socket hang up/],
+    ['its sitemap component is there and names no sitemap', { components: [{ componenttype: 62 }] }, 'sitemap-component-not-found', /names no sitemap/],
+    ['the sitemap read is refused', { sitemap: { status: 403, body: {} } }, 'sitemap-query-failed', /HTTP 403/],
+    ['the sitemap has no row', { sitemap: { status: 200, body: { value: [] } } }, 'sitemap-xml-unreadable', undefined],
+    ['the sitemap XML is cut short', { sitemap: { status: 200, body: { value: [{ sitemapxml: '<SiteMap', componentstate: 1 }] } } }, 'malformed', undefined],
+    ['a page id in it is no GUID', { sitemap: { status: 200, body: { value: [{ sitemapxml: '<SiteMap><Area><Group><SubArea GenPageId="not-a-guid"/></Group></Area></SiteMap>', componentstate: 1 }] } } }, 'malformed', undefined],
+  ];
+  for (const [what, setup, reason, detail] of cases) {
+    const { sdk } = proofEnv(setup);
+    const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+    assert.strictEqual(r.ok, false, what);
+    assert.strictEqual(r.neverPublished, true, `${what}: the app was found in its saved layer, so this is the navigation of an app that was never published`);
+    assert.strictEqual(r.reason, reason, what);
+    if (detail) assert.match(r.detail, detail, what);
+    assert.strictEqual(r.ids, undefined, `${what}: no page is proven by a read that failed`);
+  }
+});
+
+test('navigationProof: an app that cannot be looked up in its saved layer is an unreadable answer that does not claim it was never published', async () => {
+  const noLookup = proofEnv();
+  delete noLookup.sdk.resolveArtifact;
+  const noClient = proofEnv({ noDataverse: true });
+  for (const [what, sdk, reason, detail] of [
+    ['the SDK cannot look the app up', proofEnv({ resolveError: 'Contoso app lookup unavailable' }).sdk, 'appmodule-query-failed', /Contoso app lookup unavailable/],
+    ['the SDK has no app lookup', noLookup.sdk, 'appmodule-query-failed', /no lookup of an app/],
+    ['there is no Dataverse client', noClient.sdk, 'no Dataverse client to read it', undefined],
+  ]) {
+    const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+    assert.strictEqual(r.ok, false, what);
+    assert.strictEqual(r.neverPublished, undefined, `${what}: the app was not found there, so nothing says it was never published`);
+    assert.strictEqual(r.reason, reason, what);
+    if (detail) assert.match(r.detail, detail, what);
+    assert.strictEqual(r.ids, undefined, what);
+  }
+});
+
+test('navigationProof: a sitemap component that is found missing and then cannot be read again is an unreadable navigation — never "no navigation"', async () => {
+  const { sdk } = proofEnv({ components: [] });
+  const queryRecords = sdk.queryRecords;
+  let componentReads = 0;
+  sdk.queryRecords = async (entity, opts) => {
+    // The first read finds no component (fetchSitemap's); the second is the one that tells "none" from "one that names nothing".
+    if (entity === 'appmodulecomponent' && (componentReads += 1) === 2) throw new Error('socket hang up');
+    return queryRecords(entity, opts);
+  };
+  const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+  assert.strictEqual(componentReads, 2);
+  assert.deepStrictEqual([r.ok, r.neverPublished, r.reason], [false, true, 'sitemap-component-query-failed']);
+  assert.match(r.detail, /socket hang up/);
+});
+
+test('navigationProof: an app that was never published whose sitemap component is there costs no second read of the components, and one with none costs exactly one more', async () => {
+  const linked = proofEnv();
+  await navigationProof(linked.sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+  assert.strictEqual(linked.calls.queries.filter((q) => q.entity === 'appmodulecomponent').length, 1);
+  const bare = proofEnv({ components: [] });
+  await navigationProof(bare.sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+  assert.strictEqual(bare.calls.queries.filter((q) => q.entity === 'appmodulecomponent').length, 2);
+});
+
+// The vendored SDK ties an app to its sitemap by NAME, and an app whose layer has no sitemap component can still hold a sitemap — and pages in it — that only its name links to it. The scan of the OTHER apps follows that link,
+// so the teardown of THIS one does too: skipping it would prove none of an app's pages, and the teardown would still delete the app and the sitemap that holds them.
+test('navigationProof: an app with no published layer and no sitemap component is read through the sitemap that carries its name, in any case', async () => {
+  for (const name of ['contoso_app', 'CONTOSO_App']) {
+    const { sdk, calls } = proofEnv({ components: [], saved: { status: 200, body: { value: [
+      { sitemapid: '9d1b0a52-0000-4000-8000-0000000000aa', sitemapnameunique: 'contoso_other', sitemapxml: withPage(GP_OVERVIEW), componentstate: 1 },
+      { sitemapid: PROOF_SITEMAP, sitemapnameunique: name, sitemapxml: XML, componentstate: 1 },
+    ] } } });
+    const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+    assert.deepStrictEqual(r, { ok: true, neverPublished: true, ids: BOTH_PAGES, currentNavigation: { ok: true, ids: BOTH_PAGES } }, name);
+    assert.deepStrictEqual(calls.gets.map((u) => u.split('?')[0]), [
+      '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()',
+      '/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()',
+    ], 'the layer, and the one read of the saved sitemaps — no read of the sitemap by id, which no component names');
+  }
+});
+
+test('navigationProof: an app with no published layer, no sitemap component and no sitemap of its name has no navigation: a valid proof of no pages, not an error', async () => {
+  const { sdk } = proofEnv({ components: [], saved: { status: 200, body: { value: [{ sitemapid: PROOF_SITEMAP, sitemapnameunique: 'contoso_other', sitemapxml: XML, componentstate: 1 }] } } });
+  assert.deepStrictEqual(await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]), { ok: true, neverPublished: true, ids: [], currentNavigation: { ok: true, ids: [] } });
+});
+
+test('navigationProof: a sitemap linked by name that cannot be told, or read, is an unreadable navigation', async () => {
+  const mine = (over) => ({ sitemapid: PROOF_SITEMAP, sitemapnameunique: 'contoso_app', sitemapxml: XML, componentstate: 1, ...over });
+  const cases = [
+    ['two sitemaps carry the name', { status: 200, body: { value: [mine(), mine({ sitemapid: '9d1b0a52-0000-4000-8000-0000000000bb' })] } }, 'sitemap-query-failed', /more than one sitemap/],
+    ['two current rows of the one sitemap', { status: 200, body: { value: [mine(), mine()] } }, 'sitemap-query-failed', undefined],
+    ['the sitemap has no XML', { status: 200, body: { value: [mine({ sitemapxml: '' })] } }, 'sitemap-xml-unreadable', undefined],
+    ['the XML is cut short', { status: 200, body: { value: [mine({ sitemapxml: '<SiteMap><Area><Group><SubArea GenPageId="13ecbc57' })] } }, 'malformed', undefined],
+    ['the read is refused', { status: 503, body: null }, 'sitemap-query-failed', /HTTP 503/],
+  ];
+  for (const [what, saved, reason, detail] of cases) {
+    const { sdk } = proofEnv({ components: [], saved });
+    const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+    assert.strictEqual(r.ok, false, what);
+    assert.strictEqual(r.neverPublished, true, what);
+    assert.strictEqual(r.reason, reason, what);
+    if (detail) assert.match(r.detail, detail, what);
+  }
+});
+
+test('navigationProof: the saved sitemap of an app with no published layer, when a pending edit makes the platform answer with both layers, is the authored one', async () => {
+  const { sdk } = proofEnv({ sitemap: { status: 200, body: { value: [
+    { componentstate: 0, sitemapxml: withPage(GP_OVERVIEW) },
+    { componentstate: 1, sitemapxml: withPage(GP_DETAIL) },
+  ] } } });
+  const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_DETAIL]);
+  assert.deepStrictEqual(r.ids, [GP_DETAIL]);
 });

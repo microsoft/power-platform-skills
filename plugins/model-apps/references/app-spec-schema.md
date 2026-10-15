@@ -1431,7 +1431,8 @@ custom control), but the spec validator emits a warning.
      fail-closed, discriminated). This set alone decides placement, download enumeration, and verify
      coverage. A read failure HALTs (`pages-sitemap-read-failed`).
 - **Teardown page scope.** The manifest supplies candidates, not permission to delete. A candidate
-  is deleted only when it is in this app's sitemap (published, or saved but unpublished — a page another app's
+  is deleted only when it is in this app's sitemap (published, or saved but unpublished — an app that was never published has
+  only the saved one, which is read for it — a page another app's
   saved navigation still references is refused by the platform and kept) or a local app/key/id creation receipt proves it,
   with its stored name corroborating the receipt. Other candidates are kept with a manual-removal hint.
   The build writes `page-ownership.created.<hash>.json` in its workspace after an acknowledged create,

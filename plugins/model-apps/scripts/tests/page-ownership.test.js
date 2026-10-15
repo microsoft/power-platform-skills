@@ -9,7 +9,7 @@ const { runTeardown: realRunTeardown } = require('../lib/sdk-teardown.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { loadCli } = require('./helpers/cli-harness.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
-const { recordPageCreation, readPageOwnership, recordPagePending, readPendingCreations, checkPageOwnershipClearable } = require('../lib/page-ownership-records.js');
+const { recordPageCreation, readPageOwnership, recordPagePending, readPendingCreations, checkPageOwnershipClearable, recordPageTeardown } = require('../lib/page-ownership-records.js');
 const { sha256 } = require('../lib/hash.js');
 
 // What the page backend was asked to write: a build that must not touch a page leaves this empty.
@@ -112,11 +112,17 @@ function sdkForPages(opts = {}) {
     if (publishedName !== undefined) return [{ ...row, name: publishedName, componentstate: 0 }, { ...row, componentstate: 1 }];
     return [{ ...row, componentstate: 0 }];
   });
-  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], draftReads: 0, pageReads: [] };
+  // `appResolves` and `appLayerReads` count the lookups of the app in its saved layer (the SDK's app resolver, and the read of the app's current layer), `sitemapListReads` the read of every saved sitemap.
+  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], draftReads: 0, pageReads: [], appResolves: 0, appLayerReads: 0, sitemapListReads: 0 };
   const membership = opts.membership || [OWN];
   const sdk = {
+    // The app as the SDK's resolver finds it: through the SAVED layer, so an app that was never published (`opts.neverPublished`) is found, though the published read below does not return it.
     resolveArtifact: async (kind, identity) => {
-      if (kind === 'app') return state.app ? [{ id: APP, name: 'Contoso Pages', appModuleIdUnique: LAYER }] : [];
+      if (kind === 'app') {
+        state.appResolves += 1;
+        if (opts.resolveError) throw new Error('Contoso app lookup unavailable');
+        return state.app ? [{ id: APP, name: 'Contoso Pages', appModuleIdUnique: opts.neverPublished ? DRAFT_LAYER : LAYER }] : [];
+      }
       if (kind === 'solution') return [{ id: 'solution-id', name: 'ContosoPages' }];
       if (kind === 'webResource') return [{ id: identity.name, name: identity.name }];
       return [];
@@ -126,9 +132,14 @@ function sdkForPages(opts = {}) {
       if (entity === 'webresource') return [{ webresourceid: 'manifest-id', content: Buffer.from(opts.corruptManifest ? '{' : JSON.stringify({ schemaVersion: 1, pages: candidates })).toString('base64') }];
       if (entity === 'appmodule') {
         if (opts.sitemapError) throw new Error('Contoso sitemap read unavailable');
-        return state.app ? [{ appmoduleid: APP, appmoduleidunique: LAYER, uniquename: 'contoso_pages' }] : [];
+        // A plain read answers the PUBLISHED layer, and an app that was never published has no row in it: it answers as it does for an app that does not exist.
+        return state.app && !opts.neverPublished ? [{ appmoduleid: APP, appmoduleidunique: LAYER, uniquename: 'contoso_pages' }] : [];
       }
-      if (entity === 'appmodulecomponent') return [{ objectid: SITEMAP, componenttype: 62 }];
+      if (entity === 'appmodulecomponent') {
+        if (opts.componentError) throw new Error('Contoso sitemap component read unavailable');
+        if (opts.componentRows !== undefined) return opts.componentRows;
+        return opts.noSitemapComponent ? [] : [{ objectid: SITEMAP, componenttype: 62 }];
+      }
       if (entity === 'sitemap') return state.app ? [{ sitemapxml: `<SiteMap>${membership.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>` }] : [];
       if (entity === 'uxagentproject') {
         // A plain read of the page table answers the PUBLISHED layer only: a page that was never published is not in it. Teardown must not decide what exists by this.
@@ -141,9 +152,11 @@ function sdkForPages(opts = {}) {
     // A page is deleted through the SDK's own delete (the project row, then the conversation history that points at it): the row is what `entity` names.
     //   deleteAnswers404: true    the DELETE answers "not found" and the page stays — what a by-id request that cannot see a draft-only row would do
     //   deleteAnswers404: 'gone'  the DELETE answers "not found" because the page IS gone (a cascade race, a maker who deleted it meanwhile)
+    //   referenced: [id, …]       the pages another component still references: the platform refuses their DELETE and they stay
     deleteRemoteArtifact: async (kind, id) => {
       assert.equal(kind, 'genPage');
       state.deletes.push({ entity: 'uxagentproject', id });
+      if ((opts.referenced || []).includes(id)) throw new Error(`The uxagentproject(${id}) component cannot be deleted because it is referenced by 1 other components.`);
       if (!opts.deleteAnswers404) return;
       if (opts.deleteAnswers404 === 'gone') rows.splice(rows.findIndex((r) => r.uxagentprojectid === id), 1);
       throw Object.assign(new Error(`HTTP 404 from DELETE /uxagentprojects(${id}): Does Not Exist`), { code: 'CONNECTION_ERROR', statusCode: 404 });
@@ -172,11 +185,20 @@ function sdkForPages(opts = {}) {
         state.draftReads += 1;
         if (opts.draftError) return { status: 503, body: null };
         if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')) {
-          return { status: 200, body: { value: [{ appmoduleid: APP, appmoduleidunique: DRAFT_LAYER, componentstate: 1 }] } };
+          state.appLayerReads += 1;
+          // `layerRows` are the rows of the app's layers verbatim (to say two current layers, say). The app is not in either layer once it is deleted.
+          if (opts.layerRows !== undefined) return { status: 200, body: { value: opts.layerRows } };
+          return { status: 200, body: { value: state.app ? [{ appmoduleid: APP, appmoduleidunique: DRAFT_LAYER, componentstate: 1 }] : [] } };
         }
         if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')) {
           const ids = opts.draftMembership !== undefined ? opts.draftMembership : membership;
           const xml = `<SiteMap>${ids.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>`;
+          // The read of EVERY saved sitemap, which finds the one an app's name links to when no component does:
+          //   { "value": [ { "sitemapid": "…", "sitemapnameunique": "contoso_pages", "componentstate": 1, "sitemapxml": "<SiteMap>…" } ] }
+          if (url.includes('sitemapnameunique')) {
+            state.sitemapListReads += 1;
+            return { status: 200, body: { value: opts.savedSitemaps !== undefined ? opts.savedSitemaps(xml) : [{ sitemapid: SITEMAP, sitemapnameunique: 'contoso_pages', sitemapxml: xml, componentstate: 1 }] } };
+          }
           return { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } };
         }
         throw new Error(`unexpected test read: ${url}`);
@@ -479,6 +501,234 @@ test('a page with a pending edit is judged by its current row — the authored o
   assert.equal(r.ok, true, JSON.stringify(r.errors));
   assert.deepEqual(written.state.deletes, [{ entity: 'uxagentproject', id: OWN }]);
 });
+
+// ── An app that was never published has only its SAVED navigation ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// The twin of the page section above, one level up. A plain read answers the PUBLISHED layer, and an app that was created and never published — a build killed before its publish, an app saved in the maker and left —
+// has no row in it: the read of its sitemap answers "app not found", exactly as it does for an app that was deleted. Its navigation exists only in the saved layer, and a page stays a dependency of that navigation until
+// the app and its sitemap are deleted. Teardown proved the pages of such an app by this workspace's records alone, so a page its navigation held, and no receipt or pending record named, was kept. The saved layer
+// is read now, as that of a published app is when its published layer leaves a page unproven. `neverPublished: true` is an app with no published row; `draftMembership` is the navigation it saved.
+const neverPublishedOpts = (extra = {}) => ({
+  neverPublished: true,
+  membership: [],
+  draftMembership: [OWN, OTHER],
+  // One page that is published, one that is a draft too: the app's own layer does not depend on the layer of its pages.
+  rows: [{ uxagentprojectid: OWN, name: 'Overview' }, { uxagentprojectid: OTHER, name: 'Contoso Draft', draftOnly: true }],
+  ...extra,
+});
+
+test("teardown deletes the pages a never-published app's saved navigation holds — the app has no published navigation to prove them by", async () => {
+  const { sdk, state } = sdkForPages(neverPublishedOpts());
+  const r = await runTeardown(spec(), { apply: true }, { sdk });
+  assert.deepEqual(state.deletes.map((d) => d.id).sort(), [OWN, OTHER].sort(), 'both pages are in the app\'s navigation, and no record of this workspace is needed to say so');
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual([...r.deleted.genpage].sort(), [OWN, OTHER].sort());
+  assert.equal(state.app, false, 'and then the app, whose sitemap held them');
+  assert.ok(state.resources.some((id) => id.endsWith('_pagemanifest')), 'a clean pages step lets the manifest go');
+  assert.equal(state.reads.filter((read) => read.entity === 'sitemap').length, 0, 'there is no published sitemap to read');
+  assert.ok(state.draftReads > 0, 'the saved layer is what was read');
+});
+
+test("a page in a never-published app's navigation that another app still references is kept: the platform refuses its delete, and teardown does not force it", async () => {
+  const { sdk, state } = sdkForPages(neverPublishedOpts({ referenced: [OTHER] }));
+  const r = await runTeardown(spec(), { apply: true }, { sdk });
+  assert.deepEqual(r.deleted.genpage, [OWN], 'only the page nothing else references is deleted');
+  assert.deepEqual(state.deletes.map((d) => d.id).sort(), [OWN, OTHER].sort(), 'the other was put to the platform, which is the authority on what references it, and refused');
+  assert.equal(r.ok, false, 'a proven page that is still there is not a clean teardown, as for a published app');
+  assert.match(JSON.stringify(r.errors), new RegExp(`proven pages remain undeleted: ${OTHER}`));
+  assert.ok(state.resources.every((id) => !id.endsWith('_pagemanifest')), 'and its manifest stays for a re-run');
+});
+
+test("a never-published app whose saved navigation holds none of the pages leaves the decision to this workspace's records, as before: a receipted page is deleted, the others are kept and named", async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'draft', OTHER, 'Contoso Draft', ENV);
+  const { sdk, state } = sdkForPages(neverPublishedOpts({ draftMembership: [] }));
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OTHER }], 'the page the receipt and its stored name corroborate');
+  assert.match(r.skipped.join('\n'), new RegExp(`${OWN}[^\\n]*not proven to belong to this app`), 'the page nothing proves is named, and left');
+  assert.deepEqual(readPageOwnership(workspaceDir, 'contoso_pages', ENV), { created: [], teardown: [] }, 'the receipt of the deleted page is consumed');
+});
+
+test('a page that is in neither the saved navigation of a never-published app nor this workspace\'s records is kept, and a navigation that does not name it is not an error', async () => {
+  const { sdk, state } = sdkForPages(neverPublishedOpts({ draftMembership: [OWN] }));
+  const r = await runTeardown(spec(), { apply: true }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }]);
+  assert.match(r.skipped.join('\n'), new RegExp(`${OTHER}[^\\n]*not proven to belong to this app`));
+});
+
+test('a never-published app whose saved navigation cannot be read is an error that keeps every page — one this workspace holds a receipt for too — and the app stays for a re-run', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+  const opts = neverPublishedOpts({ draftError: true });
+  const { sdk, state } = sdkForPages(opts);
+  const first = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.deepEqual(state.deletes, [], 'nothing is deleted while the navigation that would rule a page in or out cannot be read');
+  assert.equal(first.ok, false);
+  assert.equal(state.app, true, 'the app, and the sitemap that proves its pages, stay');
+  assert.ok(state.resources.every((id) => !id.endsWith('_pagemanifest')));
+  const said = first.errors.map((e) => e.message).join('\n');
+  assert.match(said, /app sitemap unreadable \(the app was never published, so its navigation is the one it saved, and that could not be read: appmodule-query-failed: /);
+  assert.match(said, new RegExp(`${OWN} "Overview" \\(kept\\)`), 'the pages are named, and kept');
+  // Once it reads, the re-run finishes the cleanup, and the receipt goes with the page it named.
+  opts.draftError = false;
+  const second = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(second.ok, true, JSON.stringify(second.errors));
+  assert.deepEqual(state.deletes.map((d) => d.id).sort(), [OWN, OTHER].sort());
+  assert.deepEqual(readPageOwnership(workspaceDir, 'contoso_pages', ENV), { created: [], teardown: [] });
+});
+
+for (const [what, extra, reason] of [
+  ['its sitemap component cannot be read', { componentError: true }, /sitemap-component-query-failed: Contoso sitemap component read unavailable/],
+  ['its sitemap component is there and names no sitemap', { componentRows: [{ componenttype: 62 }] }, /sitemap-component-not-found: its sitemap component names no sitemap/],
+  ['its saved layer is two current rows', { layerRows: [
+    { appmoduleid: APP, appmoduleidunique: DRAFT_LAYER, componentstate: 1 },
+    { appmoduleid: APP, appmoduleidunique: '77777777-7777-4777-8777-777777777777', componentstate: 1 },
+  ] }, /appmodule-query-failed: no single current layer among 2 app row\(s\)/],
+  ['the SDK cannot look it up in its saved layer', { resolveError: true }, /app sitemap unreadable \(appmodule-query-failed: Contoso app lookup unavailable\)/],
+]) {
+  test(`a never-published app whose navigation cannot be read because ${what} keeps every page, receipted or not, and the app`, async () => {
+    const workspaceDir = workspace();
+    recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+    const { sdk, state } = sdkForPages(neverPublishedOpts(extra));
+    const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+    assert.deepEqual(state.deletes, []);
+    assert.equal(r.ok, false);
+    assert.equal(state.app, true);
+    assert.match(r.errors.map((e) => e.message).join('\n'), reason);
+    assert.equal(readPageOwnership(workspaceDir, 'contoso_pages', ENV).created.length, 1, 'the receipt stays: its page was not deleted');
+  });
+}
+
+test('a never-published app with no sitemap component in its layer is read through the sitemap that carries its name — the link the SDK itself follows', async () => {
+  const { sdk, state } = sdkForPages(neverPublishedOpts({ noSitemapComponent: true }));
+  const r = await runTeardown(spec(), { apply: true }, { sdk });
+  assert.deepEqual(state.deletes.map((d) => d.id).sort(), [OWN, OTHER].sort());
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.equal(state.sitemapListReads, 1, 'the one read of the saved sitemaps, which is how the name finds it');
+});
+
+test('a never-published app with no sitemap component and no sitemap of its name has no navigation: its pages are the records\' to decide, and nothing is an error', async () => {
+  const workspaceDir = workspace();
+  recordPageCreation(workspaceDir, 'contoso_pages', 'draft', OTHER, 'Contoso Draft', ENV);
+  // A sitemap that another app's name carries is that app's, whatever it holds.
+  const { sdk, state } = sdkForPages(neverPublishedOpts({
+    noSitemapComponent: true,
+    savedSitemaps: (xml) => [{ sitemapid: SITEMAP, sitemapnameunique: 'contoso_someone_else', sitemapxml: xml, componentstate: 1 }],
+  }));
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OTHER }]);
+  assert.match(r.skipped.join('\n'), new RegExp(`${OWN}[^\\n]*not proven to belong to this app`));
+});
+
+for (const [what, savedSitemaps] of [
+  ['two sitemaps carry its name', (xml) => [
+    { sitemapid: SITEMAP, sitemapnameunique: 'contoso_pages', sitemapxml: xml, componentstate: 1 },
+    { sitemapid: '77777777-7777-4777-8777-777777777777', sitemapnameunique: 'CONTOSO_PAGES', sitemapxml: xml, componentstate: 1 },
+  ]],
+  ['the sitemap that carries its name has no XML', () => [{ sitemapid: SITEMAP, sitemapnameunique: 'contoso_pages', sitemapxml: '', componentstate: 1 }]],
+  ['the sitemap that carries its name is cut short', () => [{ sitemapid: SITEMAP, sitemapnameunique: 'contoso_pages', sitemapxml: '<SiteMap><Area><Group><SubArea GenPageId="1111', componentstate: 1 }]],
+  ['the saved sitemaps cannot be read', () => { throw new Error('Contoso saved sitemaps unavailable'); }],
+]) {
+  test(`a never-published app with no sitemap component, when ${what}, keeps every page and the app`, async () => {
+    const workspaceDir = workspace();
+    recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+    const { sdk, state } = sdkForPages(neverPublishedOpts({ noSitemapComponent: true, savedSitemaps }));
+    const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+    assert.deepEqual(state.deletes, []);
+    assert.equal(r.ok, false);
+    assert.equal(state.app, true);
+    assert.match(r.errors.map((e) => e.message).join('\n'), /app sitemap unreadable \(the app was never published, so its navigation is the one it saved, and that could not be read: /);
+  });
+}
+
+test("a dry run lists the pages a never-published app's saved navigation holds as ones it would delete, and deletes nothing", async () => {
+  const { sdk, state } = sdkForPages(neverPublishedOpts());
+  const r = await runTeardown(spec(), { apply: false }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  const plan = r.plan.join('\n');
+  assert.match(plan, new RegExp(`${OWN}[^\\n]*would delete`));
+  assert.match(plan, new RegExp(`${OTHER}[^\\n]*would delete`));
+  assert.doesNotMatch(plan, /not proven|kept/);
+  assert.deepEqual(state.deletes, []);
+  assert.equal(state.app, true);
+  assert.equal(state.appResolves, 1, 'one look for the app in its saved layer');
+});
+
+test('a dry run says that the saved navigation of a never-published app could not be read, lists every page as kept for that reason, and fails', async () => {
+  const { sdk, state } = sdkForPages(neverPublishedOpts({ draftError: true }));
+  const r = await runTeardown(spec(), { apply: false }, { sdk });
+  assert.equal(r.ok, false);
+  const plan = r.plan.join('\n');
+  for (const id of [OWN, OTHER]) assert.match(plan, new RegExp(`${id}[^\\n]*kept — page proof unreadable: app sitemap unreadable \\(the app was never published, so its navigation is the one it saved, and that could not be read: appmodule-query-failed`));
+  assert.doesNotMatch(plan, /would delete/);
+  assert.deepEqual(state.deletes, []);
+});
+
+// Where the published layer answers, nothing changes — and an app that is in neither layer is still the records' to decide.
+test('an app that is in neither layer — the re-run of a teardown that deleted it — is left to the records of this workspace, as before', async () => {
+  const workspaceDir = workspace();
+  recordPageTeardown(workspaceDir, 'contoso_pages', [{ id: OWN, key: 'overview', name: 'Overview' }], ENV);
+  const { sdk, state } = sdkForPages({ appPresent: false, rows: [{ uxagentprojectid: OWN, name: 'Overview' }, { uxagentprojectid: OTHER, name: 'Contoso Draft' }] });
+  const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'the page this workspace proved before the app went');
+  assert.match(r.skipped.join('\n'), new RegExp(`${OTHER}[^\\n]*not proven to belong to this app`));
+  assert.deepEqual(readPageOwnership(workspaceDir, 'contoso_pages', ENV), { created: [], teardown: [] });
+});
+
+test('an app that is in neither layer costs one look for it in the saved layer and no read of any navigation', async () => {
+  const workspaceDir = workspace();
+  recordPageTeardown(workspaceDir, 'contoso_pages', [{ id: OWN, key: 'overview', name: 'Overview' }], ENV);
+  const { sdk, state } = sdkForPages({ appPresent: false, rows: [{ uxagentprojectid: OWN, name: 'Overview' }, { uxagentprojectid: OTHER, name: 'Contoso Draft' }] });
+  await runTeardown(spec(), { apply: false, workspaceDir }, { sdk });
+  assert.equal(state.appResolves, 1);
+  assert.equal(state.appLayerReads, 0);
+  assert.equal(state.draftReads, 0);
+});
+
+test('a published app is not looked for in its saved layer by the proof: its published navigation names every page, or the one read of its saved navigation follows', async () => {
+  // Every page proven by the published navigation: no read of the saved layer at all.
+  const proven = sdkForPages({ candidates: manifest(OWN).pages, draftMembership: [OWN], rows: [{ uxagentprojectid: OWN, name: 'Overview' }] });
+  await runTeardown(spec(), { apply: false }, { sdk: proven.sdk });
+  assert.equal(proven.state.appResolves, 0);
+  assert.equal(proven.state.draftReads, 0);
+  // A page the published navigation does not name: the saved layer of the app that IS published is read, through the app's own id.
+  const unproven = sdkForPages({ draftMembership: [OWN, OTHER] });
+  const r = await runTeardown(spec(), { apply: false }, { sdk: unproven.sdk });
+  assert.equal(unproven.state.appResolves, 0, 'it is a published app: the published read found it, and nothing asks whether it was ever published');
+  assert.equal(unproven.state.appLayerReads, 1);
+  assert.match(r.plan.join('\n'), new RegExp(`${OTHER}[^\\n]*would delete`));
+});
+
+test('pages that are not in the environment cost no read of the app at all', async () => {
+  const { sdk, state } = sdkForPages(neverPublishedOpts({ rows: [] }));
+  const r = await runTeardown(spec(), { apply: false }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.equal(state.appResolves, 0);
+  assert.equal(state.draftReads, 0);
+  assert.equal(state.reads.filter((read) => read.entity === 'appmodule' || read.entity === 'sitemap').length, 0);
+});
+
+// What is NOT an app with no published layer stays what it was: every other answer of the published read keeps every page and the app, in the words it always used, and is never looked up in the saved layer.
+for (const [what, extra, said] of [
+  ['its published sitemap read fails', { sitemapError: true }, 'app sitemap unreadable (appmodule-query-failed: Contoso sitemap read unavailable)'],
+  ['it has a published layer but no published sitemap component', { noSitemapComponent: true }, 'app sitemap unreadable (sitemap-component-not-found)'],
+]) {
+  test(`a published app whose navigation cannot be read because ${what} is kept whole, in the words it always was — it is not taken for an app that was never published`, async () => {
+    const workspaceDir = workspace();
+    recordPageCreation(workspaceDir, 'contoso_pages', 'overview', OWN, 'Overview', ENV);
+    const { sdk, state } = sdkForPages({ ...extra });
+    const r = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+    assert.equal(r.ok, false);
+    assert.deepEqual(state.deletes, []);
+    assert.equal(state.app, true);
+    assert.ok(r.errors.map((e) => e.message).join('\n').includes(said), `the message is ${said}`);
+    assert.doesNotMatch(JSON.stringify(r), /never published/);
+    assert.equal(state.appResolves, 0, 'the saved layer is not asked whether it was published: the published layer found it');
+  });
+}
 
 // ── A "not found" from the DELETE of a page is not proof that the page is gone ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // The SDK's delete sends DELETE /uxagentprojects(<id>) with no MSCRM.IncludeUnpublished header, and its own notes say a by-id request on a page that was never published answers 404 without it. Measured live,

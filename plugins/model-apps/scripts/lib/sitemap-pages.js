@@ -489,13 +489,14 @@ async function savedSitemaps(sdk) {
   return { ok: true, byId, idsByName };
 }
 
-// The genpage ids in one app's saved layer — { ok:true, ids } — or { ok:false } when its rows cannot be trusted: none came back for its sitemap, they do
-// not name one current row, or the current one has no XML or malformed XML (the same structural check a published sitemap must pass).
+// The genpage ids in one app's saved layer — { ok:true, ids } — or { ok:false, reason } when its rows cannot be trusted: none came back for its sitemap, they do
+// not name one current row, or the current one has no XML or malformed XML (the same structural check a published sitemap must pass). The reasons are fetchSitemap's for the same faults.
 function savedLayerIds(rows) {
   let current;
-  try { [current] = currentSitemapRows(rows || []); } catch { return { ok: false }; }
+  try { [current] = currentSitemapRows(rows || []); } catch { return { ok: false, reason: 'sitemap-query-failed' }; }
   const xml = current && current.sitemapxml;
-  if (!xml || isMalformed(String(xml))) return { ok: false };
+  if (!xml) return { ok: false, reason: 'sitemap-xml-unreadable' };
+  if (isMalformed(String(xml))) return { ok: false, reason: 'malformed' };
   return { ok: true, ids: sitemapGenPageIds(String(xml)) };
 }
 
@@ -511,8 +512,24 @@ function savedLayerIds(rows) {
 // Not being able to read it is not a failure: the published proof stands, so nothing is proven that
 // was not before, and `currentNavigation: { ok:false, reason }` says why for the message that refuses
 // or keeps an unproven page. Ids are lower-cased, as sitemapGenPageIds returns them.
-//   -> published unchanged | { ...published, ids: <union>, currentNavigation: { ok:true, ids } | { ok:false, reason } }
+//
+// AN APP WITH NO PUBLISHED LAYER. `published` is then { ok:false, reason:'app-not-found' }: a plain read answers the published layer only, and an app that was created and never published — a build killed
+// before its publish, an app saved in the maker and left — has no row in it, so the read answers as it does for an app that is gone. Its navigation exists only in the saved layer, and a page that navigation
+// names stays a dependency of it until the app and its sitemap are deleted — so the saved navigation is the proof, as it is for a published app whose published layer leaves a page unproven. Without it the
+// pages of such an app were proven by the records of one workspace alone. What tells such an app from a deleted one is the SAVED layer (neverPublishedNavigation): it finds the app there, or finds nothing, and
+// then the published answer stands. A saved navigation that cannot be read is a failure of the proof, never "no pages": it is the one navigation the app has, and there is no published proof for it to fall back on.
+//   -> published unchanged
+//    | { ...published, ids: <union>, currentNavigation: { ok:true, ids } | { ok:false, reason } }
+//    | { ok:true, neverPublished:true, ids, currentNavigation: { ok:true, ids } }      no published layer: its saved navigation
+//    | { ok:false, neverPublished:true, reason, detail? }                              no published layer, and its saved navigation could not be read (fetchSitemap's reasons)
+//    | { ok:false, reason, detail? }                                                   the app could not be looked up in its saved layer, so nothing is known of it but that the published read did not find it
 async function navigationProof(sdk, appUnique, published, candidateIds = []) {
+  if (published && !published.ok && published.reason === 'app-not-found' && [...candidateIds].length) {
+    const saved = await neverPublishedNavigation(sdk, appUnique);
+    if (saved.absent) return published;
+    if (!saved.ok) return saved;
+    return { ok: true, neverPublished: true, ids: saved.ids, currentNavigation: { ok: true, ids: saved.ids } };
+  }
   if (!published || !published.ok) return published;
   const ids = new Set(published.ids.map((id) => String(id).toLowerCase()));
   if (![...candidateIds].some((id) => !ids.has(String(id).toLowerCase()))) return published;
@@ -538,6 +555,63 @@ async function currentNavigation(sdk, appUnique) {
   const layer = await currentAppLayer(sdk.dataverse, String(appId).replace(/[{}]/g, ''));
   const r = await fetchSitemap(sdk, appUnique, { currentLayer: layer });
   return r.ok ? { ok: true, ids: r.ids } : { ok: false, reason: `${r.reason}${r.detail ? `: ${r.detail}` : ''}` };
+}
+
+// The genpage ids of an app that has no published layer, from the SAVED layer it has instead: { ok:true, ids }, { ok:false, neverPublished:true, reason, detail? } (fetchSitemap's reasons) when the app is there and its navigation cannot be
+// read, { ok:false, reason, detail? } when the app cannot even be looked up, or { absent:true } when it is in neither layer.
+//   1. The app. The SDK's own lookup (`resolveArtifact('app')`, the one the teardown's app step deletes the app by) reads the saved layer, so it finds a draft:
+//        GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,appmoduleidunique&$filter=uniquename eq 'contoso_orders'&$top=1
+//        { "value": [ { "appmoduleid": "…", "name": "Orders", "appmoduleidunique": "…" } ] }
+//      A draft's row is its one layer, with componentstate 1 (Unpublished, https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appmodule). Its CURRENT layer is then read by the id, as a
+//      download reads it (currentAppLayer), so the lookup's `$top=1` cannot pick the wrong one of two layers' rows. No row at all means the app is in neither layer.
+//   2. Its sitemap, by fetchSitemap over that layer: the sitemap component (componenttype 62) of the layer's key, then the sitemap by id in the saved layer.
+//   3. An app whose layer has no sitemap component can still hold a sitemap that only its NAME links to it (sitemapLinkedByName).
+// A lookup that fails, a layer that is not one, and a sitemap that cannot be read are each { ok:false }: nothing here is read as "the app has no pages" that was not read.
+async function neverPublishedNavigation(sdk, appUnique) {
+  if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'no Dataverse client to read it' };
+  if (typeof sdk.resolveArtifact !== 'function') return { ok: false, reason: 'appmodule-query-failed', detail: 'the SDK has no lookup of an app in its saved layer' };
+  let apps;
+  try {
+    apps = await sdk.resolveArtifact('app', { uniqueName: appUnique });
+  } catch (e) {
+    return { ok: false, reason: 'appmodule-query-failed', detail: String((e && e.message) || e) };
+  }
+  const app = apps && apps[0];
+  if (!app) return { absent: true };
+  // From here the app is known to be in the saved layer and not in the published one, so a navigation that cannot be read is that of an app that was never published.
+  const layer = await currentAppLayer(sdk.dataverse, String(app.id).replace(/[{}]/g, ''));
+  let r = await fetchSitemap(sdk, appUnique, { currentLayer: layer });
+  if (!r.ok && r.reason === 'sitemap-component-not-found') r = await sitemapWithoutComponent(sdk, appUnique, layer);
+  return r.ok ? { ok: true, ids: r.ids } : { ok: false, neverPublished: true, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) };
+}
+
+// fetchSitemap answers "sitemap-component-not-found" both for a layer with NO sitemap component and for a component row that names no sitemap. Only the first leaves room for a sitemap linked by name: a row that is
+// there and names nothing proves nothing about the navigation, so it stays unreadable — as the scan of the other apps treats it (fetchAppsForPages) — and costs one more read of the components, in this branch only.
+async function sitemapWithoutComponent(sdk, appUnique, layer) {
+  let rows;
+  try {
+    rows = await appComponentRows(sdk, layer.appModuleIdUnique, 62, { top: 1 });
+  } catch (e) {
+    return { ok: false, reason: 'sitemap-component-query-failed', detail: String((e && e.message) || e) };
+  }
+  if (rows.length) return { ok: false, reason: 'sitemap-component-not-found', detail: 'its sitemap component names no sitemap' };
+  return sitemapLinkedByName(sdk, appUnique);
+}
+
+// The navigation of an app whose layer has no sitemap component at all: the sitemap that carries its unique name, as { ok:true, ids } or { ok:false, reason, detail } in fetchSitemap's own shape. The vendored SDK ties an app to
+// its sitemap by NAME — it looks the sitemap up by `sitemapnameunique` equal to the app's unique name, and so does this plugin's ensureSitemapInSolution — so such an app may hold a sitemap, and pages in it, that no
+// component row links to it. It is found the way the scan of the other apps finds it (fetchAppsForPages): every saved sitemap in one request, by the name each row carries, compared in lower case because Dataverse
+// compares names without regard to case:
+//   { "sitemapid": "5111e0f2-…", "sitemapnameunique": "contoso_orders", "componentstate": 1, "sitemapxml": "<SiteMap>…" }
+// No sitemap of its name means the app has no navigation at all (saved in the maker with only a name, say), so it names no page. More than one leaves it unknown which is the app's, and either may hold the page.
+async function sitemapLinkedByName(sdk, appUnique) {
+  const saved = await savedSitemaps(sdk);
+  if (!saved.ok) return { ok: false, reason: 'sitemap-query-failed', detail: saved.reason };
+  const ids = saved.idsByName.get(String(appUnique).toLowerCase());
+  if (!ids) return { ok: true, ids: [] };
+  if (ids.size !== 1) return { ok: false, reason: 'sitemap-query-failed', detail: "more than one sitemap carries the app's unique name, so which is its navigation cannot be told" };
+  const layer = savedLayerIds(saved.byId.get([...ids][0]));
+  return layer.ok ? layer : { ok: false, reason: layer.reason, detail: "the saved sitemap that carries the app's unique name cannot be read" };
 }
 
 module.exports = { liveNavEntries, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, navigationProof, fetchAppsForPages, XML_TAG, XML_ATTR };
