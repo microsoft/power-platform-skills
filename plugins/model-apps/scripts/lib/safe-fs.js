@@ -419,6 +419,25 @@ function unlinkWithRetry(fsImpl, file) {
   }
 }
 
+/**
+ * Removes a directory tree — a folder a run made for itself — with the bounded retry a Windows lock needs, as renameWithRetry and unlinkWithRetry have: a scanner or a sync client that has just seen a file
+ * written holds it, and `rm` answers EBUSY, EPERM or EACCES for as long as it does. Answers `null` when the tree is gone (one that was never there counts) and, when it is not, the code that stopped it. It never
+ * throws: the caller has its answer already, and says a folder that stays (its path is the one thing the maker needs to delete it) rather than fail a run that worked.
+ */
+function removeTreeWithRetry(dir, opts) {
+  const fsImpl = (opts && opts.fs) || fs;
+  for (let i = 0; ; i += 1) {
+    try {
+      fsImpl.rmSync(dir, { recursive: true, force: true });
+      return null;
+    } catch (err) {
+      const code = err && err.code;
+      if (process.platform !== 'win32' || !RENAME_LOCK_CODES.has(code) || i >= RENAME_RETRY_MS.length) return code || 'UNKNOWN';
+      sleepSync(RENAME_RETRY_MS[i]);
+    }
+  }
+}
+
 function appendFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to append: no path was given', 'uninspectable');
   const fsImpl = (opts && opts.fs) || fs;
@@ -476,4 +495,5 @@ module.exports = {
   writeFileSafe,
   appendFileSafe,
   removeFileSafe,
+  removeTreeWithRetry,
 };

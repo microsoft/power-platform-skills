@@ -3911,6 +3911,15 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     refused (`pacPayload`), never read as an empty answer. What `pac` printed about a failure is shown without its
     header (`pacErrorText`: the signed-in account, the version and the links are dropped, `Error:` lines kept), and
     redacted before it is cut to length.
+  - **The folder a `pac` fallback works in is removed, and said when it stays** (`inWorkFolder`, `lib/safe-fs.js`
+    `removeTreeWithRetry`). `pac solution create-settings` writes into a `solution-settings-<random>` folder under the
+    temp directory, which holds the package the SDK exported and pac's template — defaults that can be values. It is
+    removed however the run ends, with the bounded retry a Windows lock needs (a scanner or a sync client that holds
+    what pac just wrote answers `rm` with EBUSY, EPERM or EACCES: six attempts over about three quarters of a second;
+    on other systems a lock code is not waited out). A folder that STILL stays is a warning with its path and what is in
+    it — in `warnings` of a run that succeeded, and beside the failure of one that did not (`leftoverWarnings`, which
+    `describeFailure` prints with the SDK's cleanup warnings and no sanitizer looks at: it is the plugin's own sentence, a
+    path and a code) — never left unsaid.
   - **Files are written without replacing another's** (`lib/safe-fs.js`). `solution-settings.js template` without
     `--force` installs its file as an exclusive create, and it must never remove a file it cannot prove it wrote:
     the whole content goes to a sibling file this process created exclusively (`.<name>.<pid>.<random>.tmp`), and is

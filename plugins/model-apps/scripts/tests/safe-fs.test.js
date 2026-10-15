@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, appendFileSafe, removeFileSafe } = require('../lib/safe-fs.js');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, appendFileSafe, removeFileSafe, removeTreeWithRetry } = require('../lib/safe-fs.js');
 
 const dirs = [];
 test.after(() => {
@@ -780,4 +780,62 @@ test('a UNC share root is accepted even when readlink would return a target', (t
     readlinkSync: () => '\\\\elsewhere\\target',
   };
   assert.strictEqual(assertSafeOutputDir(share, { fs: fake }), native);
+});
+
+// --- a folder a run made for itself, removed with the retry a Windows lock needs ---------------------------------------------------------------------
+
+test('removeTreeWithRetry removes a tree — files and folders in it — and answers null; a tree that is not there is gone too', () => {
+  const dir = tmp('work');
+  fs.mkdirSync(path.join(dir, 'inner'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'a');
+  fs.writeFileSync(path.join(dir, 'inner', 'b.txt'), 'b');
+  assert.strictEqual(removeTreeWithRetry(dir), null);
+  assert.strictEqual(fs.existsSync(dir), false);
+  assert.strictEqual(removeTreeWithRetry(dir), null, 'a second removal of what is gone is not a failure');
+});
+
+// An fs whose `rmSync` of the folder answers `code` for its first `times` calls (all of them when `times` is Infinity), and counts the calls.
+function heldTree(times, code = 'EBUSY') {
+  const state = { calls: 0, options: [] };
+  const stand = {
+    ...fs,
+    rmSync: (p, options) => {
+      state.calls += 1;
+      state.options.push(options);
+      if (state.calls <= times) throw Object.assign(new Error(`${code}: resource busy or locked, rmdir`), { code });
+    },
+  };
+  return { state, stand };
+}
+
+test('a folder held for a moment — a scanner reading what the run wrote — is removed by the bounded retry on Windows; one held longer answers the code that stopped it, after every attempt of the bound', (t) => {
+  asPlatform(t, 'win32');
+  const clears = heldTree(2);
+  assert.strictEqual(removeTreeWithRetry('somewhere', { fs: clears.stand }), null);
+  assert.strictEqual(clears.state.calls, 3, 'tried again, twice');
+  assert.deepStrictEqual(clears.state.options[0], { recursive: true, force: true });
+  for (const code of ['EBUSY', 'EPERM', 'EACCES']) {
+    const stays = heldTree(Infinity, code);
+    assert.strictEqual(removeTreeWithRetry('somewhere', { fs: stays.stand }), code);
+    assert.strictEqual(stays.state.calls, 6, `${code}: one attempt and the five retries of the bound`);
+  }
+});
+
+test('the wait for a held folder is Windows\' alone, and only a lock code is waited out: elsewhere EBUSY is answered at once, and so is any other code on every platform', (t) => {
+  asPlatform(t, 'linux');
+  const posix = heldTree(Infinity, 'EBUSY');
+  assert.strictEqual(removeTreeWithRetry('somewhere', { fs: posix.stand }), 'EBUSY');
+  assert.strictEqual(posix.state.calls, 1);
+  asPlatform(t, 'win32');
+  for (const code of ['EIO', 'ENOSPC', 'EROFS']) {
+    const other = heldTree(Infinity, code);
+    assert.strictEqual(removeTreeWithRetry('somewhere', { fs: other.stand }), code);
+    assert.strictEqual(other.state.calls, 1, code);
+  }
+});
+
+test('removeTreeWithRetry never throws: what it cannot remove it describes, whatever was thrown', () => {
+  assert.strictEqual(removeTreeWithRetry('somewhere', { fs: { rmSync: () => { throw 'a string'; } } }), 'UNKNOWN');
+  assert.strictEqual(removeTreeWithRetry('somewhere', { fs: { rmSync: () => { throw Object.assign(new Error('x'), { code: 42 }); } } }), 42);
+  assert.strictEqual(removeTreeWithRetry('somewhere', { fs: { rmSync: () => { throw null; } } }), 'UNKNOWN');
 });

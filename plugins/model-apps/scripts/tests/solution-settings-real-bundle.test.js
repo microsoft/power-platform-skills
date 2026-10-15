@@ -151,6 +151,96 @@ test('REAL BUNDLE: a staging copy that cannot be deleted is a warning on the out
   assert.match(result.warnings[0], /stagesolutionupload 33333333-3333-4333-8333-333333333333\) could not be deleted/);
 });
 
+// --- the folder a pac fallback works in ----------------------------------------------------------------------------------------------------
+// A template that pac makes is written into a folder of the run's own under the temp directory (`solution-settings-<random>`), which holds the package the SDK exported and pac's template — whose defaults can be
+// values. It is removed however the run ends, with the bounded retry a Windows lock needs; a folder that stays is SAID, with its path, on the output of a run that succeeded and beside the failure of one that did not.
+const WORK_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
+// Holds the work folders as a scanner does: every removal of one answers `code` for its first `times` calls (all of them when Infinity), and what is left is removed when the test ends. `dirs` are the
+// folders the script tried to remove. The test's own folders (`solution-settings-real-…`) have a longer name and are never held.
+function holdingWorkFolders(t, { times = Infinity, code = 'EBUSY', platform } = {}) {
+  const realRemove = fs.rmSync;
+  const state = { dirs: new Set(), calls: 0 };
+  fs.rmSync = (target, options) => {
+    if (WORK_FOLDER.test(path.basename(String(target)))) {
+      state.dirs.add(String(target));
+      state.calls += 1;
+      if (state.calls <= times) throw Object.assign(new Error(`${code}: resource busy or locked, rmdir '${target}'`), { code });
+    }
+    return realRemove(target, options);
+  };
+  const host = platform && Object.getOwnPropertyDescriptor(process, 'platform');
+  if (platform) Object.defineProperty(process, 'platform', { ...host, value: platform });
+  t.after(() => {
+    fs.rmSync = realRemove;
+    if (platform) Object.defineProperty(process, 'platform', host);
+    for (const dir of state.dirs) realRemove(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  });
+  return state;
+}
+const pacWritesTemplate = (status = 0) => ({
+  spawn: (name, args) => {
+    fs.writeFileSync(args[args.indexOf('--settings-file') + 1], JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: '', DefaultValue: 'https://config.contoso.example' }], ConnectionReferences: [] }));
+    return { status, stdout: status === 0 ? 'Template created' : '', stderr: status === 0 ? '' : 'Error: pac refused the package' };
+  },
+});
+const MISSING_BASE = { stage: { status: 'Failed', missingDependencies: [{ Message: 'Missing base solution' }] } };
+
+test('REAL BUNDLE: a pac template folder that cannot be removed is said — its path, and what is in it — as a warning on a run that succeeded; the template at --out is complete', async (t) => {
+  const held = holdingWorkFolders(t);
+  const { http } = world(MISSING_BASE);
+  const f = files();
+  const result = await ss.runTemplate(templateRequest(f, { solution: 'ContosoDemo' }), { http, pac: pacWritesTemplate() });
+  assert.strictEqual(result.source, 'pac');
+  assert.strictEqual(held.dirs.size, 1);
+  const [left] = held.dirs;
+  assert.deepStrictEqual(fs.readdirSync(left).sort(), ['settings.json', 'solution.zip'], 'the exported package and pac\'s template are what stayed');
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote. Delete it.`]);
+  assert.strictEqual(JSON.parse(fs.readFileSync(f.out, 'utf8')).EnvironmentVariables[0].SchemaName, 'new_Url');
+});
+
+test('REAL BUNDLE: and beside the failure of a run that did not — pac refuses — whose folder stayed: the failure keeps its code and its reason, and carries the folder as a warning', async (t) => {
+  const held = holdingWorkFolders(t);
+  const { http } = world(MISSING_BASE);
+  const f = files();
+  const { readCleanupWarnings } = require('../lib/maker-sdk.js');
+  await assert.rejects(ss.runTemplate(templateRequest(f, { solution: 'ContosoDemo' }), { http, pac: pacWritesTemplate(1) }), (err) => {
+    const [left] = held.dirs;
+    assert.strictEqual(err.code, 'PAC_FAILED');
+    assert.strictEqual(err.fallback.code, 'SOLUTION_STAGING_FAILED');
+    const described = ss.describeFailure(err, readCleanupWarnings);
+    assert.deepStrictEqual(described.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote. Delete it.`]);
+    assert.match(described.error, /pac refused the package/);
+    return true;
+  });
+  assert.strictEqual(fs.existsSync(f.out), false, '--out is not written');
+});
+
+test('REAL BUNDLE: a folder held for a moment is removed by the bounded retry on Windows — no warning, nothing left — and the ordinary run, whose folder is not held, leaves nothing either', async (t) => {
+  const held = holdingWorkFolders(t, { times: 2, platform: 'win32' });
+  const { http } = world(MISSING_BASE);
+  const f = files();
+  const result = await ss.runTemplate(templateRequest(f, { solution: 'ContosoDemo' }), { http, pac: pacWritesTemplate() });
+  assert.strictEqual(held.calls, 3, 'the removal was tried again, twice');
+  assert.ok(!('warnings' in result), 'and said nothing, because nothing is left');
+  assert.strictEqual(fs.existsSync([...held.dirs][0]), false);
+  // The ordinary run, after the hold has let go: one removal, no warning.
+  const g = files();
+  const again = await ss.runTemplate(templateRequest(g, { solution: 'ContosoDemo' }), { http: world(MISSING_BASE).http, pac: pacWritesTemplate() });
+  assert.ok(!('warnings' in again));
+  assert.strictEqual(held.calls, 4);
+  assert.deepStrictEqual([...held.dirs].map((dir) => fs.existsSync(dir)), [false, false]);
+});
+
+test('REAL BUNDLE: without --env the zip is read by pac alone, and its folder is said the same way — it holds pac\'s template and no package', async (t) => {
+  const held = holdingWorkFolders(t);
+  const f = files();
+  const result = await ss.runTemplate(templateRequest(f, { env: undefined, packagePath: f.pkg }), { pac: pacWritesTemplate() });
+  assert.strictEqual(result.source, 'pac');
+  const [left] = held.dirs;
+  assert.deepStrictEqual(fs.readdirSync(left), ['settings.json']);
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote. Delete it.`]);
+});
+
 // --- import -------------------------------------------------------------------------------------------------------------------------
 
 test('REAL BUNDLE: import stages the package to check every filled entry against it, deletes the staging copy, and sends ComponentParameters in the import itself — with pac\'s defaults', async () => {

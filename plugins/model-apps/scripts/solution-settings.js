@@ -80,7 +80,8 @@
 //   and, when pac answered because the SDK refused, "source": "pac" and "fallback": { "code": "<the SDK's code>", "message": "…" } — the SDK's own words, so
 //   the "Nothing was imported" in one is about the SDK's attempt, which stopped before any request; pac then did the work;
 //   "warnings": [...] when something the run made could not be cleaned up: the SDK could not delete the staged copy of the package it made, or `template` could not remove the temporary name its
-//   file was written under (the file is complete; until that name is removed the file has two names, and writing it again is refused as a hard link). For pac `applied` lists the entries the file
+//   file was written under (the file is complete; until that name is removed the file has two names, and writing it again is refused as a hard link), or the folder a pac fallback worked in
+//   could not be removed (after the bounded retry a Windows lock needs; the warning names its path and what is in it — the package the SDK exported, pac's template — to delete). For pac `applied` lists the entries the file
 //   filled (pac does not report what it applied).
 //
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
@@ -95,7 +96,7 @@ const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeReques
 const { createAzHttpClient, retryAfterMs, scrubBearer } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
-const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
+const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 const USAGE = [
@@ -798,15 +799,44 @@ function pacError(code, message, refusal) {
   return error;
 }
 
+// A folder of this run's own under the temp directory — for what pac reads or writes — removed however `work(dir)` ends: its value, or its failure, which is rethrown. The removal has the bounded retry a
+// Windows lock needs (a scanner or a sync client holding a file pac has just written: removeTreeWithRetry), and a folder that STILL stays is never left unsaid. What it holds — pac's template, the package the SDK
+// exported — is not worth keeping and can be sensitive (a template's defaults can be values), so a leftover is reported with its path: as `leftover` beside the value of a run that worked, and on the error
+// (`leftoverWarnings`, see withLeftover) of one that did not. `holds` says what is in the folder, for that note. The folder is made by lib/temp-workspace.js in the plugin's own temp folder, named
+// `solution-settings-<pid>-` and six characters.
+// pac is another process and is given paths in this folder (the zip it reads, the file it writes). On POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that takes the
+// folder because this run is gone would remove it from under pac. So the folder is made LENT — recorded as such once, when it is made — and a sweep keeps it for as long as it is young, whether
+// or not this run is still going (lib/temp-workspace.js). Nothing is recorded about pac itself, and nothing about the folder is changed after pac has started.
+async function inWorkFolder(holds, work) {
+  const dir = makeTempWorkspace('solution-settings-', { lent: true });
+  let value;
+  let failure;
+  let failed = false;
+  try {
+    value = await work(dir);
+  } catch (err) {
+    failed = true;
+    failure = err;
+  }
+  const stopped = removeTreeWithRetry(dir);
+  const leftover = stopped ? `The folder ${dir} could not be removed (${stopped}); it holds ${holds}. Delete it.` : null;
+  if (failed) throw leftover ? withLeftover(failure, leftover) : failure;
+  return { value, leftover };
+}
+
+// The note of a folder that stayed, on the error of a run that failed. It is the plugin's own sentence — a path and a code — so no sanitizer looks at it, and it is kept apart from the SDK's cleanup
+// warnings, which are another party's text and are looked at (describeFailure puts the two together).
+function withLeftover(error, text) {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  failure.leftoverWarnings = [...(failure.leftoverWarnings || []), text];
+  return failure;
+}
+
 // `pac solution create-settings` reads the zip offline and writes the settings file; here it writes into a throwaway folder, and what it wrote is
 // read back and checked before it goes anywhere, so a failed or odd run cannot leave a half-made file at --out. `packageBytes` is the package when
-// only its bytes are at hand (it was exported by the SDK); pac needs a file.
+// only its bytes are at hand (it was exported by the SDK); pac needs a file. Answers `{ text, settings }`, and `warnings` when the folder stayed.
 async function templateThroughPac({ packagePath, packageBytes }, refusal, deps = {}) {
-  // pac is another process and is given paths in this folder (the zip it reads, the file it writes). On POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that takes the
-  // folder because this run is gone would remove it from under pac. So the folder is made LENT — recorded as such once, when it is made — and a sweep keeps it for as long as it is young, whether
-  // or not this run is still going (lib/temp-workspace.js). Nothing is recorded about pac itself, and nothing about the folder is changed after pac has started.
-  const dir = makeTempWorkspace('solution-settings-', { lent: true });
-  try {
+  const { value, leftover } = await inWorkFolder(`${packageBytes ? 'the solution package this run exported and ' : ''}the settings template pac wrote`, async (dir) => {
     let zip = packagePath;
     if (!zip) {
       zip = path.join(dir, 'solution.zip');
@@ -827,13 +857,8 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
     } catch (err) {
       throw pacError('PAC_OUTPUT_UNREADABLE', err.message, refusal);
     }
-  } finally {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // The folder holds a copy of a package and a settings template: a failed removal is left for the temp cleaner, never a failure of the run.
-    }
-  }
+  });
+  return leftover ? { ...value, warnings: [leftover] } : value;
 }
 
 async function importThroughPac({ env, packagePath, settingsPath }, redact, refusal, deps = {}) {
@@ -900,7 +925,7 @@ async function runTemplate(request, deps = {}) {
   // No environment, nothing to stage a package in: pac reads the zip, offline.
   if (!request.env) {
     const made = await templateThroughPac({ packagePath: request.packagePath }, null, deps);
-    return { source: 'pac', ...writeTemplate(request, made.text, made.settings) };
+    return { source: 'pac', ...writeTemplate(request, made.text, made.settings, made.warnings ? { warnings: made.warnings } : undefined) };
   }
 
   let exported; // the package as the SDK exported it, when it did: pac needs it should the SDK refuse to stage it
@@ -932,7 +957,7 @@ async function runTemplate(request, deps = {}) {
       ...writeTemplate(request, `${JSON.stringify(settings, null, 2)}\n`, settings, warnings && warnings.length ? { warnings } : {}),
     };
   }
-  return { source: 'pac', ...writeTemplate(request, outcome.value.text, outcome.value.settings), fallback: outcome.fallback };
+  return { source: 'pac', ...writeTemplate(request, outcome.value.text, outcome.value.settings, outcome.value.warnings ? { warnings: outcome.value.warnings } : undefined), fallback: outcome.fallback };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1133,7 +1158,11 @@ async function runImport(request, deps = {}) {
 // error arrives with its warnings already read and cleaned (importFailure); any other reads them here.
 function describeFailure(error, readWarnings = () => undefined) {
   const code = error && typeof error.code === 'string' ? error.code : undefined;
-  const warnings = error && Array.isArray(error.warnings) ? error.warnings : readWarnings(error);
+  // The SDK's cleanup warnings (read from the error, or already read and cleaned — an import's) and, after them, the notes of a folder this run made and could not remove (withLeftover).
+  const warnings = [
+    ...((error && Array.isArray(error.warnings) ? error.warnings : readWarnings(error)) || []),
+    ...(error && Array.isArray(error.leftoverWarnings) ? error.leftoverWarnings : []),
+  ];
   return {
     ok: false,
     error: String((error && error.message) || error),
