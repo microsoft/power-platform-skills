@@ -497,11 +497,13 @@ async function redeployAfterRedownload(earlierKeyOfId, { fromEmptyFolder = false
     // The unchanged app is downloaded again, into the same folder or (the earlier spec being gone) into an empty one.
     if (fromEmptyFolder) fs.rmSync(path.join(sourceDir, 'app-spec.json'));
     const again = await download();
-    assert.deepStrictEqual(keysByName(again), expectedKeys, 'every page keeps the key it had');
     const rebuilt = await deploy(portable(again));
+    // What matters first: the other environment's pages. Each id holds its own name and content, as it did before the second download.
     assert.deepStrictEqual(held(target), before, 'each page of the other environment still holds its own name and content');
     assert.deepStrictEqual(rebuilt.created.pages, { [earlierKeyOfId[OVERVIEW_ID]]: OVERVIEW_ID, [earlierKeyOfId[DETAIL_ID]]: DETAIL_ID });
     assert.strictEqual(target.genpage.of('create').length, 0, 'no page is created: every key binds the page it built');
+    // And why: each page has the key it had.
+    assert.deepStrictEqual(keysByName(again), expectedKeys, 'every page keeps the key it had');
   } finally {
     process.env.PATH = previousPath;
     fs.rmSync(root, { recursive: true, force: true });
