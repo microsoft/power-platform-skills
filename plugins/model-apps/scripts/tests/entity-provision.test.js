@@ -1437,7 +1437,13 @@ test('a same-type probe that finds the name on different endpoints halts before 
   const runner = makeRunner({ emit: () => {}, total: 8 });
   await assert.rejects(
     () => provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: collisionSpec([ONE_TO_MANY]), apply: true }),
-    /already used by 1:N contoso_project -> contoso_task \(lookup contoso_ownerid\)/,
+    (e) => {
+      assert.match(e.message, /already used by 1:N contoso_project -> contoso_task \(lookup contoso_ownerid\)/);
+      // A name held by another relationship is the spec's to fix: a run again finds it held, so the halt is never run again (halt-retry-policy.test.js holds its table row).
+      assert.strictEqual(e.code, 'relationship-name-taken');
+      assert.strictEqual(isTransientHalt(e), false);
+      return true;
+    },
   );
   assert.strictEqual(created, 0, 'a name held by a different lookup must not be created under that name');
 });

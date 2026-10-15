@@ -326,6 +326,56 @@ test('isTransientHalt: a halt that names the words it is judged by is judged by 
   assert.ok(isTransientHalt(new Error('page "SQL Timeout Report" has a token')), 'unmarked and undeclared: the whole message is read');
 });
 
+// ── What a halt is judged by ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A halt's message is the plugin's own, and it quotes what the maker named; the failure the halt wraps is the service's. The decision to run the whole build again reads the second, by
+// structure first (the HTTP status, the transport, the SDK's typed errors) and by the service's words after — never the first. lib/retry-policy.js holds the rule; halt-retry-policy.test.js holds each halt.
+const SERVICE_URL = "https://contoso.crm.dynamics.com/api/data/v9.2/roles?$filter=name eq 'SQL Timeout Reader'";
+const serviceError = (statusCode, words, url = SERVICE_URL) => Object.assign(new Error(`${statusCode > 0 ? `HTTP ${statusCode} from ${url}` : `Transport failure reaching ${url}`}: ${words}`), { code: 'CONNECTION_ERROR', statusCode, url });
+
+test('isTransientHalt: a halt is judged by the failure it wraps — its own message, which quotes the maker, is never read', () => {
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const quoting = 'security role "SQL Timeout Reader" could not be authored: same-name role is managed';
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed' })), false, 'a halt with no failure behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed', cause: new Error('same-name role is managed') })), false, 'a failure with nothing transient in it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed', cause: serviceError(503, 'The service is unavailable.') })), true, 'a 503 behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt('x', { phase: 'security', code: 'x', cause: new Error('Please try again later.') })), true, 'the service\'s words behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'x', retry: 'never', cause: serviceError(503, 'x') })), false, 'a halt that says never');
+});
+
+test('isTransientHalt: 502 and 504 are transient beside 429 and 503, and so are a timeout and a reset of the transport — a 500 and a certificate failure are not', () => {
+  for (const status of [429, 502, 503, 504]) assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(status, 'nothing to read') }), true, String(status));
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'nothing to read') }), false, 'a bare 500');
+  for (const words of ['Request failed: read ECONNRESET', 'Request timed out', 'Request failed: connect ETIMEDOUT 10.0.0.1:443']) assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(0, words) }), true, words);
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(0, 'Request failed: unable to verify the first certificate') }), false);
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })), true, 'a system error of the transport');
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('EACCES: permission denied, open \'/work/SQL Timeout/page.json\''), { code: 'EACCES' })), false, 'a file error');
+});
+
+test('isTransientHalt: an error the SDK or the plugin types is a refusal whatever its message quotes — and a typed error that carries a throttle is the service\'s answer all the same', () => {
+  for (const code of ['VALIDATION_ERROR', 'VERSION_CONFLICT', 'APP_SOURCE_PATH']) {
+    assert.strictEqual(isTransientHalt({ message: 'wrapper', cause: Object.assign(new Error('"SQL Timeout Reader": try again later'), { code }) }), false, code);
+  }
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('x'), { code: 'APP_COMPONENT_UNREADABLE', statusCode: 429 })), true);
+});
+
+test('isTransientHalt: the url of a request is where it went, not what the service said — a maker\'s name in the query is not a SQL timeout', () => {
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'The server is busy') }), false, 'SQL Timeout in the url only');
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'SQL timeout expired') }), true, 'in the answer');
+});
+
+test('transient auto-retry: a refusal whose message quotes a name that reads as a transient error is run once — a 503 is retried, whatever the name', async () => {
+  const run = async (failure) => {
+    const { sdk } = mockSdk();
+    let attempts = 0;
+    sdk.createTable = async () => { attempts += 1; throw failure; };
+    await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk }));
+    return attempts;
+  };
+  assert.strictEqual(await run(Object.assign(new Error('Table "SQL Timeout 503 try again later" is invalid'), { code: 'VALIDATION_ERROR' })), 1, 'a typed refusal');
+  assert.strictEqual(await run(serviceError(403, 'permission denied')), 1, 'a 403 whose url quotes the name');
+  assert.strictEqual(await run(serviceError(503, 'The service is unavailable.')), 4, 'a 503: the first run and three more');
+});
+
 // Live-captured shape, renamed onto the support-desk sample: a view pushed moments after the build created the
 // relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse reports the
 // logical (lower-case) name.

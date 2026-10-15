@@ -42,6 +42,7 @@ const { genPageSubArea, genPageSubAreaId } = require('./genpage-subarea.js');
 const { guardWorkspaceStorage } = require('./workspace-storage-guard.js');
 const { sha256 } = require('./hash.js');
 
+const { withCause } = require('./retry-policy.js');
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 // How many pages one read of their files' versions asks for: the pages are named in the query's filter, so this keeps the request line short however many pages an app has.
@@ -66,10 +67,9 @@ function suppliedButBlank(value) {
   return value !== undefined && value !== null && !String(value).trim();
 }
 
-// An error that must never be answered by trying again. The build re-runs a whole phase when a halt looks transient (isTransientHalt
-// in build-model-app.js), and it decides that from the error's TEXT — which quotes the page's name (user text: "SQL Timeouts",
-// "Concurrent Deletes") and the SDK's own message — so every error a page write raises says `transient: false`, which that check
-// reads on the error and on its cause. A write that failed for a known reason would only fail again, and one whose outcome is not
+// An error that must never be answered by trying again. The build re-runs a whole phase when a failure looks transient (isTransientHalt in build-model-app.js, by the rule of lib/retry-policy.js), and an error that says
+// `transient: false` — on itself or anywhere along its causes — is never run again, whatever its text quotes (the page's name is the maker's: "SQL Timeouts", "Concurrent Deletes"). So every error a page write raises says
+// so. A write that failed for a known reason would only fail again, and one whose outcome is not
 // known must not be sent by a re-run that does not know it: a create would mint a second page beside the first one if it landed,
 // and an update could record its turn twice.
 function genpageError(message, props = {}) {
@@ -591,9 +591,9 @@ function makeGenpageSdk(env, deps = {}) {
     try {
       const outcome = await sdk.publishArtifact(type, id, options);
       const state = (outcome && outcome.publish) || {};
-      return { kind: state.kind || 'unknown', detail: state.reason || (state.error && messageOf(state.error)) || '' };
+      return withCause({ kind: state.kind || 'unknown', detail: state.reason || (state.error && messageOf(state.error)) || '' }, state.error);
     } catch (error) {
-      return { kind: 'failed', detail: messageOf(error) };
+      return withCause({ kind: 'failed', detail: messageOf(error) }, error);
     }
   }
 
@@ -615,11 +615,12 @@ function makeGenpageSdk(env, deps = {}) {
         const pages = list.map((p) => ({ pageId: String(p.id), name: String(p.name === undefined || p.name === null ? '' : p.name) }));
         return { ok: true, ids: pages.map((p) => p.pageId.toLowerCase()), pages };
       } catch (error) {
-        return { ok: false, ids: [], error: `could not list the environment's generative pages: ${messageOf(error)}`, ...codeOf(error) };
+        return withCause({ ok: false, ids: [], error: `could not list the environment's generative pages: ${messageOf(error)}`, ...codeOf(error) }, error);
       }
     },
 
     // The pages the navigation of an app names. `name` is the navigation TITLE, not the page's own name (a rename of the page
+  // The answer carries the failure itself as a non-enumerable `cause` (withCause, retry-policy.js) when there was one — the SDK's reported `publish.error`, or what the call threw.
     // leaves the title as it was), so a listed name is never evidence of what the page is called.
     // `includeUnpublished` reads the app's SAVED navigation (what the designer holds, the latest the maker made); without it the
     // PUBLISHED one (appmodule -> sitemap, as the build and verify read it). An app that was never published has no published

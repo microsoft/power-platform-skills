@@ -33,6 +33,9 @@ const { readRelationshipsOf, findRelationshipHolder, sameRelationship, describeR
 // Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
 // construction-time option, so the LCID must be known before the SDK that would normally read it.
 const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-auth.js');
+// The build's retry policy (see the header of retry-policy.js): every halt below says what a run again may do, decided where it is raised, and every failure this engine raises itself is made by
+// refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service) — never a bare `new Error`, whose message the build's retry would read.
+const { RETRY, retryPolicyFor, refusal, serviceFailure } = require('./retry-policy.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -87,7 +90,7 @@ async function checkProvisioned(lcid, source, provisionedLanguages) {
     + `rejected outright — so the build would create the table, label it wrong, then stop partway `
     + `through the columns. Provisioned languages: ${list.join(', ')}. Pick one of those, provision `
     + `${lcid} in the organization first, or omit the override to use the base language.`,
-    { phase: 'data-model', code: 'language-not-provisioned', recoverable: false }
+    { phase: 'data-model', code: 'language-not-provisioned', recoverable: false, retry: RETRY.NEVER }
   );
 }
 
@@ -151,7 +154,7 @@ async function checkLocalizedLabelLanguages(spec, provisionedLanguages) {
     + 'a create carrying an unprovisioned LCID returns success and the label is simply absent afterwards, '
     + 'with nothing reporting the loss. Provisioned languages: '
     + `${list.join(', ')}. Provision the language in the organization first, or drop it from the labels.`,
-    { phase: 'data-model', code: 'localized-label-language-not-provisioned', recoverable: false }
+    { phase: 'data-model', code: 'localized-label-language-not-provisioned', recoverable: false, retry: RETRY.NEVER }
   );
 }
 
@@ -319,22 +322,24 @@ function primaryNameLength(primaryAttribute) {
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api#retrieve-attributes
 async function readTextColumnLength(provision, tableLogical, columnLogical, { sleep } = {}) {
   const raw = provision && provision.dataverse;
-  if (!raw || typeof raw.get !== 'function') throw new Error('there is no Dataverse client to read the column with');
+  if (!raw || typeof raw.get !== 'function') throw refusal('there is no Dataverse client to read the column with');
   const wait = typeof sleep === 'function' ? sleep : ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const url = `/EntityDefinitions(LogicalName='${odataLit(tableLogical)}')/Attributes(LogicalName='${odataLit(columnLogical)}')/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength`;
   let why = 'no answer';
+  let status;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (attempt > 0) await wait(1000);
     const res = await raw.get(url);
     if (res && res.status >= 200 && res.status < 300) {
       if (res.body && Number.isInteger(res.body.MaxLength)) return res.body.MaxLength;
-      throw new Error('the answer to the read of the column\'s length carries no MaxLength');
+      throw refusal('the answer to the read of the column\'s length carries no MaxLength');
     }
     const detail = res && res.body && res.body.error && res.body.error.message;
     why = `HTTP ${res && res.status}${detail ? `: ${detail}` : ''}`;
+    status = res && res.status;
     if (!res || res.status !== 404) break;
   }
-  throw new Error(`could not read the column's length (${why})`);
+  throw serviceFailure(`could not read the column's length (${why})`, { status, words: why });
 }
 
 // Sets the primary name column of a table THIS build created to the length the spec asks for. The table is created with a
@@ -376,11 +381,11 @@ async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical,
     'data-model',
     `${label} -> ${asked}`,
     async () => {
-      if (unread) throw new Error(`asked ${asked}, the length the platform made is unknown: ${(unread && unread.message) || unread}`);
+      if (unread) throw serviceFailure(`asked ${asked}, the length the platform made is unknown: ${(unread && unread.message) || unread}`, { cause: unread });
       try {
         await sdk.updateColumn(logical, primaryLogical, { maxLength: asked });
       } catch (err) {
-        throw new Error(`asked ${asked}, the platform made ${actual}: ${(err && err.message) || err}`, { cause: err });
+        throw serviceFailure(`asked ${asked}, the platform made ${actual}: ${(err && err.message) || err}`, { cause: err });
       }
     },
     warn,
@@ -681,14 +686,25 @@ async function confirmInlineColumns(provision, table, columns, { warn, sleep, at
 
 const STATE_CODE = { Active: 0, Inactive: 1 };
 
+// A halt the build stops with. `retry` is the halt's policy for the build's own re-run (retry-policy.js), decided where it is raised: RETRY.NEVER (a run again cannot change it — marks the halt
+// `transient: false`, which the retry check has always read) or RETRY.SERVICE (it wraps a failure of the service: the status and words of that failure decide, never this halt's message, which quotes
+// what the maker named). `retryText` is what the halt declares as the service's own words, `statusCode` the status the service answered, when a halt has no failure to carry them as its `cause`.
+// A halt raised with no policy is judged by the failure it wraps and nothing else: its own message is never read.
 class BuildHalt extends Error {
-  constructor(message, { phase, code, recoverable = false, cause } = {}) {
+  constructor(message, { phase, code, recoverable = false, cause, retry, retryText, statusCode } = {}) {
     super(message);
     this.name = 'BuildHalt';
     this.phase = phase;
     this.code = code;
     this.recoverable = recoverable;
     this.cause = cause;
+    if (retry !== undefined) {
+      if (retry !== RETRY.NEVER && retry !== RETRY.SERVICE) throw new TypeError(`BuildHalt: unknown retry policy ${JSON.stringify(retry)} (halt ${code}): use RETRY.NEVER or RETRY.SERVICE (lib/retry-policy.js)`);
+      this.retry = retry;
+      if (retry === RETRY.NEVER) this.transient = false;
+    }
+    if (retryText !== undefined) this.retryText = String(retryText);
+    if (statusCode !== undefined) this.statusCode = statusCode;
   }
 }
 
@@ -919,7 +935,7 @@ async function readAttributeRequiredLevels({ sdk, provision, logical }) {
     const msg = res && res.body && res.body.error && res.body.error.message
       ? res.body.error.message
       : `HTTP ${res && res.status}`;
-    throw new Error(`could not read RequiredLevel for ${logical}: ${msg}`);
+    throw serviceFailure(`could not read RequiredLevel for ${logical}: ${msg}`, { status: res && res.status, words: msg });
   }
   const out = new Map();
   for (const a of (res.body && res.body.value) || []) {
@@ -1009,7 +1025,7 @@ function makeRunner({ emit, total }) {
         return undefined;
       }
       emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
-      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
+      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err, retry: retryPolicyFor(err) });
     }
   };
   const skip = (phase, label) => { emit({ phase, status: 'skip', label, n: (n += 1), total }); };
@@ -1128,7 +1144,7 @@ function requireSuccessfulPush(result, what, warn) {
     // conditional update. The SDK's own advice (`fetchArtifact(..., { overwrite: true })`) is an API
     // call an operator of this plugin cannot make, so this names the step they can.
     if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
-      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again. To reset it, ${RESET_WORKSPACE}, and re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again. To reset it, ${RESET_WORKSPACE}, and re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists', retry: RETRY.NEVER });
     }
     // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
     // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
@@ -1139,9 +1155,10 @@ function requireSuccessfulPush(result, what, warn) {
     // fixtures here use a code-less error, and the real-bundle test never routes its result through
     // this function.
     if (!sdkCode || sdkCode === 'VERSION_CONFLICT') {
-      throw new BuildHalt(`push ${label} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`, { ...opts, code: 'version-conflict' });
+      throw new BuildHalt(`push ${label} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`, { ...opts, code: 'version-conflict', retry: RETRY.NEVER });
     }
-    throw new BuildHalt(`push ${label} failed: ${detail}`, { ...opts, code: sdkCode });
+    // The SDK's own code is the halt's, and the halt follows the failure: a typed refusal (VALIDATION_ERROR, …) is final, a failure of the service (a 503 behind CONNECTION_ERROR) is run again.
+    throw new BuildHalt(`push ${label} failed: ${detail}`, { ...opts, code: sdkCode, retry: retryPolicyFor(result.error) });
   }
   // A push can COMMIT and still be partially wrong, and the SDK reports that by value rather than
   // failing: an app whose components could not all be pinned, whose system-admin role assignment
@@ -1264,17 +1281,21 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
     // behaviour.
     const tries = hasLocalizedLabels ? Math.max(1, attempts) : 1;
     let lastWhy = 'unknown';
+    // What the last read was: the error it threw, or the status it answered. The halt below follows it — a 429 or a 503 is the service's to ride out, a refusal is not.
+    let lastFailure;
+    let lastStatus;
     for (let i = 0; i < tries; i += 1) {
       // Wrapped like its `findExistingColumns` sibling. The client resolves `{status}` for a 404 and
       // even a persistent 5xx, and throws only on a persistent TRANSPORT error; letting that
       // propagate here would abort the build on a blip the fallback might well survive.
       let res = null;
-      try { res = await raw.get(url); } catch (err) { res = null; lastWhy = (err && err.message) || String(err); }
+      lastFailure = undefined;
+      try { res = await raw.get(url); } catch (err) { res = null; lastFailure = err; lastWhy = (err && err.message) || String(err); }
       if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
         return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
       }
       if (res && res.status === 404) return null;
-      if (res) lastWhy = `HTTP ${res.status}${res.body && res.body.LogicalName === undefined && res.status < 300 ? ' with no LogicalName in the body' : ''}`;
+      if (res) { lastWhy = `HTTP ${res.status}${res.body && res.body.LogicalName === undefined && res.status < 300 ? ' with no LogicalName in the body' : ''}`; lastStatus = res.status; }
     }
     if (hasLocalizedLabels) {
       throw new BuildHalt(
@@ -1282,7 +1303,13 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
         + 'Resolving this by the broad metadata read the build normally falls back to is what makes Dataverse store '
         + 'ONLY the base-language label (live-measured, 0/4 vs 4/4), so the build stops here instead of silently '
         + 'creating an English-only table. Re-run once the environment answers metadata reads.',
-        { phase: 'data-model', code: 'table-probe-inconclusive', recoverable: true },
+        {
+          phase: 'data-model',
+          code: 'table-probe-inconclusive',
+          recoverable: true,
+          // The halt quotes the table's name and the last read's words; what decides is the read: the error it threw, or the status and the words of the answer.
+          ...(lastFailure ? { cause: lastFailure, retry: retryPolicyFor(lastFailure) } : { retry: RETRY.SERVICE, retryText: lastWhy, ...(lastStatus ? { statusCode: lastStatus } : {}) }),
+        },
       );
     }
     // Any other status is inconclusive — fall through to findTables rather than assume "absent",
@@ -1705,12 +1732,10 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     });
     if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
     if (exists && exists.mismatch) {
-      const halt = new BuildHalt(
+      throw new BuildHalt(
         `relationship schema name '${schema}' is already used by ${describeRelationship(exists.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`,
-        { phase: 'data-model', code: 'relationship-name-taken', recoverable: false },
+        { phase: 'data-model', code: 'relationship-name-taken', recoverable: false, retry: RETRY.NEVER },
       );
-      halt.transient = false;
-      throw halt;
     }
     // A parent whose name the spec cannot give — a table it does not declare (account, contact,
     // systemuser…), or one it declares without a displayName that the build did not create (an
@@ -1752,9 +1777,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           throw err;
         }
         if (holder.found === true) {
-          const taken = new Error(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
-          taken.transient = false;
-          throw taken;
+          throw refusal(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
         }
         if (holder.found === false) {
           // The generated name is free, but the lookup column may already belong to a relationship
@@ -1772,9 +1795,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
                 throw err;
               }
               const at = (spec.relationships || []).indexOf(rel);
-              const taken = new Error(`lookup '${wantLookup}' on '${String(rel.referencing).toLowerCase()}' already belongs to relationship '${owner.schemaName}' (${describeRelationship(owner)}); set relationships[${at}].schemaName to '${owner.schemaName}' to reuse it`);
-              taken.transient = false;
-              throw taken;
+              throw refusal(`lookup '${wantLookup}' on '${String(rel.referencing).toLowerCase()}' already belongs to relationship '${owner.schemaName}' (${describeRelationship(owner)}); set relationships[${at}].schemaName to '${owner.schemaName}' to reuse it`);
             }
           }
           // The create said the name is taken, but neither the case-sensitive key nor the endpoint
@@ -1791,21 +1812,16 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
               throw err;
             }
             if (holder.found === true) {
-              const taken = new Error(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
-              taken.transient = false;
-              throw taken;
+              throw refusal(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
             }
             if (holder.found !== false) break;
           }
           if (holder.found === false) {
-            const unknown = new Error(`relationship schema name '${schema}' is already used by a relationship the build could not identify. Give it an explicit "schemaName".`);
-            unknown.transient = false;
-            throw unknown;
+            throw refusal(`relationship schema name '${schema}' is already used by a relationship the build could not identify. Give it an explicit "schemaName".`);
           }
         }
-        const unread = new Error(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`);
-        unread.statusCode = holder.status;
-        throw unread;
+        // What the read of the holder said — its status and its words — is what decides whether a run again can help; the create's own refusal, and the name, do not.
+        throw serviceFailure(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`, { status: holder.status, words: holder.error || '' });
       }
     }, { skipIf: (e) => isAlreadyExists(e) && e.sameRelationshipExists === true });
   }
@@ -2041,7 +2057,7 @@ function chooseMatchOn(e, seedRecords) {
     if (cols.length === 1 && hasNonEmpty(cols[0])) {
       const duplicate = firstDuplicateNonEmpty(seedRecords, cols[0]);
       if (duplicate !== undefined) {
-        throw new Error(`sample data for '${e.schemaName}' has duplicate ${cols[0]} value '${String(duplicate)}'; ${cols[0]} is the single-column alternate key used as matchOn, so Dataverse could resolve or deduplicate the wrong row. Make ${cols[0]} unique across the sample rows.`);
+        throw refusal(`sample data for '${e.schemaName}' has duplicate ${cols[0]} value '${String(duplicate)}'; ${cols[0]} is the single-column alternate key used as matchOn, so Dataverse could resolve or deduplicate the wrong row. Make ${cols[0]} unique across the sample rows.`);
       }
       return cols[0];
     }
@@ -2050,7 +2066,7 @@ function chooseMatchOn(e, seedRecords) {
   if (hasNonEmpty(primary)) {
     const duplicate = firstDuplicateNonEmpty(seedRecords, primary);
     if (duplicate !== undefined) {
-      throw new Error(`sample data for '${e.schemaName}' has duplicate ${primary} value '${String(duplicate)}'; without a single-column alternate key, ${primary} would be used as matchOn and Dataverse could resolve or deduplicate the wrong row. Add a single-column alternate key with unique values, or make ${primary} unique across the sample rows.`);
+      throw refusal(`sample data for '${e.schemaName}' has duplicate ${primary} value '${String(duplicate)}'; without a single-column alternate key, ${primary} would be used as matchOn and Dataverse could resolve or deduplicate the wrong row. Add a single-column alternate key with unique values, or make ${primary} unique across the sample rows.`);
     }
     return primary;
   }
@@ -2062,7 +2078,7 @@ function chooseMatchOn(e, seedRecords) {
 // this runtime backstop cannot drift; validateAppSpec normally catches these first. #544.
 function relationshipForParent(spec, parentEntity, childEntity, wanted) {
   const { rel, error } = resolveParentRelationship(spec, parentEntity, childEntity, wanted);
-  if (error) throw new Error(`sample data for '${childEntity}' ${error}`);
+  if (error) throw refusal(`sample data for '${childEntity}' ${error}`);
   return rel;
 }
 
@@ -2076,7 +2092,7 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
     // payload like `{ "new_name": "T1", "_seedKey": "ticket-1" }` from reaching Dataverse
     // as a non-existent attribute while avoiding a silent drop of data the author may expect to use.
     if (raw && Object.prototype.hasOwnProperty.call(raw, '_seedKey')) {
-      throw new Error(`sample data for '${e.schemaName}' record ${i} uses _seedKey, but _seedKey is not supported by this App Spec version. Remove it, or declare a real single-column alternate key and put the stable seed identifier in that column.`);
+      throw refusal(`sample data for '${e.schemaName}' record ${i} uses _seedKey, but _seedKey is not supported by this App Spec version. Remove it, or declare a real single-column alternate key and put the stable seed identifier in that column.`);
     }
     const body = Object.assign({}, resolved[i]);
     delete body.$parent; delete body.$parents; delete body.statusReason;
@@ -2094,7 +2110,7 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
       // lint time; this is the runtime backstop for a build that skipped validation. runner.run (the
       // caller) turns the throw into a clean sample-data phase failure.
       if (!rel || !parentEntity) {
-        throw new Error(`sample data for '${e.schemaName}' declares a parent on '${parent.entity}' with no OneToMany relationship to it — fix the spec's $parent/$parents`);
+        throw refusal(`sample data for '${e.schemaName}' declares a parent on '${parent.entity}' with no OneToMany relationship to it — fix the spec's $parent/$parents`);
       }
       const parentRecords = sampleRecordsFor(spec, parentEntity);
       const matchingParentIndexes = [];
@@ -2102,10 +2118,10 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
         if (matchesRecord(parentRecords[j], parent.match)) matchingParentIndexes.push(j);
       }
       if (matchingParentIndexes.length === 0) {
-        throw new Error(`sample data for '${e.schemaName}': parent match ${JSON.stringify(parent.match)} found no '${String(parent.entity).toLowerCase()}' sample record — the '${rel.lookup.schemaName}' lookup would be left unset`);
+        throw refusal(`sample data for '${e.schemaName}': parent match ${JSON.stringify(parent.match)} found no '${String(parent.entity).toLowerCase()}' sample record — the '${rel.lookup.schemaName}' lookup would be left unset`);
       }
       if (matchingParentIndexes.length > 1) {
-        throw new Error(`sample data for '${e.schemaName}': parent match ${JSON.stringify(parent.match)} matched ${matchingParentIndexes.length} '${String(parent.entity).toLowerCase()}' sample records, so '${rel.lookup.schemaName}' is ambiguous. Make the match unique (for example by matching an alternate-key column) or change the sample data.`);
+        throw refusal(`sample data for '${e.schemaName}': parent match ${JSON.stringify(parent.match)} matched ${matchingParentIndexes.length} '${String(parent.entity).toLowerCase()}' sample records, so '${rel.lookup.schemaName}' is ambiguous. Make the match unique (for example by matching an alternate-key column) or change the sample data.`);
       }
       const parentIndex = matchingParentIndexes[0];
       binds.push({ navProperty: rel.lookup.schemaName, parentEntity: parent.entity.toLowerCase(), parentIndex });
@@ -2115,7 +2131,7 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
     // the value is unknown — halt loudly instead of silently inserting a default status.
     if (raw && raw.statusReason) {
       const sv = (statusReasonValues[e.schemaName.toLowerCase()] || {})[raw.statusReason];
-      if (!sv) throw new Error(`record sets statusReason '${raw.statusReason}' on ${e.schemaName}, but its status value wasn't captured — include the data-model phase (don't --skip data-model) so the custom status reason is created and its option value captured`);
+      if (!sv) throw refusal(`record sets statusReason '${raw.statusReason}' on ${e.schemaName}, but its status value wasn't captured — include the data-model phase (don't --skip data-model) so the custom status reason is created and its option value captured`);
       body.statuscode = sv.value; body.statecode = sv.stateCode;
     }
     seedRecords.push({ body, binds });
@@ -2156,7 +2172,7 @@ function selfReferenceWaves(entityLogical, records, labelFor) {
       // its own parent). Name the rows — "a cycle exists" is not actionable, and the author needs
       // to know WHICH records to break. Failing here also beats looping forever.
       const involved = remaining.map((i) => labelFor(i)).join(', ');
-      throw new Error(`sample data for '${entityLogical}' has a $parent cycle among its own rows (${involved}) — a row cannot be created before its parent. Break the cycle, or set the lookup after the build.`);
+      throw refusal(`sample data for '${entityLogical}' has a $parent cycle among its own rows (${involved}) — a row cannot be created before its parent. Break the cycle, or set the lookup after the build.`);
     }
     const readySet = new Set(ready);
     for (const i of ready) waveOf[i] = waves.length;

@@ -22,6 +22,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
+const { judgeFailure } = require('./lib/retry-policy.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -830,31 +831,36 @@ async function buildModelApp(spec, opts, deps) {
   return r;
 }
 
-// A halt is transient (safe to auto-retry, since the build is idempotent) when the underlying HTTP
-// status is 429/503, or the message names a known transient server condition (customization lock,
-// concurrent-op guard, SQL timeout, "try again later"). NOTE: the engine's `recoverable` flag means
-// "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
+// A failure is transient (safe to auto-retry, since the build is idempotent) when the SERVICE said so: the
+// HTTP status it answered (429, 502, 503, 504), a timeout or a reset of the transport, or — for the answers
+// that carry no such status — its own words (customization lock, concurrent-op guard, SQL timeout, "try
+// again later"). What the build or the maker named is never read: a halt's message quotes views, roles,
+// personas, flows, pages, paths and the workspace's folder, and "SQL Timeout Reader" is a legal name for
+// any of them. So the decision is made from the STRUCTURE of the failure first, and the plugin's own text
+// is out of it — lib/retry-policy.js holds the rule (`judgeFailure`), and tests/halt-retry-policy.test.js
+// holds every halt the build raises to a policy of its own. A failure that says it must not be retried
+// (`transient: false` anywhere along its causes) or that the SDK or the plugin types as a refusal
+// (VALIDATION_ERROR, VERSION_CONFLICT, a file system error) is never retried, whatever it quotes.
+// NOTE: the engine's `recoverable` flag means "re-runnable phase", NOT "transient error", so it is
+// deliberately NOT used here.
 //
 // `spec` (optional) enables the one clause that depends on what the build itself creates — see
 // MISSING_DECLARED_ATTRIBUTE below. Without it that clause never fires, so a caller that passes no spec gets
 // exactly the classification it always had.
 function isTransientHalt(err, { spec } = {}) {
   if (!err) return false;
-  // An error that says it must not be retried wins over any status or text it carries. A dashboard
-  // the build could neither add to its solution nor remove again is one (sdk-build.js): its message
-  // quotes the causes verbatim — a customization lock, "try again later" — but a retry would find the
-  // dashboard as a lone name match and reuse it outside the solution, the state the undo exists to
-  // prevent.
-  if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
-  const status = (err.cause && err.cause.statusCode) || err.statusCode;
-  // A halt whose message quotes the maker's own words beside the service's (a page's name, then the answer to its refused publish) says which words decide: `retryText`, on the halt or on the
-  // halt that wraps it (the runner wraps every step's halt once). Without it the whole message is read, as it always was — and a page called "SQL Timeout Report" reads as a SQL timeout.
-  const declared = [err, err.cause].find((e) => e && typeof e.retryText === 'string');
-  const msg = declared ? declared.retryText : String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
+  // A dashboard the build could neither add to its solution nor remove again says `transient: false`
+  // (sdk-build.js): its message quotes the causes verbatim — a customization lock, "try again later" —
+  // but a retry would find the dashboard as a lone name match and reuse it outside the solution, the
+  // state the undo exists to prevent. `never` is that, and the typed refusals, and nothing else.
+  const judgement = judgeFailure(err);
+  if (judgement.never) return false;
+  if (judgement.transientStatus || judgement.transport) return true;
+  // `text` is only what the service said — a halt's own message, and what an error says of its url, are
+  // not in it — unless an error declares its own words (`retryText`), and then those alone are.
+  const msg = judgement.text;
   const missing = spec ? MISSING_DECLARED_ATTRIBUTE.exec(msg) : null;
   return (
-    status === 429 ||
-    status === 503 ||
     /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg) ||
     // A SQL deadlock victim was rolled back, so the idempotent build can simply run again — the same
     // footing as the "SQL timeout" above, with a less ambiguous outcome (see SQL_DEADLOCK_VICTIM).

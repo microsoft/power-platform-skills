@@ -3623,3 +3623,228 @@ test('deploy: the automatic re-run publishes the page another writer published o
     fs.rmSync(appDir, { recursive: true, force: true });
   }
 });
+
+// ── The build's retry reads the failure, not the words a maker chose ─────────────────────────────────────────────────────────────────────────────
+// A halt's message quotes what the maker named — a page, a workspace folder, a source file — and the build used to read it as if the service had said it: a page, folder or file whose name holds "SQL Timeout"
+// made a refusal no run could change run again, three more times, from the first phase. Each halt now declares what a run again may do (lib/retry-policy.js), and a failure it wraps is judged by its structure: the
+// status, the transport, the SDK's own types. These tests drive the REAL retry loop over the real pages phase, with the name in a path, in a file error's cause, and in a page's name, and count the runs.
+// halt-retry-policy.test.js holds every halt the build can raise against a table; the halts of the pages phase are held here, beside the page doubles.
+const LABEL_503 = 'SQL Timeout 503 try again later';
+async function driveBuild(spec, appDir, { genpage, engine = runBuild, runOpts = {}, sdk: given } = {}) {
+  const { buildModelApp } = require('../build-model-app.js');
+  const sdk = given || mockSdk().sdk;
+  let attempts = 0;
+  const lines = [];
+  let halt = null;
+  let result = null;
+  try {
+    result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0 }, {
+      sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m), warn: () => {}, verify: async () => ({ ok: true }),
+      discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+      runBuild: async (s, o) => { attempts += 1; return engine(s, { ...o, phases: PHASES, ...runOpts }); },
+    });
+  } catch (e) { halt = e; }
+  return { halt, result, attempts, retried: lines.filter((l) => /retrying/.test(l)).length };
+}
+
+test('deploy: the pages lease held by another build stops the build once — in a workspace folder called "SQL Timeout Workspace" as in any other', async () => {
+  const { acquireAppPagesLease } = require('../lib/sdk-build.js');
+  const { appDir, spec } = onePageApp('Overview');
+  const workspaceDir = path.join(appDir, 'SQL Timeout Workspace');
+  const lease = acquireAppPagesLease(workspaceDir, appUniqueName(spec));
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: mockGenpageCli(), runOpts: { workspaceDir } });
+    assert.strictEqual(out.halt && out.halt.code, 'pages-locked');
+    assert.match(out.halt.message, /SQL Timeout Workspace/, 'the halt names the lease file, which lies in the maker\'s folder');
+    assert.deepStrictEqual([out.attempts, out.retried], [1, 0], 'the lease belongs to a build still running: running the earlier phases again would not release it');
+  } finally {
+    lease.release();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: a page source that goes missing after the spec was checked stops the build once — a missing "SQL Timeout Report.tsx" is a file error, not a SQL timeout', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  spec.pages[0].source.codeFile = 'SQL Timeout Report.tsx';
+  const file = path.join(appDir, 'SQL Timeout Report.tsx');
+  fs.writeFileSync(file, 'export default function P(){ return null; }', 'utf8');
+  try {
+    const engine = async (s, o) => { fs.rmSync(file, { force: true }); return runBuild(s, o); };
+    const out = await driveBuild(spec, appDir, { genpage: mockGenpageCli(), engine });
+    assert.strictEqual(out.halt && out.halt.code, 'APP_SOURCE_PATH');
+    assert.match(String(out.halt.cause && out.halt.cause.message), /ENOENT[\s\S]*SQL Timeout Report\.tsx/, 'the cause is the file error, which quotes the path');
+    assert.deepStrictEqual([out.attempts, out.retried], [1, 0]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a local page record that cannot be read stops the build once, in a folder called "SQL Timeout Workspace" — the receipts and the pending records both', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  const workspaceDir = path.join(appDir, 'SQL Timeout Workspace');
+  fs.mkdirSync(workspaceDir);
+  try {
+    // A creation receipt that is not one: the first read of the workspace's records refuses it.
+    fs.writeFileSync(path.join(workspaceDir, `page-ownership.created.${'0'.repeat(64)}.json`), '{}', 'utf8');
+    const receipt = await driveBuild(spec, appDir, { genpage: mockGenpageCli(), runOpts: { workspaceDir } });
+    assert.strictEqual(receipt.halt && receipt.halt.code, 'pages-identity-conflict');
+    assert.match(receipt.halt.message, /could not read local page creation receipts[\s\S]*SQL Timeout Workspace/);
+    assert.deepStrictEqual([receipt.attempts, receipt.retried], [1, 0], 'the receipt read');
+    fs.rmSync(path.join(workspaceDir, `page-ownership.created.${'0'.repeat(64)}.json`));
+
+    // The second read of the folder — the pending records — fails while the first did not: a permission that changed mid-run.
+    const engine = async (s, o) => {
+      const readdir = fs.readdirSync;
+      let reads = 0;
+      fs.readdirSync = function patched(p, ...args) {
+        if (path.resolve(String(p)) === workspaceDir && (reads += 1) === 2) throw Object.assign(new Error(`EACCES: permission denied, scandir '${p}'`), { code: 'EACCES' });
+        return readdir.call(this, p, ...args);
+      };
+      try { return await runBuild(s, o); } finally { fs.readdirSync = readdir; }
+    };
+    const pending = await driveBuild(spec, appDir, { genpage: mockGenpageCli(), engine, runOpts: { workspaceDir } });
+    assert.strictEqual(pending.halt && pending.halt.code, 'pages-identity-conflict');
+    assert.match(pending.halt.message, /could not read local records of page creations that were started[\s\S]*SQL Timeout Workspace/);
+    assert.deepStrictEqual([pending.attempts, pending.retried], [1, 0], 'the pending read');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: a creation receipt that cannot be saved stops the build once, in a folder called "SQL Timeout Workspace" — the page exists, and running the earlier phases again would not save the receipt', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  const workspaceDir = path.join(appDir, 'SQL Timeout Workspace');
+  try {
+    const engine = async (s, o) => {
+      const rename = fs.renameSync;
+      // The receipt is written through a temp file and renamed into place (apply-snapshot-store.js writeFileAtomic): the rename of this record's file fails, as a disk that is full or read-only does.
+      fs.renameSync = function patched(from, to, ...args) {
+        if (/page-ownership\.created\.[0-9a-f]{64}\.json$/.test(String(to))) throw Object.assign(new Error(`EACCES: permission denied, rename '${from}' -> '${to}'`), { code: 'EACCES' });
+        return rename.call(this, from, to, ...args);
+      };
+      try { return await runBuild(s, o); } finally { fs.renameSync = rename; }
+    };
+    const out = await driveBuild(spec, appDir, { genpage: mockGenpageCli(), engine, runOpts: { workspaceDir } });
+    assert.strictEqual(out.halt && out.halt.code, 'pages-creation-receipt-failed');
+    assert.match(out.halt.message, /was created as [\s\S]*its local receipt could not be saved[\s\S]*SQL Timeout Workspace/);
+    assert.deepStrictEqual([out.attempts, out.retried], [1, 0]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The page backend reports a publish the service refused, or one that threw, BY VALUE, and the build used to take the words of what it caught as the service's: a file error on the maker's machine, with a path
+// in it, read as a transient service error, and an error marked never-retry lost its mark on the way. The backend now passes the error it caught on, and the halt follows its structure.
+test('deploy: a publish that fails on the maker\'s own machine is final and one the service refuses with a 503 is run again — the page is sent once either way, whatever it is called', async () => {
+  const cases = [
+    { what: 'a file error whose path holds "SQL Timeout"', failure: () => Object.assign(new Error("EACCES: permission denied, open 'C:\\Work\\SQL Timeout\\genPages\\page.json'"), { code: 'EACCES' }), runs: 1 },
+    { what: 'an error that says it must never be retried', failure: () => Object.assign(new Error('The service is unavailable. Please try again later.'), { transient: false }), runs: 1 },
+    { what: 'a 400 from the service', failure: () => connectionError(400, 'Bad request'), runs: 1 },
+    { what: 'a 503', failure: () => connectionError(503, 'The service is unavailable.'), runs: 2 },
+    { what: 'a 429', failure: () => connectionError(429, 'Too many requests.'), runs: 2 },
+    { what: 'a reset of the connection', failure: () => connectionError(0, 'Request failed: read ECONNRESET'), runs: 2 },
+  ];
+  for (const { what, failure, runs } of cases) {
+    const { appDir, spec } = onePageApp('SQL Timeout Report');
+    const fake = new FakeSdk().script('publish', failure());
+    const genpage = makeGenpageSdk('https://contoso.crm.dynamics.com', { sdk: fake, newId: () => UNCERTAIN_PAGE_ID });
+    try {
+      const out = await driveBuild(spec, appDir, { genpage, runOpts: { workspaceDir: path.join(appDir, '.maker-workspace') } });
+      assert.strictEqual(out.attempts, runs, `${what}: the build ran ${runs} time(s)`);
+      if (runs === 1) assert.strictEqual(out.halt && out.halt.code, 'pages-publish-failed', what);
+      else assert.strictEqual(out.result && out.result.ok, true, `${what}: and the run again finished it`);
+      assert.strictEqual(fake.count('pushArtifact'), 1, `${what}: the create was sent once`);
+    } finally {
+      await genpage.dispose();
+      fs.rmSync(appDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('deploy: a listing of the environment\'s pages that is refused stops the build once; one whose answer says to try again later is run again', async () => {
+  for (const [what, words, runs] of [['a refusal', 'permanent refusal', 1], ['the service saying to try later', 'The service is unavailable. Please try again later.', 2]]) {
+    const { appDir, spec } = onePageApp('SQL Timeout Report');
+    const genpage = mockGenpageCli();
+    let listings = 0;
+    genpage.enumerateEnv = async () => {
+      listings += 1;
+      return listings === 1 ? { ok: false, ids: [], error: `could not list the environment's generative pages: ${words}` } : { ok: true, ids: [], pages: [] };
+    };
+    try {
+      const out = await driveBuild(spec, appDir, { genpage });
+      assert.strictEqual(out.attempts, runs, what);
+      if (runs === 1) assert.strictEqual(out.halt && out.halt.code, 'pages-existence-failed', what);
+      else assert.strictEqual(out.result && out.result.ok, true, what);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
+// The reads the pages phase makes of the app's navigation fail BY VALUE (lib/sitemap-pages.js), and used to be read for the words of the failure. The error itself now rides along, and the halt follows its structure: a 503
+// or a 429 is run again — as the service's answer to a request, whatever anything is called — and a refusal, a typed error and an error that says it must not be run again are not.
+const retriedFailures = () => [
+  { what: 'a 503', failure: () => connectionError(503, 'The service is unavailable.'), runs: 2 },
+  { what: 'a 429', failure: () => connectionError(429, 'Too many requests.'), runs: 2 },
+  { what: 'a 504', failure: () => connectionError(504, 'The gateway timed out.'), runs: 2 },
+  { what: 'a reset of the connection', failure: () => connectionError(0, 'Request failed: read ECONNRESET'), runs: 2 },
+  { what: 'a 403', failure: () => connectionError(403, 'permission denied'), runs: 1 },
+  { what: 'a typed refusal whose words say to try again later', failure: () => Object.assign(new Error(TRY_AGAIN_LATER), { code: 'VALIDATION_ERROR' }), runs: 1 },
+  { what: 'an error that says it must not be run again', failure: () => Object.assign(new Error(TRY_AGAIN_LATER), { transient: false }), runs: 1 },
+];
+
+test('deploy: the sitemap read of the pages phase that fails is run again for a 503, a 429, a 504 and a reset — and not for a 403, a typed refusal or an error that says never, whatever they say', async () => {
+  for (const { what, failure, runs } of retriedFailures()) {
+    const { appDir, spec } = onePageApp('SQL Timeout Report');
+    const { sdk } = mockSdk();
+    const query = sdk.queryRecords;
+    let thrown = 0;
+    // The sitemap read of an app begins with its appmodule row by unique name (fetchSitemap); the first such read the pages phase makes fails.
+    sdk.queryRecords = async (entity, o) => {
+      if (entity === 'appmodule' && o && Array.isArray(o.select) && o.select.includes('appmoduleidunique') && thrown === 0) { thrown += 1; throw failure(); }
+      return query(entity, o);
+    };
+    try {
+      const out = await driveBuild(spec, appDir, { genpage: mockGenpageCli(), sdk, runOpts: { workspaceDir: path.join(appDir, '.maker-workspace') } });
+      assert.strictEqual(out.attempts, runs, `${what}: the build ran ${runs} time(s)`);
+      if (runs === 1) assert.strictEqual(out.halt && out.halt.code, 'pages-sitemap-read-failed', what);
+      else assert.strictEqual(out.result && out.result.ok, true, `${what}: and the run again finished it`);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
+test('deploy: the scan for pages shared across apps that fails is run again for a 503, a 429, a 504 and a reset — and not for a 403, a typed refusal or an error that says never, whatever they say', async () => {
+  for (const { what, failure, runs } of retriedFailures()) {
+    const a = makeTwoPageApp();
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = manifestOf([{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }]);
+    const { sdk } = mockSdk({ pageManifest: manifest, selfAppUnique: appUniqueName(a.spec), liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+    const query = sdk.queryRecords;
+    let thrown = 0;
+    // The scan lists every app, with no filter by unique name: the first such list fails.
+    sdk.queryRecords = async (entity, o) => {
+      if (entity === 'appmodule' && !((o && o.filter) || '').includes('uniquename eq') && thrown === 0) { thrown += 1; throw failure(); }
+      return query(entity, o);
+    };
+    try {
+      const out = await driveBuild(a.spec, a.appDir, { genpage: mockGenpageCli(live), sdk, runOpts: { workspaceDir: path.join(a.appDir, '.maker-workspace') } });
+      assert.strictEqual(out.attempts, runs, `${what}: the build ran ${runs} time(s)`);
+      if (runs === 1) assert.strictEqual(out.halt && out.halt.code, 'pages-shared-check-failed', what);
+      else assert.strictEqual(out.result && out.result.ok, true, `${what}: and the run again finished it`);
+    } finally { fs.rmSync(a.appDir, { recursive: true, force: true }); }
+  }
+});
+
+test('deploy: a listing of the environment\'s pages that fails is judged by the error the backend caught, not by the words it printed — a 503 behind innocent words is run again, a typed refusal behind "try again later" is not', async () => {
+  const { withCause } = require('../lib/retry-policy.js');
+  for (const { what, failure, runs } of retriedFailures()) {
+    const { appDir, spec } = onePageApp('SQL Timeout Report');
+    const genpage = mockGenpageCli();
+    let listings = 0;
+    genpage.enumerateEnv = async () => {
+      listings += 1;
+      const error = failure();
+      // The words the backend prints are its own and the error's, and say nothing here: what is judged is the error beside them.
+      return listings === 1 ? withCause({ ids: [], ok: false, error: `could not list the environment's generative pages: ${what}` }, error) : { ok: true, ids: [], pages: [] };
+    };
+    try {
+      const out = await driveBuild(spec, appDir, { genpage });
+      assert.strictEqual(out.attempts, runs, `${what}: the build ran ${runs} time(s)`);
+      if (runs === 1) assert.strictEqual(out.halt && out.halt.code, 'pages-existence-failed', what);
+      else assert.strictEqual(out.result && out.result.ok, true, `${what}: and the run again finished it`);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
