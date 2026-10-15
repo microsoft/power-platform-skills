@@ -82,11 +82,15 @@ a real Dataverse environment name, review provenance, and indexes into documents
 cannot open. Record that kind of context in the PR conversation instead.
 `scripts/tests/review-references-hygiene.test.js` enforces the review-provenance part for this plugin
 and `evals/model-apps`: it fails on finding ids (in a comment, a message, or at the start of a test
-title), hyphenated finding and override labels, numbered severities, and reviewer, round and plan
-pointers. The plain words a pointer is made of ("Task 1", "Addendum") are data when they are a fixture
-value, an assertion's input or inside a code fence, and are flagged only in a pointer's shape. Its header
-lists the patterns and what is kept on purpose (generic provenance such as "found in review", and
-pointers a reader can follow such as "design §13.1").
+title), numbered findings (a heading that gives a finding a number, and the test titles that carry it),
+a count of the findings of a review, hyphenated finding and override labels, numbered severities, and
+reviewer, round and plan pointers. Name what a group of tests pins, not its number in a review. The
+plain words a pointer is made of ("Task 1", "Addendum") are data when they are a fixture value (an app
+name that holds them in parentheses is still a name), an assertion's expected value or inside a code
+fence, and are flagged only in a pointer's shape in prose or in a message. A message is found by its
+position: the argument after what an assertion compares, so the second argument of a two-argument
+`assert.equal` is data and the third a message. Its header lists the patterns and what is kept on purpose
+(generic provenance such as "found in review", and pointers a reader can follow such as "design §13.1").
 
 ## app-builder — intent → model-driven app
 

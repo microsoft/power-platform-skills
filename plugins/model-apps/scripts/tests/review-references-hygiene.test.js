@@ -36,6 +36,11 @@
 //     `assert.equal(label, 'x', 'Task-6: Overview')` is a message. That needs the lexical structure of the call
 //     (a comma inside a nested call, a string, a template or a regular expression separates nothing; a call
 //     written inside a string or a comment is not one), so `lex` below reads it.
+//   * A rule about the numbered titles under a heading needs the heading. A test title that opens with its own
+//     number ("#2b ...") is flagged only in a file whose prose also labels its groups "Finding N"
+//     (`numbered-title-under-finding`): there the numbers are the review's, not the suite's. Elsewhere it is an
+//     ordinary numbered test ("#4 view pure column append -> fast"), and a title that opens with an issue
+//     number ("#545: ...") is a pointer a reader can follow; neither is flagged.
 //   * Every pattern carries examples it must flag, and LEGITIMATE carries text that no pattern may flag;
 //     the first two tests below run both, so a pattern cannot drift without this file noticing.
 //
@@ -69,10 +74,14 @@ const TOKEN_END = String.raw`(?![\w'"\x60-])`;
 // The function keys read like ids ("F12 -> Network" in a troubleshooting step); they are removed before the
 // broad rule runs.
 const FUNCTION_KEY = /\bF(?:[1-9]|1[0-2])\b(?=\s*(?:→|->|keys?\b))|\b[Pp]ress\s+F(?:[1-9]|1[0-2])\b/g;
+// A numbered finding of a review: "Finding 3", "findings #4". The pattern `finding-number` flags it, and a file whose prose carries one is a file whose
+// numbered test titles are probably the findings' own numbers (`numbered-title-under-finding`).
+const FINDING_NUMBER = /\b[Ff]indings?\s+#?\d{1,2}[a-z]?\b/;
 
 // scope 'any': every line. scope 'prose': comments and Markdown prose only (a Markdown code fence is data). scope 'note': what a person wrote for a
 // reader and nothing a program reads — prose, the title literal of a test, the message of an assertion or of a skip (found by its position among the
-// call's arguments) — never the data on the same line.
+// call's arguments) — never the data on the same line. scope 'title': the title literal of a test alone. A pattern with `inFile` applies only in a file
+// in which the pattern it names flags something: a rule about the numbered titles under a heading needs the heading.
 const PATTERNS = [
   {
     name: 'id-in-parens',
@@ -137,6 +146,42 @@ const PATTERNS = [
     why: 'a numbered new finding: "#N2".',
     re: /#N\d{1,2}\b/,
     bad: ['// --- #N6: widening a field must re-pack its row ---', "test('#N7: the verifier matches containers', () => {});"],
+  },
+  {
+    name: 'finding-number',
+    scope: 'note',
+    why: 'a numbered finding of a review, as a heading or a label: "Finding 3: ...", "--- Finding 4 ---", "(Finding 7)", "Findings 1 and 2". The number indexes a list of findings that this repository does not hold; say what the group pins. "finding" with no number is not flagged, nor is a fixture or an expected value that holds the words.',
+    re: FINDING_NUMBER,
+    bad: [
+      '// --- Finding 1: a stale cache entry was served ---------------------------------------',
+      '// Finding #4 regression: a view filter on a localized option',
+      "test('Finding 7: the primary attribute keeps its label', () => {});",
+      "assert.ok(ok, 'the label is kept (Finding 2b)');",
+      '// Findings 3 and 4 are covered by the same test',
+    ],
+  },
+  {
+    name: 'numbered-title-under-finding',
+    scope: 'title',
+    inFile: 'finding-number',
+    why: 'a test title that opens with its own number ("#1 ...", "#2b-bis ...", "#6a5 ...") in a file whose groups are labelled "Finding N": the numbers are the findings\' and mean nothing to whoever reads the suite; say what the test proves. In a file with no such labels a numbered title ("#4 view pure column append -> fast") is an ordinary numbered test, and an issue number ("#545: ...") is a pointer a reader can follow: neither is flagged.',
+    re: /^#\d{1,2}(?:[a-z](?:-bis|\d)?)?(?=[\s:.)]|$)/,
+    bad: [
+      "// --- Finding 1: a stale cache entry was served ---\ntest('#1 a stale entry is refreshed before it is served', async () => {});",
+      "// --- Finding 2: the retry could be skipped ---\ntest('#2b-bis a retry after a timeout is not skipped', async () => {});",
+      "// --- Finding 6: the report failed open ---\ntest('#6a5 a failed read is reported as unknown', async () => {});",
+    ],
+  },
+  {
+    name: 'review-finding-count',
+    scope: 'note',
+    why: 'a count or a batch of the findings of a review: "the six defects an adversarial peer review found", "Further review findings". A single reason ("found in review", "an adversarial review caught ...") is generic provenance and stays.',
+    re: /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:defects|findings|bugs|issues)\s+(?:an?\s+|the\s+)?(?:[\w-]+\s+){0,3}reviews?\b[^.]{0,20}\bfound\b|\b(?:further|more|additional|remaining|other)\s+review\s+findings\b/i,
+    bad: [
+      '// Regression tests for the six defects an adversarial peer review found in the importer',
+      '// --- Further review findings: key escaping, and the two parsers that still disagreed ---',
+      '// the 3 bugs a review found in the importer',
+    ],
   },
   {
     name: 'severity-numbered',
@@ -388,6 +433,19 @@ const LEGITIMATE = [
   ['a.js', "assert.equal(app.name,\n  'Task 1 (Plan 2)');"],
   ['a.js', "const sample = `\nassert.ok(x, 'Task 12: the gate (Plan 4)');\n`;"],
   ['a.js', "const rule = /assert.ok(x, 'Task 12: gate')/;"],
+  // Words and numbers that look like the findings of a review but are not: a finding with no number, the name of a lint result, a numbered test that belongs
+  // to no review, an issue number a reader can follow, and a review mentioned as the place a fix was found.
+  ['a.js', '// each finding names its table; a finding is a warning, not an error'],
+  ['a.js', '// the lint reports 3 findings, 1 per table'],
+  ['a.js', 'assert.equal(report.findings.length, 3);'],
+  ['a.js', "assert.equal(report.findings[0].title, 'Finding 1');"],
+  ['a.js', "const rows = [{ title: 'Finding 1' }, { title: 'Finding 2' }];"],
+  ['fixture.json', '{ "title": "Finding 1", "body": "Findings 2 and 3" }'],
+  ['a.js', "test('#4 view pure column APPEND -> fast (view shape)', () => {});"],
+  ['a.js', "test('#1 build-status.json is overwritten each step', () => {});"],
+  ['a.js', "test('#545: preserves hand-authored page keys when only the top-level schemaVersion is missing', () => {});"],
+  ['a.js', "// the 3 issues were found in review and fixed\ntest('#2 the second case', () => {});"],
+  ['a.js', '// found in review: three issues were reported against the importer'],
   ['a.js', '// a per-table OVERRIDE that beats the default, and an override of the default view'],
   ['a.js', '// the important part is that a minor change keeps its key; Major versions bump'],
 ];
@@ -579,30 +637,39 @@ function noteOf(file, line, prose, messages) {
   return parts.length ? parts.join('\n') : null;
 }
 
-function flagsFor(file, line, prose, messages) {
-  const note = noteOf(file, line, prose, messages);
-  const names = [];
-  for (const p of PATTERNS) {
-    const subject = p.scope === 'any' ? line : p.scope === 'note' ? note : prose;
-    if (subject === null) continue;
-    if (p.re.test(p.strip ? subject.replace(p.strip, ' ') : subject)) names.push(p.name);
-  }
-  return names;
+function matches(p, row) {
+  const subject = p.scope === 'any' ? row.line : p.scope === 'note' ? row.note : p.scope === 'title' ? row.title : row.prose;
+  if (subject === null) return false;
+  return p.re.test(p.strip ? subject.replace(p.strip, ' ') : subject);
 }
 
 function scanText(file, text) {
-  const hits = [];
   const markdown = /\.md$/i.test(file);
   const messages = SOURCE_FILE.test(file) ? messageLiterals(text) : new Map();
   let inFence = false;
-  text.split(/\r?\n/).forEach((line, index) => {
+  const rows = text.split(/\r?\n/).map((line, index) => {
     // A fence line toggles the state and is itself code: ```js
     if (markdown && /^\s*(?:```|~~~)/.test(line)) inFence = !inFence;
-    for (const name of flagsFor(file, line, proseOf(file, line, inFence), messages.get(index))) {
-      hits.push({ file, line: index + 1, name, text: line.trim().slice(0, 160) });
-    }
+    const prose = proseOf(file, line, inFence);
+    const title = markdown ? null : TITLE_LITERAL.exec(line);
+    return { line, index, prose, note: noteOf(file, line, prose, messages.get(index)), title: title ? title[2] : null };
   });
-  return hits;
+  const hits = [];
+  const flagged = new Set();
+  // The patterns that need a context come after the ones that make it: `inFile` names the pattern that must have flagged something in this file.
+  const sweep = (patterns) => {
+    for (const p of patterns) {
+      for (const row of rows) {
+        if (!matches(p, row)) continue;
+        hits.push({ file, line: row.index + 1, name: p.name, text: row.line.trim().slice(0, 160) });
+        flagged.add(p.name);
+      }
+    }
+  };
+  sweep(PATTERNS.filter((p) => !p.inFile));
+  sweep(PATTERNS.filter((p) => p.inFile && flagged.has(p.inFile)));
+  const order = (hit) => PATTERNS.findIndex((p) => p.name === hit.name);
+  return hits.sort((a, b) => a.line - b.line || order(a) - order(b));
 }
 
 // `git ls-files`, not a directory walk: other tests create and delete transient folders under these trees
@@ -758,6 +825,43 @@ test('the reader of messages follows the language: a division is not a regular e
   assert.deepEqual(messages("assert.ok(x, 'it\\'s, fine');"), ["0:it\\'s, fine"], 'an escaped quote');
   assert.deepEqual(messages("assert.ok(x, 'unfinished"), [], 'a call that does not close says nothing');
   assert.deepEqual(messages("assert.ok(x, 'a'); assert.equal(y, 'b'); assert.equal(y, 'c', 'd');"), ['0:a|d']);
+});
+
+test('a numbered finding heading, the numbered titles under it and a count of a review\'s findings are flagged; ordinary numbered tests and fixture values are not', () => {
+  const names = (file, text) => scanText(file, text).map((hit) => `${hit.line}:${hit.name}`);
+  // The shape a file of regression tests can have: a header that counts the defects, a heading per finding, and titles that carry the finding's own number.
+  const numbered = [
+    '// Regression tests for the six defects an adversarial peer review found in the importer.',
+    '// --- Finding 1: a stale cache entry was served -----------------------',
+    "test('#1 a stale entry is refreshed before it is served', async () => {});",
+    '// --- Finding 2: the retry could be skipped -------------------------',
+    "test('#2a a retry after a timeout is not skipped', async () => {});",
+    "test('#2b-bis a second retry is not skipped either', async () => {});",
+    "test('#6a5 a failed read is reported as unknown', async () => {});",
+    "test('#9d a message with a quote is escaped once', () => {});",
+    '// --- Further review findings: key escaping, and the two parsers that still disagreed ---',
+    "test('an option label of \"__proto__\" resolves to its own value', () => {});",
+  ].join('\n');
+  assert.deepEqual(names('a.js', numbered), [
+    '1:review-finding-count', '2:finding-number', '3:numbered-title-under-finding', '4:finding-number', '5:numbered-title-under-finding',
+    '6:numbered-title-under-finding', '7:numbered-title-under-finding', '8:numbered-title-under-finding', '9:review-finding-count',
+  ]);
+  // The same titles with no finding label in the file are ordinary numbered tests; the context is the heading, not the number.
+  assert.deepEqual(names('a.js', ["test('#1 a numbered case', () => {});", "test('#2b-bis another one', () => {});"].join('\n')), []);
+  // Under a heading, an issue number is still a pointer a reader can follow, and a title with no number is no ordinal.
+  assert.deepEqual(names('a.js', ['// --- Finding 3: a ---', "test('#545: preserves hand-authored page keys', () => {});", "test('keeps the key', () => {});"].join('\n')), ['1:finding-number']);
+  // The words are data in a JSON value, an object literal, an expected value and a Markdown code fence, and prose that says "finding" has no number to flag.
+  assert.deepEqual(names('f.json', '{ "title": "Finding 1" }'), []);
+  assert.deepEqual(names('a.js', "const rows = [{ title: 'Finding 1' }];"), []);
+  assert.deepEqual(names('a.js', "assert.equal(label, 'Finding 1');"), []);
+  assert.deepEqual(names('a.js', "assert.equal(label, 'x', 'Finding 1: the label');"), ['1:finding-number']);
+  assert.deepEqual(names('a.md', ['```js', '// Finding 1: a sample', '```'].join('\n')), []);
+  assert.deepEqual(names('a.md', 'Each finding names its table.'), []);
+  assert.deepEqual(names('a.md', 'Finding 1 of the report names the table.'), ['1:finding-number']);
+  assert.deepEqual(names('a.js', '// this is finding 3 from the report'), ['1:finding-number'], 'a lower-case label is a label');
+  // A test title is the title literal of a test call; a line of prose that happens to start with a number under a heading is not one.
+  assert.deepEqual(names('a.md', ['Finding 3: a heading', '#2 an item of a list'].join('\n')), ['1:finding-number']);
+  assert.deepEqual(names('a.js', ['// Finding 3: a heading', "const label = '#2 a label';", "log('#2 a message');"].join('\n')), ['1:finding-number']);
 });
 
 test('a schema-valid fixture whose names read like pointers is data, whatever it is called', () => {

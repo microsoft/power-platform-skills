@@ -1,8 +1,10 @@
 'use strict';
-// Regression tests for the ten defects an adversarial peer review found in the AB#6686423 /
-// AB#6686428 / AB#6686429 changes. Every one was a real bug in code I had already tested, mutation-
-// tested and (for roleGrants) live-verified — so each is pinned here by the PROPERTY it broke, not
-// by the shape of the fix.
+// Regression tests for defects that adversarial review found in the AB#6686423 / AB#6686428 /
+// AB#6686429 changes: how roleGrants reach the changed-only diff and the role identity guards, how
+// localized labels are validated and resolved in every entry point, and how the not-round-tripped
+// report treats a failed inventory read. Every one was a real bug in code that already had tests,
+// mutation tests and (for roleGrants) a live verification — so each is pinned here by the PROPERTY it
+// broke, not by the shape of the fix.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { validateAppSpec, choiceValueMap, labelText, resolveSampleRecords } = require('../lib/app-spec.js');
@@ -24,9 +26,9 @@ function base() {
 }
 const errorsFor = (mutate) => { const s = base(); mutate(s); return validateAppSpec(s, { profile: 'plan' }).errors || []; };
 
-// --- Finding 1: roleGrants were invisible to --changed-only ---------------------------------------
+// --- roleGrants were invisible to --changed-only ---------------------------------------
 
-test('#1 a roleGrant-only change is VISIBLE to the changed-only phase diff', async () => {
+test('a roleGrant-only change is VISIBLE to the changed-only phase diff', async () => {
   // The security slice was `s.personas` alone, so a spec whose ONLY change was adding a roleGrant
   // diffed as "nothing changed": --changed-only reported "deployed app already matches the spec" and
   // never called AddPrivilegesRole. The table deployed and the role still had no access to it —
@@ -44,7 +46,7 @@ test('#1 a roleGrant-only change is VISIBLE to the changed-only phase diff', asy
   assert.ok(!diffPhases(after, JSON.parse(JSON.stringify(after))).includes('security'));
 });
 
-// --- Finding 2: the role identity guard could be bypassed -----------------------------------------
+// --- the role identity guard could be bypassed -----------------------------------------
 
 const roleRow = (over = {}) => ({ roleid: '33333333-3333-3333-3333-333333333333', name: 'Shared', ismanaged: false, ...over });
 
@@ -67,7 +69,7 @@ function securitySdk(over = {}) {
 }
 const applySecurity = (spec, sdk) => runSdkBuild(spec, { sdk, provisionSdk: sdk, apply: true, phases: ['security'] });
 
-test('#2a a roleGrant pinned by roleId at a PERSONA role halts on the resolved id', async () => {
+test('a roleGrant pinned by roleId at a PERSONA role halts on the resolved id', async () => {
   // The static check compares NAMES, and a persona role does not exist at lint time, so a pinned id
   // aiming at the same role slipped through. The build then ran ReplacePrivilegesRole (removing
   // everything not on the persona) and AddPrivilegesRole against ONE role — and a failure between
@@ -85,7 +87,7 @@ test('#2a a roleGrant pinned by roleId at a PERSONA role halts on the resolved i
   assert.strictEqual(sdk.calls.addEntityPrivilegesToRole.length, 0, 'nothing may be granted once the overlap is known');
 });
 
-test('#2b a NAME and a roleId aliasing ONE role halt on the resolved id', async () => {
+test('a NAME and a roleId aliasing ONE role halt on the resolved id', async () => {
   // Two entries the static dedup could not see as one role. Splitting them across two SDK calls
   // hides the "entities sharing one privilege must request one depth" conflict, which the SDK
   // detects only WITHIN a call — so the later write silently wins.
@@ -108,7 +110,7 @@ test('#2b a NAME and a roleId aliasing ONE role halt on the resolved id', async 
     `no grant may be applied once any later one is known to be invalid; got ${JSON.stringify(aliasSdk.calls.addEntityPrivilegesToRole)}`);
 });
 
-test('#2b-bis a VALID grant preceding an invalid one is not applied either', async () => {
+test('a VALID grant preceding an invalid one is not applied either', async () => {
   // The counterfactual that makes the assertion above mean something: here the first grant targets a
   // completely different, legitimate role, so under the old interleaved order it was applied
   // successfully before the second halted. Nothing about the first entry is wrong — it must still not
@@ -126,7 +128,7 @@ test('#2b-bis a VALID grant preceding an invalid one is not applied either', asy
     `the leading VALID grant must not have been applied; got ${JSON.stringify(sdk.calls.addEntityPrivilegesToRole)}`);
 });
 
-test('#2c two same-named roles in DIFFERENT business units are allowed', async () => {
+test('two same-named roles in DIFFERENT business units are allowed', async () => {
   // The old dedup keyed on the bare name, so this valid pair was rejected. A role is identified by
   // (name, business unit) — that is the identity the SDK itself uses.
   const errs = errorsFor((s) => {
@@ -145,9 +147,9 @@ test('#2c two same-named roles in DIFFERENT business units are allowed', async (
   }).some((e) => /duplicate roleGrant/.test(e)));
 });
 
-test('#2d the persona overlap check is business-unit aware', async () => {
+test('the persona overlap check is business-unit aware', async () => {
   // A persona in BU-1 and a grant on a same-named role in BU-2 are DIFFERENT roles; rejecting that
-  // pair was over-strict for the same reason #2c was.
+  // pair was over-strict for the same reason as in the same-named-roles case above.
   const errs = errorsFor((s) => {
     s.personas = [{ persona: 'Viewer', businessUnitId: '11111111-1111-1111-1111-111111111111', jobs: [{ name: 'j', privileges: [{ entity: 'contoso_order', access: ['read'] }] }] }];
     s.roleGrants = [{ role: 'Viewer', businessUnitId: '22222222-2222-2222-2222-222222222222', privileges: [{ entity: 'contoso_order', access: ['read'] }] }];
@@ -166,7 +168,7 @@ test('#2d the persona overlap check is business-unit aware', async () => {
   }).some((e) => /is a persona in this spec/.test(e)), 'an explicit same-BU overlap must still be rejected');
 });
 
-// --- Finding 3: provision-entities bypassed localized-label validation ----------------------------
+// --- provision-entities bypassed localized-label validation ----------------------------
 
 const provisionBase = (entityExtra) => ({
   solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
@@ -174,7 +176,7 @@ const provisionBase = (entityExtra) => ({
   relationships: [],
 });
 
-test('#3 the provision-entities input rejects a language TAG, like the App Spec does', () => {
+test('the provision-entities input rejects a language TAG, like the App Spec does', () => {
   // `provision-entities.js` is a SEPARATE entry point whose only gate is validateProvisionInput, and
   // it provisions the SOLUTION before the data model — so a label that fails only inside createTable
   // fails AFTER a write. Two entry points that disagree about what a label is teach two rules.
@@ -183,7 +185,7 @@ test('#3 the provision-entities input rejects a language TAG, like the App Spec 
   assert.ok((r.errors || []).some((e) => /is not an LCID/.test(e)), JSON.stringify(r.errors));
 });
 
-test('#3b the provision-entities input enforces the localized-plural rule', () => {
+test('the provision-entities input enforces the localized-plural rule', () => {
   const r = validateProvisionInput(provisionBase({ displayName: { 1033: 'Order', 3082: 'Pedido' } }));
   assert.strictEqual(r.ok, false);
   assert.ok((r.errors || []).some((e) => /pluralName is required when displayName is a localized label/.test(e)), JSON.stringify(r.errors));
@@ -191,13 +193,13 @@ test('#3b the provision-entities input enforces the localized-plural rule', () =
   assert.strictEqual(validateProvisionInput(provisionBase({ displayName: { 1033: 'Order', 3082: 'Pedido' }, pluralName: { 1033: 'Orders', 3082: 'Pedidos' } })).ok, true);
 });
 
-test('#3c a plain-string provision input is unaffected', () => {
+test('a plain-string provision input is unaffected', () => {
   assert.strictEqual(validateProvisionInput(provisionBase({ displayName: 'Order' })).ok, true);
 });
 
-// --- Finding 4: localized Choice labels did not resolve in view filters ---------------------------
+// --- localized Choice labels did not resolve in view filters ---------------------------
 
-test('#4 a view filter naming a localized Choice option resolves to its option value', () => {
+test('a view filter naming a localized Choice option resolves to its option value', () => {
   // `options.indexOf(val)` returns -1 for an object option, so the LABEL was sent as the value of a
   // numeric picklist condition — an invalid or silently ineffective view filter.
   const s = base();
@@ -209,7 +211,7 @@ test('#4 a view filter naming a localized Choice option resolves to its option v
   assert.doesNotMatch(json, /"Abierto"/, 'the raw label must not reach a numeric picklist condition');
 });
 
-test('#4b a view filter on a GLOBAL choice resolves too', () => {
+test('a view filter on a GLOBAL choice resolves too', () => {
   // The inline-only lookup never resolved a column bound to a globalChoice at all.
   const s = base();
   s.globalChoices = [{ name: 'contoso_status', displayName: 'Status', options: ['Open', 'Closed'] }];
@@ -218,9 +220,9 @@ test('#4b a view filter on a GLOBAL choice resolves too', () => {
   assert.match(JSON.stringify(viewDef(s, s.views[0])), /100000001/);
 });
 
-// --- Finding 5: an ambiguous cross-language alias silently picked the wrong option ------------------
+// --- an ambiguous cross-language alias silently picked the wrong option ------------------
 
-test('#5 a label string naming TWO options is rejected, not tie-broken', () => {
+test('a label string naming TWO options is rejected, not tie-broken', () => {
   // "Abierto" is option 0 in Spanish and option 1 in English. Any resolution rule is a coin flip, so
   // the SPEC is what must be fixed. Last-wins silently resolved it to the second option.
   const errs = errorsFor((s) => {
@@ -232,7 +234,7 @@ test('#5 a label string naming TWO options is rejected, not tie-broken', () => {
   assert.match(hit, /Rename one/);
 });
 
-test('#5b a duplicate PLAIN label warns rather than failing — it is visible, and Dataverse allows it', () => {
+test('a duplicate PLAIN label warns rather than failing — it is visible, and Dataverse allows it', () => {
   // Deliberately NOT an error. A plain duplicate sits on the same line, so the author can already
   // see it, and specs written before this rule existed provisioned fine with one; failing them
   // would break working input to restate something obvious. The invisible cross-language case
@@ -247,16 +249,16 @@ test('#5b a duplicate PLAIN label warns rather than failing — it is visible, a
   assert.match(w, /resolves to options\[0\]/, 'and the warning must state which one wins');
 });
 
-test('#5c the alias index is first-wins, so resolution is deterministic', () => {
+test('the alias index is first-wins, so resolution is deterministic', () => {
   // Belt and braces: the validator rejects ambiguity, but a spec that bypassed validation must still
   // resolve predictably rather than to whichever option happened to be last.
   const entity = { schemaName: 'e', columns: [{ schemaName: 'c', type: 'Choice', options: [{ 1033: 'Open', 3082: 'Abierto' }, { 1033: 'Abierto', 3082: 'Cerrado' }] }] };
   assert.strictEqual(choiceValueMap(entity, {}).c.Abierto, 100000000);
 });
 
-// --- Finding 6: the not-round-tripped report failed open on an inventory read failure --------------
+// --- the not-round-tripped report failed open on an inventory read failure --------------
 
-test('#6 a FAILED inventory read is reported as UNKNOWN, not as "the app has none"', () => {
+test('a FAILED inventory read is reported as UNKNOWN, not as "the app has none"', () => {
   // The whole app-component block shared one broad catch, so a 403 on systemform produced
   // `forms: []` and `notRoundTripped: null` — an empty spec with nothing reporting why, which is
   // AB#6686423 reappearing inside its own fix.
@@ -269,7 +271,7 @@ test('#6 a FAILED inventory read is reported as UNKNOWN, not as "the app has non
   assert.match(w, /UNKNOWN, not as "the app has none"/);
 });
 
-test('#6a readDescriptionInventory RECORDS a per-class read failure', async () => {
+test('readDescriptionInventory RECORDS a per-class read failure', async () => {
   // BEHAVIOURAL, through the real reader. The unit test above proves the summary reports an
   // `incomplete` entry; only this proves one is ever PRODUCED. It also pins the per-class catch: a
   // failing `systemform` query must not hide the views and charts that were read successfully.
@@ -304,7 +306,7 @@ test('#6a readDescriptionInventory RECORDS a per-class read failure', async () =
   assert.match(w, /forms — HTTP 403/);
 });
 
-test('#6a3 a non-2xx global-choice read is UNKNOWN, not "this environment has none"', async () => {
+test('a non-2xx global-choice read is UNKNOWN, not "this environment has none"', async () => {
   // `sdk.dataverse.get` resolves a non-2xx as a VALUE, so the old `|| []` put the failure beyond the
   // catch's reach and the class simply vanished from the report. That mattered the moment
   // `notRoundTrippedSummary` started reporting global choices: a class it omits reads as absent.
@@ -327,7 +329,7 @@ test('#6a3 a non-2xx global-choice read is UNKNOWN, not "this environment has no
   assert.deepStrictEqual((ok.globalChoices || []).map((g) => g.name), ['contoso_status']);
 });
 
-test('#6a4 a failed BUSINESS-RULE read is UNKNOWN, not "this app has no business rules"', async () => {
+test('a failed BUSINESS-RULE read is UNKNOWN, not "this app has no business rules"', async () => {
   // This path needs a solutionUniqueName, which the fixtures above pass as null — so the guard was
   // shipped untested until a mutation run showed removing it changed nothing. It matters for the
   // same reason as the others: `notRoundTrippedSummary` reports a class only when it has rows, so a
@@ -351,7 +353,7 @@ test('#6a4 a failed BUSINESS-RULE read is UNKNOWN, not "this app has no business
   assert.ok(!(clean.incomplete || []).some((i) => i.kind === 'businessRules'), JSON.stringify(clean.incomplete));
 });
 
-test('#6a5 app component inventory reads are paginated, not capped and undercounted', async () => {
+test('app component inventory reads are paginated, not capped and undercounted', async () => {
   // These component rows decide which deployed forms/views/charts are reported as not round-tripped.
   // A capped read turns the tail into an authoritative undercount, so the query must ask the SDK to
   // follow every page instead of relying on `$top`.
@@ -378,7 +380,7 @@ test('#6a5 app component inventory reads are paginated, not capped and undercoun
   }
 });
 
-test('#6a2 an unreadable app-component list marks EVERY class unknown', async () => {
+test('an unreadable app-component list marks EVERY class unknown', async () => {
   // If the parent lookup itself fails, nothing was enumerated — reporting "no forms, no views, no
   // charts" would be three lies at once.
   const { readDescriptionInventory } = require('../download-model-app.js');
@@ -390,7 +392,7 @@ test('#6a2 an unreadable app-component list marks EVERY class unknown', async ()
   assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['charts', 'forms', 'globalChoices', 'views']);
 });
 
-test('#6b a partial failure reports BOTH what was found and what is unknown', () => {
+test('a partial failure reports BOTH what was found and what is unknown', () => {
   const s = notRoundTrippedSummary({
     forms: [{ name: 'Main', entity: 'contoso_order' }], views: [], charts: [],
     incomplete: [{ kind: 'views', reason: 'HTTP 500' }],
@@ -400,13 +402,13 @@ test('#6b a partial failure reports BOTH what was found and what is unknown', ()
   assert.match(w, /views — HTTP 500/);
 });
 
-test('#6c a clean read with nothing to report still summarises as null', () => {
+test('a clean read with nothing to report still summarises as null', () => {
   assert.strictEqual(notRoundTrippedSummary({ forms: [], views: [], charts: [], incomplete: [] }), null);
 });
 
-// --- Finding 7: the download discarded the localized primary-attribute label -----------------------
+// --- the download discarded the localized primary-attribute label -----------------------
 
-test('#7 the primary attribute keeps its real (and localized) label', () => {
+test('the primary attribute keeps its real (and localized) label', () => {
   // It is excluded from columns[], so its label was hardcoded to 'Name' — a fresh-environment
   // rebuild lost both the real label and its translations, contradicting "the round trip closes".
   const { entityFromMetadata } = require('../download-model-app.js');
@@ -429,9 +431,9 @@ test('#7 the primary attribute keeps its real (and localized) label', () => {
   assert.strictEqual(none.primaryAttribute.displayName, 'Name');
 });
 
-// --- Finding 8: a localized child label reached form change detection as [object Object] ------------
+// --- a localized child label reached form change detection as [object Object] ------------
 
-test('#8 a sub-grid title resolves a localized child label instead of stringifying it', () => {
+test('a sub-grid title resolves a localized child label instead of stringifying it', () => {
   // subgridLabel fed the form intent, which the projection stringifies for change detection — so two
   // DIFFERENT localized labels both became "[object Object]" and hashed identically.
   const s = base();
@@ -446,9 +448,9 @@ test('#8 a sub-grid title resolves a localized child label instead of stringifyi
   assert.strictEqual(subgridLabel(s, { childEntity: 'contoso_line', label: 'Mine' }), 'Mine');
 });
 
-// --- Finding 9: several derive sites ignored the spec's authoring language -------------------------
+// --- several derive sites ignored the spec's authoring language -------------------------
 
-test('#9 the AI prompt, design doc and schema facts all resolve in the SPEC language', () => {
+test('the AI prompt, design doc and schema facts all resolve in the SPEC language', () => {
   const s = base();
   s.languageCode = 3082;
   s.entities[0].displayName = { 1033: 'Order', 3082: 'Pedido' };
@@ -471,7 +473,7 @@ test('#9 the AI prompt, design doc and schema facts all resolve in the SPEC lang
   assert.match(renderAppSpecDoc(s), /Nota/);
 });
 
-test('#9b a localized Choice option renders in the design doc instead of an empty cell', () => {
+test('a localized Choice option renders in the design doc instead of an empty cell', () => {
   // The doc treated any object option as the legacy `{label}` shape, so a localized option — an
   // object with no `label` key — rendered as "choices: —, —".
   const { renderAppSpecDoc } = require('../lib/app-spec-doc.js');
@@ -481,7 +483,7 @@ test('#9b a localized Choice option renders in the design doc instead of an empt
   assert.match(doc, /choices: Open, Closed/, doc.split('\n').filter((l) => /choices/.test(l)).join(' | '));
 });
 
-test('#9c a localized lookup label reaches relationship facts as a STRING', () => {
+test('a localized lookup label reaches relationship facts as a STRING', () => {
   const { schemaFacts } = require('../lib/schema-facts.js');
   const s = base();
   s.entities.push({ schemaName: 'contoso_line', displayName: 'Line', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] });
@@ -492,7 +494,7 @@ test('#9c a localized lookup label reaches relationship facts as a STRING', () =
   assert.strictEqual(JSON.stringify(schemaFacts(s)).includes('[object Object]'), false);
 });
 
-test('#9d a form wireframe renders localized field labels in the spec language', () => {
+test('a form wireframe renders localized field labels in the spec language', () => {
   const { renderFormWireframe } = require('../lib/form-preview.js');
   const s = base();
   s.languageCode = 3082;
@@ -504,7 +506,7 @@ test('#9d a form wireframe renders localized field labels in the spec language',
   assert.match(w, /Nombre/);
   assert.match(w, /Nota/);
 });
-// --- Further review findings: prototype keys, and the two label gates that still disagreed -----------
+// --- prototype keys, and the two label gates that still disagreed -----------
 
 test('an option label of "__proto__" resolves to its own value, not Object.prototype', () => {
   // `choiceValueMap` is a dictionary keyed by an AUTHOR-CONTROLLED string. On a plain {} the READ
