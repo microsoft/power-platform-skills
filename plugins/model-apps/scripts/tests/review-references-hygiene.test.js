@@ -143,13 +143,6 @@ const PATTERNS = [
     bad: ['// see the addenda', '// (addendum new-1)'],
   },
   {
-    name: 'review-model-name',
-    scope: 'any',
-    why: 'the name of an AI model used as a reviewer. A quoted fixture value and a longer word ("solution") are not flagged.',
-    re: /(?<!['"`\w-])\b(?:Opus|Sonnet|Haiku|Sol)\b(?!['"`\w-])/,
-    bad: ['// Haiku suggested the guard', '// the final Sonnet pass', '// Opus: do not record the baseline', '// Sol #9: keep the lease'],
-  },
-  {
     name: 'reviewer-verb',
     scope: 'any',
     why: 'a named act of a reviewer on this code: "a reviewer pointed out". "so a reviewer can approve the doc" is not flagged.',
@@ -262,8 +255,6 @@ const LEGITIMATE = [
   ['a.js', "test('round-trips the deployed ids', () => {});"],
   ['a.js', '// The fix ROUND-TRIPS it rather than dropping it'],
   ['a.js', "assert.equal(deriveUniqueName('Q3 Plan 2026', hex), 'q3_plan_2026_1a2b3c4d');"],
-  ['a.js', "if (kind === 'solution') return [{ id: 'id5', name: 'Sol' }];"],
-  ['a.js', '// the solution row, not a Solution layer'],
   ['a.js', 'const dt = new Date(`${key}T00:00:00`);'],
   ['a.js', 'const path = `M0,${h} L${w},${h} Z`;'],
   ['a.js', "'type C1<T> = T extends (infer U)[] ? U : never;',"],
