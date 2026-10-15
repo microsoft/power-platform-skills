@@ -13,6 +13,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+const { makeAppComponentScope } = require('../lib/app-component-scope.js');
 const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
 const { main: genpageVerbs } = require('../genpage.js');
 const { main: upload } = require('../genpage-upload.js');
@@ -286,5 +288,79 @@ test('REAL BUNDLE: the build\'s pin of the tables its pages read — the pages p
     assert.deepStrictEqual(world.additions(), [{ AppId: APP_ID, Components: [viewRef(APP_VIEW_ID)] }], 'one AddAppComponents, for the one view the pin names');
     assert.deepStrictEqual(world.added(), { tables: [], forms: [], views: [APP_VIEW_ID], charts: [] });
     assertMembership(world);
+  }, { defaultViewPinned: false });
+});
+
+// ── The limit holds when the SDK's request is not the one it reads ──────────────────────────────────────────────────────────────────────────────────────
+// app-component-scope.test.js holds the limit's own rules against a transport that only records. These make the SDK ITSELF push the app through the limit, with its request changed on the way —
+// as a bundle that posted differently would change it — and show what a user would see: the push's own warning, nothing sent to the app, and the app's components as the maker left them.
+// (The requests the bundle sends today are the tests above: a re-vendor that changes their shape fails there first.)
+const MISSING_VIEW = '99999999-9999-4999-8999-99999999999a';
+const isAddAppComponents = (request) => /addappcomponents/i.test(request.url);
+
+// A page edit of the app through the SDK, as `placeInApp` makes one for a pin: the views `pinned` are put in the app's components, and the push is made while the edit owns `owned`. `change`, when
+// given, sits between the SDK and the limit and rewrites each request as [url, body] -> [url, body]. `reached` is what got past the limit to the app.
+async function pinThrough(world, { pinned, owned = pinned, change = null }) {
+  const scope = makeAppComponentScope();
+  const reached = [];
+  const limited = scope.wrap({ ...world.http, post: async (url, body, options) => { reached.push({ url: String(url), body }); return world.http.post(url, body, options); } });
+  const sdk = createMakerSdk({
+    workspaceStorage: createNodeWorkspaceStorage(tmp()),
+    instanceUrl: INSTANCE,
+    httpClient: change ? new Proxy({}, {
+      get: (_, key) => (key === 'post' ? (url, body, options) => limited.post(...change(url, body), options) : typeof limited[key] === 'function' ? limited[key].bind(limited) : limited[key]),
+      has: (_, key) => key in limited,
+    }) : limited,
+  });
+  await sdk.initWorkspace();
+  const app = await sdk.fetchArtifact('app', APP_ID, { overwrite: true });
+  if (app.components === undefined) await sdk.addElement('app', APP_ID, '', { components: { views: pinned } });
+  else if (app.components.views === undefined) await sdk.addElement('app', APP_ID, '/components', { views: pinned });
+  else await sdk.updateElement('app', APP_ID, '/components/views', [...app.components.views, ...pinned]);
+  const pushed = await scope.limit(APP_ID, { views: owned }, () => sdk.pushArtifact('app', APP_ID));
+  return { pushed, reached };
+}
+
+test('REAL BUNDLE: the SDK pushes the app through the limit — the control for what follows: its derived list is cut to the one view the edit pins, with no warning', async () => {
+  await inWorld(async ({ world }) => {
+    const { pushed, reached } = await pinThrough(world, { pinned: [APP_VIEW_ID] });
+    assert.strictEqual(pushed.saved, true, JSON.stringify(pushed));
+    assert.deepStrictEqual(pushed.warnings || [], []);
+    assert.deepStrictEqual(reached.filter(isAddAppComponents).map((request) => request.body), [{ AppId: APP_ID, Components: [viewRef(APP_VIEW_ID)] }]);
+    assert.deepStrictEqual(world.added(), { tables: [], forms: [], views: [APP_VIEW_ID], charts: [] });
+    assertMembership(world);
+  }, { defaultViewPinned: false });
+});
+
+test('REAL BUNDLE: a request the limit cannot read is refused, and the SDK reports it as a warning of the push — nothing reaches the app, and no pin is claimed that was not made', async () => {
+  const drifts = [
+    ['a body that is JSON text', (url, body) => [url, isAddAppComponents({ url }) ? JSON.stringify(body) : body], /was NOT sent: its body is not the \{ AppId, Components/],
+    ['an address in another spelling', (url, body) => [url.replace('AddAppComponents', 'addappcomponents'), body], /was NOT sent: its address \(.*addappcomponents\) .*AddAppComponents/],
+    ['an address with a trailing slash', (url, body) => [isAddAppComponents({ url }) ? `${url}/` : url, body], /was NOT sent: its address \(.*AddAppComponents\/\)/],
+    ['a view that is an OData reference', (url, body) => [url, isAddAppComponents({ url }) ? { ...body, Components: body.Components.map((c) => (c.savedqueryid ? { '@odata.id': `savedqueries(${c.savedqueryid})` } : c)) } : body], new RegExp(`was NOT sent: its list does not carry the view ${APP_VIEW_ID} the edit pins`)],
+  ];
+  for (const [label, change, said] of drifts) {
+    await inWorld(async ({ world }) => {
+      const { pushed, reached } = await pinThrough(world, { pinned: [APP_VIEW_ID], change });
+      assert.strictEqual(pushed.saved, true, `${label}: the push is the SDK's to report, and the sitemap it wrote is saved: ${JSON.stringify(pushed)}`);
+      assert.strictEqual((pushed.warnings || []).length, 1, `${label}: ${JSON.stringify(pushed.warnings)}`);
+      assert.match(pushed.warnings[0], /one or more components were not pinned \(/, label);
+      assert.match(pushed.warnings[0], said, label);
+      assert.deepStrictEqual(reached.filter(isAddAppComponents), [], `${label}: no AddAppComponents reached the app, limited or not`);
+      assert.deepStrictEqual(world.additions(), [], label);
+      assertMembership(world, { views: [] });
+    }, { defaultViewPinned: false });
+  }
+});
+
+test('REAL BUNDLE: a pin the SDK\'s list does not carry is a warning and not a no-op — the view the edit owns and the SDK did not post is named, and nothing is sent', async () => {
+  await inWorld(async ({ world }) => {
+    const { pushed, reached } = await pinThrough(world, { pinned: [APP_VIEW_ID], owned: [APP_VIEW_ID, MISSING_VIEW] });
+    assert.strictEqual(pushed.saved, true, JSON.stringify(pushed));
+    assert.strictEqual(pushed.warnings.length, 1, JSON.stringify(pushed.warnings));
+    assert.match(pushed.warnings[0], new RegExp(`was NOT sent: its list does not carry the view ${MISSING_VIEW} the edit pins`));
+    assert.ok(!pushed.warnings[0].includes(APP_VIEW_ID), 'the view that is carried is not named');
+    assert.deepStrictEqual(reached.filter(isAddAppComponents), []);
+    assertMembership(world, { views: [] });
   }, { defaultViewPinned: false });
 });

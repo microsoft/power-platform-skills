@@ -36,8 +36,10 @@
 //
 //   `--add-to-sitemap` writes the page's entry in the app's navigation with a title in the environment's BASE language (read with the
 //   backend's `baseLanguage()`, as `genpage.js add-to-app` does; also when this completes a placement an earlier run began): a title in a
-//   language the environment has not provisioned does not show. A language that cannot be read fails the placement, and the page — written
-//   by then — is completed by the same command with `--page-id` added.
+//   language the environment has not provisioned does not show. A language that cannot be read fails the placement before the app is
+//   touched, and the report says only what is known — the page is written and published, its placement is unfinished, this run changed
+//   nothing in the app's navigation (and, when it completes a placement an earlier run began, did not look at what that run saved there) —
+//   and the page is completed by the same command with `--page-id` added.
 //
 //   `--prompt` / `--agent-message` are accepted for short, shell-safe text, but `--prompt-file` is
 //   the documented path precisely because it cannot be mangled by a shell. `--compiled-code-file` is
@@ -621,21 +623,31 @@ async function deploy(context) {
     // (the publish failed, or the published navigation does not show the page), and the marker is cleared only after it returns.
     const finishingPlacement = !!(completing && completing.unfinished === 'place' && addToSitemap && flags['app-id']);
     if (pageId && flags['app-id'] && (addToSitemap || (dataSourcesOf(tables) || []).length)) {
-      try {
-        // The title of the page's entry in the navigation is written in the environment's BASE language: a title in a language the environment has not provisioned does not show, and the SDK
-        // writes one in its own default, 1033, when it is told nothing — an English entry in a German-only environment, reported as a success. `genpage.js add-to-app` reads the language for the
-        // same reason, with the same operation, and so does the run that completes a placement an earlier one began: it is this placement again. An unreadable language fails the placement,
-        // nothing guessed in its place — as it fails `add-to-app`: the page is written and the marker says what is left. A pin has no title to write, so an upload that places no page asks the
-        // environment nothing.
-        let languageCode;
-        if (addToSitemap) {
-          try {
-            languageCode = await genpage.baseLanguage();
-          } catch (e) {
-            // What the read says is the platform's own words (`HTTP 503 from …/organizations?$select=languagecode: …`), which do not say what was being read or why it matters here.
-            throw new Error(`the environment's base language, which the entry's title is written in, could not be read (${(e && e.message) || e}); no other language is assumed in its place`, { cause: e });
-          }
+      // The title of the page's entry in the navigation is written in the environment's BASE language: a title in a language the environment has not provisioned does not show, and the SDK
+      // writes one in its own default, 1033, when it is told nothing — an English entry in a German-only environment, reported as a success. `genpage.js add-to-app` reads the language for the
+      // same reason, with the same operation, and so does the run that completes a placement an earlier one began: it is this placement again. An unreadable language fails the placement,
+      // nothing guessed in its place — as it fails `add-to-app`: the page is written and the marker says what is left. A pin has no title to write, so an upload that places no page asks the
+      // environment nothing.
+      let languageCode;
+      if (addToSitemap) {
+        try {
+          languageCode = await genpage.baseLanguage();
+        } catch (e) {
+          // The READ failed, not the placement: the app was never read or touched, so the only thing known of its navigation is that this run changed nothing in it, and that is all this says. "NOT added … add
+          // the page in Maker" would be false for a page an earlier run already put in the app's saved navigation (its publish is what failed) or even in the published one, and it would send the user to add
+          // a page the navigation holds. Only the run that completes a placement an earlier one began (`finishingPlacement`) can be in that case, so only it says it did not look at what that run left; a page
+          // this run created is in no navigation, and one created with no app begins its first placement here. `saved` is not set: it claims a saved navigation, which on a first attempt does not exist.
+          // The marker was written before this (`unfinished: 'place'`), so the same command completes the placement once the language can be read. The read's own words
+          // (`HTTP 503 from …/organizations?$select=languagecode: …`) do not say what was being read or why it matters here.
+          const left = finishingPlacement ? ', and did not look at what an earlier run saved or published there, so the page may already be in it' : '';
+          const verb = `node scripts/genpage.js add-to-app --env ${flags.env} --app-id ${flags['app-id']} --page-id ${pageId}`;
+          const way = recorded
+            ? `To finish it, run the same command again with --page-id ${pageId} added and nothing else changed, once the language can be read: the page is already published, so only its placement is made, for this page only (the base marker beside ${flags['code-file']} records that it is not done). Or run ${verb}, which places the page, or finishes a placement that was saved, whichever is left.`
+            : `Once the language can be read, ${verb} places the page, or finishes a placement that was saved, whichever is left.`;
+          return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'} and published, but its placement in app ${flags['app-id']}'s navigation is unfinished: the environment's base language, which the entry's title is written in, could not be read (${(e && e.message) || e}); no other language is assumed in its place. This run changed nothing in the app's navigation${left}. ${way}`));
         }
+      }
+      try {
         placement = await genpage.placeInApp(flags['app-id'], {
           pages: addToSitemap ? [{ pageId, title: (written && written.name) || pageName.value || (deployed && deployed.name) }] : [],
           dataSources: tables,

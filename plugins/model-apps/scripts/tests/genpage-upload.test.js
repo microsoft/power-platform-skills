@@ -1035,18 +1035,92 @@ test('an upload that places no page — it only pins the views of its tables —
   assert.deepStrictEqual(appless.of('baseLanguage'), []);
 });
 
-test('a language that cannot be read fails the placement — nothing is guessed in its place: the page is written and the marker says it is not placed, as for any placement that fails', async () => {
+test('a language that cannot be read leaves the placement unfinished — nothing is guessed in its place, and the only thing said of the navigation is that this run changed nothing in it', async () => {
   const file = codeFile();
   const unreadable = Object.assign(new Error(`HTTP 503 from ${ENV}/api/data/v9.0/organizations?$select=languagecode: the service is busy`), { code: 'CONNECTION_ERROR' });
   const genpage = environment({ languageError: unreadable });
   const r = await run(createArgs(file, [...NAMED, '--add-to-sitemap']), genpage);
   assert.strictEqual(r.ok, false, 'an unplaced page is not a successful deployment');
   assert.strictEqual(r.payload.pageId, NEW_ID, 'the id is reported, so the page can be completed');
-  assert.match(r.payload.error, new RegExp(`page ${NEW_ID} was created and published, but NOT added to app ${APP}'s navigation: the environment's base language, which the entry's title is written in, could not be read \\(HTTP 503 from .*languagecode: the service is busy\\); no other language is assumed in its place\\.`));
-  assert.match(r.payload.error, new RegExp(`Add the page to the app navigation with node scripts/genpage\\.js add-to-app --env \\S+ --app-id ${APP} --page-id ${NEW_ID}, or run the same command again with --page-id `));
+  assert.strictEqual(r.payload.appId, APP);
+  assert.match(r.payload.error, new RegExp(`^page ${NEW_ID} was created and published, but its placement in app ${APP}'s navigation is unfinished: the environment's base language, which the entry's title is written in, could not be read \\(HTTP 503 from .*languagecode: the service is busy\\); no other language is assumed in its place\\. This run changed nothing in the app's navigation\\. `));
+  assert.match(r.payload.error, new RegExp(`To finish it, run the same command again with --page-id ${NEW_ID} added and nothing else changed, once the language can be read: .*Or run node scripts/genpage\\.js add-to-app --env \\S+ --app-id ${APP} --page-id ${NEW_ID}, which places the page, or finishes a placement that was saved, whichever is left\\.$`));
+  assert.doesNotMatch(r.payload.error, /NOT added|in Maker|did not look at/, 'it says nothing of the navigation that it did not learn');
+  assert.ok(!('saved' in r.payload), 'and claims no placement that was saved: on a first attempt there is no entry to have been');
   assert.strictEqual(genpage.of('placeInApp').length, 0, 'the app was not edited with a guess');
   assert.strictEqual(readMarker(file).unfinished, 'place');
   assert.strictEqual(genpage.disposed, 1);
+});
+
+// The run that COMPLETES a placement reads the language too, and can fail to: an earlier run may have put the page in the app's saved navigation (its publish is what failed), which this run did not
+// look at and a failed read does not show. "NOT added … add the page in Maker" would send the user to add a page the navigation holds, so the report says what this run knows and did.
+test('the run that COMPLETES a placement and cannot read the language says only what it knows — the page is saved and published, this run changed nothing in the navigation and did not look at what the earlier one saved — and the marker keeps the placement unfinished', async () => {
+  const file = codeFile();
+  const appPages = {};
+  const genpage = environment({
+    pages: [],
+    appPages,
+    language: 1031,
+    placement: (appId, options) => {
+      const saved = (appPages[appId] = appPages[appId] || []);
+      for (const p of options.pages) if (!saved.some((s) => s.pageId === p.pageId)) saved.push({ pageId: p.pageId, name: p.title });
+      if (options.finish !== true) throw Object.assign(new Error(`the navigation of app ${appId} was saved, but publishing the app failed (503)`), { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true });
+      return { added: [], alreadyPlaced: options.pages.map((p) => String(p.pageId)), pinnedViews: [], warnings: [], appEdited: false, provedPublished: true };
+    },
+  });
+  const args = createArgs(file, [...NAMED, '--add-to-sitemap']);
+  const first = await run(args, genpage);
+  assert.strictEqual(first.ok, false);
+  assert.match(first.payload.error, new RegExp(`it is placed in app ${APP}'s saved navigation, but the app's publish is not finished`));
+  assert.deepStrictEqual(appPages[APP].map((p) => p.pageId), [NEW_ID], 'the navigation was saved with the page');
+  assert.strictEqual(readMarker(file).unfinished, 'place');
+
+  // The advice, run, where the language cannot be read.
+  const readable = genpage.baseLanguage;
+  genpage.baseLanguage = async () => { throw Object.assign(new Error(`HTTP 503 from ${ENV}/api/data/v9.0/organizations?$select=languagecode: the service is busy`), { code: 'CONNECTION_ERROR' }); };
+  const placements = genpage.of('placeInApp').length;
+  const second = await run([...args, ...adviceFor(first)], genpage);
+  assert.strictEqual(second.ok, false);
+  assert.match(second.payload.error, new RegExp(`^page ${NEW_ID} was saved and published, but its placement in app ${APP}'s navigation is unfinished: the environment's base language, which the entry's title is written in, could not be read \\(HTTP 503 from .*languagecode: the service is busy\\); no other language is assumed in its place\\. This run changed nothing in the app's navigation, and did not look at what an earlier run saved or published there, so the page may already be in it\\. To finish it, run the same command again with --page-id ${NEW_ID} added and nothing else changed`));
+  assert.doesNotMatch(second.payload.error, /NOT added|in Maker/);
+  assert.ok(!('saved' in second.payload), 'it did not look at the navigation, so it does not claim it holds the page either');
+  assert.strictEqual(second.payload.pageId, NEW_ID);
+  assert.strictEqual(genpage.of('placeInApp').length, placements, 'the app was not touched: not edited, not published');
+  assert.strictEqual(readMarker(file).unfinished, 'place', 'the placement is still unfinished: the same command completes it');
+  assert.strictEqual(genpage.of('create').length, 1);
+
+  // The language can be read: the same command finishes the placement the first run began.
+  genpage.baseLanguage = readable;
+  const third = await run([...args, ...adviceFor(first)], genpage);
+  assert.strictEqual(third.ok, true, JSON.stringify(third.payload));
+  assert.deepStrictEqual(genpage.of('placeInApp').slice(-1).map((c) => [c.args[1].languageCode, c.args[1].finish]), [[1031, true]]);
+  assert.strictEqual(readMarker(file).unfinished, undefined, 'finished');
+});
+
+test('a create whose language cannot be read AND whose base marker could not be written has only the verb to finish by — the report does not offer a marker that is not there', async () => {
+  const file = codeFile();
+  const unreadable = Object.assign(new Error(`HTTP 503 from ${ENV}/api/data/v9.0/organizations?$select=languagecode: the service is busy`), { code: 'CONNECTION_ERROR' });
+  const genpage = environment({ languageError: unreadable });
+  const r = await run(createArgs(file, [...NAMED, '--add-to-sitemap']), genpage, { base: { ...realBase, writeMarker() { throw new Error('disk full'); } } });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, new RegExp(`^page ${NEW_ID} was created and published, but its placement in app ${APP}'s navigation is unfinished: the environment's base language, which the entry's title is written in, could not be read \\(.*\\); no other language is assumed in its place\\. This run changed nothing in the app's navigation\\. Once the language can be read, node scripts/genpage\\.js add-to-app --env \\S+ --app-id ${APP} --page-id ${NEW_ID} places the page, or finishes a placement that was saved, whichever is left\\.$`));
+  assert.doesNotMatch(r.payload.error, /same command again|NOT added/);
+});
+
+// A page created with no app whose publish failed is completed INTO an app by placing it there — a first placement, which no earlier run began, so nothing is said of one that was not looked at.
+test('completing a publish that failed INTO an app, where the language cannot be read, says nothing of an earlier placement — none was made — and the marker says the placement is what is left', async () => {
+  const file = codeFile();
+  const genpage = environment({ pages: [], onCreate: () => ({ publish: { kind: 'failed', detail: 'timed out' } }) });
+  const first = await run(['--env', ENV, '--code-file', file, ...NAMED], genpage);
+  assert.strictEqual(first.ok, false);
+  assert.strictEqual(readMarker(file).unfinished, 'publish');
+  genpage.baseLanguage = async () => { throw Object.assign(new Error(`HTTP 503 from ${ENV}/api/data/v9.0/organizations?$select=languagecode: the service is busy`), { code: 'CONNECTION_ERROR' }); };
+  const second = await run(['--env', ENV, '--app-id', APP, '--code-file', file, ...NAMED, '--add-to-sitemap', ...adviceFor(first)], genpage);
+  assert.strictEqual(second.ok, false);
+  assert.match(second.payload.error, new RegExp(`^page ${NEW_ID} was saved and published, but its placement in app ${APP}'s navigation is unfinished: the environment's base language, which the entry's title is written in, could not be read \\(.*\\); no other language is assumed in its place\\. This run changed nothing in the app's navigation\\. To finish it, run the same command again with --page-id ${NEW_ID} added and nothing else changed`));
+  assert.doesNotMatch(second.payload.error, /did not look at|NOT added/);
+  assert.strictEqual(genpage.of('placeInApp').length, 0);
+  assert.strictEqual(readMarker(file).unfinished, 'place', 'the placement is what is left now');
 });
 
 test('the run that completes a placement asks for the language and tells the placement too — the first run did not get as far as placing the page, and neither did it read the language', async () => {
