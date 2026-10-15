@@ -104,7 +104,8 @@ test('an edit of one app does not limit another app\'s post, and every other req
     await wrapped.get(`${ROOT}/appmodules`);
     await wrapped.patch(`${ROOT}/sitemaps(1)`, { sitemapxml: '<SiteMap/>' });
   });
-  assert.strictEqual(calls[0][2], elsewhere);
+  assert.deepStrictEqual(calls[0][2], elsewhere);
+  assert.notStrictEqual(calls[0][2], elsewhere, 'what goes on is what was read, not the object the caller holds');
   assert.deepStrictEqual(calls.map(([method]) => method), ['post', 'post', 'post', 'get', 'patch']);
   assert.deepStrictEqual(calls[2][2], derived(), 'another action keeps its whole list');
 });
@@ -243,7 +244,8 @@ test('another request is not taken for the action because its query or its fragm
     const body = derived();
     const answer = await scope.limit(APP, { views: [] }, () => scope.wrap(client).post(address, body));
     assert.strictEqual(calls.length, 1, `sent: ${address}`);
-    assert.strictEqual(calls[0][2], body, `as it was: ${address}`);
+    assert.deepStrictEqual(calls[0][2], body, `as it was: ${address}`);
+    assert.notStrictEqual(calls[0][2], body, `as it was read, and not the object the caller holds: ${address}`);
     assert.deepStrictEqual(answer.body, { answeredBy: 'the service' }, `not answered by this tool: ${address}`);
   }
 });
@@ -398,7 +400,7 @@ test('a raw POST to the action\'s address is limited as a post is — to the vie
       const answer = await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(address, encode(derived()), options));
       assert.strictEqual(answer.status, 204, `${label}: ${address}`);
       assert.strictEqual(calls.length, 1, `${label}: ${address}`);
-      assert.strictEqual(calls[0][0], address, `${label}: addressed as it was`);
+      assert.strictEqual(calls[0][0], String(address), `${label}: addressed as it was — as the text of the address, which is read once`);
       assert.deepStrictEqual(decode(calls[0][1]), { AppId: APP, Components: [view(VIEW)] }, `${label}: the table, the form, the other view and the chart are not sent: ${address}`);
       assert.strictEqual(calls[0][2], options, `${label}: the options are the caller's`);
     }
@@ -449,14 +451,18 @@ test('an edit that owns no view posts nothing through postRaw either — the SDK
   }
 });
 
-test('another app\'s raw request to the action goes through as it is, in any shape — an edit of one app does not limit another\'s', async () => {
+test('another app\'s raw request to the action goes through as it was read, in any shape — the same text, a copy of the same bytes, a plain copy of the object — an edit of one app does not limit another\'s', async () => {
   const scope = makeAppComponentScope();
   const { client, calls } = rawTransport();
   const wrapped = scope.wrap(client);
   const sent = [JSON.stringify(derived(OTHER_APP)), Buffer.from(JSON.stringify({ AppId: OTHER_APP })), JSON.stringify({ AppId: OTHER_APP, Components: 'x' }), derived(OTHER_APP)];
   await scope.limit(APP, { views: [VIEW] }, async () => { for (const body of sent) await wrapped.postRaw(ADD, body); });
   assert.strictEqual(calls.length, sent.length);
-  calls.forEach((call, i) => assert.strictEqual(call[1], sent[i], `as it was: ${i}`));
+  calls.forEach((call, i) => {
+    assert.deepStrictEqual(call[1], sent[i], `as it was read: ${i}`);
+    if (typeof sent[i] === 'string') assert.strictEqual(call[1], sent[i], `the very text: ${i}`);
+    else assert.notStrictEqual(call[1], sent[i], `a copy, not what the caller holds: ${i}`);
+  });
 });
 
 test('a raw body the limit cannot read is REFUSED as a post\'s is — not JSON, not an object, nobody\'s app, no list — and nothing is sent', async () => {
@@ -704,7 +710,8 @@ test('a hook that changes the app is read as the app it makes — the request it
     const elsewhere = { AppId: APP, Components: derived().Components, toJSON() { return derived(OTHER_APP); } };
     await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](ADD, elsewhere));
     assert.strictEqual(calls.length, 1, method);
-    assert.strictEqual(calls[0].body, elsewhere, `${method}: it serializes to another app's request, which is not this edit's, so it goes on as it came`);
+    assert.deepStrictEqual(calls[0].body, derived(OTHER_APP), `${method}: it serializes to another app's request, which is not this edit's, so it goes on as it was read — the plain data it serialized to, without its serializer`);
+    assertPlain(calls[0].body, method);
   }
 });
 
@@ -871,7 +878,7 @@ test('an address whose escapes decode to something else is no concern of the lim
       const body = method === 'post' ? derived() : 'a body nobody reads';
       await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](address, body));
       assert.strictEqual(calls.length, 1, `sent: ${method} ${address}`);
-      assert.strictEqual(calls[0].body, body, `as it was: ${method} ${address}`);
+      assert.deepStrictEqual(calls[0].body, body, `as it was: ${method} ${address}`);
     }
   }
 });
@@ -954,18 +961,23 @@ test('a JSON batch is read as JSON is — an escaped letter, an object, a percen
   const { client, calls } = rawTransport();
   const sent = [JSON.stringify(rows), rows, undefined];
   await scope.limit(APP, { views: [VIEW] }, async () => { for (const body of sent) await scope.wrap(client).postRaw(`${ROOT}/$batch`, body); });
-  assert.deepStrictEqual(calls.map((call) => call[1]), sent, 'a batch that does not name the action goes through as it is');
-  calls.forEach((call, i) => assert.strictEqual(call[1], sent[i], `the very ${typeof sent[i]}: ${i}`));
+  assert.deepStrictEqual(calls.map((call) => call[1]), sent, 'a batch that does not name the action goes through as it was read');
+  calls.forEach((call, i) => {
+    if (typeof sent[i] === 'object') assert.notStrictEqual(call[1], sent[i], `a plain copy of the object, not the object the caller holds: ${i}`);
+    else assert.strictEqual(call[1], sent[i], `the very ${typeof sent[i]}: ${i}`);
+  });
 });
 
-test('a body that cannot be read as the text it will be sent as is REFUSED where a batch could hide the action — an object with a cycle, or one whose serializer throws', async () => {
+test('a body that cannot be read as the text it will be sent as is REFUSED where a batch could hide the action — an object with a cycle, a BigInt, or one whose serializer throws — through post as through postRaw', async () => {
   const cycle = { requests: [] };
   cycle.requests.push(cycle);
-  for (const [label, body] of [['an object with a cycle', cycle], ['a serializer that throws', { toJSON() { throw new Error('no'); } }]]) {
-    const scope = makeAppComponentScope();
-    const { client, calls } = rawTransport();
-    await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).postRaw(`${ROOT}/$batch`, body)));
-    assert.deepStrictEqual(calls, [], `nothing was sent: ${label}`);
+  for (const [label, body] of [['an object with a cycle', cycle], ['a BigInt', { requests: [], size: 1n }], ['a serializer that throws', { toJSON() { throw new Error('no'); } }]]) {
+    for (const method of METHODS) {
+      const scope = makeAppComponentScope();
+      const { client, calls } = bothTransport();
+      await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](`${ROOT}/$batch`, body)));
+      assert.deepStrictEqual(calls, [], `nothing was sent: ${method}, ${label}`);
+    }
   }
 });
 
@@ -980,5 +992,358 @@ test('over the plugin\'s own transport a batch that hides the action in an escap
     const { scope, client, wire } = overTheWire();
     await refused(scope.limit(APP, { views: [VIEW] }, () => client.postRaw(`${ROOT}/$batch`, body, { headers })));
     assert.deepStrictEqual(wire, [], label);
+  }
+});
+
+// ── Every request is read ONCE, and what goes on is what was read ───────────────────────────────────────────────────────────────────────────────────
+// While an edit is open the limit reads each POST — its address and its body — exactly once, decides on that reading and sends THAT, in every branch: the action it cuts, another app's request, a request to another
+// address, a `$batch`. It never sends the object, the array or the address the caller holds, because the transport reads what it is given again — lib/sdk-http-client.js serializes an object with JSON.stringify and
+// turns an address that is an object into text each time it needs the text — so something that answers differently the second time would show the limit one request and put another on the wire.
+
+// What the transport of a recorder is given when `request` is sent through `method` to `address` while an edit of APP is open.
+async function sentThrough(method, address, body, options) {
+  const scope = makeAppComponentScope();
+  const { client, calls } = bothTransport();
+  await scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](address, body, options));
+  assert.strictEqual(calls.length, 1, `${method} ${String(address)}: one request`);
+  return calls[0];
+}
+
+// A request that is not the edit's own, as the plain data it is, and how a caller may hand it over: [label, the request as a body, whether it is text or bytes — only a raw POST may carry those to the action itself].
+const GIVEN = [
+  ['an object', (request) => request, false],
+  ['an object with a toJSON', (request) => ({ ignored: true, toJSON() { return request; } }), false],
+  ['an object with getters', (request) => Object.defineProperties({}, Object.fromEntries(Object.keys(request).map((key) => [key, { enumerable: true, get: () => request[key] }]))), false],
+  ['JSON text', (request) => JSON.stringify(request), true],
+  ['a Buffer', (request) => Buffer.from(JSON.stringify(request)), true],
+  ['a Uint8Array', (request) => new Uint8Array(Buffer.from(JSON.stringify(request))), true],
+  ['a Buffer with a toJSON of its own', (request) => Object.assign(Buffer.from(JSON.stringify(request)), { toJSON: () => derived() }), true],
+  ['a Buffer with a valueOf of its own', (request) => Object.assign(Buffer.from(JSON.stringify(request)), { valueOf: () => 'not these bytes' }), true],
+];
+const PASSED_ON = [
+  // [label, address, the request as plain data, whether the address is the action's — which a post can carry only as an object]
+  ['another address', `${ROOT}/accounts`, { name: 'Contoso', tags: ['a', 'b'], owner: { id: 1 } }, false],
+  ['another address that mentions the action only in its query', OTHER_ADDRESSES[0], { name: 'x' }, false],
+  ['the action of another app', ADD, derived(OTHER_APP), true],
+  ['a $batch that does not name the action', `${ROOT}/$batch`, { requests: [{ id: '1', method: 'POST', url: 'uxagentprojects', body: { name: 'Page' } }] }, false],
+];
+
+function assertSentAsRead(given, request, sent, label) {
+  if (typeof given === 'string') {
+    assert.strictEqual(sent, given, `${label}: the very text`);
+  } else if (given instanceof Uint8Array) {
+    assert.ok(sent instanceof Uint8Array && Buffer.isBuffer(sent) === Buffer.isBuffer(given), `${label}: bytes, of the kind they were`);
+    assert.notStrictEqual(sent, given, `${label}: a copy of the bytes, not the array the caller holds, which can be changed or serialize itself`);
+    assert.ok(!Object.hasOwn(sent, 'toJSON'), `${label}: the copy has no serializer of its own`);
+    assert.ok(Buffer.from(sent.buffer, sent.byteOffset, sent.byteLength).equals(Buffer.from(given.buffer, given.byteOffset, given.byteLength)), `${label}: the same bytes`);
+  } else {
+    assertPlain(sent, label);
+    assert.deepStrictEqual(sent, request, `${label}: what the object serializes as`);
+    assert.notStrictEqual(sent, given, `${label}: not the object that can answer differently when it is serialized again`);
+  }
+}
+
+test('what a limit lets through is what it read — the text it was given, a copy of the bytes, the plain data an object serializes as — and never the object or the array the caller holds', async () => {
+  const options = { headers: { 'Content-Type': 'application/json', 'If-Match': '1' } };
+  for (const [caseLabel, address, request, isAction] of PASSED_ON) {
+    for (const method of METHODS) {
+      for (const [formLabel, give, isBytesOrText] of GIVEN) {
+        // The SDK gives a post an object, and a post of text or bytes to the action itself is refused: nothing is passed on there.
+        if (isAction && isBytesOrText && method === 'post') continue;
+        const given = give(request);
+        const label = `${method}, ${caseLabel}, ${formLabel}`;
+        const sent = await sentThrough(method, address, given, options);
+        assert.strictEqual(sent.url, address, `${label}: the address`);
+        assert.strictEqual(sent.options, options, `${label}: the options are the caller's own`);
+        assertSentAsRead(given, request, sent.body, label);
+      }
+    }
+  }
+  // Nothing to read is nothing to send.
+  for (const method of METHODS) {
+    for (const body of [undefined, null]) assert.strictEqual((await sentThrough(method, `${ROOT}/accounts`, body)).body, body, `${method}: ${body}`);
+  }
+});
+
+test('a body is serialized exactly once in every branch — another address, another app\'s action, a $batch and the edit\'s own action', async () => {
+  for (const [label, address, request] of [...PASSED_ON.map(([name, at, plain]) => [name, at, plain]), ['the edit\'s own action', ADD, derived()]]) {
+    for (const method of METHODS) {
+      let reads = 0;
+      await sentThrough(method, address, { toJSON() { reads += 1; return request; } });
+      assert.strictEqual(reads, 1, `${method}, ${label}`);
+    }
+  }
+});
+
+test('a request refused for its address is refused without its body being read — what the address already decides is not asked of the body', async () => {
+  for (const address of [...LOOKALIKE_ADDRESSES, ...ENCODED_LOOKALIKE_ADDRESSES, ...UNREADABLE_ADDRESSES]) {
+    for (const method of METHODS) {
+      let reads = 0;
+      const scope = makeAppComponentScope();
+      const { client, calls } = bothTransport();
+      await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](address, { toJSON() { reads += 1; return derived(); } })));
+      assert.strictEqual(reads, 0, `${method} ${address}: the body was not read`);
+      assert.deepStrictEqual(calls, [], `${method} ${address}: nothing was sent`);
+    }
+  }
+});
+
+test('what goes on the wire for a request the limit lets through is what the transport writes without it — byte for byte, whatever the body is', async () => {
+  const bodies = [
+    ['a plain object', { name: 'Contoso', list: [1, 2, { x: null }], nested: { a: 'ü 🦊 \u2028 "quoted"' } }],
+    ['integer-like keys', { b: 1, 2: 'two', 1: 'one' }],
+    ['undefined values, functions and symbols', { a: undefined, b: [undefined, () => 1, Symbol('x')], c: 1 }],
+    ['a Date', new Date(Date.UTC(2020, 0, 2, 3, 4, 5))],
+    ['numbers', { n: [0, -0, 1e21, 1.5e-7, NaN, Infinity] }],
+    ['a toJSON that answers a text', { toJSON: () => 'abc' }],
+    ['a toJSON that answers a number', { toJSON: () => 5 }],
+    ['a toJSON that answers null', { toJSON: () => null }],
+    ['a toJSON that answers nothing', { toJSON: () => undefined }],
+    ['text', '{"already":"text"}'],
+    ['a list', [1, 'two', { three: 3 }]],
+    ['a number', 7],
+    ['a boolean', false],
+    ['a Buffer', Buffer.from('bytes')],
+    ['a Uint8Array', new Uint8Array([1, 2, 3])],
+    ['nothing', undefined],
+    ['null', null],
+  ];
+  // No body is `null` or `undefined` for the transport alike: it writes nothing for either.
+  const written = (wire) => wire.map((sent) => ({ ...sent, body: sent.body === undefined ? null : sent.body }));
+  for (const method of METHODS) {
+    for (const [label, body] of bodies) {
+      const without = overTheWire();
+      await without.client[method](`${ROOT}/accounts`, body);
+      const limited = overTheWire();
+      await limited.scope.limit(APP, { views: [VIEW] }, () => limited.client[method](`${ROOT}/accounts`, body));
+      assert.deepStrictEqual(written(limited.wire), written(without.wire), `${method}, ${label}`);
+    }
+  }
+});
+
+test('an object that names another app the first time it is serialized and the edit\'s app the second cannot put the whole request on the wire — it is read once, and the transport is given what was read', async () => {
+  const hooks = [
+    ['a toJSON', (read) => ({ toJSON() { return derived(read() === 1 ? OTHER_APP : APP); } })],
+    ['a getter', (read) => ({ get AppId() { return read() === 1 ? OTHER_APP : APP; }, Components: derived().Components })],
+  ];
+  for (const method of METHODS) {
+    for (const [label, make] of hooks) {
+      let reads = 0;
+      const { scope, client, wire } = overTheWire();
+      await scope.limit(APP, { views: [VIEW] }, () => client[method](ADD, make(() => (reads += 1))));
+      assert.strictEqual(reads, 1, `${method}, ${label}: serialized once`);
+      assert.strictEqual(wire.length, 1, `${method}, ${label}: one request`);
+      assert.deepStrictEqual(JSON.parse(wire[0].body), derived(OTHER_APP), `${method}, ${label}: the request that was read — another app's, which is not this edit's to limit — and no other`);
+    }
+  }
+  // The same object, read as the edit's own the first time, is cut, and never read again.
+  for (const method of METHODS) {
+    let reads = 0;
+    const { scope, client, wire } = overTheWire();
+    await scope.limit(APP, { views: [VIEW] }, () => client[method](ADD, { toJSON() { reads += 1; return reads === 1 ? derived() : derived(OTHER_APP); } }));
+    assert.strictEqual(reads, 1, method);
+    assert.deepStrictEqual(wire.map((sent) => JSON.parse(sent.body)), [{ AppId: APP, Components: [view(VIEW)] }], method);
+  }
+});
+
+test('a body that serializes as nothing, or as an empty batch, the first time and as a batch that names the action the second is read once — the batch never reaches the wire', async () => {
+  const batch = { requests: [{ id: '1', method: 'POST', url: 'AddAppComponents', body: derived() }] };
+  for (const method of METHODS) {
+    for (const [label, first, expected] of [['an empty batch', { requests: [] }, '{"requests":[]}'], ['nothing', undefined, undefined]]) {
+      let reads = 0;
+      const { scope, client, wire } = overTheWire();
+      await scope.limit(APP, { views: [VIEW] }, () => client[method](`${ROOT}/$batch`, { toJSON() { reads += 1; return reads === 1 ? first : batch; } }, { headers: { 'Content-Type': 'application/json' } }));
+      assert.strictEqual(reads, 1, `${method}, ${label}: serialized once`);
+      assert.strictEqual(wire.length, 1, `${method}, ${label}`);
+      assert.ok(!String(wire[0].body || '').includes(FORM), `${method}, ${label}: the excluded form is not on the wire`);
+      assert.strictEqual(wire[0].body ?? undefined, expected, `${method}, ${label}: what was read is what was sent`);
+    }
+  }
+});
+
+test('bytes that serialize themselves are not sent as what they say — a Buffer with a toJSON of its own is sent as the bytes the limit read', async () => {
+  for (const method of METHODS) {
+    for (const address of [`${ROOT}/accounts`, ADD]) {
+      // The SDK gives a post an object: bytes to the action itself are a raw POST's, and a post of them is refused.
+      if (address === ADD && method === 'post') continue;
+      const bytes = Buffer.from(address === ADD ? JSON.stringify(derived(OTHER_APP)) : 'ordinary bytes');
+      const expected = JSON.stringify(Buffer.from(bytes));
+      bytes.toJSON = () => derived();
+      const { scope, client, wire } = overTheWire();
+      await scope.limit(APP, { views: [VIEW] }, () => client[method](address, bytes));
+      assert.deepStrictEqual(wire.map((sent) => sent.body), [expected], `${method} ${address}: the bytes, not what their serializer answers`);
+    }
+  }
+});
+
+test('an address given as an object is read once — the transport is given the text the limit read, whatever the object says the next time', async () => {
+  for (const method of METHODS) {
+    let reads = 0;
+    const address = { toString() { reads += 1; return reads === 1 ? `${ROOT}/accounts` : ADD; } };
+    const { scope, client, wire } = overTheWire();
+    await scope.limit(APP, { views: [VIEW] }, () => client[method](address, derived(), { headers: {} }));
+    assert.strictEqual(reads, 1, `${method}: read once`);
+    assert.deepStrictEqual(wire.map((sent) => sent.url), [`${ROOT}/accounts`], `${method}: where the limit read it to be`);
+  }
+  // A URL is handed on as the text of it; a text is handed on as it is.
+  for (const method of METHODS) {
+    for (const address of [new URL(`${ROOT}/accounts?$top=1`), `${ROOT}/accounts?$top=1`]) {
+      const sent = await sentThrough(method, address, 'text');
+      assert.strictEqual(sent.url, `${ROOT}/accounts?$top=1`, method);
+      assert.strictEqual(typeof sent.url, 'string', method);
+    }
+  }
+  // An address with no text form is one that cannot be read.
+  for (const address of [Object.create(null), { toString() { throw new Error('no'); } }]) {
+    const scope = makeAppComponentScope();
+    const { client, calls } = bothTransport();
+    await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client).post(address, derived())));
+    assert.deepStrictEqual(calls, []);
+  }
+});
+
+test('with no edit open nothing is read — an address, a body and options whose conversion would throw are delegated as they are, and a body is serialized once, by the transport', async () => {
+  const scope = makeAppComponentScope();
+  const { client, calls } = bothTransport();
+  const wrapped = scope.wrap(client);
+  let reads = 0;
+  const address = { toString() { reads += 1; throw new Error('the address was read'); } };
+  const body = { toJSON() { reads += 1; throw new Error('the body was serialized'); } };
+  const options = { get headers() { reads += 1; throw new Error('the options were read'); } };
+  for (const method of METHODS) await wrapped[method](address, body, options);
+  assert.strictEqual(reads, 0);
+  assert.strictEqual(calls.length, 2);
+  for (const call of calls) assert.ok(call.url === address && call.body === body && call.options === options, `${call.method}: the very references`);
+
+  let serializations = 0;
+  const { client: wired, wire } = overTheWire();
+  await wired.post(ADD, { toJSON() { serializations += 1; return derived(); } });
+  assert.strictEqual(serializations, 1);
+  assert.deepStrictEqual(JSON.parse(wire[0].body), derived());
+});
+
+test('requests that are no concern of the limit go through post as they were read — the check of a batch reads them and changes nothing, and a url that is no batch entry is nobody\'s address', async () => {
+  const sent = [
+    [`${ROOT}/PublishXml`, { ParameterXml: '<importexportxml><appmodules><appmodule>22222222-2222-4222-8222-222222222222</appmodule></appmodules></importexportxml>' }],
+    [`${ROOT}/appmodules`, { name: 'Sales', uniquename: 'contoso_sales' }],
+    [`${ROOT}/webresourceset`, { name: 'x', url: 'https://example.com/100%' }],
+    [`${ROOT}/accounts`, { name: '100% done %ZZ %C0%AF %41' }],
+    [`${ROOT}/RemoveAppComponents`, derived()],
+    [`${ROOT}/accounts`, '{"name":"as text"}'],
+    [`${ROOT}/$batch`, { requests: [1, 'x', null, { id: '2' }, { id: '3', url: 7 }] }],
+  ];
+  for (const method of METHODS) {
+    const scope = makeAppComponentScope();
+    const { client, calls } = bothTransport();
+    await scope.limit(APP, { views: [VIEW] }, async () => { for (const [address, body] of sent) await scope.wrap(client)[method](address, body); });
+    assert.strictEqual(calls.length, sent.length, method);
+    calls.forEach((call, i) => {
+      assert.strictEqual(call.url, sent[i][0], `${method}: ${i}`);
+      assert.deepStrictEqual(call.body, sent[i][1], `${method}: ${i}`);
+    });
+  }
+});
+
+// ── A $batch is classified in one way, whichever method carries it and whichever way it is written ─────────────────────────────────────────────────────────────────────
+// lib/sdk-http-client.js sends `post` and `postRaw` as the same POST — `postRaw` only reads the answer as text — so a batch that may carry the action is refused through both, and its requests are decoded in
+// one way: a multipart request line and an entry of a JSON batch are each an address, read as any address is.
+const jsonBatchOf = (url, body = derived()) => ({ requests: [{ id: '1', method: 'POST', url, body }] });
+const asText = (batch) => (typeof batch === 'string' ? [['text', batch], ['a Buffer', Buffer.from(batch)], ['a Uint8Array', new Uint8Array(Buffer.from(batch))]] : [['an object', batch]]);
+const JSON_HEADERS = { headers: { 'Content-Type': 'application/json' } };
+
+test('a $batch that names the action is refused through post as it is through postRaw — a multipart one, a JSON one as text, as bytes and as an object, with an escape, a serializer or an address that cannot be read', async () => {
+  const escaped = JSON.stringify(jsonBatchOf('AddAppComponents')).replace('AddAppComponents', '\\u0041ddAppComponents');
+  for (const [label, batch, options] of [
+    ['a multipart batch', batchOf(`POST ${ADD} HTTP/1.1`), MULTIPART],
+    ['a multipart batch with bare line feeds', batchOf(`POST ${ADD} HTTP/1.1`).replace(/\r\n/g, '\n'), MULTIPART],
+    ['a multipart batch whose request line is percent-escaped', batchOf(`POST ${ROOT}/%41ddAppComponents HTTP/1.1`), MULTIPART],
+    ['a multipart batch whose request line cannot be read', batchOf(`POST ${ROOT}/%ZZ HTTP/1.1`), MULTIPART],
+    ['a JSON batch', JSON.stringify(jsonBatchOf('AddAppComponents')), JSON_HEADERS],
+    ['a JSON batch with an escaped letter', escaped, JSON_HEADERS],
+    ['a JSON text that names the action with an escaped letter outside any request entry', '{"actions":[{"name":"\\u0041ddAppComponents"}]}', JSON_HEADERS],
+    ['a JSON batch', jsonBatchOf('AddAppComponents'), JSON_HEADERS],
+    ['an object that serializes itself as a batch that names the action', { requests: [], toJSON() { return jsonBatchOf('AddAppComponents'); } }, JSON_HEADERS],
+  ]) {
+    for (const [formLabel, body] of asText(batch)) {
+      for (const method of METHODS) {
+        const scope = makeAppComponentScope();
+        const { client, calls } = bothTransport();
+        await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](`${ROOT}/$batch`, body, options)));
+        assert.deepStrictEqual(calls, [], `nothing was sent: ${method}, ${label}, ${formLabel}`);
+      }
+    }
+  }
+});
+
+test('a JSON batch is read entry by entry as a multipart one is read line by line — an entry whose address cannot be read is refused, whichever way the batch is given', async () => {
+  for (const url of [`${ROOT}/%FF%41ddAppComponents`, `${ROOT}/%ZZ`, `${ROOT}/%C0%AF`, `${ROOT}/accounts%`, 'accounts%2']) {
+    for (const [formLabel, body] of [...asText(JSON.stringify(jsonBatchOf(url, { name: 'Page' }))), ...asText(jsonBatchOf(url, { name: 'Page' }))]) {
+      for (const method of METHODS) {
+        const scope = makeAppComponentScope();
+        const { client, calls } = bothTransport();
+        await assert.rejects(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](`${ROOT}/$batch`, body, JSON_HEADERS)), (error) => {
+          assert.strictEqual(error.code, 'APP_COMPONENTS_NOT_LIMITED', `${method}, ${formLabel}: ${url}`);
+          assert.match(error.message, /was NOT sent: .*cannot be read/, `${method}, ${formLabel}: ${url}`);
+          assert.ok(error.message.includes(url), `${method}, ${formLabel}: names the address that cannot be read: ${error.message}`);
+          return true;
+        });
+        assert.deepStrictEqual(calls, [], `nothing was sent: ${method}, ${formLabel}, ${url}`);
+      }
+    }
+  }
+  // The entries that name the action in a spelling that is read are refused as the request lines are.
+  for (const url of ['AddAppComponents', `${ROOT}/AddAppComponents`, '/api/data/v9.0/addappcomponents', `${ROOT}/%41ddAppComponents%2F`, `${ROOT}/Microsoft.Dynamics.CRM.AddAppComponents`]) {
+    for (const method of METHODS) {
+      const scope = makeAppComponentScope();
+      const { client, calls } = bothTransport();
+      await refused(scope.limit(APP, { views: [VIEW] }, () => scope.wrap(client)[method](`${ROOT}/$batch`, jsonBatchOf(url, { name: 'Page' }), JSON_HEADERS)));
+      assert.deepStrictEqual(calls, [], `nothing was sent: ${method}, ${url}`);
+    }
+  }
+});
+
+test('a JSON batch whose entries are no concern of the limit goes through as it was read — through post and postRaw, whatever its addresses spell, unless one cannot be read', async () => {
+  const rows = [
+    jsonBatchOf('uxagentprojects', { name: 'Page' }),
+    jsonBatchOf(`${ROOT}/uxagentprojectfiles(11111111-2222-4333-8444-555555555555)/filecontent`, { name: 'Page' }),
+    jsonBatchOf(`${ROOT}/accounts?$filter=name%20eq%20%27x%27`, { name: 'Page' }),
+    jsonBatchOf(`${ROOT}/accounts?$filter=name eq '100%'`, { name: 'Page' }),
+    jsonBatchOf('uxagentprojects', { name: '100% done %ZZ %C0%AF %41' }),
+    { requests: [jsonBatchOf('uxagentprojects').requests[0], jsonBatchOf('accounts').requests[0]] },
+  ];
+  for (const method of METHODS) {
+    for (const [formLabel, convert] of [['an object', (rows_) => rows_], ['text', (rows_) => JSON.stringify(rows_)], ['bytes', (rows_) => Buffer.from(JSON.stringify(rows_))]]) {
+      const scope = makeAppComponentScope();
+      const { client, calls } = bothTransport();
+      await scope.limit(APP, { views: [VIEW] }, async () => { for (const batch of rows) await scope.wrap(client)[method](`${ROOT}/$batch`, convert(batch), JSON_HEADERS); });
+      assert.strictEqual(calls.length, rows.length, `${method}, ${formLabel}`);
+      calls.forEach((call, i) => {
+        const given = convert(rows[i]);
+        assertSentAsRead(given, rows[i], call.body, `${method}, ${formLabel}: ${i}`);
+      });
+    }
+  }
+});
+
+test('over the plugin\'s own transport a batch stays off the wire through post as through postRaw — a multipart one, a JSON one as an object and with an escape, and an entry whose address cannot be read', async () => {
+  const escaped = JSON.stringify(jsonBatchOf('AddAppComponents')).replace('AddAppComponents', '\\u0041ddAppComponents');
+  for (const [label, body, headers] of [
+    ['a multipart batch', batchOf(`POST ${ADD} HTTP/1.1`), MULTIPART.headers],
+    ['a JSON batch as an object', jsonBatchOf('AddAppComponents'), JSON_HEADERS.headers],
+    ['a JSON batch with an escaped letter', escaped, JSON_HEADERS.headers],
+    ['a JSON batch with an entry whose address cannot be read', JSON.stringify(jsonBatchOf(`${ROOT}/%FF%41ddAppComponents`)), JSON_HEADERS.headers],
+  ]) {
+    for (const method of METHODS) {
+      const { scope, client, wire } = overTheWire();
+      await refused(scope.limit(APP, { views: [VIEW] }, () => client[method](`${ROOT}/$batch`, body, { headers })));
+      assert.deepStrictEqual(wire, [], `${method}, ${label}`);
+    }
+  }
+  // A batch of the page's own rows goes on the wire as it is, through either method.
+  const rows = batchOf(`POST ${ROOT}/uxagentprojects HTTP/1.1`, '{"name":"Page"}');
+  for (const method of METHODS) {
+    const { scope, client, wire } = overTheWire();
+    await scope.limit(APP, { views: [VIEW] }, () => client[method](`${ROOT}/$batch`, rows, MULTIPART));
+    assert.deepStrictEqual(wire.map((sent) => sent.body), [rows], method);
   }
 });

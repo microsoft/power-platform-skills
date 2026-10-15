@@ -16,10 +16,13 @@
 //   world.members                { tables, forms, views, charts }: Sets of the ids the app's current layer holds, kept up to date by AddAppComponents
 //   world.additions()            the AddAppComponents bodies the app received, in order: [{ AppId, Components: [...] }]
 //   world.added()                what they added, flattened: { tables, forms, views, charts } as sorted arrays of ids
+// A request for ANOTHER app is not this app's: it is answered as for an app that does not exist, and changes nothing (`appId`, the app `appTransport` serves, is APP_ID unless given).
 // The shapes are the raw Web API ones the SDK parses (see the reads in `get`).
+const { APP_ID } = require('./fake-genpage-server.js');
+
 const lower = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
 
-function withAppComponents(app, { tables }) {
+function withAppComponents(app, { tables, appId = APP_ID }) {
   const members = { tables: new Set(), forms: new Set(), views: app.state.views, charts: new Set() };
   const byName = new Map();
   for (const table of tables) {
@@ -73,6 +76,10 @@ function withAppComponents(app, { tables }) {
       return app.http.get(url, options);
     },
     post: async (url, body, options) => {
+      // The service applies the action to the app it names and answers as for a row that does not exist for any other, so a request for ANOTHER app — which the limit lets through, it is not that edit's — does not change this one.
+      if (url.endsWith('/AddAppComponents') && body && typeof body.AppId === 'string' && lower(body.AppId) !== lower(appId)) {
+        return { status: 404, headers: {}, body: { error: { message: `appmodule With Id = ${body.AppId} Does Not Exist` } } };
+      }
       const answered = await app.http.post(url, body, options);
       if (url.endsWith('/AddAppComponents') && answered.status < 300) {
         for (const component of body.Components || []) {

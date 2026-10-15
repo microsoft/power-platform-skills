@@ -24,10 +24,11 @@
 // and `app.mainForms` narrows the Main forms the SDK derives for it), so it never opens an edit.
 //
 // WHAT IT READS, AND WHAT IT REFUSES. The limit knows the one request the bundle sends today (below). It finds the action by the PATH of the address, never by text elsewhere in it, and it decides on the request in its
-// CANONICAL form — the request as the service will read it — and sends that form, never what the caller happens to hold: the address percent-decoded (`AddAppComponents%2F` and `%41ddAppComponents` are the action
-// in another spelling, not another action) and the body put into the plain JSON data the plugin's transport will put on the wire. While an edit is open, a request that IS the action but cannot be read in that form is
-// REFUSED — the action in another spelling (lower case, a trailing slash, a namespace, an escape), an address that cannot be decoded, a `post` body that is JSON text (the SDK gives a `post` an object), a body that is
-// not JSON or has no list, a view that is only a reference — and so is one that does not carry every view the edit pins. It is not forwarded: that would send the SDK's whole derived list, which is what this holds back.
+// CANONICAL form — the request as the service will read it — and sends that form, in every case (the action it cuts, another app's request, a request to another address, a `$batch`), never what the caller happens to hold: the
+// address as text, percent-decoded to be read (`AddAppComponents%2F` and `%41ddAppComponents` are the action in another spelling, not another action) and the body put into the plain JSON data the plugin's transport will put
+// on the wire. While an edit is open, a request that IS the action but cannot be read in that form is REFUSED — the action in another spelling (lower case, a trailing slash, a namespace, an escape), an address that cannot be
+// decoded, a `post` body that is JSON text (the SDK gives a `post` an object), a body that is not JSON or has no list, a view that is only a reference — and so is one that does not carry every view the edit pins. It is not
+// forwarded: that would send the SDK's whole derived list, which is what this holds back.
 // And it is not answered as done: a pin it could not read would be dropped and reported as made. It is refused with the bundle's SdkError (`APP_COMPONENTS_NOT_LIMITED`). The SDK catches every
 // error of that request and reports it as a warning of the push ("one or more components were not pinned (…)"), so the navigation the edit saved stays saved, the warning says what was not added,
 // and nothing unlimited reaches the app.
@@ -38,13 +39,18 @@
 // text and for bytes (a Buffer would be sent as `{"type":"Buffer","data":[…]}`, which is not the action's parameters), the plain object for an object. A Content-Length the caller declared — in whatever spelling —
 // becomes one header with the exact length of what is written, or the receiver would wait for bytes that never come.
 //
-// WHY AN OBJECT IS READ ONCE. lib/sdk-http-client.js serializes an object with JSON.stringify, which runs a `toJSON` — own, inherited, on a component or on the list — and every getter, so the object a limit inspected can
-// serialize as another request. The limit therefore serializes it once, as the transport would, reads the plain data back, decides on that and sends that: nothing in what it sends can answer differently again. A body that cannot
-// be put in that form (a cycle, a BigInt, a serializer that throws or answers nothing) is refused.
+// WHY A REQUEST IS READ ONCE. lib/sdk-http-client.js serializes an object with JSON.stringify, which runs a `toJSON` — own, inherited, on a component or on the list — and every getter, and it turns an address that is an
+// object into text each time it needs the text, so what a limit inspected can read as another request when the transport reads it again. The limit therefore reads every POST it sees while an edit is open ONCE — the address
+// as text, the body as the transport takes it: text as it is, bytes copied, anything else serialized as the transport would and read back as plain data — decides on that reading and sends THAT, in every branch: not only
+// the action it cuts but the request it lets through (another app's, another address's, a batch's). A limit that let those go on as the object it had read would be undone by one that says another app's request, or an empty
+// batch, the first time it is serialized and the whole request the second. Nothing in what is sent can answer differently again. A body that cannot be put in that form (a cycle, a BigInt, a serializer that throws) is refused;
+// one that serializes to nothing sends nothing.
 //
-// A `$batch` is not parsed — its parts are text in a multipart envelope — so while an edit is open a raw POST to any other address that may carry the action is refused: a part of a batch cannot be limited, the bundle does not
-// send this action in one, and passing it on would send the SDK's whole derived list. A multipart batch is read line by line, each request line as an address is (percent-escapes decoded; one that cannot be read refuses
-// the batch); a JSON batch, as text or as an object, is read after its JSON is (`\u0041` is `A`); and the name is looked for in the rest of a text as it is and with its escapes decoded.
+// A `$batch` cannot be limited part by part — its parts are text in a multipart envelope, or the entries of a JSON batch — so while an edit is open a POST to any other address whose body may carry the action is refused:
+// the bundle does not send this action in one, and passing it on would send the SDK's whole derived list. `post` and `postRaw` are the same POST on the wire (the transport sends one and the other with the same bytes; the second
+// only reads the answer as text), so ONE classifier reads the body of either, whichever way the batch is written: a multipart batch request line by line and a JSON batch entry by entry, each address read as an address is
+// (percent-escapes decoded; one that cannot be read refuses the batch); a JSON batch, as text, bytes or an object, after its JSON is (`\u0041` is `A`); and the name is looked for in the rest of the text as it is and with its
+// escapes decoded.
 //
 // The SDK reads the app's tables back after the post and reports a table its sitemap opens that is not a component (`APP_COMPONENTS_NOT_PERSISTED`) as a warning of the push — which is
 // what a page edit of an app whose navigation opens a table the app does not hold still says: the edit does not add it.
@@ -75,20 +81,30 @@ const ACTION_PATH = /^(?:.*\/api\/data\/v\d+(?:\.\d+)?)?\/AddAppComponents$/;
 // the service may well accept as the action and this does not read. It is matched against the DECODED path (`kindOf`).
 const ACTION_NAME = /(?:^|\.)addappcomponents$/i;
 
-// The path of an address given as text or as a URL: relative addresses are read against a placeholder, and one that cannot be read is no path at all.
-function pathOf(address) {
+// The address of a request as text, READ ONCE: a text is itself, a URL its `href`, any other object what its `toString` says; an object with no text form (`Object.create(null)`, a `toString` that throws) has no address at all.
+// What is decided on, and what is sent, is the text returned here — the transport asks an object that is an address for its text again each time it needs it, so one that says another address the second time would
+// otherwise show the limit one request and the service another.
+function addressOf(address) {
   try {
-    return (address instanceof URL ? address : new URL(String(address), 'https://placeholder.invalid')).pathname;
+    return address instanceof URL ? address.href : String(address);
   } catch {
     return null;
   }
 }
-const addressOf = (address) => (address instanceof URL ? address.href : String(address));
+
+// The path of an address as text: relative addresses are read against a placeholder, and one that cannot be read is no path at all.
+function pathOf(address) {
+  try {
+    return new URL(address, 'https://placeholder.invalid').pathname;
+  } catch {
+    return null;
+  }
+}
 
 // 'action' (the address the SDK uses), 'lookalike' (the action in a spelling this does not read), 'unreadable' (an address, or a path, that cannot be read at all, so it cannot be told from the action's) or
-// 'other' (not the action).
+// 'other' (not the action). `address` is the text `addressOf` made, or null.
 function kindOf(address) {
-  const path = pathOf(address);
+  const path = address === null ? null : pathOf(address);
   if (path === null) return 'unreadable';
   if (ACTION_PATH.test(path)) return 'action';
   // The WHOLE path is percent-decoded first — every segment, so that an escaped separator is a separator — and only then are its trailing slashes dropped and its last segment compared with the action's name.
@@ -133,61 +149,87 @@ const decodeEscapes = (text) => text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
   }
 });
 
-// Why the body of a raw POST to another address cannot be sent while an edit is open — it is, or holds, a `$batch` that may carry the action — or null when nothing in it does. A part of a batch cannot be limited, so a batch that
-// may carry the action is not sent, and a page's own writes, which never name it, are not affected. The body is read as it will be sent: text as it is, bytes as text, an object as the transport serializes it (JSON.stringify,
-// which runs its serializers). What it can name, it can name in a spelling this reads:
-//   multipart            every request line is an address, read as `kindOf` reads one — escapes decoded, a trailing separator and a namespace seen through — and a line that cannot be read refuses the batch
-//   JSON, text or object read after its JSON is: `{"url":"\u0041ddAppComponents"}` names it
-//   anywhere in the text the name is looked for as it is written and with its escapes decoded
-function batchProblem(body) {
-  let text;
-  if (typeof body === 'string') {
-    text = body;
-  } else if (body instanceof Uint8Array) {
-    text = Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString('latin1');
-  } else if (body !== null && typeof body === 'object') {
-    try {
-      text = JSON.stringify(body);
-    } catch {
-      return 'its body cannot be read as the text it will be sent as, so it cannot be told from a $batch that names that action';
-    }
-    // A serializer that answers nothing leaves nothing to send.
-    if (typeof text !== 'string') return null;
-  } else {
-    return null;
-  }
-  const texts = [text];
+// A request body, READ ONCE as the transport takes it (lib/sdk-http-client.js `call` writes a text as it is and serializes everything else with JSON.stringify). This reading is what the limit decides on and what it sends, so
+// nothing in it can answer differently when the transport reads it again. `kind` says what the body was and `send` is what goes on in its place:
+//   none        `undefined` or `null`: no body                                  sent as it is
+//   text        a string, which cannot change                                    sent as it is
+//   bytes       a Buffer or a Uint8Array                                         sent as a COPY: one with no `toJSON` of its own (JSON.stringify would run it) that the caller cannot write to afterwards
+//   data        anything else that serializes to text: `text` is what it serialized to and `data` what that reads back as — plain JSON data with no serializer or getter left to run. A plain object or list is sent as `data`,
+//               which the transport serializes to that same text again (the text JSON.stringify made reads back and writes the same); anything else — a string, a number, `null` — is sent as the `text`, because the transport
+//               writes a string as it is (`"abc"` would go as `abc`) and `null` as no body
+//   nothing     a serializer that answers `undefined`: nothing is written, so nothing is sent
+//   unreadable  a cycle, a BigInt, a serializer that throws, bytes that lie about their memory: it cannot be read, so it is refused where it matters
+function readBody(body) {
+  if (body === undefined || body === null) return { kind: 'none', send: body };
+  if (typeof body === 'string') return { kind: 'text', text: body, send: body };
   try {
-    texts.push(JSON.stringify(JSON.parse(text)));
+    if (body instanceof Uint8Array) {
+      // A view of the caller's memory, then a copy of it: `Buffer.from(body)` would call a `valueOf` the caller put on the bytes.
+      const bytes = Buffer.from(Buffer.from(body.buffer, body.byteOffset, body.byteLength));
+      return { kind: 'bytes', bytes, send: Buffer.isBuffer(body) ? bytes : new Uint8Array(bytes) };
+    }
+    const text = JSON.stringify(body);
+    if (typeof text !== 'string') return { kind: 'nothing', send: undefined };
+    const data = JSON.parse(text);
+    return { kind: 'data', text, data, send: data !== null && typeof data === 'object' ? data : text };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
+// The address of every request a batch holds, in either of the forms a batch is written in:
+//   multipart   a request line for each part, as the bundle writes one (renderChangeSet):        POST https://contoso.crm.dynamics.com/api/data/v9.0/uxagentprojects HTTP/1.1
+//   JSON        the `url` of each entry of `requests`, an absolute path or one relative to the service root:   {"requests":[{"id":"1","method":"POST","url":"uxagentprojects","body":{…}}]}
+//               https://docs.oasis-open.org/odata/odata-json-format/v4.01/odata-json-format-v4.01.html#_Toc19867124 (19.1 Batch Request)
+// An entry that has no `url` (it is not an object, or its `url` is not text) names no address: the look for the name in the text (`batchProblem`) is all that reads it.
+function batchAddresses(text, json) {
+  const lines = [...text.matchAll(REQUEST_LINE)].map(([, address]) => address);
+  const entries = json && Array.isArray(json.requests) ? json.requests.filter((entry) => entry && typeof entry.url === 'string').map((entry) => entry.url) : [];
+  return [...lines, ...entries];
+}
+
+// Why a request to another address cannot be sent while an edit is open — its body is, or holds, a `$batch` that may carry the action — or null when nothing in it does. It is asked of a `post` and of a `postRaw` alike: the
+// transport sends both as the same POST and only reads the answer differently. A part of a batch cannot be limited, so a batch that may carry the action is not sent, and a page's own writes, which never name it, are not
+// affected. The body is read as `readBody` had it — the text it will be written as: a text as it is, bytes as the text they spell, an object as what it serialized to. What a batch can name, it can name in a spelling this reads:
+//   multipart   every request line is an address, read as `kindOf` reads one — escapes decoded, a trailing separator and a namespace seen through — and a line that cannot be read refuses the batch
+//   JSON        every entry of `requests` is an address, read the same way, whether the batch is text, bytes or an object — and read after its JSON is: `{"url":"\u0041ddAppComponents"}` names it
+//   anywhere    in the text the name is looked for as it is written and with its escapes decoded
+function batchProblem(read) {
+  if (read.kind === 'unreadable') return 'its body cannot be read as the text it will be sent as, so it cannot be told from a $batch that names that action';
+  // A body with nothing to write — none, or a serializer that answered nothing — holds no batch.
+  const text = read.kind === 'text' || read.kind === 'data' ? read.text : read.kind === 'bytes' ? read.bytes.toString('latin1') : undefined;
+  if (text === undefined) return null;
+  const texts = [text];
+  let json;
+  try {
+    json = JSON.parse(text);
+    texts.push(JSON.stringify(json));
   } catch {
     // Not JSON text: a multipart envelope, say.
   }
   const names = 'it is part of a $batch that names that action, and a batch cannot be limited part by part';
   if (texts.some((one) => MENTIONS_ACTION.test(one) || MENTIONS_ACTION.test(decodeEscapes(one)))) return names;
-  for (const [, address] of text.matchAll(REQUEST_LINE)) {
+  for (const address of batchAddresses(text, json)) {
     const kind = kindOf(address);
-    if (kind === 'unreadable') return `it is part of a $batch with a request line whose address (${address}) cannot be read, so it cannot be told from one that names that action, and a batch cannot be limited part by part`;
+    if (kind === 'unreadable') return `it is part of a $batch with a request whose address (${address}) cannot be read, so it cannot be told from one that names that action, and a batch cannot be limited part by part`;
     if (kind !== 'other') return names;
   }
   return null;
 }
 
-// A request body in its CANONICAL form: the plain JSON data the service will read, or `undefined` when the body cannot be put in that form. A `post` is given an object, which the plugin's transport serializes with
-// JSON.stringify; a raw body is JSON text, or the UTF-8 bytes of it (JSON exchanged between systems is UTF-8 — https://www.rfc-editor.org/rfc/rfc8259#section-8.1), or an object. An object is serialized and read back
-// exactly as the transport will serialize it, so that what is inspected is what is sent: JSON.stringify runs a `toJSON` — own, inherited, on a component or on the list — and every getter, and the plain data that comes
-// back has none of them left to run again. The SDK's request, as a raw body:
+// The plain JSON data the action's body reads as — what `decide` works on — or `undefined` when it cannot be read in the form the service takes, which the limit refuses as it refuses a `post` with no body. A `post` is given an
+// object, which the plugin's transport serializes with JSON.stringify, and that is the `data` `readBody` made of it; a raw body is JSON text, or the UTF-8 bytes of it (JSON exchanged between systems is UTF-8 —
+// https://www.rfc-editor.org/rfc/rfc8259#section-8.1), or an object. The SDK's request, as a raw body:
 //   {"AppId":"<guid>","Components":[{"@odata.type":"Microsoft.Dynamics.CRM.savedquery","savedqueryid":"<guid>"}]}
-// What is not such data is `undefined`, which the limit refuses as it refuses a `post` with no body: text that is not JSON, text or bytes with a byte order mark (`JSON.parse` does not read one), bytes that are not
-// UTF-8 (they are not read leniently, with a replacement character in their place, because what is sent is what was read, re-encoded), a cycle, a BigInt, a serializer that throws or answers nothing.
-function canonicalOf(body, raw) {
+// What is not such data is `undefined`: text that is not JSON, text or bytes with a byte order mark (`JSON.parse` does not read one), bytes that are not UTF-8 (they are not read leniently, with a replacement character in
+// their place, because what is sent is what was read, re-encoded), no body, and a body `readBody` could not read — a cycle, a BigInt, a serializer that throws or answers nothing.
+function canonicalOf(read, raw) {
   try {
-    if (raw && typeof body === 'string') return JSON.parse(body);
-    if (raw && body instanceof Uint8Array) {
-      const bytes = Buffer.from(body.buffer, body.byteOffset, body.byteLength);
-      return isUtf8(bytes) ? JSON.parse(bytes.toString('utf8')) : undefined;
-    }
-    if (body === null || typeof body !== 'object') return undefined;
-    return JSON.parse(JSON.stringify(body));
+    if (read.kind === 'data') return read.data;
+    if (!raw) return undefined;
+    if (read.kind === 'text') return JSON.parse(read.text);
+    if (read.kind === 'bytes') return isUtf8(read.bytes) ? JSON.parse(read.bytes.toString('utf8')) : undefined;
+    return undefined;
   } catch {
     return undefined;
   }
@@ -242,25 +284,28 @@ function makeAppComponentScope() {
     wrap(client) {
       if (!client || typeof client.post !== 'function') return client;
       // A POST — `post` with the object the SDK gives it, or `postRaw` with a body the transport does not touch — while some edit is open (`raw` says which). With no edit open nothing is read, below: the build owns
-      // the whole app and sends what the SDK derives, in whatever shape the bundle gives it.
+      // the whole app and sends what the SDK derives, in whatever shape the bundle gives it. With one open the request is read ONCE (WHY A REQUEST IS READ ONCE, above) — its address as text, its body as `readBody` has it — and
+      // every branch decides on that reading and sends that: the address text and `read.send`, never the url or the body the caller handed over, which the transport would read again.
       const forward = async (method, raw, url, body, options) => {
-        const kind = kindOf(url);
-        if (kind === 'unreadable') throw refusal(`its address (${addressOf(url)}) cannot be read — a malformed percent-escape, or no URL at all — so it cannot be told from the AddAppComponents action`);
-        if (kind === 'lookalike') throw refusal(`its address (${pathOf(url)}) is not the SDK's /api/data/v<version>/AddAppComponents, though it names that action`);
+        const address = addressOf(url);
+        const kind = kindOf(address);
+        if (kind === 'unreadable') throw refusal(`its address${address === null ? '' : ` (${address})`} cannot be read — a malformed percent-escape, or no URL at all — so it cannot be told from the AddAppComponents action`);
+        if (kind === 'lookalike') throw refusal(`its address (${pathOf(address)}) is not the SDK's /api/data/v<version>/AddAppComponents, though it names that action`);
+        const read = readBody(body);
         if (kind === 'other') {
-          // Not the action's address, so not the action's — but a raw body may be a `$batch` that NAMES the action, which cannot be limited. Anything else goes on as it is.
-          const problem = raw ? batchProblem(body) : null;
+          // Not the action's address, so not the action's — but the body may be a `$batch` that NAMES the action, which cannot be limited, whichever method carries it. Anything else goes on as it was read.
+          const problem = batchProblem(read);
           if (problem) throw refusal(problem);
-          return client[method](url, body, options);
+          return client[method](address, read.send, options);
         }
-        const { send, elsewhere } = decide(canonicalOf(body, raw));
-        // Another app's request is not this edit's, so it goes on as it came: the decision was made on its canonical form, which is what the transport will send of it.
-        if (elsewhere) return client[method](url, body, options);
+        const { send, elsewhere } = decide(canonicalOf(read, raw));
+        // Another app's request is not this edit's, so it goes on as it was read.
+        if (elsewhere) return client[method](address, read.send, options);
         if (send === null) return NO_CONTENT(raw);
         // What goes on is the canonical form the decision was made on, in a representation the transport sends as it is: the JSON text for text and for bytes — it would send a Buffer as `{"type":"Buffer",…}` —
         // and the plain object for an object. Never the object, text or bytes that were handed over: another reading of them could be another request, and a Content-Length is the length of what is written.
-        const onward = raw && (typeof body === 'string' || body instanceof Uint8Array) ? JSON.stringify(send) : send;
-        return client[method](url, onward, optionsFor(onward, options));
+        const onward = raw && (read.kind === 'text' || read.kind === 'bytes') ? JSON.stringify(send) : send;
+        return client[method](address, onward, optionsFor(onward, options));
       };
       const post = async (url, body, options) => (open.size === 0 ? client.post(url, body, options) : forward('post', false, url, body, options));
       // A raw POST is told by its address as a `post` is (WHAT IS RAW, above).

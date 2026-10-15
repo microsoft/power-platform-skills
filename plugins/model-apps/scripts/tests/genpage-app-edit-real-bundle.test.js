@@ -507,3 +507,51 @@ test('REAL BUNDLE: a raw request the limit cannot read is refused, and the SDK r
     }, { defaultViewPinned: false });
   }
 });
+
+// ── A request is read ONCE: what reaches the service is what the limit read ─────────────────────────────────────────────────────────────────────────────
+// The plugin's transport serializes the object it is given with JSON.stringify, which runs a `toJSON` — so an object that answers differently each time it is serialized would show the limit one request and put
+// another on the wire, if the limit sent that object on instead of what it read. These make the SDK's request of the action such an object. Read as another app's request the first time (the SDK's whole list, for an
+// app that is not the edit's), it is not the edit's to limit and goes on, as read: the transport is given that and never serializes the object again, so the SDK's own request, which it would have answered with the
+// second time, is never sent. Read as the SDK's own the first time, it is cut like any other. (The fake service answers a request for an app it does not have as the service does: no such app, and no change.)
+const OTHER_APP = '33333333-3333-4333-8333-333333333333';
+const answersDifferently = (state, first, later) => ({ toJSON() { state.serializations += 1; return state.serializations === 1 ? first : later; } });
+// How the SDK's request of the action is sent as `make(request)`: through a post, or through the raw method.
+const SENT_AS = [
+  ['a post', (make) => ({ change: (url, request) => [url, isAddAppComponents({ url }) ? make(request) : request] })],
+  ['a raw post', (make) => ({ raw: (request) => make(request) })],
+];
+
+for (const [label, sentAs] of SENT_AS) {
+  test(`REAL BUNDLE: ${label} of an object that serializes as another app's request the first time and as the SDK's own after is read once — what reaches the service is what the limit read, and nothing the maker took out is put back`, async () => {
+    await inWorld(async ({ world }) => {
+      const state = { serializations: 0 };
+      let whole;
+      const { pushed, reached, emitted } = await pinThrough(world, {
+        pinned: [APP_VIEW_ID],
+        ...sentAs((request) => { whole = request; return answersDifferently(state, { ...request, AppId: OTHER_APP }, request); }),
+      });
+      assert.strictEqual(pushed.saved, true, JSON.stringify(pushed));
+      assert.strictEqual(emitted.length, 1, 'the SDK made its one request of the action');
+      assert.strictEqual(state.serializations, 1, 'serialized once, by the limit — not again by the transport');
+      assert.deepStrictEqual(reached.filter(isAddAppComponents).map((request) => request.body), [{ ...whole, AppId: OTHER_APP }], 'the request the limit read — the SDK\'s whole list, for another app — is the one that reached the service');
+      assert.strictEqual((pushed.warnings || []).length, 1, JSON.stringify(pushed.warnings));
+      assert.match(pushed.warnings[0], /one or more components were not pinned \(HTTP 404 .*Does Not Exist/, 'the service has no such app: the SDK says its pin was not made');
+      assert.deepStrictEqual(world.additions(), [], 'nothing was added to the app');
+      assertMembership(world, { views: [] });
+    }, { defaultViewPinned: false });
+  });
+
+  test(`REAL BUNDLE: ${label} of an object that serializes as the SDK's own request the first time is cut like any other — and read once, so what it would serialize as after is never sent`, async () => {
+    const other = { AppId: OTHER_APP, Components: [] };
+    await inWorld(async ({ world }) => {
+      const state = { serializations: 0 };
+      const { pushed, reached } = await pinThrough(world, { pinned: [APP_VIEW_ID], ...sentAs((request) => answersDifferently(state, request, other)) });
+      assert.strictEqual(pushed.saved, true, JSON.stringify(pushed));
+      assert.strictEqual(state.serializations, 1);
+      assert.deepStrictEqual(reached.filter(isAddAppComponents).map((request) => request.body), [{ AppId: APP_ID, Components: [viewRef(APP_VIEW_ID)] }], 'the one view the edit pins');
+      assert.deepStrictEqual(pushed.warnings || [], []);
+      assert.deepStrictEqual(world.added(), { tables: [], forms: [], views: [APP_VIEW_ID], charts: [] });
+      assertMembership(world);
+    }, { defaultViewPinned: false });
+  });
+}
