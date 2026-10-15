@@ -136,6 +136,12 @@ const { navigationEntryKind, navigationVerdict } = require('./app-navigation.js'
 const BuildHalt = _BuildHalt;
 const SDK_COLUMN_TYPE = _SDK_COLUMN_TYPE;
 
+// What a halt that quotes the maker's own words — a page's name — gets when a run again cannot change what it says. The build runs itself again, up to three times and after every earlier phase,
+// for a halt it takes for a transient error (isTransientHalt, build-model-app.js), and unless the halt says `transient: false` it takes that from the halt's TEXT: a page called "SQL Timeout Report"
+// whose source the build refuses then reads as a SQL timeout, and the page is run three more times with a log that blames the service. A halt that wraps the service's own words as well is not marked
+// but names them (`retryText`, see afterWrite), so the service's words still decide and the page's name cannot.
+const NEVER_RETRIED = Object.freeze({ transient: false });
+
 // Dataverse control class ids. The vendored bundle does NOT export the SDK's ControlClassId enum, so
 // these stable platform GUIDs are pinned here (matching the SDK's
 // @maker-studio/cds-designer-models ControlClassIds) and passed as intent to the generic addElement
@@ -5604,7 +5610,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           adoptedPending.push({ key, pageId: record.pageId, name: page.name });
         } catch (e) {
           // `transient: false`, as for any creation receipt that cannot be saved: the build's re-run of a halt it takes for transient must not run on.
-          throw Object.assign(new BuildHalt(`page "${page.name}" was found as ${record.pageId} (a create an earlier build started), but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
+          throw Object.assign(new BuildHalt(`page "${page.name}" was found as ${record.pageId} (a create an earlier build started), but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), NEVER_RETRIED);
         }
       }
       if (pendingConflicts.length) {
@@ -5613,7 +5619,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (c.reason === 'pending-create-unreadable') return `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it could not be read to tell whether it is a page that build sent (${c.error}), so it is neither adopted nor updated`;
           return `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it is not a page that build sent: ${c.why} — so it is neither adopted nor updated`;
         });
-        throw new BuildHalt(`generative-page creation(s) that an earlier build started cannot be settled: ${why.join('; ')}. Look at the page(s) in the environment: delete the one that is not yours, or delete the "pending" record(s) named in ${path.join(path.resolve(opts.workspaceDir || '.'), 'page-ownership.pending.*.json')} for a page you have confirmed is not this app's, and re-run.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+        throw Object.assign(new BuildHalt(`generative-page creation(s) that an earlier build started cannot be settled: ${why.join('; ')}. Look at the page(s) in the environment: delete the one that is not yours, or delete the "pending" record(s) named in ${path.join(path.resolve(opts.workspaceDir || '.'), 'page-ownership.pending.*.json')} for a page you have confirmed is not this app's, and re-run.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false }), NEVER_RETRIED);
       }
       const createdIds = creationIds(ownership);
       const storedNames = new Map();
@@ -5665,7 +5671,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const removal = genpageCommand('delete', { env: opts.env, pageId: c.manifestId, flags: ' --allow-destructive' });
           return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation with ${place} (it publishes the app and proves the page in what runs) and re-run; if not, remove the stale id from the manifest/spec (or delete the page, after asking the user — it is permanent: ${removal}) and re-run`;
         });
-        throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+        throw Object.assign(new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false }), NEVER_RETRIED);
       }
       // A key that is bound to a page does not create one, so a creation an earlier build left pending for it is not resumed. What becomes of its record is decided by what is KNOWN
       // about its page, never by one listing:
@@ -5707,7 +5713,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (group.length < 2) continue;
         const unbound = group.filter((p) => !keyToId.has(p.key || p.name));
         if (unbound.length) {
-          throw new BuildHalt(`refusing to CREATE a duplicate-named generative page: ${unbound.length} of ${group.length} pages named '${group[0].name}' are NOT bound to an existing deployed page (their pageId is absent/stale — e.g. the page was deleted in Maker since this spec was downloaded), so this build would re-materialize the duplicate. Re-download the app for fresh page ids, or rename/remove the stale page(s) in the spec.`, { phase: 'pages', code: 'pages-duplicate-name-create', recoverable: false });
+          throw Object.assign(new BuildHalt(`refusing to CREATE a duplicate-named generative page: ${unbound.length} of ${group.length} pages named '${group[0].name}' are NOT bound to an existing deployed page (their pageId is absent/stale — e.g. the page was deleted in Maker since this spec was downloaded), so this build would re-materialize the duplicate. Re-download the app for fresh page ids, or rename/remove the stale page(s) in the spec.`, { phase: 'pages', code: 'pages-duplicate-name-create', recoverable: false }), NEVER_RETRIED);
         }
       }
 
@@ -5773,7 +5779,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (updateIds.length) {
         const shared = await sharedPagesNow(updateIds);
         if (shared.length) {
-          throw new BuildHalt(`generative page(s) shared across apps: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
+          throw Object.assign(new BuildHalt(`generative page(s) shared across apps: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false }), NEVER_RETRIED);
         }
       }
 
@@ -5787,7 +5793,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         try { recordPageCreation(opts.workspaceDir, appUnique, p.key || p.name, id, p.name, opts.env); } catch (e) {
           // `transient: false`: the page exists and nothing records it, so the build's own re-run of a halt it takes for transient (isTransientHalt, build-model-app.js — which reads this
           // message, and so the page's name: "SQL Timeouts" would match) would create a second one beside it.
-          throw Object.assign(new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
+          throw Object.assign(new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), NEVER_RETRIED);
         }
         // The receipt is what the page's creation is now known by; the record that stood for it while it was not is consumed after it, never before. One that cannot be
         // removed is harmless — the next build finds the receipt for the same key and id when it settles the pending records (above), and consumes the record without proving the page again — so it is not a halt.
@@ -5823,7 +5829,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           });
         } catch (e) {
           // A page found under the id that no create under it sent: the conflict a page listed under a pending id is, said the same way. Nothing was adopted, published or updated.
-          if (e && e.code === 'GENPAGE_CREATE_DIVERGED') throw Object.assign(new BuildHalt(e.message, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, cause: e }), { transient: false });
+          if (e && e.code === 'GENPAGE_CREATE_DIVERGED') throw Object.assign(new BuildHalt(e.message, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, cause: e }), NEVER_RETRIED);
           // Only for a create this build started itself. A resumed one may share its id with a request an earlier build sent that has still not arrived, which a refusal of THIS send says nothing about.
           if (sentUnder && opts.workspaceDir && e && e.outcome === 'nothing' && !resumeIds.has(key)) {
             try { completePendingCreations(opts.workspaceDir, appUnique, [sentUnder], opts.env); } catch { /* the record of a create that wrote nothing: the next build resumes it, or keeps it while the key is bound to another page — not a reason to halt */ }
@@ -5847,7 +5853,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       for (const p of implemented) {
         for (const [field, value] of [['prompt', p.prompt], ['agentMessage', p.agentMessage]]) {
           if (suppliedButBlank(value)) {
-            throw new BuildHalt(`page "${p.name || keyOf(p)}": ${field} is present but blank — refusing to deploy generated text in its place. Give it real content or remove the key.`, { phase: 'pages', code: 'pages-blank-provenance', recoverable: false });
+            throw Object.assign(new BuildHalt(`page "${p.name || keyOf(p)}": ${field} is present but blank — refusing to deploy generated text in its place. Give it real content or remove the key.`, { phase: 'pages', code: 'pages-blank-provenance', recoverable: false }), NEVER_RETRIED);
           }
         }
       }
@@ -5902,26 +5908,26 @@ async function runSdkBuildPhases(spec, opts, owed) {
         scannedSha.set(keyOf(p), sourceSha);
         let code;
         try { code = sourceText(bytes); } catch (e) {
-          throw new BuildHalt(`page "${p.name}" cannot be deployed: ${e.message}`, { phase: 'pages', code: 'pages-source-not-utf8', recoverable: false });
+          throw Object.assign(new BuildHalt(`page "${p.name}" cannot be deployed: ${e.message}`, { phase: 'pages', code: 'pages-source-not-utf8', recoverable: false }), NEVER_RETRIED);
         }
         sourceByKey.set(keyOf(p), code);
         const malformed = navMalformedRefs(code);
-        if (malformed.length) throw new BuildHalt(`page "${p.name}" has malformed navigation reference(s): ${malformed.join(', ')} — a cross-page link must be a double-quoted "PAGEREF_<key>" pageId literal, alone or followed only by casts such as \`as const\`; ${PAGEREF_RULE}`, { phase: 'pages', code: 'pages-malformed-navref', recoverable: false });
+        if (malformed.length) throw Object.assign(new BuildHalt(`page "${p.name}" has malformed navigation reference(s): ${malformed.join(', ')} — a cross-page link must be a double-quoted "PAGEREF_<key>" pageId literal, alone or followed only by casts such as \`as const\`; ${PAGEREF_RULE}`, { phase: 'pages', code: 'pages-malformed-navref', recoverable: false }), NEVER_RETRIED);
         const { declaredNotReferenced, referencedNotDeclared } = navTargetParity((p.navigatesTo || []).map((n) => n.targetKey), navReferencedKeys(code));
         // A declared call can be absent only because the lexer cannot see it (it read a regex or a comment over it), and "declared-but-absent"
         // alone sends the author looking for a call that is plainly there: when the page has a guess, the halt names it.
         const hidden = declaredNotReferenced.length ? frontierNote(code) : '';
-        if (declaredNotReferenced.length || referencedNotDeclared.length) throw new BuildHalt(`page "${p.name}" navigation parity mismatch — declared-but-absent: [${declaredNotReferenced.join(', ')}], referenced-but-undeclared: [${referencedNotDeclared.join(', ')}]${hidden ? ` — ${hidden}` : ''}`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false });
+        if (declaredNotReferenced.length || referencedNotDeclared.length) throw Object.assign(new BuildHalt(`page "${p.name}" navigation parity mismatch — declared-but-absent: [${declaredNotReferenced.join(', ')}], referenced-but-undeclared: [${referencedNotDeclared.join(', ')}]${hidden ? ` — ${hidden}` : ''}`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false }), NEVER_RETRIED);
         // new-Important-1 (fail-closed): a nav pageId must be a DECLARED "PAGEREF_<key>" — never a dynamic
         // expression (unverifiable target) or a hardcoded GUID literal in CANONICAL source (breaks cross-env
         // recreate and ships nav the design never declared). extractNavTargets classifies each nav call site's
         // pageId; 'pageref'-not-declared is already caught by navTargetParity, so here reject 'dynamic' + 'literal'.
         const badNav = extractNavTargets(code).filter((t) => t.kind === 'dynamic' || t.kind === 'literal');
-        if (badNav.length) throw new BuildHalt(`page "${p.name}" has ${badNav.length} undeclared/non-symbolic navigation target(s) (dynamic expression or hardcoded page GUID) — cross-page navigation must use a double-quoted "PAGEREF_<key>" pageId declared via navigatesTo`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false });
+        if (badNav.length) throw Object.assign(new BuildHalt(`page "${p.name}" has ${badNav.length} undeclared/non-symbolic navigation target(s) (dynamic expression or hardcoded page GUID) — cross-page navigation must use a double-quoted "PAGEREF_<key>" pageId declared via navigatesTo`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false }), NEVER_RETRIED);
         // A PAGEREF_ token nothing resolves (anywhere but the canonical pageId of a call the checker trusts — no comment is exempt) would ship as the literal
         // string — a dead link — so it halts here, before any page is created, naming the page and where the token is.
         const stray = strayPageRefs(code);
-        if (stray.length) throw new BuildHalt(`page "${p.name}" has PAGEREF_ token(s) that no navigation rewrite will resolve, so they would ship as literal text: ${describePageRefLocations(stray)} — ${pageRefAdvice(stray)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false });
+        if (stray.length) throw Object.assign(new BuildHalt(`page "${p.name}" has PAGEREF_ token(s) that no navigation rewrite will resolve, so they would ship as literal text: ${describePageRefLocations(stray)} — ${pageRefAdvice(stray)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false }), NEVER_RETRIED);
         // The Griffel check, last, so a page's navigation problems — which a style fix does not touch — are reported first. The file named is the canonical source, as the spec gives it.
         // A page that is created, or whose source changed since the last recorded apply, is held to it; one that is sent again as it is gets a warning (griffelStanding above).
         if (uploadedThisRun(p)) {
@@ -5935,7 +5941,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
               // `transient: false`, as for the receipt halt: this refuses the page's own source, before anything in the pages phase is written, so running the build again cannot change
               // the answer — but isTransientHalt (build-model-app.js) reads the halt's TEXT, which opens with the page's name, and a page called "SQL Timeout Report" would read as a
               // transient error: three more runs of every earlier phase, and a log that blames the service.
-              throw Object.assign(new BuildHalt(describeGriffelRefusal(problems, file, { ...words, note }), { phase: 'pages', code: 'pages-griffel-shorthand', recoverable: false }), { transient: false });
+              throw Object.assign(new BuildHalt(describeGriffelRefusal(problems, file, { ...words, note }), { phase: 'pages', code: 'pages-griffel-shorthand', recoverable: false }), NEVER_RETRIED);
             }
             griffelWarnings.push(describeGriffelWarning(problems, file, { ...words, standing }));
           }
@@ -5950,19 +5956,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // published is a halt — the page exists (the caller has recorded it by now), the runtime still serves the copy it had, and a re-run reuses the page
       // and publishes it (a page that already holds its content is published, not written again — unless this workspace recorded that this very content was
       // published, below, and that record is only ever written after a publish that was seen to take effect).
-      const afterWrite = async (p, verb, written) => {
+      const afterWrite = async (p, verb, written, fields) => {
         if (typeof opts.warn === 'function') for (const w of written.warnings || []) opts.warn(`page "${p.name}": ${w}`);
         if (written.publish && written.publish.kind === 'failed') {
-          throw new BuildHalt(`page "${p.name}" was ${verb} as ${written.pageId} and saved, but publishing it failed (${written.publish.detail}) — the runtime still serves the previously published copy. Re-run the build once the cause is cleared: the page is reused, not created again`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true });
+          // The halt quotes the page's name, and in the parentheses the service's own words — and only those say whether a run again can help ("… try again later"). They are what the build's retry
+          // reads (`retryText`, isTransientHalt in build-model-app.js), so a page called "SQL Timeout Report" cannot make a refused publish read as a transient error, and a refusal that says to try later still does.
+          throw Object.assign(new BuildHalt(`page "${p.name}" was ${verb} as ${written.pageId} and saved, but publishing it failed (${written.publish.detail}) — the runtime still serves the previously published copy. Re-run the build once the cause is cleared: the page is reused, not created again`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true }), { retryText: String(written.publish.detail || '') });
         }
-        await rememberPublished(written);
+        await rememberPublished(written, p, fields);
       };
 
       // WHICH PAGES ARE KNOWN TO BE PUBLISHED. A page that already holds what the spec asks for is not written, but the backend publishes it unless it is told that exactly this content was
       // published already (`publishedFingerprint`, genpage.update): the server cannot say whether an earlier run's publish of a page finished, and a page whose publish did not finish has to be
       // published by the next run. Without a record of its own that would publish EVERY unchanged page on EVERY rebuild — one PublishXml of several seconds each, ten pages ten publishes. So the build keeps the
       // record (lib/page-publish-records.js), written once a publish was SEEN to take effect (`verified`) and never otherwise: per page the hash of the content it was published with, and the versionnumber
-      // of each of its file rows read right after that publish.
+      // of each of its file rows, taken only from a published copy that was read back and found to hold that content (`provedVersions`, below).
       // The hash says what this workspace SENT; it cannot say that nobody has published anything else since — another workspace, another machine or Maker publishing other content and then leaving the
       // draft equal to the file would match it. The file rows' versions are what moves (measured: publishing new content, or a draft-only save, moves the version of each file row it changes; an unchanged row
       // keeps its own), so the hash is handed to `update` only while the versions read NOW are exactly the recorded ones (`publishesStillStanding`, below). A page that is not in the record, is there with
@@ -5972,17 +5980,33 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // page that, and what it cannot see is spelled out in the record's header (the page row's own fields, its name).
       const publishedPages = readPublishedPages(opts.workspaceDir, appUnique, opts.env);
       let publishRecordWarned = false;
-      const rememberPublished = async (written) => {
+      // The versions of a page's files that may go into the record: Map<file row id, version>, or null — "no versions", which costs the next build a publish and nothing else. The versions only mean "the published
+      // copy held this content while the files read so" when they belong to such a copy, and a read of them taken AFTER the SDK saw the publish take effect does not say that: a writer that published other content and
+      // put this content back as a draft in between left the versions of ITS publication, with this build's hash beside them, and every rebuild then trusted the pair. So they are proved, in the order that proves them: the
+      // versions, then the page's PUBLISHED copy read back and compared with the content that was sent (`publishedDiffers`), then the versions again. They are recorded only when both reads of the versions are one
+      // consistent set and the same set — nothing moved while the copy was read — and the copy held the content: the versions are then those of a published copy that holds it, whoever published it. A copy that differs
+      // was published over from elsewhere and is said so; a read that fails, a set that moved or a backend that cannot read the copy back says nothing and records none, as a failed read of the versions never said anything.
+      const provedVersions = async (p, pageId, fields, fingerprint) => {
+        try {
+          if (!fields || typeof genpage.fileVersions !== 'function' || typeof genpage.publishedDiffers !== 'function') return null;
+          const first = await genpage.fileVersions([pageId]);
+          const before = first.ok ? first.versions.get(pageId) : null;
+          if (!before) return null;
+          const copy = await genpage.publishedDiffers(pageId, fields);
+          // `fingerprint` is the hash of the content the copy was compared with: it must be the hash the record keeps, or the answer is about other content.
+          if (!copy.ok || copy.fingerprint !== fingerprint) return null;
+          if (copy.differing.length) {
+            if (typeof opts.warn === 'function') opts.warn(`page "${p.name}": its published copy, read back right after the publish, differs from what this build sent in its ${copy.differing.join(', ')} — it was published again from elsewhere — so it is not recorded as published, and the next build publishes it again`);
+            return null;
+          }
+          const second = await genpage.fileVersions([pageId]);
+          return second.ok && sameFileVersions(before, second.versions.get(pageId)) ? before : null;
+        } catch { return null; }
+      };
+      const rememberPublished = async (written, p, fields) => {
         if (!opts.workspaceDir || !written.publish || written.publish.kind !== 'verified' || typeof written.fingerprint !== 'string') return;
         const pageId = String(written.pageId).toLowerCase();
-        // The versions of the page's files as they are right after the publish that was seen to take effect. A read that fails, or that is not one consistent set, records none — and the next build publishes the page.
-        let files = null;
-        try {
-          if (typeof genpage.fileVersions === 'function') {
-            const read = await genpage.fileVersions([pageId]);
-            files = read.ok ? read.versions.get(pageId) || null : null;
-          }
-        } catch { files = null; }
+        const files = await provedVersions(p, pageId, fields, written.fingerprint);
         publishedPages.set(pageId, { fingerprint: written.fingerprint, files });
         const bound = new Set(Array.from(keyToId.values(), (id) => String(id).toLowerCase()));
         try {
@@ -6028,19 +6052,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const up = await createPage(p, { name: p.name, source: sourceByKey.get(key), prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model });
+            const fields = { name: p.name, source: sourceByKey.get(key), prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
+            const up = await createPage(p, fields);
             recordCreate(p, up.pageId);
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
             result.created.pageSourceShas[key] = scannedSha.get(key);
             mintedKeys.add(key);
             await persistNow();
-            await afterWrite(p, 'created', up);
+            await afterWrite(p, 'created', up, fields);
           }
           const navSources = new Map();
           for (const p of implemented) if ((p.navigatesTo || []).length) navSources.set(keyOf(p), { code: sourceByKey.get(keyOf(p)) });
           const { deployment: dep, unresolved, residual } = resolvePageRefs(navSources, keyToId);
-          if (unresolved.length) throw new BuildHalt(`unresolved cross-page navigation target(s): ${unresolved.join(', ')} — a page navigates to a key that isn't a built page`, { phase: 'pages', code: 'pages-dangling-navref', recoverable: false });
+          if (unresolved.length) throw Object.assign(new BuildHalt(`unresolved cross-page navigation target(s): ${unresolved.join(', ')} — a page navigates to a key that isn't a built page`, { phase: 'pages', code: 'pages-dangling-navref', recoverable: false }), NEVER_RETRIED);
           // The resolved copy is checked again, because the lexer can read it differently from the source: each token became a longer page id,
           // which can move a `(` out of the lexer's look-behind (see lexNavigation in pageref-resolver.js). The check is a plain scan of the text
           // with no exemption: ANY PAGEREF_ token left in it, in a comment too, would ship as literal text, so the page halts here — after the
@@ -6048,7 +6073,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (residual.length) {
             const left = residual.filter((r) => r.page === residual[0].page);
             const owner = implemented.find((p) => keyOf(p) === residual[0].page);
-            throw new BuildHalt(`page "${owner ? owner.name : residual[0].page}" has PAGEREF_ token(s) left once its navigation links were resolved, so they would ship as literal text: ${describePageRefLocations(left)} (line and column are in the resolved copy) — ${pageRefAdvice(left)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false });
+            throw Object.assign(new BuildHalt(`page "${owner ? owner.name : residual[0].page}" has PAGEREF_ token(s) left once its navigation links were resolved, so they would ship as literal text: ${describePageRefLocations(left)} (line and column are in the resolved copy) — ${pageRefAdvice(left)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false }), NEVER_RETRIED);
           }
           for (const [k, code] of dep) deployment.set(k, code);
           return `${deployment.size} navigation source(s)`;
@@ -6112,7 +6137,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             checkedBeforeWritingInPlace = true;
             const shared = await sharedPagesNow(Array.from(writesInPlace, (k) => keyToId.get(k)));
             if (shared.length) {
-              throw Object.assign(new BuildHalt(`generative page(s) became shared across apps while this build ran: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content); no page this build began with has been updated in place. ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false }), { transient: false });
+              throw Object.assign(new BuildHalt(`generative page(s) became shared across apps while this build ran: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content); no page this build began with has been updated in place. ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false }), NEVER_RETRIED);
             }
           }
           await runner.run('pages', `page "${p.name}"`, async () => {
@@ -6132,7 +6157,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             if (!requestedId) recordCreate(p, up.pageId);
             // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
-            if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
+            if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw Object.assign(new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false }), NEVER_RETRIED);
             if (requestedId && writesInPlace.has(key)) updatedInPlace.set(String(requestedId).toLowerCase(), p.name);
             // Key by the STABLE key (p.key||p.name): appDef resolves result.pages[s.page] where s.page is the
             // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
@@ -6142,7 +6167,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
             result.created.pageSourceShas[key] = scannedSha.get(key);
             await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
-            await afterWrite(p, requestedId ? 'updated' : 'created', up);
+            await afterWrite(p, requestedId ? 'updated' : 'created', up, fields);
             return up.pageId;
           });
         }

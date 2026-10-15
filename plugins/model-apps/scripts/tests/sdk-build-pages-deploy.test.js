@@ -2739,7 +2739,8 @@ test('deploy: the record keeps the version of every file row of each page as it 
       assert.deepStrictEqual(recorded.files, versionsNow(server, id), `${id}: every file row, with the version it had once the publish had taken effect`);
       assert.ok(recorded.files.size >= 4, 'the four rows a page is made of, at least');
     }
-    assert.strictEqual(versionReads(server).length, 2, 'one read of a page\'s versions after each publish');
+    // A page's versions are read twice after its publish, one read on each side of the read-back of its published copy: they are recorded only when the two agree and the copy holds the content that was sent.
+    assert.strictEqual(versionReads(server).length, 4, 'two reads of a page\'s versions for each of the two pages');
 
     const from = server.requests.length;
     await rebuildPages(spec, appDir, server, ids);
@@ -2873,6 +2874,225 @@ test('deploy: a read of the versions that FAILS costs the pages a publish and a 
     from = server.requests.length;
     await rebuildPages(spec, appDir, server, ids);
     assert.strictEqual(requestsOf(server, from).publishes, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── The record certifies the publish it is of ────────────────────────────────────────────────────────────────────────────────────────────────────
+// The record pairs the hash of what the build published with the versions of the page's files, and a rebuild skips the page's publish while its files still read as recorded and it still holds that content. So the
+// versions are worth something only when they are those of the publication the hash is of. They used to be read AFTER the SDK had seen the publish take effect (and after the manifest was written), and nothing tied
+// them to it: a writer that published other content and put the build's content back as a draft in between left a page whose draft equalled the file and whose versions equalled the record — and whose published copy was
+// the other writer's, skipped by every rebuild after that, each of them reporting success. The build now records versions only from a published copy it read back, between two reads of the versions that agree, and found
+// to hold the content it sent; anything else leaves the page unrecorded, and the next build publishes it. The second writer is the stateful fake of the page tables (helpers/fake-genpage-server.js), acting between the
+// build's own requests through a second backend of its own.
+const COMPILED_FILE = 'src/pages/page.compiled';
+// What another writer does to a page: it publishes `otherText` — the page's source and its compiled output both change — and puts the draft back to what it held, so the draft still equals the file.
+async function publishOver(server, writer, pageId, otherText) {
+  const sourceBefore = server.rowText(pageId, PAGE_FILE);
+  const compiledBefore = server.rowText(pageId, COMPILED_FILE);
+  const wrote = await writer.update(pageId, { source: otherText });
+  assert.strictEqual(wrote.publish.kind, 'verified', 'the other writer\'s publish took effect');
+  server.otherWorkspaceDraft(pageId, PAGE_FILE, sourceBefore);
+  server.otherWorkspaceDraft(pageId, COMPILED_FILE, compiledBefore);
+}
+const publishedSource = (server, pageId) => Buffer.from(server.publishedPages.get(pageId).files.find((f) => f.filename === PAGE_FILE).content).toString('utf8');
+
+test('deploy: a page another writer published over before the build read its versions is not recorded as published — the next build publishes it, where the record used to skip it for good', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const writer = realPageBackend(server);
+  try {
+    const alphaText = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+    const genpage = realPageBackend(server);
+    const readVersions = genpage.fileVersions;
+    let overwritten = null;
+    genpage.fileVersions = async (ids) => {
+      // The build's first read of a page's versions comes after its publish was seen to take effect; the other writer gets in before it.
+      if (overwritten === null) {
+        overwritten = ids[0];
+        await publishOver(server, writer, ids[0], alphaText.replace('>Alpha<', '>Somebody else<'));
+      }
+      return readVersions(ids);
+    };
+    const warnings = [];
+    const first = await buildPages(spec, appDir, genpage, { warn: (m) => warnings.push(m) });
+    const ids = { ...first.created.pages };
+    assert.strictEqual(overwritten, ids.alpha, 'the first page built is the one the other writer got to');
+    assert.match(publishedSource(server, ids.alpha), /Somebody else/, 'what runs is the other writer\'s page, and the draft is the file');
+    assert.strictEqual(server.rowText(ids.alpha, PAGE_FILE), alphaText);
+    const entry = publishedOf(spec, appDir).get(ids.alpha);
+    assert.ok(!entry || entry.files === null, 'so the page is not recorded with versions: they would be those of a publication that is not the build\'s');
+    assert.ok(publishedOf(spec, appDir).get(ids.beta).files, 'the page next to it, which nobody touched, is recorded as before');
+    assert.ok(warnings.some((m) => /page "Alpha"/.test(m) && /differs from what this build sent in its source/.test(m) && /published again from elsewhere/.test(m)), `the build said why: ${warnings.join(' | ')}`);
+
+    // The next build finds the draft equal to the file and nothing recorded for the page, so it publishes that page — and no other.
+    const publishedBefore = server.published.length;
+    let from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    const rebuilt = requestsOf(server, from);
+    assert.deepStrictEqual([rebuilt.changeSets, rebuilt.publishes], [0, 1], 'nothing to write, and the one page that is not known to be published is published');
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.alpha]);
+    assert.strictEqual(publishedSource(server, ids.alpha), alphaText, 'what runs is the file again');
+    assert.deepStrictEqual(publishedOf(spec, appDir).get(ids.alpha).files, versionsNow(server, ids.alpha), 'and the record holds the versions of THAT publication');
+
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, from).publishes, 0, 'after which the page is left alone');
+  } finally {
+    await writer.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// The same writer at each point of the build's proof: before its first read of the page's versions, while the published copy is read back, and after that read. A copy that already differs is said so; a page whose files
+// moved after the copy was read back is not — the copy held the content when it was read, and what refuses the record is the movement. Neither is ever recorded.
+test('deploy: a page another writer publishes over at any point while the build reads its published copy back is left unrecorded, and the next build publishes it', async () => {
+  const placements = [
+    { when: 'before', what: 'before the first read of the versions', says: true },
+    { when: 'while', what: 'while the published copy is read back', says: true },
+    { when: 'after', what: 'after the published copy was read back, before the second read of the versions', says: false },
+  ];
+  for (const { when, what, says } of placements) {
+    const { appDir, spec } = twoPageApp();
+    const server = new FakeGenPageServer();
+    const writer = realPageBackend(server);
+    try {
+      const alphaText = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+      const genpage = realPageBackend(server);
+      assert.strictEqual(typeof genpage.publishedDiffers, 'function', 'the backend can read a page\'s published copy back');
+      let target = null;
+      let reads = 0;
+      let done = false;
+      const act = async (pageId) => { done = true; await publishOver(server, writer, pageId, alphaText.replace('>Alpha<', '>Somebody else<')); };
+      const readVersions = genpage.fileVersions;
+      genpage.fileVersions = async (ids) => {
+        if (target === null) target = ids[0];
+        if (ids[0] === target) {
+          reads += 1;
+          if (!done && ((when === 'before' && reads === 1) || (when === 'after' && reads === 2))) await act(ids[0]);
+        }
+        return readVersions(ids);
+      };
+      const readCopy = genpage.publishedDiffers;
+      genpage.publishedDiffers = async (id, args) => {
+        if (!done && when === 'while') await act(id);
+        return readCopy(id, args);
+      };
+      const warnings = [];
+      const first = await buildPages(spec, appDir, genpage, { warn: (m) => warnings.push(m) });
+      const ids = { ...first.created.pages };
+      assert.ok(done, `${what}: the other writer got in`);
+      assert.strictEqual(target, ids.alpha);
+      assert.match(publishedSource(server, ids.alpha), /Somebody else/, `${what}: what runs is the other writer's page`);
+      const entry = publishedOf(spec, appDir).get(ids.alpha);
+      assert.ok(!entry || entry.files === null, `${what}: so the page is not recorded with versions`);
+      assert.ok(publishedOf(spec, appDir).get(ids.beta).files, `${what}: and the page next to it is`);
+      assert.strictEqual(warnings.filter((m) => /published again from elsewhere/.test(m)).length, says ? 1 : 0, `${what}: ${warnings.join(' | ')}`);
+
+      const publishedBefore = server.published.length;
+      await rebuildPages(spec, appDir, server, ids);
+      assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.alpha], `${what}: the next build publishes that page, and only that page`);
+      assert.strictEqual(publishedSource(server, ids.alpha), alphaText, `${what}: what runs is the file again`);
+      assert.deepStrictEqual(publishedOf(spec, appDir).get(ids.alpha).files, versionsNow(server, ids.alpha), `${what}: and it is recorded now`);
+    } finally {
+      await writer.dispose();
+      fs.rmSync(appDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('deploy: a published copy that cannot be read back is not recorded — the build finishes and says nothing of it, and the next build publishes the page and records it', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const genpage = realPageBackend(server);
+    assert.strictEqual(typeof genpage.publishedDiffers, 'function', 'the backend can read a page\'s published copy back');
+    const readCopy = genpage.publishedDiffers;
+    let reads = 0;
+    genpage.publishedDiffers = async (id, args) => {
+      // The service refuses the reads of the first page's files while its copy is read back — and only then: the SDK's own check of the publish is over, and the next page's is not under way.
+      reads += 1;
+      if (reads > 1) return readCopy(id, args);
+      server.failOn = (method, requestPath) => (method === 'GET' && /\/filecontent\/\$value/.test(requestPath) ? 503 : undefined);
+      try { return await readCopy(id, args); } finally { server.failOn = undefined; }
+    };
+    const warnings = [];
+    const first = await buildPages(spec, appDir, genpage, { warn: (m) => warnings.push(m) });
+    const ids = { ...first.created.pages };
+    const entry = publishedOf(spec, appDir).get(ids.alpha);
+    assert.ok(entry && entry.files === null, 'the page is recorded as published, with no versions: nothing proves them');
+    assert.ok(publishedOf(spec, appDir).get(ids.beta).files, 'the page next to it is recorded with its versions');
+    assert.deepStrictEqual(warnings.filter((m) => /Alpha/.test(m)), [], 'and nothing is said: it is a cache, and a failed read of it costs a publish');
+
+    const publishedBefore = server.published.length;
+    let from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual([requestsOf(server, from).changeSets, requestsOf(server, from).publishes], [0, 1]);
+    assert.deepStrictEqual(server.published.slice(publishedBefore), [ids.alpha]);
+    assert.deepStrictEqual(publishedOf(spec, appDir).get(ids.alpha).files, versionsNow(server, ids.alpha), 'this time the copy is read back, and the versions are recorded');
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, from).publishes, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// What the record certifies is the CONTENT the published copy holds, not who published it: another writer's publish that left the page holding the very content the build sent — it published something else and then
+// the build's content again — is a published copy that holds the content, and is recorded.
+test('deploy: a page another writer published and then published the build\'s content back to is recorded — the record is of the content the published copy holds, whoever published it', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const writer = realPageBackend(server);
+  try {
+    const alphaText = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+    const genpage = realPageBackend(server);
+    const readVersions = genpage.fileVersions;
+    let overwritten = null;
+    genpage.fileVersions = async (ids) => {
+      if (overwritten === null) {
+        overwritten = ids[0];
+        await writer.update(ids[0], { source: alphaText.replace('>Alpha<', '>Somebody else<') });
+        await writer.update(ids[0], { source: alphaText });
+      }
+      return readVersions(ids);
+    };
+    const warnings = [];
+    const first = await buildPages(spec, appDir, genpage, { warn: (m) => warnings.push(m) });
+    const ids = { ...first.created.pages };
+    assert.strictEqual(overwritten, ids.alpha);
+    assert.strictEqual(publishedSource(server, ids.alpha), alphaText, 'what runs is the file');
+    assert.deepStrictEqual(publishedOf(spec, appDir).get(ids.alpha).files, versionsNow(server, ids.alpha), 'and the page is recorded with the versions of the copy that runs');
+    assert.deepStrictEqual(warnings.filter((m) => /Alpha/.test(m)), []);
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(requestsOf(server, from).publishes, 0, 'so the next build leaves it alone');
+  } finally {
+    await writer.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// The read-back belongs to a publish the build has just seen take effect. A page that is left alone — nothing to write, and recorded as published — is not published, so nothing of its published copy is read: an unchanged
+// rebuild asks the page service for the draft of each page and the versions of its files, in one request, and for no published content.
+test('deploy: an unchanged rebuild reads no page\'s published copy — the read-back is for a publish the build has just made', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    // A read of a file's content that does not ask for the unpublished layer is a read of the published one.
+    const publishedContentReads = (from) => server.requests.slice(from).filter((r) => r.method === 'GET' && /\/filecontent\/\$value$/.test(r.path) && r.headers['MSCRM.IncludeUnpublished'] !== 'true').length;
+    assert.ok(publishedContentReads(0) > 0, 'a publish is read back: the SDK\'s check of it, and the build\'s');
+    let from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(publishedContentReads(from), 0, 'an unchanged rebuild publishes nothing, so it reads no published copy');
+
+    // A page that changes is published, and read back.
+    fs.writeFileSync(path.join(appDir, 'beta.tsx'), fs.readFileSync(path.join(appDir, 'beta.tsx'), 'utf8').replace('>Beta<', '>Beta, edited<'), 'utf8');
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.ok(publishedContentReads(from) > 0, 'a rebuild that publishes a page reads it back');
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(publishedContentReads(from), 0, 'and the rebuild after it reads no published copy again');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -3022,4 +3242,384 @@ test('deploy: through the real backend the pin is ONE app edit, and a rebuild wr
     assert.strictEqual(appCalls('publishArtifact').length, 1);
     await genpage.dispose();
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── A halt that quotes a page's name is final for the build's retry — whatever the page is called ──────────────────────────────────────────────────
+// buildModelApp runs the whole build again — up to three times, after every earlier phase — when a halt reads as a transient error (isTransientHalt, build-model-app.js), and unless the halt says
+// `transient: false` it reads that from the halt's TEXT. Most halts of the pages phase open with the page's name, which is the maker's own: a page called "SQL Timeout Report" whose source makes a
+// navigation call the build refuses, or holds a token it cannot resolve, read as a SQL timeout — the page that could never deploy was run three more times before the build reported it, and the log
+// blamed the service. Each halt below is raised by something a run again cannot change, so each carries the marker, as the style-shorthand and receipt halts do. In every test the control is that the
+// halt's words alone DO read as transient, so it is the marker that holds the build back; the tests after the table pin that what the build rides out is still ridden out.
+const HALT_NAME = 'SQL Timeout Report';
+const manifestOf = (pages) => Buffer.from(JSON.stringify({ schemaVersion: 1, pages }), 'utf8').toString('base64');
+const OTHER_PAGE_ID = '99999999-9999-4999-8999-999999999999';
+// `setup(name)` makes the folder and the spec whose first page is called `name`, with the doubles the build runs against when it needs more than the defaults.
+const NAME_HALTS = [
+  { code: 'pages-malformed-navref', what: 'a navigation reference that is not a double-quoted PAGEREF_ literal', setup: (name) => {
+    const a = makeTwoPageApp({ malformed: true });
+    a.spec.pages[0].name = name;
+    return a;
+  } },
+  { code: 'pages-nav-parity', what: 'a navigation call nothing declares', setup: (name) => {
+    const a = makeTwoPageApp({ undeclaredRef: true });
+    a.spec.pages[0].name = name;
+    return a;
+  } },
+  { code: 'pages-nav-parity', what: 'a declared navigation the page never makes', setup: (name) => {
+    const a = makeTwoPageApp();
+    a.spec.pages[0].name = name;
+    fs.writeFileSync(path.join(a.appDir, 'overview.tsx'), 'export default function Overview(){ return null; }', 'utf8');
+    return a;
+  } },
+  { code: 'pages-nav-parity', what: 'a navigation target that is not a declared PAGEREF_ symbol', setup: (name) => {
+    const a = makeTwoPageApp();
+    a.spec.pages[0].name = name;
+    a.spec.pages[0].navigatesTo = [];
+    fs.writeFileSync(path.join(a.appDir, 'overview.tsx'), 'export default function O(){ Xrm.Navigation.navigateTo({ pageType: "generative", pageId: someVar, data: {} }); return null; }', 'utf8');
+    return a;
+  } },
+  { code: 'pages-stray-pageref', what: 'a PAGEREF_ token no navigation rewrite resolves', setup: (name) => {
+    const a = makeTwoPageApp();
+    a.spec.pages[0].name = name;
+    fs.writeFileSync(path.join(a.appDir, 'overview.tsx'), OVERVIEW_WITH('const route = "PAGEREF_detail";', NAV('detail')), 'utf8');
+    return a;
+  } },
+  { code: 'pages-source-not-utf8', what: 'a source that is not UTF-8', setup: (name) => {
+    const a = makeTwoPageApp();
+    a.spec.pages[0].name = name;
+    fs.writeFileSync(path.join(a.appDir, 'overview.tsx'), Buffer.from([0x65, 0xff, 0xfe, 0x66]));
+    return a;
+  } },
+  { code: 'pages-blank-provenance', what: 'a prompt that is present and blank', setup: (name) => {
+    const a = makeTwoPageApp();
+    a.spec.pages[0].name = name;
+    a.spec.pages[0].prompt = '   ';
+    return a;
+  } },
+  { code: 'pages-dangling-navref', quotesName: false, what: 'a navigation target that is not a built page', setup: (name) => {
+    const a = makeTwoPageApp({ danglingTarget: true });
+    a.spec.pages[0].name = name;
+    return a;
+  } },
+  { code: 'pages-duplicate-name-create', what: 'two pages of one name, one of them no longer deployed', setup: (name) => {
+    const a = makeDupNamePageApp();
+    for (const p of a.spec.pages) p.name = name;
+    const manifest = manifestOf([{ key: 'sc-a', name, pageId: a.GA }, { key: 'sc-b', name, pageId: a.GB }]);
+    return { ...a, sdk: mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest', liveSitemapXml: pageSitemap([a.GA]), pageRows: [{ uxagentprojectid: a.GA, name }] }).sdk, genpage: mockGenpageCli([{ pageId: a.GA, name }]) };
+  } },
+  { code: 'pages-identity-conflict', what: 'a manifest id nothing proves is this app\'s', setup: (name) => {
+    const a = onePageApp(name);
+    fs.writeFileSync(path.join(a.appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+    const manifest = manifestOf([{ key: 'p', name, pageId: UNCERTAIN_PAGE_ID }]);
+    return { ...a, sdk: mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest', liveSitemapXml: EMPTY_SITEMAP_XML, pageRows: [{ uxagentprojectid: UNCERTAIN_PAGE_ID, name }] }).sdk, genpage: mockGenpageCli([{ pageId: UNCERTAIN_PAGE_ID, name }]) };
+  } },
+  { code: 'pages-identity-conflict', what: 'a page under an id an earlier build minted that no create sent', setup: (name) => {
+    const a = onePageApp(name);
+    fs.writeFileSync(path.join(a.appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+    const workspaceDir = path.join(a.appDir, '.maker-workspace');
+    const server = new FakeGenPageServer();
+    server.seedPage(UNCERTAIN_PAGE_ID, { name: 'Somebody else\'s page', source: 'export default function Theirs() { return null; }\n' });
+    recordPagePending(workspaceDir, appUniqueName(a.spec), 'p', UNCERTAIN_PAGE_ID, name, BUILD_ENV, sha256(PAGE_SOURCE));
+    return { ...a, genpage: realPageBackend(server), opts: { workspaceDir } };
+  } },
+  { code: 'pages-update-identity-mismatch', what: 'a page whose update answers with another page\'s id', setup: (name) => {
+    const a = makeTwoPageApp();
+    a.spec.pages[1].name = name;
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name }];
+    const genpage = mockGenpageCli(live);
+    const update = genpage.update;
+    genpage.update = async (id, o) => { const up = await update(id, o); return o.name === name ? { ...up, pageId: OTHER_PAGE_ID } : up; };
+    const manifest = manifestOf([{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name, pageId: DETAIL_ID }]);
+    return { ...a, genpage, sdk: mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) }).sdk };
+  } },
+  { code: 'pages-shared-across-apps', quotesName: false, what: 'a page another app\'s navigation also holds', setup: () => {
+    const a = makeTwoPageApp();
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = manifestOf([{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }]);
+    const sdk = mockSdk({ pageManifest: manifest, selfAppUnique: appUniqueName(a.spec), liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })),
+      otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: pageSitemap([OVERVIEW_ID]) }] }).sdk;
+    return { ...a, sdk, genpage: mockGenpageCli(live) };
+  } },
+  { code: 'pages-publish-failed', what: 'a publish the service refused for no reason a run again would change', setup: (name) => {
+    const a = makeTwoPageApp();
+    a.spec.pages[0].name = name;
+    const genpage = mockGenpageCli();
+    const create = genpage.create;
+    genpage.create = async (o) => { const up = await create(o); return o.name === name ? { ...up, publish: { kind: 'failed', detail: 'PublishXml answered 500: the service is busy' } } : up; };
+    return { ...a, genpage };
+  } },
+];
+// The halt `scenario` ends the build with, for a page called `name`; the page doubles are disposed and the folder removed.
+async function nameHaltOf(scenario, name) {
+  const a = scenario.setup(name);
+  const genpage = a.genpage || mockGenpageCli();
+  try {
+    let halt = null;
+    try {
+      await runSdkBuild(a.spec, { sdk: a.sdk || mockSdk().sdk, apply: true, env: BUILD_ENV, appDir: a.appDir, genpageCli: genpage, phases: PHASES, ...(a.opts || {}) });
+    } catch (e) { halt = e; }
+    return { halt, spec: a.spec };
+  } finally {
+    if (typeof genpage.dispose === 'function') await genpage.dispose();
+    fs.rmSync(a.appDir, { recursive: true, force: true });
+  }
+}
+for (const scenario of NAME_HALTS) {
+  test(`deploy: the ${scenario.code} halt for ${scenario.what} is final for the build's retry, even for a page called "${HALT_NAME}"`, async () => {
+    const { isTransientHalt } = require('../build-model-app.js');
+    const { halt, spec } = await nameHaltOf(scenario, HALT_NAME);
+    assert.ok(halt, 'the build halts');
+    assert.strictEqual(halt.phase, 'pages');
+    assert.strictEqual(halt.code, scenario.code);
+    assert.strictEqual(isTransientHalt(halt, { spec }), false, 'the build does not run again for it');
+    if (scenario.quotesName !== false) {
+      assert.ok(halt.message.includes(HALT_NAME), 'the halt quotes the page\'s name');
+      assert.strictEqual(isTransientHalt(new Error(halt.message), { spec }), true, 'its words alone would have read as a transient error');
+    } else {
+      assert.ok(halt.transient === false || (halt.cause && halt.cause.transient === false), 'the halt carries the marker itself: what it quotes is the maker\'s text too');
+    }
+  });
+}
+
+// The navigation links are resolved into a copy of each page, and that copy is checked once more — a tripwire for a defect in the checks before it. The resolver is made to leave a token here,
+// as the test of that check does, and the halt it ends the build with is final for the retry too.
+test('deploy: the halt for a token left in the resolved copy of a page called "SQL Timeout Report" is final for the build\'s retry', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const resolverPath = require.resolve('../lib/pageref-resolver.js');
+  const buildPath = require.resolve('../lib/sdk-build.js');
+  const resolver = require(resolverPath);
+  const real = resolver.resolvePageRefs;
+  const live = [{ pageId: OVERVIEW_ID, name: HALT_NAME }, { pageId: DETAIL_ID, name: 'Detail' }];
+  resolver.resolvePageRefs = (sources, keyToId) => {
+    const resolved = real(sources, keyToId);
+    const deployment = new Map(resolved.deployment);
+    deployment.set('overview', deployment.get('overview').replace(`"${DETAIL_ID}"`, '"PAGEREF_detail"'));
+    const { residual } = real(new Map([['overview', { code: deployment.get('overview') }]]), new Map());
+    return { ...resolved, deployment, residual };
+  };
+  delete require.cache[buildPath];
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    const { runSdkBuild: build } = require(buildPath);
+    spec.pages[0].name = HALT_NAME;
+    const manifest = manifestOf([{ key: 'overview', name: HALT_NAME, pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }]);
+    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest', liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+    let halt = null;
+    try { await build(spec, { sdk, apply: true, env: 'https://x', appDir, genpage: mockGenpageCli(live), phases: PHASES }); } catch (e) { halt = e; }
+    assert.ok(halt, 'the build halts');
+    assert.strictEqual(halt.code, 'pages-stray-pageref');
+    assert.match(halt.message, /page "SQL Timeout Report" has PAGEREF_ token\(s\) left once its navigation links were resolved/);
+    assert.strictEqual(isTransientHalt(halt, { spec }), false, 'the build does not run again for it');
+    assert.strictEqual(isTransientHalt(new Error(halt.message), { spec }), true, 'its words alone would have read as a transient error');
+  } finally {
+    resolver.resolvePageRefs = real;
+    delete require.cache[buildPath];
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// Through the real retry loop: one run of the pages phase, never four, and a log that does not blame the service — for each way a page can be called that reads as a transient error (the control
+// is that the words alone do) and for a name that merely contains a status.
+test('deploy: the build runs once — not four times — for a halt that quotes a page called like a transient error', async () => {
+  const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
+  for (const name of [HALT_NAME, 'Please try again later', 'Concurrent Delete log', '503 Orders']) {
+    const a = makeTwoPageApp({ malformed: true });
+    a.spec.pages[0].name = name;
+    try {
+      const genpage = mockGenpageCli();
+      let listings = 0;
+      const enumerateEnv = genpage.enumerateEnv;
+      genpage.enumerateEnv = async () => { listings += 1; return enumerateEnv(); };
+      const { sdk } = mockSdk();
+      const lines = [];
+      let halt = null;
+      try {
+        await buildModelApp(a.spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir: a.appDir, retryDelayMs: 0 }, {
+          sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m),
+          discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+        });
+      } catch (e) { halt = e; }
+      assert.ok(halt, `${name}: the build halts`);
+      assert.strictEqual(halt.code, 'pages-malformed-navref', name);
+      assert.strictEqual(listings, 1, `${name}: the pages phase ran once`);
+      assert.deepStrictEqual(lines.filter((l) => /transient error|retrying/.test(l)), [], `${name}: and the build never says it is retrying`);
+      if (name !== '503 Orders') assert.strictEqual(isTransientHalt(new Error(halt.message), { spec: a.spec }), true, `${name}: its words alone would have read as a transient error`);
+    } finally { fs.rmSync(a.appDir, { recursive: true, force: true }); }
+  }
+});
+
+// The marker is on the halts, not on the names: a failure that IS transient is run again for a page called "SQL Timeout Report" as for any other.
+test('deploy: a transient failure is still run again for a page called like one — and the create is sent once', async () => {
+  const { buildModelApp } = require('../build-model-app.js');
+  const { appDir, spec } = onePageApp(HALT_NAME);
+  try {
+    const fake = new FakeSdk().script('list', new Error(TRY_AGAIN_LATER));
+    const genpage = makeGenpageSdk('https://contoso.crm.dynamics.com', { sdk: fake, newId: () => UNCERTAIN_PAGE_ID });
+    const { sdk } = mockSdk();
+    const lines = [];
+    const result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0 }, {
+      sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m),
+      discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+    });
+    assert.strictEqual(result.ok, true);
+    assert.ok(lines.some((l) => /transient error in pages — retrying/.test(l)), 'the build retried');
+    assert.strictEqual(fake.count('pushArtifact'), 1, 'and the create went out once');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A refused publish is the one halt that quotes the page's name AND the service's own words, and the words are what say whether a run again can help ("… try again later"). So it is judged by the
+// service's words alone: the same words that always made it a transient error still do, and the page's name no longer can.
+test('deploy: a refused publish is run again when the service says to try later — and not when only the page\'s name says so', async () => {
+  const { buildModelApp } = require('../build-model-app.js');
+  const run = async (name, detail) => {
+    const { appDir, spec } = makeTwoPageApp();
+    spec.pages[0].name = name;
+    try {
+      const genpage = mockGenpageCli();
+      let creates = 0;
+      const create = genpage.create;
+      genpage.create = async (o) => {
+        const up = await create(o);
+        if (o.name !== name) return up;
+        creates += 1;
+        return creates === 1 ? { ...up, publish: { kind: 'failed', detail } } : up;
+      };
+      const { sdk } = mockSdk();
+      const lines = [];
+      let halt = null;
+      let result = null;
+      try {
+        result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0 }, {
+          sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m),
+          discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+        });
+      } catch (e) { halt = e; }
+      return { halt, result, creates, retried: lines.some((l) => /transient error in pages — retrying/.test(l)) };
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  };
+  const later = await run(HALT_NAME, TRY_AGAIN_LATER);
+  assert.strictEqual(later.halt, null, 'the second run publishes it');
+  assert.strictEqual(later.retried, true, 'the service said to try again later, so the build did');
+  assert.strictEqual(later.creates, 2);
+  for (const name of [HALT_NAME, 'Overview']) {
+    const final = await run(name, 'PublishXml answered 500: the service is busy');
+    assert.strictEqual(final.halt && final.halt.code, 'pages-publish-failed', name);
+    assert.strictEqual(final.retried, false, `${name}: the service gave no reason to run again, and a page's name is not one`);
+    assert.strictEqual(final.creates, 1, name);
+  }
+});
+
+// ── What a rebuild records in a page's history ───────────────────────────────────────────────────────────────────────────────────────────────
+// A page's conversation holds the prompt of each change made to it. The release before pages went through the SDK sent every page again on every run, so the history grew by one prompt per page per build — and
+// by one more for each automatic re-run after a transient failure later in the same run. A page is written now only when what the spec asks for differs from what the page holds (`update`, lib/genpage-sdk.js:
+// the source, and the name, data sources, model and bindings the spec gives), so the history grows by one turn per CHANGE, and a page nothing changed is neither written nor given a turn. These tests count the
+// messages the page service holds and the writes it receives across rebuilds, through the real backend over the stateful fake of the page tables; the publish is covered by the tests above them.
+test('deploy: an unchanged rebuild records no prompt however often it runs — and a change records one turn, on the page that changed, whatever kind of change it is', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    const history = () => Object.fromEntries(Object.entries(ids).map(([key, id]) => [key, server.messagesOf(id).length]));
+    assert.deepStrictEqual(history(), { alpha: 2, beta: 2 }, 'a create records the prompt and the reply');
+    const rebuild = async () => {
+      const from = server.requests.length;
+      await rebuildPages(spec, appDir, server, ids);
+      const { changeSets, publishes, otherWrites } = requestsOf(server, from);
+      return [changeSets, publishes, otherWrites];
+    };
+    // Three rebuilds, nothing changed: the new count of writes for a no-op rebuild of this app is zero — no change set, no publish, no other write — and no turn.
+    for (let run = 1; run <= 3; run += 1) assert.deepStrictEqual(await rebuild(), [0, 0, 0], `rebuild ${run}: not one write`);
+    assert.deepStrictEqual(history(), { alpha: 2, beta: 2 }, 'and not one prompt');
+
+    // A page's source changes: one change set and one publish, for the page that changed, and the new turn on that page alone.
+    fs.writeFileSync(path.join(appDir, 'beta.tsx'), fs.readFileSync(path.join(appDir, 'beta.tsx'), 'utf8').replace('>Beta<', '>Beta, edited<'), 'utf8');
+    assert.deepStrictEqual(await rebuild(), [1, 1, 0], 'a changed source is written and published once');
+    assert.deepStrictEqual(history(), { alpha: 2, beta: 4 }, 'with its turn, on the page that changed');
+    assert.deepStrictEqual(await rebuild(), [0, 0, 0], 'and the rebuild after it is a no-op again');
+    assert.deepStrictEqual(history(), { alpha: 2, beta: 4 });
+
+    // What is not the source — the model the spec names — is part of the page too: a change to it is written, as a change to the source is, and once.
+    spec.pages[1].model = 'gpt-4.1';
+    assert.deepStrictEqual(await rebuild(), [1, 1, 0], 'a changed model is written and published once');
+    assert.deepStrictEqual(history(), { alpha: 2, beta: 6 });
+    assert.deepStrictEqual(await rebuild(), [0, 0, 0]);
+    assert.deepStrictEqual(history(), { alpha: 2, beta: 6 }, 'and then it is held');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The build runs itself again, from its first phase, when a failure it takes for transient comes after the pages were written: a 503 on a later write, say. That run reads every page again and finds it
+// holding what the spec asks for, so it writes none of them and gives none a second turn; the record of what was published (lib/page-publish-records.js) spares them a second publish too.
+// The build here is the real one, through its own retry loop, with the first publish of the app — after both pages are written, in the sitemap finalize — refused once with a 503. It answers what the
+// build returned, what it logged, and how many change sets the page service had received when the app's publish was refused.
+async function buildThroughTransientFailure(spec, appDir, server, genpage) {
+  const { buildModelApp } = require('../build-model-app.js');
+  const { sdk } = mockSdk();
+  const publishArtifact = sdk.publishArtifact;
+  let refusedAt = null;
+  sdk.publishArtifact = async (type, id, options) => {
+    if (type === 'app' && refusedAt === null) {
+      refusedAt = { changeSets: requestsOf(server).changeSets };
+      throw Object.assign(new Error('Service Unavailable'), { statusCode: 503 });
+    }
+    return publishArtifact(type, id, options);
+  };
+  const lines = [];
+  let result;
+  try {
+    result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, workspaceDir: path.join(appDir, '.maker-workspace'), retryDelayMs: 0 }, {
+      sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m),
+      discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+    });
+  } finally { await genpage.dispose(); }
+  return { result, lines, refusedAt };
+}
+test('deploy: the build\'s automatic re-run after a transient failure later in the same run sends no page again — each is written once, published once, and has its turn once', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  try {
+    const { result, lines, refusedAt } = await buildThroughTransientFailure(spec, appDir, server, realPageBackend(server));
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(refusedAt, { changeSets: 2 }, 'the failure came after both pages were written');
+    assert.ok(lines.some((l) => /transient error in pages — retrying/.test(l)), 'the build ran again');
+    const all = requestsOf(server);
+    assert.deepStrictEqual([all.changeSets, all.publishes, all.otherWrites], [2, 2, 0], 'one write and one publish per page across both runs, and nothing else');
+    assert.deepStrictEqual([...server.state.projects.keys()].sort(), Object.values(result.created.pages).sort(), 'one page per spec entry');
+    for (const id of Object.values(result.created.pages)) assert.strictEqual(server.messagesOf(id).length, 2, `${id}: the prompt and the reply, once`);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The record spares a page its second publish only when it provably describes what is published. Another writer that published over a page while the first run was recording it left that page unrecorded, so
+// the re-run publishes it — and only it — and still writes nothing: the draft is the file, and what is wrong is the published copy.
+test('deploy: the automatic re-run publishes the page another writer published over in the first run — that page alone, and without writing it', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const writer = realPageBackend(server);
+  try {
+    const alphaText = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+    const genpage = realPageBackend(server);
+    const readVersions = genpage.fileVersions;
+    let overwritten = null;
+    genpage.fileVersions = async (ids) => {
+      if (overwritten === null) {
+        overwritten = ids[0];
+        await publishOver(server, writer, ids[0], alphaText.replace('>Alpha<', '>Somebody else<'));
+      }
+      return readVersions(ids);
+    };
+    const { result, lines, refusedAt } = await buildThroughTransientFailure(spec, appDir, server, genpage);
+    const ids = result.created.pages;
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(overwritten, ids.alpha);
+    assert.deepStrictEqual(refusedAt, { changeSets: 3 }, 'both pages were created and the other writer\'s update was written by then');
+    assert.ok(lines.some((l) => /transient error in pages — retrying/.test(l)), 'the build ran again');
+    assert.deepStrictEqual(server.published, [ids.alpha, ids.alpha, ids.beta, ids.alpha], 'Alpha: its create, the other writer, and the re-run that found it unrecorded; Beta: its create alone');
+    const all = requestsOf(server);
+    assert.deepStrictEqual([all.changeSets, all.otherWrites], [3, 0], 'two creates and the other writer\'s update: the re-run writes nothing');
+    assert.strictEqual(publishedSource(server, ids.alpha), alphaText, 'and what runs is the file');
+    assert.deepStrictEqual([ids.alpha, ids.beta].map((id) => server.messagesOf(id).length), [4, 2], 'the re-run records no turn: Alpha\'s second pair is the other writer\'s');
+  } finally {
+    await writer.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
 });

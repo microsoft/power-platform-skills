@@ -847,7 +847,10 @@ function isTransientHalt(err, { spec } = {}) {
   // prevent.
   if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
   const status = (err.cause && err.cause.statusCode) || err.statusCode;
-  const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
+  // A halt whose message quotes the maker's own words beside the service's (a page's name, then the answer to its refused publish) says which words decide: `retryText`, on the halt or on the
+  // halt that wraps it (the runner wraps every step's halt once). Without it the whole message is read, as it always was — and a page called "SQL Timeout Report" reads as a SQL timeout.
+  const declared = [err, err.cause].find((e) => e && typeof e.retryText === 'string');
+  const msg = declared ? declared.retryText : String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
   const missing = spec ? MISSING_DECLARED_ATTRIBUTE.exec(msg) : null;
   return (
     status === 429 ||

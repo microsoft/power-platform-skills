@@ -8,10 +8,19 @@
 //
 // After a publish that was SEEN to take effect (`publish.kind` `verified`) it records, per page, two things:
 //   fingerprint  the hash of the content the page was published with (`contentFingerprint`): what the build WROTE, which the next `update` compares with what the page holds
-//   files        the versionnumber of EVERY file row of the page, as the PLAIN collection answers it right after that publish (genpage.fileVersions): what the page's published copy WAS
+//   files        the versionnumber of EVERY file row of the page, as the PLAIN collection answers it (genpage.fileVersions) on both sides of a read-back of the page's PUBLISHED copy that held that content: what the page's published copy WAS
 // A page skips its publish only when the page holds that content (the fingerprint, in `update`) AND the file rows read now are exactly the recorded set with the recorded versions
 // (`sameFileVersions`, in the build). The fingerprint alone says what this workspace sent; it cannot say that nobody has published anything else since. A page published from another
 // workspace, another machine or Maker, and then put back to the file's content as a draft, holds the content and is NOT live — and the fingerprint matches. The versions are what moved.
+//
+// The versions are recorded only when they provably belong to a published copy that holds that content. One read of them after the publish was seen to take effect was not enough: a writer that published other
+// content, and put the build's content back as a draft, in the moments between the SDK's check of the publish and that read left the versions of ITS publication beside this build's hash — and every rebuild after
+// that trusted the pair, found the draft equal to the file, and skipped the page's publish while the page that runs was the other writer's, each of them reporting success. So the build reads the versions, reads the
+// page's PUBLISHED copy back (genpage.publishedDiffers: plain reads of the published layer, compared field by field with the content it sent — the source, the name, the data sources, the model and the bindings), and reads
+// the versions again. It records them when the two reads are the same set of rows at the same versions and the copy holds the content, and records none otherwise: a copy that differs (it was published again from
+// elsewhere), a set that moved while the copy was read, a read that failed, a page laid out otherwise. An entry with no versions never skips a publish. What the proof cannot see: the copy is compared on the content the
+// hash is of, so the compiled output, the first prompt and any other file are not part of it — a change to one of those, published from elsewhere in the moments before the first read, is not seen, where a change
+// after it moves a version and is.
 //
 // MEASURED on a real environment (a page is a `uxagentprojects` row and its `uxagentprojectfiles` rows; `versionnumber` read with a plain GET):
 //   1. Publishing new content moves the versionnumber of each file row whose content changed; a file row whose content did not change keeps its own. The PAGE row's versionnumber does not move for
@@ -24,10 +33,11 @@
 //
 // Everything that is not a clear "yes" is a "no", and a "no" costs one publish: no file, a file that cannot be read or is damaged, one written for another app or environment, a page with
 // no entry, an entry for other content (the spec changed, or the page's publish did not finish after it was written), an entry with no versions (one in the format an earlier build of this release wrote, or one whose
-// versions could not be read after the publish), a read of the versions that fails or cannot be taken as one consistent set, a file row that was added, removed or moved, and a publish that
+// versions could not be proved to be those of a published copy that held the content, above), a read of the versions that fails or cannot be taken as one consistent set, a file row that was added, removed or moved, and a publish that
 // was accepted but not seen to take effect. So the file is a cache that can only ever be wrong in one direction — a publish that did not need to happen — with one residual: what the
 // versions of the FILE rows cannot show. The page row's own fields (its name, kept in the project row, not in a file) are not covered, so a page renamed from elsewhere and published, then
-// renamed back as a draft, is not seen. The release before pages went through the SDK re-uploaded and re-published every page of a full rebuild (through the CLI), so the cost of a publish
+// renamed back as a draft, is not seen. Nor is a page that is published over from elsewhere after the build's one read of the versions, which is taken before the pages are looked at: the build after it finds the
+// version moved and publishes the page. The release before pages went through the SDK re-uploaded and re-published every page of a full rebuild (through the CLI), so the cost of a publish
 // per page was paid on every rebuild; this record is what removes it, and the residual above is what it costs.
 //
 // One file per app and environment, beside the page-ownership records but not one of them — it grants and blocks nothing, and is not read by anything that decides what may be updated or

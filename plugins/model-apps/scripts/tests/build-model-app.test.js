@@ -308,6 +308,24 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
 });
 
+// A halt that quotes the maker's own words beside the service's — a page's name, then the answer to its refused publish — names the words that decide (`retryText`), so the maker's cannot.
+test('isTransientHalt: a halt that names the words it is judged by is judged by them alone — the message, which quotes the maker, is not read', () => {
+  const quoting = (retryText, extra = {}) => Object.assign(new Error('page "SQL Timeout Report" was updated as 1 and saved, but publishing it failed (…)'), { retryText }, extra);
+  assert.ok(!isTransientHalt(quoting('PublishXml answered 500: the service is busy')), 'the page\'s name is a SQL timeout to the whole message, and to nothing else');
+  assert.ok(isTransientHalt(quoting('The service is unavailable. Please try again later.')), 'the service\'s own words still decide');
+  assert.ok(isTransientHalt(quoting('Microsoft.Crm.ObjectModel.CustomizationLockException: ...')));
+  assert.ok(!isTransientHalt(quoting('')), 'a refusal with no words says nothing');
+  // The runner wraps every step's halt once, with the text of the first in its own message: the declaration on the cause is read, and the wrapper's message — the name again — is not.
+  const wrapped = (cause) => ({ message: `pages failed: ${cause.message}`, cause });
+  assert.ok(!isTransientHalt(wrapped(quoting('PublishXml answered 500: the service is busy'))));
+  assert.ok(isTransientHalt(wrapped(quoting('SQL timeout expired'))));
+  // A status still counts, and an explicit never-retry still wins over the words.
+  assert.ok(isTransientHalt(quoting('busy', { statusCode: 503 })));
+  assert.ok(!isTransientHalt(quoting('try again later', { transient: false })));
+  // A halt that names nothing is read as it always was.
+  assert.ok(isTransientHalt(new Error('page "SQL Timeout Report" has a token')), 'unmarked and undeclared: the whole message is read');
+});
+
 // Live-captured shape, renamed onto the support-desk sample: a view pushed moments after the build created the
 // relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse reports the
 // logical (lower-case) name.

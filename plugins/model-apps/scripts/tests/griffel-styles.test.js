@@ -955,7 +955,7 @@ test('griffel-styles: each key reports the slot, selectors and at-rules it sits 
   assert.deepEqual(within(`${styles('{ a: { all: 1 } }')}${styles('{ b: { all: 1 } }').replace(IMPORT, '')}`), [['all', ['a']], ['all', ['b']]]);
 });
 
-test('griffel-styles: griffelProblemsNotIn tells the keys a deployed page already had from the new ones — the same key in the same place first, then the same key anywhere that nothing else has claimed', () => {
+test('griffel-styles: griffelProblemsNotIn tells the keys a deployed page already had from the new ones — only the same key, set to the same value, in the same place', () => {
   const found = (source) => griffelStyleProblems(source).problems;
   const split = (local, deployed) => {
     const { added, inherited } = griffelProblemsNotIn(found(local), found(deployed));
@@ -966,21 +966,26 @@ test('griffel-styles: griffelProblemsNotIn tells the keys a deployed page alread
   assert.deepEqual(split(deployed, deployed), { added: [], inherited: ['borderWidth@3', 'borderColor@4'] });
   // A key in a place the deployed page had none: the new one, and only it. The keys that were there are inherited whatever line they are on now.
   assert.deepEqual(split(styles("{\n  card: { borderStyle: 'solid' },\n  root: { borderWidth: 1 },\n  hover: { ':hover': { borderColor: 'red' } },\n}"), deployed), { added: ['borderStyle@3'], inherited: ['borderWidth@4', 'borderColor@5'] });
-  // A slot renamed, a rule moved under another selector: the same key, still dropped, still not new.
-  assert.deepEqual(split(styles("{\n  container: { borderWidth: 1 },\n  hover: { ':focus': { borderColor: 'red' } },\n}"), deployed), { added: [], inherited: ['borderWidth@3', 'borderColor@4'] });
+  // A key removed from one place and set to the same value in another is NEW where it is set now: the deployed page had it in the first place only, and Griffel drops the new one just the same,
+  // so the page would show none of what the maker meant. The key that stayed where it was is still inherited.
+  assert.deepEqual(split(styles("{\n  root: { padding: 1 },\n  card: { borderWidth: 1 },\n  hover: { ':hover': { borderColor: 'red' } },\n}"), deployed), { added: ['borderWidth@4'], inherited: ['borderColor@5'] });
+  assert.deepEqual(split(styles("{\n  root: { borderWidth: 1 },\n  hover: { padding: 1 },\n  focus: { ':hover': { borderColor: 'red' } },\n}"), deployed), { added: ['borderColor@5'], inherited: ['borderWidth@3'] });
+  // A slot renamed, a rule moved under another selector: the same thing — the key is in a place the deployed page did not have it, and is new.
+  assert.deepEqual(split(styles("{\n  container: { borderWidth: 1 },\n  hover: { ':focus': { borderColor: 'red' } },\n}"), deployed), { added: ['borderWidth@3', 'borderColor@4'], inherited: [] });
   // A second key where there was one is new — and in-place matching takes the key that is where the deployed one was, so the new one is the one named, wherever it comes.
   assert.deepEqual(split(styles("{\n  root: { borderWidth: 1 },\n  card: { borderWidth: 2 },\n  hover: { ':hover': { borderColor: 'red' } },\n}"), deployed), { added: ['borderWidth@4'], inherited: ['borderWidth@3', 'borderColor@5'] });
   assert.deepEqual(split(styles("{\n  card: { borderWidth: 2 },\n  root: { borderWidth: 1 },\n  hover: { ':hover': { borderColor: 'red' } },\n}"), deployed), { added: ['borderWidth@3'], inherited: ['borderWidth@4', 'borderColor@5'] });
   // The same key twice in one object is ONE property — JavaScript keeps the last definition — so it is one key, with the last value: the value the deployed page
-  // had is not new, and another value is. (That each deployed key is spent once is held by the two-hooks case below, and by two slots each with the key.)
+  // had is not new, and another value is. (That each deployed key is spent once is held by the two-hooks case below.)
   assert.deepEqual(split(styles("{ root: { borderWidth: 1, borderWidth: 1 } }"), styles("{ root: { borderWidth: 1 } }")), { added: [], inherited: ['borderWidth@2'] });
   assert.deepEqual(split(styles("{ root: { borderWidth: 2, borderWidth: 1 } }"), styles("{ root: { borderWidth: 1 } }")), { added: [], inherited: ['borderWidth@2'] });
   assert.deepEqual(split(styles("{ root: { borderWidth: 1, borderWidth: 2 } }"), styles("{ root: { borderWidth: 1 } }")), { added: ['borderWidth@2'], inherited: [] });
   // The same slot in two makeStyles hooks: counted across the calls, the earlier one is the deployed one.
   const hook = "{ root: { borderColor: 'red' } }";
   assert.deepEqual(split(`${styles(hook)}${styles(hook, '')}`, styles(hook)), { added: ['borderColor@3'], inherited: ['borderColor@2'] });
-  // Among keys that cannot be told apart by place, the earlier one is taken as the deployed one: each deployed key is spent once.
-  assert.deepEqual(split(styles("{\n  a: { borderWidth: 1 },\n  b: { borderWidth: 2 },\n}"), styles("{ root: { borderWidth: 1 } }")), { added: ['borderWidth@4'], inherited: ['borderWidth@3'] });
+  // Two slots that hold what one held are not one place: the deployed key belongs to the slot it was in, and the other is new.
+  assert.deepEqual(split(styles("{\n  a: { borderWidth: 1 },\n  b: { borderWidth: 2 },\n}"), styles("{ root: { borderWidth: 1 } }")), { added: ['borderWidth@3', 'borderWidth@4'], inherited: [] });
+  assert.deepEqual(split(styles("{\n  root: { borderWidth: 1 },\n  b: { borderWidth: 1 },\n}"), styles("{ root: { borderWidth: 1 } }")), { added: ['borderWidth@4'], inherited: ['borderWidth@3'] });
   // Nothing deployed (or nothing known of it): every key is new.
   for (const none of [[], undefined, null]) assert.deepEqual(griffelProblemsNotIn(found(deployed), none).inherited, []);
   assert.equal(griffelProblemsNotIn(found(deployed), []).added.length, 2);
@@ -1021,7 +1026,7 @@ test('griffel-styles: each key reports the value it is set to as written — a q
   assert.notDeepEqual(valuesOf(styles("{ a: { borderColor: 'red' } }")), valuesOf(styles('{ a: { borderColor: red } }')));
 });
 
-test('griffel-styles: a key given ANOTHER value is a new key — a reformat of it, or the same key and value moved to another slot, is not', () => {
+test('griffel-styles: a key given ANOTHER value is a new key, and so is the same key and value in another slot — a reformat of it is not', () => {
   const found = (source) => griffelStyleProblems(source).problems;
   const split = (local, deployed) => {
     const { added, inherited } = griffelProblemsNotIn(found(local), found(deployed));
@@ -1033,12 +1038,12 @@ test('griffel-styles: a key given ANOTHER value is a new key — a reformat of i
   for (const value of ["'blue'", 'tokens.colorBrandStroke1', "'red' + x", '`red`', 'red']) assert.deepEqual(split(hover(value), deployed), { added: ['borderColor@3'], inherited: [] }, value);
   // The same value, written another way: not a change.
   for (const value of ['"red"', "'red' /* now blue */", "\n    'red'", "'\\x72ed'"]) assert.deepEqual(split(hover(value), deployed), { added: [], inherited: ['borderColor@3'] }, value);
-  // A slot renamed, or the rule moved under another selector, with the value kept: the same key. With the value changed as well: new.
-  assert.deepEqual(split(hover("'red'", 'container'), deployed), { added: [], inherited: ['borderColor@3'] });
+  // A slot renamed, with the value kept or changed: the key is set in a place the deployed page did not have it, so it is new either way.
+  assert.deepEqual(split(hover("'red'", 'container'), deployed), { added: ['borderColor@3'], inherited: [] });
   assert.deepEqual(split(hover("'blue'", 'container'), deployed), { added: ['borderColor@3'], inherited: [] });
-  // Two slots whose values were exchanged: each value is still there once.
+  // Two slots whose values were exchanged: each is the same key set to another value where it was, so both are new.
   const two = (a, b) => styles(`{\n  a: { borderColor: ${a} },\n  b: { borderColor: ${b} },\n}`);
-  assert.deepEqual(split(two("'blue'", "'red'"), two("'red'", "'blue'")), { added: [], inherited: ['borderColor@3', 'borderColor@4'] });
+  assert.deepEqual(split(two("'blue'", "'red'"), two("'red'", "'blue'")), { added: ['borderColor@3', 'borderColor@4'], inherited: [] });
   // A value used once before and twice now: the second is new, whichever slot it is in.
   assert.deepEqual(split(two("'red'", "'red'"), styles("{\n  a: { borderColor: 'red' },\n}")), { added: ['borderColor@4'], inherited: ['borderColor@3'] });
 });

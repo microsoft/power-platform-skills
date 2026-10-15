@@ -1224,37 +1224,28 @@ const isShorthandProblem = (problem) => problem.code === 'unsupported-shorthand'
 
 /**
  * Which of `problems` the page's deployed version already had. `deployed` is that version's problems (griffelStyleProblems of the source that was deployed). A key counts as already
- * there when the deployed page has the same key set to the same value in the same place (`within`: the slot, selectors and at-rules it sits under) and, failing that, the same key set to
- * the same value anywhere that nothing else has claimed — so a slot that was renamed, or a rule that was moved, does not turn a key Griffel was already dropping into a new one. A key given
- * ANOTHER value is a new one: Griffel drops it just the same, so the page would show none of the change the maker meant, which is what this check exists to stop (a value is compared as
- * written — `value` of the problem — and nothing is evaluated). Each key of the deployed page is spent once, so a second `borderColor` where there was one is new. A problem that is not a
- * shorthand — a call the checker cannot read — is never "already there": what it hides cannot be compared with anything.
+ * there only when the deployed page has the same key set to the same value in the same place (`within`: the slot, selectors and at-rules it sits under). A key set in another place is a
+ * new one even when the deployed page held the same value somewhere else — an edit that removes a key in one place and sets it to the same value in another has added a key where there was
+ * none: Griffel drops it just the same, so the page would show none of what the edit meant, which is what this check exists to stop. (A slot that was renamed, or a rule that was moved under
+ * another selector, is that too: the source cannot say a rename from a removal and an addition, and the cost of the wrong guess is a key that ships without its style. The way on is the same
+ * as for any new key — delete it, or write the longhands.) A key given ANOTHER value in the same place is a new one for the same reason (a value is compared as written — `value` of the problem
+ * — and nothing is evaluated). Each key of the deployed page is spent once, so a second `borderColor` where there was one is new. A problem that is not a shorthand — a call the checker cannot
+ * read — is never "already there": what it hides cannot be compared with anything.
  * @returns {{ added: object[], inherited: object[] }} the problems the deployed page did not have, and those it did, each in source order
  */
 function griffelProblemsNotIn(problems, deployed) {
-  const keyOf = (p) => `${p.property}\u0001${p.value}`;
-  const placeOf = (p) => `${(p.within || []).join('\u0000')}\u0001${keyOf(p)}`;
-  const inPlace = new Map();
-  const anywhere = new Map();
-  const spend = (map, key, by) => map.set(key, (map.get(key) || 0) + by);
+  const placeOf = (p) => `${(p.within || []).join('\u0000')}\u0001${p.property}\u0001${p.value}`;
+  const held = new Map();
   for (const d of deployed || []) {
-    if (!isShorthandProblem(d)) continue;
-    spend(inPlace, placeOf(d), 1);
-    spend(anywhere, keyOf(d), 1);
+    if (isShorthandProblem(d)) held.set(placeOf(d), (held.get(placeOf(d)) || 0) + 1);
   }
   const added = [];
   const inherited = [];
-  const unplaced = [];
   for (const p of problems) {
-    if (!isShorthandProblem(p)) added.push(p);
-    else if ((inPlace.get(placeOf(p)) || 0) > 0) {
-      spend(inPlace, placeOf(p), -1);
-      spend(anywhere, keyOf(p), -1);
+    if (isShorthandProblem(p) && (held.get(placeOf(p)) || 0) > 0) {
+      held.set(placeOf(p), held.get(placeOf(p)) - 1);
       inherited.push(p);
-    } else unplaced.push(p);
-  }
-  for (const p of unplaced) {
-    if ((anywhere.get(keyOf(p)) || 0) > 0) { spend(anywhere, keyOf(p), -1); inherited.push(p); } else added.push(p);
+    } else added.push(p);
   }
   const bySource = (a, b) => a.line - b.line || a.column - b.column;
   return { added: added.sort(bySource), inherited: inherited.sort(bySource) };

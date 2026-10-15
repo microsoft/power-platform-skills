@@ -1467,14 +1467,23 @@ test('an UPDATE that ADDS a key the deployed page did not have is refused, namin
   }
 });
 
-test('an UPDATE is judged key by key: a renamed slot keeps the keys the deployed page had, and a second key where there was one is new — and is the one that is named', async () => {
+test('an UPDATE is judged key by key: a key removed from one place and set to the same value in another is new there, and so is a second key where there was one — and it is the one that is named', async () => {
   const deployed = `${GRIFFEL_IMPORT}const s = makeStyles({\n  root: { borderWidth: '1px' },\n});\nexport default function P() { return null; }\n`;
   const aboutGriffel = (result) => (result.r.payload.warnings || []).filter((w) => /Griffel/.test(w));
-  // The slot is renamed: the same key, still dropped, still not new.
-  const renamed = await griffelUpdate(deployed.replace('root:', 'container:'), deployed);
-  assert.strictEqual(renamed.r.ok, true, JSON.stringify(renamed.r.payload));
-  assert.strictEqual(aboutGriffel(renamed).length, 1);
-  // A second `borderWidth`, in another slot, is new — wherever it comes in the file.
+  // The key is removed from `root` and set to the same value in `card`: the deployed page had it in `root` only, so the one in `card` is new — Griffel drops it just the same, and the page
+  // would show none of what the edit meant. It stops the upload, naming only that key, as a key it never had would.
+  for (const [what, local] of [
+    ['set in another slot', deployed.replace("root: { borderWidth: '1px' },", "root: { padding: '1px' },\n  card: { borderWidth: '1px' },")],
+    ['the slot renamed', deployed.replace('root:', 'container:')],
+  ]) {
+    const { file, genpage, r } = await griffelUpdate(local, deployed);
+    assert.strictEqual(r.ok, false, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(r.payload.code, 'griffel-shorthand', what);
+    assert.strictEqual(genpage.of('update').length, 0, `${what}: nothing is written`);
+    assert.deepStrictEqual(r.payload.problems.map((p) => [p.property, p.within]), [['borderWidth', [what === 'the slot renamed' ? 'container' : 'card']]], `${what}: the key where it is set now`);
+    assert.ok(r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '1px'")}: \`borderWidth\``), `${what}: named where it is`);
+  }
+  // A second `borderWidth`, in another slot, is new too — wherever it comes in the file.
   for (const [what, local] of [
     ['after the old one', deployed.replace("root: { borderWidth: '1px' },", "root: { borderWidth: '1px' },\n  card: { borderWidth: '2px' },")],
     ['before the old one', deployed.replace("root: { borderWidth: '1px' },", "card: { borderWidth: '2px' },\n  root: { borderWidth: '1px' },")],
@@ -1486,6 +1495,10 @@ test('an UPDATE is judged key by key: a renamed slot keeps the keys the deployed
     assert.ok(r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '2px'")}: \`borderWidth\``), `${what}: named where it is`);
     assert.ok(!r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '1px'")}:`), `${what}: the old one is not named`);
   }
+  // The key kept where the deployed page had it is inherited, whatever else is edited around it — with the warning an inherited key gets.
+  const kept = await griffelUpdate(deployed.replace("root: { borderWidth: '1px' },", "root: { borderWidth: '1px', padding: '2px' },\n  card: { padding: '1px' },"), deployed);
+  assert.strictEqual(kept.r.ok, true, JSON.stringify(kept.r.payload));
+  assert.strictEqual(aboutGriffel(kept).length, 1);
   // Fixing the page — the key deleted — is an update like any other.
   const fixed = await griffelUpdate(deployed.replace("root: { borderWidth: '1px' },", "root: { padding: '1px' },"), deployed);
   assert.strictEqual(fixed.r.ok, true);

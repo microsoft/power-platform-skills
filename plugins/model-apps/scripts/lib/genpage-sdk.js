@@ -15,6 +15,7 @@
 //   genpage.defaultViews(tables)            the default public view of each table                  -> { views: [{ table, viewId }], warnings }
 //   genpage.baseLanguage()                  the environment's base language (an LCID)
 //   genpage.fileVersions(pageIds)           the versionnumber of every file row of each page, from one plain read -> { ok, versions: Map<pageId, Map<fileRowId, version> | null>, error }
+//   genpage.publishedDiffers(pageId, args)  what a page's PUBLISHED copy differs from `args` in, read back with plain reads -> { ok, differing: [field…], fingerprint, error }
 //   genpage.dispose({ waitMs })             close the backend and remove its throwaway workspaces -> a promise of { left } (await it before the process ends)
 //   genpage.discardWorkspaces({ waitMs })   the same for the workspaces made so far, leaving the backend open for the next operation
 //
@@ -237,6 +238,85 @@ function contentFingerprint(fields) {
   const content = {};
   for (const key of ['source', 'name', 'dataSources', 'model', 'connectorBindings', 'actionBindings']) if (fields[key] !== undefined) content[key] = fields[key];
   return sha256(`genpage-content/1\n${JSON.stringify(content)}`);
+}
+
+// The content fields of a page as `update` takes them from its arguments, normalized as the write normalizes them, so what is compared, hashed and checked afterwards is what is written. A field the caller leaves
+// out (`undefined`) is the page's own. `publishedDiffers` takes its arguments through this too, so the `fingerprint` it answers is the one `update` answers for the same arguments.
+function contentFieldsOf(args) {
+  return {
+    source: sourceText(args.source),
+    name: args.name === undefined || args.name === null || !String(args.name).trim() ? undefined : String(args.name),
+    dataSources: dataSourcesOf(args.dataSources),
+    model: args.model ? String(args.model) : undefined,
+    connectorBindings: bindingOf(args.connectorBindings, 'connectorBindings'),
+    actionBindings: bindingOf(args.actionBindings, 'actionBindings'),
+  };
+}
+
+// The filetype of the rows that hold a page's TEXT: its source and its settings (`config.json`). The compiled output is the type after it. This is the layout the maker portal and the SDK write, and the one the SDK's
+// page adapter reads (GenPageAdapter `fromApiResponse`): the source is the one text row whose name holds `page.tsx`, the settings the text row named `config.json`.
+const TEXT_ROW_TYPE = 200000000;
+
+// A file's content as bytes. The plugin's HTTP client answers a `$value` read with the Buffer it arrived as, never decoded (lib/sdk-http-client.js); a client that answers a string means its UTF-8.
+function bytesOf(body) {
+  if (typeof body === 'string') return Buffer.from(body, 'utf8');
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  if (Object.prototype.toString.call(body) === '[object ArrayBuffer]') return Buffer.from(body);
+  return null;
+}
+
+// The page as its PUBLISHED layer holds it, in the shape `planEdits` compares — { name, source, dataSources, model, connectorBindings, actionBindings } — or null for a page that has no published copy. The published layer is
+// what a plain read (no `MSCRM.IncludeUnpublished`) is served: the copy a publish writes and a draft does not touch. They are the plain reads the SDK's own check of a publish makes (it does not hand back what it
+// read), made one after another — so a caller that needs them as ONE state brackets them with `fileVersions`, as the build does:
+//   GET /uxagentprojects(<id>)?$select=uxagentprojectid,name                       { "uxagentprojectid": "…", "name": "Overview" }
+//   GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id>
+//                                                                                  { "value": [ { "uxagentprojectfileid": "…", "filename": "src/pages/page.tsx", "filetype": 200000000 }, … ] }
+//   GET /uxagentprojectfiles(<file id>)/filecontent/$value                         the file's bytes: the source row, and `config.json` when the page has one
+// The settings are read as the SDK reads them: a JSON object (one leading byte order mark is ignored), `dataSources` a list of names, `model` a text, the two bindings as they are, every other key left alone.
+// A page laid out otherwise — no source row or two, a file that is not UTF-8, settings that are not those — is one this reads no content from. It throws, and what a caller takes from that is "cannot be told".
+async function readPublishedPage(sdk, id) {
+  const client = sdk.dataverse;
+  if (!client || typeof client.get !== 'function') throw genpageError('the SDK has no Dataverse client to read the published layer with', { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+  const get = async (path, what) => {
+    const response = await client.get(path);
+    if (!response || (response.status !== 404 && (response.status < 200 || response.status >= 300))) {
+      throw genpageError(`${what}: HTTP ${response && response.status}`, { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+    }
+    return response;
+  };
+  const project = await get(`/uxagentprojects(${id})?$select=uxagentprojectid,name`, 'the page\'s row');
+  if (project.status === 404) return null;
+  const rows = await sdk.queryRecords('uxagentprojectfile', { select: ['uxagentprojectfileid', 'filename', 'filetype'], filter: `_uxagentprojectid_value eq ${id}`, paginate: true });
+  const textRows = (rows || []).filter((row) => row && Number(row.filetype) === TEXT_ROW_TYPE && typeof row.filename === 'string');
+  const sources = textRows.filter((row) => row.filename.includes('page.tsx'));
+  const settings = textRows.filter((row) => row.filename === 'config.json');
+  if (sources.length !== 1 || settings.length > 1) {
+    throw genpageError(`its published files are not laid out as a page is (${sources.length} source rows, ${settings.length} settings rows)`, { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+  }
+  const textOf = async (row, what) => {
+    const fileId = String(row.uxagentprojectfileid || '').replace(/[{}]/g, '').toLowerCase();
+    if (!GUID_RE.test(fileId)) throw genpageError(`${what} has no file id`, { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+    const content = await get(`/uxagentprojectfiles(${fileId})/filecontent/$value`, what);
+    const bytes = content.status === 404 ? null : bytesOf(content.body);
+    if (!bytes) throw genpageError(`${what} has no readable content`, { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+    // `fatal`: a byte that is not UTF-8 is an error, not U+FFFD; `ignoreBOM`: a mark at the start is content, as the SDK's own read of the row keeps it.
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  };
+  const page = { name: String((project.body && project.body.name) ?? ''), source: await textOf(sources[0], 'the source row') };
+  if (settings.length) {
+    const config = JSON.parse((await textOf(settings[0], 'config.json')).replace(/^\uFEFF/, ''));
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw genpageError('config.json is not a JSON object', { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+    if ('dataSources' in config) {
+      if (!Array.isArray(config.dataSources) || !config.dataSources.every((name) => typeof name === 'string')) throw genpageError('config.json holds dataSources that are not a list of names', { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+      page.dataSources = config.dataSources;
+    }
+    if ('model' in config) {
+      if (typeof config.model !== 'string') throw genpageError('config.json holds a model that is not a text', { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+      page.model = config.model;
+    }
+    for (const key of ['connectorBindings', 'actionBindings']) if (key in config) page[key] = config[key];
+  }
+  return page;
 }
 
 // Whether a page read from the environment holds what one of the creates sent under its id sent: its name, and its source. `sent` is [{ name, sourceSha256 }] —
@@ -743,14 +823,7 @@ function makeGenpageSdk(env, deps = {}) {
     async update(pageId, args = {}) {
       if (!GUID_RE.test(String(pageId || ''))) throw genpageError(`'${pageId}' is not a page id`, { code: 'GENPAGE_ID_INVALID' });
       const id = String(pageId).toLowerCase();
-      const fields = {
-        source: sourceText(args.source),
-        name: args.name === undefined || args.name === null || !String(args.name).trim() ? undefined : String(args.name),
-        dataSources: dataSourcesOf(args.dataSources),
-        model: args.model ? String(args.model) : undefined,
-        connectorBindings: bindingOf(args.connectorBindings, 'connectorBindings'),
-        actionBindings: bindingOf(args.actionBindings, 'actionBindings'),
-      };
+      const fields = contentFieldsOf(args);
       const sdk = await getSdk();
       const found = await readServer(sdk, id);
       if (found.kind === 'absent') throw genpageError(`page ${id} does not exist in this environment — nothing was changed`, { code: 'GENPAGE_NOT_FOUND', outcome: 'nothing', pageId: id });
@@ -1201,6 +1274,31 @@ function makeGenpageSdk(env, deps = {}) {
       return { ok: true, versions: new Map([...versions].map(([id, files]) => [id, unknown.has(id) || !files.size ? null : files])) };
     },
 
+    // What the PUBLISHED copy of a page differs from `args` in: the content a caller that keeps a record of what it published (the build: lib/page-publish-records.js) needs to see held before it records a publish.
+    //   args: what `update` takes — only the content fields count (the source, and the name, data sources, model and bindings given); an omitted one is the page's own and cannot differ
+    //   -> { ok: true, differing: [key…], fingerprint } | { ok: false, error }
+    // `differing` names the fields whose published value is not the one asked for, in `planEdits`' own words — the one definition of "holds that content", made on the published layer where `update` makes it on the
+    // draft — and is empty when the published copy holds the content. `fingerprint` is `contentFingerprint` of the content that was asked about, so the caller can hold the answer to the hash it keeps. `ok: false` is
+    // "cannot be told", and never "holds it": a page with no published copy, a read that fails, a page laid out otherwise (see readPublishedPage). The reads are one after another, not one state: a caller that needs
+    // them as one reads `fileVersions` before and after, and takes the answer only when those two agree.
+    async publishedDiffers(pageId, args = {}) {
+      if (!GUID_RE.test(String(pageId || ''))) return { ok: false, error: `'${pageId}' is not a page id` };
+      const id = String(pageId).toLowerCase();
+      let fields;
+      try {
+        fields = contentFieldsOf(args);
+      } catch (error) {
+        return { ok: false, error: messageOf(error), ...codeOf(error) };
+      }
+      try {
+        const page = await readPublishedPage(await getSdk(), id);
+        if (page === null) return { ok: false, error: `page ${id} has no published copy` };
+        return { ok: true, differing: planEdits(fields, page).map((edit) => edit.key), fingerprint: contentFingerprint(fields) };
+      } catch (error) {
+        return { ok: false, error: `could not read the published copy of page ${id}: ${messageOf(error)}`, ...codeOf(error) };
+      }
+    },
+
     // Closes the backend and removes the workspace folders it made. Idempotent; it never throws, and the promise it returns never rejects.
     //   - No operation starts after it (`GENPAGE_BACKEND_CLOSED`), and what is removed is what release() removes: the workspaces are
     //     closed first, so an initialization or a read that is still running can neither write into a folder that is about to go nor put
@@ -1281,7 +1379,7 @@ function makeGenpageSdk(env, deps = {}) {
   // The operations are counted while they run: what release() waits for on an SDK it does not own. A closed backend refuses them in getSdk,
   // which the two listings reach inside their own try — a listing never rejects (a listing that cannot be read is `{ ok: false, error }`, and a
   // caller decides between creating a page and reusing one on that), so on a closed backend it answers exactly that.
-  for (const name of ['enumerateEnv', 'enumeratePages', 'read', 'create', 'update', 'placeInApp', 'removeFromApp', 'describe', 'delete', 'runtimeTypes', 'defaultViews', 'baseLanguage', 'fileVersions']) {
+  for (const name of ['enumerateEnv', 'enumeratePages', 'read', 'create', 'update', 'placeInApp', 'removeFromApp', 'describe', 'delete', 'runtimeTypes', 'defaultViews', 'baseLanguage', 'fileVersions', 'publishedDiffers']) {
     const operation = api[name];
     api[name] = (...args) => {
       const run = operation(...args);
