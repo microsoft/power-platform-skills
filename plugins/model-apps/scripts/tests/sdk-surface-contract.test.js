@@ -127,6 +127,11 @@ const SKILL_SDK_SURFACE = [
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',
+  // The SDK's own write wrapper: it runs a schema write, then forgets the metadata the SDK cached for the table. The name column's length of
+  // a table an earlier attempt created is written through the raw client, addressed by MetadataId, instead of through `updateColumn`, which
+  // resolves the column by name (entity-provision.js, updateTextColumnLengthById) — and so asks for the same cache invalidation. The call is
+  // optional (an SDK without it has no cache to forget), which is why a bundle that drops it must be noticed HERE: nothing else would fail.
+  'schemaWrite',
   'setEntityIcon',
   // Wave 2 header/navigation refresh (`app.headerNavigationRefresh`). Used instead of a raw setting
   // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted

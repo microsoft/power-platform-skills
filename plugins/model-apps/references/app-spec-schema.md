@@ -480,8 +480,9 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   names the table, the length asked and the length the platform made, and goes on — or, when the data model
   stopped first, says so, and that a later run leaves the column as it is (the build's own automatic retry of a
   transient failure is not a later run: it sets the length the stopped attempt could not, and says so — to the
-  table that attempt created, which it checks by the table's MetadataId first, so a table another maker deleted
-  and made again in the meantime is left as it is, with a warning). One exception to
+  table that attempt created, which it checks by the table's MetadataId first and then writes to by that id, so a
+  table another maker deleted and made again in the meantime — even in the middle of the update — is left as it is,
+  with a warning). One exception to
   "applied when the table is created": a table the build finds **after** its create — the answer to the
   create was lost, or another maker created the table first — is not written to, because nothing shows that
   this build made it. The build reads its name column's length once instead, and warns when it is not the
@@ -496,10 +497,10 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   with a message that says why and what to do instead of the platform's refusal. Keep the key within 900 bytes
   (at most 450 characters when the name column is its only column). Without a `maxLength` the build leaves the
   column as the environment made it and makes the key with its table, so on such an environment the key is
-  refused: give one. This holds for a key whose `displayName` is one label in the language the build writes in
-  (`languageCode`, else the environment's base language): a string, or a language map that holds only that
-  language, which is the same request. A key labelled in more than that — several languages
-  (`{ "1033": "…", "3082": "…" }`), or a language the build does not write in — is made **before** the length is set,
+  refused: give one. This holds for a key whose `displayName` goes out in one language: a string, or a language
+  map that names exactly one language, whichever it is — the SDK sends either as one label, the same request, and
+  where the key is made does not depend on the language the build writes in. A key labelled in several languages
+  (`{ "1033": "…", "3082": "…" }`) is made **before** the length is set,
   because the update that sets the length reads the column with its labels, and Dataverse keeps only the base
   language of a create that comes straight after such a read. So where the platform refuses such a key for the
   length of its column, the first build stops there; the build then **warns**, naming the key and what to do: run it

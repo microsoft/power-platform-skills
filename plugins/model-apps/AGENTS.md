@@ -1437,7 +1437,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     Last, because `updateColumn` starts by reading the column WITH its labels, and a label-bearing metadata read ahead of
     a labelled create is what strips non-base languages (measured; see `findExistingColumns`): within one attempt, nothing
     labelled in more than one language is created after it (the one thing that is, an alternate key over the name column —
-    below — carries one label, in the build's language, which a read cannot strip). The build's automatic retry of a transient halt (a 429, a
+    below — carries one label, which a read cannot strip). The build's automatic retry of a transient halt (a 429, a
     lock) runs the phase again as a second attempt. The attempt that created the table sets its length in the halt path
     too; when that step fails as well (the lock that stopped the phase can still be held), the table is **owed** its
     length. `provisionDataModel` records it (`owedLengths`, a Map of `{ table, column, asked, tried, tableId, columnId? }`,
@@ -1457,15 +1457,30 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     `EntityDefinitions(LogicalName='…')?$select=MetadataId,PrimaryNameAttribute`, made **only for a debt an earlier
     attempt carried** (the attempt that created the table asks nothing, and a first build, a no-op rebuild and an
     attempt that owes nothing send exactly the requests they always did), which must answer the recorded id and the
-    recorded primary name column; the column read that follows must answer the recorded column id. The debt is also paid
+    recorded primary name column. The read of the column's length that follows answers the column's own id, which must be the
+    recorded one (an answer that names another, or none, is refused too). The debt is also paid
     only as recorded: the spec must still ask that column that length. Otherwise — another table answers now, no table
     does, the primary column is another, the record holds no id to prove anything by, or the spec asks something else —
     nothing is written and the step is a skip (`(not the table the build created — kept)`, `(the table the build
     created is gone — kept)`, `(not the name column the build created — kept)`, `(nothing shows which table the build
     created — kept)`, `(no longer what the spec asks — kept)`) with a warning, the debt is dropped, and a key that waited
     for the length is made as the key on any table the build found is (the platform decides). A read that fails is a
-    failed step with nothing written, which the build retries when it is transient. What this cannot close is the few
-    milliseconds between that read and the SDK's own update, which resolves the column by name again.
+    failed step with nothing written, which the build retries when it is transient.
+    **The check is not what protects the column; the addressing is.** A check followed by an update that resolves the table
+    or the column by name again only moves the window — another maker can replace the table in the few requests between the
+    two, and the update would find the replacement — which is what the SDK's `updateColumn` does (a read of
+    `Attributes(LogicalName='…')`, whose answer's id the two requests that follow use). So a debt is **not** paid through
+    `updateColumn`: every request that follows the check is addressed by the recorded ids —
+    `EntityDefinitions(<table id>)/Attributes(<column id>)`, for the typed read of the length, the read of the column's
+    definition and the update, which `updateTextColumnLengthById` makes as the documented PUT of the whole definition (the
+    answer's `@odata.*` members dropped, `@odata.type` set, `MaxLength` changed, `MSCRM.MergeLabels: true`, through
+    the SDK's own client so a header-ful SDK adds the solution header, and inside the SDK's `schemaWrite`, which is what
+    forgets the metadata the SDK cached for the table after a write of its own). Where the debt records no column id, the column
+    is found by name inside the table the id names, and the update is addressed by the id that read answers. A table made
+    again has other ids, and an id that no table has any more answers 404, so a replacement cannot be the target of any of
+    these requests, wherever in the payment it is made: a 404 from any of them leaves the column as it is, with the same
+    warning (`(the table the build created changed — kept)`) and the debt dropped. Nothing is resolved by name once the table
+    is proved, except the one read that asks which table answers to the name.
     When no retry follows, the CLI makes one last try at a length that no attempt got as far as setting
     (the last one halted before its data-model phase; `settleOwedLengths`, silent unless it fails), as it settles owed
     publishes; a process killed outright, or a later run, finds the table and leaves its name column alone. What the retry
@@ -1497,30 +1512,33 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     most 900 bytes — 2 for each character of a text column
     ([Dataverse alternate keys](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys)) —
     so a key over a name column an environment made 850 characters long is refused. A key that holds a table's primary
-    name column, when the spec gives that column a length and the key's label is **one label in the language the build
-    writes in** (`keyWaitsForNameLength`, `lib/app-spec.js`), is therefore made after the length steps and not with its
+    name column, when the spec gives that column a length and the key's label **goes out in one language**
+    (`keyWaitsForNameLength`, `lib/app-spec.js`), is therefore made after the length steps and not with its
     table, for a table whose length is still to be set: one this attempt created, or one an earlier attempt left owed.
-    What counts is what is sent, not the shape of the value: the SDK writes a string, and a language map that holds only
-    that language, as the same one-entry `LocalizedLabels` array, byte for byte. The build's language is the resolved
-    authoring LCID (`--language-code`, else the spec's `languageCode`, else the environment's base language); a plan made
-    before the build has resolved it takes the one language of a map for it. Such a key is made only when the length step
+    What counts is what is sent — not the shape of the value, and not the language the build is authored in: the SDK writes
+    a string as one `LocalizedLabels` entry in the build's language, and a language map as one entry per language it names,
+    so a string and a map that names one language are the same request, byte for byte, whichever language that is (a
+    `{ "1033": … }` map under `languageCode: 3082` is the request it is under 1033). The same request is the same label under
+    every authoring language, so where its key is made cannot depend on it — which also means the dry run, which cannot always
+    know the build's language, and the apply cannot disagree about it. Such a key is made only when the length step
     came out right (`ok`, or `already N`). When it did not, the key is not sent: its own step fails with
     `BuildHalt` code `alt-key-name-length-not-set` (`recoverable`), whose text names the table, the length and why the
     step failed — not the platform's refusal of the key, which says nothing of the length — and which carries the step's
     HTTP status (and an explicit `transient: false`), so a 429 or a 503 is retried by the build and a refusal is not.
     The retry then finds the length owed, sets it, and makes the key. A key made after the read that carries labels is
     safe because its label is one label, which a read has nothing to strip. That was measured for a create straight after
-    the read; it has not been measured separately for a build whose language is not the environment's base language,
-    where the key is the same request as every other label of that build.
-    **A key labelled in more than that — several languages, or a language the build does not write in — keeps the place
-    it always had**, ahead of the length step (`keyNeedsNameLength` holds, `keyWaitsForNameLength` does not), as every
-    multi-language create in this file does: it cannot follow the read that sets the length without risking the other
+    the read and for a label in the base language; it has not been measured separately for a label in another language
+    (a build authored in one, or a map that names one), where the key is the same request as every other label of such
+    a build.
+    **A key labelled in several languages keeps the place it always had**, ahead of the length step (`keyNeedsNameLength`
+    holds, `keyWaitsForNameLength` does not), as every multi-language create in this file does: it cannot follow the read
+    that sets the length without risking the other
     languages, and the length cannot be set without that read (the SDK's update needs the column's whole definition,
     which only that read provides). So its first build can still stop where the platform refuses the key for the length
-    of its column, and then `alternateKeyAheadOfLength` warns — only when the key fails — naming the key, why it was made
-    first, and what to do: run the build again (the length is set as the build stops, so the run that follows finds the
-    table with it and makes the key), or label the key in one language. Where the environment keeps the length asked, the
-    key is made and nothing is said. Every other key —
+    of its column, and then `alternateKeyAheadOfLength` warns — only when the key fails — naming the key, the languages its
+    label goes out in, why it was made first, and what to do: run the build again (the length is set as the build stops, so
+    the run that follows finds the table with it and makes the key), or label the key in one language. Where the environment
+    keeps the length asked, the key is made and nothing is said. Every other key —
     over another column, over the name column of a table that already existed or was found after its create (never
     written to), or in a spec that gives no length — is made with its table, as it always was; a spec that keys a name
     column without a `primaryAttribute.maxLength` leaves the column as the environment made it, so the reference tells
@@ -1626,7 +1644,7 @@ scripts/
   check-griffel-styles.js      ← /genpage and /app-builder: a page's `makeStyles` calls hold none of the ten shorthands Griffel's runtime drops (lib/griffel-styles.js; see "Griffel shorthands" below)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
-    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase — a length a failed attempt left unset is owed to the build's retry (`owedLengths`, paid only to the table that attempt created, checked by its MetadataId), and an alternate key over that column is made after it; and `mapLimit`, the bounded fan-out every parallel path reuses
+    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase — a length a failed attempt left unset is owed to the build's retry (`owedLengths`, paid only to the table that attempt created: proved by its MetadataId, and then written by requests addressed with the ids, which a table made again cannot answer to), and an alternate key over that column is made after it; and `mapLimit`, the bounded fan-out every parallel path reuses
     provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
     dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), the Azure CLI token for the Power Apps service (`getPowerAppsToken`: the same read for another resource, memoized apart from the Dataverse token and asked for only by the Power Apps service client and the connectivity preflight), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked — except a launcher that only forwards to the native program beside it, the Windows MSI's two-line `pac.cmd` (`@echo off` / `"%~dp0pac.launcher.exe" %*`): it is recognised by its exact lines — `@echo off` on a line of its own, then the forwarding line, as `cmd` reads lines, so a one-line `@echo off "%~dp0x.exe" %*`, which is an `echo`, is not one — and the program beside it (`forwardedProgram`) and that program is started directly, so a `%` or a double quote reaches it unchanged; every other batch file keeps the checked route and its refusal of them); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere, each only once `ps -o lstart= -p` shows its pid still has the start time the listing saw — a descendant that exited meanwhile can have its pid given to an unrelated process; best effort, since two processes can share a one-second start time and the moment between that read and the signal is not covered), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws. `spawnResultTree` is `spawnResultSync`'s asynchronous twin (same result shape, never rejects) for a call that may have to be ended: one that outlasts its `timeout`, or writes past `maxBuffer`, has its whole tree ended through `killProcessTree` before the call settles (`ETIMEDOUT`, `ENOBUFS`), after a short wait for the pipes of what was ended; the error says whether they closed (`containment`: `confirmed`, or `unconfirmed` when a process that outlived the ended tree still holds them, with the `pid` the call was started as)

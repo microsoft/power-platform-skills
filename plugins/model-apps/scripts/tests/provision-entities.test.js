@@ -606,7 +606,7 @@ test('a key over the name column of a table whose length is set waits for it: th
   assert.strictEqual(done[done.length - 1].label, 'alt key cr_candidate.cr_name_key');
 });
 
-test('a key over the name column whose label is a map of the build\'s language alone waits like a string; one that names another language keeps its place', async () => {
+test('a key over the name column whose label goes out in one language waits like a string, whichever language that is; one labelled in several languages keeps its place', async () => {
   const keyed = (displayName, languageCode) => ({
     solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
     ...(languageCode ? { languageCode } : {}),
@@ -618,26 +618,31 @@ test('a key over the name column whose label is a map of the build\'s language a
   });
   const waits = ['solution Default', 'table cr_candidate', 'primary column length cr_candidate.cr_name', 'alt key cr_candidate.cr_name_key'];
   const keeps = ['solution Default', 'table cr_candidate', 'alt key cr_candidate.cr_name_key', 'primary column length cr_candidate.cr_name'];
-  for (const [what, spec, opts, expected] of [
+  const rows = [
     ['a string', keyed('Name Key'), {}, waits],
     ['a map of one language where no language is named', keyed({ 1033: 'Name Key' }), {}, waits],
     ['a map of the spec\'s language', keyed({ 3082: 'Clave' }, 3082), {}, waits],
     ['a map of the language the command line names', keyed({ 3082: 'Clave' }), { languageCode: 3082 }, waits],
-    ['a map of another language than the spec\'s', keyed({ 1033: 'Name Key' }, 3082), {}, keeps],
-    ['a map of another language than the command line\'s', keyed({ 3082: 'Clave' }, 3082), { languageCode: 1033 }, keeps],
+    ['a map of another language than the spec\'s: it is one label all the same', keyed({ 1033: 'Name Key' }, 3082), {}, waits],
+    ['a map of another language than the command line\'s', keyed({ 3082: 'Clave' }, 3082), { languageCode: 1033 }, waits],
+    ['a map of the base language under another language on the command line', keyed({ 1033: 'Name Key' }), { languageCode: 3082 }, waits],
     ['a map of several languages', keyed({ 1033: 'Name Key', 3082: 'Clave' }, 1033), {}, keeps],
-  ]) {
+    ['a map of several languages, whatever the command line names', keyed({ 1033: 'Name Key', 3082: 'Clave' }, 1033), { languageCode: 3082 }, keeps],
+  ];
+  for (const [what, spec, opts, expected] of rows) {
     const dry = await provisionEntities(spec, { apply: false, ...opts }, mockDeps());
     assert.deepStrictEqual(dry.plan, expected, what);
   }
 
-  // The apply orders it the same way: the length is set, and then the key is made.
-  const d = mockDeps();
-  const order = [];
-  d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: 850 } } : { status: 404, body: null }) };
-  d.sdk.updateColumn = async () => { order.push('updateColumn'); return {}; };
-  d.sdk.createAlternateKey = async (table, options) => { order.push(`createAlternateKey ${options.schemaName}`); return {}; };
-  const r = await provisionEntities(keyed({ 1033: 'Name Key' }), { apply: true }, { sdk: d.sdk, provision: d.provision, emit: () => {}, warn: () => {} });
-  assert.strictEqual(r.ok, true, JSON.stringify(r));
-  assert.deepStrictEqual(order, ['updateColumn', 'createAlternateKey cr_name_key']);
+  // The apply orders each of them the way the plan does: the length is set and then the key is made — or, for a label in several languages, the key and then the length.
+  for (const [what, spec, opts, expected] of rows) {
+    const d = mockDeps();
+    const order = [];
+    d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: 850 } } : { status: 404, body: null }) };
+    d.sdk.updateColumn = async () => { order.push('updateColumn'); return {}; };
+    d.sdk.createAlternateKey = async (table, options) => { order.push(`createAlternateKey ${options.schemaName}`); return {}; };
+    const r = await provisionEntities(spec, { apply: true, ...opts }, { sdk: d.sdk, provision: d.provision, emit: () => {}, warn: () => {} });
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r)}`);
+    assert.deepStrictEqual(order, expected === waits ? ['updateColumn', 'createAlternateKey cr_name_key'] : ['createAlternateKey cr_name_key', 'updateColumn'], what);
+  }
 });

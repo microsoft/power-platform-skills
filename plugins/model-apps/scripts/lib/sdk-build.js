@@ -513,7 +513,7 @@ function planFor(spec, opts) {
       }
       for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
       for (const k of e.alternateKeys || []) {
-        if (!keyWaitsForNameLength(e, k, spec && spec.languageCode)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
+        if (!keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
       }
     }
     // The relationships in the order the data-model phase creates them (relationshipsInCreateOrder): localized
@@ -547,12 +547,13 @@ function planFor(spec, opts) {
       if (askedPrimaryNameLength(e) !== undefined) items.push({ phase: 'data-model', label: `primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}` });
     }
     // Then the alternate keys over a name column whose length is set: the build makes such a key once that length is right
-    // (keyWaitsForNameLength, which also needs to know the language the build writes in: the spec's, where it names one). The plan lists it
+    // (keyWaitsForNameLength, which depends on what the key's label is sent as and not on the language the build writes in, so the plan and the
+    // apply cannot disagree about it). The plan lists it
     // where a table the build creates has it; a table that already exists is not written to, and
     // its keys are made with the table — the same steps, in another place, so the count holds.
     for (const e of spec.entities) {
       for (const k of e.alternateKeys || []) {
-        if (keyWaitsForNameLength(e, k, spec && spec.languageCode)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
+        if (keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
       }
     }
   }

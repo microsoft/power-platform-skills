@@ -892,33 +892,34 @@ function keyNeedsNameLength(entity, key) {
   return name !== '' && key.columns.some((column) => String(column).toLowerCase() === name);
 }
 
-// Whether the label a key goes out with is ONE label, in the language the build writes in. The SDK sends a plain string as one
-// `LocalizedLabels` entry in the build's language and a language map as one entry per language it names, so a string and a map that
-// holds only the build's language are the same request, byte for byte (what counts is what is sent, not the shape of the value). A map
-// that names any other language, or more than one, is not. `languageCode` is the language the build writes in; where it is not known —
-// a plan is made before the build has resolved it from the environment — the one language of a map is taken to be it.
-function labelIsInBuildLanguageOnly(value, languageCode) {
+// Whether a label goes out in ONE language: what the SDK sends for it is a single `LocalizedLabels` entry. The SDK writes a plain string as one
+// entry in the language the build writes in, and a language map as one entry per language it names, so a string and a map that names one
+// language are the same request, byte for byte, whichever language that is. What decides is what is sent — not the shape of the value, and not
+// the language the build is authored in, which a map does not use (it names its own) and a string takes: the same request is the same label
+// under every authoring language, so where its key is made cannot depend on it. A map that names several languages or none, or a name that is
+// not an LCID, is not one label.
+function labelGoesOutInOneLanguage(value) {
   if (!isLocalizedLabelMap(value)) return true;
   const languages = Object.keys(value);
-  if (languages.length !== 1 || !/^[1-9]\d*$/.test(languages[0])) return false;
-  const language = normalizeLanguageCode(languageCode);
-  return language === null || Number(languages[0]) === language;
+  return languages.length === 1 && /^[1-9]\d*$/.test(languages[0]);
 }
 
 // Whether an alternate key must wait for its table's primary name column to get the length the spec asks for. The one rule behind the
 // data-model phase and both plans, so that they cannot disagree about where such a key is made: true when the key needs the length
-// (keyNeedsNameLength) and its label is ONE label in the build's language (labelIsInBuildLanguageOnly).
+// (keyNeedsNameLength) and its label goes out in ONE language (labelGoesOutInOneLanguage).
 //
 // The build sets the length LAST in the phase: the SDK's update reads the column with its labels, and a read that carries labels ahead of
 // a create that carries several languages is what makes Dataverse keep only the base one. A key with one label has nothing for such a read
-// to strip, so it may follow the step; a key labelled in more than that keeps the place it has always had, ahead of it — and where the
+// to strip, so it may follow the step; a key labelled in several languages keeps the place it has always had, ahead of it — and where the
 // platform then refuses it for the length of its column, the build says so (alternateKeyAheadOfLength, lib/entity-provision.js).
+//
+// It does not depend on the language the build writes in, so the dry run and the apply cannot disagree about it however either is given one.
 //
 // This is the half of the rule the spec decides. The other half is the build's: a table that already existed is never written to, so
 // its keys are made where they always were, and only a table whose length is still to be set (one this build created, or one a failed
 // attempt of the same build left unset) makes its keys wait.
-function keyWaitsForNameLength(entity, key, languageCode) {
-  return keyNeedsNameLength(entity, key) && labelIsInBuildLanguageOnly(key.displayName, languageCode);
+function keyWaitsForNameLength(entity, key) {
+  return keyNeedsNameLength(entity, key) && labelGoesOutInOneLanguage(key.displayName);
 }
 
 // The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as

@@ -574,24 +574,32 @@ async function attemptsOf(errors, { spec = desk, configure } = {}) {
   return { handed, warnings, attempts: n, ...outcome };
 }
 // The support desk with a name column length asked of its Ticket table, and an SDK that can read and set it. `reads` are the reads of the
-// column's length, `identity` the reads of which table answers to the name, and `tableId` is the one that does.
+// column's length, `identity` the reads of which table answers to the name, `definitions` the reads of the column's whole definition, and
+// `tableId` is the id of the table that answers. A debt is paid by requests addressed with the MetadataIds it records (the table's and its
+// name column's), not through the SDK's updateColumn, which resolves them by name again — so the update is a PUT of the column's definition.
 const deskAskingALength = () => { const spec = jclone(desk); spec.entities.find((e) => e.schemaName === 'new_ticket').primaryAttribute.maxLength = 120; return spec; };
+const NAME_URL = `/EntityDefinitions(${TICKET_ID})/Attributes(${NAME_ID})`;
 function lengthSdk(sdk, { current = 850, update, tableId = TICKET_ID } = {}) {
   const writes = [];
   const reads = [];
   const identity = [];
+  const definitions = [];
   sdk.dataverse = {
     get: async (url) => {
       if (/\?\$select=MetadataId,PrimaryNameAttribute$/.test(url)) {
         identity.push(url);
         return { status: 200, headers: {}, body: { MetadataId: tableId, PrimaryNameAttribute: 'new_name' } };
       }
+      if (/StringAttributeMetadata$/.test(url)) {
+        definitions.push(url);
+        return { status: 200, headers: {}, body: { '@odata.context': 'https://x/api/data/v9.2/$metadata#EntityDefinitions', MetadataId: NAME_ID, LogicalName: 'new_name', MaxLength: current } };
+      }
       reads.push(url);
       return { status: 200, headers: {}, body: { MaxLength: current, MetadataId: NAME_ID } };
     },
+    put: async (url, body, options) => { writes.push([url, body, options && options.headers]); if (update) await update(); return { status: 204, headers: {}, body: null }; },
   };
-  sdk.updateColumn = async (table, column, changes) => { writes.push([table, column, changes]); if (update) await update(); };
-  return { writes, reads, identity };
+  return { writes, reads, identity, definitions };
 }
 
 test('the name column lengths a failed attempt still owes are handed to the next attempt, and what that attempt reports takes their place', async () => {
@@ -619,9 +627,11 @@ test('a halt no retry follows sets the length of a table whose debt no attempt t
   const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
   assert.match(out.error.message, /bad request/, 'the halt is what is reported');
   assert.strictEqual(out.attempts, 2);
-  assert.deepStrictEqual(spy.writes, [['new_ticket', 'new_name', { maxLength: 120 }]], 'the length asked, written once');
+  assert.deepStrictEqual(spy.writes, [[NAME_URL, { MetadataId: NAME_ID, LogicalName: 'new_name', MaxLength: 120, '@odata.type': 'Microsoft.Dynamics.CRM.StringAttributeMetadata' }, { 'MSCRM.MergeLabels': 'true' }]],
+    'the length asked, written once, to the column the debt records: addressed by the ids, with the labels kept');
   assert.strictEqual(spy.identity.length, 1, 'after one read of which table answers to the name');
-  assert.strictEqual(spy.reads.length, 1, 'and one read of the column');
+  assert.deepStrictEqual(spy.reads, [`${NAME_URL}/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength`], 'and one read of the column, by the ids');
+  assert.deepStrictEqual(spy.definitions, [`${NAME_URL}/Microsoft.Dynamics.CRM.StringAttributeMetadata`], 'and one of its definition');
   assert.deepStrictEqual(out.warnings, []);
 });
 
@@ -632,7 +642,7 @@ test('a halt no retry follows leaves a table that is not the one the debt record
   });
   assert.match(out.error.message, /bad request/, 'the halt is what is reported');
   assert.deepStrictEqual(spy.writes, [], 'the table another maker made again is not written to');
-  assert.deepStrictEqual(spy.reads, [], 'nor is its column read');
+  assert.deepStrictEqual([spy.reads, spy.definitions], [[], []], 'nor is its column read');
   assert.strictEqual(out.warnings.length, 1);
   assert.match(out.warnings[0], /^did not set the length of the primary name column new_ticket\.new_name to 120 — the table new_ticket is not the one this build created /);
 });
@@ -647,7 +657,7 @@ test('what an attempt already tried is not settled again, and a build that owes 
     let spy;
     const out = await attemptsOf(errors, { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
     assert.match(out.error.message, /bad request/, what);
-    assert.deepStrictEqual([spy.identity, spy.reads, spy.writes], [[], [], []], `${what}: nothing is read or written`);
+    assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []], `${what}: nothing is read or written`);
     assert.deepStrictEqual(out.warnings, [], what);
   }
 });
@@ -656,7 +666,7 @@ test('a build that succeeds after a retry settles nothing: what the retry owed i
   let spy;
   const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), null], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
   assert.strictEqual(out.result.ok, true);
-  assert.deepStrictEqual([spy.identity, spy.reads, spy.writes], [[], [], []]);
+  assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []]);
 });
 
 test('a settle that cannot set the length warns, names the table and the length, and the halt is still what is reported', async () => {

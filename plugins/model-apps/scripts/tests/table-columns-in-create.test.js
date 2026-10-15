@@ -43,6 +43,11 @@ const SYSTEM_COLUMNS = ['createdon', 'modifiedon', 'ownerid', 'statecode', 'stat
 // The most bytes an alternate key may hold. A text column takes 2 bytes a character, so a name column of 450 characters is the longest
 // that can be in a key alone — and the 850 characters some environments make of a new name column are far too long.
 const KEY_BYTES_LIMIT = 900;
+// A table or a column in a metadata path is named by its logical name — the alternate key, `LogicalName='new_ticket'` — or by its
+// MetadataId, the primary key. A table's MetadataId stops answering when the table is deleted, whatever is made under its name afterwards.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/retrieve-metadata-name-metadataid
+const TABLE_KEY = "(LogicalName='[^']+'|[0-9a-f-]{36})";
+const COLUMN_KEY = TABLE_KEY;
 // The columns a column creates beside itself: a Money column its base-currency twin, a choice or a Boolean its `<name>name`
 // shadow, a Customer lookup its three shadows `<name>name`, `<name>yominame` and `<name>idtype` (measured), a File column the
 // `<name>_name` that holds the file's name, an Image column its `<name>id`, `<name>_timestamp` and `<name>_url`, and a rollup
@@ -163,6 +168,8 @@ function fakeDataverse({
     return null;
   };
   const relative = (url) => decodeURIComponent(String(url).replace(API, ''));
+  const tableAt = (key) => { const named = /^LogicalName='([^']+)'$/.exec(key); return named ? tables.get(named[1]) : [...tables.values()].find((x) => x.id === key); };
+  const columnAt = (table, key) => { const named = /^LogicalName='([^']+)'$/.exec(key); return named ? table.columns.get(named[1]) : [...table.columns.values()].find((c) => c.row.MetadataId === key); };
 
   const httpClient = {
     get: async (url) => {
@@ -207,15 +214,16 @@ function fakeDataverse({
         const t = tables.get(m[1]);
         return t ? reply(200, { value: [...t.columns.values()].map((c) => ({ LogicalName: c.row.LogicalName, RequiredLevel: c.body.RequiredLevel })) }) : reply(404, { error: { message: 'no such table' } });
       }
-      // The read of a text column's length: one typed request that selects MaxLength and nothing else.
-      if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Attributes\(LogicalName='([^']+)'\)\/Microsoft\.Dynamics\.CRM\.StringAttributeMetadata\?\$select=MaxLength$/.exec(p))) {
+      // The read of a text column's length: one typed request that selects MaxLength and nothing else. The table and the column are
+      // addressed by logical name (the alternate key) or by MetadataId (the primary key) — a debt an earlier attempt carried is paid by ids.
+      if ((m = new RegExp(`^/EntityDefinitions\\(${TABLE_KEY}\\)/Attributes\\(${COLUMN_KEY}\\)/Microsoft\\.Dynamics\\.CRM\\.StringAttributeMetadata\\?\\$select=MaxLength$`).exec(p))) {
         lengthReadCount += 1;
         const override = lengthRead && lengthRead(lengthReadCount);
         if (override) return override;
-        const t = tables.get(m[1]);
-        const column = t && t.columns.get(m[2]);
-        if (!column) return reply(404, { error: { message: `no column ${m[2]}` } });
-        return reply(200, { MaxLength: m[2] === t.primaryName ? t.primaryLength : column.body.MaxLength, MetadataId: column.row.MetadataId });
+        const t = tableAt(m[1]);
+        const column = t && columnAt(t, m[2]);
+        if (!column) return reply(404, { error: { message: `no table or column ${m[1]} / ${m[2]}` } });
+        return reply(200, { MaxLength: column.row.LogicalName === t.primaryName ? t.primaryLength : column.body.MaxLength, MetadataId: column.row.MetadataId });
       }
       // The two reads of the SDK's updateColumn: the column's id and type by name, then its whole typed definition by id.
       if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Attributes\(LogicalName='([^']+)'\)\?\$select=MetadataId,AttributeType$/.exec(p))) {
@@ -223,12 +231,13 @@ function fakeDataverse({
         const column = t && t.columns.get(m[2]);
         return column ? reply(200, { MetadataId: column.row.MetadataId, AttributeType: 'String' }) : reply(404, { error: { message: `no column ${m[2]}` } });
       }
-      if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Attributes\(([0-9a-f-]{36})\)\/Microsoft\.Dynamics\.CRM\.StringAttributeMetadata$/.exec(p))) {
-        const t = tables.get(m[1]);
-        const column = t && [...t.columns.values()].find((c) => c.row.MetadataId === m[2]);
-        if (!column) return reply(404, { error: { message: `no column ${m[2]}` } });
+      if ((m = new RegExp(`^/EntityDefinitions\\(${TABLE_KEY}\\)/Attributes\\(([0-9a-f-]{36})\\)/Microsoft\\.Dynamics\\.CRM\\.StringAttributeMetadata$`).exec(p))) {
+        const t = tableAt(m[1]);
+        const column = t && columnAt(t, m[2]);
+        if (!column) return reply(404, { error: { message: `no table or column ${m[1]} / ${m[2]}` } });
         const isPrimary = column.row.LogicalName === t.primaryName;
-        return reply(200, { ...clone(column.body), ...column.row, ...(isPrimary ? { MaxLength: t.primaryLength } : {}) });
+        // `@odata.context` is what the platform adds to an answer; the SDK drops every `@odata.*` member before it writes the definition back.
+        return reply(200, { '@odata.context': `${API}/$metadata#EntityDefinitions('${t.logical}')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata/$entity`, ...clone(column.body), ...column.row, ...(isPrimary ? { MaxLength: t.primaryLength } : {}) });
       }
       // The probe the SDK's createGlobalOptionSet makes by name before it creates the option set.
       if ((m = /^\/GlobalOptionSetDefinitions\(Name='([^']+)'\)\?\$select=MetadataId$/.exec(p))) {
@@ -310,19 +319,20 @@ function fakeDataverse({
     },
     patch: async (url) => { throw new Error(`unexpected PATCH ${relative(url)}`); },
     // The documented update of a column: a PUT of its whole typed definition, with MSCRM.MergeLabels so the labels already
-    // stored are kept — what the SDK's updateColumn sends.
+    // stored are kept — what the SDK's updateColumn sends. The table is addressed by logical name (the SDK's own update) or by
+    // MetadataId (the update of a debt an earlier attempt carried): an id that no table has any more is a 404.
     put: async (url, body, options) => {
       const p = relative(url);
       log.push({ method: 'PUT', path: p, body: clone(body), headers: (options && options.headers) || {} });
-      const m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Attributes\(([0-9a-f-]{36})\)$/.exec(p);
+      const m = new RegExp(`^/EntityDefinitions\\(${TABLE_KEY}\\)/Attributes\\(([0-9a-f-]{36})\\)$`).exec(p);
       if (!m) throw new Error(`unexpected PUT ${p}`);
       if (updateFails) {
         const failure = updateFails(body);
         if (failure) return refuse(p, failure);
       }
-      const t = tables.get(m[1]);
-      const column = t && [...t.columns.values()].find((c) => c.row.MetadataId === m[2]);
-      if (!column) return reply(404, { error: { message: `no column ${m[2]}` } });
+      const t = tableAt(m[1]);
+      const column = t && columnAt(t, m[2]);
+      if (!column) return reply(404, { error: { message: `no table or column ${m[1]} / ${m[2]}` } });
       if (column.row.LogicalName === t.primaryName) t.primaryLength = body.MaxLength;
       else column.body = { ...column.body, MaxLength: body.MaxLength };
       return reply(204, null);
@@ -2127,8 +2137,8 @@ test('where a key is made: after the length step only when it holds the name col
       [...A_FIRST, KEY_ON_A, ...THEN_B, SET_A_LENGTH]],
     ['a label map that holds only the build\'s language is the request the string is, so the key waits like one', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 1033: 'Key' } }), [],
       [...A_FIRST, ...THEN_B, SET_A_LENGTH, KEY_ON_A]],
-    ['a label map of a language the build does not write in is not that request: the key keeps its place', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 3082: 'Clave' } }), [],
-      [...A_FIRST, KEY_ON_A, ...THEN_B, SET_A_LENGTH]],
+    ['a label map of one language is one label whichever language that is — the build\'s language does not enter into it — so the key waits', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 3082: 'Clave' } }), [],
+      [...A_FIRST, ...THEN_B, SET_A_LENGTH, KEY_ON_A]],
     ['a key over the name column of a table that already existed: its name column is never written', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'] }), ['new_a'],
       ['createColumn new_a.new_x', KEY_ON_A, ...THEN_B]],
   ]) {
@@ -2212,8 +2222,9 @@ test('a key that waits and that the platform then refuses, or finds already ther
 // saved is (`owedLengths`, sdk-build.js runSdkBuild), and paid at the end of that attempt's data-model phase.
 //
 // These run the real retry loop over the real engine (runSdkBuild, data-model phase), the real SDK and the stub. `faults` says how the
-// stub misbehaves: the first N requests of a kind answer 503 — and, for the writes of the table, change nothing.
-async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {} } = {}) {
+// stub misbehaves: the first N requests of a kind answer 503 — and, for the writes of the table, change nothing. `arrange(dv)` is a
+// last word on the stub, made after the faults are in place: a test wraps the transport in it (swapAfterIdentityRead).
+async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {}, arrange } = {}) {
   const { buildModelApp } = require('../build-model-app.js');
   const { runSdkBuild } = require('../lib/sdk-build.js');
   const dv = fakeDataverse(dataverse);
@@ -2236,6 +2247,7 @@ async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {} } = 
     if (left.setLength > 0) { left.setLength -= 1; return refuse503('PUT', String(url).replace(API, ''), body); }
     return put(url, body, options);
   };
+  if (arrange) arrange(dv);
   const sdk = await realSdk(dv.httpClient);
   const attempts = [];
   const events = [];
@@ -2388,7 +2400,7 @@ test('whichever write of the build is refused with a 503, the build converges: t
 // that is handed one does with it, without the retry loop around them. Two attempts over the same stub: a second SDK over the first's
 // transport is a new process finding what the first left.
 async function provisionAgain(dv, spec, options = {}) {
-  const sdk = await realSdk(dv.httpClient);
+  const sdk = await realSdk(dv.httpClient, options.sdkOptions);
   const events = [];
   const warnings = [];
   const owedLengths = options.owedLengths || new Map();
@@ -2585,7 +2597,7 @@ test('the plan lists a key that waits for the name column length after the lengt
   assert.deepStrictEqual(labels(KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 1033: 'Key', 3082: 'Clave' } })), [
     'table new_a ("A")', 'column new_a.new_x (Text)', 'alt key new_a.new_k', 'table new_b ("B")', 'relationship 1:N new_a->new_b', 'primary column length new_a.new_n',
   ], 'a key labelled in several languages keeps its place');
-  // A map of the build's language alone is the request a string is. The plan knows that language only when the spec names it.
+  // A map of one language is the request a string is, whichever language that is: the plan does not need to know the build's.
   const waits = [
     'table new_a ("A")', 'column new_a.new_x (Text)', 'table new_b ("B")', 'relationship 1:N new_a->new_b', 'primary column length new_a.new_n', 'alt key new_a.new_k',
   ];
@@ -2596,7 +2608,8 @@ test('the plan lists a key that waits for the name column length after the lengt
   assert.deepStrictEqual(labels(KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 1033: 'Key' } })), waits, 'a map of one language, in a spec that names no language');
   assert.deepStrictEqual(labels(labelled(1033, { 1033: 'Key' })), waits, 'the spec\'s language');
   assert.deepStrictEqual(labels(labelled(3082, { 3082: 'Clave' })), waits, 'whichever it is');
-  assert.deepStrictEqual(labels(labelled(3082, { 1033: 'Key' })), keeps, 'a language the spec does not write in');
+  assert.deepStrictEqual(labels(labelled(3082, { 1033: 'Key' })), waits, 'a language the spec does not write in is one label too');
+  assert.deepStrictEqual(labels(labelled(3082, { 1033: 'Key', 3082: 'Clave' })), keeps, 'two languages are not');
 });
 
 test('keyWaitsForNameLength is the half of the rule the spec decides: the name column in the key, a length asked of it, and a label that is the request a plain string makes', () => {
@@ -2604,25 +2617,27 @@ test('keyWaitsForNameLength is the half of the rule the spec decides: the name c
   const entity = (primaryAttribute) => ({ schemaName: 'new_a', primaryAttribute });
   const asked = { schemaName: 'new_Name', maxLength: 120 };
   const key = (columns, extra = {}) => ({ schemaName: 'new_k', columns, ...extra });
-  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['NEW_NAME']), 1033), true, 'logical names are lower case, whatever case the spec writes');
-  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_x', 'new_name']), 1033), true, 'among other columns');
-  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_name'], { displayName: 'Name Key' }), 1033), true, 'a string label');
-  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_x']), 1033), false, 'another column');
-  assert.strictEqual(keyWaitsForNameLength(entity({ schemaName: 'new_name' }), key(['new_name']), 1033), false, 'no length asked');
-  assert.strictEqual(keyWaitsForNameLength(entity({ ...asked, maxLength: null }), key(['new_name']), 1033), false, 'a null length is none');
-  // What goes out decides, not the shape of the value: the SDK writes a string as one label in the build's language, and a map as one label per language it names.
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['NEW_NAME'])), true, 'logical names are lower case, whatever case the spec writes');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_x', 'new_name'])), true, 'among other columns');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_name'], { displayName: 'Name Key' })), true, 'a string label');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_x'])), false, 'another column');
+  assert.strictEqual(keyWaitsForNameLength(entity({ schemaName: 'new_name' }), key(['new_name'])), false, 'no length asked');
+  assert.strictEqual(keyWaitsForNameLength(entity({ ...asked, maxLength: null }), key(['new_name'])), false, 'a null length is none');
+  // What goes out decides, not the shape of the value and not the language the build writes in: the SDK writes a string as one label in
+  // the build's language, and a map as one label per language it names — so a label that goes out in ONE language is one label, whichever.
   const labelled = (displayName, language) => keyWaitsForNameLength(entity(asked), key(['new_name'], { displayName }), language);
-  assert.strictEqual(labelled({ 1033: 'Key' }, 1033), true, 'a map of the build\'s language alone is the same request as the string');
-  assert.strictEqual(labelled({ 3082: 'Clave' }, 3082), true, 'whichever language that is');
-  assert.strictEqual(labelled({ 3082: 'Clave' }, '3082'), true, 'a language written as text, the way a spec writes one');
-  assert.strictEqual(labelled('Clave', 3082), true, 'a string is in the build\'s language, whichever it is');
-  assert.strictEqual(labelled({ 1033: 'Key', 3082: 'Clave' }, 1033), false, 'a label in several languages');
-  assert.strictEqual(labelled({ 1033: 'Key', 3082: 'Clave' }, 3082), false, 'in whichever of them the build writes');
-  assert.strictEqual(labelled({ 3082: 'Clave' }, 1033), false, 'a map of a language that is not the build\'s');
-  assert.strictEqual(labelled({}, 1033), false, 'a map of no language');
-  assert.strictEqual(labelled({ 'en-US': 'Key' }, 1033), false, 'a key that is not an LCID');
-  assert.strictEqual(labelled({ 1033: 'Key' }, undefined), true, 'a plan made before the build has resolved its language takes the one language of a map for the build\'s');
-  assert.strictEqual(labelled({ 3082: 'Clave' }, null), true, 'likewise');
+  assert.strictEqual(labelled({ 1033: 'Key' }), true, 'a map of one language is the same request as the string');
+  assert.strictEqual(labelled({ 3082: 'Clave' }), true, 'whichever language that is');
+  assert.strictEqual(labelled('Clave'), true, 'a string is one label');
+  assert.strictEqual(labelled({ 1033: 'Key', 3082: 'Clave' }), false, 'a label in several languages');
+  assert.strictEqual(labelled({}), false, 'a map of no language');
+  assert.strictEqual(labelled({ 'en-US': 'Key' }), false, 'a key that is not an LCID');
+  for (const language of [undefined, null, 1033, 3082, '3082', 'x']) {
+    assert.strictEqual(labelled({ 1033: 'Key' }, language), true, `a language the caller still passes (${language}) changes nothing: a map of one language`);
+    assert.strictEqual(labelled({ 3082: 'Clave' }, language), true, `${language}: whichever language the map names`);
+    assert.strictEqual(labelled('Clave', language), true, `${language}: a string`);
+    assert.strictEqual(labelled({ 1033: 'Key', 3082: 'Clave' }, language), false, `${language}: several languages`);
+  }
   // The half that does not look at the label: the columns and the length, which is what the build also needs to say that a key over the name column is in the way.
   assert.strictEqual(keyNeedsNameLength(entity(asked), key(['new_name'], { displayName: { 1033: 'Key', 3082: 'Clave' } })), true, 'a key in several languages needs it as much as any');
   assert.strictEqual(keyNeedsNameLength(entity(asked), key(['new_x'])), false);
@@ -2634,7 +2649,7 @@ test('keyWaitsForNameLength is the half of the rule the spec decides: the name c
     ['no primary attribute', { schemaName: 'new_a' }, key(['new_name'])],
     ['no entity', undefined, key(['new_name'])],
   ]) {
-    assert.strictEqual(keyWaitsForNameLength(e, k, 1033), false, `${what}: false, never a throw`);
+    assert.strictEqual(keyWaitsForNameLength(e, k), false, `${what}: false, never a throw`);
     assert.strictEqual(keyNeedsNameLength(e, k), false, `${what}: false, never a throw`);
   }
 });
@@ -2888,11 +2903,13 @@ test('owedLengths: a debt that records no table id cannot be proved to be this t
 });
 
 test('a table with the right id whose name column is not the one the debt recorded is left alone too', async () => {
+  const gone = /^did not set the length of the primary name column new_ticket\.new_name to 120 — the table new_ticket this build created \(or its name column\) was deleted, or deleted and created again, while the build was setting its length, and the build never writes to a table it did not create/;
   for (const [what, change, step, why] of [
     ['its primary name column is another column now', (dv) => { dv.tables.get('new_ticket').primaryName = 'new_title'; },
       'primary column length new_ticket.new_name (not the name column the build created — kept)', /the primary name column of table new_ticket is new_title now, not new_name/],
+    // The request that reads the column is addressed by the id the debt records, and the table has no column with it: a 404, like a table that is gone.
     ['its name column is another column of the same name', (dv) => { dv.tables.get('new_ticket').columns.get('new_name').row.MetadataId = attributeId('replacement.new_ticket', 'new_name'); },
-      'primary column length new_ticket.new_name (not the name column the build created — kept)', /new_name is not the column this build created in new_ticket/],
+      'primary column length new_ticket.new_name (the table the build created changed — kept)', gone],
   ]) {
     let blocked = true;
     const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
@@ -2912,11 +2929,43 @@ test('a table with the right id whose name column is not the one the debt record
   }
 });
 
+test('an answer to the read of the column that is not the column the debt records, or that does not say which column it is, is not written to either', async () => {
+  const OTHER = attributeId('replacement.new_ticket', 'new_name');
+  const answer = (body) => () => ({ status: 200, headers: {}, body });
+  for (const [what, recorded, read, step, why] of [
+    ['an answer that names another column than the recorded one', true, answer({ MaxLength: 850, MetadataId: OTHER }),
+      'primary column length new_ticket.new_name (not the name column the build created — kept)', /new_name is not the column this build created in new_ticket/],
+    ['an answer that names no column, where the debt records one', true, answer({ MaxLength: 850 }),
+      'primary column length new_ticket.new_name (not the name column the build created — kept)', /new_name is not the column this build created in new_ticket/],
+    ['an answer that names no column, where the debt records none: there is no id to address the update by', false, answer({ MaxLength: 850 }),
+      'primary column length new_ticket.new_name (nothing shows which column the build created — kept)', /carries no MetadataId, so nothing shows which column an update would write to/],
+  ]) {
+    const state = { blocked: true, read: null };
+    const dv = fakeDataverse({
+      updateFails: () => (state.blocked ? refusal() : null),
+      lengthRead: (n) => (state.read ? state.read() : (n === 1 && !recorded ? unavailable() : undefined)),
+    });
+    const spec = oneTable([], asksFor(120));
+    const owed = new Map();
+    await provisionAgain(dv, spec, { owedLengths: owed });
+    assert.strictEqual(owed.get('new_ticket').columnId !== undefined, recorded, `${what}: the debt ${recorded ? 'records' : 'does not record'} the column`);
+    state.blocked = false;
+    state.read = read;
+    const updatesBefore = puts({ dv }).length;
+    const run = await provisionAgain(dv, spec, { owedLengths: owed });
+    assert.strictEqual(puts({ dv }).length, updatesBefore, `${what}: nothing is written`);
+    assert.deepStrictEqual(lengthEvents(run).map((e) => [e.status, e.label]), [['skip', step]], what);
+    assert.strictEqual(run.warnings.length, 1, what);
+    assert.match(run.warnings[0], why, what);
+  }
+});
+
 // --- the language a key's label goes out in -------------------------------------------------------------------------------------
-// What matters to the order of a key is what the SDK sends for its label: a string, and a map that holds only the build's language, are
-// ONE label in that language, byte for byte (the SDK writes a map as one label per language it names) — and one label is what a read that
-// carries labels cannot strip. A label that names more than that is the case the build keeps ahead of the length step, and where the
-// platform then refuses the key for the length of its column, the build says so and what to do.
+// What matters to the order of a key is what the SDK sends for its label, not the shape of the value and not the language the build is
+// authored in: a string, and a map that names one language, are ONE label, byte for byte (the SDK writes a string in the build's language
+// and a map in the languages it names) — and one label is what a read that carries labels cannot strip. A label that goes out in several
+// languages is the case the build keeps ahead of the length step, and where the platform then refuses the key for the length of its column,
+// the build says so and what to do.
 const MAP_KEY = (displayName) => ({ ...NAME_KEY, displayName });
 const keyLabels = (run) => keyPosts(run).map((r) => r.body.DisplayName.LocalizedLabels.map((l) => [l.LanguageCode, l.Label]));
 
@@ -2932,21 +2981,27 @@ test('a key whose label is a map holding only the build\'s language is the reque
   assert.deepStrictEqual(map.warnings, []);
 });
 
-test('the build\'s language is the one that counts: under another authoring language a string and a map of that language wait, and a map of a language the build does not write in does not', async () => {
-  for (const [what, displayName, waits] of [
-    ['a string', 'Clave del nombre', true],
-    ['a map of the build\'s language', { 3082: 'Clave del nombre' }, true],
-    ['a map of another language', { 1033: 'Name Key' }, false],
+test('what is sent decides, not the language the build is authored in: a key whose label goes out in ONE language waits for the length, whatever that language is', async () => {
+  for (const [what, authoring, displayName] of [
+    ['a string', 3082, 'Clave del nombre'],
+    ['a map of the authoring language', 3082, { 3082: 'Clave del nombre' }],
+    ['a map of the environment\'s base language, under another authoring language', 3082, { 1033: 'Name Key' }],
+    ['a map of another language than the authoring one, under the base language', 1033, { 3082: 'Clave del nombre' }],
   ]) {
-    const run = await provisionOver(keyedTable([MAP_KEY(displayName)]), { preResolvedLanguageCode: 3082, capture: true });
+    const run = await provisionOver(keyedTable([MAP_KEY(displayName)]), { preResolvedLanguageCode: authoring, capture: true });
+    assert.strictEqual(run.error, undefined, `${what}: the first build succeeds`);
     const lines = run.dv.log.map(requestLine);
-    const keyAt = lines.findIndex((l) => /\/Keys$/.test(l));
-    const updateAt = lines.findIndex((l) => l.startsWith('PUT '));
-    assert.ok(keyAt >= 0 && updateAt >= 0, what);
-    assert.strictEqual(keyAt > updateAt, waits, `${what}: the key is made ${waits ? 'after' : 'before'} the length step`);
-    assert.strictEqual(run.error === undefined, waits, `${what}: the first build ${waits ? 'succeeds' : 'stops where the platform refuses the key'}`);
-    if (waits) assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey'], what);
+    assert.ok(lines.findIndex((l) => /\/Keys$/.test(l)) > lines.findIndex((l) => l.startsWith('PUT ')), `${what}: the key is made after the length step`);
+    assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey'], what);
+    assert.deepStrictEqual(run.dv.refusals, [], `${what}: the platform refused nothing`);
+    assert.deepStrictEqual(run.warnings, [], what);
   }
+  // The same request in every authoring language: the key's label goes out as it names itself, so where it is made cannot depend on the build's language.
+  const base = await provisionOver(keyedTable([MAP_KEY({ 1033: 'Name Key' })]), { preResolvedLanguageCode: 1033 });
+  const other = await provisionOver(keyedTable([MAP_KEY({ 1033: 'Name Key' })]), { preResolvedLanguageCode: 3082 });
+  assert.deepStrictEqual(keyPosts(other).map((r) => r.body), keyPosts(base).map((r) => r.body), 'the one-language map is the same key request under either authoring language');
+  assert.deepStrictEqual(keyLabels(other), [[[1033, 'Name Key']]]);
+  assert.deepStrictEqual(finished(other).slice(-2), finished(base).slice(-2), 'and the same last two steps: the length, then the key');
 });
 
 test('a key labelled in several languages keeps its place ahead of the length step, and where the platform then refuses it the build says why and what to do — and the run that follows makes it, with both labels', async () => {
@@ -2962,10 +3017,11 @@ test('a key labelled in several languages keeps its place ahead of the length st
   const advice = run.warnings.filter((w) => /alt key new_ticket\.new_namekey/.test(w));
   assert.strictEqual(advice.length, 1, 'one warning names the key');
   assert.match(advice[0], /It is over the name column new_name of a table this build created/);
-  assert.match(advice[0], /its label is in 1033, 3082, more than the build's language \(1033\)/, 'says why this key was made first');
+  assert.match(advice[0], /its label is in several languages \(1033, 3082\), so the build creates it before it sets that column/, 'says why this key was made first, from the languages the label goes out in');
+  assert.doesNotMatch(advice[0], /more than the build's language/, 'and not in terms of the build\'s language: only what goes out matters');
   assert.match(advice[0], /900 bytes/, 'and what the platform refused it for');
   assert.match(advice[0], /run the build again/, 'and what to do');
-  assert.match(advice[0], /labelled in the build's language alone is created after the length is set/, 'and how to have it made first time');
+  assert.match(advice[0], /A key labelled in one language is created after the length is set/, 'and how to have it made first time');
   const again = await provisionAgain(run.dv, keyedTable([labelled]));
   assert.strictEqual(again.error, null, 'the run that follows finds the table with the length set');
   assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
@@ -2989,6 +3045,54 @@ test('a key labelled in several languages that the platform accepts, or refuses 
   const existing = await provisionAgain(dv, keyedTable([labelled]));
   assert.ok(existing.error instanceof BuildHalt, 'a table that already existed');
   assert.deepStrictEqual(existing.warnings, [], 'is not one the build set the length of, so the advice does not apply');
+});
+
+// --- the dry run and the apply agree on where a key goes ------------------------------------------------------------------------
+// The plan lists the steps in the order the apply takes them. Where a key over the name column goes depends only on what the key is
+// sent as, so the plan cannot disagree with the apply about it — whichever language the spec, the command line and the label name. This
+// goes through the entry both of them share (runSdkBuild), with the same spec and the same options: only `apply` differs.
+test('the dry-run plan and the apply put a key over the name column in the same place, whichever language the spec, the command line and the label name', async () => {
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const kinds = (labels) => labels.filter((l) => /^(alt key|primary column length) /.test(l)).map((l) => (l.startsWith('alt key') ? 'key' : 'length'));
+  for (const specLanguage of [undefined, 1033, 3082]) {
+    for (const override of [undefined, 1033, 3082]) {
+      for (const [what, displayName] of [['a string', 'Name Key'], ['a map of 1033', { 1033: 'Name Key' }], ['a map of 3082', { 3082: 'Clave' }], ['a map of both', { 1033: 'Name Key', 3082: 'Clave' }]]) {
+        const spec = keyedTable([MAP_KEY(displayName)]);
+        if (specLanguage) spec.languageCode = specLanguage;
+        const dv = fakeDataverse(HONOURING);
+        const sdk = await realSdk(dv.httpClient);
+        // What the CLI hands the engine: the command line's language, and the language it resolved (the command line's, else the spec's, else the environment's).
+        const options = {
+          sdk, provisionSdk: sdk, phases: ['data-model'], livePlan: false, ...(override ? { languageCode: override } : {}),
+          preResolvedLanguageCode: override || specLanguage || 1033, provisionedLanguages: async () => [1033, 3082],
+        };
+        const dry = await runSdkBuild(spec, { ...options, apply: false });
+        const events = [];
+        const applied = await runSdkBuild(spec, { ...options, apply: true, emit: (e) => events.push(e) });
+        assert.strictEqual(applied.ok, true);
+        assert.deepStrictEqual(
+          kinds(dry.plan), kinds(events.filter((e) => e.status !== 'start').map((e) => e.label)),
+          `${what}: the spec names ${specLanguage || 'no language'}, the command line ${override || 'none'}`,
+        );
+      }
+    }
+  }
+});
+
+test('a spec written in one language and built with the command line\'s other language: the plan lists a one-language key where the apply makes it, after the length', async () => {
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const spec = keyedTable([MAP_KEY({ 3082: 'Clave' })]);
+  spec.languageCode = 3082;
+  const dv = fakeDataverse(HONOURING);
+  const sdk = await realSdk(dv.httpClient);
+  const options = { sdk, provisionSdk: sdk, phases: ['data-model'], livePlan: false, languageCode: 1033, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033, 3082] };
+  const dry = await runSdkBuild(spec, { ...options, apply: false });
+  const events = [];
+  await runSdkBuild(spec, { ...options, apply: true, emit: (e) => events.push(e) });
+  const relevant = (labels) => labels.filter((l) => /^(alt key|primary column length) /.test(l));
+  const expected = ['primary column length new_ticket.new_name', 'alt key new_ticket.new_namekey'];
+  assert.deepStrictEqual(relevant(dry.plan), expected, 'the plan');
+  assert.deepStrictEqual(relevant(events.filter((e) => e.status !== 'start').map((e) => e.label)).map((l) => l.replace(/ (->|\().*$/, '')), expected, 'the apply');
 });
 
 // --- what the warning for a length that could not be set promises ---------------------------------------------------------------
@@ -3049,4 +3153,245 @@ test('a key that could not wait for the length fails the way the step failed wha
     assert.match(warnings[0], /and the build stops at alt key new_ticket\.new_namekey, which is over that column/, `${what}: the warning does not promise the build goes on`);
   }
 });
+
+// --- a debt is paid through the mutation itself ---------------------------------------------------------------------------------
+// Which table answers to a name (the identity read) and the update of its name column are separate requests, and another maker can
+// replace the table between any two of them. A check followed by an update that resolves the table or the column BY NAME again only
+// moves the window — the replacement is then what the update finds, which is what the SDK's own updateColumn does. So a debt an earlier
+// attempt carried is paid by requests addressed with the MetadataIds it records, the table's and the name column's: a table made again
+// under the name has other ids, and an id that no table has any more answers 404, so the replacement cannot be the target of any request
+// that follows the check, wherever in the payment it is made.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/retrieve-metadata-name-metadataid
+
+// Another maker deletes the table and makes it again at the worst moment: right after the build proved that the table which answers to
+// the name is the one it created (the identity read), before the `before`-th request that follows it (1 is the very next one).
+// `dv.swapped` says before which request that happened, and how many requests the build had sent by then.
+function swapAfterIdentityRead(dv, { before = 1, logical = 'new_ticket' } = {}) {
+  let proved = false;
+  let seen = 0;
+  dv.swapped = null;
+  for (const method of ['get', 'put', 'post']) {
+    const send = dv.httpClient[method];
+    dv.httpClient[method] = async (url, ...rest) => {
+      const path = decodeURIComponent(String(url).replace(API, ''));
+      if (proved && dv.swapped === null && (seen += 1) === before) {
+        replaceTable(dv, logical);
+        dv.swapped = { before: `${method.toUpperCase()} ${path}`, sent: dv.log.length };
+      }
+      const answer = await send(url, ...rest);
+      if (method === 'get' && isIdentityRead({ method: 'GET', path })) proved = true;
+      return answer;
+    };
+  }
+  return dv;
+}
+
+// The first attempt creates the table and cannot set its length (the update is refused), so the table is owed it, with the ids of the
+// table and of its name column. The update is allowed from then on.
+async function owingTicket(spec = oneTable([textColumn('new_a')], asksFor(120))) {
+  const state = { blocked: true };
+  const dv = fakeDataverse({ updateFails: () => (state.blocked ? refusal() : null) });
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed });
+  state.blocked = false;
+  return { dv, spec, owed };
+}
+
+test('a table made again at any moment after the build proved the debt is the table\'s — before the read of the column, of its definition, or the update — is never written to', async (t) => {
+  const { settleOwedLengths } = require('../lib/sdk-build.js');
+  const routes = {
+    'the retry of a build': async (before) => {
+      const run = await buildWithRetries(retriedTicket({ key: false }), { faults: { createFile: 1, setLength: 1 }, arrange: (dv) => swapAfterIdentityRead(dv, { before }) });
+      assert.strictEqual(run.result.ok, true, 'the build completes');
+      return { dv: run.dv, warnings: run.warnings.map((w) => w.text), steps: run.steps(2, /^primary column length /) };
+    },
+    'a phase that stops before it reaches the table': async (before) => {
+      const { dv, spec, owed } = await owingTicket();
+      swapAfterIdentityRead(dv, { before });
+      const post = dv.httpClient.post;
+      dv.httpClient.post = async (url, body, options) => (/\/GlobalOptionSetDefinitions$/.test(String(url)) ? unavailable() : post(url, body, options));
+      const run = await provisionAgain(dv, { ...spec, globalChoices: [{ name: 'new_cat', options: ['A', 'B'] }] }, { owedLengths: owed });
+      assert.ok(run.error instanceof BuildHalt, 'the halt is still what is thrown');
+      return { dv, warnings: run.warnings, steps: lengthEvents(run).map((e) => `${e.status} ${e.label}`) };
+    },
+    'the settle of a build that stops for good': async (before) => {
+      const { dv, spec, owed } = await owingTicket();
+      swapAfterIdentityRead(dv, { before });
+      const sdk = await realSdk(dv.httpClient);
+      const warnings = [];
+      await settleOwedLengths({ sdk, provision: sdk, spec, owed: [...owed.values()].map((d) => ({ ...d, tried: false })), warn: (m) => warnings.push(m), sleep: async () => {} });
+      return { dv, warnings, steps: [] };
+    },
+  };
+  for (const [route, pay] of Object.entries(routes)) {
+    for (const before of [1, 2, 3]) {
+      await t.test(`${route}: the table is made again before the ${['first', 'second', 'third'][before - 1]} request that follows the proof`, async () => {
+        const { dv, warnings, steps } = await pay(before);
+        assert.ok(dv.swapped, 'the table was made again in the middle of the payment');
+        assert.strictEqual(dv.tables.get('new_ticket').id, REPLACEMENT_ID, 'and it is the table that answers to the name');
+        assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 600, 'its name column keeps the length its maker gave it');
+        assert.strictEqual(warnings.filter((w) => leftAlone.test(w)).length, 1, 'and the build says it left the column alone');
+        assert.deepStrictEqual(steps.filter((s) => s.startsWith('ok ')), [], 'the step is not narrated as done');
+      });
+    }
+  }
+});
+
+test('the requests that pay a debt are addressed by the MetadataIds it records — the table\'s and its name column\'s — and nothing is resolved by name once the table is proved', async () => {
+  const { dv, spec, owed } = await owingTicket();
+  const before = dv.log.length;
+  const run = await provisionAgain(dv, spec, { owedLengths: owed });
+  assert.strictEqual(run.error, null);
+  const T = tableId('new_ticket');
+  const C = attributeId('new_ticket', 'new_name');
+  const paying = dv.log.slice(before).filter((r) => isIdentityRead(r) || /\/Attributes\(/.test(r.path));
+  assert.deepStrictEqual(paying.map(requestLine), [
+    "GET /EntityDefinitions(LogicalName='new_ticket')?$select=MetadataId,PrimaryNameAttribute",
+    `GET /EntityDefinitions(${T})/Attributes(${C})/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength`,
+    `GET /EntityDefinitions(${T})/Attributes(${C})/Microsoft.Dynamics.CRM.StringAttributeMetadata`,
+    `PUT /EntityDefinitions(${T})/Attributes(${C})`,
+  ], 'the table is looked up by its name once, to prove it is the one the build created — and then nothing is looked up by name again');
+  const update = paying[paying.length - 1];
+  assert.strictEqual(update.body.MaxLength, 120);
+  assert.strictEqual(update.body['@odata.type'], 'Microsoft.Dynamics.CRM.StringAttributeMetadata');
+  assert.deepStrictEqual(Object.keys(update.body).filter((key) => key.startsWith('@odata.')), ['@odata.type'], 'the annotations of the answer are not written back');
+  assert.deepStrictEqual(update.headers, { 'MSCRM.MergeLabels': 'true' }, 'the labels already stored are kept');
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120);
+  assert.deepStrictEqual(lengthEvents(run).map((e) => [e.status, e.label]), [['ok', `primary column length new_ticket.new_name -> 120 (${OWED})`]]);
+  assert.deepStrictEqual(run.warnings, []);
+});
+
+test('a debt that records no column id is paid the same way: the column is found by name inside the table the debt names, and the update is addressed by the id that read answers', async () => {
+  const dv = fakeDataverse({ lengthRead: (n) => (n === 1 ? unavailable() : undefined) });
+  const spec = oneTable([], asksFor(120));
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed });
+  const { columnId, ...tableOnly } = DEBT;
+  assert.deepStrictEqual([...owed.values()], [tableOnly], 'the first attempt could not read the column: only the table\'s id is recorded');
+  const before = dv.log.length;
+  const run = await provisionAgain(dv, spec, { owedLengths: owed });
+  assert.strictEqual(run.error, null);
+  const T = tableId('new_ticket');
+  const C = attributeId('new_ticket', 'new_name');
+  assert.deepStrictEqual(dv.log.slice(before).filter((r) => isIdentityRead(r) || /\/Attributes\(/.test(r.path)).map(requestLine), [
+    "GET /EntityDefinitions(LogicalName='new_ticket')?$select=MetadataId,PrimaryNameAttribute",
+    `GET /EntityDefinitions(${T})/Attributes(LogicalName='new_name')/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength`,
+    `GET /EntityDefinitions(${T})/Attributes(${C})/Microsoft.Dynamics.CRM.StringAttributeMetadata`,
+    `PUT /EntityDefinitions(${T})/Attributes(${C})`,
+  ]);
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120);
+  assert.deepStrictEqual([...owed], [], 'and the debt is paid');
+});
+
+test('what a debt\'s update writes is what the SDK\'s own update writes — the column\'s whole definition with its labels, the merge-labels header and the solution header — only the address differs', async () => {
+  const sdkOptions = { solutionUniqueName: 'TableColumns' };
+  const own = await provisionOver(oneTable([textColumn('new_a')], asksFor(120)), { sdkOptions });
+  const state = { blocked: true };
+  const dv = fakeDataverse({ updateFails: () => (state.blocked ? refusal() : null) });
+  const spec = oneTable([textColumn('new_a')], asksFor(120));
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed, sdkOptions });
+  state.blocked = false;
+  const refused = puts({ dv }).length;
+  const run = await provisionAgain(dv, spec, { owedLengths: owed, sdkOptions });
+  assert.strictEqual(run.error, null);
+  const [theirs] = puts({ dv }).slice(refused);
+  const [ours] = puts(own);
+  assert.deepStrictEqual(ours.headers, { 'MSCRM.MergeLabels': 'true', 'MSCRM.SolutionUniqueName': 'TableColumns' }, 'what the SDK\'s own update sends');
+  assert.deepStrictEqual(theirs.headers, ours.headers);
+  assert.ok(ours.body.DisplayName.LocalizedLabels.length > 0 && ours.body.MetadataId, 'the whole definition: its labels and its id are in the body');
+  assert.deepStrictEqual(theirs.body, ours.body);
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120);
+});
+
+// What the SDK does after every write of its own (`schemaWrite`): it forgets the metadata it cached for the table, so that a later read
+// does not serve a definition older than the write. A debt's update does not go through the SDK's updateColumn, so it asks for the same.
+test('a debt\'s update runs inside the SDK\'s schema write, as its own update does, so the metadata the SDK cached for the table is forgotten', async () => {
+  const { ArtifactNotFoundError } = require(BUNDLE);
+  // Records which schema writes a PUT went out inside of.
+  const watched = (dv, sdk) => {
+    const writes = [];
+    let current = null;
+    const put = dv.httpClient.put;
+    dv.httpClient.put = async (...args) => { if (current) current.put = true; return put(...args); };
+    const schemaWrite = sdk.schemaWrite.bind(sdk);
+    sdk.schemaWrite = (tables, fn) => {
+      const entry = { tables, put: false };
+      writes.push(entry);
+      current = entry;
+      return schemaWrite(tables, fn).finally(() => { current = null; });
+    };
+    return () => writes.filter((w) => w.put).map((w) => w.tables);
+  };
+  const run = (sdk, spec, owed) => provisionDataModel({
+    sdk, provision: sdk, runner: makeRunner({ emit: () => undefined, total: 99 }), spec, apply: true, preResolvedLanguageCode: 1033,
+    provisionedLanguages: async () => [1033, 3082], sleep: async () => {}, warn: () => {}, owedLengths: owed,
+  });
+  const spec = oneTable([textColumn('new_a')], asksFor(120));
+
+  const first = fakeDataverse(OVERRIDING);
+  const firstSdk = await realSdk(first.httpClient);
+  const firstWrites = watched(first, firstSdk);
+  await run(firstSdk, spec, new Map());
+  assert.deepStrictEqual(firstWrites(), [['new_ticket']], 'the SDK\'s own update of a first attempt is one schema write of the table');
+
+  const state = { blocked: true };
+  const dv = fakeDataverse({ updateFails: () => (state.blocked ? refusal() : null) });
+  const sdk = await realSdk(dv.httpClient);
+  const owed = new Map();
+  await run(sdk, spec, owed);
+  state.blocked = false;
+  const writes = watched(dv, sdk);
+  await cacheMetadataOf(dv, sdk, 'new_ticket');
+  assert.strictEqual((await sdk.getEntityMetadata('new_ticket')).logicalName, 'new_ticket', 'the SDK holds the table\'s metadata');
+  await run(sdk, spec, owed);
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120, 'the debt was paid');
+  assert.deepStrictEqual(writes(), [['new_ticket']], 'by one schema write of the table, as the SDK\'s own update is');
+  await assert.rejects(() => sdk.getEntityMetadata('new_ticket'), (err) => err instanceof ArtifactNotFoundError, 'and what the SDK held of the table is forgotten');
+});
+
+// Fills the SDK's cache of a table's metadata the way a build's own broad reads do (fetchEntityMetadata), over the stub.
+async function cacheMetadataOf(dv, sdk, logical) {
+  const send = dv.httpClient.get;
+  const reply = (body) => ({ status: 200, headers: {}, body });
+  dv.httpClient.get = async (url, options) => {
+    const p = decodeURIComponent(String(url).replace(API, ''));
+    const table = dv.tables.get(logical);
+    if (/\?\$select=LogicalName,SchemaName,DisplayName,Description/.test(p)) {
+      return reply({
+        MetadataId: table.id, LogicalName: table.logical, SchemaName: table.logical,
+        DisplayName: { UserLocalizedLabel: { Label: 'Ticket' }, LocalizedLabels: [{ Label: 'Ticket', LanguageCode: 1033 }] },
+        EntitySetName: `${table.logical}s`, PrimaryNameAttribute: table.primaryName, PrimaryIdAttribute: `${table.logical}id`, IsCustomEntity: true,
+        Attributes: [...table.columns.values()].map((c) => ({ ...clone(c.body), ...c.row, AttributeType: 'String', AttributeTypeName: { Value: 'StringType' }, IsCustomAttribute: true })),
+      });
+    }
+    if (/Attributes\/Microsoft\.Dynamics\.CRM\.StringAttributeMetadata/.test(p)) {
+      return reply({ value: [...table.columns.values()].map((c) => ({ LogicalName: c.row.LogicalName, MaxLength: c.row.LogicalName === table.primaryName ? table.primaryLength : c.body.MaxLength })) });
+    }
+    if (/\$expand=.*Relationships/.test(p)) return reply({ OneToManyRelationships: [], ManyToOneRelationships: [], ManyToManyRelationships: [] });
+    if (p.startsWith(`/EntityDefinitions(LogicalName='${logical}')`) || p.startsWith('/RelationshipDefinitions')) return reply({ value: [] });
+    return send(url, options);
+  };
+  try {
+    await sdk.fetchEntityMetadata(logical);
+  } finally {
+    dv.httpClient.get = send;
+  }
+}
+
+test('where the read of the column that pays a debt fails, nothing is written and the step fails — a 503 is the build\'s to retry, and the retry pays', async () => {
+  // The reads of the column's length are counted across the attempts: the first attempt's (1) answers, the retry's (2) is refused, the third attempt's (3) answers.
+  const run = await buildWithRetries(retriedTicket(), { dataverse: { lengthRead: (n) => (n === 2 ? unavailable() : undefined) }, faults: { createFile: 1, setLength: 1 } });
+  assert.strictEqual(run.result.ok, true);
+  assert.strictEqual(run.retries, 2, 'attempt 2 could not read the column and stopped at the key; attempt 3 paid');
+  assert.deepStrictEqual(run.requests(2).filter((r) => r.method === 'PUT' || /\/Keys$/.test(r.path)), [], 'attempt 2 wrote nothing, not even the key');
+  const steps = (n) => run.steps(n, /^(primary column length|alt key) /);
+  assert.deepStrictEqual(steps(2), [`error primary column length new_ticket.new_name -> 120${OWED_NOTE}`, 'error alt key new_ticket.new_namekey']);
+  assert.deepStrictEqual(steps(3), [`ok primary column length new_ticket.new_name -> 120${OWED_NOTE}`, 'ok alt key new_ticket.new_namekey']);
+  const failedStep = run.events.find((e) => e.attempt === 2 && e.status === 'error' && /^primary column length/.test(e.label));
+  assert.match(failedStep.detail, /^asked 120, the length the platform made is unknown: could not read the column's length \(HTTP 503: Service Unavailable\)/);
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120);
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
+});
+
 
