@@ -9,6 +9,7 @@ const {
 } = require('../lib/retry-policy.js');
 const { BuildHalt } = require('../lib/entity-provision.js');
 const { isTransientHalt } = require('../build-model-app.js');
+const { SdkError } = require('../lib/maker-sdk.js');
 
 const LABEL = 'SQL Timeout 503 try again later';
 const URL_WITH_LABEL = `https://contoso.crm.dynamics.com/api/data/v9.2/roles?$filter=name eq '${LABEL}'`;
@@ -90,6 +91,23 @@ test('judgeFailure: an error the SDK or the plugin types is a refusal whatever i
   const source = Object.assign(new Error('does not exist or is not a file', { cause: typed('ENOENT', `ENOENT: no such file or directory, lstat '/work/${LABEL}.tsx'`) }), { code: 'APP_SOURCE_PATH' });
   assert.strictEqual(isTransientHalt(source), false);
   assert.strictEqual(isTransientHalt(new BuildHalt('pages failed', { phase: 'pages', code: 'APP_SOURCE_PATH', cause: source })), false);
+});
+
+test('judgeFailure: an SDK error that wraps a failed publish is read by the answer it embeds — its code says what failed, not that a run again cannot help', () => {
+  // `enrichDefaultViews` (a build without --publish) words a sentence of its own around the publish error it caught and puts that error's message inside, without attaching it as a cause.
+  const publishUrl = 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml';
+  const wrap = (answer, table = 'contoso_task') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
+  assert.strictEqual(wrap('x').code, 'ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', 'the bundle\'s own SdkError, typed as the SDK types it');
+  for (const status of [429, 502, 503, 504]) assert.strictEqual(isTransientHalt(wrap(`HTTP ${status} from ${publishUrl}: Service Unavailable`)), true, `${status} in the answer it embeds`);
+  for (const status of [400, 403, 404, 500]) assert.strictEqual(isTransientHalt(wrap(`HTTP ${status} from ${publishUrl}: Principal user is missing prvPublishCustomization`)), false, `${status}`);
+  assert.strictEqual(isTransientHalt(wrap(`HTTP 409 from ${publishUrl}: CustomizationLockException: another solution install is running`)), true, 'a lock, in the service\'s words');
+  assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: read ECONNRESET`)), true, 'a reset');
+  assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: unable to verify the first certificate`)), false, 'a certificate is not a blip');
+  assert.strictEqual(isTransientHalt(wrap(`HTTP 403 from ${publishUrl}: permission denied`, 'contoso_sql_timeout')), false, 'what the sentence quotes is the maker\'s table, and decides nothing');
+  assert.strictEqual(retryPolicyFor(wrap(`HTTP 503 from ${publishUrl}: x`)), RETRY.SERVICE);
+  const err = wrap(`HTTP 503 from ${publishUrl}: x`);
+  assert.strictEqual(isTransientHalt(new BuildHalt(`enrich default views for contoso_task failed: ${err.message}`, { phase: 'views', code: err.code, recoverable: true, cause: err, retry: retryPolicyFor(err) })), true, 'through the halt the runner raises');
+  assert.strictEqual(isTransientHalt(new SdkError('VALIDATION_ERROR', `(HTTP 503 from ${publishUrl}: x) ${LABEL}`)), false, 'the exception is for the codes that wrap a failed publish, and no other typed error');
 });
 
 test('judgeFailure: the service\'s words are read from the answer, never from where the request went — the url holds what the maker named', () => {

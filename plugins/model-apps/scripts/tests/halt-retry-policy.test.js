@@ -28,6 +28,7 @@ const {
 } = require('../lib/sdk-build.js');
 const { BuildHalt, makeRunner, requireSuccessfulPush, findExistingTable, resolveLanguageCode, checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
 const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
+const { SdkError } = require('../lib/maker-sdk.js');
 
 const SCRIPTS = path.join(__dirname, '..');
 // What a maker may call anything — a view, a role, a persona, a flow, a folder — and what no halt may be judged by.
@@ -197,17 +198,21 @@ function connectionError(statusCode, words, url = `${ENV}/api/data/v9.2/roles?$f
   return Object.assign(new Error(`${lead}${words}`), { code: 'CONNECTION_ERROR', statusCode, url });
 }
 // Failures a run again cannot change, as the SDK, the service and the machine report them — every one with a label that reads as transient where a label can be.
+// What `enrichDefaultViews` raises when the publish of the views it saved fails: an SdkError of its own code, the publish error's message inside it, and no cause.
+const wrappedPublish = (answer, table = 'contoso_order') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
 const REFUSALS = [
   ['a refusal in the SDK\'s words', () => new Error('same-name role is managed and cannot be adopted')],
   ['a typed validation error that quotes the label', () => Object.assign(new Error(`View '${LABEL}' is invalid`), { code: 'VALIDATION_ERROR' })],
   ['a 403 from the service whose url carries the label', () => connectionError(403, 'permission denied')],
   ['a local file error that quotes the path', () => Object.assign(new Error(`EACCES: permission denied, open '/work/${LABEL}/page.json'`), { code: 'EACCES', syscall: 'open' })],
+  ['an SDK error that wraps a publish the service refused (a 403), on a table called like a timeout', () => wrappedPublish(`HTTP 403 from ${ENV}/api/data/v9.2/PublishXml: permission denied`, 'contoso_sql_timeout')],
 ];
 // Failures that ARE the service's to say, whatever anything is called.
 const GENUINE = [
   ['a 503', () => connectionError(503, 'The service is unavailable.')],
   ['a 429', () => connectionError(429, 'Too many requests.')],
   ['a reset of the connection', () => connectionError(0, 'Request failed: read ECONNRESET')],
+  ['an SDK error that wraps a publish the service could not take (a 503)', () => wrappedPublish(`HTTP 503 from ${ENV}/api/data/v9.2/PublishXml: Service Unavailable`)],
 ];
 
 // The spec every row's retry loop runs on: valid, and not the point.
