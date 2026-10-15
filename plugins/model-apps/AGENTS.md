@@ -1128,15 +1128,33 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   page manifest), and a key that moved between two downloads of an unchanged app makes the next deployment
   swap what two pages hold there — the build succeeds and the verifier passes, since both pages still
   exist. A page's key therefore comes from, in this order: the app's page manifest (`key → id`, the
-  authority); the key an earlier download of the same app gave the page, read from the `app-spec.json`
+  authority); the key an earlier download of the **same app** gave the page, read from the `app-spec.json`
   already in `--out` and matched by the page's **id** (`readPreviousPageKeys` — so an edit session downloads
-  into the same working folder every time; the spec of another app, or one that cannot be trusted, is not
-  used, and a file that cannot be read is said on stderr); and only for a page with neither, a fresh slug of
+  into the same working folder every time); and only for a page with neither, a fresh slug of
   its name, minted after every key above is taken and **in the order of the page ids** (`comparePageIds`),
   not of the names: two names that make one slug (`Work_Order`, `Work Order`) give the plain slug to the
   lower id and `-2` to the other — the order earlier releases minted in on a file system that lists names in
   order (NTFS, HFS+), so a spec they wrote keeps its keys. A key the manifest took from the earlier
-  download's is reported on stderr with both keys. `download-page-keys.test.js` pins each rule and
+  download's is reported on stderr with both keys.
+  **A file in `--out` is the same app's history only when it says so.** A page id does not say which app a
+  key belongs to — a page can be in several apps, each with its own page manifest and keys — so the file is
+  read only when `app.uniqueName` is a text equal to the downloaded app's unique name (without case, as Dataverse
+  compares them; read as the build reads an app's identity, `appUniqueName`). A gap is never a wildcard: a spec
+  of another app is skipped silently, and one that names none (an authored spec derives its identity from its
+  publisher prefix and name and writes none; a hand edit can leave a null, a blank or a number) is skipped and
+  said on stderr, naming the file, when it held keys that could have been used. A file that cannot be read is
+  said too.
+  **Keys that cannot be told apart are never minted afresh behind the maker's back.** When the earlier spec
+  gives one key to two pages, or one page two keys, and the page manifest does not bind the page, a deployed copy
+  of that spec could be built with either key, and fresh keys would exchange what two pages hold there. The
+  download then stops before it reads a page or writes anything — the file, which is the only record of those
+  keys, and the page folders are as they were — with `{ ok: false, code: 'page-keys-ambiguous', error, pages,
+  conflicts }`; the error names each page with its id and each key, and the two ways on: correct the file and
+  download again, or `--reset-page-keys`, which gives exactly those pages fresh keys (page-id order, said on
+  stderr) and leaves every other page's key alone. Only the rows of pages the app still has count — a row of a page
+  that is gone neither voids a clear key nor makes a conflict — and a page the manifest binds is never part of it:
+  the manifest is the authority. The switch is the maker's decision about every environment that holds a copy of
+  the earlier spec (a skill never passes it unasked). `download-page-keys.test.js` pins each rule and
   `download-rebuild-teardown.test.js` the redeploy of a copy to another environment after a re-download.
   **Table membership also comes from type-1 components**, in addition to the sitemap and the app's
   VIEW / CHART / FORM owners. Hidden type-1 members emit sorted `app.tables`; custom hidden tables

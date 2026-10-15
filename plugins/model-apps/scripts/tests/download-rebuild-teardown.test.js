@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runDownload } = require('../download-model-app.js');
+const { runDownload, main } = require('../download-model-app.js');
 const { migrateAppSpec, validateAppSpec } = require('../lib/app-spec.js');
 const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
 const { planTeardown } = require('../lib/sdk-teardown.js');
@@ -426,16 +426,51 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
 // The source environment is an app made in Maker, so it carries no page manifest, with two pages whose names make one slug. The lower id is "Work_Order"; by
 // name "Work Order" comes first (a space sorts before an underscore), so the order the pages are written in is not the id order. `earlierKeyOfId` is how
 // the earlier download — an earlier release's — keyed them: in id order (a file system that lists folders by name) or in the other order (one that does not).
-async function redeployAfterRedownload(earlierKeyOfId, { fromEmptyFolder = false } = {}) {
+// The other environment holds its pages under ids of its own. `beforeRedownload({ sourceDir, first, rekeyed, portable, attempt, runCli, treeOf })` is
+// called once the copy is deployed and before the app is downloaded again, to leave the working folder as a test needs it; `attempt(options)` is one
+// `runDownload` and `runCli(...flags)` one run of the command line's `main`. Answers what the last download said on stderr.
+async function redeployAfterRedownload(earlierKeyOfId, { fromEmptyFolder = false, beforeRedownload = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'download-keys-redeploy-'));
   const previousPath = process.env.PATH;
   process.env.PATH = path.dirname(process.execPath);
   const TARGET = 'https://contoso-target.crm.dynamics.com';
   const IDS = [OVERVIEW_ID, DETAIL_ID];
+  const TARGET_IDS = ['77777777-0000-4000-8000-000000000001', '77777777-0000-4000-8000-000000000002'];
   const NAMES = ['Work_Order', 'Work Order'];
   const SOURCES = ['export default function Page(){ return "underscore-page"; }\n', 'export default function Page(){ return "space-page"; }\n'];
   const holdTwoPages = (fixture) => IDS.forEach((id, i) => Object.assign(fixture.genpage.pages.get(id), { name: NAMES[i], source: SOURCES[i] }));
-  const held = (fixture) => IDS.map((id) => { const page = fixture.genpage.pages.get(id); return { id, name: page.name, source: page.source }; });
+  // The environment a copy is deployed to holds the pages under ids of its own: the source's ids belong to the source, and a copy of the spec holds none of
+  // them, so the only thing that binds a key to a page there is that environment's page manifest.
+  const holdTargetPages = (fixture) => {
+    IDS.forEach((id, i) => {
+      const page = fixture.genpage.pages.get(id);
+      fixture.genpage.pages.delete(id);
+      fixture.genpage.pages.set(TARGET_IDS[i], { ...page, id: TARGET_IDS[i], name: NAMES[i], source: SOURCES[i] });
+      fixture.state.pages.delete(id);
+      fixture.state.pages.add(TARGET_IDS[i]);
+    });
+    for (const app of fixture.state.apps.values()) for (const area of app.siteMap.areas) for (const group of area.groups) for (const sub of group.subAreas) {
+      if (IDS.includes(sub.genPageId)) sub.genPageId = TARGET_IDS[IDS.indexOf(sub.genPageId)];
+    }
+    // The stand-in's page backend accepts the source's ids only; this one takes the target's, and a rebuild of an existing copy creates nothing.
+    fixture.genpage = fakeGenpage({
+      pages: [...fixture.genpage.pages.values()],
+      onUpdate: (id) => assert.ok(TARGET_IDS.includes(id), 'a rebuild updates only the pages the other environment holds'),
+    });
+  };
+  const held = (fixture, ids = IDS) => ids.map((id) => { const page = fixture.genpage.pages.get(id); return { id, name: page.name, source: page.source }; });
+  // Every file under `dir`, by its path: what a refused download must leave exactly as it was.
+  const treeOf = (dir) => {
+    const files = {};
+    const walk = (current) => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) walk(full); else files[path.relative(dir, full)] = fs.readFileSync(full, 'utf8');
+      }
+    };
+    walk(dir);
+    return files;
+  };
   // The spec as a copy for another environment holds it: the source's page ids belong to the source, so they are left out.
   const portable = (spec) => {
     const copy = migrateAppSpec(clone(spec));
@@ -459,15 +494,45 @@ async function redeployAfterRedownload(earlierKeyOfId, { fromEmptyFolder = false
     const sourceDir = path.join(root, 'source');
     const targetWorkspace = path.join(root, 'target-workspace');
     fs.mkdirSync(sourceDir);
-    const download = async () => {
+    // One `runDownload`, as the real download makes it: the app is read through the source environment's stand-in, the pages through its page backend.
+    const readerOf = async () => {
       const sitemap = await source.sdk.queryRecords('sitemap', { filter: `sitemapid eq ${SITEMAP_ID}`, top: 1 });
-      const downloaded = await runDownload({
-        sdk: currentReadSdk(source.sdk, { appId: APP_ID, layerId: APP_LOOKUP, sitemapXml: sitemap[0].sitemapxml }),
-        genpage: source.genpage, outDir: sourceDir, appId: APP_ID, appUnique: APP_UNIQUE,
+      return currentReadSdk(source.sdk, { appId: APP_ID, layerId: APP_LOOKUP, sitemapXml: sitemap[0].sitemapxml });
+    };
+    const saying = async (run) => {
+      const said = [];
+      const realWrite = process.stderr.write;
+      try {
+        process.stderr.write = (chunk) => { said.push(String(chunk)); return true; };
+        return { ...(await run()), stderr: said.join('') };
+      } finally {
+        process.stderr.write = realWrite;
+      }
+    };
+    const attempt = (options = {}) => saying(async () => ({
+      result: await runDownload({ sdk: await readerOf(), genpage: source.genpage, outDir: sourceDir, appId: APP_ID, appUnique: APP_UNIQUE, ...options }),
+    }));
+    // The same through the command line's own entry point, with only its side effects replaced.
+    const runCli = (...flags) => saying(async () => {
+      const emitted = [];
+      const sdk = await readerOf();
+      await main({
+        argv: ['--env', ENV, '--app', APP_UNIQUE, '--out', sourceDir, ...flags],
+        preflightAuth: async () => ({ ok: true }),
+        makeDownloadSdk: async () => ({ sdk, cleanup() {} }),
+        makeGenpageSdk: () => source.genpage,
+        emitResult: (ok, payload) => emitted.push({ ok, payload }),
+        exit: (code) => assert.fail(`unexpected exit ${code}`),
       });
-      assert.strictEqual(downloaded.ok, true, JSON.stringify(downloaded));
-      fs.writeFileSync(path.join(sourceDir, 'app-spec.json'), JSON.stringify(downloaded.spec, null, 2));
-      return downloaded.spec;
+      return { emitted };
+    });
+    let lastStderr = '';
+    const download = async () => {
+      const { result, stderr } = await attempt();
+      lastStderr = stderr;
+      assert.strictEqual(result.ok, true, JSON.stringify(result));
+      fs.writeFileSync(path.join(sourceDir, 'app-spec.json'), JSON.stringify(result.spec, null, 2));
+      return result.spec;
     };
     const keysByName = (spec) => spec.pages.map((p) => [p.key, p.pageId]);
     const expectedKeys = [[earlierKeyOfId[DETAIL_ID], DETAIL_ID], [earlierKeyOfId[OVERVIEW_ID], OVERVIEW_ID]]; // written by name: "Work Order" first
@@ -478,32 +543,34 @@ async function redeployAfterRedownload(earlierKeyOfId, { fromEmptyFolder = false
     const earlier = portable(first);
     assert.deepStrictEqual(earlier.pages.map((p) => [p.key, p.name]), [[earlierKeyOfId[DETAIL_ID], 'Work Order'], [earlierKeyOfId[OVERVIEW_ID], 'Work_Order']]);
 
-    // The other environment holds the pages that copy built there (the stand-in gives them the ids of the source's) and the manifest that binds each key to its page.
+    // The other environment holds the pages that copy built there, under ids of its own, and the manifest that binds each key to its page.
     const target = recordingLifecycleSdk();
-    holdTwoPages(target);
+    holdTargetPages(target);
     target.state.resources.get(MANIFEST).content = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [
-      { key: earlierKeyOfId[OVERVIEW_ID], name: 'Work_Order', pageId: OVERVIEW_ID }, { key: earlierKeyOfId[DETAIL_ID], name: 'Work Order', pageId: DETAIL_ID },
+      { key: earlierKeyOfId[OVERVIEW_ID], name: 'Work_Order', pageId: TARGET_IDS[0] }, { key: earlierKeyOfId[DETAIL_ID], name: 'Work Order', pageId: TARGET_IDS[1] },
     ] })).toString('base64');
     const deploy = async (spec) => {
       const result = await runSdkBuild(spec, { sdk: target.sdk, genpage: target.genpage, apply: true, env: TARGET, appDir: sourceDir, workspaceDir: targetWorkspace, preResolvedLanguageCode: 1033 });
       assert.strictEqual(result.ok, true, JSON.stringify(result));
       return result;
     };
-    const before = held(target);
+    const before = held(target, TARGET_IDS);
     await deploy(earlier);
     await deploy(earlier);
-    assert.deepStrictEqual(held(target), before, 'deploying the earlier copy again changes nothing');
+    assert.deepStrictEqual(held(target, TARGET_IDS), before, 'deploying the earlier copy again changes nothing');
 
-    // The unchanged app is downloaded again, into the same folder or (the earlier spec being gone) into an empty one.
+    // The unchanged app is downloaded again, into the same folder (as a test may have left it) or (the earlier spec being gone) into an empty one.
     if (fromEmptyFolder) fs.rmSync(path.join(sourceDir, 'app-spec.json'));
+    if (beforeRedownload) await beforeRedownload({ sourceDir, first, rekeyed, portable, attempt, runCli, treeOf });
     const again = await download();
     const rebuilt = await deploy(portable(again));
     // What matters first: the other environment's pages. Each id holds its own name and content, as it did before the second download.
-    assert.deepStrictEqual(held(target), before, 'each page of the other environment still holds its own name and content');
-    assert.deepStrictEqual(rebuilt.created.pages, { [earlierKeyOfId[OVERVIEW_ID]]: OVERVIEW_ID, [earlierKeyOfId[DETAIL_ID]]: DETAIL_ID });
+    assert.deepStrictEqual(held(target, TARGET_IDS), before, 'each page of the other environment still holds its own name and content');
+    assert.deepStrictEqual(rebuilt.created.pages, { [earlierKeyOfId[OVERVIEW_ID]]: TARGET_IDS[0], [earlierKeyOfId[DETAIL_ID]]: TARGET_IDS[1] });
     assert.strictEqual(target.genpage.of('create').length, 0, 'no page is created: every key binds the page it built');
     // And why: each page has the key it had.
     assert.deepStrictEqual(keysByName(again), expectedKeys, 'every page keeps the key it had');
+    return { stderr: lastStderr };
   } finally {
     process.env.PATH = previousPath;
     fs.rmSync(root, { recursive: true, force: true });
@@ -522,4 +589,54 @@ test('a re-download keeps each page\'s key even when the earlier download minted
 
 test('with the earlier spec gone, a download into an empty folder mints the keys an earlier release minted on NTFS, so a copy deployed then is still bound', async () => {
   await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order', [DETAIL_ID]: 'work-order-2' }, { fromEmptyFolder: true });
+});
+
+// A page id does not say which app a key belongs to — a page can be in several apps, each with its own page manifest and so its own keys — so a spec in the working
+// folder is the earlier keys of THIS app only when it says it is of this app (`app.uniqueName`). An authored spec derives its identity from its publisher prefix and
+// name (appUniqueName in lib/sdk-build.js) and writes none, and it can hold the page ids of this app with the keys of another.
+test('a spec of another app that names no app.uniqueName cannot give the pages of a deployed copy each other\'s keys, and the download says the file was not used', async () => {
+  const { stderr } = await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order', [DETAIL_ID]: 'work-order-2' }, {
+    beforeRedownload: async ({ sourceDir, first, rekeyed, portable }) => {
+      const foreign = rekeyed(first, { [OVERVIEW_ID]: 'work-order-2', [DETAIL_ID]: 'work-order' });
+      delete foreign.app.uniqueName;
+      foreign.app.name = 'Other App';
+      assert.notStrictEqual(appUniqueName(foreign), APP_UNIQUE, 'the build takes it for another app');
+      portable(foreign); // a valid spec, for the deploy profile too
+      fs.writeFileSync(path.join(sourceDir, 'app-spec.json'), JSON.stringify(foreign, null, 2));
+    },
+  });
+  assert.match(stderr, /WARNING: the app-spec\.json in .* does not say which app it describes/);
+});
+
+// A hand edit has left the earlier spec giving `work-order` to two pages (and the lower page two keys). The earlier download that wrote it was made on a file system that lists
+// folders by hash, so the higher id has the plain key — the opposite of what minting by page id gives — and a copy of it is deployed. Which key each page was built with is not in
+// the file, so the download stops instead of guessing; once the file is corrected it keeps the earlier keys.
+test('an earlier spec that gives one key to two pages is refused without touching the folder, and once it is corrected a re-download still cannot swap the pages of a deployed copy', async () => {
+  await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order-2', [DETAIL_ID]: 'work-order' }, {
+    beforeRedownload: async ({ sourceDir, first, attempt, runCli, treeOf }) => {
+      const specPath = path.join(sourceDir, 'app-spec.json');
+      const erroneous = clone(first);
+      erroneous.pages.push({ ...clone(erroneous.pages.find((p) => p.pageId === OVERVIEW_ID)), key: 'work-order' });
+      fs.writeFileSync(specPath, JSON.stringify(erroneous, null, 2));
+      const untouched = treeOf(sourceDir);
+
+      const refused = await attempt();
+      assert.strictEqual(refused.result.ok, false, 'the download does not guess which page owns `work-order`');
+      assert.strictEqual(refused.result.code, 'page-keys-ambiguous');
+      assert.ok(refused.result.error.includes('--reset-page-keys'), refused.result.error);
+      // The command line gives the same answer, in the JSON a caller reads, and the folder is as it was.
+      const cli = await runCli();
+      assert.deepStrictEqual(cli.emitted.map((e) => [e.ok, e.payload.code, e.payload.pages.map((p) => p.name)]), [[false, 'page-keys-ambiguous', ['Work Order', 'Work_Order']]]);
+      assert.deepStrictEqual(treeOf(sourceDir), untouched, 'a refused download changes nothing in the working folder');
+
+      // The explicit way on: fresh keys for the two pages, by page id, and the download says so. (That is the one way left to exchange what they hold.)
+      const reset = await attempt({ resetPageKeys: true });
+      assert.strictEqual(reset.result.ok, true);
+      assert.deepStrictEqual(reset.result.spec.pages.map((p) => [p.pageId, p.key]).sort(), [[OVERVIEW_ID, 'work-order'], [DETAIL_ID, 'work-order-2']]);
+      assert.match(reset.stderr, /WARNING: --reset-page-keys: 2 page\(s\) were given a fresh key/);
+
+      // The maker corrects the file instead: the erroneous entry goes, and the download goes on from the keys the file holds.
+      fs.writeFileSync(specPath, JSON.stringify(first, null, 2));
+    },
+  });
 });

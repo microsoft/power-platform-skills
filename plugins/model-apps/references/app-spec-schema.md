@@ -1407,9 +1407,11 @@ custom control), but the spec validator emits a warning.
   deployed pages fail-closed, and uses `reconcilePageIds` to reconstruct keys and reverse-normalize
   navigation placeholders back to `"PAGEREF_<key>"` in each page's source. A page the manifest does not
   bind (a legacy or Maker-authored app) keeps the `key` an earlier download of the app gave it — read from
-  the `app-spec.json` already in the output folder, matched by `pageId` — and only a page with neither gets
-  a fresh key. A key never changes between two downloads of an unchanged app: a copy of the spec deployed
-  to another environment is bound to the pages it built there by key.
+  the `app-spec.json` already in the output folder when it names this app in `app.uniqueName`, matched by
+  `pageId` — and only a page with neither gets a fresh key. A key never changes between two downloads of an
+  unchanged app: a copy of the spec deployed to another environment is bound to the pages it built there by
+  key. When that file gives one key to two pages (or one page two keys) for a page the manifest does not bind,
+  the download stops (`page-keys-ambiguous`) unless `--reset-page-keys` says to give those pages fresh keys.
 - **Three-authority page identity.** Generative-page management consults three authorities, each
   for a distinct question — all matching is **by id**, never by display name:
   1. **IDENTITY** — the `<appUnique>_pagemanifest` (`key → pageId` map). For an *edit-snapshot* spec

@@ -7,7 +7,14 @@
 // pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys]
+//
+// A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
+// earlier download of the SAME app gave it (the app-spec.json already in --out, when its app.uniqueName is this app's). If that earlier spec gives a page keys that
+// cannot be told apart — one key to two pages, or two keys to one page — and the manifest does not bind the page, the download stops without writing anything:
+// `{ ok: false, code: 'page-keys-ambiguous', error, pages }`. Correct the file and download again, or pass --reset-page-keys to give exactly those pages fresh
+// keys (minted in page-id order; every other page keeps its key). The switch is a decision about every environment that holds a copy of the earlier spec: it
+// binds each key to the page it built there, so a fresh key can make that copy update another page.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -28,6 +35,7 @@ const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
 const { mapLimit } = require('./lib/entity-provision.js');
 const { compareText } = require('./lib/compare-text.js');
+const { appUniqueName } = require('./lib/sdk-build.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -914,50 +922,114 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
   return pages;
 }
 
-// The page keys an earlier download of this app left in the output folder: { keys: Map<lower-cased page id, key>, problem }, read from the
-// app-spec.json this download is about to replace (the working folder of an edit session holds it). A key is a page's identity in a
-// rebuild — a copy of that spec deployed to another environment binds each key to the page it created there — so a page whose id is read
-// again keeps the key it had, whatever it is called now or however the names sort, instead of being given one afresh (assignPageKeys).
+// The page keys an earlier download of this app left in the output folder: { keys, conflicts, problem, unidentified }, read from the app-spec.json this
+// download is about to replace (the working folder of an edit session holds it). A key is a page's identity in a rebuild — a copy of that spec deployed to
+// another environment binds each key to the page it created there — so a page whose id is read again keeps the key it had, whatever it is called now or
+// however the names sort, instead of being given one afresh (assignPageKeys).
 //
-// What is read of the file is each page's `pageId` and `key`, and `app.uniqueName` to tell another app's spec from this one's:
+// What is read of the file is each page's `pageId` and `key`, and `app.uniqueName` to tell this app's spec from any other:
 //   { "app": { "uniqueName": "contoso_app" }, "pages": [ { "key": "work-order", "pageId": "10000000-0000-4000-8000-000000000001", ... }, ... ] }
-// A spec that names no app (one written by hand) is read; one that names another app is not. An entry with no id or no key, or a key outside
-// the key grammar, is skipped. A key two pages claim, or a page given two keys, is ambiguous — the file was edited by hand — and is kept for
-// none of them.
+// A page id does not say which app a key belongs to — a page can be in several apps, each with its own page manifest and so its own keys — so the file is
+// this app's only when it SAYS so: `app.uniqueName` is a text and is this app's unique name. The name is read as the build reads an app's identity
+// (appUniqueName, lib/sdk-build.js) and compared without case, as Dataverse compares unique names (lib/deployed-baseline.js readBaseline does the same).
+// A gap is never a wildcard. A spec that names another app is skipped. One that names none is skipped too — an authored spec derives its identity from its
+// publisher prefix and name and writes none, and a hand edit can leave a null, a blank or a number — and is reported (`unidentified`) when it held keys that
+// could have been used. (The identity appUniqueName derives for such a spec is a guess at what the build would create, not something the file says.)
 //
-// Best-effort, like the other things read back from this file (preserveAuthoredLanguageCode): a missing file keeps nothing and says
-// nothing; one that cannot be read keeps nothing and says so (`problem`), because the keys are then minted afresh and may differ from the
-// ones a deployed copy was built with. `problem` never quotes the file: a parse error carries a piece of the text, and a link planted at
-// this name could point at any file.
-function readPreviousPageKeys(specPath, appUnique) {
-  const none = (problem = null) => ({ keys: new Map(), problem });
+// `keys` (Map<lower-cased page id, key>) holds the entries that are clear. An entry with no id or no key, or a key outside the key grammar, is skipped.
+// A key given to two pages, or a page given two keys, is ambiguous — the file was edited by hand — and is kept for none of them; each such group is in
+// `conflicts` as { keys, pageIds }: one page and the keys it is given, or one key and the pages it is given to. With `livePageIds`, only the rows of those
+// pages are read at all: a row of a page the app no longer has says nothing about a page it has, so it neither voids a clear key nor makes a conflict.
+//
+// Best-effort, like the other things read back from this file (preserveAuthoredLanguageCode): a missing file keeps nothing and says nothing; one that
+// cannot be read keeps nothing and says so (`problem`), because the keys are then minted afresh and may differ from the ones a deployed copy was built
+// with. `problem` never quotes the file: a parse error carries a piece of the text, and a link planted at this name could point at any file.
+function readPreviousPageKeys(specPath, appUnique, { livePageIds } = {}) {
+  const none = (extra = {}) => ({ keys: new Map(), conflicts: [], problem: null, unidentified: false, ...extra });
   let prior;
   try {
     assertPlainFileTarget(specPath); // a missing file passes; a link, a folder or a hard link is refused, unread
     prior = JSON.parse(fs.readFileSync(specPath, 'utf8').replace(/^\uFEFF/, ''));
   } catch (error) {
     if (error && error.code === 'ENOENT') return none();
-    if (error && error.code === 'UNSAFE_OUTPUT') return none(`it is not a regular file with one name (${error.reason})`);
-    return none(error instanceof SyntaxError ? 'it is not valid JSON' : String((error && error.code) || (error && error.message) || error));
+    if (error && error.code === 'UNSAFE_OUTPUT') return none({ problem: `it is not a regular file with one name (${error.reason})` });
+    return none({ problem: error instanceof SyntaxError ? 'it is not valid JSON' : String((error && error.code) || (error && error.message) || error) });
   }
   if (!prior || typeof prior !== 'object' || !Array.isArray(prior.pages)) return none();
-  const named = prior.app && typeof prior.app.uniqueName === 'string' ? prior.app.uniqueName.trim().toLowerCase() : '';
-  if (named && appUnique && named !== String(appUnique).trim().toLowerCase()) return none();
-  const idsOfKey = new Map();
-  const keysOfId = new Map();
-  const add = (map, from, to) => { if (!map.has(from)) map.set(from, new Set()); map.get(from).add(to); };
+  const live = livePageIds ? new Set(Array.from(livePageIds, (id) => String(id).trim().toLowerCase())) : null;
+  const rows = [];
   for (const page of prior.pages) {
     if (!page || typeof page.key !== 'string' || !KEY_GRAMMAR.test(page.key) || typeof page.pageId !== 'string' || !page.pageId.trim()) continue;
     const id = page.pageId.trim().toLowerCase();
-    add(idsOfKey, page.key, id);
-    add(keysOfId, id, page.key);
+    if (!live || live.has(id)) rows.push({ id, key: page.key });
+  }
+  const ours = typeof appUnique === 'string' ? appUnique.trim().toLowerCase() : '';
+  if (!ours) return none();
+  const said = prior.app && typeof prior.app.uniqueName === 'string' && prior.app.uniqueName.trim() ? appUniqueName(prior).trim().toLowerCase() : '';
+  if (!said) return none({ unidentified: rows.length > 0 });
+  if (said !== ours) return none();
+  const idsOfKey = new Map();
+  const keysOfId = new Map();
+  const add = (map, from, to) => { if (!map.has(from)) map.set(from, new Set()); map.get(from).add(to); };
+  for (const { id, key } of rows) {
+    add(idsOfKey, key, id);
+    add(keysOfId, id, key);
   }
   const keys = new Map();
+  const ofSeveralKeys = [];
+  const ofSeveralPages = [];
   for (const [id, own] of keysOfId) {
     const [key] = own;
     if (own.size === 1 && idsOfKey.get(key).size === 1) keys.set(id, key);
+    if (own.size > 1) ofSeveralKeys.push({ keys: [...own].sort(compareText), pageIds: [id] });
   }
-  return { keys, problem: null };
+  for (const [key, owners] of idsOfKey) {
+    if (owners.size > 1) ofSeveralPages.push({ keys: [key], pageIds: [...owners].sort(compareText) });
+  }
+  // In an order of their own, not the file's: pages given several keys by page id, then keys given to several pages by key.
+  ofSeveralKeys.sort((a, b) => compareText(a.pageIds[0], b.pageIds[0]));
+  ofSeveralPages.sort((a, b) => compareText(a.keys[0], b.keys[0]));
+  return { keys, conflicts: [...ofSeveralKeys, ...ofSeveralPages], problem: null, unidentified: false };
+}
+
+// The pages the earlier spec's keys leave undecided, and what is wrong with them: `conflicts` is what readPreviousPageKeys found (about the pages of this download
+// only) and `keyToId` the keys the page manifest binds (key -> id). A page the manifest binds is not undecided, whatever the file says of it: the manifest is the
+// authority, and its key is used. Of every other page in a conflict the file cannot say which key a deployed copy was built with. Returns the pages (by name, then
+// id, as { pageId, name }) and the conflicts that concern one of them, or null when there are none.
+function undecidedPageKeys(conflicts, keyToId, nameById) {
+  const bound = new Set(Array.from((keyToId || new Map()).values(), (id) => String(id).toLowerCase()));
+  const undecided = new Map();
+  const concerning = [];
+  for (const conflict of conflicts || []) {
+    const open = conflict.pageIds.filter((id) => !bound.has(id));
+    if (!open.length) continue;
+    concerning.push(conflict);
+    for (const id of open) undecided.set(id, (nameById && nameById.get(id)) || id);
+  }
+  if (!undecided.size) return null;
+  return { pages: [...undecided].map(([pageId, name]) => ({ pageId, name })).sort(comparePages), conflicts: concerning };
+}
+
+// The refusal of a download whose earlier spec leaves page keys undecided (undecidedPageKeys). It names each page with its id and each key, says why guessing is
+// not safe and what the two ways on are. It is the only thing the download answers then: nothing has been written.
+function pageKeysRefusal(specPath, undecided, nameById) {
+  const quoted = (list) => list.map((key) => `'${key}'`).join(', ');
+  const named = (id) => ({ pageId: id, name: (nameById && nameById.get(id)) || id });
+  const describe = (pages) => pages.map((p) => `${JSON.stringify(p.name)} (${p.pageId})`).join(', ');
+  const found = undecided.conflicts.map((c) => (c.pageIds.length > 1
+    ? `the key ${quoted(c.keys)} is given to ${c.pageIds.length} pages: ${describe(c.pageIds.map(named).sort(comparePages))}`
+    : `${describe(c.pageIds.map(named))} is given ${c.keys.length} keys: ${quoted(c.keys)}`));
+  return {
+    ok: false,
+    code: 'page-keys-ambiguous',
+    error: `the page keys in ${specPath} cannot be told apart for ${undecided.pages.length} page(s) that the app's page manifest does not bind: ${found.join('; ')}. `
+      + 'A page\'s key is its identity in a rebuild: a copy of an earlier spec that was deployed to another environment has each key bound to the page it built there, '
+      + 'so giving these pages fresh keys could make that copy update the wrong pages. Nothing was written. Correct the file so that each page has one key and each key one page '
+      + '(the keys an earlier download wrote are the ones a deployed copy was built with) and download again; or download again with --reset-page-keys to give exactly these pages '
+      + 'fresh keys, minted in page-id order (every other page keeps its key), and check each key against every environment that holds a copy of the earlier spec before you deploy this spec there.',
+    pages: undecided.pages,
+    conflicts: undecided.conflicts,
+  };
 }
 
 // Assign a STABLE key to every downloaded page + carry the manifest's v2 semantics. A page's key is its identity in a rebuild (a spec
@@ -2037,8 +2109,10 @@ async function recoverAppSolution(sdk, appId) {
 // `appId`      — the app's GUID (used for download + solution lookup)
 // `appUnique`  — the app's unique name (for fetchSitemap + manifest lookup); may be undefined for
 //                apps not found by unique name, in which case the sitemap read fails gracefully.
+// `resetPageKeys` — the maker's decision to give the pages whose earlier keys cannot be told apart fresh keys instead of stopping (see the header of this file)
 // Returns { ok:true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails,
-// dashboardReconstructionError } or { ok:false, error }.
+// dashboardReconstructionError } or { ok:false, error } — and, when the earlier spec's page keys cannot be told apart, { ok:false, code:'page-keys-ambiguous',
+// error, pages, conflicts }, answered before anything is written.
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 // A link already under pages/ must be refused before the tree is replaced. rm of a real
@@ -2099,7 +2173,7 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, concurrency }) {
+async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -2187,9 +2261,6 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       if (!(e && e.code === 'ENOENT')) throw e;
     }
     const sitemapIds = smPages.map((p) => p.pageId);
-    const read = await readSitemapPages(genpage, sitemapIds, concurrency);
-    if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
-    writePageTree(pagesRoot, read.pages);
 
     // Name resolver: env-wide name (real, stable) primary; sitemap title (XML-entity-decoded) as
     // fallback when the env-wide list doesn't cover an id (shouldn't happen in practice — env-wide
@@ -2201,6 +2272,41 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       const id = String(p.pageId).toLowerCase();
       return [id, unescapePacName(envNameById.get(id) || p.title || p.pageId)];
     }));
+
+    // Reconcile by MEMBERSHIP. For download, existence AND membership are both the sitemap ids
+    // (the pages we are about to pull — a page of the sitemap that cannot be pulled fails the download below). This differs from the build path, which
+    // uses the env-wide EXISTENCE set (because a build must find crash-orphaned pages that are not yet in the sitemap). It needs no page content, so it
+    // is done first: the keys below are judged before anything is read or written.
+    const { keyToId, conflicts } = reconcilePageIds(
+      (manifest && manifest.pages) || [],
+      manifest,
+      sitemapIds, // existenceIds: confirmed present (the sitemap names them)
+      sitemapIds  // sitemapIds: membership = same set as existence for the download path
+    );
+    if (conflicts.length) {
+      return { ok: false, error: `page identity conflict during download: ${conflicts.map((c) => c.pageId || c.key).join(', ')} — cannot safely reconstruct` };
+    }
+
+    // The keys an earlier download of this app gave these pages are read, and judged, BEFORE a page is read from the backend or anything is written, so that a
+    // refusal leaves the working folder exactly as it was: the file is the maker's only record of those keys, and the page folders may hold edits. Only the rows of
+    // the pages this app has now count: a row of a page that is gone says nothing about a page that is here.
+    const priorSpecPath = path.join(outDir, 'app-spec.json');
+    const previous = readPreviousPageKeys(priorSpecPath, appUnique, { livePageIds: sitemapIds });
+    if (previous.problem) {
+      process.stderr.write(`WARNING: the app-spec.json in ${outDir} could not be read (${previous.problem}), so the page keys of an earlier download were not kept: a page that the page manifest does not bind is given a fresh key, which can differ from the one a copy of that spec already deployed to another environment was built with.\n`);
+    }
+    if (previous.unidentified) {
+      process.stderr.write(`WARNING: the app-spec.json in ${outDir} does not say which app it describes (its app.uniqueName is missing, blank or not a text), so its page keys were not used as the earlier keys of this app: a page that the page manifest does not bind is given a fresh key, which can differ from the one a copy of that spec already deployed to another environment was built with. A spec an earlier download of this app wrote names the app in app.uniqueName.\n`);
+    }
+    // Keys that cannot be told apart for a page the manifest does not bind are not minted afresh behind the maker's back — that is how two pages of a
+    // deployed copy swap what they hold — unless the maker has said to (--reset-page-keys).
+    const undecided = undecidedPageKeys(previous.conflicts, keyToId, nameById);
+    if (undecided && !resetPageKeys) return pageKeysRefusal(priorSpecPath, undecided, nameById);
+
+    const read = await readSitemapPages(genpage, sitemapIds, concurrency);
+    if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
+    writePageTree(pagesRoot, read.pages);
+
     const unreadableConfigs = [];
     const unkeptModels = [];
     pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels);
@@ -2233,29 +2339,15 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       return { ok: false, error: `downloaded page(s) not in the sitemap: ${extra.map((p) => p.pageId).join(', ')} — inconsistent page set` };
     }
 
-    // Reconcile by MEMBERSHIP. For download, existence AND membership are both the sitemap ids
-    // (the pages we just pulled — if they were downloaded they exist; if not we already aborted
-    // above). This differs from the build path, which uses the env-wide EXISTENCE set (because a
-    // build must find crash-orphaned pages that are not yet in the sitemap).
-    const { keyToId, conflicts } = reconcilePageIds(
-      (manifest && manifest.pages) || [],
-      manifest,
-      sitemapIds, // existenceIds: confirmed present (we just downloaded them)
-      sitemapIds  // sitemapIds: membership = same set as existence for the download path
-    );
-    if (conflicts.length) {
-      return { ok: false, error: `page identity conflict during download: ${conflicts.map((c) => c.pageId || c.key).join(', ')} — cannot safely reconstruct` };
-    }
-
     // Assign stable keys + carry v2 semantics (navigatesTo/purpose/pageInput) from the manifest.
     // Pages bound to manifest keys reuse their key and semantics; the other pages keep the key an earlier download of this app
     // gave them (the app-spec.json this download replaces); only pages with neither (Maker-added, not in the manifest) get a
-    // fresh slug key minted from their env-wide name.
-    const previous = readPreviousPageKeys(path.join(outDir, 'app-spec.json'), appUnique);
-    if (previous.problem) {
-      process.stderr.write(`WARNING: the app-spec.json in ${outDir} could not be read (${previous.problem}), so the page keys of an earlier download were not kept: a page that the page manifest does not bind is given a fresh key, which can differ from the one a copy of that spec already deployed to another environment was built with.\n`);
-    }
+    // fresh slug key minted from their env-wide name — and so do the pages whose earlier keys cannot be told apart, when the maker said to (--reset-page-keys).
     const idToKey = assignPageKeys(pages, manifest, keyToId, previous.keys);
+    if (undecided) {
+      const keyOf = new Map(pages.map((p) => [String(p.pageId).toLowerCase(), p.key]));
+      process.stderr.write(`WARNING: --reset-page-keys: ${undecided.pages.length} page(s) were given a fresh key because the app-spec.json in ${outDir} gave them keys that cannot be told apart (${undecided.pages.map((p) => `${JSON.stringify(p.name)} (${keyOf.get(p.pageId)})`).join(', ')}). A key is a page's identity in a rebuild: another environment that holds a copy of the earlier spec has the earlier keys bound to its pages, so deploying this spec there could update a different page than the earlier one did. Check each key against that environment before you deploy this spec there.\n`);
+    }
     // A key that is not the earlier one was given by the manifest (it outranks the file, and it holds a key for a page, or a page for a key,
     // that the file says otherwise of). Say so: a copy of the earlier spec deployed to another environment binds the earlier keys there.
     const moved = pages.filter((p) => previous.keys.has(String(p.pageId).toLowerCase()) && previous.keys.get(String(p.pageId).toLowerCase()) !== p.key);
@@ -2624,11 +2716,11 @@ async function main(deps = {}) {
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]';
-  // `--allow-lossy-download` is a real boolean switch, so it stays out of needValue; everything else
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys]';
+  // `--allow-lossy-download` and `--reset-page-keys` are real boolean switches, so they stay out of needValue; everything else
   // feeds a URL, an app id, or a path and must not receive `true`.
   const flagError = validateFlags(argv, {
-    known: ['env', 'app', 'out', 'output', 'allow-lossy-download'],
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys'],
     needValue: ['env', 'app', 'out', 'output'],
   });
   if (flagError) {
@@ -2640,6 +2732,8 @@ async function main(deps = {}) {
   const appArg = flags.app || positional[0];
   const outArg = flags.out || flags.output;
   const allowLossyDownload = flags['allow-lossy-download'] === true;
+  // Off unless it is given: it is a decision about every environment that holds a copy of the earlier spec (see the header), never a default.
+  const resetPageKeys = flags['reset-page-keys'] === true;
   if (!env || !appArg) {
     io.stderr.write(USAGE + '\n');
     io.exit(1);
@@ -2690,7 +2784,7 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload });
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys });
     if (!result.ok) { finish(false, result); return; }
 
     const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft } = result;

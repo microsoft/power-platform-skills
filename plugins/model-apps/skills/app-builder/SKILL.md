@@ -635,9 +635,14 @@ Then:
 1. **Always pull fresh at the start of an edit session** — someone may have changed the app in Maker. The
    build reads an etag when it hydrates, so a write against an artifact changed since the pull throws a
    version conflict → **re-pull and retry**, never clobber. Pull into the **same `<working-dir>`** every time:
-   a page keeps the `key` its earlier download gave it (read from the `app-spec.json` already there, matched
-   by the page's id), and a copy of the spec deployed to another environment is bound to the pages it built
-   there by those keys — a key that changed would update a different page. A new folder mints keys again.
+   a page keeps the `key` its earlier download gave it (read from the `app-spec.json` already there, when that
+   file names this app in `app.uniqueName`; matched by the page's id), and a copy of the spec deployed to
+   another environment is bound to the pages it built there by those keys — a key that changed would update a
+   different page. A new folder mints keys again. If the pull answers `"code": "page-keys-ambiguous"`, the
+   earlier `app-spec.json` gives one key to two pages (or one page two keys) and **nothing was written**: show
+   the user the message, which names the pages and keys, and either correct the file and pull again or —
+   only when the user says so, because fresh keys can make a copy deployed elsewhere update the wrong
+   pages — pull again with `--reset-page-keys`, which re-keys exactly those pages.
 2. Edit `app-spec.json` (and any page `.tsx`) for the requested change. A page you edit by hand is
    checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx>`
    on it before you rebuild (the rule and the ten shorthands are in Phase 1.5, step 5) and fix what it

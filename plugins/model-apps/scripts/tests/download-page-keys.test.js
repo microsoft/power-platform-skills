@@ -15,7 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runDownload, assignPageKeys, readPreviousPageKeys, parseDownloadedPages } = require('../download-model-app.js');
+const { runDownload, assignPageKeys, readPreviousPageKeys, parseDownloadedPages, main } = require('../download-model-app.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
@@ -66,24 +66,31 @@ function pagesSdk(pages, { manifest } = {}) {
 // The spec an earlier download left in the folder: what matters of it is the app it describes and each page's id and key.
 const earlierSpec = (pages, { uniqueName = APP_UNIQUE } = {}) => ({
   schemaVersion: 2,
-  app: { name: 'Keys App', ...(uniqueName === undefined ? {} : { uniqueName }) },
+  app: { name: 'Keys App', uniqueName },
   pages: pages.map((p) => ({ key: p.key, name: p.name, pageId: p.pageId, source: { kind: 'tsx', codeFile: `pages/${p.pageId}/page.tsx` } })),
 });
 
-// Runs one download into `out` (made, and removed, by the caller), answering the pages through the stand-in page backend. Returns the
-// result and what the download said on stderr.
-async function download(out, pages, options = {}) {
+// Runs one download into `out` (made, and removed, by the caller), answering the pages through the stand-in page backend. Returns what
+// `runDownload` answered, what the download said on stderr and the page backend (to see what was read from it). `options.manifest` is the
+// page manifest the app carries; `options.resetPageKeys` is the switch of the same name.
+async function attempt(out, pages, options = {}) {
   const stderr = [];
   const realWrite = process.stderr.write;
   try {
     process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
     const genpage = fakeGenpage({ pages: pages.map((p) => ({ ...p, source: sourceOf(p) })) });
-    const res = await runDownload({ sdk: pagesSdk(pages, options), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
-    assert.ok(res.ok, JSON.stringify(res));
-    return { res, stderr: stderr.join('') };
+    const res = await runDownload({ sdk: pagesSdk(pages, options), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, resetPageKeys: options.resetPageKeys });
+    return { res, stderr: stderr.join(''), genpage };
   } finally {
     process.stderr.write = realWrite;
   }
+}
+
+// The same, for a download that must succeed.
+async function download(out, pages, options = {}) {
+  const done = await attempt(out, pages, options);
+  assert.ok(done.res.ok, JSON.stringify(done.res));
+  return done;
 }
 
 function folder(t) {
@@ -212,6 +219,209 @@ test('the earlier spec of ANOTHER app is not read, and an unreadable one is said
   assert.match(stderr, /WARNING: the app-spec\.json in .* could not be read \(.*\), so the page keys of an earlier download were not kept/);
 });
 
+// A file whose app is not named is not this app's: a page id does not say which app a key belongs to — a page can be in several apps, each with
+// its own page manifest and its own keys — so the id is matched only inside a spec that says the spec is of THIS app. `app.uniqueName` says it;
+// an authored spec derives its identity from its publisher prefix and name (appUniqueName in lib/sdk-build.js) and carries none, and a hand-edited
+// one can hold anything. None of these stands for "this app".
+const WITHOUT_IDENTITY = {
+  'no app.uniqueName, as in an authored spec': (spec) => { delete spec.app.uniqueName; spec.app.name = 'Other App'; },
+  'a blank app.uniqueName': (spec) => { spec.app.uniqueName = '   '; },
+  'a null app.uniqueName': (spec) => { spec.app.uniqueName = null; },
+  'an app.uniqueName that is a number': (spec) => { spec.app.uniqueName = 12; },
+  'an app.uniqueName that is a list holding this very name': (spec) => { spec.app.uniqueName = [APP_UNIQUE]; },
+  'an app that is a text': (spec) => { spec.app = APP_UNIQUE; },
+  'a null app': (spec) => { spec.app = null; },
+  'no app at all': (spec) => { delete spec.app; },
+};
+
+for (const [label, withoutIdentity] of Object.entries(WITHOUT_IDENTITY)) {
+  test(`an earlier spec that does not say which app it describes is not read, and the download says so (${label})`, async (t) => {
+    const out = folder(t);
+    // The keys another app (or an old copy) gave these two page ids: the opposite of what minting by page id gives.
+    const foreign = earlierSpec([{ ...LOW_PAGE, key: 'work-order-2' }, { ...HIGH_PAGE, key: 'work-order' }]);
+    withoutIdentity(foreign);
+    fs.writeFileSync(path.join(out, 'app-spec.json'), JSON.stringify(foreign));
+    const { res, stderr } = await download(out, [LOW_PAGE, HIGH_PAGE]);
+    assert.deepStrictEqual(keysOf(res), { [LOW]: 'work-order', [HIGH]: 'work-order-2' }, 'minted afresh, by page id: the file\'s keys are another spec\'s');
+    assert.ok(stderr.includes(`WARNING: the app-spec.json in ${out} does not say which app it describes`), `the warning names the file: ${stderr}`);
+    assert.match(stderr, /so its page keys were not used as the earlier keys of this app/);
+  });
+}
+
+test('a spec that does not say which app it describes is not reported when it holds no page keys to use, and one of this app\'s own is read whatever the case of its name', async (t) => {
+  const quiet = folder(t);
+  const keyless = earlierSpec([{ ...LOW_PAGE, key: 'work-order-2' }]);
+  delete keyless.app.uniqueName;
+  keyless.pages = [{ name: 'Work_Order' }, { key: 'no-id' }, { pageId: LOW }];
+  fs.writeFileSync(path.join(quiet, 'app-spec.json'), JSON.stringify(keyless));
+  const { stderr: said } = await download(quiet, [LOW_PAGE, HIGH_PAGE]);
+  assert.doesNotMatch(said, /does not say which app/, 'nothing it holds could have been used, so there is nothing to say');
+
+  const own = folder(t);
+  fs.writeFileSync(path.join(own, 'app-spec.json'), JSON.stringify(earlierSpec([{ ...LOW_PAGE, key: 'work-order-2' }, { ...HIGH_PAGE, key: 'work-order' }], { uniqueName: ` ${APP_UNIQUE.toUpperCase()} ` })));
+  const { res, stderr } = await download(own, [LOW_PAGE, HIGH_PAGE]);
+  assert.deepStrictEqual(keysOf(res), { [LOW]: 'work-order-2', [HIGH]: 'work-order' }, 'Dataverse compares unique names without case, so this is the same app');
+  assert.doesNotMatch(stderr, /app-spec\.json/);
+});
+
+// ── an earlier spec whose keys cannot be told apart ──────────────────────────────────────────────────────────────────────────
+
+// A page's key was written by an earlier download of this app, and a hand edit has since left the file giving a key to two pages and a page two keys:
+//   HIGH -> work-order     LOW -> work-order-2     LOW -> work-order (the edit)
+// Which of these is what a copy deployed to another environment was built with is not in the file. Giving the pages fresh keys would exchange what two
+// pages hold there, silently, so unless something else says which is right the download stops and says what to do. What else can say: the app's page
+// manifest binds the page to a key (the authority), or the file's row is about a page the app no longer has.
+const ambiguousSpec = () => {
+  const spec = earlierSpec([{ ...LOW_PAGE, key: 'work-order-2' }, { ...HIGH_PAGE, key: 'work-order' }]);
+  spec.pages.push({ ...spec.pages[0], key: 'work-order' });
+  return spec;
+};
+
+test('a download refuses, before it writes anything, when the earlier spec gives its pages keys that cannot be told apart', async (t) => {
+  const out = folder(t);
+  const file = path.join(out, 'app-spec.json');
+  const before = JSON.stringify(ambiguousSpec(), null, 2);
+  fs.writeFileSync(file, before);
+  const { res, genpage } = await attempt(out, [LOW_PAGE, HIGH_PAGE]);
+  assert.strictEqual(res.ok, false, 'the download must not go on with keys it would have to guess');
+  assert.strictEqual(res.code, 'page-keys-ambiguous');
+  // It names the pages (with their ids) and the keys, and says how to go on: correct the file, or accept fresh keys.
+  for (const part of ['"Work_Order"', LOW, '"Work Order"', HIGH, "'work-order'", "'work-order-2'", '--reset-page-keys', file]) {
+    assert.ok(res.error.includes(part), `the refusal names ${part}: ${res.error}`);
+  }
+  assert.deepStrictEqual(res.pages.map((p) => [p.pageId, p.name]), [[HIGH, 'Work Order'], [LOW, 'Work_Order']]);
+  // Nothing was changed: the file (the only record of the earlier keys), and no page folder, and no page was even read.
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+  assert.deepStrictEqual(fs.readdirSync(out), ['app-spec.json']);
+  assert.strictEqual(genpage.of('read').length, 0);
+});
+
+test('the refusal also stops a file in which a page is given two keys, or two entries share a page id', async (t) => {
+  const out = folder(t);
+  const twoKeys = earlierSpec([{ ...LOW_PAGE, key: 'work-order' }, { ...LOW_PAGE, key: 'work-order-2' }, { ...HIGH_PAGE, key: 'other-order' }]);
+  fs.writeFileSync(path.join(out, 'app-spec.json'), JSON.stringify(twoKeys));
+  const { res } = await attempt(out, [LOW_PAGE, HIGH_PAGE]);
+  assert.strictEqual(res.code, 'page-keys-ambiguous');
+  assert.match(res.error, /"Work_Order" \(10000000-0000-4000-8000-000000000001\) is given 2 keys: 'work-order', 'work-order-2'/);
+  assert.deepStrictEqual(res.pages.map((p) => p.pageId), [LOW], 'the page with one clear key is not named');
+
+  const sameKey = folder(t);
+  const twoPages = earlierSpec([{ ...LOW_PAGE, key: 'shared' }, { ...HIGH_PAGE, key: 'shared' }]);
+  fs.writeFileSync(path.join(sameKey, 'app-spec.json'), JSON.stringify(twoPages));
+  const { res: refused } = await attempt(sameKey, [LOW_PAGE, HIGH_PAGE]);
+  assert.strictEqual(refused.code, 'page-keys-ambiguous');
+  assert.match(refused.error, /the key 'shared' is given to 2 pages: "Work Order" \(f0000000-0000-4000-8000-000000000001\), "Work_Order" \(10000000-0000-4000-8000-000000000001\)/);
+});
+
+test('with --reset-page-keys the pages whose keys cannot be told apart are given fresh keys by page id, and the download says which', async (t) => {
+  const out = folder(t);
+  fs.writeFileSync(path.join(out, 'app-spec.json'), JSON.stringify(ambiguousSpec()));
+  const { res, stderr } = await download(out, [LOW_PAGE, HIGH_PAGE], { resetPageKeys: true });
+  assert.deepStrictEqual(keysOf(res), { [LOW]: 'work-order', [HIGH]: 'work-order-2' }, 'minted afresh, in page-id order');
+  assert.match(stderr, /WARNING: --reset-page-keys: 2 page\(s\) were given a fresh key because the app-spec\.json in .* gave them keys that cannot be told apart/);
+  assert.match(stderr, /"Work_Order" \(work-order\)/);
+  assert.match(stderr, /"Work Order" \(work-order-2\)/);
+  assert.ok(fs.existsSync(path.join(out, 'pages', LOW, 'page.tsx')) && fs.existsSync(path.join(out, 'pages', HIGH, 'page.tsx')), 'the pages are written');
+});
+
+test('only the pages whose earlier keys cannot be told apart are named, and only they are re-keyed: a clear key is kept, and the manifest outranks the file', async (t) => {
+  // Alpha: one clear key in the file. Beta and Gamma: the file gives both `shared`. Delta: the page manifest binds it, and the file gives it two keys.
+  const [alpha, beta, gamma, delta] = ['Alpha', 'Beta', 'Gamma', 'Delta'].map((name, i) => ({ pageId: g(`${i + 1}0000000`, 1), name }));
+  const earlier = earlierSpec([{ ...alpha, key: 'kept-a' }, { ...beta, key: 'shared' }, { ...gamma, key: 'shared' }, { ...delta, key: 'd-one' }, { ...delta, key: 'd-two' }]);
+  const manifest = { schemaVersion: 1, pages: [{ key: 'from-manifest', name: 'Delta', pageId: delta.pageId }] };
+  const pages = [alpha, beta, gamma, delta];
+
+  const stopped = folder(t);
+  fs.writeFileSync(path.join(stopped, 'app-spec.json'), JSON.stringify(earlier));
+  const { res: refused } = await attempt(stopped, pages, { manifest });
+  assert.strictEqual(refused.code, 'page-keys-ambiguous');
+  assert.deepStrictEqual(refused.pages.map((p) => p.name), ['Beta', 'Gamma'], 'a page with a clear key, and one the manifest binds, are not part of it');
+  assert.doesNotMatch(refused.error.split(stopped).join(''), /Alpha|Delta|kept-a|d-one|from-manifest/);
+
+  const reset = folder(t);
+  fs.writeFileSync(path.join(reset, 'app-spec.json'), JSON.stringify(earlier));
+  const { res, stderr } = await download(reset, pages, { manifest, resetPageKeys: true });
+  assert.deepStrictEqual(keysOf(res), { [alpha.pageId]: 'kept-a', [beta.pageId]: 'beta', [gamma.pageId]: 'gamma', [delta.pageId]: 'from-manifest' });
+  assert.match(stderr, /--reset-page-keys: 2 page\(s\)/);
+  assert.doesNotMatch(stderr.split(reset).join(''), /Alpha|Delta/, 'the others are not mentioned');
+});
+
+test('a manifest that binds every page makes the file\'s ambiguity moot, and a flag nobody needs changes nothing', async (t) => {
+  const manifest = { schemaVersion: 1, pages: [{ key: 'm-low', name: 'Work_Order', pageId: LOW }, { key: 'm-high', name: 'Work Order', pageId: HIGH }] };
+  for (const resetPageKeys of [false, true]) {
+    const out = folder(t);
+    fs.writeFileSync(path.join(out, 'app-spec.json'), JSON.stringify(ambiguousSpec()));
+    const { res, stderr } = await download(out, [LOW_PAGE, HIGH_PAGE], { manifest, resetPageKeys });
+    assert.deepStrictEqual(keysOf(res), { [LOW]: 'm-low', [HIGH]: 'm-high' });
+    assert.doesNotMatch(stderr, /reset-page-keys|cannot be told apart/);
+  }
+  // And with nothing ambiguous, the flag is not an instruction to forget the earlier keys.
+  const clear = folder(t);
+  fs.writeFileSync(path.join(clear, 'app-spec.json'), earlierFile(EARLIER['in another order']));
+  const { res, stderr } = await download(clear, [LOW_PAGE, HIGH_PAGE], { resetPageKeys: true });
+  assert.deepStrictEqual(keysOf(res), EARLIER['in another order']);
+  assert.doesNotMatch(stderr, /reset-page-keys/);
+});
+
+test('rows about pages the app no longer has never stop a download, and never void the clear key of a page it has', async (t) => {
+  const gone = [g('90000000', 1), g('90000000', 2), g('90000000', 3)];
+  const out = folder(t);
+  // Duplicates among pages that are gone; and one of them shares the key of LOW, which is still there.
+  const earlier = earlierSpec([
+    { ...LOW_PAGE, key: 'custom-key' },
+    { pageId: gone[0], name: 'Gone 1', key: 'dup' }, { pageId: gone[1], name: 'Gone 2', key: 'dup' },
+    { pageId: gone[2], name: 'Gone 3', key: 'custom-key' }, { pageId: gone[2], name: 'Gone 3', key: 'another' },
+  ]);
+  fs.writeFileSync(path.join(out, 'app-spec.json'), JSON.stringify(earlier));
+  const { res, stderr } = await download(out, [LOW_PAGE, HIGH_PAGE]);
+  assert.deepStrictEqual(keysOf(res), { [LOW]: 'custom-key', [HIGH]: 'work-order' }, 'LOW keeps its key; HIGH, new to the file, is minted afresh');
+  assert.doesNotMatch(stderr, /reset-page-keys|cannot be told apart|app-spec\.json/);
+});
+
+// ── the switch on the command line ───────────────────────────────────────────────────────────────────────────────────────────
+
+// `main` with every side effect replaced: what it asked `runDownload` for, what it printed and with which exit status.
+async function cli(argv, runDownloadAnswer) {
+  const asked = [];
+  const emitted = [];
+  const said = [];
+  let exited = null;
+  await main({
+    argv,
+    stderr: { write: (text) => { said.push(String(text)); return true; } },
+    exit: (code) => { exited = code; },
+    emitResult: (ok, payload) => emitted.push({ ok, payload }),
+    preflightAuth: async () => ({ ok: true }),
+    makeDownloadSdk: async () => ({ sdk: { queryRecords: async () => [{ uniquename: APP_UNIQUE }] }, cleanup() {} }),
+    makeGenpageSdk: () => ({}),
+    runDownload: async (args) => { asked.push(args); return runDownloadAnswer; },
+  });
+  return { asked, emitted, said: said.join(''), exited };
+}
+
+test('--reset-page-keys is a switch of the download: off unless it is given, and given it reaches the download', async (t) => {
+  const out = folder(t);
+  const base = ['--env', 'https://contoso.crm.dynamics.com', '--app', APP_ID, '--out', out];
+  const refusal = { ok: false, code: 'page-keys-ambiguous', error: 'refused', pages: [] };
+  const plain = await cli(base, refusal);
+  assert.strictEqual(plain.asked.length, 1);
+  assert.strictEqual(plain.asked[0].resetPageKeys, false);
+  const reset = await cli([...base, '--reset-page-keys'], refusal);
+  assert.strictEqual(reset.asked[0].resetPageKeys, true);
+  assert.strictEqual(reset.exited, null, 'a known switch is no usage error');
+  // The refusal is the download's answer, printed as it is: the code and the pages are in the JSON a caller reads.
+  assert.deepStrictEqual(plain.emitted, [{ ok: false, payload: refusal }]);
+});
+
+test('the usage line names --reset-page-keys, and a misspelling of it is a usage error that suggests it', async () => {
+  const bare = await cli([], { ok: true });
+  assert.match(bare.said, /Usage: node download-model-app\.js --env <url> --app <appId\|uniqueName\|displayName> --out <dir> \[--allow-lossy-download\] \[--reset-page-keys\]/);
+  const typo = await cli(['--env', 'x', '--app', 'y', '--reset-page-key'], { ok: true });
+  assert.strictEqual(typo.exited, 1);
+  assert.match(typo.said, /--reset-page-key \(did you mean --reset-page-keys\?\)/);
+  assert.strictEqual(typo.asked.length, 0);
+});
+
 // ── the pieces ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 test('assignPageKeys: a page keeps the key of an earlier download by its id, and only new pages are minted, by id', () => {
@@ -259,6 +469,7 @@ test('readPreviousPageKeys reads page id -> key of the same app, and nothing it 
   const dir = folder(t);
   const file = path.join(dir, 'app-spec.json');
   const write = (value) => fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value));
+  const own = { uniqueName: APP_UNIQUE };
 
   // The usual case: ids are read without case; a page with no key or no id, or a key outside the key grammar, is skipped; the rest are kept.
   write({
@@ -271,28 +482,69 @@ test('readPreviousPageKeys reads page id -> key of the same app, and nothing it 
   let read = readPreviousPageKeys(file, APP_UNIQUE);
   assert.strictEqual(read.problem, null);
   assert.deepStrictEqual([...read.keys], [[LOW, 'one'], [HIGH, 'two']]);
+  assert.deepStrictEqual(read.conflicts, []);
 
-  // A spec that names no app (a hand-authored one) is read; one that names another app is not.
-  write({ pages: [{ key: 'one', pageId: LOW }] });
-  assert.deepStrictEqual([...readPreviousPageKeys(file, APP_UNIQUE).keys], [[LOW, 'one']]);
+  // Only a spec that says it is of this app is read. One that names another app is not, and no more is one that names none: a hand-authored spec,
+  // a null, a blank or a mistyped name do not stand for this app. The second kind is reported (`unidentified`) when it held keys that could have been used.
   write({ app: { uniqueName: 'other_app' }, pages: [{ key: 'one', pageId: LOW }] });
-  assert.deepStrictEqual([...readPreviousPageKeys(file, APP_UNIQUE).keys], []);
+  read = readPreviousPageKeys(file, APP_UNIQUE);
+  assert.deepStrictEqual([[...read.keys], read.unidentified], [[], false]);
+  for (const app of [undefined, null, 'text', {}, { uniqueName: null }, { uniqueName: '' }, { uniqueName: ' ' }, { uniqueName: 7 }, { uniqueName: [APP_UNIQUE] }, { uniqueName: { name: APP_UNIQUE } }]) {
+    write({ app, pages: [{ key: 'one', pageId: LOW }] });
+    read = readPreviousPageKeys(file, APP_UNIQUE);
+    assert.deepStrictEqual([[...read.keys], read.unidentified, read.problem], [[], true, null], JSON.stringify(app));
+  }
+  write({ app: {}, pages: [{ key: 'one' }, { pageId: LOW }] });
+  assert.deepStrictEqual([readPreviousPageKeys(file, APP_UNIQUE).keys.size, readPreviousPageKeys(file, APP_UNIQUE).unidentified], [0, false], 'nothing in it could have been used');
+  // Nor is a file read when the app it would be read for has no name to compare with — and then what is missing is not the file's name, so it is not reported.
+  write({ app: own, pages: [{ key: 'one', pageId: LOW }] });
+  for (const unnamed of [undefined, null, '', '  ']) assert.strictEqual(readPreviousPageKeys(file, unnamed).keys.size, 0);
+  write({ app: {}, pages: [{ key: 'one', pageId: LOW }] });
+  assert.strictEqual(readPreviousPageKeys(file, undefined).unidentified, false);
 
-  // A key claimed by two pages, or a page given two keys, is ambiguous: nothing is kept for either.
-  write({ pages: [{ key: 'one', pageId: LOW }, { key: 'one', pageId: HIGH }, { key: 'solo', pageId: g('30000000', 1) }, { key: 'x', pageId: g('40000000', 1) }, { key: 'y', pageId: g('40000000', 1) }] });
-  assert.deepStrictEqual([...readPreviousPageKeys(file, APP_UNIQUE).keys], [[g('30000000', 1), 'solo']]);
+  // A key claimed by two pages, or a page given two keys, is ambiguous: nothing is kept for either, and each is reported with what it holds.
+  const P3 = g('30000000', 1);
+  const P4 = g('40000000', 1);
+  write({ app: own, pages: [{ key: 'one', pageId: LOW }, { key: 'one', pageId: HIGH }, { key: 'solo', pageId: P3 }, { key: 'x', pageId: P4 }, { key: 'y', pageId: P4 }] });
+  read = readPreviousPageKeys(file, APP_UNIQUE);
+  assert.deepStrictEqual([...read.keys], [[P3, 'solo']]);
+  assert.deepStrictEqual(read.conflicts, [{ keys: ['x', 'y'], pageIds: [P4] }, { keys: ['one'], pageIds: [LOW, HIGH] }]);
+  // The same entry twice is not a conflict, and ids are compared without case.
+  write({ app: own, pages: [{ key: 'one', pageId: LOW }, { key: 'one', pageId: LOW.toUpperCase() }] });
+  read = readPreviousPageKeys(file, APP_UNIQUE);
+  assert.deepStrictEqual([[...read.keys], read.conflicts], [[[LOW, 'one']], []]);
 
   // Absent is no problem; present and unreadable is one; a BOM (an editor's) is not.
   fs.rmSync(file);
-  assert.deepStrictEqual(readPreviousPageKeys(file, APP_UNIQUE), { keys: new Map(), problem: null });
+  assert.deepStrictEqual(readPreviousPageKeys(file, APP_UNIQUE), { keys: new Map(), conflicts: [], problem: null, unidentified: false });
   write('{ nope');
   read = readPreviousPageKeys(file, APP_UNIQUE);
   assert.strictEqual(read.keys.size, 0);
   assert.match(read.problem, /JSON|Expected|position/);
-  write('\uFEFF' + JSON.stringify({ pages: [{ key: 'one', pageId: LOW }] }));
+  write('\uFEFF' + JSON.stringify({ app: own, pages: [{ key: 'one', pageId: LOW }] }));
   assert.deepStrictEqual([...readPreviousPageKeys(file, APP_UNIQUE).keys], [[LOW, 'one']]);
   write('[1, 2]');
   assert.strictEqual(readPreviousPageKeys(file, APP_UNIQUE).keys.size, 0);
+});
+
+test('readPreviousPageKeys looks only at the rows of pages the app still has, when it is told which', (t) => {
+  const dir = folder(t);
+  const file = path.join(dir, 'app-spec.json');
+  const GONE = g('90000000', 1);
+  const GONE_TOO = g('90000000', 2);
+  fs.writeFileSync(file, JSON.stringify({
+    app: { uniqueName: APP_UNIQUE },
+    pages: [{ key: 'kept', pageId: LOW }, { key: 'kept', pageId: GONE }, { key: 'twice', pageId: GONE }, { key: 'dup', pageId: GONE_TOO }, { key: 'dup', pageId: HIGH }, { key: 'dup', pageId: LOW.toUpperCase() }],
+  }));
+  // Told nothing, it reads every row: LOW and GONE are each given two keys, and `kept` and `dup` each go to several pages.
+  assert.strictEqual(readPreviousPageKeys(file, APP_UNIQUE).conflicts.length, 4);
+  // Told the pages the app has (HIGH and LOW, in any case), the rows of the pages it lost are not read at all.
+  const live = readPreviousPageKeys(file, APP_UNIQUE, { livePageIds: [HIGH.toUpperCase(), LOW] });
+  assert.deepStrictEqual([...live.keys], [], 'LOW holds two keys, `kept` and `dup`; HIGH shares `dup` with it');
+  assert.deepStrictEqual(live.conflicts, [{ keys: ['dup', 'kept'], pageIds: [LOW] }, { keys: ['dup'], pageIds: [LOW, HIGH] }]);
+  const onlyHigh = readPreviousPageKeys(file, APP_UNIQUE, { livePageIds: [HIGH] });
+  assert.deepStrictEqual([[...onlyHigh.keys], onlyHigh.conflicts], [[[HIGH, 'dup']], []], 'the page that shared its key is gone: the key is its own');
+  assert.deepStrictEqual(readPreviousPageKeys(file, APP_UNIQUE, { livePageIds: [] }).conflicts, []);
 });
 
 test('parseDownloadedPages still lists pages by name then id: the order they are written in is not the order keys are minted in', () => {
