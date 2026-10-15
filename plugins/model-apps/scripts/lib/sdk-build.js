@@ -35,6 +35,7 @@ const {
   normalizePageSource,
   quickCreateEnabledFor,
   askedPrimaryNameLength,
+  keyWaitsForNameLength,
   isPlatformIconRef,
   FORM_TYPE_CODE,
   formIdentityKey,
@@ -73,6 +74,7 @@ const {
   makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
+  settleOwedLengths,
   provisionSampleData,
   BuildHalt: _BuildHalt,
   SDK_COLUMN_TYPE: _SDK_COLUMN_TYPE,
@@ -510,7 +512,9 @@ function planFor(spec, opts) {
         }
       }
       for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
-      for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
+      for (const k of e.alternateKeys || []) {
+        if (!keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
+      }
     }
     // The relationships in the order the data-model phase creates them (relationshipsInCreateOrder): localized
     // lookups first. The plan lists what the build does, in the order it does it.
@@ -541,6 +545,14 @@ function planFor(spec, opts) {
     // length of a table it creates: once every labelled create and repair of the phase is done.
     for (const e of spec.entities) {
       if (askedPrimaryNameLength(e) !== undefined) items.push({ phase: 'data-model', label: `primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}` });
+    }
+    // Then the alternate keys over a name column whose length is set: the build makes such a key once that length is right
+    // (keyWaitsForNameLength). The plan lists it where a table the build creates has it; a table that already exists is not written to, and
+    // its keys are made with the table — the same steps, in another place, so the count holds.
+    for (const e of spec.entities) {
+      for (const k of e.alternateKeys || []) {
+        if (keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
+      }
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -2185,15 +2197,27 @@ function genpageCommand(verb, { env, pageId, app, flags = '' }) {
 // everything that app has saved, so the user is asked first), or detach it in Maker, or give this app a page of its own. `commands` are the lines `genpageCommand` made, one per app that holds the page.
 const detachAdvice = (commands) => `Detach it from the other app — ask the user first, since this changes another app: ${commands.join('; ')} (each takes the page out of that app's navigation and publishes that app, which publishes everything that app has saved; the page itself stays) — or detach it in Maker, or give this app its own page.`;
 
-// Every caller enters here; the phases run in runSdkBuildPhases. This wrapper only carries what the
-// deferred publishes (default-view enrichment, reconciled views and forms) still owe out of a halt:
-// `owedPublishes`, and `owedPaid` when this run's publish phase completed — which pays what an earlier
-// attempt of the same build owed too, since every attempt saves the same tables (see settleOwedPublishes).
+// Every caller enters here; the phases run in runSdkBuildPhases. This wrapper only carries what an attempt
+// still owes out of a halt, for the caller that retries:
+//  - the deferred publishes (default-view enrichment, reconciled views and forms): `owedPublishes`, and
+//    `owedPaid` when this run's publish phase completed — which pays what an earlier attempt of the same
+//    build owed too, since every attempt saves the same tables (see settleOwedPublishes);
+//  - the primary name column lengths of the tables it created and did not finish setting: `owedLengths`, the
+//    records the data-model phase keeps (provisionDataModel), which the caller hands to the next attempt as
+//    `opts.owedLengths` and which that attempt pays at the end of its own data-model phase. What is on the
+//    halt is everything still owed: what the attempt was handed and did not pay, and what it created.
 async function runSdkBuild(spec, opts = {}) {
   // tables: entity logical -> [type, id, names] of a saved view or form that owes its publish, and the names of
   // what is deferred onto that table: its reconciled views and forms, and its enriched default views
-  // (oweTablePublish).
-  const owed = { tables: new Map(), paid: false };
+  // (oweTablePublish). lengths: table logical -> { table, column, asked, tried } of a name column whose length is owed.
+  const owed = { tables: new Map(), paid: false, lengths: new Map() };
+  // A record this attempt was handed is a debt it has not tried to pay yet, whatever an earlier attempt did with it.
+  let carriedIn = 0;
+  for (const debt of Array.isArray(opts.owedLengths) ? opts.owedLengths : []) {
+    if (!debt || typeof debt !== 'object' || typeof debt.table !== 'string' || !debt.table) continue;
+    owed.lengths.set(debt.table.toLowerCase(), { ...debt, table: debt.table.toLowerCase(), tried: false });
+    carriedIn += 1;
+  }
   try {
     return await runSdkBuildPhases(spec, opts, owed);
   } catch (err) {
@@ -2203,6 +2227,12 @@ async function runSdkBuild(spec, opts = {}) {
         Object.defineProperty(err, 'owedPublishes', { value: [...owed.tables.values()], enumerable: false, configurable: true, writable: true });
         Object.defineProperty(err, 'owedPaid', { value: owed.paid, enumerable: false, configurable: true, writable: true });
       } catch { /* a frozen error carries nothing; the re-run saves the views again and owes their publish */ }
+    }
+    // Also when nothing is owed any more but an attempt was handed a debt: the empty list is how the caller learns it was paid.
+    if ((owed.lengths.size > 0 || carriedIn > 0) && err && typeof err === 'object') {
+      try {
+        Object.defineProperty(err, 'owedLengths', { value: [...owed.lengths.values()], enumerable: false, configurable: true, writable: true });
+      } catch { /* a frozen error carries nothing; a run that finds the table leaves its name column as it is, which the warning said */ }
     }
     throw err;
   }
@@ -2392,7 +2422,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
@@ -6988,4 +7018,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten };

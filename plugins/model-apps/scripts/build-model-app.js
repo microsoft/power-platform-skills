@@ -16,7 +16,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
@@ -633,6 +633,11 @@ async function buildModelApp(spec, opts, deps) {
   // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
   // (`owedPaid`), and the final halt settles the rest.
   const owedAcrossAttempts = new Map();
+  // What failed attempts still owe for the primary name column of a table they created and did not finish setting the length of
+  // (sdk-build.js: `owedLengths` on the halt, the records the data-model phase keeps). Handed to every attempt, which pays what it can
+  // at the end of its own data-model phase; what a halt carries replaces it, being everything that is still owed. A halt that carries
+  // no list (one thrown before the engine, or by a stand-in for it) leaves it as it was.
+  let owedLengths = [];
   let r;
   for (let attempt = 1; ; attempt++) {
     counts.ok = counts.skip = counts.error = 0; // summary reflects the final (successful) attempt
@@ -640,6 +645,7 @@ async function buildModelApp(spec, opts, deps) {
       r = await runBuild(spec, {
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
+        owedLengths,
         apply: opts.apply,
         sampleData: opts.sampleData,
         publish: opts.publish,
@@ -671,6 +677,7 @@ async function buildModelApp(spec, opts, deps) {
     } catch (err) {
       if (err && err.owedPaid) owedAcrossAttempts.clear();
       collectOwedPublishes(owedAcrossAttempts, err && err.owedPublishes);
+      if (err && Array.isArray(err.owedLengths)) owedLengths = err.owedLengths;
       if (attempt <= maxRetries && isTransientHalt(err, { spec })) {
         const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
         if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
@@ -686,6 +693,8 @@ async function buildModelApp(spec, opts, deps) {
       // retry follows now (see settleOwedPublishes, sdk-build.js). Best-effort, so the halt below is still
       // what this run reports.
       await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn);
+      // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
+      await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
       if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
       throw err;
     }

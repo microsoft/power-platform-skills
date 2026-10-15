@@ -576,3 +576,32 @@ test('primary column length: the step is planned AND counted, so [n/total] never
     assert.deepStrictEqual(updates, read === 120 ? [] : [['cr_candidate', 'cr_name', { maxLength: 120 }]], what);
   }
 });
+
+test('a key over the name column of a table whose length is set waits for it: the plan lists it after the length step, the apply makes it there, and n never passes total', async () => {
+  const keyed = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [{
+      schemaName: 'cr_candidate', displayName: 'Candidate', primaryAttribute: { schemaName: 'cr_name', maxLength: 120 }, columns: [{ schemaName: 'cr_code', type: 'Text' }],
+      alternateKeys: [{ schemaName: 'cr_code_key', columns: ['cr_code'] }, { schemaName: 'cr_name_key', columns: ['cr_name'] }],
+    }],
+    relationships: [],
+  };
+  const dry = await provisionEntities(keyed, { apply: false }, mockDeps());
+  assert.deepStrictEqual(dry.plan, [
+    'solution Default', 'table cr_candidate', 'column cr_candidate.cr_code (Text)', 'alt key cr_candidate.cr_code_key', 'primary column length cr_candidate.cr_name', 'alt key cr_candidate.cr_name_key',
+  ]);
+
+  const d = mockDeps();
+  const order = [];
+  d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: 850 } } : { status: 404, body: null }) };
+  d.sdk.updateColumn = async () => { order.push('updateColumn'); return {}; };
+  d.sdk.createAlternateKey = async (table, options) => { order.push(`createAlternateKey ${options.schemaName}`); return {}; };
+  const events = [];
+  const r = await provisionEntities(keyed, { apply: true }, { sdk: d.sdk, provision: d.provision, emit: (e) => events.push(e), warn: () => {} });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(order, ['createAlternateKey cr_code_key', 'updateColumn', 'createAlternateKey cr_name_key'], 'the key over the name column is made once its length is set');
+  const done = events.filter((e) => e.status !== 'start');
+  assert.ok(events.every((e) => e.n <= e.total), 'no step emits n > total');
+  assert.strictEqual(done[done.length - 1].n, done[0].total, 'the last step is the total');
+  assert.strictEqual(done[done.length - 1].label, 'alt key cr_candidate.cr_name_key');
+});

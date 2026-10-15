@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, relationshipsInCreateOrder } = require('./lib/entity-provision.js');
-const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength } = require('./lib/app-spec.js');
+const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength, keyWaitsForNameLength } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 
@@ -111,7 +111,7 @@ function buildPlan(input, opts) {
       plan.push(`status reason ${e.schemaName}: ${sr.label}`);
     }
     for (const k of e.alternateKeys || []) {
-      plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+      if (!keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
     }
   }
   
@@ -128,6 +128,13 @@ function buildPlan(input, opts) {
   // After the relationships: where provisionDataModel sets the length of a table it creates (computeTotal counts the step too).
   for (const e of input.entities || []) {
     if (askedPrimaryNameLength(e) !== undefined) plan.push(`primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}`);
+  }
+  // Then the alternate keys over a name column whose length is set: the apply makes such a key once that length is right
+  // (keyWaitsForNameLength), where a table it creates has it. computeTotal counts them with the other keys.
+  for (const e of input.entities || []) {
+    for (const k of e.alternateKeys || []) {
+      if (keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+    }
   }
 
   if (opts.sampleData && input.sampleData) {

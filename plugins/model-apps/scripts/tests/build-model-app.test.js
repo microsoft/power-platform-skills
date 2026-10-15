@@ -549,6 +549,101 @@ test('the names an earlier attempt recorded for a debt are kept when a later att
   assert.deepStrictEqual(warnings.filter((w) => /FAILED/.test(w)).map((w) => w.replace(/ FAILED:.*/, '')), ['the build stopped before its publish phase; publish view Open Tickets, form Ticket']);
 });
 
+// What a failed attempt still owes for the primary name column of a table it created (`owedLengths`, from runSdkBuild in sdk-build.js) is
+// carried the same way: handed to the next attempt, replaced by what that attempt reports, and — for what no attempt got as far as —
+// settled once no retry follows.
+const lengthDebt = (table = 'new_ticket', extra = {}) => ({ table, column: 'new_name', asked: 120, tried: false, ...extra });
+const owingLengths = (message, owedLengths) => Object.defineProperties(new Error(message), { owedLengths: { value: owedLengths } });
+async function attemptsOf(errors, { spec = desk, configure } = {}) {
+  const { sdk } = mockSdk();
+  if (configure) configure(sdk);
+  const handed = [];
+  const warnings = [];
+  let n = 0;
+  const runBuild = async (_spec, options) => {
+    handed.push(options.owedLengths);
+    const next = errors[n++];
+    if (next instanceof Error) throw next;
+    return { ok: true, created: {}, skipped: { layout: [] } };
+  };
+  const outcome = await buildModelApp(spec, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, discoverOpDiffState: async () => quietState, warn: (m) => warnings.push(m) })
+    .then((result) => ({ result }), (error) => ({ error }));
+  return { handed, warnings, attempts: n, ...outcome };
+}
+// The support desk with a name column length asked of its Ticket table, and an SDK that can read and set it.
+const deskAskingALength = () => { const spec = jclone(desk); spec.entities.find((e) => e.schemaName === 'new_ticket').primaryAttribute.maxLength = 120; return spec; };
+function lengthSdk(sdk, { current = 850, update } = {}) {
+  const writes = [];
+  const reads = [];
+  sdk.dataverse = { get: async (url) => { reads.push(url); return { status: 200, headers: {}, body: { MaxLength: current } }; } };
+  sdk.updateColumn = async (table, column, changes) => { writes.push([table, column, changes]); if (update) await update(); };
+  return { writes, reads };
+}
+
+test('the name column lengths a failed attempt still owes are handed to the next attempt, and what that attempt reports takes their place', async () => {
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), owingLengths(TRANSIENT, []), null]);
+  assert.strictEqual(out.result.ok, true);
+  assert.deepStrictEqual(out.handed, [[], [lengthDebt()], []], 'the first attempt is handed nothing; the second what the first owed; the third what the second left — nothing');
+});
+
+test('a halt that carries no record of the lengths leaves what was owed as it was', async () => {
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error(TRANSIENT), null]);
+  assert.strictEqual(out.result.ok, true);
+  assert.deepStrictEqual(out.handed, [[], [lengthDebt()], [lengthDebt()]]);
+});
+
+test('a halt with a record that is not a list of debts is not taken for one', async () => {
+  for (const odd of ['new_ticket', { new_ticket: lengthDebt() }, null, 7]) {
+    const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), owingLengths(TRANSIENT, odd), null]);
+    assert.strictEqual(out.result.ok, true);
+    assert.deepStrictEqual(out.handed, [[], [lengthDebt()], [lengthDebt()]], JSON.stringify(odd));
+  }
+});
+
+test('a halt no retry follows sets the length of a table whose debt no attempt tried, once, and reports the halt', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
+  assert.match(out.error.message, /bad request/, 'the halt is what is reported');
+  assert.strictEqual(out.attempts, 2);
+  assert.deepStrictEqual(spy.writes, [['new_ticket', 'new_name', { maxLength: 120 }]], 'the length asked, written once');
+  assert.strictEqual(spy.reads.length, 1, 'after one read of the column');
+  assert.deepStrictEqual(out.warnings, []);
+});
+
+test('what an attempt already tried is not settled again, and a build that owes nothing settles nothing', async () => {
+  for (const [what, errors] of [
+    ['a debt an attempt tried', [owingLengths(TRANSIENT, [lengthDebt('new_ticket', { tried: true })]), new Error('bad request')]],
+    ['no debt', [new Error(TRANSIENT), new Error('bad request')]],
+    ['a debt paid by the attempt after', [owingLengths(TRANSIENT, [lengthDebt()]), owingLengths('bad request', [])]],
+    ['a debt for a table the spec asks no length of', [owingLengths(TRANSIENT, [lengthDebt('new_customer')]), new Error('bad request')]],
+  ]) {
+    let spy;
+    const out = await attemptsOf(errors, { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
+    assert.match(out.error.message, /bad request/, what);
+    assert.deepStrictEqual([spy.reads, spy.writes], [[], []], `${what}: nothing is read or written`);
+    assert.deepStrictEqual(out.warnings, [], what);
+  }
+});
+
+test('a build that succeeds after a retry settles nothing: what the retry owed it paid or reported itself', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), null], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
+  assert.strictEqual(out.result.ok, true);
+  assert.deepStrictEqual([spy.reads, spy.writes], [[], []]);
+});
+
+test('a settle that cannot set the length warns, names the table and the length, and the halt is still what is reported', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], {
+    spec: deskAskingALength(),
+    configure: (sdk) => { spy = lengthSdk(sdk, { update: async () => { throw new Error('the update was refused'); } }); },
+  });
+  assert.match(out.error.message, /bad request/);
+  assert.strictEqual(spy.writes.length, 1);
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120 .*asked 120, the platform made 850: the update was refused/);
+});
+
 test('transient auto-retry: no retries in dry-run', async () => {
   const { sdk } = mockSdk();
   const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });

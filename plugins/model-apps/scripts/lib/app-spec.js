@@ -879,6 +879,28 @@ function askedPrimaryNameLength(entity) {
   return asked === undefined || asked === null ? undefined : asked;
 }
 
+// Whether an alternate key must wait for its table's primary name column to get the length the spec asks for. The one rule behind the
+// data-model phase and both plans, so that they cannot disagree about where such a key is made: true when the spec asks the name
+// column for a length (askedPrimaryNameLength), the key holds that column, and the key's label is a plain string, not a language map.
+//
+// The platform validates a key when it is created, and a key may hold at most 900 bytes — 2 for each character of a text column.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+// A new table's name column is created asking for a length, but some environments make it 850 characters (1,700 bytes) whatever is
+// asked (DEFAULT_PRIMARY_NAME_LENGTH, lib/entity-provision.js), so a key over it can be created only once the build has set the
+// length the spec asks for. The build does that LAST in the phase: the SDK's update reads the column with its labels, and a read that
+// carries labels ahead of a create that carries several languages is what makes Dataverse keep only the base one. A key labelled with
+// a plain string carries one language, which such a read has nothing to strip, so it may follow the step; a key labelled with a language
+// map keeps the place it has always had, ahead of it (as every label map is treated in this file: `isLocalizedLabelMap`).
+//
+// This is the half of the rule the spec decides. The other half is the build's: a table that already existed is never written to, so
+// its keys are made where they always were, and only a table whose length is still to be set (one this build created, or one a failed
+// attempt of the same build left unset) makes its keys wait.
+function keyWaitsForNameLength(entity, key) {
+  if (askedPrimaryNameLength(entity) === undefined || !key || isLocalizedLabelMap(key.displayName) || !Array.isArray(key.columns)) return false;
+  const name = String(entity.primaryAttribute.schemaName || '').toLowerCase();
+  return name !== '' && key.columns.some((column) => String(column).toLowerCase() === name);
+}
+
 // The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
 // ENTITY_KEYS (#537). The levels name their title differently — areas and groups take `label`,
 // subareas take `title` — and a key with no reader was accepted and dropped: an area written with
@@ -4230,6 +4252,7 @@ module.exports = {
   PRIMARY_NAME_MAX_LENGTH,
   primaryNameLengthProblem,
   askedPrimaryNameLength,
+  keyWaitsForNameLength,
   validateSampleDataRows,
   normalizePageSource,
   normalizeLanguageCode,

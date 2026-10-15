@@ -478,13 +478,26 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   `maxLength`, it is not reconciled afterwards; to change it on an existing table, change it in Maker. If
   the length cannot be set after the create, the build reports a failed `primary column length` step that
   names the table, the length asked and the length the platform made, and goes on — or, when the data model
-  stopped first, says so, and that a re-run leaves the column as it is. One exception to
+  stopped first, says so, and that a later run leaves the column as it is (the build's own automatic retry of a
+  transient failure is not a later run: it sets the length the stopped attempt could not, and says so). One exception to
   "applied when the table is created": a table the build finds **after** its create — the answer to the
   create was lost, or another maker created the table first — is not written to, because nothing shows that
   this build made it. The build reads its name column's length once instead, and warns when it is not the
   length the spec asks for (or cannot be read). A build that stops because the table was created but cannot
   be read back yet (`TABLE_METADATA_NOT_VISIBLE`) warns that the length may not have been applied, since a
   re-run leaves an existing table's name column alone.
+- **A key over the name column — give the column a `maxLength`.** A key may hold at most 900 bytes (2 for
+  each character of text), and some environments make a new name column 850 characters long whatever length
+  the table's create asks for, so Dataverse refuses a key over it. When the spec gives the name column a
+  `maxLength` and a table's `alternateKeys[]` entry holds that column, the build makes the key after it has
+  set the length — so the first build succeeds — and does not send it when the length could not be set: it stops
+  with a message that says why and what to do instead of the platform's refusal. Keep the key within 900 bytes
+  (at most 450 characters when the name column is its only column). Without a `maxLength` the build leaves the
+  column as the environment made it and makes the key with its table, so on such an environment the key is
+  refused: give one. A key whose `displayName` is a language map (`{ "1033": "…", "3082": "…" }`) is made before
+  the length is set, because the update that sets the length reads the column with its labels, and Dataverse keeps
+  only the base language of a create that comes straight after such a read; so it can stop a first build on such
+  an environment (a re-run makes it).
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
 

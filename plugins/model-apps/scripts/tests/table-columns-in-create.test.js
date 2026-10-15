@@ -40,6 +40,9 @@ const tableId = (schema) => `${hex(hash(`table.${schema}`), 8)}-0000-4000-8000-$
 const duplicateAttribute = (name, table) => ({ status: 400, headers: {}, body: { error: { code: '0x80060304', message: `Attribute ${name} already exists for entity ${table}.` } } });
 // Columns every table gets from the platform, whatever the request says.
 const SYSTEM_COLUMNS = ['createdon', 'modifiedon', 'ownerid', 'statecode', 'statuscode'];
+// The most bytes an alternate key may hold. A text column takes 2 bytes a character, so a name column of 450 characters is the longest
+// that can be in a key alone — and the 850 characters some environments make of a new name column are far too long.
+const KEY_BYTES_LIMIT = 900;
 // The columns a column creates beside itself: a Money column its base-currency twin, a choice or a Boolean its `<name>name`
 // shadow, a Customer lookup its three shadows `<name>name`, `<name>yominame` and `<name>idtype` (measured), a File column the
 // `<name>_name` that holds the file's name, an Image column its `<name>id`, `<name>_timestamp` and `<name>_url`, and a rollup
@@ -127,7 +130,8 @@ function fakeDataverse({
   lookupLag = 0,               // how many reads of a new table BY NAME answer 404 before it shows (the metadata-read lag)
   keepsAskedLength = false,    // the environment that keeps the length asked of a plain text primary column in a one-attribute create
   lengthRead = null,           // (n) => response | undefined; overrides the typed read of a text column's MaxLength
-  updateFails = null,          // (body) => response, for the PUT of a typed column
+  updateFails = null,          // (body) => response | falsy, for the PUT of a typed column; a falsy answer lets it through
+  keyFails = null,             // (body, table) => response | falsy, for the request that creates an alternate key; a falsy answer lets it through
   extraCompanions = null,      // (body) => names the platform makes beside a column that nothing in the build lists
 } = {}) {
   const log = [];
@@ -233,7 +237,7 @@ function fakeDataverse({
         const logical = String(body.SchemaName).toLowerCase();
         if (tables.has(logical)) return refuse(p, reply(400, { error: { message: `Entities already exist: ${body.SchemaName}` } }));
         const table = {
-          id: tableId(body.SchemaName), logical, primaryName: String(body.Attributes[0].SchemaName).toLowerCase(), columns: new Map(),
+          id: tableId(body.SchemaName), logical, primaryName: String(body.Attributes[0].SchemaName).toLowerCase(), columns: new Map(), keys: new Map(),
           reserved: new Set([`${logical}id`, ...SYSTEM_COLUMNS]), lagReads: lookupLag,
           // What the platform makes of the primary name column's length in a create that carries only that column (measured on two
           // environments): one keeps the length asked, the other makes a plain text column 850 whatever length was asked and keeps
@@ -254,6 +258,29 @@ function fakeDataverse({
         if (collision) return refuse(p, duplicateAttribute(collision, t.logical));
         addColumn(t, body);
         return created(`EntityDefinitions(LogicalName='${m[1]}')/Attributes(${attributeId(t.logical, body.SchemaName)})`);
+      }
+      // The request that creates an alternate key. The platform validates a key when it is created: its columns must exist, and the
+      // key's total size must stay within what an index holds — 900 bytes, 2 for each character of a text column. This stub refuses a
+      // key that is too large with a message of its own: the rule is the platform's, the wording is not.
+      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+      if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Keys$/.exec(p))) {
+        const t = tables.get(m[1]);
+        if (!t) return reply(404, { error: { message: `no table ${m[1]}` } });
+        const failure = keyFails && keyFails(body, t);
+        if (failure) return refuse(p, failure);
+        const name = String(body.SchemaName).toLowerCase();
+        if (t.keys.has(name)) return refuse(p, reply(400, { error: { message: `A key with the same name already exists on ${t.logical}.` } }));
+        let bytes = 0;
+        for (const attribute of body.KeyAttributes) {
+          const column = t.columns.get(attribute);
+          if (!column) return refuse(p, reply(400, { error: { message: `The key column ${attribute} does not exist on ${t.logical}.` } }));
+          const isText = /StringAttributeMetadata$/.test(String(column.body['@odata.type']));
+          bytes += isText ? 2 * (attribute === t.primaryName ? t.primaryLength : (column.body.MaxLength || 100)) : 8;
+        }
+        if (bytes > KEY_BYTES_LIMIT) return refuse(p, reply(400, { error: { message: `The key ${body.SchemaName} is ${bytes} bytes long; a key may hold at most ${KEY_BYTES_LIMIT}.` } }));
+        const id = attributeId(t.logical, `key.${body.SchemaName}`);
+        t.keys.set(name, { body: clone(body), id });
+        return created(`EntityDefinitions(LogicalName='${m[1]}')/Keys(${id})`);
       }
       if (p === '/CreateCustomerRelationships') {
         const t = tables.get(body.OneToManyRelationships[0].ReferencingEntity);
@@ -279,7 +306,10 @@ function fakeDataverse({
       log.push({ method: 'PUT', path: p, body: clone(body), headers: (options && options.headers) || {} });
       const m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Attributes\(([0-9a-f-]{36})\)$/.exec(p);
       if (!m) throw new Error(`unexpected PUT ${p}`);
-      if (updateFails) return refuse(p, updateFails(body));
+      if (updateFails) {
+        const failure = updateFails(body);
+        if (failure) return refuse(p, failure);
+      }
       const t = tables.get(m[1]);
       const column = t && [...t.columns.values()].find((c) => c.row.MetadataId === m[2]);
       if (!column) return reply(404, { error: { message: `no column ${m[2]}` } });
@@ -1997,3 +2027,573 @@ test('the primary column length step is planned exactly when the spec asks for a
     assert.strictEqual(run.events.filter((e) => e.status !== 'start').length, planned.length, `${what}: as many steps as the plan has, so n never passes total`);
   }
 });
+
+// --- an alternate key over a new table's name column -----------------------------------------------------------------------------
+// The platform validates a key when it is created, and a key may hold at most 900 bytes (KEY_BYTES_LIMIT, 2 a character of text). The
+// name column of a new table has the length the spec asks for only once the length step has run — last in the phase, because its read
+// carries labels (see the order tests above) — and an environment that ignores the length asked of the create makes it 850 characters,
+// 1,700 bytes: far too long for a key. So a key over the name column of a table whose length is still to be set waits for that step,
+// and is not asked for when the step failed.
+
+const NAME_KEY = { schemaName: 'new_namekey', displayName: 'Name Key', columns: ['new_name'] };
+// One table with a name column as given and the alternate keys given, beside a text column `new_code`.
+function keyedTable(keys, primaryAttribute = asksFor(120), columns = [textColumn('new_code')]) {
+  const spec = oneTable(columns, primaryAttribute);
+  spec.entities[0].alternateKeys = keys;
+  return spec;
+}
+const keyPosts = (run) => posts(run).filter((r) => /\/Keys$/.test(r.path));
+const finished = (run) => run.events.filter((e) => e.status !== 'start').map((e) => [e.status, e.label]);
+
+test('an alternate key over a new table\'s name column is created after the length is set: the first build succeeds where the platform made the column too long for a key', async () => {
+  // The stub's default is the environment that makes a new name column 850 characters whatever length the create asks for.
+  const run = await provisionOver(keyedTable([NAME_KEY]));
+  const table = run.dv.tables.get('new_ticket');
+  assert.strictEqual(table.primaryLength, 120, 'the name column has the length the spec asks for');
+  assert.deepStrictEqual([...table.keys.keys()], ['new_namekey'], 'and the key exists after the first build');
+  assert.deepStrictEqual(run.dv.refusals, [], 'the platform refused nothing');
+  assert.deepStrictEqual(finished(run).slice(-2), [['ok', 'primary column length new_ticket.new_name -> 120'], ['ok', 'alt key new_ticket.new_namekey']], 'the length step, then the key');
+  const lines = run.dv.log.map(requestLine);
+  assert.ok(lines.findIndex((l) => l.startsWith('PUT ')) < lines.findIndex((l) => /\/Keys$/.test(l)), 'the length is written before the key is asked for');
+  assert.strictEqual(keyPosts(run).length, 1, 'the key is asked for once');
+  assert.deepStrictEqual(run.warnings, []);
+});
+
+test('where the environment keeps the length asked, the key still follows the length step — which is a skip, and writes nothing', async () => {
+  const run = await provisionOver(keyedTable([NAME_KEY]), { dataverse: HONOURING });
+  assert.deepStrictEqual(puts(run), [], 'the column is already the length asked');
+  assert.deepStrictEqual(finished(run).slice(-2), [['skip', 'primary column length new_ticket.new_name (already 120)'], ['ok', 'alt key new_ticket.new_namekey']]);
+  assert.strictEqual(run.dv.tables.get('new_ticket').keys.size, 1);
+  assert.deepStrictEqual(run.warnings, []);
+});
+
+test('a key over the name column among other columns waits too, and a second key that needs no length is created where it always was', async () => {
+  const keys = [{ schemaName: 'new_pairkey', columns: ['new_code', 'new_name'] }, { schemaName: 'new_codekey', columns: ['new_code'] }];
+  const run = await provisionOver(keyedTable(keys));
+  assert.deepStrictEqual(finished(run).map(([, label]) => label), [
+    'table new_ticket', 'column new_ticket.new_code (Text)', 'alt key new_ticket.new_codekey', 'primary column length new_ticket.new_name -> 120', 'alt key new_ticket.new_pairkey',
+  ], 'the key without the name column is made with its table, the other after the length step');
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()].sort(), ['new_codekey', 'new_pairkey']);
+});
+
+// Where each kind of key is made, against a second table, a relationship and the length step. The doubles record the order of every
+// write. A key that needs no length keeps the place it has always had — with its table, before the next one — and only a key over a
+// name column whose length is still to be set moves, to after the length step.
+const KEYED_PAIR = (key, primaryAttribute = { schemaName: 'new_n', maxLength: 120 }) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [
+    { schemaName: 'new_a', displayName: 'A', primaryAttribute, columns: [textColumn('new_x')], alternateKeys: [key] },
+    { schemaName: 'new_b', displayName: 'B', primaryAttribute: { schemaName: 'new_m' }, columns: [] },
+  ],
+  relationships: [{ type: 'OneToMany', referenced: 'new_a', referencing: 'new_b', schemaName: 'new_a_b', lookup: { schemaName: 'new_aid', displayName: 'A' } }],
+});
+const A_FIRST = ['createTable new_a', 'createColumns new_a new_x'];
+const THEN_B = ['createTable new_b', 'createRelationship new_a_b'];
+const KEY_ON_A = 'createAlternateKey new_a.new_k';
+const SET_A_LENGTH = 'updateColumn new_a.new_n {"maxLength":120}';
+
+test('where a key is made: after the length step only when it holds the name column of a table whose length is still to be set — every other key keeps its place', async (t) => {
+  for (const [what, spec, existing, expected] of [
+    ['a key over the name column of a new table whose spec asks for a length', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'] }), [],
+      [...A_FIRST, ...THEN_B, SET_A_LENGTH, KEY_ON_A]],
+    ['the same with the column named in capitals: logical names are lower case', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_N'] }), [],
+      [...A_FIRST, ...THEN_B, SET_A_LENGTH, KEY_ON_A]],
+    ['a key over the name column and another column', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_x', 'new_n'] }), [],
+      [...A_FIRST, ...THEN_B, SET_A_LENGTH, KEY_ON_A]],
+    ['a key over another column: it needs no length', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_x'] }), [],
+      [...A_FIRST, KEY_ON_A, ...THEN_B, SET_A_LENGTH]],
+    ['a key over the name column when the spec asks for no length: there is no length step to wait for', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'] }, { schemaName: 'new_n' }), [],
+      [...A_FIRST, KEY_ON_A, ...THEN_B]],
+    ['a key over the name column whose label is in several languages: a read that carries labels must not come before it', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 1033: 'Key', 3082: 'Clave' } }), [],
+      [...A_FIRST, KEY_ON_A, ...THEN_B, SET_A_LENGTH]],
+    ['a label map of one language is a label map as everywhere in the build: the key keeps its place', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 1033: 'Key' } }), [],
+      [...A_FIRST, KEY_ON_A, ...THEN_B, SET_A_LENGTH]],
+    ['a key over the name column of a table that already existed: its name column is never written', KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'] }), ['new_a'],
+      ['createColumn new_a.new_x', KEY_ON_A, ...THEN_B]],
+  ]) {
+    await t.test(what, async () => {
+      const doubles = orderDoubles({ existing });
+      await runOrder(doubles, spec);
+      assert.deepStrictEqual(doubles.calls, expected);
+    });
+  }
+});
+
+test('a name column key that waits is created once, with the options the inline key has — and a key over a column that is not the name column has them where it always did', async () => {
+  const doubles = orderDoubles();
+  const seen = [];
+  const createAlternateKey = doubles.sdk.createAlternateKey;
+  doubles.sdk.createAlternateKey = async (table, options) => { seen.push([table, options]); return createAlternateKey(table, options); };
+  await runOrder(doubles, KEYED_PAIR({ schemaName: 'new_k', displayName: 'The Key', columns: ['new_N'] }));
+  assert.deepStrictEqual(seen, [['new_a', { schemaName: 'new_k', displayName: 'The Key', keyAttributes: ['new_n'], languageCode: 1033 }]]);
+});
+
+test('a table found after the answer to its create was lost keeps its keys where they were: nothing shows that this build made it, so its name column is not written for a key', async () => {
+  const run = await provisionOver(keyedTable([NAME_KEY]), { dataverse: { createCommitsThenFails: lostAnswer }, capture: true });
+  assert.deepStrictEqual(puts(run), [], 'the column is left alone');
+  assert.strictEqual(keyPosts(run).length, 1, 'and the key is asked for where it always was');
+  assert.ok(run.error instanceof BuildHalt && run.error.code !== 'alt-key-name-length-not-set', 'where the platform refuses it, as it did before');
+});
+
+test('a key that waits for a length that could not be set is not asked for: the build stops there and says why, in words of its own', async () => {
+  const refuse = () => ({ status: 400, headers: {}, body: { error: { message: 'The attribute cannot be changed right now' } } });
+  const run = await provisionOver(keyedTable([NAME_KEY]), { dataverse: { updateFails: refuse }, capture: true });
+  assert.ok(run.error instanceof BuildHalt, 'the build stops');
+  assert.strictEqual(run.error.code, 'alt-key-name-length-not-set');
+  assert.strictEqual(run.error.phase, 'data-model');
+  assert.strictEqual(run.error.recoverable, true, 'a re-run can finish it');
+  assert.deepStrictEqual(keyPosts(run), [], 'no request was sent for the key, so the platform said nothing about it');
+  assert.match(run.error.message, /^data-model failed: alt key new_ticket\.new_namekey was not created: .*\bnew_name\b.*\b120\b/);
+  assert.match(run.error.message, /The attribute cannot be changed right now/, 'with what stopped the length from being set');
+  assert.match(run.error.message, /900 bytes/, 'and why a key needs it');
+  assert.match(run.error.message, /Maker/, 'and what to do');
+  assert.deepStrictEqual(run.events.filter((e) => e.status === 'error').map((e) => e.label), ['primary column length new_ticket.new_name -> 120', 'alt key new_ticket.new_namekey'], 'both steps are narrated as failed, the length first');
+  assert.strictEqual(run.warnings.length, 1, 'and the length is warned about once, as ever');
+  assert.match(run.warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120/);
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 850);
+  assert.strictEqual(run.dv.tables.get('new_ticket').keys.size, 0);
+});
+
+test('a key that could not wait for the length fails the way the length step failed: a 429 or a 503 is the build\'s to retry, a refusal is not', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const answer = (status, message) => () => ({ status, headers: {}, body: { error: { message } } });
+  for (const [what, failure, transient] of [
+    ['the update is throttled (429)', { updateFails: answer(429, 'Cannot start another [EntityCustomization] because there is a previous [EntityCustomization] running.') }, true],
+    ['the update gets a 503', { updateFails: answer(503, 'Service Unavailable') }, true],
+    ['the length cannot be read (503)', { lengthRead: answer(503, 'Service Unavailable') }, true],
+    ['the update is refused (400)', { updateFails: answer(400, 'The attribute cannot be changed right now') }, false],
+    ['the length cannot be read (500)', { lengthRead: answer(500, 'An unexpected error occurred.') }, false],
+  ]) {
+    const run = await provisionOver(keyedTable([NAME_KEY]), { dataverse: failure, capture: true });
+    assert.strictEqual(run.error && run.error.code, 'alt-key-name-length-not-set', what);
+    assert.strictEqual(isTransientHalt(run.error), transient, what);
+    assert.deepStrictEqual(keyPosts(run), [], `${what}: the key is not asked for`);
+  }
+});
+
+test('a key that waits and that the platform then refuses, or finds already there, is treated as any key is: the platform\'s own words stop the build, an already-exists answer is a skip', async () => {
+  const refusedKey = await provisionOver(keyedTable([NAME_KEY]), {
+    dataverse: { keyFails: () => ({ status: 400, headers: {}, body: { error: { message: 'The key column new_name is not valid in a key.' } } }) }, capture: true,
+  });
+  assert.ok(refusedKey.error instanceof BuildHalt && /The key column new_name is not valid in a key\./.test(refusedKey.error.message), 'the platform\'s words');
+  assert.notStrictEqual(refusedKey.error.code, 'alt-key-name-length-not-set', 'not the build\'s own refusal: the length was set');
+  assert.strictEqual(refusedKey.dv.tables.get('new_ticket').primaryLength, 120);
+  const there = await provisionOver(keyedTable([NAME_KEY]), {
+    dataverse: { keyFails: () => ({ status: 400, headers: {}, body: { error: { message: 'A key with the same name already exists on new_ticket.' } } }) },
+  });
+  assert.deepStrictEqual(finished(there).slice(-1), [['skip', 'alt key new_ticket.new_namekey (exists)']]);
+});
+
+// What the build's own retry does with a name column length that an attempt which created the table left unset. The build runs a phase
+// that halts on a transient answer again (build-model-app.js); the attempt that created the table sets the length in its `finally`, but
+// that step can fail too — the lock that stopped the phase may still be held — and the retry, which finds the table, used to leave its
+// name column as it found it. What an attempt still owes is carried to the next one the way what it owes for the views and forms it
+// saved is (`owedLengths`, sdk-build.js runSdkBuild), and paid at the end of that attempt's data-model phase.
+//
+// These run the real retry loop over the real engine (runSdkBuild, data-model phase), the real SDK and the stub. `faults` says how the
+// stub misbehaves: the first N requests of a kind answer 503 — and, for the writes of the table, change nothing.
+async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {} } = {}) {
+  const { buildModelApp } = require('../build-model-app.js');
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const dv = fakeDataverse(dataverse);
+  const left = { createTable: faults.createTable || 0, createFile: faults.createFile || 0, setLength: faults.setLength || 0 };
+  const refuse503 = (what, path, body) => { dv.log.push({ method: what, path: `(503) ${path}`, body }); return { status: 503, headers: {}, body: { error: { message: 'Service Unavailable' } } }; };
+  // `failWrite(n)` refuses the n-th write of the whole build (a POST or a PUT, counted across the attempts) when it answers true.
+  let writes = 0;
+  const failThisWrite = () => { writes += 1; return !!(faults.failWrite && faults.failWrite(writes)); };
+  const post = dv.httpClient.post;
+  dv.httpClient.post = async (url, body, options) => {
+    const p = String(url).replace(API, '');
+    if (failThisWrite()) return refuse503('POST', p, body);
+    if (left.createTable > 0 && p === '/EntityDefinitions') { left.createTable -= 1; return refuse503('POST', p, body); }
+    if (left.createFile > 0 && /\/Attributes$/.test(p) && body && body.SchemaName === 'new_attachment') { left.createFile -= 1; return refuse503('POST', p, body); }
+    return post(url, body, options);
+  };
+  const put = dv.httpClient.put;
+  dv.httpClient.put = async (url, body, options) => {
+    if (failThisWrite()) return refuse503('PUT', String(url).replace(API, ''), body);
+    if (left.setLength > 0) { left.setLength -= 1; return refuse503('PUT', String(url).replace(API, ''), body); }
+    return put(url, body, options);
+  };
+  const sdk = await realSdk(dv.httpClient);
+  const attempts = [];
+  const events = [];
+  const warnings = [];
+  const runBuild = async (builtSpec, options) => {
+    const attempt = { number: attempts.length + 1, from: dv.log.length, owedIn: options.owedLengths };
+    attempts.push(attempt);
+    try {
+      return await runSdkBuild(builtSpec, {
+        ...options, phases: ['data-model'], preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033, 3082],
+        emit: (e) => events.push({ attempt: attempt.number, ...e }), warn: (m) => warnings.push({ attempt: attempt.number, text: m }),
+      });
+    } catch (err) {
+      attempt.owedOut = err.owedLengths;
+      attempt.owedOutVisible = Object.keys(err).includes('owedLengths');
+      throw err;
+    } finally {
+      attempt.to = dv.log.length;
+    }
+  };
+  const journal = [];
+  const result = await buildModelApp(spec, { apply: true, env: ORG, retryDelayMs: 0 }, {
+    sdk, provisionSdk: sdk, runBuild,
+    journal: { path: 'x', record: (e) => journal.push(e), close: () => {} },
+    discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+  });
+  const requests = (n) => dv.log.slice(attempts[n - 1].from, attempts[n - 1].to);
+  const steps = (n, pattern) => events.filter((e) => e.attempt === n && e.status !== 'start' && pattern.test(e.label)).map((e) => `${e.status} ${e.label}`);
+  return { result, dv, attempts, events, warnings, journal, requests, steps, retries: journal.filter((e) => e.status === 'retry').length };
+}
+
+// A table with a File column, which has its own request (so a fault can hit it), and a name column of 120 characters, with a key over
+// the name column unless told otherwise.
+function retriedTicket({ key = true } = {}) {
+  return {
+    app: { name: 'Ticket Desk' },
+    solution: { uniqueName: 'TableColumns', publisherPrefix: 'new' },
+    relationships: [],
+    entities: [{
+      schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name', displayName: 'Name', maxLength: 120 },
+      columns: [textColumn('new_title'), { schemaName: 'new_attachment', displayName: 'Attachment', type: 'File', maxSizeKb: 1024 }],
+      ...(key ? { alternateKeys: [NAME_KEY] } : {}),
+    }],
+  };
+}
+const isWrite = (r) => r.method === 'PUT' && !/^\(503\)/.test(r.path);
+const OWED = 'owed by the attempt that created the table';
+const OWED_NOTE = ` (${OWED})`;
+const owedIn = (run, attempt) => run.attempts[attempt - 1].owedIn || [];
+
+test('a transient halt after a table\'s create, where the length step cannot be set either: the retry sets the length the first attempt owed, and says so', async () => {
+  const run = await buildWithRetries(retriedTicket({ key: false }), { faults: { createFile: 1, setLength: 1 } });
+  assert.strictEqual(run.result.ok, true, 'the retry completed the build');
+  assert.strictEqual(run.retries, 1, 'one transient halt, one retry');
+  assert.deepStrictEqual(run.steps(1, /^primary column length /), ['error primary column length new_ticket.new_name -> 120'], 'the first attempt could not set it');
+  assert.deepStrictEqual(run.steps(2, /^primary column length /), [`ok primary column length new_ticket.new_name -> 120${OWED_NOTE}`], 'the retry narrates the step it owed — not "table exists — kept"');
+  assert.strictEqual(run.requests(1).filter(isWrite).length, 0, 'the first attempt wrote nothing to the column: its one update was refused');
+  assert.strictEqual(run.requests(2).filter(isWrite).length, 1, 'the retry set the length');
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120, 'and the column has the length the spec asks for');
+  assert.deepStrictEqual(run.attempts[0].owedOut, [{ table: 'new_ticket', column: 'new_name', asked: 120, tried: true }], 'the halt carries what the attempt left undone');
+  assert.strictEqual(run.attempts[0].owedOutVisible, false, 'and it rides along: it is never part of a serialized error');
+  assert.deepStrictEqual(run.attempts.map((a) => a.owedIn), [[], [{ table: 'new_ticket', column: 'new_name', asked: 120, tried: true }]], 'the first attempt is handed nothing, the retry is handed what the first owed');
+});
+
+test('the retry creates the key after the length it owed — and the first attempt, which never got that far, did not ask for it', async () => {
+  const run = await buildWithRetries(retriedTicket(), { faults: { createFile: 1, setLength: 1 } });
+  assert.strictEqual(run.result.ok, true, 'the build completed — without the fix the key is refused for a column of 850 characters and the build stops');
+  assert.strictEqual(run.retries, 1);
+  assert.deepStrictEqual(run.requests(1).filter((r) => /\/Keys$/.test(r.path)), [], 'the first attempt did not ask for the key');
+  const retry = run.requests(2).map(requestLine);
+  assert.strictEqual(retry.filter((l) => /\/Keys$/.test(l)).length, 1, 'the retry asked for it once');
+  assert.ok(retry.findIndex((l) => l.startsWith('PUT ')) < retry.findIndex((l) => /\/Keys$/.test(l)), 'after the length');
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120);
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
+  assert.deepStrictEqual(run.steps(2, /^(primary column length|alt key) /), [`ok primary column length new_ticket.new_name -> 120${OWED_NOTE}`, 'ok alt key new_ticket.new_namekey']);
+});
+
+test('what an attempt paid is not owed again: a third attempt finds the table and leaves its name column alone', async () => {
+  const run = await buildWithRetries(retriedTicket({ key: false }), { faults: { createFile: 2, setLength: 1 } });
+  assert.strictEqual(run.result.ok, true);
+  assert.strictEqual(run.retries, 2);
+  assert.deepStrictEqual(run.steps(2, /^primary column length /), [`ok primary column length new_ticket.new_name -> 120${OWED_NOTE}`], 'the second attempt halts after the table, and pays it in its `finally`');
+  assert.deepStrictEqual(run.steps(3, /^primary column length /), ['skip primary column length new_ticket.new_name (table exists — kept)']);
+  assert.strictEqual(run.requests(3).filter((r) => /StringAttributeMetadata/.test(r.path)).length, 0, 'the third attempt did not even read the column');
+  assert.strictEqual([1, 2, 3].reduce((n, a) => n + run.requests(a).filter(isWrite).length, 0), 1, 'the length was written once');
+  assert.deepStrictEqual(run.attempts.map((a) => (a.owedIn || []).length), [0, 1, 0], 'the second attempt paid it, so the third is handed nothing');
+  assert.deepStrictEqual(run.attempts[1].owedOut, [], 'and the halt of the second attempt says so');
+});
+
+test('a table that was never created is not owed: the attempt that creates it carries no debt, and its step is not worded as one', async () => {
+  const run = await buildWithRetries(retriedTicket({ key: false }), { faults: { createTable: 1 } });
+  assert.strictEqual(run.result.ok, true);
+  assert.strictEqual(run.retries, 1);
+  assert.deepStrictEqual(owedIn(run, 2), [], 'the failed create left nothing to carry');
+  assert.strictEqual(run.attempts[0].owedOut, undefined, 'and the halt of the attempt that could not create the table carries no record at all');
+  assert.deepStrictEqual(run.steps(2, /^primary column length /), ['ok primary column length new_ticket.new_name -> 120'], 'and the retry sets the length of the table it made as any build does');
+});
+
+test('where the first attempt did set the length, the retry owes nothing and finds the table as it always did', async () => {
+  const run = await buildWithRetries(retriedTicket(), { faults: { createFile: 1 } });
+  assert.strictEqual(run.result.ok, true);
+  assert.deepStrictEqual(owedIn(run, 2), []);
+  assert.deepStrictEqual(run.steps(1, /^primary column length /), ['ok primary column length new_ticket.new_name -> 120'], 'the attempt that created the table set the length in its `finally`');
+  assert.deepStrictEqual(run.steps(2, /^primary column length /), ['skip primary column length new_ticket.new_name (table exists — kept)']);
+  assert.strictEqual(run.requests(2).filter(isWrite).length, 0);
+  assert.deepStrictEqual(run.requests(1).filter((r) => /\/Keys$/.test(r.path)), [], 'the key of an attempt that halted before the length step is not asked for');
+  assert.strictEqual(run.requests(2).filter((r) => /\/Keys$/.test(r.path)).length, 1, 'the retry creates it, where a key on an existing table always was made — the length is already right');
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
+});
+
+test('a length step that fails on its own stops the build at the key that waited for it, which the build retries — and the retry sets the length and makes the key', async () => {
+  // Nothing else goes wrong: the one update of the name column's length is refused with a 503, which the build does not stop for.
+  const run = await buildWithRetries(retriedTicket(), { faults: { setLength: 1 } });
+  assert.strictEqual(run.result.ok, true, 'the build completed');
+  assert.strictEqual(run.retries, 1, 'the key that could not be asked for stopped the first attempt, and a 503 is retried');
+  assert.deepStrictEqual(run.requests(1).filter((r) => /\/Keys$/.test(r.path)), [], 'the first attempt did not ask for the key');
+  assert.deepStrictEqual(run.steps(1, /^(primary column length|alt key) /), ['error primary column length new_ticket.new_name -> 120', 'error alt key new_ticket.new_namekey']);
+  assert.deepStrictEqual(run.steps(2, /^(primary column length|alt key) /), [`ok primary column length new_ticket.new_name -> 120${OWED_NOTE}`, 'ok alt key new_ticket.new_namekey']);
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120);
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
+  assert.deepStrictEqual(run.attempts.map((a) => (a.owedIn || []).length), [0, 1]);
+});
+
+test('whichever write of the build is refused with a 503, the build converges: the table has the length the spec asks for and the key exists', async () => {
+  const clean = await buildWithRetries(retriedTicket());
+  const writes = clean.dv.log.filter((r) => (r.method === 'POST' || r.method === 'PUT') && r.path !== '/$batch').length;
+  assert.ok(writes >= 4, `a clean build writes the table, the File column, the length and the key (the other column goes in a change set): ${writes}`);
+  assert.strictEqual(clean.retries, 0);
+  for (const [what, faults] of [
+    ['alone', (n) => ({ failWrite: (i) => i === n })],
+    ['with the first update of the length refused as well', (n) => ({ failWrite: (i) => i === n, setLength: 1 })],
+    ['and again at the same place on the retry', (n) => ({ failWrite: (i) => i === n || i === n + 1 })],
+  ]) {
+    for (let n = 1; n <= writes; n += 1) {
+      const run = await buildWithRetries(retriedTicket(), { faults: faults(n) });
+      const label = `write ${n} of ${writes} refused, ${what}`;
+      assert.strictEqual(run.result.ok, true, label);
+      assert.ok(run.retries >= 1 && run.retries <= 3, `${label}: retried ${run.retries} time(s)`);
+      const table = run.dv.tables.get('new_ticket');
+      assert.strictEqual(table.primaryLength, 120, `${label}: the name column's length`);
+      assert.deepStrictEqual([...table.keys.keys()], ['new_namekey'], `${label}: the key`);
+      assert.deepStrictEqual([...table.columns.keys()].filter((c) => c.startsWith('new_')).sort(), ['new_attachment', 'new_name', 'new_title'], `${label}: the columns`);
+      assert.strictEqual(run.dv.log.filter((r) => /\/Keys$/.test(r.path) && !/^\(503\)/.test(r.path)).length, 1, `${label}: the key is asked for once`);
+    }
+  }
+});
+// What `owedLengths` — the Map a halted attempt leaves, from a table's logical name to what is owed for it — holds, and what an attempt
+// that is handed one does with it, without the retry loop around them. Two attempts over the same stub: a second SDK over the first's
+// transport is a new process finding what the first left.
+async function provisionAgain(dv, spec, options = {}) {
+  const sdk = await realSdk(dv.httpClient);
+  const events = [];
+  const warnings = [];
+  const owedLengths = options.owedLengths || new Map();
+  const error = await provisionDataModel({
+    sdk, provision: sdk, runner: makeRunner({ emit: (e) => events.push(e), total: 99 }), spec, apply: true, preResolvedLanguageCode: 1033,
+    provisionedLanguages: async () => [1033, 3082], sleep: async () => {}, warn: (m) => warnings.push(m), owedLengths,
+  }).then(() => null, (err) => err);
+  return { events, warnings, owedLengths, error };
+}
+const refusal = () => ({ status: 400, headers: {}, body: { error: { message: 'The attribute cannot be changed right now' } } });
+const DEBT = { table: 'new_ticket', column: 'new_name', asked: 120, tried: true };
+
+test('owedLengths: a table the build creates is owed until its length step is done, and is left out once it is paid', async () => {
+  const owed = new Map();
+  const paid = await provisionOver(oneTable([], asksFor(120)), { owedLengths: owed });
+  assert.deepStrictEqual([...owed], [], 'the step set the length: nothing is owed');
+  assert.strictEqual(paid.dv.tables.get('new_ticket').primaryLength, 120);
+  const unpaid = await provisionOver(oneTable([], asksFor(120)), { owedLengths: owed, dataverse: { updateFails: refusal } });
+  assert.deepStrictEqual([...owed], [['new_ticket', DEBT]], 'a step that failed leaves the table owed, and says it was tried');
+  assert.strictEqual(unpaid.warnings.length, 1);
+  const none = new Map();
+  await provisionOver(oneTable([], { schemaName: 'new_name', displayName: 'Name' }), { owedLengths: none });
+  assert.deepStrictEqual([...none], [], 'a spec that asks for no length owes none');
+  const read = new Map();
+  await provisionOver(oneTable([], asksFor(120)), { owedLengths: read, dataverse: { lengthRead: () => ({ status: 500, headers: {}, body: { error: { message: 'An unexpected error occurred.' } } }) } });
+  assert.deepStrictEqual([...read.keys()], ['new_ticket'], 'a length that could not even be read is owed too');
+});
+
+test('owedLengths: a table found after its create, or one that already existed, is never owed', async () => {
+  const lost = new Map();
+  await provisionOver(oneTable([], asksFor(120)), { owedLengths: lost, dataverse: { createCommitsThenFails: lostAnswer } });
+  assert.deepStrictEqual([...lost], [], 'nothing shows that this build made the table found after its create');
+  const dv = fakeDataverse(OVERRIDING);
+  await provisionAgain(dv, oneTable([], asksFor(120)));
+  const rebuilt = await provisionAgain(dv, oneTable([], asksFor(120)));
+  assert.deepStrictEqual([...rebuilt.owedLengths], [], 'an existing table');
+  assert.deepStrictEqual(lengthEvents(rebuilt).map((e) => [e.status, e.label]), [['skip', 'primary column length new_ticket.new_name (table exists — kept)']]);
+});
+
+test('owedLengths: handed a table an earlier attempt created, the phase sets its length and says it was owed, instead of keeping the table as it finds it', async () => {
+  let blocked = true;
+  const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
+  const spec = oneTable([textColumn('new_a')], asksFor(120));
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed });
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 850, 'the first attempt could not set it');
+  assert.deepStrictEqual([...owed], [['new_ticket', DEBT]]);
+  blocked = false;
+  const retry = await provisionAgain(dv, spec, { owedLengths: owed });
+  assert.deepStrictEqual(retry.events.filter((e) => e.status !== 'start').map((e) => [e.status, e.label]), [
+    ['skip', 'table new_ticket (exists — reuse)'],
+    ['skip', 'column new_ticket.new_a (exists)'],
+    ['ok', `primary column length new_ticket.new_name -> 120 (${OWED})`],
+  ], 'the step is the last of the phase, narrated once, and it is not the "table exists — kept" skip');
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120);
+  assert.deepStrictEqual([...owed], [], 'and it is paid');
+  assert.deepStrictEqual(retry.warnings, []);
+});
+
+test('owedLengths: a debt whose column already has the length is a skip that says so — an update can land although its answer was lost', async () => {
+  let blocked = true;
+  const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
+  const spec = oneTable([], asksFor(120));
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed });
+  dv.tables.get('new_ticket').primaryLength = 120;
+  blocked = false;
+  const updatesBefore = puts({ dv }).length;
+  const retry = await provisionAgain(dv, spec, { owedLengths: owed });
+  assert.deepStrictEqual(lengthEvents(retry).map((e) => [e.status, e.label]), [['skip', `primary column length new_ticket.new_name (already 120; ${OWED})`]]);
+  assert.strictEqual(puts({ dv }).length, updatesBefore, 'nothing is written');
+  assert.deepStrictEqual([...owed], []);
+});
+
+test('owedLengths: a debt that fails again stays owed — and is told it was tried, so a build that stops for good does not try it a second time', async () => {
+  const dv = fakeDataverse({ updateFails: refusal });
+  const spec = oneTable([], asksFor(120));
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed });
+  owed.get('new_ticket').tried = false;
+  const retry = await provisionAgain(dv, spec, { owedLengths: owed });
+  assert.deepStrictEqual(lengthEvents(retry).map((e) => [e.status, e.label]), [['error', `primary column length new_ticket.new_name -> 120 (${OWED})`]]);
+  assert.strictEqual(retry.warnings.length, 1);
+  assert.deepStrictEqual([...owed], [['new_ticket', DEBT]]);
+});
+
+test('owedLengths: a debt is paid even when the phase halts before it reaches the table, and the halt is still the error that is thrown', async () => {
+  let blocked = true;
+  const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
+  const spec = oneTable([textColumn('new_a')], asksFor(120));
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed });
+  blocked = false;
+  // The phase starts with a global choice, whose create is refused: nothing of the table loop runs.
+  const halting = { ...spec, globalChoices: [{ name: 'new_cat', options: ['A', 'B'] }] };
+  const post = dv.httpClient.post;
+  dv.httpClient.post = async (url, body, options) => (/\/GlobalOptionSetDefinitions$/.test(String(url)) ? { status: 503, headers: {}, body: { error: { message: 'Service Unavailable' } } } : post(url, body, options));
+  const retry = await provisionAgain(dv, halting, { owedLengths: owed });
+  assert.ok(retry.error instanceof BuildHalt && /global choice new_cat/.test(retry.events.filter((e) => e.status === 'error')[0].label), 'the halt is the global choice\'s');
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120, 'the debt was paid');
+  assert.deepStrictEqual([...owed], []);
+  assert.deepStrictEqual(lengthEvents(retry).map((e) => [e.status, e.label]), [['ok', `primary column length new_ticket.new_name -> 120 (${OWED})`]]);
+});
+
+test('owedLengths: a debt for a table the spec asks no length of is dropped, and a debt nothing in the spec matches is left alone', async () => {
+  const dv = fakeDataverse(OVERRIDING);
+  await provisionAgain(dv, oneTable([], { schemaName: 'new_name', displayName: 'Name' }));
+  const before = dv.log.length;
+  const owed = new Map([['new_ticket', { ...DEBT, tried: false }], ['new_elsewhere', { table: 'new_elsewhere', column: 'new_name', asked: 50, tried: false }]]);
+  const retry = await provisionAgain(dv, oneTable([], { schemaName: 'new_name', displayName: 'Name' }), { owedLengths: owed });
+  assert.deepStrictEqual(lengthEvents(retry), [], 'no length is asked, so no step');
+  assert.deepStrictEqual(dv.log.slice(before).filter((r) => r.method !== 'GET'), [], 'and nothing is written');
+  assert.deepStrictEqual([...owed.keys()], ['new_elsewhere']);
+});
+
+test('settleOwedLengths: a build that stops for good sets what no attempt got as far as — once, and what an attempt already tried is left alone', async () => {
+  const { settleOwedLengths } = require('../lib/sdk-build.js');
+  let blocked = true;
+  const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
+  const spec = oneTable([], asksFor(120));
+  await provisionAgain(dv, spec);
+  const sdk = await realSdk(dv.httpClient);
+  const warnings = [];
+  const settle = (owed) => settleOwedLengths({ sdk, provision: sdk, spec, owed, warn: (m) => warnings.push(m), sleep: async () => {} });
+  const updates = () => puts({ dv }).length;
+  const refusedAtFirst = updates();
+
+  await settle([{ ...DEBT, tried: true }]);
+  assert.strictEqual(updates(), refusedAtFirst, 'an attempt tried this one, and the build would only fail again: nothing is written');
+  assert.strictEqual(dv.log.filter((r) => /StringAttributeMetadata\?\$select=MaxLength$/.test(r.path)).length, 1, 'only the first attempt read it');
+
+  await settle([{ ...DEBT, tried: false }]);
+  assert.strictEqual(warnings.length, 1, 'a settle that cannot set the length warns once');
+  assert.match(warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120 .* the platform made 850: /);
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 850);
+
+  blocked = false;
+  await settle([{ ...DEBT, tried: false }]);
+  assert.strictEqual(warnings.length, 1, 'and says nothing when it succeeds');
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120, 'the length is set');
+
+  for (const nothing of [undefined, null, [], [{}], [{ table: 'new_nowhere', column: 'new_name', asked: 5, tried: false }], 'new_ticket']) await settle(nothing);
+  assert.strictEqual(warnings.length, 1, 'nothing owed, or owed for a table the spec has no such entity for: nothing happens');
+  await settleOwedLengths({ sdk: null, provision: null, spec, owed: [{ ...DEBT, tried: false }], warn: (m) => warnings.push(m) });
+  assert.strictEqual(warnings.length, 2, 'and an SDK that is not there is a warning, never a throw');
+});
+
+test('an attempt that halts before its data-model phase hands on what it was given, unpaid and untried — and a build that stops there settles it', async () => {
+  const { runSdkBuild, settleOwedLengths } = require('../lib/sdk-build.js');
+  let blocked = true;
+  const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
+  const spec = oneTable([], asksFor(120));
+  const owed = new Map();
+  await provisionAgain(dv, spec, { owedLengths: owed });
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 850, 'the first attempt made the table and could not set its length');
+  // The next attempt halts in its first phase, long before the data-model phase.
+  const stub = { queryRecords: async () => { throw new Error('the environment is not answering'); } };
+  const halted = await runSdkBuild(spec, { sdk: stub, provisionSdk: stub, apply: true, phases: ['solution'], owedLengths: [...owed.values()] }).then(() => null, (err) => err);
+  assert.match(halted.message, /not answering/);
+  assert.deepStrictEqual(halted.owedLengths, [{ ...DEBT, tried: false }], 'what it was handed, nobody has tried it');
+  assert.strictEqual(Object.keys(halted).includes('owedLengths'), false, 'and it rides along, never into a serialized error');
+  // No retry follows: the settle sets it.
+  blocked = false;
+  const sdk = await realSdk(dv.httpClient);
+  await settleOwedLengths({ sdk, provision: sdk, spec, owed: halted.owedLengths, warn: (m) => assert.fail(`no warning expected: ${m}`), sleep: async () => {} });
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120);
+});
+
+test('runSdkBuild carries nothing on a halt when nothing is owed and nothing was handed to it', async () => {
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const stub = { queryRecords: async () => { throw new Error('the environment is not answering'); } };
+  for (const owedLengths of [undefined, [], 'new_ticket', [null, 7, {}, { table: '' }]]) {
+    const halted = await runSdkBuild(oneTable([], asksFor(120)), { sdk: stub, provisionSdk: stub, apply: true, phases: ['solution'], owedLengths }).then(() => null, (err) => err);
+    assert.match(halted.message, /not answering/);
+    assert.strictEqual(halted.owedLengths, undefined, JSON.stringify(owedLengths));
+  }
+});
+
+test('the plan lists a key that waits for the name column length after the length steps, where the build makes it — and every other key where it always was', async () => {
+  const { planFor } = require('../lib/sdk-build.js');
+  const labels = (spec) => planFor(spec, { phases: ['data-model'] }).map((item) => item.label);
+  assert.deepStrictEqual(labels(KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'] })), [
+    'table new_a ("A")', 'column new_a.new_x (Text)', 'table new_b ("B")', 'relationship 1:N new_a->new_b', 'primary column length new_a.new_n', 'alt key new_a.new_k',
+  ]);
+  assert.deepStrictEqual(labels(KEYED_PAIR({ schemaName: 'new_k', columns: ['new_x'] })), [
+    'table new_a ("A")', 'column new_a.new_x (Text)', 'alt key new_a.new_k', 'table new_b ("B")', 'relationship 1:N new_a->new_b', 'primary column length new_a.new_n',
+  ]);
+  assert.deepStrictEqual(labels(KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'] }, { schemaName: 'new_n' })), [
+    'table new_a ("A")', 'column new_a.new_x (Text)', 'alt key new_a.new_k', 'table new_b ("B")', 'relationship 1:N new_a->new_b',
+  ], 'with no length asked there is no length step to wait for');
+  assert.deepStrictEqual(labels(KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'], displayName: { 1033: 'Key', 3082: 'Clave' } })), [
+    'table new_a ("A")', 'column new_a.new_x (Text)', 'alt key new_a.new_k', 'table new_b ("B")', 'relationship 1:N new_a->new_b', 'primary column length new_a.new_n',
+  ], 'a key labelled in several languages keeps its place');
+});
+
+test('keyWaitsForNameLength is the half of the rule the spec decides: the name column in the key, a length asked of it, and a label that is a plain string', () => {
+  const { keyWaitsForNameLength } = require('../lib/app-spec.js');
+  const entity = (primaryAttribute) => ({ schemaName: 'new_a', primaryAttribute });
+  const asked = { schemaName: 'new_Name', maxLength: 120 };
+  const key = (columns, extra = {}) => ({ schemaName: 'new_k', columns, ...extra });
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['NEW_NAME'])), true, 'logical names are lower case, whatever case the spec writes');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_x', 'new_name'])), true, 'among other columns');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_name'], { displayName: 'Name Key' })), true, 'a string label');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_x'])), false, 'another column');
+  assert.strictEqual(keyWaitsForNameLength(entity({ schemaName: 'new_name' }), key(['new_name'])), false, 'no length asked');
+  assert.strictEqual(keyWaitsForNameLength(entity({ ...asked, maxLength: null }), key(['new_name'])), false, 'a null length is none');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_name'], { displayName: { 1033: 'Key', 3082: 'Clave' } })), false, 'a label in several languages');
+  assert.strictEqual(keyWaitsForNameLength(entity(asked), key(['new_name'], { displayName: { 1033: 'Key' } })), false, 'any label map');
+  for (const [what, e, k] of [
+    ['no key', entity(asked), undefined],
+    ['no columns', entity(asked), { schemaName: 'new_k' }],
+    ['columns that are not a list', entity(asked), { schemaName: 'new_k', columns: 'new_name' }],
+    ['no primary attribute', { schemaName: 'new_a' }, key(['new_name'])],
+    ['no entity', undefined, key(['new_name'])],
+  ]) assert.strictEqual(keyWaitsForNameLength(e, k), false, `${what}: false, never a throw`);
+});
+
+test('a spec with a key that waits narrates exactly the steps the plan has, so [n/total] holds, and ends on the key', async () => {
+  const { planFor } = require('../lib/sdk-build.js');
+  for (const [what, spec, dataverse] of [
+    ['the platform ignores the length', keyedTable([NAME_KEY]), {}],
+    ['the platform keeps the length', keyedTable([NAME_KEY]), HONOURING],
+  ]) {
+    const run = await provisionOver(spec, { dataverse });
+    const planned = planFor(spec, { phases: ['data-model'] });
+    assert.strictEqual(run.events.filter((e) => e.status !== 'start').length, planned.length, `${what}: as many steps as the plan has`);
+    const last = run.events[run.events.length - 1];
+    assert.deepStrictEqual([last.label, last.n], ['alt key new_ticket.new_namekey', planned.length], `${what}: the last step is the key, and n has reached the total`);
+  }
+});
+

@@ -514,7 +514,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   publishes it (a clean workspace copy is still published, below): no marker outlives the process, the
   default-view enrichment has the same exposure, and the app-builder skill's recovery guidance says to
   re-run. A default-view push refused by a concurrent edit fails the enrichment step, as any refused
-  push does.
+  push does. The name column length a failed attempt left unset is carried across attempts the same way
+  (`owedLengths`, `settleOwedLengths`; see *Primary name column length* below).
   **An unchanged rebuild writes almost nothing, and no write is skipped on a guess.** An existing view
   or form is pushed only when the SDK reports that its workspace copy differs from its last-synced
   snapshot (`diffArtifact`, `lib/unsynced-edits.js`): an edit this run made, or one an interrupted run
@@ -1429,21 +1430,34 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     (850 → 120 → 850). So when the spec gives a length and THIS build created the table, it reads the length back with
     one typed `…/Attributes(LogicalName='…')/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength` GET and
     calls `updateColumn` only when it differs — LAST in the data-model phase, once every table, column, status reason,
-    alternate key and relationship has been created, and inside a `finally`, so that a phase that halts after creating a
-    table still sets that table's length (a re-run finds the table and leaves an existing table's name column alone; a
-    length that cannot be set while the phase is halting is warned about as one a re-run will not set either).
+    relationship and alternate key that needs no length has been created, and in the halt path too, so that a phase that
+    halts after creating a table still sets that table's length (a run in a new process finds the table and leaves an
+    existing table's name column alone; a length that cannot be set while the phase is halting is warned about as one such
+    a run will not set either).
     Last, because `updateColumn` starts by reading the column WITH its labels, and a label-bearing metadata read ahead of
     a labelled create is what strips non-base languages (measured; see `findExistingColumns`): within one attempt, nothing
-    labelled is created after it. The build's automatic retry of a transient halt (a 429, a lock) runs the phase again as a
-    second attempt: the attempt that created the table has already set its length (the `finally` runs after a halt too), and
-    the retry finds the table and keeps its name column as it finds it, so the length is set once — but what the retry
-    creates comes after the first attempt's read, and the loss was measured only for a create straight after the read, so
-    whether it reaches across the pause between two attempts is not known (`table-columns-in-create.test.js` pins what
-    each attempt does). That is one narrated `primary column length` step, planned (after the relationships) and counted
+    labelled in more than one language is created after it (the one thing that is, an alternate key over the name column —
+    below — carries one language, which a read cannot strip). The build's automatic retry of a transient halt (a 429, a
+    lock) runs the phase again as a second attempt. The attempt that created the table sets its length in the halt path
+    too; when that step fails as well (the lock that stopped the phase can still be held), the table is **owed** its
+    length. `provisionDataModel` records it (`owedLengths`, a Map of `{ table, column, asked, tried }`, which `runSdkBuild`
+    hands to the phase and puts on the halt it throws, the way it carries the publishes an attempt owes for the views it
+    saved), the CLI hands the record to the next attempt and keeps what each halt carries (everything still owed — an empty
+    list when the attempt paid it), and the retry, which finds the table, sets the length at the end of its own phase
+    instead of keeping the table as it finds it: `primary column length … -> N (owed by the attempt that created the
+    table)`, or `(already N; owed by …)`. An attempt that did set the length leaves nothing owed, and the retry keeps the
+    table as before. When no retry follows, the CLI makes one last try at a length that no attempt got as far as setting
+    (the last one halted before its data-model phase; `settleOwedLengths`, silent unless it fails), as it settles owed
+    publishes; a process killed outright, or a later run, finds the table and leaves its name column alone. What the retry
+    creates comes after the read of the attempt that set the length, and the loss was measured only for a create straight
+    after the read, so whether it reaches across the pause between two attempts is not known
+    (`table-columns-in-create.test.js` pins what each attempt does). That is one narrated `primary column length` step,
+    planned (after the relationships) and counted
     only when the spec gives a length (`planFor`, and the provision-entities plan and total): `ok … -> N` when it set the
     length, or a skip — `(already N)`, `(table exists — kept)` or `(table found after its create — kept at N, asked M)` —
     or a FAILED step naming the table, the length asked and the length the platform made (for a read as well as an
-    update), with a warning, that never stops the build. There is no read for the default: a spec without a length
+    update), with a warning, that never stops the build unless an alternate key is waiting for it (below). There is no
+    read for the default: a spec without a length
     leaves the column as the environment made it, which is what the previous release did. A rebuild leaves an existing
     table's name column alone, like every column's `maxLength`, because it must not shorten a column that may hold data
     or undo a length widened in Maker. A table found after the answer to its create was lost (or that another maker
@@ -1456,6 +1470,27 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     build reads only `schemaName`, `displayName`, `autoNumberFormat`, `required` and `maxLength` from
     `primaryAttribute`; any other key inside it is still accepted and ignored (unlike the table level, it has
     no key allow-list).
+  - **Alternate keys over the name column.** The platform validates a key when it is created, and a key may hold at
+    most 900 bytes — 2 for each character of a text column
+    ([Dataverse alternate keys](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys)) —
+    so a key over a name column an environment made 850 characters long is refused. A key that holds a table's primary
+    name column, when the spec gives that column a length and the key's label is a plain string, not a language map
+    (`keyWaitsForNameLength`, `lib/app-spec.js`), is therefore made after the length steps and not with its table, for a
+    table whose length is still to be set: one this attempt created, or one an earlier attempt left owed. It is made only
+    when that step came out right (`ok`, or `already N`). When it did not, the key is not sent: its own step fails with
+    `BuildHalt` code `alt-key-name-length-not-set` (`recoverable`), whose text names the table, the length and why the
+    step failed — not the platform's refusal of the key, which says nothing of the length — and which carries the step's
+    HTTP status (and an explicit `transient: false`), so a 429 or a 503 is retried by the build and a refusal is not.
+    The retry then finds the length owed, sets it, and makes the key. A key made after the read that carries labels is
+    safe because its label carries one language; a key labelled with a language map keeps the place it always had, ahead
+    of the length step (the same rule every label map follows in this file), so its first build can still stop where the
+    platform refuses it (a re-run makes it). Every other key —
+    over another column, over the name column of a table that already existed or was found after its create (never
+    written to), or in a spec that gives no length — is made with its table, as it always was; a spec that keys a name
+    column without a `primaryAttribute.maxLength` leaves the column as the environment made it, so the reference tells
+    an author to give one. `planFor` and the provision-entities plan list a waiting key after the length steps, where a
+    table the build creates has it; the count is unchanged. `table-columns-in-create.test.js` pins the order (against a
+    stub that refuses a key over 900 bytes), the failure, and the retry.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
@@ -1555,7 +1590,7 @@ scripts/
   check-griffel-styles.js      ← /genpage and /app-builder: a page's `makeStyles` calls hold none of the ten shorthands Griffel's runtime drops (lib/griffel-styles.js; see "Griffel shorthands" below)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
-    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase; and `mapLimit`, the bounded fan-out every parallel path reuses
+    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase — a length a failed attempt left unset is owed to the build's retry (`owedLengths`), and an alternate key over that column is made after it; and `mapLimit`, the bounded fan-out every parallel path reuses
     provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
     dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), the Azure CLI token for the Power Apps service (`getPowerAppsToken`: the same read for another resource, memoized apart from the Dataverse token and asked for only by the Power Apps service client and the connectivity preflight), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked — except a launcher that only forwards to the native program beside it, the Windows MSI's two-line `pac.cmd` (`@echo off` / `"%~dp0pac.launcher.exe" %*`): it is recognised by its exact lines — `@echo off` on a line of its own, then the forwarding line, as `cmd` reads lines, so a one-line `@echo off "%~dp0x.exe" %*`, which is an `echo`, is not one — and the program beside it (`forwardedProgram`) and that program is started directly, so a `%` or a double quote reaches it unchanged; every other batch file keeps the checked route and its refusal of them); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere, each only once `ps -o lstart= -p` shows its pid still has the start time the listing saw — a descendant that exited meanwhile can have its pid given to an unrelated process; best effort, since two processes can share a one-second start time and the moment between that read and the signal is not covered), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws. `spawnResultTree` is `spawnResultSync`'s asynchronous twin (same result shape, never rejects) for a call that may have to be ended: one that outlasts its `timeout`, or writes past `maxBuffer`, has its whole tree ended through `killProcessTree` before the call settles (`ETIMEDOUT`, `ENOBUFS`), after a short wait for the pipes of what was ended; the error says whether they closed (`containment`: `confirmed`, or `unconfirmed` when a process that outlived the ended tree still holds them, with the `pid` the call was started as)
