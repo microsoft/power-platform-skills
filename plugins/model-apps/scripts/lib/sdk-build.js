@@ -5890,7 +5890,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       //     nav oracle (extractNavTargets). Reject a malformed (non-canonical) nav PAGEREF and enforce EXACT
       //     parity between declared navigatesTo targetKeys and the keys the source references at REAL nav
       //     call sites — a decoy "PAGEREF_" string or a stray GUID in a comment can never pass.
-      //     new-Important-1 (OVERRIDE 2): additionally reject `dynamic` (variable/expression) and `literal`
+      //     It also rejects `dynamic` (variable/expression) and `literal`
       //     (hardcoded GUID) nav pageIds — a nav target must always be a declared "PAGEREF_<key>" symbol.
       //     The Griffel check (AB#6691124) rides the same scan: a `makeStyles` key Griffel drops at runtime ships a page
       //     without its border, colour or reset, and nothing else on the way to the service notices — so a page that would
@@ -5947,7 +5947,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // alone sends the author looking for a call that is plainly there: when the page has a guess, the halt names it.
         const hidden = declaredNotReferenced.length ? frontierNote(code) : '';
         if (declaredNotReferenced.length || referencedNotDeclared.length) throw new BuildHalt(`page "${p.name}" navigation parity mismatch — declared-but-absent: [${declaredNotReferenced.join(', ')}], referenced-but-undeclared: [${referencedNotDeclared.join(', ')}]${hidden ? ` — ${hidden}` : ''}`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false });
-        // new-Important-1 (fail-closed): a nav pageId must be a DECLARED "PAGEREF_<key>" — never a dynamic
+        // Fail-closed: a nav pageId must be a DECLARED "PAGEREF_<key>" — never a dynamic
         // expression (unverifiable target) or a hardcoded GUID literal in CANONICAL source (breaks cross-env
         // recreate and ships nav the design never declared). extractNavTargets classifies each nav call site's
         // pageId; 'pageref'-not-declared is already caught by navTargetParity, so here reject 'dynamic' + 'literal'.

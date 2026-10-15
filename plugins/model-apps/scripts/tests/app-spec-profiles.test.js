@@ -67,7 +67,7 @@ test('structural profile ignores page implementation entirely', () => {
   assert.strictEqual(validateAppSpec(s, { profile: 'structural' }).ok, true);
 });
 
-// Minor #7 additions ------------------------------------------------------------------
+// Edge cases of profile handling and the codeFile checks -------------------------------
 
 test('unknown profile returns a clear error immediately', () => {
   const r = validateAppSpec(base(), { profile: 'nonexistent' });

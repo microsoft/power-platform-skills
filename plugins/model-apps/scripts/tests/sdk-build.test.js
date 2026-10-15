@@ -5679,7 +5679,7 @@ test('planFor emits one step per page + a manifest step (alignment)', () => {
 const PRIOR_SITEMAP = { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [{ type: 'GenPage', genPageId: 'gp-prev', title: 'Overview' }] }] }] };
 const hasGenPage = (sm, id) => (sm.areas || []).some((a) => (a.groups || []).some((g) => (g.subAreas || []).some((s) => s.type === 'GenPage' && s.genPageId === id)));
 
-test('C2: an EXISTING page-backed app does NOT push its sitemap in app-shell — an enumeration failure PRESERVES the prior sitemap', async () => {
+test('an EXISTING page-backed app does NOT push its sitemap in app-shell — an enumeration failure PRESERVES the prior sitemap', async () => {
   const spec = makeSpec();
   spec.schemaVersion = 2;
   spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
@@ -5698,7 +5698,7 @@ test('C2: an EXISTING page-backed app does NOT push its sitemap in app-shell —
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('C2: an EXISTING page-backed app writes its sitemap ONCE, in the finalizer, with GenPage subareas resolved', async () => {
+test('an EXISTING page-backed app writes its sitemap ONCE, in the finalizer, with GenPage subareas resolved', async () => {
   const spec = makeSpec();
   spec.schemaVersion = 2;
   spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
@@ -5714,7 +5714,7 @@ test('C2: an EXISTING page-backed app writes its sitemap ONCE, in the finalizer,
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('C2: an EXISTING app with NO page subareas still pushes its sitemap in app-shell (unchanged behavior)', async () => {
+test('an EXISTING app with NO page subareas still pushes its sitemap in app-shell (unchanged behavior)', async () => {
   const spec = makeSpec(); // entity subarea only, no pages
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
   await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), phases: ['solution', 'data-model', 'app-shell'] });

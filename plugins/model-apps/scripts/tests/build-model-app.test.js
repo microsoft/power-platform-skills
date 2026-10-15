@@ -1399,7 +1399,7 @@ test('discoverOpDiffState resolves an explicit-layout form by (entity, name, TYP
   assert.ok(formQueries.length >= 1 && /name eq 'Information'/.test(formQueries[0]), 'resolved by (entity, name, type)');
 });
 
-test('I1: apply refuses ANY partial phase range except the full build or exactly --stage data', async () => {
+test('apply refuses ANY partial phase range except the full build or exactly --stage data', async () => {
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }], appShell: { areas: [] } };
   for (const phases of [['pages'], ['views', 'charts'], ['app-shell', 'pages', 'ai-features']]) {
     const r = await buildModelApp(spec, { apply: true, phases }, { log: () => {} });
@@ -1408,7 +1408,7 @@ test('I1: apply refuses ANY partial phase range except the full build or exactly
   }
 });
 
-test('I1 exception: a changed-only pages-only fast apply is NOT refused (fastApply seam); other partials still are', async () => {
+test('partial-apply exception: a changed-only pages-only fast apply is NOT refused (fastApply seam); other partials still are', async () => {
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }], appShell: { areas: [] } };
   // pages-only WITH the changed-only fastApply seam is the ONE sanctioned partial range — the partial-apply guard must
   // let it through (a stub runBuild proves it reached the build, not the gate rejection).

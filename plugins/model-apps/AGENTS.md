@@ -81,9 +81,12 @@ A corollary for **error messages**: an error must stand alone. `operator 'X' is 
 a real Dataverse environment name, review provenance, and indexes into documents an outside reader
 cannot open. Record that kind of context in the PR conversation instead.
 `scripts/tests/review-references-hygiene.test.js` enforces the review-provenance part for this plugin
-and `evals/model-apps`: it fails on finding ids, reviewer, round and plan pointers. Its header lists the
-patterns and what is kept on purpose (generic provenance such as "found in review", and pointers a
-reader can follow such as "design §13.1").
+and `evals/model-apps`: it fails on finding ids (in a comment, a message, or at the start of a test
+title), hyphenated finding and override labels, numbered severities, and reviewer, round and plan
+pointers. The plain words a pointer is made of ("Task 1", "Addendum") are data when they are a fixture
+value, an assertion's input or inside a code fence, and are flagged only in a pointer's shape. Its header
+lists the patterns and what is kept on purpose (generic provenance such as "found in review", and
+pointers a reader can follow such as "design §13.1").
 
 ## app-builder — intent → model-driven app
 

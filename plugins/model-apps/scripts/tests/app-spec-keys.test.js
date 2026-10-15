@@ -63,7 +63,7 @@ test('spec.design accepts known keys and rejects unknown ones', () => {
   assert.ok(validateAppSpec(bad, { profile: 'plan' }).errors.some((e) => /design: unknown key 'accent'/.test(e)));
 });
 
-// Minor #7 additions ------------------------------------------------------------------
+// Edge cases of navigatesTo, pageInput and design validation --------------------------
 
 test('navigatesTo entry with a missing or non-string targetKey errors (isV2)', () => {
   const s = base();

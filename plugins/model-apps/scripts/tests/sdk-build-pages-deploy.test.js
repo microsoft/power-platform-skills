@@ -4,8 +4,8 @@
 // Uses a REAL temp appDir so the fs read of the canonical .tsx runs; the page backend double records the text
 // each write was sent — the SDK takes the text of a page, so there is no file to stage or to read back.
 //
-// Tests also cover OVERRIDE 2 (new-Important-1): a nav pageId that is a `dynamic` expression or a `literal`
-// GUID (hardcoded) must be rejected fail-closed BEFORE any write, even when navigatesTo: [] (so the existing
+// Tests also cover a nav pageId that is a `dynamic` expression or a `literal`
+// GUID (hardcoded): it must be rejected fail-closed BEFORE any write, even when navigatesTo: [] (so the existing
 // parity check does not catch it). Only `extractNavTargets`-based structural detection catches these.
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -693,7 +693,7 @@ test('deploy: two duplicate-named pages BOTH live (fresh download) build as UPDA
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// OVERRIDE 2 (new-Important-1): a DYNAMIC nav pageId (e.g. pageId: someVar — a variable, not a literal)
+// A DYNAMIC nav pageId (e.g. pageId: someVar — a variable, not a literal)
 // must be rejected BEFORE any write, even when navigatesTo:[] so the existing parity check sees no mismatch.
 // Only extractNavTargets-based structural detection (kind:'dynamic') catches it. Error code: pages-nav-parity.
 test('deploy: trailing spread after nav pageId HALTS before any write', async () => {
@@ -712,7 +712,7 @@ test('deploy: trailing spread after nav pageId HALTS before any write', async ()
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('deploy: DYNAMIC nav pageId (variable expression) HALTS before any write — new-Important-1 override-2', async () => {
+test('deploy: DYNAMIC nav pageId (variable expression) HALTS before any write', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-dynav-'));
   try {
     // overview: navigatesTo:[] but source calls navigateTo with a variable pageId (dynamic, unverifiable target)
@@ -726,7 +726,7 @@ test('deploy: DYNAMIC nav pageId (variable expression) HALTS before any write �
       app: { name: 'DynNav App' },
       entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
       // navigatesTo:[] so the existing parity check (declared vs referenced canonical PAGEREF) sees no mismatch;
-      // only extractNavTargets's 'dynamic' kind detection (OVERRIDE 2) rejects this before any write.
+      // only extractNavTargets's 'dynamic' kind detection rejects this before any write.
       pages: [
         { key: 'overview', name: 'Overview', navigatesTo: [], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
         { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
@@ -739,14 +739,14 @@ test('deploy: DYNAMIC nav pageId (variable expression) HALTS before any write �
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
       (e) => e && e.phase === 'pages' && e.code === 'pages-nav-parity'
     );
-    assert.strictEqual(genpageCli.uploads.length, 0, 'dynamic nav pageId rejected before any write (new-Important-1)');
+    assert.strictEqual(genpageCli.uploads.length, 0, 'dynamic nav pageId rejected before any write');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// OVERRIDE 2 (new-Important-1): a LITERAL GUID nav pageId (hardcoded env-specific id — breaks cross-env
+// A LITERAL GUID nav pageId (hardcoded env-specific id — breaks cross-env
 // recreate, design §9) must be rejected BEFORE any write. Even with navigatesTo:[] (parity passes),
 // extractNavTargets (kind:'literal') catches it. Error code: pages-nav-parity.
-test('deploy: LITERAL GUID nav pageId (hardcoded) HALTS before any write — new-Important-1 override-2', async () => {
+test('deploy: LITERAL GUID nav pageId (hardcoded) HALTS before any write', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-litguid-'));
   try {
     // overview: navigatesTo:[] but source has a hardcoded GUID as pageId — env-specific, not symbolic
@@ -759,7 +759,7 @@ test('deploy: LITERAL GUID nav pageId (hardcoded) HALTS before any write — new
       solution: { uniqueName: 'PgLitGuid', displayName: 'Pg', publisherPrefix: 'contoso' },
       app: { name: 'LitGuid App' },
       entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
-      // navigatesTo:[] so parity passes; only extractNavTargets 'literal' detection (OVERRIDE 2) rejects this.
+      // navigatesTo:[] so parity passes; only extractNavTargets 'literal' detection rejects this.
       pages: [
         { key: 'overview', name: 'Overview', navigatesTo: [], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
         { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
@@ -772,7 +772,7 @@ test('deploy: LITERAL GUID nav pageId (hardcoded) HALTS before any write — new
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
       (e) => e && e.phase === 'pages' && e.code === 'pages-nav-parity'
     );
-    assert.strictEqual(genpageCli.uploads.length, 0, 'literal GUID nav pageId rejected before any write (new-Important-1)');
+    assert.strictEqual(genpageCli.uploads.length, 0, 'literal GUID nav pageId rejected before any write');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
