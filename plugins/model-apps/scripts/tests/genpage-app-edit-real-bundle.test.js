@@ -15,11 +15,13 @@ const path = require('node:path');
 const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const { makeAppComponentScope } = require('../lib/app-component-scope.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
 const { main: genpageVerbs } = require('../genpage.js');
 const { main: upload } = require('../genpage-upload.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_ID, APP_EXISTING_PAGE_ID, APP_VIEW_ID } = require('./helpers/fake-genpage-server.js');
 const { withAppComponents } = require('./helpers/fake-app-components.js');
+const { effectiveContentLength } = require('./helpers/wire-framing.js');
 
 const OTHER = '77777777-7777-4777-8777-777777777777';
 const ACCOUNT_ID = '88888888-8888-4888-8888-888888888888';
@@ -295,34 +297,58 @@ test('REAL BUNDLE: the build\'s pin of the tables its pages read — the pages p
 // app-component-scope.test.js holds the limit's own rules against a transport that only records. These make the SDK ITSELF push the app through the limit, with its request changed on the way —
 // as a bundle that posted differently would change it — and show what a user would see: the push's own warning, nothing sent to the app, and the app's components as the maker left them.
 // (The requests the bundle sends today are the tests above: a re-vendor that changes their shape fails there first.)
+//
+// Beneath the limit sits the plugin's OWN transport (lib/sdk-http-client.js), with only the token and the network replaced by a fake service that reads the wire as the service would: the body as JSON, and a
+// Content-Length that must be exactly that body's length. A transport double that decodes what it is given — a Buffer, say — would hide a request the real transport sends otherwise: it sends text as it is and
+// JSON-serializes every other body, so a Buffer would reach the service as `{"type":"Buffer","data":[…]}`, and a Content-Length the caller declared is sent as it was written.
 const MISSING_VIEW = '99999999-9999-4999-8999-99999999999a';
 const isAddAppComponents = (request) => /addappcomponents/i.test(request.url);
 
+// The fake service under the transport. `reached` gets every AddAppComponents that is a well-formed request — the body as the service read it — and `wire` the framing of every one that came: { declared, bytes }.
+// The service answers 400 to an action whose Content-Length is not the length of its body, or whose body is not the action's parameters, as it would; everything else is handed to the fake app.
+function appNetwork(world, reached, wire) {
+  const answered = (out) => ({ statusCode: out.status, headers: out.headers || {}, body: out.body === undefined || out.body === null ? '' : typeof out.body === 'string' || Buffer.isBuffer(out.body) ? out.body : JSON.stringify(out.body) });
+  const refused = (message) => ({ statusCode: 400, headers: {}, body: JSON.stringify({ error: { message } }) });
+  return async ({ url, method, headers, body }) => {
+    const options = { headers };
+    if (method === 'GET') return answered(await world.http.get(url, options));
+    if (method === 'DELETE') return answered(await world.http.delete(url, options));
+    let read;
+    if (typeof body === 'string' && body !== '') {
+      try { read = JSON.parse(body); } catch { /* a multipart $batch is not JSON */ }
+    }
+    if (isAddAppComponents({ url })) {
+      const bytes = Buffer.byteLength(body || '');
+      const declared = effectiveContentLength(headers);
+      wire.push({ declared, bytes });
+      if (declared !== undefined && declared !== String(bytes)) return refused(`the Content-Length (${declared}) is not the length of the body (${bytes} bytes)`);
+      if (!read || typeof read !== 'object' || !Array.isArray(read.Components)) return refused('AddAppComponents takes the parameters AppId and Components');
+      reached.push({ url: String(url), body: read });
+    }
+    const name = method === 'POST' && read === undefined && body ? 'postRaw' : method.toLowerCase();
+    return answered(await world.http[name](url, read === undefined ? body : read, options));
+  };
+}
+
 // A page edit of the app through the SDK, as `placeInApp` makes one for a pin: the views `pinned` are put in the app's components, and the push is made while the edit owns `owned`. `change`, when
-// given, sits between the SDK and the limit and rewrites each request as [url, body] -> [url, body]. `raw`, when given, makes the SDK's request of the action go through the limit's RAW method —
-// `postRaw`, which takes text or bytes — with its body made by `raw(body)`: the same request, sent another way. `reached` is what got past the limit to the app, the body as the service would read it; `emitted`
-// is the addresses of the SDK's own requests of the action, which tell a limit that dropped everything from a push that never made one (both are read only when `change` or `raw` is given).
-async function pinThrough(world, { pinned, owned = pinned, change = null, raw = null }) {
+// given, sits between the SDK and the limit and rewrites each request as [url, body, options] -> [url, body, options] (the options may be left out). `raw`, when given, makes the SDK's request of the action
+// go through the limit's RAW method — `postRaw`, which takes text, bytes or an object — with its body made by `raw(body)` and, when `rawHeaders` is given, the headers it makes: the same request, sent another way.
+// `reached` is what got past the limit to the app, the body as the service would read it; `wire` the framing of each such request; `emitted` the addresses of the SDK's own requests of the action, which tell a
+// limit that dropped everything from a push that never made one (all of them are read only when `change` or `raw` is given).
+async function pinThrough(world, { pinned, owned = pinned, change = null, raw = null, rawHeaders = null }) {
   const scope = makeAppComponentScope();
   const reached = [];
   const emitted = [];
-  const limited = scope.wrap({
-    ...world.http,
-    post: async (url, body, options) => { reached.push({ url: String(url), body }); return world.http.post(url, body, options); },
-    // The fake app takes the objects the SDK posts; the action as JSON text, or as the bytes of it, is read as the object it holds, as the service reads it.
-    postRaw: async (url, body, options) => {
-      if (!isAddAppComponents({ url })) return world.http.postRaw(url, body, options);
-      const read = JSON.parse(Buffer.from(body).toString('utf8'));
-      reached.push({ url: String(url), body: read });
-      return world.http.post(url, read, options);
-    },
-  });
+  const wire = [];
+  const limited = scope.wrap(createAzHttpClient(INSTANCE, { getToken: () => 'offline-token', sleep: async () => {}, request: appNetwork(world, reached, wire) }));
   const emit = (url, body, options) => {
-    const [target, sent] = change ? change(url, body) : [url, body];
-    if (isAddAppComponents({ url: target })) emitted.push(target);
-    return raw && isAddAppComponents({ url: target })
-      ? limited.postRaw(target, raw(sent), { ...options, headers: { ...(options && options.headers), 'Content-Type': 'application/json' } })
-      : limited.post(target, sent, options);
+    // Whether it is the SDK's request of the action is told by the address the SDK gave it, before `change` rewrites it.
+    const action = isAddAppComponents({ url });
+    const [target, sent, sentOptions = options] = change ? change(url, body, options) : [url, body, options];
+    if (action) emitted.push(target);
+    return raw && action
+      ? limited.postRaw(target, raw(sent), { ...sentOptions, headers: { ...(sentOptions && sentOptions.headers), 'Content-Type': 'application/json', ...(rawHeaders && rawHeaders(sent)) } })
+      : limited.post(target, sent, sentOptions);
   };
   const sdk = createMakerSdk({
     workspaceStorage: createNodeWorkspaceStorage(tmp()),
@@ -338,7 +364,7 @@ async function pinThrough(world, { pinned, owned = pinned, change = null, raw = 
   else if (app.components.views === undefined) await sdk.addElement('app', APP_ID, '/components', { views: pinned });
   else await sdk.updateElement('app', APP_ID, '/components/views', [...app.components.views, ...pinned]);
   const pushed = await scope.limit(APP_ID, { views: owned }, () => sdk.pushArtifact('app', APP_ID));
-  return { pushed, reached, emitted };
+  return { pushed, reached, emitted, wire };
 }
 
 test('REAL BUNDLE: the SDK pushes the app through the limit — the control for what follows: its derived list is cut to the one view the edit pins, with no warning', async () => {
@@ -358,6 +384,9 @@ test('REAL BUNDLE: a request the limit cannot read is refused, and the SDK repor
     ['an address in another spelling', (url, body) => [url.replace('AddAppComponents', 'addappcomponents'), body], /was NOT sent: its address \(.*addappcomponents\) .*AddAppComponents/],
     ['an address with a trailing slash', (url, body) => [isAddAppComponents({ url }) ? `${url}/` : url, body], /was NOT sent: its address \(.*AddAppComponents\/\)/],
     ['a view that is an OData reference', (url, body) => [url, isAddAppComponents({ url }) ? { ...body, Components: body.Components.map((c) => (c.savedqueryid ? { '@odata.id': `savedqueries(${c.savedqueryid})` } : c)) } : body], new RegExp(`was NOT sent: its list does not carry the view ${APP_VIEW_ID} the edit pins`)],
+    ['an address with an encoded trailing slash', (url, body) => [isAddAppComponents({ url }) ? `${url}%2F` : url, body], /was NOT sent: its address \(.*AddAppComponents%2F\) .*AddAppComponents/],
+    ['an address with an encoded letter', (url, body) => [url.replace('AddAppComponents', '%41ddAppComponents'), body], /was NOT sent: its address \(.*%41ddAppComponents\) .*AddAppComponents/],
+    ['an address with an escape that cannot be decoded', (url, body) => [url.replace('AddAppComponents', 'AddApp%ZZComponents'), body], /was NOT sent: its address \(.*AddApp%ZZComponents\) cannot be read/],
   ];
   for (const [label, change, said] of drifts) {
     await inWorld(async ({ world }) => {
@@ -386,28 +415,64 @@ test('REAL BUNDLE: a pin the SDK\'s list does not carry is a warning and not a n
 });
 
 // ── The same limit when the SDK's request goes through the RAW method ───────────────────────────────────────────────────────────────────────────────────
-// `postRaw` is a real POST too (the plugin's transport sends it with text, or bytes, it does not touch), and the limit tells it by its address as it tells a `post`. The bundle sends the action through
-// `post`; these make the SDK's own request go through `postRaw` instead — the way it is sent is all that changes — to show that the exclusion holds, and that what cannot be read is refused, whichever method a re-vendored bundle uses.
-const rawForms = [['JSON text', (body) => JSON.stringify(body)], ['the bytes of JSON text', (body) => Buffer.from(JSON.stringify(body))]];
+// `postRaw` is a real POST too (the plugin's transport sends it with text it does not touch, and JSON-serializes any other body), and the limit tells it by its address as it tells a `post`. The bundle sends the action
+// through `post`; these make the SDK's own request go through `postRaw` instead — the way it is sent is all that changes — to show that the exclusion holds, that the request still reaches the service as the
+// action's JSON with a Content-Length that is its exact length, and that what cannot be read is refused, whichever method and form a re-vendored bundle uses.
+const lengthOf = (body) => String(Buffer.byteLength(JSON.stringify(body)));
+// [label, the body `raw` makes of the SDK's request, the headers it declares (optional)]
+const rawForms = [
+  ['JSON text', (body) => JSON.stringify(body)],
+  ['the bytes of JSON text', (body) => Buffer.from(JSON.stringify(body))],
+  ['an object that serializes itself as the whole request', (body) => ({ ...body, toJSON() { return body; } })],
+  ['an object with the Content-Length of the whole request', (body) => body, (body) => ({ 'Content-Length': lengthOf(body) })],
+  ['JSON text with the Content-Length of the whole request in two spellings', (body) => JSON.stringify(body), (body) => ({ 'Content-Length': lengthOf(body), 'content-length': lengthOf(body) })],
+  ['the bytes of JSON text with the Content-Length of the whole request', (body) => Buffer.from(JSON.stringify(body)), (body) => ({ 'Content-Length': lengthOf(body) })],
+];
+
+// The AddAppComponents requests that got to the service were framed as they said: each declared the exact length of the body that was written (the fake service answers 400 to one that did not).
+const assertFramed = (wire, label) => {
+  assert.ok(wire.length > 0, `${label}: the service received the request`);
+  for (const { declared, bytes } of wire) assert.ok(declared === undefined || declared === String(bytes), `${label}: the Content-Length (${declared}) is the length of the body (${bytes})`);
+};
 
 test('REAL BUNDLE: the SDK\'s request sent through the raw method is limited as its own is — the one view the edit pins, no warning, and nothing the maker took out is put back', async () => {
-  for (const [label, raw] of rawForms) {
+  for (const [label, raw, rawHeaders] of rawForms) {
     await inWorld(async ({ world }) => {
-      const { pushed, reached, emitted } = await pinThrough(world, { pinned: [APP_VIEW_ID], raw });
+      const { pushed, reached, emitted, wire } = await pinThrough(world, { pinned: [APP_VIEW_ID], raw, rawHeaders });
       assert.strictEqual(pushed.saved, true, `${label}: ${JSON.stringify(pushed)}`);
       assert.strictEqual(emitted.length, 1, `${label}: the SDK made its one request of the action`);
       assert.deepStrictEqual(pushed.warnings || [], [], label);
       assert.deepStrictEqual(reached.filter(isAddAppComponents).map((request) => request.body), [{ AppId: APP_ID, Components: [viewRef(APP_VIEW_ID)] }], label);
+      assertFramed(wire, label);
       assert.deepStrictEqual(world.added(), { tables: [], forms: [], views: [APP_VIEW_ID], charts: [] }, label);
       assertMembership(world);
     }, { defaultViewPinned: false });
   }
 });
 
-test('REAL BUNDLE: the SDK\'s request sent through the raw method by an edit that pins nothing — a removal — adds nothing: no request reaches the app, and no warning', async () => {
-  for (const [label, raw] of rawForms) {
+test('REAL BUNDLE: the SDK\'s request sent as an object that serializes itself as the whole request, or with the Content-Length of the whole request, is limited and framed as its own is', async () => {
+  const drifts = [
+    ['a post of an object that serializes itself as the whole request', (url, body) => [url, isAddAppComponents({ url }) ? { ...body, toJSON() { return body; } } : body]],
+    ['a post with the Content-Length of the whole request', (url, body, options) => [url, body, isAddAppComponents({ url }) ? { ...options, headers: { ...(options && options.headers), 'Content-Length': lengthOf(body) } } : options]],
+    ['a post with the Content-Length of the whole request in two spellings', (url, body, options) => [url, body, isAddAppComponents({ url }) ? { ...options, headers: { ...(options && options.headers), 'Content-Length': lengthOf(body), 'content-length': lengthOf(body) } } : options]],
+  ];
+  for (const [label, change] of drifts) {
     await inWorld(async ({ world }) => {
-      const { pushed, reached, emitted } = await pinThrough(world, { pinned: [], raw });
+      const { pushed, reached, emitted, wire } = await pinThrough(world, { pinned: [APP_VIEW_ID], change });
+      assert.strictEqual(pushed.saved, true, `${label}: ${JSON.stringify(pushed)}`);
+      assert.strictEqual(emitted.length, 1, `${label}: the SDK made its one request of the action`);
+      assert.deepStrictEqual(pushed.warnings || [], [], label);
+      assert.deepStrictEqual(reached.filter(isAddAppComponents).map((request) => request.body), [{ AppId: APP_ID, Components: [viewRef(APP_VIEW_ID)] }], label);
+      assertFramed(wire, label);
+      assertMembership(world);
+    }, { defaultViewPinned: false });
+  }
+});
+
+test('REAL BUNDLE: the SDK\'s request sent through the raw method by an edit that pins nothing — a removal — adds nothing: no request reaches the app, and no warning', async () => {
+  for (const [label, raw, rawHeaders] of rawForms) {
+    await inWorld(async ({ world }) => {
+      const { pushed, reached, emitted } = await pinThrough(world, { pinned: [], raw, rawHeaders });
       assert.strictEqual(pushed.saved, true, `${label}: ${JSON.stringify(pushed)}`);
       assert.strictEqual(emitted.length, 1, `${label}: the SDK made its one request of the action, and the limit dropped all of it`);
       assert.deepStrictEqual(pushed.warnings || [], [], label);
@@ -425,6 +490,8 @@ test('REAL BUNDLE: a raw request the limit cannot read is refused, and the SDK r
     ['a body of bytes that are not JSON', { raw: () => Buffer.from([0xff, 0xfe, 0x00, 0x7b]) }, /was NOT sent: its body is not the \{ AppId, Components/],
     ['a view that is an OData reference', { raw: asReference }, new RegExp(`was NOT sent: its list does not carry the view ${APP_VIEW_ID} the edit pins`)],
     ['an address in another spelling', { raw: (body) => JSON.stringify(body), change: (url, body) => [url.replace('AddAppComponents', 'addappcomponents'), body] }, /was NOT sent: its address \(.*addappcomponents\) .*AddAppComponents/],
+    ['an address with an encoded trailing slash', { raw: (body) => JSON.stringify(body), change: (url, body) => [isAddAppComponents({ url }) ? `${url}%2F` : url, body] }, /was NOT sent: its address \(.*AddAppComponents%2F\) .*AddAppComponents/],
+    ['an address that cannot be decoded', { raw: (body) => JSON.stringify(body), change: (url, body) => [url.replace('AddAppComponents', 'AddApp%ZZComponents'), body] }, /was NOT sent: its address \(.*AddApp%ZZComponents\) cannot be read/],
   ];
   for (const [label, how, said] of drifts) {
     await inWorld(async ({ world }) => {
