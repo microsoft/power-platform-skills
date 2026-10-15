@@ -9,7 +9,9 @@
 // errors (ensureSuccess / VersionConflictError on 412). We throw only when we cannot obtain a token
 // (ensureToken) or when the underlying transport itself fails — a network/timeout error (res.error)
 // after exhausting retries, or at once for a write that must not be re-sent (see `call`). We never
-// throw purely on a non-2xx HTTP status.
+// throw purely on a non-2xx HTTP status. An answer that is not a success comes back with the access
+// token taken out of it, and so does a transport failure's text (see "The access token, taken out of what a
+// service says"): the SDK quotes such a body in the message a script prints. A success is returned untouched.
 const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = require('./dataverse-auth.js');
 
 // How Dataverse reports that SQL Server chose a request's transaction as a deadlock VICTIM and rolled
@@ -254,6 +256,47 @@ function batchRetryAfterMs(res, now = Date.now()) {
   }
   return longest;
 }
+
+// ---- The access token, taken out of what a service says -----------------------------------------------------------------------------
+// An answer that is not a success is what an SDK makes an error message of — `ConnectionError` QUOTES the body, and the scripts print that message — and an authorization layer, or a gateway,
+// that rejects a token may repeat it: whole, or one part of it. So the client takes the token out of such an answer, and out of a transport failure's text, before the SDK can see it. A SUCCESS is
+// never touched: its bytes are the caller's data. The same rule keeps the Power Apps client's answers clean (lib/power-apps-service-client.js takes `scrub` and `scrubAnswer` from here, which is
+// why they are exported: there is one scrubber).
+//
+// Not the token alone: what an error or a gateway repeats of a bearer token is often one part of it. A token is `header.payload.signature` (three base64url parts joined by dots;
+// https://www.rfc-editor.org/rfc/rfc7519#section-3), so each part long enough to be distinctive is taken out too.
+const MIN_TOKEN_PART_LENGTH = 24;
+function scrub(text, token) {
+  const message = String(text);
+  if (!token) return message;
+  const needles = new Set([token]);
+  for (const part of token.split('.')) if (part.length >= MIN_TOKEN_PART_LENGTH) needles.add(part);
+  return [...needles].sort((a, b) => b.length - a.length).reduce((out, needle) => out.split(needle).join('<token>'), message);
+}
+
+// The same for a whole ANSWER: every string of it is scrubbed, keys included, whatever the status: the rest of the answer is left as it is, so the status and the typed `error.code` the SDK reads survive.
+// A structure nested deeper than a real answer is, is replaced rather than walked (recursion on a body nested thousands of levels deep must not be what fails the read).
+const MAX_SCRUB_DEPTH = 100;
+function scrubAnswer(value, token, depth = 0) {
+  if (typeof value === 'string') return scrub(value, token);
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= MAX_SCRUB_DEPTH) return '<too deeply nested to scrub>';
+  if (Array.isArray(value)) return value.map((item) => scrubAnswer(item, token, depth + 1));
+  const scrubbed = {};
+  for (const [key, item] of Object.entries(value)) scrubbed[scrub(key, token)] = scrubAnswer(item, token, depth + 1);
+  return scrubbed;
+}
+
+// A value shorter than this is no access token (the Azure CLI's are JWTs of hundreds of characters), and taking it out of a message would blank every place the message has the same few letters.
+// The Power Apps client has no such floor: it is given a token by one function, and a short one there is a test's.
+const MIN_SCRUBBED_TOKEN_LENGTH = 16;
+
+/** `text` with the access token that `headers` carry (`Authorization: Bearer <token>`) taken out of it, for a caller that has the words of a transport failure and the request it was sending. */
+function scrubBearer(text, headers) {
+  const entry = headers && typeof headers === 'object' ? Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization') : undefined;
+  const bearer = entry && /^Bearer\s+(\S+)$/i.exec(String(entry[1]));
+  return bearer && bearer[1].length >= MIN_SCRUBBED_TOKEN_LENGTH ? scrub(text, bearer[1]) : String(text);
+}
 /**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
@@ -328,6 +371,19 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // The wait before re-sending an answered request: the backoff above, or longer when the answer asks
   // for longer in `Retry-After` (retryAfterMs, capped).
   const retryWaitMs = (res, attempt) => Math.max(backoffMs(attempt), retryAfterMs(res.headers, now()));
+
+  // Every access token this client has sent — the one a 401 refresh replaced as well as the one that replaced it, because a service may repeat either — for taking it out of an answer that is not a success
+  // and out of a transport failure's text (the scrubber above). A success is never given to these.
+  const tokensSent = new Set();
+  const scrubText = (text) => [...tokensSent].reduce((out, sent) => scrub(out, sent), String(text));
+  const scrubValue = (value) => [...tokensSent].reduce((out, sent) => scrubAnswer(out, sent), value);
+  // A Buffer is returned as it is unless it holds the token as text: bytes that are not text, or hold no token, are never decoded into something else.
+  const scrubBytes = (bytes) => {
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0 || tokensSent.size === 0) return bytes;
+    const text = bytes.toString('utf8');
+    const clean = scrubText(text);
+    return clean === text ? bytes : Buffer.from(clean, 'utf8');
+  };
 
   let token = null;
   function ensureToken(options = {}) {
@@ -408,8 +464,10 @@ function createAzHttpClient(orgUrl, deps = {}) {
     const maxAttempts = 6;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const last = attempt === maxAttempts - 1;
+      const bearer = ensureToken();
+      if (bearer.length >= MIN_SCRUBBED_TOKEN_LENGTH) tokensSent.add(bearer);
       const headers = {
-        Authorization: `Bearer ${ensureToken()}`,
+        Authorization: `Bearer ${bearer}`,
         Accept: 'application/json',
         'OData-MaxVersion': '4.0',
         'OData-Version': '4.0',
@@ -429,16 +487,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
       const res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
       if (res.error) {
         if (conditional) {
-          throw new Error(`Request failed: ${res.error} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
+          throw new Error(`Request failed: ${scrubText(res.error)} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
         }
         // The server ANSWERED (status and headers arrived) and the body was then cut off. A POST may
         // already have been applied — re-sending a create here made a second row — so it is reported
         // as an uncertain outcome rather than replayed. The idempotent rebuild adopts whatever landed.
         // Reads, PATCH/PUT and metadata deletes keep the retry below.
         if (res.incompleteResponse && method_ === 'POST') {
-          throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Re-run to reconcile.`);
+          throw new Error(`Request failed: ${scrubText(res.error)} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Re-run to reconcile.`);
         }
-        if (last || noRetry) throw new Error(`Request failed: ${res.error}`);
+        if (last || noRetry) throw new Error(`Request failed: ${scrubText(res.error)}`);
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -491,6 +549,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
         await sleep(1000 * 2 ** attempt);
         continue;
       }
+      // An answer that is not a success is what an SDK makes an error message of (it quotes the body, and the scripts print that message), so the token is taken out of it first — the body in whatever
+      // mode it is read in, and the headers. A success is the caller's data and is returned exactly as it came.
+      if (!(res.statusCode >= 200 && res.statusCode < 300)) {
+        const text = (value) => (typeof value === 'string' ? scrubText(value) : value);
+        return {
+          status: res.statusCode,
+          headers: scrubValue(res.headers || {}),
+          body: ctl.bytes ? scrubBytes(res.body) : ctl.rawBody ? text(res.body) : scrubValue(parseBody(text(res.body))),
+        };
+      }
       return {
         status: res.statusCode,
         headers: res.headers || {},
@@ -532,4 +600,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, retryAfterMs, RETRY_AFTER_CAP_MS };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, retryAfterMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };

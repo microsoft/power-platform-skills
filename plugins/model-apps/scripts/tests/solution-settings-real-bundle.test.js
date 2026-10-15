@@ -1080,6 +1080,50 @@ test('PROCESS: pac\'s header is not in a failure — the Error line is, and the 
   assertPrintsNone(run, ['maker@contoso.onmicrosoft.com', 'Contoso Maker', 'PowerPlatform CLI', '2.12.2', 'aka.ms', 'discussions'], 'the pac header');
 });
 
+// --- the access token is not in what a failure prints -----------------------------------------------------------------------------------------------
+// The settings file's sanitizer takes the FILE's values out of what the platform says; the access token is not one of them. An authorization layer, or a gateway, that rejects a token
+// may repeat it — whole, or one part of it — in the body of its answer, and the SDK quotes that body in the message the script prints. The Dataverse client takes the token out of an
+// answer that is not a success (lib/sdk-http-client.js), as the Power Apps client does for its own.
+const ECHOED_TOKEN = ['syntheticDataverseHeaderPartNotARealCredential', 'syntheticDataversePayloadPartNotARealCredential', 'syntheticDataverseSignaturePartNotARealCredential'].join('.');
+
+test('PROCESS: a Dataverse token that the platform repeats in the answer to the import reaches neither stdout nor stderr — the answer\'s status, code and job survive, and the import is still sent once', () => {
+  const run = importInProcess({
+    platform: { tokens: { dataverse: ECHOED_TOKEN } },
+    solution: { importAnswer: json(403, { error: { code: 'InvalidAuthenticationToken', message: `Rejected bearer ${ECHOED_TOKEN}` } }) },
+  });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(importPosts(run), 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.ok, out.code, out.status, out.importJobId], [false, 'CONNECTION_ERROR', 403, run.state.imports[0].ImportJobId]);
+  assert.strictEqual(out.error, `HTTP 403 from ${ORG}/api/data/v9.0/ImportSolution: Rejected bearer <token>`);
+  assert.strictEqual(run.stderr.trim(), out.error);
+  assertPrintsNone(run, [ECHOED_TOKEN, ...ECHOED_TOKEN.split('.')], 'the Dataverse token');
+});
+
+test('PROCESS: nor does a part of it, or a transport failure that holds it — in the answer to the import and in the sentence for an import that got no answer', () => {
+  const [, payload] = ECHOED_TOKEN.split('.');
+  const part = importInProcess({ platform: { tokens: { dataverse: ECHOED_TOKEN } }, solution: { importAnswer: json(401, { error: { message: `the claim ${payload} is not valid` } }) } });
+  assert.strictEqual(part.status, 1);
+  assert.strictEqual(JSON.parse(part.lines[0]).error.startsWith(`HTTP 401 from ${ORG}/api/data/v9.0/ImportSolution: the claim <token> is not valid`), true, part.lines[0]);
+  assertPrintsNone(part, [ECHOED_TOKEN, ...ECHOED_TOKEN.split('.')], 'a part of the Dataverse token');
+  const lost = importInProcess({ platform: { tokens: { dataverse: ECHOED_TOKEN }, failures: [{ pathIncludes: '/ImportSolution', error: `socket hang up while sending Authorization: Bearer ${ECHOED_TOKEN}` }] } });
+  assert.strictEqual(lost.status, 1);
+  assert.match(JSON.parse(lost.lines[0]).error, /ImportSolution got no answer \(socket hang up while sending Authorization: Bearer <token>\)\. It was not sent again/);
+  assertPrintsNone(lost, [ECHOED_TOKEN, ...ECHOED_TOKEN.split('.')], 'the Dataverse token in a transport failure');
+});
+
+test('PROCESS control: the Power Apps client already takes an echoed token out of the same kind of answer — connector.js prints <token>', () => {
+  const run = runScript('connector.js', ['operations', '--env', ORG, '--connector-id', 'shared_msnweather', '--connection-id', '00000000000000000000000000000001'], {
+    platform: {
+      tokens: { powerApps: ECHOED_TOKEN },
+      failures: [{ host: 'api.bap.microsoft.com', method: 'GET', status: 400, body: { error: { message: `Rejected bearer ${ECHOED_TOKEN}` } } }],
+    },
+  });
+  assert.strictEqual(run.status, 1);
+  assert.ok(!run.stdout.includes(ECHOED_TOKEN) && !run.stderr.includes(ECHOED_TOKEN));
+  assert.match(JSON.parse(run.stdout).error, /<token>/);
+});
+
 // --- the rest of the contract ----------------------------------------------------------------------------------------------------------------
 
 test('PROCESS: an environment variable\'s value reaches the platform byte for byte — white space around it, a JSON document that ends in a newline, white space alone', () => {

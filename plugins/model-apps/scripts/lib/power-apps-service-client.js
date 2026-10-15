@@ -26,6 +26,8 @@
 // back as the answer, which the SDK reads as a failure — or let the token out in a message or an answer: a transport error's text and every
 // string of what the service answers (an error body that repeats the token it rejected, say) have it taken out before the SDK sees them.
 const { makeRequest, getPowerAppsToken, powerAppsTokenFailureMessage } = require('./dataverse-auth.js');
+// The one scrubber (lib/sdk-http-client.js): the Dataverse client takes the token out of what a service answers by the same rule.
+const { scrub, scrubAnswer } = require('./sdk-http-client.js');
 
 // The two Business Application Platform hosts the SDK chooses between (Public, Test).
 const BAP_HOSTS = Object.freeze(['api.bap.microsoft.com', 'test.api.bap.microsoft.com']);
@@ -93,35 +95,10 @@ function parseBody(raw) {
   }
 }
 
-// A transport error's text with the token taken out of it, should a transport ever repeat the request it failed — an axios error holds
-// its `Authorization` header. The message is the last place a credential may be read from.
-//
-// Not the token alone: what an error or a gateway repeats of a bearer token is often one part of it. A token is `header.payload.signature` (three
-// base64url parts joined by dots; https://www.rfc-editor.org/rfc/rfc7519#section-3), so each part long enough to be distinctive is taken out too.
-const MIN_TOKEN_PART_LENGTH = 24;
-function scrub(text, token) {
-  const message = String(text);
-  if (!token) return message;
-  const needles = new Set([token]);
-  for (const part of token.split('.')) if (part.length >= MIN_TOKEN_PART_LENGTH) needles.add(part);
-  return [...needles].sort((a, b) => b.length - a.length).reduce((out, needle) => out.split(needle).join('<token>'), message);
-}
-
-// The same for what the SERVICE answered: a body or a header that echoes the credential (an authorization layer saying which token it rejected, a gateway
-// repeating the request) would carry it into the SDK's error message — `ConnectionError` quotes the body, and the scripts print that message. Every string of the
-// answer is scrubbed, keys included, whatever the status: the rest of the answer is left as it is, so the status and the typed `error.code` the SDK reads survive.
-// A structure nested deeper than a real answer is, is replaced rather than walked (recursion on a body nested thousands of levels deep must not be what fails the read).
-const MAX_SCRUB_DEPTH = 100;
-function scrubAnswer(value, token, depth = 0) {
-  if (typeof value === 'string') return scrub(value, token);
-  if (value === null || typeof value !== 'object') return value;
-  if (depth >= MAX_SCRUB_DEPTH) return '<too deeply nested to scrub>';
-  if (Array.isArray(value)) return value.map((item) => scrubAnswer(item, token, depth + 1));
-  const scrubbed = {};
-  for (const [key, item] of Object.entries(value)) scrubbed[scrub(key, token)] = scrubAnswer(item, token, depth + 1);
-  return scrubbed;
-}
-
+// The service's answer, token-free: a body or a header that echoes the credential (an authorization layer saying which token it rejected, a gateway
+// repeating the request) would carry it into the SDK's error message — `ConnectionError` quotes the body, and the scripts print that message. `scrub` and `scrubAnswer`
+// (lib/sdk-http-client.js) take it out of a transport error's text — should a transport ever repeat the request it failed, an axios error holds its `Authorization` header —
+// and out of every string of the answer, keys included, whatever the status.
 /**
  * The client for the SDK's `powerAppsServiceClient` option: `get` for the SDK's reads, and a refusal for every other method, so a
  * future SDK that tried to write through it would fail here instead of sending a request.

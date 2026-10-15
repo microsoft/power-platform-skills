@@ -92,7 +92,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl } = require('./lib/dataverse-auth.js');
-const { createAzHttpClient, retryAfterMs } = require('./lib/sdk-http-client.js');
+const { createAzHttpClient, retryAfterMs, scrubBearer } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
@@ -776,8 +776,11 @@ function solutionHttpClient(env, deps = {}, observe = {}) {
         // The body is the SDK's own JSON; had it not parsed there would be no id to name.
       }
       // The transport's words (`res.error`: "Request timed out", a socket error) are another party's text and are looked at here, where they are read; the sentence around them is the plugin's own.
+      // They may repeat the request that failed — a socket error that holds its `Authorization` header — so the access token is taken out first, as the client does for a failure it handles itself:
+      // this function throws for the client, so what the client scrubs never reaches it.
       // The SDK wraps what a client throws and keeps it as the `cause` of its own error, which is how importFailure knows this message again (isComposed) without reading it.
-      const transport = observe.sanitize ? observe.sanitize(String(res.error), 'transport text') : String(res.error);
+      const words = scrubBearer(String(res.error), sent.headers);
+      const transport = observe.sanitize ? observe.sanitize(words, 'transport text') : words;
       const error = new Error(`${action[1]} got no answer (${transport}). It was not sent again: the environment may still be working on it, or may have finished.${job}`);
       COMPOSED_MESSAGE.add(error);
       throw error;
