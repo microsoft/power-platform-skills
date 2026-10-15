@@ -305,8 +305,8 @@ test('edit progress renders each operation state and settles when work completes
   assert.doesNotMatch(html, /<pre class="change-diagram">/);
   assert.match(html, /AI-generated content may be incorrect/);
   assert.match(html, /class="device-rail"/);
-  assert.match(html, /Applying your changes/);
-  assert.match(html, /QR code will appear here after verification/);
+  assert.match(html, /Waiting for approval/);
+  assert.match(html, /The phone preview follows the current edit step/);
   assert.doesNotMatch(html, /Scan to test the changes/);
   assert.match(html, /Waiting for your input/);
   assert.ok(
@@ -448,6 +448,28 @@ test('coarse progress follows the top-level phase when rows are omitted', (t) =>
   assert.match(html, /class="item waiting" data-item-id="plan"/);
   assert.doesNotMatch(html, /class="item active" data-item-id="inspect"/);
   assert.match(html, /1 of 5 operations complete/);
+});
+
+test('the device preview follows the active checklist operation', (t) => {
+  const root = project('docs-device-phase');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+
+  const progress = writeEditProgress(root, {
+    phase: 'preview',
+    status: 'active',
+    items: [
+      { id: 'inspect', label: 'Inspect the current app', status: 'done' },
+      { id: 'plan', label: 'Plan the requested changes', status: 'done' },
+      { id: 'apply', label: 'Apply the approved changes', status: 'done' },
+      { id: 'verify', label: 'Verify the edited app', status: 'done' },
+      { id: 'preview', label: 'Refresh the preview and app plan', status: 'active' },
+    ],
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /Refreshing your preview/);
+  assert.match(html, /The live preview and app plan are being updated/);
+  assert.doesNotMatch(html, /Applying your changes/);
 });
 
 test('screen diagram labels keep Expo dynamic route segments', () => {

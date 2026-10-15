@@ -770,6 +770,7 @@ function writeEditProgress(projectRoot, options = {}) {
   const failed = items.filter((item) => item.status === 'failed').length;
   const percent = items.length ? Math.round((completed / items.length) * 100) : 0;
   const settled = status === 'done' || status === 'failed';
+  const activeItem = items.find((item) => ['active', 'waiting'].includes(item.status));
   const state = loadState(projectRoot);
   const appName = options.appName || (state && state.appName) || path.basename(path.resolve(projectRoot));
   const generatedAt = new Date().toISOString().replace('T', ' ').slice(0, 16);
@@ -787,6 +788,33 @@ function writeEditProgress(projectRoot, options = {}) {
     ? phone.qrImage
     : '';
   const qrUrl = qrImage && typeof phone.qrUrl === 'string' ? phone.qrUrl : '';
+  const activeId = activeItem && activeItem.id;
+  const deviceProgress = activeId === 'preview'
+    ? {
+      title: 'Refreshing your preview',
+      copy: 'The live preview and app plan are being updated.',
+    }
+    : activeId === 'verify'
+      ? {
+        title: 'Verifying your changes',
+        copy: 'The edited app is being checked before the preview is refreshed.',
+      }
+      : ['apply', 'data', 'native', 'design', 'screens'].includes(activeId)
+        ? {
+          title: 'Applying your changes',
+          copy: 'The approved edits are being written to the app.',
+        }
+        : ['plan', 'impact', 'approve'].includes(activeId)
+          ? {
+            title: waiting ? 'Waiting for approval' : 'Planning your changes',
+            copy: waiting
+              ? 'The preview will update after you approve the proposed edit.'
+              : 'The requested edit is being turned into an implementation plan.',
+          }
+          : {
+            title: 'Inspecting your app',
+            copy: 'The current app is being inspected before changes are planned.',
+          };
   const deviceContent = qrImage
     ? `<div class="device-qr"><img src="${escapeHtml(qrImage)}" alt="Metro QR code" />`
       + `<div class="device-title">Scan to test the changes</div>`
@@ -797,12 +825,12 @@ function writeEditProgress(projectRoot, options = {}) {
       + `<div class="device-orbit"><span></span><span></span>`
       + `<img src="${brandIconDataUri()}" alt="" /></div>`
       + `<div class="device-title">${status === 'failed' ? 'Edit stopped' : status === 'done'
-        ? 'Device preview unavailable' : 'Applying your changes'}</div>`
+        ? 'Device preview unavailable' : deviceProgress.title}</div>`
       + `<div class="device-copy">${status === 'failed'
         ? 'Resolve the failed step before testing this edit on a device.'
         : status === 'done'
           ? 'Metro did not provide a QR code. Run the app preview to test this edit on a device.'
-          : 'The scan-to-test QR code will appear here after verification.'}</div>`
+          : deviceProgress.copy}</div>`
       + `<div class="device-progress"><span style="width:${percent}%"></span></div></div>`;
   const deviceCaption = qrImage
     ? 'Edits hot-reload onto the device while Metro is running.'
@@ -810,7 +838,11 @@ function writeEditProgress(projectRoot, options = {}) {
       ? 'The edit is complete, but no active device preview was found.'
       : status === 'failed'
         ? 'No device preview was started.'
-        : 'The phone switches to the live QR code when the edit is ready.';
+        : activeId === 'preview'
+          ? 'The phone switches to the live QR code when the preview is ready.'
+          : activeId === 'verify'
+            ? 'The phone switches to the live QR code after verification.'
+            : 'The phone preview follows the current edit step.';
 
   const filePath = path.join(prepareEditTempDir(projectRoot), 'edit-app-progress.html');
 
