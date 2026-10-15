@@ -368,7 +368,8 @@ test('REAL BUNDLE: the SDK\'s refusal of a pac-only settings feature still reads
     // SDK that rewords it — or that stops refusing the feature — fails here instead of silently ending the fallback.
     assert.ok(ss.pacOnlyFeatureMessages(JSON.parse(fs.readFileSync(f.settings, 'utf8'))).includes(result.fallback.message), `${JSON.stringify(feature)}: ${result.fallback.message}`);
     assert.deepStrictEqual(cloud.requests, [], 'the file is checked before any request: nothing was staged, nothing imported');
-    assert.deepStrictEqual(pacCalls, [['solution', 'import', '--path', f.pkg, '--environment', ORG, '--settings-file', f.settings]]);
+    assert.deepStrictEqual(pacCalls.map((args) => args.slice(0, 7)), [['solution', 'import', '--path', f.pkg, '--environment', ORG, '--settings-file']]);
+    assert.ok(pacCalls[0][7] !== f.settings && /^settings\.json$/.test(path.basename(pacCalls[0][7])), 'pac is given a copy of the settings the run read, not the maker\'s file');
   }
 });
 
@@ -1216,6 +1217,147 @@ test('PROCESS: pac\'s header is not in a failure — the Error line is, and the 
   const out = JSON.parse(run.lines[0]);
   assert.strictEqual(out.error, "`pac solution import` failed (exit 1): Error: Failed to deserialize the deployment settings. Required property 'UserEmail' not found in JSON. Path 'Workflows[0]', line 22, position 5.");
   assertPrintsNone(run, ['maker@contoso.onmicrosoft.com', 'Contoso Maker', 'PowerPlatform CLI', '2.12.2', 'aka.ms', 'discussions'], 'the pac header');
+});
+
+// --- pac imports what the run read ----------------------------------------------------------------------------------------------------------------
+// The run reads the settings file ONCE — the sanitizer is built from it, the SDK is given what it parsed, `applied` names its entries — and the staging that comes before an import takes as long as the platform takes. A file a
+// maker (or a deployment) saves meanwhile is a file the run never looked at: read by its path, its values would reach pac, and pac's own words about them, with no sanitizer that knows them. So pac is given a private copy of the
+// BYTES the run read, in a folder of the run's own that is removed afterwards. An edit made during the run is neither applied nor printed.
+const SECRET_OLD = 'synthetic-before-stage-secret-736';
+const SECRET_NEW = 'synthetic-after-stage-secret-736';
+// A staging reply that lists a variable twice: the SDK will not guess which definition is meant and refuses it (SOLUTION_STAGING_UNREADABLE), so pac imports.
+const DUPLICATE_SECRET_STAGE = { variables: [{ schemaName: 'new_Secret', type: '100000005' }, { schemaName: 'new_Secret', type: '100000005' }] };
+const secretOnly = (value) => JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Secret', Value: value, TypeId: 100000005 }], ConnectionReferences: [] });
+// An import that falls back to pac while the file changes: the platform saves `edited` over settings.json when StageSolution arrives. The fake pac says, in its error, the value of the file it READS, and records what that file held.
+function importEditedDuringStaging({ original, edited, pacStatus }) {
+  return runScript('solution-settings.js', ['import', '--env', ORG, '--package', inRunDir('solution.zip'), '--settings', inRunDir('settings.json')], {
+    platform: {
+      solution: { packageBase64: ZIP.toString('base64'), stage: DUPLICATE_SECRET_STAGE },
+      hooks: [{ method: 'POST', pathIncludes: '/StageSolution', writeFile: 'settings.json', content: secretOnly(edited) }],
+    },
+    pac: { responses: [{ match: ['solution', 'import'], status: pacStatus, stderr: pacStatus === 0 ? '' : "Error: rejected Value '{{value}}' from the settings file.", echoValueOf: '--settings-file', snapshot: ['--settings-file'] }] },
+    files: { 'solution.zip': ZIP, 'settings.json': secretOnly(original) },
+    read: ['settings.json'],
+  });
+}
+const pacsFile = (run) => run.pacCalls[0].args[run.pacCalls[0].args.indexOf('--settings-file') + 1];
+
+test('PROCESS: a settings file that changes while the SDK stages — and the SDK refuses, so pac imports — is not read again: pac is given the bytes the run read, in a folder of its own, and the secret the file was saved with is in no output', () => {
+  const run = importEditedDuringStaging({ original: SECRET_OLD, edited: SECRET_NEW, pacStatus: 1 });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(run.pacCalls.length, 1);
+  assert.strictEqual(JSON.parse(run.outputs['settings.json']).EnvironmentVariables[0].Value, SECRET_NEW, 'the maker\'s edit is on disk, as saved');
+  assert.strictEqual(JSON.parse(run.pacCalls[0].snapshots['--settings-file'].text).EnvironmentVariables[0].Value, SECRET_OLD, 'and is not what pac read: pac read the bytes the run read');
+  assert.match(path.basename(path.dirname(pacsFile(run))), /^solution-settings-[A-Za-z0-9]{6}$/, 'in a folder of the run\'s own');
+  assert.strictEqual(path.basename(pacsFile(run)), 'settings.json');
+  assert.strictEqual(fs.existsSync(path.dirname(pacsFile(run))), false, 'removed after pac ran');
+  assert.match(JSON.parse(run.lines[0]).error, /withheld/, 'pac quoted the value it read, which the sanitizer knows');
+  assertPrintsNone(run, [SECRET_OLD, SECRET_NEW], 'a settings value');
+});
+
+test('PROCESS: and `applied` names the entries of the file pac was given — a file saved empty while the SDK staged does not change what the run says it applied', () => {
+  const run = importEditedDuringStaging({ original: SECRET_OLD, edited: '', pacStatus: 0 });
+  assert.strictEqual(run.status, 0);
+  const consumed = JSON.parse(run.pacCalls[0].snapshots['--settings-file'].text);
+  assert.strictEqual(consumed.EnvironmentVariables[0].Value, SECRET_OLD, 'pac was given the bytes the run read');
+  assert.strictEqual(JSON.parse(run.outputs['settings.json']).EnvironmentVariables[0].Value, '', 'the file on disk is the maker\'s edit');
+  const filledInWhatPacGot = consumed.EnvironmentVariables.filter((entry) => entry.Value !== '').map((entry) => entry.SchemaName);
+  assert.deepStrictEqual(JSON.parse(run.lines[0]).applied.environmentVariables, filledInWhatPacGot, 'applied describes exactly what pac was given');
+  assert.strictEqual(fs.existsSync(path.dirname(pacsFile(run))), false);
+});
+
+test('PROCESS control: a settings file that does not change is redacted on the same pac route — the secret pac quotes is withheld', () => {
+  const run = importEditedDuringStaging({ original: SECRET_OLD, edited: SECRET_OLD, pacStatus: 1 });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(run.pacCalls.length, 1);
+  assertPrintsNone(run, [SECRET_OLD], 'the secret');
+  assert.match(JSON.parse(run.lines[0]).error, /withheld/);
+});
+
+test('PROCESS: the private copy is its owner\'s alone where the system has permission bits — a folder of 0700 and a file of 0600', () => {
+  const run = importEditedDuringStaging({ original: SECRET_OLD, edited: SECRET_OLD, pacStatus: 0 });
+  assert.strictEqual(run.status, 0);
+  const snapshot = run.pacCalls[0].snapshots['--settings-file'];
+  // Windows has no permission bits to read (the folder is in the user's own temp folder): the bits are asserted where there are some.
+  if (process.platform !== 'win32') assert.deepStrictEqual([snapshot.mode, snapshot.dirMode], ['600', '700']);
+  assert.ok(snapshot.bytes > 0);
+});
+
+test('REAL BUNDLE: the copy is created exclusively with mode 0600 — as its owner\'s alone — in the folder mkdtemp made for the run, which is the owner\'s alone (0700) wherever the system has permission bits', async (t) => {
+  const realWrite = fs.writeFileSync;
+  const made = [];
+  fs.writeFileSync = (file, data, options) => {
+    if (path.basename(String(file)) === 'settings.json' && WORK_FOLDER.test(path.basename(path.dirname(String(file))))) made.push(['write', options && options.mode && options.mode.toString(8), options && options.flag]);
+    return realWrite(file, data, options);
+  };
+  t.after(() => { fs.writeFileSync = realWrite; });
+  const { http } = world();
+  const f = files({ Workflows: [{ WorkflowId: 'x' }] });
+  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
+  assert.strictEqual(result.source, 'pac');
+  // `wx` fails when the name exists — the folder is new, so it never does — instead of writing through a link or over a file somebody else put there.
+  assert.deepStrictEqual(made, [['write', '600', 'wx']]);
+});
+
+// What a scanner does to a folder that was just written: every removal of it fails (`holdingWorkFolders`, above). The copy holds the settings file's values, so what cannot be removed is at least EMPTIED, and the folder is said.
+test('REAL BUNDLE: a copy of the settings that cannot be removed is emptied and said — its path, and that it can hold secrets — as a warning on a pac run that succeeded, and the note is not withheld whatever value the file holds', async (t) => {
+  const held = holdingWorkFolders(t);
+  const { http } = world();
+  // "copy" and "empty" are words of the note; the value of an entry the package does not define is looked for as a whole word, so a sanitizer that looked at the note would withhold it.
+  const f = files({ EnvironmentVariables: [{ SchemaName: 'new_Text', Value: 'copy' }, { SchemaName: 'new_More', Value: 'emptied' }], ConnectionReferences: [], Workflows: [{ WorkflowId: 'x' }] });
+  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
+  assert.strictEqual(result.source, 'pac');
+  const [left] = held.dirs;
+  assert.deepStrictEqual(fs.readdirSync(left), ['settings.json']);
+  assert.strictEqual(fs.readFileSync(path.join(left, 'settings.json'), 'utf8'), '', 'what could not be removed holds no value');
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the copy of the settings file that pac was given, which can hold secrets (emptied, so it keeps no value). Delete it.`]);
+});
+
+test('REAL BUNDLE: and beside the failure of a pac run that did not succeed — with the pac failure\'s own code and reason — and nothing of what the file held', async (t) => {
+  const held = holdingWorkFolders(t);
+  const { http } = world();
+  const f = files({ Workflows: [{ WorkflowId: 'x' }] });
+  await assert.rejects(ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 1, stdout: '', stderr: `Error: rejected ${SECRET}` }) }, importJobId: JOB }), (err) => {
+    const [left] = held.dirs;
+    assert.strictEqual(err.code, 'PAC_FAILED');
+    assert.strictEqual(err.fallback.code, 'INVALID_ARGUMENT');
+    const described = ss.describeFailure(err);
+    assert.deepStrictEqual(described.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the copy of the settings file that pac was given, which can hold secrets (emptied, so it keeps no value). Delete it.`]);
+    assert.match(described.error, /^`pac solution import` failed \(exit 1\): /);
+    assert.ok(!JSON.stringify(described).includes(SECRET));
+    return true;
+  });
+});
+
+test('REAL BUNDLE: a copy that is held for a moment is removed by the bounded retry on Windows — no warning — and one that cannot even be emptied says that it may still hold the values', async (t) => {
+  const held = holdingWorkFolders(t, { times: 2, platform: 'win32' });
+  const { http } = world();
+  const f = files({ Workflows: [{ WorkflowId: 'x' }] });
+  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
+  assert.ok(!('warnings' in result));
+  assert.strictEqual(held.calls, 3);
+  assert.strictEqual(fs.existsSync([...held.dirs][0]), false);
+});
+
+test('REAL BUNDLE: the same sentences hold when the file cannot be emptied either — the note says the values may still be there', async (t) => {
+  const stays = holdingWorkFolders(t);
+  const realWrite = fs.writeFileSync;
+  let blocked = false;
+  fs.writeFileSync = (file, data, options) => {
+    // The first write of the private copy is allowed; emptying it afterwards (a write of nothing) is what a scanner holding the file blocks.
+    if (path.basename(String(file)) === 'settings.json' && WORK_FOLDER.test(path.basename(path.dirname(String(file)))) && data === '') {
+      blocked = true;
+      throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    }
+    return realWrite(file, data, options);
+  };
+  t.after(() => { fs.writeFileSync = realWrite; });
+  const { http } = world();
+  const f = files({ Workflows: [{ WorkflowId: 'x' }] });
+  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
+  const [left] = stays.dirs;
+  assert.ok(blocked);
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the copy of the settings file that pac was given, which can hold secrets (it could not be emptied either, so it may still hold the settings file's values). Delete it.`]);
 });
 
 // --- the access token is not in what a failure prints -----------------------------------------------------------------------------------------------

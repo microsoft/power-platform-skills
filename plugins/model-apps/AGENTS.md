@@ -3911,15 +3911,29 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     refused (`pacPayload`), never read as an empty answer. What `pac` printed about a failure is shown without its
     header (`pacErrorText`: the signed-in account, the version and the links are dropped, `Error:` lines kept), and
     redacted before it is cut to length.
+  - **`pac` imports the settings the run read, not the file's path** (`importThroughPac`, `readSettingsFile`). The
+    run reads `--settings` ONCE, as bytes — the sanitizer is built from them, the SDK is given what they parse to,
+    `applied` names their entries — and the staging that comes before the SDK's refusal takes as long as the platform
+    takes. A file saved in that time is one the run never looked at: read again by `pac`, its values would reach `pac`,
+    and `pac`'s own words about them, which are printed, with no sanitizer that knows them. So `pac` is given a private
+    COPY of those bytes (byte order mark and line ends included) in a folder of the run's own: the folder is made by
+    `mkdtemp` (the owner's alone, mode 0700, on POSIX; on Windows it inherits the user's temp folder's access list), the
+    file is created exclusively (`wx`) with mode 0600, and both are removed however `pac` ends (next bullet). A copy was
+    chosen over refusing a file that changed: the import still happens, of the file the run checked, and an edit made
+    during the run is neither applied nor printed — save it again and run the import again to apply it. `pac` still
+    reads the package from its path. A copy that cannot be made is `PAC_SETTINGS_COPY_FAILED`, `pac` is then not started,
+    and the failure carries the reason `pac` was asked (`fallback`) like any other failure of the `pac` step.
   - **The folder a `pac` fallback works in is removed, and said when it stays** (`inWorkFolder`, `lib/safe-fs.js`
     `removeTreeWithRetry`). `pac solution create-settings` writes into a `solution-settings-<random>` folder under the
-    temp directory, which holds the package the SDK exported and pac's template — defaults that can be values. It is
+    temp directory, which holds the package the SDK exported and pac's template — defaults that can be values — and
+    `pac solution import` is given its copy of the settings in one (above). It is
     removed however the run ends, with the bounded retry a Windows lock needs (a scanner or a sync client that holds
     what pac just wrote answers `rm` with EBUSY, EPERM or EACCES: six attempts over about three quarters of a second;
     on other systems a lock code is not waited out). A folder that STILL stays is a warning with its path and what is in
     it — in `warnings` of a run that succeeded, and beside the failure of one that did not (`leftoverWarnings`, which
     `describeFailure` prints with the SDK's cleanup warnings and no sanitizer looks at: it is the plugin's own sentence, a
-    path and a code) — never left unsaid.
+    path and a code) — never left unsaid. The copy of the settings is EMPTIED first, so that what stays holds no value, and
+    the warning says whether that worked.
   - **Files are written without replacing another's** (`lib/safe-fs.js`). `solution-settings.js template` without
     `--force` installs its file as an exclusive create, and it must never remove a file it cannot prove it wrote:
     the whole content goes to a sibling file this process created exclusively (`.<name>.<pid>.<random>.tmp`), and is

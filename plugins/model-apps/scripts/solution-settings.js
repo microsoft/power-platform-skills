@@ -30,6 +30,9 @@
 //             merely contains the phrase is a failure, not a feature. A package that did not pass staging
 //             (SOLUTION_STAGING_FAILED, with the dependencies it is missing) is NOT retried by pac — the platform has said it cannot be
 //             imported there.
+//             What pac is given of the settings is a PRIVATE COPY of the bytes this run read (importThroughPac), in a folder of the run's own that is removed afterwards — never the path: the staging that
+//             comes before the SDK's refusal takes as long as the platform takes, and a file saved in that time is one the sanitizer was not built from. An edit made during the run is neither applied nor
+//             printed; `applied` names the entries of the file that was read, which is the file pac imported.
 // Any other failure is reported with the SDK's own code and is never answered by pac.
 //
 // ExportSolution, StageSolution and ImportSolution are sent EXACTLY ONCE (solutionHttpClient): they are long-running, a gateway can answer 502, 504 or 401
@@ -81,8 +84,8 @@
 //   the "Nothing was imported" in one is about the SDK's attempt, which stopped before any request; pac then did the work;
 //   "warnings": [...] when something the run made could not be cleaned up: the SDK could not delete the staged copy of the package it made, or `template` could not remove the temporary name its
 //   file was written under (the file is complete; until that name is removed the file has two names, and writing it again is refused as a hard link), or the folder a pac fallback worked in
-//   could not be removed (after the bounded retry a Windows lock needs; the warning names its path and what is in it — the package the SDK exported, pac's template — to delete). For pac `applied` lists the entries the file
-//   filled (pac does not report what it applied).
+//   could not be removed (after the bounded retry a Windows lock needs; the warning names its path and what is in it — the package the SDK exported, pac's template, the copy of the settings file pac
+//   was given, which is emptied first so that it keeps no value — to delete). For pac `applied` lists the entries the file filled (pac does not report what it applied).
 //
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
 //   { "ok": false, "error": "<message>", "code": "<the SDK's or the PAC step's code>" [, "status": <HTTP status of the answer>] [, "fallback": { … }, "importJobId": "<guid>"]
@@ -304,6 +307,8 @@ function parseSettings(text, where) {
   return settings;
 }
 
+// The settings file as the run reads it, ONCE: the parsed object and the BYTES it was parsed from. Everything later — the SDK's import, the sanitizer, `applied`, and the copy pac is given — is bound to this one
+// reading, never to the path, which a maker or a deployment may save again while the run waits for the platform.
 function readSettingsFile(settingsPath) {
   let stat;
   try {
@@ -313,7 +318,8 @@ function readSettingsFile(settingsPath) {
   }
   if (!stat.isFile()) throw fail('SETTINGS_UNREADABLE', `--settings: ${settingsPath} is not a file.`);
   if (stat.size > MAX_SETTINGS_BYTES) throw fail('SETTINGS_UNREADABLE', `--settings: ${settingsPath} is larger than ${MAX_SETTINGS_BYTES / (1024 * 1024)} MiB.`);
-  return parseSettings(fs.readFileSync(settingsPath, 'utf8'), `--settings ${settingsPath}`);
+  const bytes = fs.readFileSync(settingsPath);
+  return { settings: parseSettings(bytes.toString('utf8'), `--settings ${settingsPath}`), bytes };
 }
 
 /** The names of the entries a settings object FILLS in — a value or a connection id that is not empty — never what they are filled with. */
@@ -801,13 +807,14 @@ function pacError(code, message, refusal) {
 
 // A folder of this run's own under the temp directory — for what pac reads or writes — removed however `work(dir)` ends: its value, or its failure, which is rethrown. The removal has the bounded retry a
 // Windows lock needs (a scanner or a sync client holding a file pac has just written: removeTreeWithRetry), and a folder that STILL stays is never left unsaid. What it holds — pac's template, the package the SDK
-// exported — is not worth keeping and can be sensitive (a template's defaults can be values), so a leftover is reported with its path: as `leftover` beside the value of a run that worked, and on the error
-// (`leftoverWarnings`, see withLeftover) of one that did not. `holds` says what is in the folder, for that note. The folder is made by lib/temp-workspace.js in the plugin's own temp folder, named
-// `solution-settings-<pid>-` and six characters.
-// pac is another process and is given paths in this folder (the zip it reads, the file it writes). On POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that takes the
-// folder because this run is gone would remove it from under pac. So the folder is made LENT — recorded as such once, when it is made — and a sweep keeps it for as long as it is young, whether
-// or not this run is still going (lib/temp-workspace.js). Nothing is recorded about pac itself, and nothing about the folder is changed after pac has started.
-async function inWorkFolder(holds, work) {
+// exported, the copy of the settings file pac was given — is not worth keeping and can be sensitive (a template's defaults can be values; a settings file's values are), so a leftover is reported with its path: as
+// `leftover` beside the value of a run that worked, and on the error (`leftoverWarnings`, see withLeftover) of one that did not. `holds` says what is in the folder, for that note. The folder is made by
+// lib/temp-workspace.js in the plugin's own temp folder, named `solution-settings-<pid>-` and six characters.
+// pac is another process and is given paths in this folder (the zip it reads, the file it writes, the settings copy it imports with). On POSIX it outlives a run that is killed (SIGKILL, an agent's timeout),
+// and a sweep that takes the folder because this run is gone would remove it from under pac. So the folder is made LENT — recorded as such once, when it is made — and a sweep keeps it for as long as it is
+// young, whether or not this run is still going (lib/temp-workspace.js). Nothing is recorded about pac itself, and nothing about the folder is changed after pac has started.
+// `empty` names the files (relative to the folder) that hold values: when the folder cannot be removed they are EMPTIED, so that what stays on disk is at least not the values, and the note says whether that worked.
+async function inWorkFolder(holds, work, { empty = [] } = {}) {
   const dir = makeTempWorkspace('solution-settings-', { lent: true });
   let value;
   let failure;
@@ -819,7 +826,19 @@ async function inWorkFolder(holds, work) {
     failure = err;
   }
   const stopped = removeTreeWithRetry(dir);
-  const leftover = stopped ? `The folder ${dir} could not be removed (${stopped}); it holds ${holds}. Delete it.` : null;
+  let leftover = null;
+  if (stopped) {
+    const emptied = empty.map((name) => {
+      try {
+        fs.writeFileSync(path.join(dir, name), '');
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const kept = empty.length === 0 ? '' : emptied.every(Boolean) ? ' (emptied, so it keeps no value)' : " (it could not be emptied either, so it may still hold the settings file's values)";
+    leftover = `The folder ${dir} could not be removed (${stopped}); it holds ${holds}${kept}. Delete it.`;
+  }
   if (failed) throw leftover ? withLeftover(failure, leftover) : failure;
   return { value, leftover };
 }
@@ -861,20 +880,39 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
   return leftover ? { ...value, warnings: [leftover] } : value;
 }
 
-async function importThroughPac({ env, packagePath, settingsPath }, redact, refusal, deps = {}) {
+// `pac solution import` is given the settings the run READ, never the path they were read from. The SDK's refusal comes after the staging, which takes as long as the platform takes, and a file a maker or a
+// deployment saves in that time is a file the sanitizer was not built from and `applied` does not describe: read by its path, its values would reach pac — and pac's own words about them, which are
+// printed — with nothing that knows them. So pac gets a private copy of the BYTES already read (`settingsBytes`: byte order mark and line ends as they were) in a folder of the run's own. The folder is
+// made by mkdtemp — the owner's alone (mode 0700) on POSIX; on Windows it inherits the access list of the user's temp folder — and the file is created exclusively (`wx`) with mode 0600, which Windows
+// reads as "not read-only", so the removal below still works. A copy was chosen over refusing a file that changed: the import still happens, of what the run checked, and an edit made meanwhile is
+// neither applied nor printed. The package is still read by pac from its path: it is not a secret, and the run checked it without keeping it.
+// The folder goes however pac ends, with the bounded retry (inWorkFolder); one that stays is emptied of the values and said — `warnings` on the answer, `leftoverWarnings` on the error.
+async function importThroughPac({ env, packagePath, settingsBytes }, redact, refusal, deps = {}) {
   const label = 'pac solution import';
-  const run = await runPac(
-    ['solution', 'import', '--path', packagePath, '--environment', env, '--settings-file', settingsPath],
-    { label, kind: 'import', redact, ...(deps.pac || {}) }
-  );
-  if (!run.ok) {
-    const error = pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
-    // `run.message` is the plugin's own sentence — the command, its exit status, how a timeout ended — around the only text pac wrote, which `runPac` has already given to `redact`, where it is
-    // read. So it holds nothing that was not looked at, and it is not looked at again: for a value of `1` the "(exit 1)" of the plugin's own words would be found and withheld, and with it the
-    // one thing that says how pac failed.
-    COMPOSED_MESSAGE.add(error);
-    throw error;
-  }
+  const { leftover } = await inWorkFolder('the copy of the settings file that pac was given, which can hold secrets', async (dir) => {
+    const copy = path.join(dir, 'settings.json');
+    try {
+      fs.writeFileSync(copy, settingsBytes, { mode: 0o600, flag: 'wx' });
+    } catch (err) {
+      // The system's code alone (EACCES, ENOSPC, …): the error's own text is not the plugin's sentence, and this message is marked as composed, so no sanitizer looks at it again.
+      const error = pacError('PAC_SETTINGS_COPY_FAILED', `\`${label}\` was not run: a private copy of the settings file could not be made (${(err && (err.code || err.name)) || 'Error'}).`, refusal);
+      COMPOSED_MESSAGE.add(error);
+      throw error;
+    }
+    const run = await runPac(
+      ['solution', 'import', '--path', packagePath, '--environment', env, '--settings-file', copy],
+      { label, kind: 'import', redact, ...(deps.pac || {}) }
+    );
+    if (!run.ok) {
+      const error = pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
+      // `run.message` is the plugin's own sentence — the command, its exit status, how a timeout ended — around the only text pac wrote, which `runPac` has already given to `redact`, where it is
+      // read. So it holds nothing that was not looked at, and it is not looked at again: for a value of `1` the "(exit 1)" of the plugin's own words would be found and withheld, and with it the
+      // one thing that says how pac failed.
+      COMPOSED_MESSAGE.add(error);
+      throw error;
+    }
+  }, { empty: ['settings.json'] });
+  return leftover ? { warnings: [leftover] } : {};
 }
 
 // The reason pac was asked, as it is shown. The sentence for a feature of pac's that the file holds is the plugin's own: pacOnlyFeatureMessages builds it from the file's KEYS and the SDK's wording, and
@@ -1084,6 +1122,8 @@ async function importFailure(err, { sanitize, settings, importJobId, env, deps, 
   if (original.fallback) failure.fallback = shownRefusal(original.fallback, settings, sanitize);
   const warnings = (deps.readCleanupWarnings || require('./lib/maker-sdk.js').readCleanupWarnings)(original);
   if (warnings && warnings.length) failure.warnings = warnings.map((warning) => sanitize(warning, 'warning'));
+  // The notes of a folder this run made and could not remove (withLeftover) are the plugin's own sentences — a path and a code — so they are carried as they are, beside the cleaned warnings.
+  if (Array.isArray(original.leftoverWarnings) && original.leftoverWarnings.length) failure.leftoverWarnings = [...original.leftoverWarnings];
   // The job is the SDK's: pac mints its own and never sees this one, so a failure of the pac import (it carries the reason pac was asked) names none.
   if (original.fallback) return failure;
   // After a refusal that was sent again `importJobId` is the LAST send's, the one whose outcome there is to look up; the sends before it are listed, each with the wait that followed it.
@@ -1111,8 +1151,11 @@ const secondsOf = (ms) => `${Math.round(ms / 100) / 10} s`;
 const resendSentence = (sends) => `ImportSolution was sent ${sends.refusals.length + 1} times. Each send before the last was refused before it started (HTTP 429, code ${[...new Set(sends.refusals.map((refusal) => refusal.code))].join(', ')}: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${sends.refusals.map((refusal) => secondsOf(refusal.waitedMs)).join(', ')} before sending again.`;
 
 /** `import`: the package into `--env`, with the settings file applied in the same import. */
-async function runImport(request, deps = {}) {
-  const settings = readSettingsFile(request.settingsPath);
+async function runImport(asked, deps = {}) {
+  // The settings file is read ONCE, as bytes: the sanitizer, the SDK's import, `applied` and — should the SDK refuse — the copy pac is given (importThroughPac) all come from this one reading, so
+  // nothing that reaches an output or pac is a value the sanitizer was not built from. The path is never read again.
+  const { settings, bytes } = readSettingsFile(asked.settingsPath);
+  const request = { ...asked, settingsBytes: bytes };
   // What the package's own definitions say each variable is: filled in as the SDK reads the package (the StageSolution reply that passes through the client below), and looked at
   // by the sanitizer each time it is asked — see secrecyOf for why the file's `TypeId` is not what decides whether a value is a secret.
   const definitions = new Map();
@@ -1150,9 +1193,13 @@ async function runImport(request, deps = {}) {
       };
     }
     // pac did the work, and the SDK's refused attempt may have left something behind it (a staged copy it could not delete): its cleanup warnings were carried across the fallback (lib/sdk-first.js) and
-    // are cleaned here, ONCE, like the ones of an SDK run — they are another party's text. A pac run that succeeded stays a success.
-    const carried = (outcome.warnings || []).map((warning) => sanitize(warning, 'warning'));
-    return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize), ...(carried.length ? { warnings: carried } : {}) };
+    // are cleaned here, ONCE, like the ones of an SDK run — they are another party's text. After them comes the note of the folder pac's copy of the settings was in, should it have stayed: the plugin's
+    // own sentence, a path and a code, which no sanitizer looks at. A pac run that succeeded stays a success.
+    const warnings = [
+      ...(outcome.warnings || []).map((warning) => sanitize(warning, 'warning')),
+      ...((outcome.value && outcome.value.warnings) || []),
+    ];
+    return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize), ...(warnings.length ? { warnings } : {}) };
   } catch (err) {
     throw await importFailure(err, { sanitize, settings, importJobId: sends.jobId, env: request.env, deps, sends });
   }

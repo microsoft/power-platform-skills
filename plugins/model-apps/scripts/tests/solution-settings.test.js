@@ -1370,16 +1370,128 @@ test('import refuses a missing, unreadable or mis-shaped file before anything is
 
 test('import: a settings feature the SDK does not apply goes to pac with the same package and file, pinned to the environment, with the long budget; the refusal says why', async () => {
   const { request, pkg, settings } = importFiles(template({ Workflows: [{ WorkflowId: 'x' }] }));
+  const original = fs.readFileSync(settings);
   const { sdk } = sdkStub();
   sdk.importSolution = async () => { throw refusal('INVALID_ARGUMENT', listSentence('Workflows')); };
-  const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'Solution Imported successfully.\n', stderr: '' }));
+  let given;
+  const { pac, calls } = fakePac((args) => { given = { file: flagValue(args, '--settings-file'), bytes: fs.readFileSync(flagValue(args, '--settings-file')) }; return { status: 0, stdout: 'Solution Imported successfully.\n', stderr: '' }; });
   const result = await ss.runImport(request, { sdkFirst: stubSdkFirst(sdk), pac });
-  assert.deepStrictEqual(calls[0].args, ['solution', 'import', '--path', pkg, '--environment', ENV, '--settings-file', settings]);
+  // The package is the maker's file and the environment is pinned; the settings are a private copy of the bytes the run read (see "the settings pac is given").
+  assert.deepStrictEqual(calls[0].args, ['solution', 'import', '--path', pkg, '--environment', ENV, '--settings-file', given.file]);
+  assert.ok(given.file !== settings && given.bytes.equals(original), 'the same settings, as a copy');
   assert.strictEqual(calls[0].options.timeout, 3600000, 'an import is given pac\'s own longest wait');
   assert.strictEqual(result.source, 'pac');
   assert.strictEqual(result.fallback.code, 'INVALID_ARGUMENT');
   assert.deepStrictEqual(result.applied, { environmentVariables: [], connectionReferences: [] }, 'the entries the file filled — here none');
   assert.ok(!('importJobId' in result), 'pac has its own job');
+});
+
+// --- the settings pac is given ---------------------------------------------------------------------------------------------------------------------
+// The run reads the settings file ONCE: the sanitizer is built from it, the SDK is given what it parsed, and `applied` names its entries. The staging that comes before an import takes as long as the platform takes,
+// and a file a maker (or a deployment) saves in that time is a file the run never looked at — if pac read the file by its path, its values would reach pac, and pac's own words about them, with no sanitizer that knows them.
+// So pac is given a private copy of the BYTES the run read, in a folder of the run's own that is removed afterwards.
+const PRIVATE_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
+// A stand-in sdkFirst that does what the real one does when the SDK refuses — after `meanwhile()`: the staging is where the file gets saved.
+const refusedAfter = (meanwhile, sdk) => async (env, plan) => { meanwhile(); return stubSdkFirst(sdk)(env, plan); };
+const withFeature = (settings) => ({ ...settings, Workflows: [{ WorkflowId: 'x' }] });
+const toPac = () => {
+  const { sdk } = sdkStub();
+  sdk.importSolution = async () => { throw refusal('INVALID_ARGUMENT', listSentence('Workflows')); };
+  return sdk;
+};
+// A pac that reads the settings file it is given at the time of the call, and says where it found it.
+function readingPac(answer = () => ({ status: 0, stdout: 'Solution Imported successfully.\n', stderr: '' })) {
+  const seen = [];
+  return {
+    seen,
+    pac: {
+      spawn: (name, args) => {
+        const file = flagValue(args, '--settings-file');
+        seen.push({ file, dir: path.dirname(file), bytes: fs.readFileSync(file) });
+        return answer(args, seen[seen.length - 1]);
+      },
+    },
+  };
+}
+
+test('pac is given a private copy of the bytes the run read — never the file\'s path — so a file saved before pac starts is neither applied, nor quoted, nor reported', async () => {
+  const { request, settings } = importFiles(withFeature(filled()));
+  // The bytes as a Windows editor saves them: a byte order mark and CRLF line ends. They reach pac exactly.
+  const original = Buffer.from(`\uFEFF${JSON.stringify(withFeature(filled()), null, 2).replace(/\n/g, '\r\n')}`, 'utf8');
+  fs.writeFileSync(settings, original);
+  const edited = JSON.stringify(template({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: 'saved-meanwhile-0123456789', TypeId: 100000005 }] }));
+  const { seen, pac } = readingPac();
+  const result = await ss.runImport(request, { sdkFirst: refusedAfter(() => fs.writeFileSync(settings, edited), toPac()), pac });
+  assert.strictEqual(seen.length, 1);
+  assert.notStrictEqual(seen[0].file, settings, 'not the maker\'s file');
+  assert.strictEqual(path.basename(seen[0].file), 'settings.json');
+  assert.match(path.basename(seen[0].dir), PRIVATE_FOLDER, 'in a folder of the run\'s own');
+  assert.ok(seen[0].bytes.equals(original), 'the bytes the run read, byte order mark and line ends included');
+  assert.strictEqual(fs.readFileSync(settings, 'utf8'), edited, 'the maker\'s file is as they saved it');
+  assert.strictEqual(fs.existsSync(seen[0].dir), false, 'and the copy is gone');
+  assert.deepStrictEqual(result.applied, { environmentVariables: ['new_Url'], connectionReferences: ['new_Dataverse'] }, 'what is reported is what pac was given');
+});
+
+test('the sanitizer knows what pac was given: a value pac quotes from its copy is withheld — and the value a file was saved with meanwhile is never given to pac, so it is quoted by no one', async () => {
+  const { request, settings } = importFiles(withFeature(filled()));
+  const edited = JSON.stringify(template({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: 'saved-meanwhile-0123456789', TypeId: 100000005 }] }));
+  const { seen, pac } = readingPac((args, call) => ({ status: 1, stdout: '', stderr: `Error: rejected '${JSON.parse(call.bytes.toString('utf8')).EnvironmentVariables[0].Value}'` }));
+  await assert.rejects(ss.runImport(request, { sdkFirst: refusedAfter(() => fs.writeFileSync(settings, edited), toPac()), pac }), (err) => {
+    assert.strictEqual(err.code, 'PAC_FAILED');
+    assert.strictEqual(err.message, `\`pac solution import\` failed (exit 1): ${WITHHELD('text')}`);
+    assert.ok(!JSON.stringify(ss.describeFailure(err)).includes('saved-meanwhile-0123456789'));
+    return true;
+  });
+  assert.strictEqual(JSON.parse(seen[0].bytes.toString('utf8')).EnvironmentVariables[0].Value, SECRET, 'pac read the value the sanitizer was built from');
+});
+
+test('the private copy is removed whichever way pac ends — it succeeded, failed, was not found, ran out of time or was refused — and a failure of pac is pac\'s, with its code and the reason pac was asked', async () => {
+  const lost = (code, message) => () => ({ status: null, stdout: '', stderr: '', error: Object.assign(new Error(message), { code }) });
+  const outcomes = [
+    ['succeeded', () => ({ status: 0, stdout: 'ok', stderr: '' }), null],
+    ['PAC_FAILED', () => ({ status: 1, stdout: '', stderr: 'Error: nope' }), 'PAC_FAILED'],
+    ['PAC_MISSING', lost('ENOENT', 'spawn pac ENOENT: not found on PATH'), 'PAC_MISSING'],
+    ['PAC_TIMEOUT', lost('ETIMEDOUT', 't'), 'PAC_TIMEOUT'],
+    ['PAC_REFUSED', lost('EARGUMENT', 'cannot pass "a%b" to pac.cmd'), 'PAC_REFUSED'],
+  ];
+  for (const [name, answer, code] of outcomes) {
+    const { request } = importFiles(withFeature(filled()));
+    const { seen, pac } = readingPac(answer);
+    const run = ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac });
+    if (code) {
+      await assert.rejects(run, (err) => err.code === code && err.fallback.code === 'INVALID_ARGUMENT' && !('warnings' in err), name);
+    } else {
+      assert.ok(!('warnings' in (await run)), name);
+    }
+    assert.strictEqual(seen.length, 1, name);
+    assert.strictEqual(fs.existsSync(seen[0].dir), false, `${name}: the folder the copy was in is gone`);
+  }
+});
+
+test('a copy that cannot be made is a failure of the pac step — nothing is sent to pac, the folder is removed, and the reason pac was asked is kept', async () => {
+  const { request } = importFiles(withFeature(filled()));
+  const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
+  const real = fs.writeFileSync;
+  let folder;
+  fs.writeFileSync = (file, ...rest) => {
+    if (path.basename(String(file)) === 'settings.json' && PRIVATE_FOLDER.test(path.basename(path.dirname(String(file))))) {
+      folder = path.dirname(String(file));
+      throw Object.assign(new Error(`EACCES: permission denied, open '${file}'`), { code: 'EACCES' });
+    }
+    return real(file, ...rest);
+  };
+  try {
+    await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac }), (err) => {
+      assert.strictEqual(err.code, 'PAC_SETTINGS_COPY_FAILED');
+      assert.strictEqual(err.message, '`pac solution import` was not run: a private copy of the settings file could not be made (EACCES).');
+      assert.strictEqual(err.fallback.code, 'INVALID_ARGUMENT');
+      return true;
+    });
+  } finally {
+    fs.writeFileSync = real;
+  }
+  assert.deepStrictEqual(calls, [], 'pac was never started');
+  assert.ok(folder && !fs.existsSync(folder), 'the folder was removed');
 });
 
 test('an ordinary invalid file whose key or name holds "this SDK does not apply" is NOT sent to pac — the SDK\'s normal complaint quotes it, and the import fails with the SDK\'s code', async () => {

@@ -6,7 +6,9 @@
 //     "responses": [ { "match": ["solution", "create-settings"],        the leading arguments a call must have
 //                      "status": 0, "stdout": "…", "stderr": "…",
 //                      "writeFlag": "--settings-file", "writeContent": "<text>",   write this text at the path that flag names (what pac does)
-//                      "snapshot": ["--settings-file", "--path"] } ] }   record what these flags' files held (text, and a package's size)
+//                      "snapshot": ["--settings-file", "--path"],   record what these flags' files held (text, a package's size, and the permission bits of the file and of its folder)
+//                      "echoValueOf": "--settings-file" } ] }       say `{{value}}` in stdout and stderr as the first environment variable value the file that flag names holds at the time of the call — what a pac that
+//                                                                  quotes the file it reads does
 // A call no response matches exits 9, so a script that runs a pac command a test did not expect fails loudly.
 //
 // Two ways to run: as a script (`node fake-pac-program.js <pac's arguments>`), and — behind a launcher the process runner starts directly (fake-pac.js, launcher
@@ -24,15 +26,26 @@ const args = asLauncher ? [path.basename(process.argv[1]), ...process.argv.slice
 const response = config.responses.find((r) => r.match.every((m, i) => args[i] === m));
 
 const call = { args };
+// What a pac that quotes the settings file it reads would say: the first environment variable's value, from the file as it is at the time of the call.
+let echoed = '';
 if (response) {
   call.snapshots = {};
   for (const flag of response.snapshot || []) {
     const file = args[args.indexOf(flag) + 1];
     try {
       const bytes = fs.readFileSync(file);
-      call.snapshots[flag] = { bytes: bytes.length, text: bytes.toString('utf8').slice(0, 20000) };
+      const permissions = (target) => (fs.statSync(target).mode & 0o777).toString(8);
+      call.snapshots[flag] = { bytes: bytes.length, text: bytes.toString('utf8').slice(0, 20000), mode: permissions(file), dirMode: permissions(path.dirname(file)) };
     } catch {
       call.snapshots[flag] = null;
+    }
+  }
+  if (response.echoValueOf) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(args[args.indexOf(response.echoValueOf) + 1], 'utf8'));
+      echoed = String(((settings.EnvironmentVariables || []).find((entry) => typeof entry.Value === 'string') || {}).Value || '');
+    } catch {
+      echoed = '';
     }
   }
 }
@@ -43,6 +56,6 @@ if (!response) {
   process.exit(9);
 }
 if (response.writeFlag) fs.writeFileSync(args[args.indexOf(response.writeFlag) + 1], response.writeContent);
-if (response.stdout) process.stdout.write(response.stdout);
-if (response.stderr) process.stderr.write(response.stderr);
+if (response.stdout) process.stdout.write(response.stdout.replace(/\{\{value\}\}/g, () => echoed));
+if (response.stderr) process.stderr.write(response.stderr.replace(/\{\{value\}\}/g, () => echoed));
 process.exit(response.status || 0);
