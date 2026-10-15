@@ -1434,7 +1434,11 @@ custom control), but the spec validator emits a warning.
   is deleted only when it is in this app's sitemap (published, or saved but unpublished — an app that was never published has
   only the saved one, which is read for it — a page another app's
   saved navigation still references is refused by the platform and kept) or a local app/key/id creation receipt proves it,
-  with its stored name corroborating the receipt. Other candidates are kept with a manual-removal hint.
+  with its stored name corroborating the receipt. "In this app's sitemap" means an ENTRY of its navigation names the page (a
+  `SubArea` under `SiteMap/Area/Group`, either quote style): a `GenPageId` that sits in a comment or a CDATA section is text and
+  proves nothing, and a navigation that cannot be read as navigation keeps every page. A sitemap found by the app's unique name
+  (a never-published app whose layer has no sitemap component) is the app's only when its current row carries that name.
+  Other candidates are kept with a manual-removal hint.
   The build writes `page-ownership.created.<hash>.json` in its workspace after an acknowledged create,
   before manifest persistence/placement. Version-2 records include an opaque SHA-256 fingerprint of
   the normalized target HTTPS origin (lower-case host, no path or trailing slash), not its URL.

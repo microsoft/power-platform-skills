@@ -1829,7 +1829,7 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
       }
       if (entity === 'appmodule') return state.app ? [{ appmoduleid: 'app-1', appmoduleidunique: 'app-u-1' }] : [];
       if (entity === 'appmodulecomponent') return [{ objectid: 'sitemap-1', componenttype: 62 }];
-      if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><SubArea GenPageId="${PAGE_1}" /></SiteMap>` }];
+      if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><Area><Group><SubArea GenPageId="${PAGE_1}" /></Group></Area></SiteMap>` }];
       return [];
     },
     // The pages in their saved layer, which is where teardown looks for them.

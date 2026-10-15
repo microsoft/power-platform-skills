@@ -449,6 +449,8 @@ const KIND_HANDLERS = {
       // current layer is read only when the published one leaves a present page unproven. Unlike the build,
       // teardown may take the saved layer as proof: a DELETE of a page another app's saved navigation still
       // references is refused by the platform (see isDependencyBlocked), and that refusal is a skip here.
+      // A page is in that navigation when an ENTRY of it names the page (navigationProof reads the entries of the sitemap, not the
+      // text of its XML): a GenPageId in a comment or a CDATA section names none, and a single-quoted one does.
       // An app that was never published has no published layer at all — the plain read of it answers "not found",
       // as it does for an app that is gone — so its saved navigation is the only proof there is: navigationProof
       // looks for the app in its saved layer, and reads its navigation there when it finds it (`neverPublished`).

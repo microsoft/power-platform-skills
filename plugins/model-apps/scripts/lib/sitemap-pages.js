@@ -5,6 +5,10 @@
 // ["Entity","Url","DefaultDashboard","Page","GenPageId"]). The sitemap is the authoritative, complete record
 // of which pages BELONG to the app (model-driven-app membership == sitemap presence). Membership is NOT an
 // existence check — a page can exist env-wide yet not be in this app's sitemap (see genpage-sdk.js enumerateEnv).
+//
+// TWO WAYS TO READ THAT XML, by what a wrong answer costs. sitemapGenPages / sitemapGenPageIds read its TEXT for a `GenPageId="…"`: a match inside a comment or a CDATA section counts, and a single-quoted attribute does not.
+// That is good enough where a page found only REFUSES something (the scan of the other apps) or is reported or checked (verify, download, a listing, the build's membership check). navigationGenPageIds reads the navigation
+// ELEMENTS instead, and is the only reader a page is DELETED by: the teardown's proof of membership (navigationProof) rests on nothing else.
 
 const { odataLit } = require('./odata.js');
 const { appComponentRows, currentAppLayer, collectionRows, currentLayerRows } = require('./app-components.js');
@@ -50,35 +54,74 @@ function decodeXmlEntities(s) {
 const NAV_PATH = ['SiteMap', 'Area', 'Group'];
 const XML_TAG = /<(\/?)([^\s/>"'=!?]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
 const XML_ATTR = /\s([^\s/>"'=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-function liveNavEntries(xml) {
+// The walk, once, for every reader of the navigation: `visit(attrs, repeated)` is called for each navigation entry in document order, with the decoded attributes of its SubArea and whether its start tag names an
+// attribute twice (the last value stands in `attrs`). false for the markup described above.
+function walkNavigation(xml, visit) {
   const markup = String(xml || '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
     .replace(/<\?[\s\S]*?\?>/g, '');
   const tags = [...markup.matchAll(XML_TAG)];
   // In well-formed XML every remaining '<' starts a tag; text and attributes escape it.
-  if (tags.length !== (markup.match(/</g) || []).length) return null;
-  const byKey = new Map();
+  if (tags.length !== (markup.match(/</g) || []).length) return false;
   const open = [];
   for (const [, closing, name, body, selfClosing] of tags) {
     if (closing) {
-      if (open[open.length - 1] !== name) return null;
+      if (open[open.length - 1] !== name) return false;
       open.pop();
       continue;
     }
     if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
       const attrs = Object.create(null);
-      for (const m of body.matchAll(XML_ATTR)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
-      const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
-      const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
-      if (key) {
-        if (!byKey.has(key)) byKey.set(key, []);
-        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
+      let repeated = false;
+      for (const m of body.matchAll(XML_ATTR)) {
+        repeated = repeated || m[1] in attrs;
+        attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
       }
+      visit(attrs, repeated);
     }
     if (!selfClosing) open.push(name);
   }
-  return open.length ? null : byKey;
+  return open.length === 0;
+}
+
+function liveNavEntries(xml) {
+  const byKey = new Map();
+  const readable = walkNavigation(xml, (attrs) => {
+    const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
+    const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
+    if (key) {
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
+    }
+  });
+  return readable ? byKey : null;
+}
+
+// The pages the NAVIGATION of a sitemap holds: the GenPageId of every entry the walk above finds, so a page named in a comment, a CDATA section, a processing instruction or the value of another attribute is not held,
+// and either quote style and any character reference counts. This is what a page is DELETED by (navigationProof). sitemapGenPageIds reads the TEXT, which is enough to REFUSE — the scan of the other apps says "another
+// app has this page" — and to report, and is not enough to prove that a page is the app's: it takes the page of a commented-out entry for a member, and misses a single-quoted one.
+//   { ok:true, ids }                          sorted, unique and lower-cased, as sitemapGenPageIds answers
+//   { ok:false, reason:'malformed', detail }  markup the walk cannot account for, an entry whose start tag names an attribute twice, or a page id that is no GUID. FAIL-CLOSED: no id comes with it, not even those read
+//                                             before the failure — which pages the navigation holds is not known, and "none" is not an answer.
+// A page id is read as the SDK reads one (normalizeGuid, in the reader its app delete takes the pages to retain from): a GUID, or a GUID in braces, and nothing else — no stray space, no other length. An entry with no
+// GenPageId, or an empty one, names no page. Only entries under SiteMap/Area/Group count, which is narrower than the SDK's reader (it takes a SubArea at any depth): a page that only such an entry names stays unproven,
+// which keeps it. A start tag may not name an attribute twice (the well-formedness constraint "Unique Att Spec", https://www.w3.org/TR/xml/#uniqattspec): which of two values is the page's cannot be told.
+function navigationGenPageIds(xml) {
+  const ids = new Set();
+  let notGuid;
+  let repeated = false;
+  const readable = typeof xml === 'string' && xml.trim() !== '' && walkNavigation(xml, (attrs, twice) => {
+    repeated = repeated || twice;
+    const raw = attrs.GenPageId;
+    if (!raw || notGuid !== undefined) return;
+    const id = raw.length === 38 && raw.startsWith('{') && raw.endsWith('}') ? raw.slice(1, -1) : raw;
+    if (GUID_36.test(id)) ids.add(id.toLowerCase());
+    else notGuid = raw;
+  });
+  if (!readable || repeated) return { ok: false, reason: 'malformed', detail: 'the sitemap XML is not well-formed, so which pages its navigation holds cannot be told' };
+  if (notGuid !== undefined) return { ok: false, reason: 'malformed', detail: `a page id in the sitemap's navigation is not a GUID (${JSON.stringify(notGuid.slice(0, 80))}), so which pages it holds cannot be told` };
+  return { ok: true, ids: [...ids].sort() };
 }
 
 function appNavigationMatchesSitemap(app, xml) {
@@ -101,6 +144,7 @@ function appNavigationMatchesSitemap(app, xml) {
     && [...selected].every(([key, entries]) => fetchedTargets.get(key) === entries.length);
 }
 
+// The text reader (see the top of this file): every `GenPageId="…"` in a SubArea START TAG of the text — comments and CDATA included, single quotes not. Not for a decision to delete: navigationGenPageIds.
 function sitemapGenPages(xml) {
   const s = String(xml || '');
   const seen = new Set();
@@ -261,8 +305,9 @@ function currentSitemapRows(rows) {
 // (current, unpublished) sitemap has it. The saved layer is read for ALL other apps in ONE request, however many there are — the `sitemap` collection's
 // RetrieveUnpublishedMultiple, which is composable with $select
 // (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrieveunpublishedmultiple) — and joined to each app by the
-// sitemap id its published read resolved. It is the reader, and the current-row rule (currentSitemapRows), that navigationProof applies to this
-// app's own saved layer. A draft that REMOVES a page does not clear it: the published layer is what that app's users see until the maker publishes.
+// sitemap id its published read resolved. It is the current-row rule (currentSitemapRows) that navigationProof applies to this app's own saved layer, but the scan reads the TEXT of the XML where navigationProof
+// reads the navigation entries: what the scan finds only REFUSES an update, so a page named in a comment is still reported (a refusal that is not needed costs a message, a reference that is missed costs another
+// app's page), where a page that is deleted must be an entry (navigationGenPageIds). A draft that REMOVES a page does not clear it: the published layer is what that app's users see until the maker publishes.
 //
 // NEVER-PUBLISHED APPS. An app that was created in the maker and saved but never published has no row in the published list above, so none of that app's
 // navigation was read — yet a page it holds is its page, and publishing it would show the page there. draftOnlyApps lists such apps (one request), and each
@@ -462,7 +507,8 @@ async function draftOnlyApps(sdk, published, self) {
 // of one sitemap are all those the platform returned for its id (currentSitemapRows picks the current one), grouped here so the caller reads each app's by its own id. `idsByName` is
 // the same rows seen by the unique name the vendored SDK ties an app to its sitemap by (see fetchAppsForPages): a row looks like
 //   { "sitemapid": "5111e0f2-…", "sitemapnameunique": "contoso_orders", "componentstate": 1, "sitemapxml": "<SiteMap>…" }
-// and names are lower-cased because Dataverse compares them without regard to case.
+// and names are lower-cased because Dataverse compares them without regard to case. EVERY row is indexed, so a name found here may sit on a row that is not the sitemap's current one: whoever takes the sitemap that
+// carries a name as an app's must check the name on the row it reads (savedLayerXml).
 // The read pages with @odata.nextLink like every other collection read in app-components.js (collectionRows): a repeated link, a failed page or a
 // body that is no result set is a failure, never a shorter list.
 async function savedSitemaps(sdk) {
@@ -480,7 +526,7 @@ async function savedSitemaps(sdk) {
     if (!id) continue;
     if (!byId.has(id)) byId.set(id, []);
     byId.get(id).push(row);
-    const name = typeof row.sitemapnameunique === 'string' ? row.sitemapnameunique.trim().toLowerCase() : '';
+    const name = savedName(row);
     if (name) {
       if (!idsByName.has(name)) idsByName.set(name, new Set());
       idsByName.get(name).add(id);
@@ -489,15 +535,38 @@ async function savedSitemaps(sdk) {
   return { ok: true, byId, idsByName };
 }
 
-// The genpage ids in one app's saved layer — { ok:true, ids } — or { ok:false, reason } when its rows cannot be trusted: none came back for its sitemap, they do
-// not name one current row, or the current one has no XML or malformed XML (the same structural check a published sitemap must pass). The reasons are fetchSitemap's for the same faults.
-function savedLayerIds(rows) {
+// The unique name a saved sitemap row carries, as rows are compared by it: trimmed and lower-cased, and '' for a row with none.
+const savedName = (row) => (row && typeof row.sitemapnameunique === 'string' ? row.sitemapnameunique.trim().toLowerCase() : '');
+
+// The XML of one saved sitemap's current row — { ok:true, xml } — or { ok:false, reason, detail? } when its rows cannot be trusted: none came back for its sitemap, they do not name one current row, or the current one has
+// no XML or malformed XML (the same structural check a published sitemap must pass). The reasons are fetchSitemap's for the same faults. The current row is selected FIRST (currentSitemapRows).
+// `ownedBy` (a name as savedName gives it) is for a sitemap that was found by its unique name: it is the app's only if the row that is READ says so itself. The row that carries the name may not be the current one — a pending
+// edit answers with both layers, and a unique name can differ between them — and the current row's navigation belongs to whoever its OWN name says. So the current row must carry the name, and so must every other row of
+// the sitemap: rows that disagree on whose it is leave it unknown, which is unreadable, not "this app's".
+function savedLayerXml(rows, ownedBy) {
   let current;
   try { [current] = currentSitemapRows(rows || []); } catch { return { ok: false, reason: 'sitemap-query-failed' }; }
+  if (ownedBy !== undefined && (!current || (rows || []).some((row) => savedName(row) !== ownedBy))) {
+    return { ok: false, reason: 'sitemap-query-failed', detail: "the saved sitemap that carries the app's unique name does not carry it on every one of its rows, its current one included, so whose navigation it is cannot be told" };
+  }
   const xml = current && current.sitemapxml;
   if (!xml) return { ok: false, reason: 'sitemap-xml-unreadable' };
   if (isMalformed(String(xml))) return { ok: false, reason: 'malformed' };
-  return { ok: true, ids: sitemapGenPageIds(String(xml)) };
+  return { ok: true, xml: String(xml) };
+}
+
+// The genpage ids in one app's saved layer, by the TEXT of its XML — { ok:true, ids } — or { ok:false, reason } as savedLayerXml. For the scan of the other apps, which only ever refuses on what it finds here.
+function savedLayerIds(rows) {
+  const layer = savedLayerXml(rows);
+  return layer.ok ? { ok: true, ids: sitemapGenPageIds(layer.xml) } : layer;
+}
+
+// The reading of a fetchSitemap answer that a page is deleted by: { ok:true, ids } over the navigation ELEMENTS of its XML (navigationGenPageIds), the answer's own failure, or { ok:false, reason:'malformed', detail } when
+// the navigation cannot be read. The `ids` that fetchSitemap itself answers are the text reader's.
+function navigationOf(read) {
+  if (!read.ok) return read;
+  const navigation = navigationGenPageIds(read.xml);
+  return navigation.ok ? { ok: true, ids: navigation.ids } : navigation;
 }
 
 // This app's navigation as OWNERSHIP PROOF for page ids. `published` is a fetchSitemap result for the
@@ -513,16 +582,21 @@ function savedLayerIds(rows) {
 // was not before, and `currentNavigation: { ok:false, reason }` says why for the message that refuses
 // or keeps an unproven page. Ids are lower-cased, as sitemapGenPageIds returns them.
 //
+// THE PAGES OF A NAVIGATION ARE READ AS NAVIGATION, in every layer (navigationGenPageIds): the entries of the sitemap, not the text of its XML. A page is deleted on this proof, and the text names pages that are no entry —
+// one in a comment or a CDATA section — and misses ones that are, in single quotes. A published sitemap whose markup cannot be read that way is { ok:false, reason:'malformed' }, as one that fails fetchSitemap's own
+// check is: the pages its text names are not proven by it. For markup that reads, `ids` are those of the entries, and the answer is `published` itself when they are the ids fetchSitemap found.
+//
 // AN APP WITH NO PUBLISHED LAYER. `published` is then { ok:false, reason:'app-not-found' }: a plain read answers the published layer only, and an app that was created and never published — a build killed
 // before its publish, an app saved in the maker and left — has no row in it, so the read answers as it does for an app that is gone. Its navigation exists only in the saved layer, and a page that navigation
 // names stays a dependency of it until the app and its sitemap are deleted — so the saved navigation is the proof, as it is for a published app whose published layer leaves a page unproven. Without it the
 // pages of such an app were proven by the records of one workspace alone. What tells such an app from a deleted one is the SAVED layer (neverPublishedNavigation): it finds the app there, or finds nothing, and
 // then the published answer stands. A saved navigation that cannot be read is a failure of the proof, never "no pages": it is the one navigation the app has, and there is no published proof for it to fall back on.
 //   -> published unchanged
-//    | { ...published, ids: <union>, currentNavigation: { ok:true, ids } | { ok:false, reason } }
+//    | { ...published, ids: <the entries' ids, with the saved layer's added>, currentNavigation: { ok:true, ids } | { ok:false, reason } }
 //    | { ok:true, neverPublished:true, ids, currentNavigation: { ok:true, ids } }      no published layer: its saved navigation
 //    | { ok:false, neverPublished:true, reason, detail? }                              no published layer, and its saved navigation could not be read (fetchSitemap's reasons)
-//    | { ok:false, reason, detail? }                                                   the app could not be looked up in its saved layer, so nothing is known of it but that the published read did not find it
+//    | { ok:false, reason, detail? }                                                   the app could not be looked up in its saved layer, so nothing is known of it but that the published read did not find it;
+//                                                                                      or the published navigation cannot be read as navigation (reason 'malformed')
 async function navigationProof(sdk, appUnique, published, candidateIds = []) {
   if (published && !published.ok && published.reason === 'app-not-found' && [...candidateIds].length) {
     const saved = await neverPublishedNavigation(sdk, appUnique);
@@ -531,17 +605,20 @@ async function navigationProof(sdk, appUnique, published, candidateIds = []) {
     return { ok: true, neverPublished: true, ids: saved.ids, currentNavigation: { ok: true, ids: saved.ids } };
   }
   if (!published || !published.ok) return published;
-  const ids = new Set(published.ids.map((id) => String(id).toLowerCase()));
-  if (![...candidateIds].some((id) => !ids.has(String(id).toLowerCase()))) return published;
+  const own = navigationOf(published);
+  if (!own.ok) return own;
+  const proof = own.ids.length === published.ids.length && own.ids.every((id, i) => id === published.ids[i]) ? published : { ...published, ids: own.ids };
+  const ids = new Set(own.ids);
+  if (![...candidateIds].some((id) => !ids.has(String(id).toLowerCase()))) return proof;
   const current = await currentNavigation(sdk, appUnique);
-  if (!current.ok) return { ...published, currentNavigation: current };
+  if (!current.ok) return { ...proof, currentNavigation: current };
   for (const id of current.ids) ids.add(String(id).toLowerCase());
-  return { ...published, ids: [...ids].sort(), currentNavigation: current };
+  return { ...proof, ids: [...ids].sort(), currentNavigation: current };
 }
 
 // The genpage ids of the app's CURRENT sitemap, or { ok:false, reason }. appmodules by unique name gives the
 // app id; RetrieveUnpublishedMultiple gives its current layer (currentAppLayer); fetchSitemap reads that
-// layer's sitemap, exactly as download does.
+// layer's sitemap, exactly as download does, and the ids are those of its navigation entries (navigationOf).
 async function currentNavigation(sdk, appUnique) {
   if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'no Dataverse client to read it' };
   let appId;
@@ -553,7 +630,7 @@ async function currentNavigation(sdk, appUnique) {
   }
   if (!appId) return { ok: false, reason: 'app-not-found' };
   const layer = await currentAppLayer(sdk.dataverse, String(appId).replace(/[{}]/g, ''));
-  const r = await fetchSitemap(sdk, appUnique, { currentLayer: layer });
+  const r = navigationOf(await fetchSitemap(sdk, appUnique, { currentLayer: layer }));
   return r.ok ? { ok: true, ids: r.ids } : { ok: false, reason: `${r.reason}${r.detail ? `: ${r.detail}` : ''}` };
 }
 
@@ -564,7 +641,7 @@ async function currentNavigation(sdk, appUnique) {
 //        { "value": [ { "appmoduleid": "…", "name": "Orders", "appmoduleidunique": "…" } ] }
 //      A draft's row is its one layer, with componentstate 1 (Unpublished, https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appmodule). Its CURRENT layer is then read by the id, as a
 //      download reads it (currentAppLayer), so the lookup's `$top=1` cannot pick the wrong one of two layers' rows. No row at all means the app is in neither layer.
-//   2. Its sitemap, by fetchSitemap over that layer: the sitemap component (componenttype 62) of the layer's key, then the sitemap by id in the saved layer.
+//   2. Its sitemap, by fetchSitemap over that layer: the sitemap component (componenttype 62) of the layer's key, then the sitemap by id in the saved layer. Its pages are those of its navigation entries (navigationOf).
 //   3. An app whose layer has no sitemap component can still hold a sitemap that only its NAME links to it (sitemapLinkedByName).
 // A lookup that fails, a layer that is not one, and a sitemap that cannot be read are each { ok:false }: nothing here is read as "the app has no pages" that was not read.
 async function neverPublishedNavigation(sdk, appUnique) {
@@ -581,7 +658,8 @@ async function neverPublishedNavigation(sdk, appUnique) {
   // From here the app is known to be in the saved layer and not in the published one, so a navigation that cannot be read is that of an app that was never published.
   const layer = await currentAppLayer(sdk.dataverse, String(app.id).replace(/[{}]/g, ''));
   let r = await fetchSitemap(sdk, appUnique, { currentLayer: layer });
-  if (!r.ok && r.reason === 'sitemap-component-not-found') r = await sitemapWithoutComponent(sdk, appUnique, layer);
+  if (r.ok) r = navigationOf(r);
+  else if (r.reason === 'sitemap-component-not-found') r = await sitemapWithoutComponent(sdk, appUnique, layer);
   return r.ok ? { ok: true, ids: r.ids } : { ok: false, neverPublished: true, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) };
 }
 
@@ -604,14 +682,19 @@ async function sitemapWithoutComponent(sdk, appUnique, layer) {
 // compares names without regard to case:
 //   { "sitemapid": "5111e0f2-…", "sitemapnameunique": "contoso_orders", "componentstate": 1, "sitemapxml": "<SiteMap>…" }
 // No sitemap of its name means the app has no navigation at all (saved in the maker with only a name, say), so it names no page. More than one leaves it unknown which is the app's, and either may hold the page.
+// A sitemap found by a name is the app's only when the row that is READ carries that name (savedLayerXml): the current row first, which must carry it, with every other row of the sitemap agreeing. A name that sits on an
+// older row alone would otherwise hand the app whatever the current row of that sitemap holds, though its own name says it is another's. Rows that disagree are unreadable — never "no navigation", and never one row's
+// name stood in for another's. Its pages are those of its navigation entries (navigationOf).
 async function sitemapLinkedByName(sdk, appUnique) {
   const saved = await savedSitemaps(sdk);
   if (!saved.ok) return { ok: false, reason: 'sitemap-query-failed', detail: saved.reason };
-  const ids = saved.idsByName.get(String(appUnique).toLowerCase());
+  const name = String(appUnique).trim().toLowerCase();
+  const ids = saved.idsByName.get(name);
   if (!ids) return { ok: true, ids: [] };
   if (ids.size !== 1) return { ok: false, reason: 'sitemap-query-failed', detail: "more than one sitemap carries the app's unique name, so which is its navigation cannot be told" };
-  const layer = savedLayerIds(saved.byId.get([...ids][0]));
-  return layer.ok ? layer : { ok: false, reason: layer.reason, detail: "the saved sitemap that carries the app's unique name cannot be read" };
+  const layer = savedLayerXml(saved.byId.get([...ids][0]), name);
+  if (!layer.ok) return { ok: false, reason: layer.reason, detail: layer.detail || "the saved sitemap that carries the app's unique name cannot be read" };
+  return navigationOf(layer);
 }
 
-module.exports = { liveNavEntries, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, navigationProof, fetchAppsForPages, XML_TAG, XML_ATTR };
+module.exports = { liveNavEntries, navigationGenPageIds, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, navigationProof, fetchAppsForPages, XML_TAG, XML_ATTR };

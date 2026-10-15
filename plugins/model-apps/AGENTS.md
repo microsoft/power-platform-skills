@@ -393,7 +393,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   like any draft app's (case-insensitively, as Dataverse compares names), several sitemaps of the name leave the app unreadable, and **none** means the app has no
   navigation at all and holds no page, so it is skipped — one draft app saved with only a name must not stop every page update in the environment (a read that
   *fails*, or a component that names no sitemap, proves nothing and is still unreadable; so is a *published* app with no sitemap
-  component, which is not changed here). A single-app environment reads no other app's navigation: it pays the one small request for the list of
+  component, which is not changed here). The scan reads the TEXT of each sitemap's XML, and finds a sitemap by a name on any of its rows: both can only widen what it
+  refuses, so a page named in a comment is still reported as shared — nothing is deleted on what the scan finds (the teardown's proof reads the navigation entries). A single-app environment reads no other app's navigation: it pays the one small request for the list of
   never-published apps, and nothing more when there are none (one saved-layer read as well when a never-published app has no sitemap component, to rule out a sitemap linked by
   name). Classic `dashboards[]` are opt-in.
   **Generative pages are written through the SDK** (`lib/genpage-sdk.js` `makeGenpageSdk` — the one page backend that `genpage-upload.js`, `genpage.js`, the build's pages phase, verify, download and
@@ -974,10 +975,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   navigation is the only proof there is. When the published read finds no app, `navigationProof` asks the SDK's own app lookup (the one
   the app step deletes by), which reads the saved layer, whether the app is there: it reads the current layer's sitemap there, through
   the layer's sitemap component or, when the layer has none, the sitemap that carries the app's unique name (the rule the scan of the
-  other apps follows), and the pages it names are proven like any navigation member. An app in neither layer — the re-run of a teardown
+  other apps follows), and the pages it names are proven like any navigation member. A sitemap found by that name is the app's only when
+  the row that is read carries the name itself: the current row (the authored one, when a pending edit makes the platform answer with both
+  layers) is selected first, and it and every other row of that sitemap must carry the app's unique name — a name on an older row alone would
+  hand the app whatever the current row holds, though its own name says it is another's, so rows that disagree on whose it is are an unreadable
+  navigation, not "no pages". An app in neither layer — the re-run of a teardown
   that deleted it — costs that one look and is left to this workspace's records, as it was. A saved navigation that cannot be read is an
   error that keeps every page, as an unreadable published sitemap does (the message says the app was never published, and what failed to
-  read), and the app stays for a re-run. A page another app's navigation still references is refused by the platform and kept, as for any
+  read), and the app stays for a re-run. **A page is in a navigation when one of its ENTRIES names it**: the pages are read from the
+  sitemap's elements (a `SubArea` directly under `SiteMap/Area/Group`, its `GenPageId` in either quote style and with any XML character
+  reference, a GUID — or a braced one — as the SDK reads it: `navigationGenPageIds`), in every layer, never from the text of its XML. A
+  `GenPageId="…"` inside a comment, a CDATA section or another attribute's value is no entry and proves nothing; a single-quoted one is
+  an entry; markup that cannot be read that way, or a page id that is no GUID, is an unreadable navigation (`malformed`) that keeps every
+  page, as a published sitemap that fails `fetchSitemap`'s own check does. The text readers (`sitemapGenPages`, `sitemapGenPageIds`, the
+  `ids` of `fetchSitemap`) serve what deletes nothing — the scan of the other apps (which only refuses), the build's membership check, verify,
+  download, the listings — and no page is deleted on them. A page another app's navigation still references is refused by the platform and kept, as for any
   app. The BUILD binds a page by its published navigation or a receipt only; a page only in the saved layer halts with advice to
   publish the app first (the build's shared-page scan reads OTHER apps' saved navigation as well — see above). The verified ownership set is persisted locally before app deletion,
   so a page-less retry still has proof after the app is gone. Unreadable proof or a failed record write
@@ -1015,7 +1027,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   drives a mock and would stay green through a regression here. The teardown of an app that was created and never
   published (its pages proven by the saved sitemap, the platform's refusal of a page another app references, a saved navigation
   that cannot be read) is pinned against the real bundle too, in `scripts/tests/teardown-never-published-real-bundle.test.js`:
-  the app is made by `createApp` and left unpublished, so the sitemap that holds its pages is the one the SDK writes.
+  the app is made by `createApp` and left unpublished, so the sitemap that holds its pages is the one the SDK writes. What counts as
+  navigation — a page named only in a comment or a CDATA section is not proven, a single-quoted `GenPageId` is, for a published app and for an
+  app that was never published, found by its sitemap component or by name — and the rule that the current row of a sitemap found by name carries the
+  app's own unique name (both row orders, nothing recorded or deleted) are pinned against the real bundle in
+  `scripts/tests/teardown-navigation-proof-real-bundle.test.js`, where the pages deleted are checked against the pages the SDK's own reader of the sitemap retains.
   The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
@@ -1717,7 +1733,7 @@ scripts/
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
-    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries)
+    sitemap-pages.js           ← pure GenPageId extractors (the TEXT readers `sitemapGenPages` / `sitemapGenPageIds`, which only refuse or report; `navigationGenPageIds`, which reads the navigation ELEMENTS and is what a page is deleted by) + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof, read as navigation, from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries)
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
     deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there, each page with the hash of the source the pages phase read and sent (what the build's Griffel check compares a later source with)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode

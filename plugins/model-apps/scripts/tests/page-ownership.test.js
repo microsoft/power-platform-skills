@@ -41,6 +41,8 @@ const spec = () => ({
   pages: [{ key: 'overview', name: 'Overview' }],
 });
 const manifest = (id = OTHER) => ({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: id }] });
+// A sitemap whose navigation holds these pages. The entries sit where the platform keeps them, under SiteMap/Area/Group, which is where the teardown reads a navigation from.
+const navigationXml = (ids) => `<SiteMap><Area><Group>${ids.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</Group></Area></SiteMap>`;
 
 for (const pinned of [false, true]) {
   test(`manifest adoption refuses an unplaced id with another stored name (spec pin: ${pinned})`, () => {
@@ -140,7 +142,7 @@ function sdkForPages(opts = {}) {
         if (opts.componentRows !== undefined) return opts.componentRows;
         return opts.noSitemapComponent ? [] : [{ objectid: SITEMAP, componenttype: 62 }];
       }
-      if (entity === 'sitemap') return state.app ? [{ sitemapxml: `<SiteMap>${membership.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>` }] : [];
+      if (entity === 'sitemap') return state.app ? [{ sitemapxml: navigationXml(membership) }] : [];
       if (entity === 'uxagentproject') {
         // A plain read of the page table answers the PUBLISHED layer only: a page that was never published is not in it. Teardown must not decide what exists by this.
         return rows.filter((r) => !r.draftOnly && options.filter.includes(r.uxagentprojectid.toLowerCase()))
@@ -192,7 +194,7 @@ function sdkForPages(opts = {}) {
         }
         if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')) {
           const ids = opts.draftMembership !== undefined ? opts.draftMembership : membership;
-          const xml = `<SiteMap>${ids.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>`;
+          const xml = navigationXml(ids);
           // The read of EVERY saved sitemap, which finds the one an app's name links to when no component does:
           //   { "value": [ { "sitemapid": "…", "sitemapnameunique": "contoso_pages", "componentstate": 1, "sitemapxml": "<SiteMap>…" } ] }
           if (url.includes('sitemapnameunique')) {

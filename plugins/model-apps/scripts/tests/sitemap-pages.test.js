@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { sitemapGenPages, sitemapGenPageIds, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
+const { sitemapGenPages, sitemapGenPageIds, navigationGenPageIds, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -889,7 +889,7 @@ test('navigationProof: a published app whose navigation names every candidate is
 });
 
 test('navigationProof: a published app is read in its saved layer, through its own id, for the candidates the published navigation does not name — and is never asked whether it was published', async () => {
-  const published = { ok: true, xml: '<SiteMap/>', ids: [GP_OVERVIEW] };
+  const published = { ok: true, xml: withPage(GP_OVERVIEW), ids: [GP_OVERVIEW] };
   const { sdk, calls } = proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }] });
   const r = await navigationProof(sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL]);
   assert.deepStrictEqual(r, { ...published, ids: BOTH_PAGES, currentNavigation: { ok: true, ids: BOTH_PAGES } });
@@ -1052,4 +1052,218 @@ test('navigationProof: the saved sitemap of an app with no published layer, when
   ] } } });
   const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_DETAIL]);
   assert.deepStrictEqual(r.ids, [GP_DETAIL]);
+});
+
+// ── navigationGenPageIds: the pages the NAVIGATION of a sitemap holds ───────────────────────────────────────────────────────────
+// The teardown deletes a page by what this says, so it reads the navigation ELEMENTS — a SubArea directly under SiteMap/Area/Group, in either quote style — and not the text of the XML. sitemapGenPageIds is that text:
+// it sees a `GenPageId="…"` inside a comment, a CDATA section or another attribute's value, and misses a single-quoted one. That is enough to REFUSE (the scan of the other apps says "another app has the page") or to
+// REPORT, and not to decide that a page is the app's and delete it.
+const navXml = (...entries) => `<SiteMap><Area Id="a"><Group Id="g">${entries.join('')}</Group></Area></SiteMap>`;
+const subArea = (attrs) => `<SubArea Id="s" ${attrs}/>`;
+const pageAttr = (id, quote = '"') => `GenPageId=${quote}${id}${quote}`;
+// What fetchSitemap answers for the XML of a published sitemap: the XML and the ids the TEXT reader finds in it.
+const publishedOf = (xml) => ({ ok: true, xml, ids: sitemapGenPageIds(xml) });
+
+test('navigationGenPageIds: the GenPageId of every navigation element, in either quote style — sorted, unique and lower-cased; an entry that names no page adds nothing', () => {
+  const xml = navXml(
+    subArea(pageAttr(GP_DETAIL.toUpperCase())), subArea(pageAttr(GP_OVERVIEW, "'")), subArea(pageAttr(GP_OVERVIEW.toUpperCase())),
+    subArea('Entity="account"'), subArea('GenPageId=""'), subArea('Url="https://contoso.example/"'));
+  assert.deepStrictEqual(navigationGenPageIds(xml), { ok: true, ids: [GP_OVERVIEW, GP_DETAIL].sort() });
+  assert.deepStrictEqual(navigationGenPageIds(navXml(subArea('Entity="account"'))), { ok: true, ids: [] }, 'a navigation with no page is a readable one');
+  assert.deepStrictEqual(navigationGenPageIds(XML), { ok: true, ids: [GP_OVERVIEW, GP_DETAIL].sort() }, 'the realistic sitemap of this file');
+});
+
+test('navigationGenPageIds: text is not navigation — a page named in a comment, a CDATA section, a processing instruction or the value of another attribute is not held', () => {
+  const hidden = subArea(pageAttr(GP_DETAIL));
+  for (const [what, text] of [['a comment', `<!-- ${hidden} -->`], ['a CDATA section', `<![CDATA[${hidden}]]>`], ['a processing instruction', `<?hidden ${hidden}?>`]]) {
+    assert.deepStrictEqual(navigationGenPageIds(navXml(subArea(pageAttr(GP_OVERVIEW)), text)), { ok: true, ids: [GP_OVERVIEW] }, what);
+  }
+  // The decoy comes first, in the value of another attribute of the entry that holds the page — in the other quote style.
+  assert.deepStrictEqual(navigationGenPageIds(navXml(`<SubArea Id="s" Title='see GenPageId="${GP_DETAIL}"' ${pageAttr(GP_OVERVIEW)}/>`)), { ok: true, ids: [GP_OVERVIEW] });
+  assert.deepStrictEqual(navigationGenPageIds(navXml(`<SubArea Id="s" Title="see GenPageId='${GP_DETAIL}'" ${pageAttr(GP_OVERVIEW, "'")}/>`)), { ok: true, ids: [GP_OVERVIEW] });
+  // A comment can hold a '>' and a quote without ending anything.
+  assert.deepStrictEqual(navigationGenPageIds(navXml(`<!-- a > b " c ' d ${hidden} -->`, subArea(pageAttr(GP_OVERVIEW)))), { ok: true, ids: [GP_OVERVIEW] });
+});
+
+test('navigationGenPageIds: a page id spelled with XML character references is the id it spells', () => {
+  const decimal = `&#49;${GP_OVERVIEW.slice(1)}`; // '1' is &#49;
+  const hex = GP_DETAIL.replace('-', '&#x2D;');
+  assert.deepStrictEqual(navigationGenPageIds(navXml(subArea(pageAttr(decimal)), subArea(pageAttr(hex, "'")))), { ok: true, ids: [GP_OVERVIEW, GP_DETAIL].sort() });
+});
+
+test('navigationGenPageIds: a page id is a GUID, or a GUID in braces, exactly as the SDK reads it — any other value is a navigation that cannot be read, in either quote style', () => {
+  assert.deepStrictEqual(navigationGenPageIds(navXml(subArea(pageAttr(`{${GP_OVERVIEW.toUpperCase()}}`, "'")))), { ok: true, ids: [GP_OVERVIEW] });
+  for (const bad of ['not-a-guid', ` ${GP_OVERVIEW}`, `${GP_OVERVIEW} `, `{${GP_OVERVIEW}`, `${GP_OVERVIEW}}`, GP_OVERVIEW.slice(1), `${GP_OVERVIEW}0`, `{${GP_OVERVIEW}} `, `z${GP_OVERVIEW.slice(1)}`]) {
+    for (const quote of ['"', "'"]) {
+      const r = navigationGenPageIds(navXml(subArea(pageAttr(GP_DETAIL)), subArea(pageAttr(bad, quote))));
+      assert.deepStrictEqual([r.ok, r.reason], [false, 'malformed'], `${quote}${bad}${quote}`);
+      assert.match(r.detail, /not a GUID/, `${quote}${bad}${quote}`);
+      assert.strictEqual(r.ids, undefined, 'a navigation that cannot be read names no page, not even the ones it read before it failed');
+    }
+  }
+});
+
+test('navigationGenPageIds: only a SubArea directly under SiteMap/Area/Group is navigation — the same attribute anywhere else, or on an element of another name, is not', () => {
+  const page = pageAttr(GP_DETAIL);
+  for (const [what, xml] of [
+    ['a SubArea directly under an Area', `<SiteMap><Area Id="a"><SubArea Id="s" ${page}/></Area></SiteMap>`],
+    ['a SubArea directly under the SiteMap', `<SiteMap><SubArea Id="s" ${page}/></SiteMap>`],
+    ['a SubArea inside another element of a group', `<SiteMap><Area Id="a"><Group Id="g"><Other><SubArea Id="s" ${page}/></Other></Group></Area></SiteMap>`],
+    ['elements whose names only start like SubArea', `<SiteMap><Area Id="a"><Group Id="g"><SubArea-Archived Id="s" ${page}/><SubAreaX Id="t" ${page}/></Group></Area></SiteMap>`],
+    ['a document that is not a sitemap', `<Other><Area Id="a"><Group Id="g"><SubArea Id="s" ${page}/></Group></Area></Other>`],
+  ]) {
+    assert.deepStrictEqual(navigationGenPageIds(xml), { ok: true, ids: [] }, what);
+  }
+});
+
+test('navigationGenPageIds: markup it cannot account for is { ok:false, reason:"malformed" } with a detail — never "no pages"', () => {
+  const entry = subArea(pageAttr(GP_OVERVIEW));
+  for (const [what, xml] of [
+    ['an element that is never closed', `${navXml(entry)}<Dangling>`],
+    ['a closing tag that matches nothing', `<SiteMap><Area Id="a"><Group Id="g">${entry}</Area></Group></SiteMap>`],
+    ['a "<" that opens no tag', `<SiteMap><Area Id="a"><Group Id="g">${entry}</Group></Area> a < b </SiteMap>`],
+    ['an entry whose start tag names GenPageId twice', navXml(entry, `<SubArea Id="t" ${pageAttr(GP_OVERVIEW)} ${pageAttr(GP_DETAIL, "'")}/>`)],
+    ['a document type declaration, whose entities could expand into elements', `<!DOCTYPE SiteMap [<!ENTITY p "x">]>${navXml(entry)}`],
+    ['no text at all', ''],
+    ['no XML', undefined],
+  ]) {
+    const r = navigationGenPageIds(xml);
+    assert.deepStrictEqual([r.ok, r.reason], [false, 'malformed'], what);
+    assert.match(r.detail, /well-formed/, what);
+    assert.strictEqual(r.ids, undefined, what);
+  }
+});
+
+// ── navigationProof reads the pages of a navigation as navigation, in whichever layer it reads ──────────────────────────────────
+
+test('navigationProof: a published app is proven by the navigation elements of its published sitemap — a page that only a comment or a CDATA section names is not proven, and the saved layer is asked about it', async () => {
+  for (const hide of [(s) => `<!-- ${s} -->`, (s) => `<![CDATA[${s}]]>`]) {
+    const xml = navXml(subArea(pageAttr(GP_OVERVIEW)), hide(subArea(pageAttr(GP_DETAIL))));
+    const published = publishedOf(xml);
+    assert.deepStrictEqual(published.ids, BOTH_PAGES, 'the text reader of fetchSitemap names both pages');
+    const { sdk, calls } = proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }], sitemap: { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } } });
+    const r = await navigationProof(sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL]);
+    assert.deepStrictEqual(r.ids, [GP_OVERVIEW], 'the page in the comment is in the navigation of neither layer');
+    assert.deepStrictEqual(r.currentNavigation, { ok: true, ids: [GP_OVERVIEW] });
+    assert.ok(calls.gets.length > 0, 'the saved layer was read, for the page the published navigation does not prove');
+  }
+});
+
+test('navigationProof: a published app whose navigation names its pages in single quotes has them proven by the published layer, with no read of the saved one', async () => {
+  const { sdk, calls } = proofEnv();
+  const r = await navigationProof(sdk, 'contoso_app', publishedOf(navXml(subArea(pageAttr(GP_OVERVIEW, "'")), subArea(pageAttr(GP_DETAIL, "'")))), [GP_OVERVIEW, GP_DETAIL]);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.ids, BOTH_PAGES);
+  assert.deepStrictEqual(calls, { resolved: [], queries: [], gets: [] });
+});
+
+test('navigationProof: the saved layer of a published app is read as navigation too — a page only a comment names is not proven by it, a single-quoted one is', async () => {
+  const published = publishedOf(withPage(GP_OVERVIEW));
+  const saved = (xml) => proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }], sitemap: { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } } });
+  const hidden = await navigationProof(saved(navXml(subArea(pageAttr(GP_OVERVIEW)), `<!-- ${subArea(pageAttr(GP_DETAIL))} -->`)).sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL]);
+  assert.deepStrictEqual(hidden.ids, [GP_OVERVIEW]);
+  assert.deepStrictEqual(hidden.currentNavigation, { ok: true, ids: [GP_OVERVIEW] });
+  const quoted = await navigationProof(saved(navXml(subArea(pageAttr(GP_OVERVIEW)), subArea(pageAttr(GP_DETAIL, "'")))).sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL]);
+  assert.deepStrictEqual(quoted.ids, BOTH_PAGES);
+  assert.deepStrictEqual(quoted.currentNavigation, { ok: true, ids: BOTH_PAGES });
+  // A saved navigation that cannot be read as navigation proves nothing more, and says why — as one the platform refuses to answer does.
+  const unread = await navigationProof(saved(`${navXml(subArea(pageAttr(GP_OVERVIEW)))}<Dangling>`).sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL]);
+  assert.deepStrictEqual(unread.ids, [GP_OVERVIEW]);
+  assert.strictEqual(unread.ok, true);
+  assert.strictEqual(unread.currentNavigation.ok, false);
+  assert.match(unread.currentNavigation.reason, /malformed.*well-formed/);
+});
+
+test('navigationProof: a published sitemap whose markup cannot be read as navigation is an unreadable answer — not a navigation without pages, and not the pages its text names', async () => {
+  const published = publishedOf(`${navXml(subArea(pageAttr(GP_OVERVIEW)))}<Dangling>`);
+  assert.deepStrictEqual(published.ids, [GP_OVERVIEW], 'fetchSitemap accepts it: its text is a sitemap that ends with ">"');
+  const { sdk, calls } = proofEnv();
+  for (const candidates of [[GP_OVERVIEW], []]) {
+    const r = await navigationProof(sdk, 'contoso_app', published, candidates);
+    assert.deepStrictEqual([r.ok, r.reason], [false, 'malformed']);
+    assert.match(r.detail, /well-formed/);
+    assert.strictEqual(r.ids, undefined);
+  }
+  assert.deepStrictEqual(calls, { resolved: [], queries: [], gets: [] });
+});
+
+// An app with no published layer is read through the sitemap its saved layer holds: found through its sitemap component, or through the unique name that its sitemap carries when its layer has no sitemap component.
+const NEVER_PUBLISHED_ROUTES = [
+  ['its sitemap component', undefined],
+  ['the unique name its sitemap carries', []],
+];
+const savedSitemapOf = (xml) => ({
+  saved: { status: 200, body: { value: [{ sitemapid: PROOF_SITEMAP, sitemapnameunique: 'contoso_app', sitemapxml: xml, componentstate: 1 }] } },
+  sitemap: { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } },
+});
+
+test('navigationProof: an app with no published layer is proven by the navigation elements of its saved sitemap — a comment or a CDATA section names no page, a single-quoted attribute does — by its component or by its name', async () => {
+  for (const [route, components] of NEVER_PUBLISHED_ROUTES) {
+    for (const [what, xml, ids] of [
+      ['a comment', navXml(subArea(pageAttr(GP_OVERVIEW)), `<!-- ${subArea(pageAttr(GP_DETAIL))} -->`), [GP_OVERVIEW]],
+      ['a CDATA section', navXml(subArea(pageAttr(GP_OVERVIEW)), `<![CDATA[${subArea(pageAttr(GP_DETAIL))}]]>`), [GP_OVERVIEW]],
+      ['single quotes', navXml(subArea(pageAttr(GP_OVERVIEW, "'")), subArea(pageAttr(GP_DETAIL, "'"))), BOTH_PAGES],
+    ]) {
+      const { sdk } = proofEnv({ components, ...savedSitemapOf(xml) });
+      const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW, GP_DETAIL]);
+      assert.deepStrictEqual(r, { ok: true, neverPublished: true, ids, currentNavigation: { ok: true, ids } }, `${route}: ${what}`);
+    }
+  }
+});
+
+test('navigationProof: a saved sitemap of an app with no published layer whose markup cannot be read as navigation, or that holds a page id that is no GUID in single quotes, is unreadable — never "no pages"', async () => {
+  for (const [route, components] of NEVER_PUBLISHED_ROUTES) {
+    for (const [what, xml, detail] of [
+      ['an element that is never closed', `${navXml(subArea(pageAttr(GP_OVERVIEW)))}<Dangling>`, /well-formed/],
+      ['a single-quoted page id that is no GUID', navXml(subArea(pageAttr(GP_OVERVIEW)), subArea(pageAttr('not-a-guid', "'"))), /not a GUID/],
+    ]) {
+      const { sdk } = proofEnv({ components, ...savedSitemapOf(xml) });
+      const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW]);
+      assert.deepStrictEqual([r.ok, r.neverPublished, r.reason], [false, true, 'malformed'], `${route}: ${what}`);
+      assert.match(r.detail, detail, `${route}: ${what}`);
+      assert.strictEqual(r.ids, undefined, `${route}: ${what}`);
+    }
+  }
+});
+
+// The sitemap of an app whose layer has no sitemap component is found by the unique name its rows carry. A sitemap with a pending edit answers with the rows of both its layers, and the row whose navigation is read is the
+// CURRENT one: so it is the current row that has to carry the app's name — not some other row of the sitemap that happens to — and a sitemap whose rows do not agree on whose it is leaves it unknown whose navigation it is.
+const namedRow = (name, pages, componentstate) => ({ sitemapid: PROOF_SITEMAP, sitemapnameunique: name, sitemapxml: withPage(...pages), componentstate });
+
+test('navigationProof: the current row of a sitemap found by name must carry the app\'s unique name itself — a name on another row is no proof whose navigation it is, whichever row is listed first', async () => {
+  for (const [what, rows] of [
+    ['the name is on the older row only, and the current row is another app\'s', [namedRow('contoso_app', [GP_OVERVIEW], 0), namedRow('contoso_foreign', [GP_DETAIL], 1)]],
+    ['the name is on the current row only, and the older row is another app\'s', [namedRow('contoso_foreign', [GP_OVERVIEW], 0), namedRow('contoso_app', [GP_DETAIL], 1)]],
+    ['the name is on the current row, and the older row carries none', [namedRow(null, [GP_OVERVIEW], 0), namedRow('contoso_app', [GP_DETAIL], 1)]],
+    ['the name is on the older row, and the current row carries none', [namedRow('contoso_app', [GP_OVERVIEW], 0), namedRow('', [GP_DETAIL], 1)]],
+  ]) {
+    for (const listed of [rows, [...rows].reverse()]) {
+      const { sdk } = proofEnv({ components: [], saved: { status: 200, body: { value: listed } } });
+      const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW, GP_DETAIL]);
+      assert.deepStrictEqual([r.ok, r.neverPublished, r.reason], [false, true, 'sitemap-query-failed'], `${what}, listed ${listed[0].componentstate === 0 ? 'older' : 'current'} first`);
+      assert.match(r.detail, /unique name/, what);
+      assert.strictEqual(r.ids, undefined, `${what}: not one page is proven`);
+    }
+  }
+});
+
+test('navigationProof: every row of a sitemap found by name that carries the app\'s unique name — in any case, with stray spaces — gives the navigation of its current row, whichever row is listed first', async () => {
+  for (const names of [['contoso_app', 'contoso_app'], ['CONTOSO_APP', 'Contoso_App'], [' contoso_app', 'contoso_app ']]) {
+    const rows = [namedRow(names[0], [GP_OVERVIEW], 0), namedRow(names[1], [GP_DETAIL], 1)];
+    for (const listed of [rows, [...rows].reverse()]) {
+      const { sdk } = proofEnv({ components: [], saved: { status: 200, body: { value: listed } } });
+      const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_DETAIL]);
+      assert.deepStrictEqual(r, { ok: true, neverPublished: true, ids: [GP_DETAIL], currentNavigation: { ok: true, ids: [GP_DETAIL] } }, JSON.stringify(names));
+    }
+  }
+});
+
+// The scan of the OTHER apps (fetchAppsForPages) reads text, and keeps it: what it finds can only REFUSE an update ("another app holds this page"), and never makes a page one that is deleted, so a page that another
+// app's sitemap names only in a comment is still reported — a refusal that is not needed costs a message, and a reference that is missed costs another app's page.
+test('fetchAppsForPages: a page that another app\'s sitemap names only in a comment is still reported as shared — the scan only ever refuses, and reads text', async () => {
+  const commented = `<SiteMap><Area><Group><!-- <SubArea Id="p" GenPageId="${GP_OVERVIEW}"/> --></Group></Area></SiteMap>`;
+  const { sdk } = scanEnv([{ name: 'app-a', published: withPage() }, { name: 'app-b', published: commented }]);
+  const r = await fetchAppsForPages(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.byId.get(GP_OVERVIEW), ['app-b']);
 });
