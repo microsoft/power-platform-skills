@@ -523,6 +523,38 @@ test('edit progress embeds preview screens and links to the full HTML', (t) => {
   assert.doesNotMatch(html, /Scan to test the changes/);
 });
 
+test('embedded preview skips the untouched starter home when real screens exist', (t) => {
+  const root = project('docs-preview-starter-home');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+  seeded(root);
+  const state = loadState(root);
+  setPhone(state, {
+    stage: 'screens',
+    previewHtml: '<div class="screen" id="screen-home">'
+      + '<h1>Power Apps Standalone</h1>'
+      + '<p>Build your first screen by connecting data sources</p></div>'
+      + '<div class="screen" id="screen-readings"><h1>Field Readings</h1></div>',
+  });
+  save(root, state);
+
+  const progress = writeEditProgress(root, {
+    phase: 'preview',
+    status: 'active',
+    items: [
+      { id: 'inspect', label: 'Inspect', status: 'done' },
+      { id: 'plan', label: 'Plan', status: 'done' },
+      { id: 'apply', label: 'Apply', status: 'done' },
+      { id: 'verify', label: 'Verify', status: 'done' },
+      { id: 'preview', label: 'Preview', status: 'active' },
+    ],
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /var appScreens = screens\.filter/);
+  assert.match(html, /Build your first screen by connecting data sources/);
+  assert.match(html, /if \(appScreens\.length\) screens = appScreens/);
+});
+
 test('the final QR replaces embedded screens and adds mobile app downloads', (t) => {
   const root = project('docs-device-qr');
   t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
@@ -743,6 +775,8 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.match(skill, /MOBILE_APP_EMBED_PREVIEW=1/);
   assert.match(previewSkill, /\| `MOBILE_APP_EMBED_PREVIEW=1` \| Print the link and stop/);
   assert.doesNotMatch(previewSkill, /\| `MOBILE_APP_ORCHESTRATING=1` \|/);
+  assert.match(previewSkill, /untouched template `app\/\(app\)\/home\.tsx`/);
+  assert.match(previewSkill, /Keep it when it is the only visible screen/);
   assert.match(skill, /phone --stage screens[\s\S]*--preview-file '<working_dir>\/preview\.html'/);
   assert.match(skill, /without opening a separate browser page/);
   assert.match(skill, /phone --stage qr/);

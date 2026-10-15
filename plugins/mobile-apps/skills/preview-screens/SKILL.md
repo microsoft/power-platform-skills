@@ -69,6 +69,10 @@ Glob pattern="app/**/*.tsx" path="<working_dir>"
 - `+not-found.tsx` (Expo Router error boundary)
 - Files in directories starting with `.`
 - `index.tsx` at the app root if it only contains an auth redirect (read it to check)
+- The untouched template `app/(app)/home.tsx` when at least one other visible screen exists.
+  Recognize it only when its source still contains both `Power Apps Standalone` and
+  `Build your first screen by connecting data sources`.
+  Keep it when it is the only visible screen so the preview is never empty.
 
 **Derive screen names** from file paths:
 - `app/(app)/home.tsx` → "Home"
@@ -85,7 +89,12 @@ Build an ordered list: `[ { path, screenName, screenId } ]`.
 
 Sort the list with this priority:
 
-1. **Home / dashboard first.** The first screen matching any of these paths (in this priority): `app/(app)/home.tsx`, `app/(app)/index.tsx`, `app/(app)/dashboard.tsx`, `app/index.tsx` (only if it's a real home screen — not the auth redirect you already filtered out in Step 2). If `native-app-plan.md` flags one screen as the home/landing screen, prefer that.
+1. **Home / dashboard first.** Prefer the screen that `native-app-plan.md` identifies as the
+   home or landing screen.
+   Otherwise, use the first remaining screen matching any of these paths (in this priority):
+   `app/(app)/home.tsx`, `app/(app)/index.tsx`, `app/(app)/dashboard.tsx`, `app/index.tsx`
+   (only if it is a real home screen, not an auth redirect or the untouched starter route filtered
+   out in Step 2).
 2. **Then up to two detail screens.** A "detail" screen is any TSX whose route segment uses a dynamic param — file path contains `[` and `]` (e.g. `app/(app)/recipes/[id].tsx`, `app/(app)/orders/[orderId]/edit.tsx`). Take the first two in the order they were discovered (alphabetical by path is fine).
 3. **Then everything else** in discovery order.
 

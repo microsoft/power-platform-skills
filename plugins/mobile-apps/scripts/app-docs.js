@@ -1290,6 +1290,13 @@ function writeEditProgress(projectRoot, options = {}) {
     function renderScreenCarousel() {
       if (!phonePreviewHtml) return;
       var screens = previewScreens(phonePreviewHtml);
+      // Older preview files can include the untouched template home route before the generated
+      // app screens. Keep it only when it is the sole screen, otherwise it misrepresents the app.
+      var appScreens = screens.filter(function (screen) {
+        return !(screen.html.includes('Power Apps Standalone')
+          && screen.html.includes('Build your first screen by connecting data sources'));
+      });
+      if (appScreens.length) screens = appScreens;
       var frame = document.querySelector('.device-carousel-frame');
       var viewport = document.getElementById('devicePreviewFrame');
       var caption = document.getElementById('deviceCaption');
