@@ -94,6 +94,12 @@ function envValue(name) {
   return key === undefined ? undefined : process.env[key];
 }
 
+function isFullyQualifiedPath(file) {
+  // Windows considers \tools absolute, but it still depends on the current drive.
+  // A longer root identifies a drive-qualified or UNC path instead.
+  return path.isAbsolute(file) && (process.platform !== "win32" || path.parse(file).root.length > 1);
+}
+
 function resolveCommand(cmd) {
   if (typeof cmd !== "string" || /^[a-z0-9-]+$/.exec(cmd)?.[0] !== cmd) {
     throw new Error("Invalid command name");
@@ -105,9 +111,10 @@ function resolveCommand(cmd) {
       .map((ext) => ext.trim().toLowerCase()).filter((ext) => /^\.(?:com|exe|bat|cmd)$/.test(ext))
     : [""];
   for (const entry of paths) {
-    const dir = entry.trim().replace(/^"(.*)"$/, "$1");
+    // On POSIX, whitespace and quotes are literal directory-name characters.
+    const dir = win ? entry.trim().replace(/^"(.*)"$/, "$1") : entry;
     // Skip implicit working-directory lookup and relative PATH entries.
-    if (!path.isAbsolute(dir)) continue;
+    if (!isFullyQualifiedPath(dir)) continue;
     for (const ext of extensions) {
       const file = path.join(dir, cmd + ext);
       try {
@@ -149,9 +156,9 @@ function run(cmd, args = [], opts = {}) {
       }
       const comspec = envValue("ComSpec");
       const systemRoot = envValue("SystemRoot") || "C:\\Windows";
-      const shell = comspec && path.isAbsolute(comspec) && path.basename(comspec).toLowerCase() === "cmd.exe"
+      const shell = comspec && isFullyQualifiedPath(comspec) && path.basename(comspec).toLowerCase() === "cmd.exe"
         ? comspec : path.join(systemRoot, "System32", "cmd.exe");
-      if (!path.isAbsolute(shell)) throw new Error("Windows command interpreter path must be absolute");
+      if (!isFullyQualifiedPath(shell)) throw new Error("Windows command interpreter path must be fully qualified");
       argv = ["/d", "/s", "/v:off", "/c", `""${file}" ${args.join(" ")}"`];
       file = shell;
       options.windowsVerbatimArguments = true;

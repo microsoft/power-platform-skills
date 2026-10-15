@@ -233,6 +233,39 @@ test('CLI resolution skips relative PATH entries and honors PATH and supported P
   }
 });
 
+test('POSIX CLI resolution preserves whitespace and quotes in PATH entries literally', () => {
+  for (const entry of [' /tmp/tools', '"/tmp/tools"']) {
+    const fixture = loadInstaller({
+      env: { PATH: `${entry}:/trusted` }, commands: ['/tmp/tools/copilot', '/trusted/copilot'],
+    });
+    assert.equal(fixture.installer.resolveCommand('copilot'), '/trusted/copilot', JSON.stringify(entry));
+  }
+  const trailingSpace = loadInstaller({
+    env: { PATH: '/tmp/tools :/trusted' },
+    commands: ['/tmp/tools/copilot', '/tmp/tools /copilot', '/trusted/copilot'],
+  });
+  assert.equal(trailingSpace.installer.resolveCommand('copilot'), '/tmp/tools /copilot');
+  const missingLiteral = loadInstaller({
+    env: { PATH: '/tmp/tools :/trusted' }, commands: ['/tmp/tools/copilot', '/trusted/copilot'],
+  });
+  assert.equal(missingLiteral.installer.resolveCommand('copilot'), '/trusted/copilot');
+});
+
+test('Windows CLI resolution skips current-drive-relative paths but accepts drive and UNC roots', () => {
+  for (const entry of ['\\tools', '/tools', 'C:tools', 'C:', '\\\\server', '\\', '/']) {
+    const fixture = loadInstaller({
+      platform: 'win32', env: { Path: `${entry};C:\\trusted` },
+      commands: [path.win32.join(entry, 'copilot.exe'), 'C:\\trusted\\copilot.exe'],
+    });
+    assert.equal(fixture.installer.resolveCommand('copilot'), 'C:\\trusted\\copilot.exe', entry);
+  }
+  for (const entry of ['C:\\tools', 'C:/tools', '\\\\server\\share\\tools', '//server/share/tools']) {
+    const file = path.win32.join(entry, 'copilot.exe');
+    const fixture = loadInstaller({ platform: 'win32', env: { Path: entry }, commands: [file] });
+    assert.equal(fixture.installer.resolveCommand('copilot'), file);
+  }
+});
+
 test('native CLI calls preserve argv and process options without shell interpretation', () => {
   for (const platform of ['linux', 'win32']) {
     const file = platform === 'win32' ? 'C:\\tools\\copilot.exe' : '/tools/copilot';
@@ -288,6 +321,46 @@ test('Windows batch launchers reject paths containing expansion, quotes or contr
     assert.equal(fixture.installer.run('copilot', ['--version']).ok, false, JSON.stringify(dir));
     assert.deepEqual(fixture.calls, []);
   }
+});
+
+test('Windows batch launchers ignore current-drive-relative ComSpec and reject an unqualified fallback', () => {
+  for (const ComSpec of ['\\cmd.exe', '/cmd.exe', 'C:cmd.exe', 'cmd.exe']) {
+    const fixture = loadInstaller({
+      platform: 'win32', env: { Path: 'C:\\tools', ComSpec, SystemRoot: 'C:\\Windows' },
+      commands: ['C:\\tools\\copilot.cmd'],
+    });
+    const result = fixture.installer.run('copilot', ['--version']);
+    assert.equal(result.ok, true, result.output);
+    assert.equal(fixture.calls[0].file, 'C:\\Windows\\System32\\cmd.exe', ComSpec);
+  }
+  for (const SystemRoot of ['\\Windows', '/Windows', 'C:Windows', 'Windows']) {
+    const fixture = loadInstaller({
+      platform: 'win32', env: { Path: 'C:\\tools', ComSpec: '\\cmd.exe', SystemRoot },
+      commands: ['C:\\tools\\copilot.cmd'],
+    });
+    const result = fixture.installer.run('copilot', ['--version']);
+    assert.equal(result.ok, false, SystemRoot);
+    assert.match(result.output, /fully qualified/);
+    assert.deepEqual(fixture.calls, []);
+  }
+});
+
+test('Windows batch launchers accept fully qualified drive and UNC interpreter paths', () => {
+  for (const ComSpec of ['D:\\Windows\\System32\\cmd.exe', '\\\\server\\share\\cmd.exe']) {
+    const fixture = loadInstaller({
+      platform: 'win32', env: { Path: 'C:\\tools', ComSpec, SystemRoot: '\\Windows' },
+      commands: ['C:\\tools\\copilot.cmd'],
+    });
+    const result = fixture.installer.run('copilot', ['--version']);
+    assert.equal(result.ok, true, result.output);
+    assert.equal(fixture.calls[0].file, ComSpec);
+  }
+  const fixture = loadInstaller({
+    platform: 'win32', env: { Path: 'C:\\tools', SystemRoot: '\\\\server\\share\\Windows' },
+    commands: ['C:\\tools\\copilot.cmd'],
+  });
+  assert.equal(fixture.installer.run('copilot', ['--version']).ok, true);
+  assert.equal(fixture.calls[0].file, '\\\\server\\share\\Windows\\System32\\cmd.exe');
 });
 
 test('both plugin installers pass the original CLI flags and identifiers as separate arguments', () => {
