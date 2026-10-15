@@ -534,8 +534,11 @@ async function downloadAppMainForms(client, appModuleIdUnique, tables, { compone
     const ambiguous = members.filter((member) => typeof member.name !== 'string' || !member.name.trim()
       || catalog.filter((row) => dashboardNameKey(row.name) === dashboardNameKey(member.name)).length !== 1);
     if (ambiguous.length) {
+      // Named in code-unit order, not the order the catalog query answered in, which Dataverse does not fix: two downloads of one app must say
+      // the same, and the note's text is part of what is reported (notRoundTripped.appMembership, stderr).
+      const named = ambiguous.map((row) => `'${row.name || row.formid}'`).sort(compareText);
       notes.push({ kind: 'mainForms', table,
-        reason: `ambiguous or unreadable Main form name(s) ${ambiguous.map((row) => `'${row.name || row.formid}'`).join(', ')} of ${table}; app.mainForms cannot address them by name` });
+        reason: `ambiguous or unreadable Main form name(s) ${named.join(', ')} of ${table}; app.mainForms cannot address them by name` });
       continue;
     }
     // The download's `app.mainForms` list: by code units, not `localeCompare`, so two downloads of one app list the same names in
