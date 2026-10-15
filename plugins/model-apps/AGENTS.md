@@ -3945,7 +3945,9 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     then `icacls <dir> /reset`, `/inheritance:r` and `/grant:r *<SID>:(OI)(CI)F` — three steps, because a folder made in
     a user's temp folder can hold SYSTEM, Administrators and the user as entries of its OWN, which `/inheritance:r` alone
     leaves) and read back through `icacls /save` as SDDL (`D:PAI(A;OICI;FA;;;<SID>)`): protected, one allow entry, the
-    user's; the file is created exclusively (`wx`) and EMPTY, its list read back (`D:AI(A;ID;FA;;;<SID>)`), and only then
+    user's — the SID in full, or the alias SDDL writes for the three service accounts and for the machine's own
+    Administrator and Guest (`SY`, `LS`, `NS`, `LA`, `LG`: a VM's or a CI runner's administrator account is the built-in
+    one, renamed), and an alias only for the account it stands for; the file is created exclusively (`wx`) and EMPTY, its list read back (`D:AI(A;ID;FA;;;<SID>)`), and only then
     are the bytes written. Both tools are `.exe`s in the Windows folder's `System32` and nowhere else, started through
     `lib/process-runner.js` with no shell. On POSIX the folder is set to 0700 and the file created as 0600 and set to it
     (a umask cannot undo that), each read back with its owner and that it is not a link. Anything that cannot be set or

@@ -76,7 +76,10 @@ function accessLists(paths) {
 }
 // The account each entry of an SDDL access list names: `D:PAI(A;OICI;FA;;;S-1-5-21-…)(A;OICI;0x1200a9;;;BU)` is [that SID, 'BU'].
 const trusteesOf = (sddl) => [...sddl.matchAll(/\(([^)]*)\)/g)].map((entry) => entry[1].split(';').pop());
-const WELL_KNOWN = { 'S-1-5-18': 'SY', 'S-1-5-19': 'LS', 'S-1-5-20': 'NS' };
+// How the access list spells the current user: the SID of an ordinary user in full, but the three service accounts as SY, LS and NS and the machine's own Administrator and Guest (RID 500 and 501) as LA and LG — the
+// administrator account of a CI runner or a virtual machine is the built-in one, renamed.
+const SERVICE_ALIASES = { 'S-1-5-18': 'SY', 'S-1-5-19': 'LS', 'S-1-5-20': 'NS' };
+const nameInAccessList = (sid) => SERVICE_ALIASES[sid] || ({ 500: 'LA', 501: 'LG' })[(/^S-1-5-21-\d+-\d+-\d+-(\d+)$/.exec(sid) || [])[1]] || sid;
 
 // Two temporary folders, because Windows hands a new folder its access list in two ways and the code must make either the current user's alone: where the folder's parent has been given inheritable entries (a shared
 // TEMP that grants the Users group read access — what an administrator or a policy sets), the new folder INHERITS them, and `/inheritance:r` removes them; in a plain folder under the user's own temporary folder
@@ -108,7 +111,7 @@ for (const { what, grant } of TEMP_FOLDERS) {
     };
     const result = await importingWithTemp(t, shared, request, pac);
     assert.strictEqual(result.source, 'pac');
-    const me = WELL_KNOWN[seen.me] || seen.me;
+    const me = nameInAccessList(seen.me);
     if (grant) assert.ok(trusteesOf(seen.parent).includes('BU'), 'fixture control: the temporary folder does grant the Users group read access');
     assert.deepStrictEqual(trusteesOf(seen.folder), [me], 'the folder: one entry, the current user\'s');
     assert.deepStrictEqual(trusteesOf(seen.file), [me], 'the copy: one entry, the current user\'s — nothing the folder it is in grants the Users group reaches it');

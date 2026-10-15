@@ -28,9 +28,22 @@ const { spawnResultSync, envValue } = require('./process-runner.js');
 // How long `whoami` or `icacls` may take. Both answer in milliseconds; this is the bound of a machine that is not answering, not an expected wait.
 const TOOL_TIMEOUT_MS = 20 * 1000;
 
-// What SDDL calls a service account's SID: `icacls /save` writes `SY` for S-1-5-18 where it writes the SID of an ordinary user in full. A run as a service (a CI agent as LocalSystem) is the current user then.
-// See: https://learn.microsoft.com/windows/win32/secauthz/sid-strings
+// What SDDL calls an account: `icacls /save` writes the SID of an ordinary user in full, and a well-known account by a two-letter alias — `SY`, `LS` and `NS` for the three service accounts (a CI agent running as
+// LocalSystem is the current user then), and `LA` and `LG` for the machine's own Administrator and Guest accounts, the ones with the RIDs 500 and 501 under the machine's own domain SID (S-1-5-21-a-b-c-500).
+// The second kind matters: the administrator account a virtual machine or a CI runner is made with IS the built-in Administrator, renamed, so `whoami /user` answers its SID and the access list reads back `LA`.
+// What is read back is what was granted — the SID set by `/grant:r` — so the SID of a machine's Administrator or Guest and its alias are the same account. (A domain's Administrator, S-1-5-21-<domain>-500, is
+// written in full, which the SID itself covers.)
+// See: https://learn.microsoft.com/windows/win32/secauthz/sid-strings and https://learn.microsoft.com/windows/win32/secauthz/well-known-sids
 const SDDL_SERVICE_ALIASES = Object.freeze({ 'S-1-5-18': 'SY', 'S-1-5-19': 'LS', 'S-1-5-20': 'NS' });
+const SDDL_RID_ALIASES = Object.freeze({ 500: 'LA', 501: 'LG' });
+function sddlNamesOf(sid) {
+  const upper = sid.toUpperCase();
+  const names = [upper];
+  if (SDDL_SERVICE_ALIASES[upper]) names.push(SDDL_SERVICE_ALIASES[upper]);
+  const account = /^S-1-5-21-\d+-\d+-\d+-(\d+)$/.exec(upper);
+  if (account && SDDL_RID_ALIASES[Number(account[1])]) names.push(SDDL_RID_ALIASES[Number(account[1])]);
+  return names;
+}
 // `FA` is "file all access", full control; the same right is also spelled as its number.
 const FULL_CONTROL = /^(?:FA|0x1f01ff)$/i;
 
@@ -79,7 +92,7 @@ function ownerOnlyProblem(text, sid, { folder }) {
   const [type, flags, rights, , , trustee = ''] = aces[0];
   if (type !== 'A') return 'has an entry that is not an allow entry';
   if (!FULL_CONTROL.test(rights)) return 'has an entry that is not full control';
-  if (trustee.toUpperCase() !== sid.toUpperCase() && trustee.toUpperCase() !== SDDL_SERVICE_ALIASES[sid.toUpperCase()]) return "has an entry that is not the current user's";
+  if (!sddlNamesOf(sid).includes(trustee.toUpperCase())) return "has an entry that is not the current user's";
   // The flags are two-letter codes: OI and CI hand an entry to the files and folders made inside, ID marks one that was handed down.
   const marks = flags.match(/../g) || [];
   const fine = folder ? marks.length === 2 && marks.includes('OI') && marks.includes('CI') : marks.every((mark) => mark === 'ID');

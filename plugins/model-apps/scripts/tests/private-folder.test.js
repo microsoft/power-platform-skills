@@ -50,6 +50,12 @@ test('an access list is the user\'s alone when it is protected, has exactly one 
   assert.strictEqual(ownerOnlyProblem('D:AI(A;ID;FA;;;LS)', 'S-1-5-19', { folder: false }), null);
   assert.strictEqual(ownerOnlyProblem('D:PAI(A;OICI;0x1f01ff;;;NS)', 'S-1-5-20', { folder: true }), null, 'full control spelled as its number');
   assert.strictEqual(ownerOnlyProblem(`D:AI(A;;FA;;;${SID})`, SID, { folder: false }), null, 'a file\'s entry that is not marked inherited is just as much the user\'s');
+  // The machine's own Administrator and Guest accounts (RID 500 and 501) are written as aliases, LA and LG: the administrator account of a virtual machine or a CI runner is the built-in one, renamed.
+  const MACHINE = 'S-1-5-21-1111111111-2222222222-3333333333';
+  assert.strictEqual(ownerOnlyProblem('D:PAI(A;OICI;FA;;;LA)', `${MACHINE}-500`, { folder: true }), null, 'the machine\'s Administrator is read back as LA');
+  assert.strictEqual(ownerOnlyProblem('D:AI(A;ID;FA;;;LA)', `${MACHINE}-500`, { folder: false }), null);
+  assert.strictEqual(ownerOnlyProblem('D:PAI(A;OICI;FA;;;LG)', `${MACHINE}-501`, { folder: true }), null, 'and its Guest account as LG');
+  assert.strictEqual(ownerOnlyProblem(`D:PAI(A;OICI;FA;;;${MACHINE}-500)`, `${MACHINE}-500`, { folder: true }), null, 'a domain\'s Administrator is written in full, which the SID itself covers');
 });
 
 test('every other access list is a problem, and says which: more entries, another account, less than full control, a deny entry, an unprotected folder, a missing list, a shape it does not read', () => {
@@ -70,6 +76,15 @@ test('every other access list is a problem, and says which: more entries, anothe
   assert.match(problem(''), /missing/);
   assert.match(problem(undefined), /missing/);
   assert.match(problem(`O:${SID}`), /missing/, 'a descriptor with no DACL grants everyone access');
+  // An alias is accepted only for the account it stands for: LA is the machine's Administrator, LG its Guest, SY the system.
+  const MACHINE = 'S-1-5-21-1111111111-2222222222-3333333333';
+  const aliasFor = (alias, sid) => ownerOnlyProblem(`D:PAI(A;OICI;FA;;;${alias})`, sid, { folder: true });
+  assert.match(aliasFor('LA', `${MACHINE}-1001`), /not the current user's/, 'an ordinary local user is not the Administrator');
+  assert.match(aliasFor('LA', SID), /not the current user's/, 'nor is an Azure AD user');
+  assert.match(aliasFor('LA', `${MACHINE}-501`), /not the current user's/, 'the Guest account is not the Administrator');
+  assert.match(aliasFor('LG', `${MACHINE}-500`), /not the current user's/, 'and the Administrator is not the Guest');
+  assert.match(aliasFor('SY', `${MACHINE}-500`), /not the current user's/, 'nor the system');
+  assert.match(aliasFor('LA', 'S-1-5-18'), /not the current user's/, 'the system is not the Administrator');
 });
 
 // --- Windows: the sequence --------------------------------------------------------------------------------------------------------------------------
