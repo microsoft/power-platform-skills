@@ -34,6 +34,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const { publishAtomic, renderTemplate } = require('./lib/render-template');
 
@@ -209,6 +210,7 @@ function setPhone(state, update) {
     state.phone.previewHtml = update.previewHtml;
     state.phone.screens = [];
   }
+  if (update.previewHref !== undefined) state.phone.previewHref = update.previewHref;
   if (update.qrImage !== undefined) state.phone.qrImage = update.qrImage;
   if (update.qrHref !== undefined) state.phone.qrHref = update.qrHref;
   if (update.qrUrl !== undefined) state.phone.qrUrl = update.qrUrl;
@@ -462,6 +464,16 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function inlineJson(value) {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (character) => ({
+    '<': '\\u003c',
+    '>': '\\u003e',
+    '&': '\\u0026',
+    '\u2028': '\\u2028',
+    '\u2029': '\\u2029',
+  })[character]);
+}
+
 function normalizeEditItems(options) {
   const supplied = Array.isArray(options.items) ? options.items : null;
   const legacy = Array.isArray(options.checklist)
@@ -499,7 +511,7 @@ function normalizeEditItems(options) {
   });
 }
 
-function reconcileCoarseEditItems(items, phase, status, waiting) {
+function reconcileCoarseEditItems(items, phase, status, waiting, supplied) {
   const coarseIds = ['inspect', 'plan', 'apply', 'verify', 'preview'];
   if (items.length !== coarseIds.length
     || items.some((item, index) => item.id !== coarseIds[index])) {
@@ -530,6 +542,9 @@ function reconcileCoarseEditItems(items, phase, status, waiting) {
     ['sync', 'preview'],
     ['sync-plan', 'preview'],
   ]);
+  if (status === 'done' && !supplied) {
+    return items.map((item) => ({ ...item, status: 'done' }));
+  }
   const currentId = phaseToItem.get(String(phase).toLowerCase());
   if (!currentId || status === 'done' || status === 'failed') return items;
 
@@ -764,7 +779,10 @@ function writeEditProgress(projectRoot, options = {}) {
       `Unknown edit progress status '${status}'. Known: ${[...EDIT_PROGRESS_STATUSES].join(', ')}`,
     );
   }
-  const items = reconcileCoarseEditItems(normalizeEditItems(options), phase, status, waiting);
+  const suppliedItems = Array.isArray(options.items) || Array.isArray(options.checklist);
+  const items = reconcileCoarseEditItems(
+    normalizeEditItems(options), phase, status, waiting, suppliedItems,
+  );
   const changes = normalizeEditChanges(options);
   const completed = items.filter((item) => ['done', 'skipped'].includes(item.status)).length;
   const failed = items.filter((item) => item.status === 'failed').length;
@@ -788,6 +806,18 @@ function writeEditProgress(projectRoot, options = {}) {
     ? phone.qrImage
     : '';
   const qrUrl = qrImage && typeof phone.qrUrl === 'string' ? phone.qrUrl : '';
+  const previewHtml = !settled
+    && phone.stage === 'screens'
+    && typeof phone.previewHtml === 'string'
+    ? phone.previewHtml
+    : '';
+  const previewPath = typeof phone.previewHref === 'string'
+    ? path.resolve(docsDir(projectRoot), phone.previewHref)
+    : path.resolve(projectRoot, 'preview.html');
+  const previewHref = fs.existsSync(previewPath) ? pathToFileURL(previewPath).href : '';
+  const qrHref = qrImage && typeof phone.qrHref === 'string'
+    ? pathToFileURL(path.resolve(docsDir(projectRoot), phone.qrHref)).href
+    : '';
   const activeId = activeItem && activeItem.id;
   const deviceProgress = activeId === 'preview'
     ? {
@@ -821,7 +851,11 @@ function writeEditProgress(projectRoot, options = {}) {
       + `<div class="device-copy">Open Power Apps Mobile Preview and scan this code. `
       + `Your phone and this machine need to be on the same network.</div>`
       + `${qrUrl ? `<div class="device-url">${escapeHtml(qrUrl)}</div>` : ''}</div>`
-    : `<div class="device-building${status === 'failed' ? ' device-failed' : ''}">`
+    : previewHtml
+      ? `<div class="device-carousel"><div class="device-carousel-frame">`
+        + `<iframe id="devicePreviewFrame" sandbox="" referrerpolicy="no-referrer" `
+        + `title="Screen preview"></iframe></div></div>`
+      : `<div class="device-building${status === 'failed' ? ' device-failed' : ''}">`
       + `<div class="device-orbit"><span></span><span></span>`
       + `<img src="${brandIconDataUri()}" alt="" /></div>`
       + `<div class="device-title">${status === 'failed' ? 'Edit stopped' : status === 'done'
@@ -831,7 +865,7 @@ function writeEditProgress(projectRoot, options = {}) {
         : status === 'done'
           ? 'Metro did not provide a QR code. Run the app preview to test this edit on a device.'
           : deviceProgress.copy}</div>`
-      + `<div class="device-progress"><span style="width:${percent}%"></span></div></div>`;
+        + `<div class="device-progress"><span style="width:${percent}%"></span></div></div>`;
   const deviceCaption = qrImage
     ? 'Edits hot-reload onto the device while Metro is running.'
     : status === 'done'
@@ -842,7 +876,26 @@ function writeEditProgress(projectRoot, options = {}) {
           ? 'The phone switches to the live QR code when the preview is ready.'
           : activeId === 'verify'
             ? 'The phone switches to the live QR code after verification.'
-            : 'The phone preview follows the current edit step.';
+            : previewHtml
+              ? 'Plan-time screen preview'
+              : 'The phone preview follows the current edit step.';
+  const previewLink = previewHref
+    ? `<a class="rail-link" href="${escapeHtml(previewHref)}" target="_blank" rel="noopener">`
+      + `Open screens full size &#8599;</a>`
+    : '';
+  const qrLink = qrHref
+    ? `<a class="rail-link" href="${escapeHtml(qrHref)}" target="_blank" rel="noopener">`
+      + `Open QR code full size &#8599;</a>`
+    : '';
+  const storeButtons = qrImage
+    ? `<div class="store-row" aria-label="Download Power Apps Mobile Preview">`
+      + `<a class="store-btn" href="https://apps.apple.com/app/id6753083462" target="_blank" `
+      + `rel="noopener noreferrer"><span class="store-kicker">Download on the</span>`
+      + `<strong>App Store</strong></a>`
+      + `<a class="store-btn" href="https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp" `
+      + `target="_blank" rel="noopener noreferrer"><span class="store-kicker">GET IT ON</span>`
+      + `<strong>Google Play</strong></a></div>`
+    : '';
 
   const filePath = path.join(prepareEditTempDir(projectRoot), 'edit-app-progress.html');
 
@@ -1011,6 +1064,15 @@ function writeEditProgress(projectRoot, options = {}) {
     .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:2;}
     .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
     .device-building,.device-qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 26px;}
+    .device-carousel,.device-carousel-frame{position:absolute;inset:0;overflow:hidden;background:#fff;}
+    .device-carousel-frame iframe{position:absolute;width:375px;height:812px;border:0;transform-origin:top left;}
+    .device-controls{width:300px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+    .device-controls[hidden]{display:none;}
+    .carousel-btn{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-bright);font-size:18px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow);}
+    .carousel-btn:disabled{opacity:.35;cursor:default;}
+    .carousel-dots{display:flex;gap:5px;}
+    .carousel-dot{width:6px;height:6px;border-radius:50%;background:var(--border-light);}
+    .carousel-dot.on{background:var(--accent);}
     .device-building{gap:22px;}
     .device-orbit{position:relative;width:132px;height:132px;display:grid;place-items:center;}
     .device-orbit span{position:absolute;border:1px solid rgba(32,31,30,.14);border-radius:50%;animation:device-spin linear infinite;}
@@ -1028,11 +1090,20 @@ function writeEditProgress(projectRoot, options = {}) {
     .device-qr img{width:min(196px,100%);height:auto;}
     .device-url{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:var(--accent);word-break:break-all;}
     .device-caption{font-size:12px;color:var(--text-dim);text-align:center;max-width:320px;min-height:38px;}
+    .rail-actions{display:flex;flex-direction:column;align-items:center;gap:6px;max-width:100%;}
+    .rail-link{display:inline-flex;align-items:center;font-size:12.5px;color:var(--accent);text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid transparent;}
+    .rail-link:hover{border-color:var(--accent-border);background:var(--accent-bg);}
+    .store-row{display:flex;gap:8px;justify-content:center;}
+    .store-btn{display:flex;flex-direction:column;padding:7px 13px;border-radius:9px;background:#000;color:#fff;text-decoration:none;line-height:1.05;border:1px solid rgba(255,255,255,.22);min-width:122px;}
+    .store-btn:hover{background:#141414;}
+    .store-kicker{font-size:8.5px;letter-spacing:.03em;opacity:.9;}
+    .store-btn strong{font-size:14px;font-weight:600;}
+    .device-rail.has-actions .device{height:min(620px,calc(100vh - 65px - var(--footer-h) - 245px));}
     .ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:10;}
     @media(max-width:1180px){
       .shell{flex-direction:column;}
       .device-rail{width:100%;position:static;height:auto;border-left:0;border-top:1px solid var(--border);padding-bottom:72px;}
-      .device{height:auto;width:min(300px,calc(100vw - 44px));}
+      .device,.device-rail.has-actions .device{height:auto;width:min(300px,calc(100vw - 44px));}
     }
     @media(max-width:720px){
       .topbar{padding:12px 16px;}
@@ -1095,18 +1166,25 @@ function writeEditProgress(projectRoot, options = {}) {
         </section>
       </main>
     </div>
-    <aside class="device-rail" aria-label="Device preview">
-      <div class="device-rail-label">${qrImage ? 'Test the edited app' : 'Device preview'}</div>
+    <aside class="device-rail${previewLink || qrLink || storeButtons ? ' has-actions' : ''}" aria-label="Device preview">
+      <div class="device-rail-label">${qrImage ? 'Test the edited app' : previewHtml ? 'Your screens' : 'Device preview'}</div>
       <div class="device">
         <div class="device-notch"></div>
         <div class="device-screen">${deviceContent}</div>
       </div>
-      <div class="device-caption">${escapeHtml(deviceCaption)}</div>
+      <div class="device-controls" id="deviceControls" ${previewHtml ? '' : 'hidden'}>
+        <button class="carousel-btn" id="previousScreen" type="button" aria-label="Previous screen">&#8249;</button>
+        <div class="carousel-dots" id="screenDots"></div>
+        <button class="carousel-btn" id="nextScreen" type="button" aria-label="Next screen">&#8250;</button>
+      </div>
+      <div class="device-caption" id="deviceCaption">${escapeHtml(deviceCaption)}</div>
+      <div class="rail-actions">${previewLink}${qrLink}${storeButtons}</div>
     </aside>
   </div>
   <footer class="ai-footer">AI-generated content may be incorrect</footer>
   <script nonce="${nonce}">
   (function () {
+    var phonePreviewHtml = ${inlineJson(previewHtml)};
     var STORE_TAB = 'mobile-edit-plan-tab';
     var STORE_SCROLL = 'mobile-edit-plan-scroll';
     // The page republishes itself every few seconds, so a dismissal held only in memory would
@@ -1137,6 +1215,119 @@ function writeEditProgress(projectRoot, options = {}) {
         try { sessionStorage.setItem(STORE_DISMISSED, bannerPrompt); } catch (error) { /* private mode */ }
       });
     }
+    var MOCKUP_BANNED_TAGS = ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE',
+      'FORM', 'STYLE', 'ANIMATE', 'SET'];
+    var MOCKUP_BANNED_URL = /^(javascript:|data:text\\/html)/i;
+    function sanitizeMockup(markup, options) {
+      var source = new DOMParser().parseFromString(String(markup || ''), 'text/html');
+      Array.from(source.querySelectorAll('*')).forEach(function (node) {
+        var tag = String(node.tagName || '').toUpperCase();
+        if (MOCKUP_BANNED_TAGS.indexOf(tag) >= 0 && !(options.keepStyle && tag === 'STYLE')) {
+          node.remove();
+          return;
+        }
+        Array.from(node.attributes).forEach(function (attribute) {
+          var name = attribute.name;
+          var value = attribute.value.replace(/[\\u0000-\\u0020]/g, '');
+          if (/^on/i.test(name)
+            || (/^(href|xlink:href)$/i.test(name) && value.charAt(0) !== '#')
+            || (/^(href|src|xlink:href|action|formaction)$/i.test(name)
+              && MOCKUP_BANNED_URL.test(value))) {
+            node.removeAttribute(name);
+          }
+        });
+      });
+      return source;
+    }
+    function previewScreens(markup) {
+      var source = sanitizeMockup(markup, { keepStyle: true });
+      var tabs = Array.from(source.querySelectorAll('[data-screen]'));
+      return Array.from(source.querySelectorAll('.screen')).map(function (entry) {
+        var root = source.documentElement.cloneNode(false);
+        var head = document.createElement('head');
+        source.querySelectorAll('style').forEach(function (style) {
+          head.appendChild(style.cloneNode(true));
+        });
+        var body = source.body.cloneNode(false);
+        var selected = entry.cloneNode(true);
+        selected.classList.add('active');
+        selected.removeAttribute('hidden');
+        selected.style.setProperty('display', 'flex', 'important');
+        for (var ancestor = entry.parentElement; ancestor && ancestor !== source.body;
+          ancestor = ancestor.parentElement) {
+          var wrapper = ancestor.cloneNode(false);
+          wrapper.appendChild(selected);
+          selected = wrapper;
+        }
+        body.appendChild(selected);
+        root.appendChild(head);
+        root.appendChild(body);
+        var reset = document.createElement('style');
+        reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;'
+          + 'min-height:0!important;overflow:hidden}.phone{width:100%!important;height:100%!important;'
+          + 'margin:0!important;padding:0!important;border:0!important;border-radius:0!important;'
+          + 'box-shadow:none!important}.screen-wrap{border-radius:0!important}';
+        head.appendChild(reset);
+        var policy = document.createElement('meta');
+        policy.setAttribute('http-equiv', 'Content-Security-Policy');
+        policy.setAttribute('content', "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
+          + "img-src data:; font-src data:; base-uri 'none'; form-action 'none'");
+        head.prepend(policy);
+        var tab = tabs.find(function (button) {
+          return button.getAttribute('data-screen') === entry.id;
+        });
+        return {
+          name: (tab && tab.textContent.trim()) || entry.getAttribute('data-name')
+            || entry.getAttribute('aria-label') || entry.id,
+          html: '<!DOCTYPE html>' + root.outerHTML
+        };
+      });
+    }
+    function renderScreenCarousel() {
+      if (!phonePreviewHtml) return;
+      var screens = previewScreens(phonePreviewHtml);
+      var frame = document.querySelector('.device-carousel-frame');
+      var viewport = document.getElementById('devicePreviewFrame');
+      var caption = document.getElementById('deviceCaption');
+      var controls = document.getElementById('deviceControls');
+      if (!frame || !viewport || !screens.length) {
+        if (caption) caption.textContent = 'Screen preview unavailable. Regenerate preview.html.';
+        if (controls) controls.hidden = true;
+        return;
+      }
+      var index = 0;
+      var previous = document.getElementById('previousScreen');
+      var next = document.getElementById('nextScreen');
+      var dots = document.getElementById('screenDots');
+      function fit() {
+        var scale = Math.min(frame.clientWidth / 375, frame.clientHeight / 812);
+        viewport.style.transform = 'scale(' + scale + ')';
+        viewport.style.left = (frame.clientWidth - 375 * scale) / 2 + 'px';
+        viewport.style.top = (frame.clientHeight - 812 * scale) / 2 + 'px';
+      }
+      function show(nextIndex) {
+        index = Math.max(0, Math.min(screens.length - 1, nextIndex));
+        viewport.title = screens[index].name || 'Screen preview';
+        viewport.srcdoc = screens[index].html;
+        caption.textContent = (screens[index].name ? screens[index].name + '  ·  ' : '')
+          + (index + 1) + ' of ' + screens.length;
+        previous.disabled = index === 0;
+        next.disabled = index === screens.length - 1;
+        dots.textContent = '';
+        screens.forEach(function (unused, screenIndex) {
+          var dot = document.createElement('span');
+          dot.className = 'carousel-dot' + (screenIndex === index ? ' on' : '');
+          dots.appendChild(dot);
+        });
+      }
+      previous.addEventListener('click', function () { show(index - 1); });
+      next.addEventListener('click', function () { show(index + 1); });
+      fit();
+      window.addEventListener('resize', fit, { passive: true });
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fit).observe(frame);
+      show(0);
+    }
+    renderScreenCarousel();
     var diagramBlocks = Array.from(document.querySelectorAll('.diagram-block'));
     function markDiagramUnavailable(block) {
       block.classList.add('diagram-unavailable');
@@ -1409,6 +1600,11 @@ if (require.main === module) {
         // and ancestor selectors. The page extracts each .screen inside an isolated viewport.
         update.previewHtml = fs.readFileSync(options.previewFile, 'utf8');
         if (!update.previewHtml.trim()) throw new Error('The screen preview HTML is empty.');
+        const previewPath = path.resolve(options.previewFile);
+        const relative = path.relative(docsDir(root), previewPath);
+        // Keep the living plan portable with a relative link; the temp-hosted edit page converts
+        // it back to a file URL because it does not share the project's directory.
+        update.previewHref = relative.split(path.sep).join('/');
       }
       if (options.screensFile) {
         update.screens = JSON.parse(fs.readFileSync(options.screensFile, 'utf8'));

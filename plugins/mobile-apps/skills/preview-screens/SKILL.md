@@ -191,6 +191,7 @@ grep -E "^visual_companion:[[:space:]]*(yes|no)" '<working_dir>/memory-bank.md' 
 
 | Flag | Action |
 |---|---|
+| `MOBILE_APP_ORCHESTRATING=1` | Print the link and stop. The owning create/edit plan embeds the screens. |
 | `visual_companion: no` | Print the link and stop. Do not auto-open. |
 | `visual_companion: yes` (or missing memory-bank, or standalone invocation) | Print the link, then auto-open. |
 

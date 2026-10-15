@@ -1120,7 +1120,22 @@ failed.
 
 Before Step 8, `npx --no-install tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx --no-install tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
-If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
+If any UI, design, navigation, native interaction, or visible data state changed - or if the user
+explicitly asked for a preview - read and execute `/preview-screens` after verification with
+`MOBILE_APP_ORCHESTRATING=1`.
+This regenerates `preview.html` without opening a separate browser page.
+After the file is written, put the same screens in the phone rail and publish the progress page:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage screens \
+  --preview-file '<working_dir>/preview.html'
+```
+
+Keep the progress page open.
+It shows the screens in a sandboxed phone carousel, links to `preview.html` for a full-size view, and
+keeps the living `docs/create-app-plan.html` in sync through the same phone state.
+If the preview was skipped or generation failed, leave the phone on its current progress state and
+report the concern.
 
 Unless this is `--plan-only`, finish with a real-device handoff. Read
 `/create-mobile-app` Step 12 from **Launch command** through **Put the QR in the plan** and execute
@@ -1145,7 +1160,8 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --
 
 Do not open `docs/create-app-plan.html`; its phone changes in the background. Run the final
 `progress` write with `devicePreviewReady: true` after this command succeeds so the already-open
-edit page switches from its building state to the same QR code. If Metro or QR generation fails,
+edit page replaces the screen carousel with the same QR code and shows the App Store and Google Play
+buttons for Power Apps Mobile Preview. If Metro or QR generation fails,
 keep `devicePreviewReady: false`; the completed edit page then shows `Device preview unavailable`
 even when the living plan contains a QR from an earlier run. Report the preview concern separately,
 and do not turn a verified app edit into a failure.

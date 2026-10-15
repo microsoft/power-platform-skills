@@ -771,7 +771,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       container.appendChild(link);
     }
 
-    add(summary.screenPreviewHref, 'Open screens full size \u2197');
+    add(phone.previewHref || summary.screenPreviewHref, 'Open screens full size \u2197');
     // The QR is already drawn in the phone; this is for scanning it larger, and it links the
     // PNG rather than the inlined data URI because browsers block top-level navigation to a
     // data: URL. It drops away once `.expo/` is cleaned, leaving the inlined copy.

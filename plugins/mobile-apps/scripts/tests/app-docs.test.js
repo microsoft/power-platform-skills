@@ -472,6 +472,72 @@ test('the device preview follows the active checklist operation', (t) => {
   assert.doesNotMatch(html, /Applying your changes/);
 });
 
+test('edit progress embeds preview screens and links to the full HTML', (t) => {
+  const root = project('docs-device-screens');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+  const preview = '<!doctype html><html><head><style>.screen{display:none}</style></head>'
+    + '<body><button data-screen="screen-home">Home</button>'
+    + '<div class="phone"><div class="screen" id="screen-home">Home screen</div></div></body></html>';
+  fs.writeFileSync(path.join(root, 'preview.html'), preview);
+  const state = initState(root, { appName: 'Field Readings' });
+  save(root, setPhone(state, {
+    stage: 'screens',
+    previewHtml: preview,
+    previewHref: '../preview.html',
+  }));
+
+  const progress = writeEditProgress(root, {
+    phase: 'preview',
+    status: 'active',
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /id="devicePreviewFrame"/);
+  assert.match(html, /var phonePreviewHtml = /);
+  assert.match(html, /Home screen/);
+  assert.match(html, /Open screens full size/);
+  assert.match(html, /file:\/\/.*preview\.html/);
+  assert.match(html, /id="previousScreen"/);
+  assert.doesNotMatch(html, /Scan to test the changes/);
+});
+
+test('the final QR replaces embedded screens and adds mobile app downloads', (t) => {
+  const root = project('docs-device-qr');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.expo'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'preview.html'), '<div class="screen">Preview</div>');
+  fs.writeFileSync(path.join(root, '.expo', 'metro-qr.png'), 'qr');
+  const state = initState(root, { appName: 'Field Readings' });
+  setPhone(state, {
+    stage: 'screens',
+    previewHtml: '<div class="screen">Preview</div>',
+    previewHref: '../preview.html',
+  });
+  setPhone(state, {
+    stage: 'qr',
+    qrImage: 'data:image/png;base64,aW1hZ2U=',
+    qrHref: '../.expo/metro-qr.png',
+    qrUrl: 'exp://192.0.2.1:8081',
+  });
+  save(root, state);
+
+  const progress = writeEditProgress(root, {
+    phase: 'done',
+    status: 'done',
+    devicePreviewReady: true,
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /Scan to test the changes/);
+  assert.doesNotMatch(html, /id="devicePreviewFrame"/);
+  assert.match(html, /Open screens full size/);
+  assert.match(html, /Open QR code full size/);
+  assert.match(html, /Download Power Apps Mobile Preview/);
+  assert.match(html, /App Store/);
+  assert.match(html, /Google Play/);
+  assert.match(html, /5 of 5 operations complete/);
+});
+
 test('screen diagram labels keep Expo dynamic route segments', () => {
   // Expo file-based routing names dynamic segments `[id]`, so these brackets are the
   // common case in a screen graph rather than an edge case. Dropping them rewrote the
@@ -646,7 +712,12 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.match(skill, /Step 4[\s\S]*app-docs\.js sync --json-file/);
   assert.match(skill, /Step 8[\s\S]*scripts\/app-docs\.js" --working-dir '<working_dir>' sync/);
   assert.match(skill, /\/create-mobile-app` Step 12/);
+  assert.match(skill, /MOBILE_APP_ORCHESTRATING=1/);
+  assert.match(skill, /phone --stage screens[\s\S]*--preview-file '<working_dir>\/preview\.html'/);
+  assert.match(skill, /without opening a separate browser page/);
   assert.match(skill, /phone --stage qr/);
+  assert.match(skill, /replaces the screen carousel with the same QR code/);
+  assert.match(skill, /App Store and Google Play/);
   assert.match(skill, /Run the final\s+`progress` write with `devicePreviewReady: true` after this command succeeds/);
   assert.doesNotMatch(skill, /If `native-app-plan\.md` is missing → STOP/);
   assert.match(skill, /devicePreviewReady: false[\s\S]*earlier run/);
@@ -673,16 +744,18 @@ test('the phone CLI carries the full preview, including shared CSS, without rewr
   const preview = '<!doctype html><html><head><style>:root{--brand:#0078d4}.card{display:flex}</style>'
     + '</head><body><div class="screen" id="products">Products</div>'
     + '<div class="screen" id="detail">Detail</div></body></html>';
-  const previewPath = path.join(root, '_plan_preview.html');
+  const previewPath = path.join(root, 'preview.html');
   fs.writeFileSync(previewPath, preview);
   const result = spawnSync(process.execPath, [
     scriptPath, '--working-dir', root, 'phone', '--stage', 'screens', '--preview-file', previewPath,
   ], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(loadState(root).phone.previewHtml, preview);
+  assert.equal(loadState(root).phone.previewHref, '../preview.html');
   const html = fs.readFileSync(outputPath(root), 'utf8');
   const phone = JSON.parse(html.match(/<script id="phoneData" type="application\/json">([\s\S]*?)<\/script>/)[1]);
   assert.equal(phone.previewHtml, preview);
+  assert.equal(phone.previewHref, '../preview.html');
 });
 
 test('replacing a full preview with legacy screens cannot leave stale markup selected', (t) => {
