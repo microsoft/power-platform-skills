@@ -4,9 +4,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readProjectRequirements } = require('./lib/mobile-release');
 
 const REQUIRED_FILES = [
   'package.json',
+  'app.json',
   'app.config.js',
   'auth.config.json',
   'tamagui.config.ts',
@@ -93,6 +95,7 @@ function assertFreshTemplate(projectRoot) {
   }
 
   verifyHostTsconfig(projectRoot);
+  readProjectRequirements(projectRoot);
 }
 
 function updateIdentity(projectRoot, displayName, slug) {
@@ -121,7 +124,13 @@ function removeEmptyPowerConfig(projectRoot) {
   if (!fs.existsSync(powerConfigPath)) return false;
 
   const powerConfig = readJson(powerConfigPath);
-  if (typeof powerConfig.environmentId === 'string' && powerConfig.environmentId.trim()) {
+  const emptyPlaceholderKeys = new Set([
+    'environmentId', 'appId', 'appDisplayName', 'databaseReferences', 'connectionReferences',
+  ]);
+  const isEmptyValue = (value) => value === '' || value === null
+    || (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
+  if (!powerConfig || Array.isArray(powerConfig) || typeof powerConfig !== 'object'
+    || Object.entries(powerConfig).some(([key, value]) => !emptyPlaceholderKeys.has(key) || !isEmptyValue(value))) {
     return false;
   }
 

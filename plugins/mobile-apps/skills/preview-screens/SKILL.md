@@ -41,7 +41,7 @@ Determine the working directory:
 Validate the project:
 
 ```text
-Glob pattern="power.config.json" path="<working_dir>"
+Glob pattern="power.config.json" path='<working_dir>'
 ```
 
 If missing, check for `package.json`. If neither exists, report the error and stop.
@@ -61,7 +61,7 @@ Fallback: read `name` from `package.json`.
 Find all TSX files under the app directory:
 
 ```text
-Glob pattern="app/**/*.tsx" path="<working_dir>"
+Glob pattern="app/**/*.tsx" path='<working_dir>'
 ```
 
 **Exclude** these patterns — they are not screens:
@@ -110,7 +110,7 @@ Internalize:
 Also check if the project has custom brand tokens:
 
 ```text
-Glob pattern="tamagui.config.ts" path="<working_dir>"
+Glob pattern="tamagui.config.ts" path='<working_dir>'
 ```
 
 If found, read it and extract any custom color tokens (look for `tokens: { color: { ... } }`). Add them as additional CSS custom properties in the generated HTML.
