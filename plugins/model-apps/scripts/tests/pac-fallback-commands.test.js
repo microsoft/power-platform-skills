@@ -46,7 +46,7 @@ const MOVED = [
 // For each owner of one of those commands, the lines that call it — nothing else may — and, for each script, the only functions that start a
 // pac process at all.
 const CALL_SITES = [
-  { script: 'list-connections.js', fn: 'listConnectionsWithPac', lines: ['fromPac: async () => listConnectionsWithPac(env),'] },
+  { script: 'list-connections.js', fn: 'listConnectionsWithPac', lines: ['fromPac: async (refusal) => listConnectionsWithPac(env, refusal),'] },
   { script: 'connector.js', fn: 'pacArgs', lines: ['const args = pacArgs(request);'] },
   {
     script: 'connector.js',

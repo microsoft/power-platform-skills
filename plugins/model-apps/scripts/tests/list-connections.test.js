@@ -732,7 +732,16 @@ function driveDiscovery({ pac, refs, refsError }) {
   return cli.main().then(() => {
     assert.deepEqual(sdkAsked, [ENV_URL], 'the SDK is asked first, for the validated origin');
     for (const run of emitted) {
-      if (!run.ok) continue;
+      if (!run.ok) {
+        // A failure of PAC's own listing says why PAC was asked, as a listing PAC gave does; a failure after it (the connection references, which are read once a listing is in hand) is not PAC's and says nothing of it.
+        if (queries.length === 0) {
+          assert.deepEqual(run.payload.connectionsFallback, SDK_REFUSAL, 'a failed pac listing says why PAC was asked');
+          delete run.payload.connectionsFallback;
+        } else {
+          assert.ok(!('connectionsFallback' in run.payload), 'a failure after the listing is not pac\'s');
+        }
+        continue;
+      }
       assert.equal(run.payload.connectionsSource, 'pac', 'a listing PAC gave says so');
       assert.deepEqual(run.payload.connectionsFallback, SDK_REFUSAL, 'and says why PAC was asked');
       delete run.payload.connectionsSource;

@@ -132,7 +132,9 @@ If the script fails (exit 1), discovery did not happen — it never reports a fa
 "no connections". Every failure past the arguments — the SDK's read, `pac`, the connection
 references, an environment URL that is not a Dataverse one — prints one
 `{ "ok": false, "error" }` line on stdout, with the error's `code` when it has one (the
-SDK's errors do), and the message on stderr; a usage error (no URL, an unknown flag) is the
+SDK's errors do), and the message on stderr — a failure of `pac`, which is asked only because
+the SDK refused, also carries `connectionsFallback`, the reason `pac` was asked, so read it
+before deciding what to repair; a usage error (no URL, an unknown flag) is the
 problem on stderr alone. Whichever it is, do **not** treat that as "no suitable connection
 exists" below, and never create a connection on it: return `needs_input` with the script's
 error.

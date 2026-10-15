@@ -173,6 +173,14 @@ test('failureLine: one ok:false line for whatever was thrown — its message, an
   assert.deepEqual(failureLine({ message: 'from an object', code: 'C' }), { ok: false, error: 'from an object', code: 'C' });
 });
 
+test('failureLine: a failure of the pac listing carries the SDK\'s reason for asking pac as `connectionsFallback` — the key a listing pac gave uses — after the error\'s code, and only when the error has a reason', () => {
+  const { failureLine } = require(scriptPath);
+  const refusal = { code: 'CONNECTIVITY_NOT_CONFIGURED', message: 'the Test cloud has no route to the SDK' };
+  assert.deepEqual(failureLine(Object.assign(new Error('pac connection list failed (exit 1)'), { fallback: refusal })), { ok: false, error: 'pac connection list failed (exit 1)', connectionsFallback: refusal });
+  assert.deepEqual(Object.keys(failureLine(Object.assign(new Error('boom'), { code: 'X_CODE', fallback: refusal }))), ['ok', 'error', 'code', 'connectionsFallback']);
+  for (const fallback of [undefined, null, '', 0, false]) assert.deepEqual(failureLine(Object.assign(new Error('boom'), { fallback })), { ok: false, error: 'boom' }, String(fallback));
+});
+
 test('an environment that is not a Dataverse origin is refused before the SDK, PAC or Dataverse is touched — and is reported as an ok:false line, with no code', async () => {
   for (const bad of ['https://contoso.example.com', 'http://contoso.crm.dynamics.com', 'https://contoso.crm.dynamics.com/api/data/v9.2', 'contoso']) {
     const run = await drive({ argv: [bad], sdkFirst: async () => { throw new Error('the SDK must not be asked'); } });
@@ -199,6 +207,55 @@ test('a PAC listing carries its source and the SDK\'s reason, beside the same ro
     connectionsFallback: refusal,
   });
   assert.deepEqual(Object.keys(run.emitted[0].payload), ['ok', 'connections', 'connectionReferences', 'connectionsSource', 'connectionsFallback']);
+});
+
+// PAC is asked only because the SDK refused (lib/sdk-first.js hands `fromPac` the refusal). A listing PAC gave says so; so must a listing PAC failed to give — a failure of pac read alone sends a maker to repair a
+// pac they never chose to depend on, for a route (a Test-cloud org, a token the service refused) that is the real reason.
+test('a failure of the pac listing carries the SDK\'s reason for asking pac — however pac failed — and the references are not read; a failure that is not pac\'s carries none', async () => {
+  const refusal = { code: 'CONNECTIVITY_CLOUD_UNSUPPORTED', message: 'this environment is not in a cloud the SDK serves' };
+  const asksPac = async (env, plan) => ({ source: 'pac', value: await plan.fromPac(refusal), fallback: refusal });
+  const grid = ['Connected as [maker001]', 'Id                               Name     API Id                                                Status', `${ID(1)} Contoso SQL  ${SQL}  Connected`, ''].join('\r\n');
+  const answers = {
+    'is not installed': { status: null, signal: null, stdout: '', stderr: '', error: Object.assign(new Error('spawn pac ENOENT'), { code: 'ENOENT' }) },
+    'runs out of time': { status: null, signal: 'SIGKILL', stdout: '', stderr: '', error: Object.assign(new Error('spawn pac ETIMEDOUT'), { code: 'ETIMEDOUT' }) },
+    'exits non-zero': { status: 1, stdout: '', stderr: 'Error: the sign-in has expired\n' },
+    'prints what is not a listing': { status: 0, stdout: 'Connected as [maker001]\r\nThis is not a table\r\n', stderr: '' },
+    'exits 0 and writes to stderr': { status: 0, stdout: grid, stderr: 'Warning: failed to retrieve connections.' },
+  };
+  for (const [what, answer] of Object.entries(answers)) {
+    const run = await drive({ sdkFirst: asksPac, spawn: () => answer });
+    assert.equal(run.emitted.length, 1, what);
+    assert.equal(run.emitted[0].ok, false, what);
+    assert.deepEqual(run.emitted[0].payload.connectionsFallback, refusal, `${what}: says why pac was asked`);
+    assert.deepEqual(Object.keys(run.emitted[0].payload), ['ok', 'error', 'connectionsFallback'], `${what}: pac's failures have no code`);
+    assert.deepEqual(run.queries, [], `${what}: the references are not read after a failed listing`);
+  }
+  // The listing was pac's and worked; the references could not be read. That failure is not pac's, so it does not say why pac was asked.
+  const refsDown = await drive({ sdkFirst: asksPac, spawn: () => ({ status: 0, stdout: grid, stderr: '' }), refs: { status: 500, data: { error: { message: 'down' } } } });
+  assert.equal(refsDown.emitted[0].ok, false);
+  assert.match(refsDown.emitted[0].payload.error, /^List connection references failed: HTTP 500/);
+  assert.deepEqual(Object.keys(refsDown.emitted[0].payload), ['ok', 'error']);
+  // A failure of the SDK that is not a refusal never reaches pac, so there is no reason to give.
+  const sdkDown = await drive({ sdkFirst: async () => { throw Object.assign(new Error('HTTP 500'), { code: 'CONNECTION_ERROR' }); } });
+  assert.deepEqual(Object.keys(sdkDown.emitted[0].payload), ['ok', 'error', 'code']);
+});
+
+test('listConnectionsWithPac(env, refusal) hands the refusal to the error pac raised — the very error, so its message and cause are what they were — and adds nothing to a listing that worked or to a call made with no refusal', async () => {
+  const refusal = { code: 'CONNECTIVITY_ROUTE_DECOMMISSIONED', message: 'decommissioned' };
+  const failing = { status: 1, stdout: '', stderr: 'Error: nope\n' };
+  const make = (answer) => loadCli(scriptPath, {
+    argv: [ENV],
+    requires: { './lib/process-runner.js': { spawnResultTree: () => Promise.resolve(answer) } },
+  }).exports.listConnectionsWithPac;
+  await assert.rejects(make(failing)(ENV, refusal), (error) => {
+    assert.equal(error.message, 'pac connection list failed (exit 1): Error: nope');
+    assert.deepEqual(error.fallback, refusal);
+    return true;
+  });
+  await assert.rejects(make(failing)(ENV), (error) => !('fallback' in error), 'asked with no reason (nothing refused), the error has none');
+  await assert.rejects(make(failing)(ENV, null), (error) => !('fallback' in error));
+  const rows = await make({ status: 0, stdout: `Connected as [maker001]\r\n[{"connectionId":"${ID(1)}","connectorId":"${SQL}","displayName":"Contoso SQL"}]`, stderr: '' })(ENV, refusal);
+  assert.deepEqual(rows, [{ connectorId: SQL, connectionId: ID(1), displayName: 'Contoso SQL' }]);
 });
 
 test('the pac listing is given the read budget — a fixed three minutes, as every other pac fallback — and a pac that runs out of it is reported as that, not as a missing pac', async () => {

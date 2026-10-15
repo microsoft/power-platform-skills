@@ -574,15 +574,17 @@ test('PROCESS: a 401 or 403 from the Business Application Platform or the Power 
 
 // What list-connections.js prints for a failure past its arguments, whoever raised it — the SDK's read, pac, the connection references, an origin that is not a Dataverse one: exit 1, ONE
 // line on stdout that is an ok:false object of pure printable ASCII (a console code page garbles anything else), and the same message on stderr. `code` is the error's own, and only when
-// it has one: the SDK's errors do, the others do not.
-function assertFailureLine(run, what, { error, code }) {
+// it has one: the SDK's errors do, the others do not. A failure of pac — asked because the SDK refused — also says why: `connectionsFallback`, the same key a listing pac gave uses, with the
+// refusal's code (`fallback`) — and a failure that is not pac's does not.
+function assertFailureLine(run, what, { error, code, fallback }) {
   assert.strictEqual(run.status, 1, `${what}: ${run.stderr}`);
   assert.match(run.stdout, /^[\x20-\x7e]+\n$/, `${what}: one line of printable ASCII, got ${JSON.stringify(run.stdout)}`);
   const out = JSON.parse(run.stdout);
-  assert.deepStrictEqual(Object.keys(out), code ? ['ok', 'error', 'code'] : ['ok', 'error'], what);
+  assert.deepStrictEqual(Object.keys(out), ['ok', 'error', ...(code ? ['code'] : []), ...(fallback ? ['connectionsFallback'] : [])], what);
   assert.strictEqual(out.ok, false, what);
   assert.match(out.error, error, what);
   if (code) assert.strictEqual(out.code, code, what);
+  if (fallback) assert.strictEqual(out.connectionsFallback.code, fallback, `${what}: says why pac was asked`);
   assert.strictEqual(run.stderr, `${out.error.trim()}\n`, `${what}: the same message on stderr`);
   return out;
 }
@@ -606,7 +608,7 @@ test('PROCESS: every failure of list-connections.js past its arguments is ONE ok
       argv: [TEST_ORG],
       platform: { org: TEST_ORG, references: REFERENCES },
       pac: { responses: [{ match: ['connection', 'list'], status: 1, stderr: `Error: the sign-in for ${accent} has expired\n` }] },
-      expect: { error: new RegExp(`^pac connection list failed \\(exit 1\\): Error: the sign-in for ${accent} has expired$`) },
+      expect: { fallback: 'CONNECTIVITY_NOT_CONFIGURED', error: new RegExp(`^pac connection list failed \\(exit 1\\): Error: the sign-in for ${accent} has expired$`) },
       saw: (run) => {
         assert.match(run.stdout, /for Jos\\u00e9 has expired/, 'the accent is an escape');
         assert.strictEqual(run.pacCalls.length, 1);
@@ -616,7 +618,7 @@ test('PROCESS: every failure of list-connections.js past its arguments is ONE ok
       what: 'pac, asked at once for a Test cloud org, is not installed',
       argv: [TEST_ORG],
       platform: { org: TEST_ORG, references: REFERENCES },
-      expect: { error: /^pac connection list could not run: .*Ensure the PAC CLI is installed and on PATH/ },
+      expect: { fallback: 'CONNECTIVITY_NOT_CONFIGURED', error: /^pac connection list could not run: .*Ensure the PAC CLI is installed and on PATH/ },
       saw: (run) => assert.deepStrictEqual(run.pacCalls, []),
     },
     {
@@ -624,7 +626,7 @@ test('PROCESS: every failure of list-connections.js past its arguments is ONE ok
       argv: [TEST_ORG],
       platform: { org: TEST_ORG, references: REFERENCES },
       pac: { responses: [{ match: ['connection', 'list'], stdout: 'Connected as [maker001]\r\nThis is not a table at all\r\n' }] },
-      expect: { error: /^pac connection list printed output this script could not read \u2014 no connection table or JSON list/ },
+      expect: { fallback: 'CONNECTIVITY_NOT_CONFIGURED', error: /^pac connection list printed output this script could not read \u2014 no connection table or JSON list/ },
       saw: (run) => assert.match(run.stdout, /could not read \\u2014 no connection table/, 'the em dash of the message is an escape'),
     },
     {
@@ -651,6 +653,29 @@ test('PROCESS: every failure of list-connections.js past its arguments is ONE ok
     assertFailureLine(run, what, expect);
     saw(run);
   }
+});
+
+test('PROCESS: a pac that fails after the SDK refused says why pac was asked — the failure line carries the refusal as `connectionsFallback`, the same reason a listing pac gave prints — for the Test cloud and for a route the SDK read as far as it could', () => {
+  // A Test-cloud org: pac is asked at once, and there is none on the machine.
+  const missing = runScript('list-connections.js', [TEST_ORG], { platform: { org: TEST_ORG, references: REFERENCES } });
+  const out = assertFailureLine(missing, 'the Test cloud, no pac', { error: /^pac connection list could not run: /, fallback: 'CONNECTIVITY_NOT_CONFIGURED' });
+  const worked = JSON.parse(runScript('list-connections.js', [TEST_ORG], {
+    platform: { org: TEST_ORG, references: REFERENCES },
+    pac: { responses: [{ match: ['connection', 'list'], stdout: PAC_GRID }] },
+  }).lines[0]);
+  assert.deepStrictEqual(out.connectionsFallback, worked.connectionsFallback, 'the same reason, whether pac then worked or not');
+  assert.match(out.connectionsFallback.message, /Test cloud[\s\S]*Power Platform API[\s\S]*pac reads them\. Nothing was requested\.$/);
+
+  // A Public org whose BAP host refuses the token: the SDK read as far as BAP and refused, and pac failed too. The reason is the SDK's own, and the token the service repeated in it is in neither stream.
+  const body = { error: { code: `rejected ${POWER_APPS_TOKEN}`, message: `the token ${POWER_APPS_TOKEN} may not read this`, innererror: { code: `inner ${POWER_APPS_TOKEN}` } } };
+  const refused = runScript('list-connections.js', [ORG], {
+    platform: { connections: CONNECTIONS, references: REFERENCES, failures: [{ host: 'api.bap.microsoft.com', status: 403, body }] },
+    pac: { responses: [{ match: ['connection', 'list'], status: 1, stderr: 'Error: the sign-in has expired\n' }] },
+  });
+  const unauthorized = assertFailureLine(refused, 'a refused token, and pac failing', { error: /^pac connection list failed \(exit 1\): Error: the sign-in has expired$/, fallback: 'CONNECTIVITY_UNAUTHORIZED' });
+  assert.match(unauthorized.connectionsFallback.message, /refused with HTTP 403 \(rejected <token>; inner <token>\)/);
+  assert.ok(!refused.stdout.includes(POWER_APPS_TOKEN) && !refused.stderr.includes(POWER_APPS_TOKEN), 'the token is in neither stream');
+  assert.strictEqual(refused.pacCalls.length, 1);
 });
 
 test('PROCESS: a usage error of list-connections.js — no environment URL, a flag it does not take — is the problem on stderr alone: exit 1, nothing on stdout, nothing asked of anyone', () => {

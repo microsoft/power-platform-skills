@@ -3724,7 +3724,12 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     pure-ASCII line, `{ ok: false, error, code }`, on stdout and the message on stderr, as the other two scripts
     do. `code` is the error's own and is left out when it has none: the SDK's errors have one (`CONNECTION_ERROR`,
     `CONNECTIVITY_RESPONSE_UNREADABLE`, …); a `pac` failure, a bad origin and a refused read of the connection
-    references do not. A usage error (an unknown flag, no environment URL) is the problem and the usage on stderr
+    references do not. A failure of `pac` — which was asked only because the SDK refused — also carries
+    `connectionsFallback: { code, message }`, the same reason a listing `pac` gave prints (`listConnectionsWithPac`
+    keeps it on the error, `failureLine` prints it): `pac` read alone would send a maker to repair a `pac` they
+    never chose to depend on, for a route that is the real reason. A failure that is not `pac`'s — the SDK's own
+    read, the connection references read after a listing — carries none. A usage error (an unknown flag, no
+    environment URL) is the problem and the usage on stderr
     alone — nothing on stdout, exit 1 — as it is in the other two.
   - **`connector.js`** — `operations`, `schema --operation <id>` and `schema --dataset <ds> --table <t>`, each with
     `--env`, `--connector-id` (the short name, or `/providers/Microsoft.PowerApps/apis/<name>`) and

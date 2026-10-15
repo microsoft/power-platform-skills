@@ -26,7 +26,8 @@
 // A failure — of the SDK's read (a route that serves and fails, an answer it cannot read), of PAC, of the connection references, an origin that is not a
 // Dataverse one — exits 1 and prints one pure-ASCII line on stdout, and the message on stderr, as connector.js and solution-settings.js do:
 //     { "ok": false, "error": "<message>", "code": "<the error's code, when it has one>" }
-// (an SDK error has its code; a PAC failure, a bad origin and a refused read of the connection references have none). A usage error — an unknown flag, no
+// (an SDK error has its code; a PAC failure, a bad origin and a refused read of the connection references have none), and — when PAC was asked because the SDK refused and then failed
+// itself — the same "connectionsFallback" a PAC listing that worked has, so a failure of PAC is never read without the reason PAC was asked at all. A usage error — an unknown flag, no
 // environment URL — is the exception: the problem and the usage on stderr alone, stdout empty, exit 1, before anything is read.
 
 const { spawnResultTree } = require('./lib/process-runner.js');
@@ -397,19 +398,29 @@ function pacFailureMessage(pac) {
 // `--environment` pins the listing to the environment this script was asked about. Without it pac answers for the ACTIVE organization of its auth profile, which is
 // not necessarily that one: measured, a pac whose active organization was another environment listed that environment's connections, and the script printed them as
 // the connections of `env` (an import that bound one of them then failed in the platform, which could not find the connection in the environment it was imported into).
-async function listConnectionsWithPac(env) {
-  const pac = await spawnResultTree('pac', ['connection', 'list', '--environment', env], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    // Bounded like every other pac fallback (lib/pac-fallback.js): a pac that is stalled, or waiting for a sign-in, would otherwise hold discovery
-    // for ever — and one that runs out of time has its whole process tree ended (on Windows `pac.cmd` can be cmd.exe running pac).
-    timeout: PAC_READ_TIMEOUT_MS,
-  });
-  if (pac.error || pac.status !== 0) {
-    throw new Error(pacFailureMessage(pac));
+//
+// `refusal` is why PAC is asked at all — the SDK's `{ code, message }` (lib/sdk-first.js). A failure of PAC keeps it on the error, as connector.js and solution-settings.js keep theirs, and
+// `failureLine` prints it: PAC read alone would send a maker to repair a PAC they never chose to depend on, for a route (a Test-cloud environment, a token the service refused) that is the
+// real reason.
+async function listConnectionsWithPac(env, refusal = null) {
+  try {
+    const pac = await spawnResultTree('pac', ['connection', 'list', '--environment', env], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Bounded like every other pac fallback (lib/pac-fallback.js): a pac that is stalled, or waiting for a sign-in, would otherwise hold discovery
+      // for ever — and one that runs out of time has its whole process tree ended (on Windows `pac.cmd` can be cmd.exe running pac).
+      timeout: PAC_READ_TIMEOUT_MS,
+    });
+    if (pac.error || pac.status !== 0) {
+      throw new Error(pacFailureMessage(pac));
+    }
+    requireQuietStderr(pac.stderr);
+    return parsePacConnectionList(pac.stdout);
+  } catch (error) {
+    // Only an object can carry it, and the error is the one PAC raised — its message and cause stay what they were.
+    if (refusal && error !== null && typeof error === 'object') error.fallback = refusal;
+    throw error;
   }
-  requireQuietStderr(pac.stderr);
-  return parsePacConnectionList(pac.stdout);
 }
 
 // A connection of the SDK as a row of this script's output: the three fields PAC's row has (its Id, API Id and Name columns, which the
@@ -428,10 +439,16 @@ function connectionRowFromSdk(connection) {
 // What a failure prints: one `ok: false` line — `error`, and the error's `code` when it has one — and `emitResult` writes the message on stderr as well. An SDK error always has a code
 // (CONNECTION_ERROR for an HTTP status, CONNECTIVITY_RESPONSE_UNREADABLE for an answer it cannot read, …), and lib/sdk-first.js throws it unchanged; a `pac` failure, an origin that is not a
 // Dataverse one and a refused read of the connection references are plain errors, which say what failed in their message and have none. The code is the error's own property, never
-// read out of a message.
+// read out of a message. A failure of `pac` carries, as `connectionsFallback` — the key a listing `pac` gave uses — the SDK's reason for asking `pac` (listConnectionsWithPac), when it has one.
 function failureLine(error) {
   const code = error && typeof error.code === 'string' && error.code !== '' ? error.code : undefined;
-  return { ok: false, error: String((error && error.message) || error), ...(code ? { code } : {}) };
+  const fallback = error && error.fallback ? error.fallback : undefined;
+  return {
+    ok: false,
+    error: String((error && error.message) || error),
+    ...(code ? { code } : {}),
+    ...(fallback ? { connectionsFallback: fallback } : {}),
+  };
 }
 
 async function main() {
@@ -460,7 +477,7 @@ async function main() {
     const listed = await sdkFirst(env, {
       ...connectivity,
       fromSdk: async (sdk) => (await sdk.listConnections()).map(connectionRowFromSdk),
-      fromPac: async () => listConnectionsWithPac(env),
+      fromPac: async (refusal) => listConnectionsWithPac(env, refusal),
     });
     const connections = listed.value;
 
