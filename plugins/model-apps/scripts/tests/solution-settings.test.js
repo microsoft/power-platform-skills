@@ -10,6 +10,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { loadCli } = require('./helpers/cli-harness.js');
 const realAuth = require('../lib/dataverse-auth.js');
+// The copy of the settings that pac is given is made the plain way here (helpers/plain-private-file.js: the real one asks Windows for an access list, half a second a copy); before the script is loaded.
+const plainPrivateFile = require('./helpers/plain-private-file.js');
+plainPrivateFile.install();
 
 const SCRIPT = path.resolve(__dirname, '..', 'solution-settings.js');
 const ss = require(SCRIPT);
@@ -1115,6 +1118,82 @@ test('a name that is taken at the very moment the file is installed is OUT_EXIST
   }
 });
 
+// The run knows things by the time it installs the file — what the SDK could not clean up before it refused (a staged copy of the package, with its upload id), and a folder of pac's it could not remove —
+// and a failure of the last step must not make it forget them: they are what the maker has left in the environment and on the disk. They are carried on the error as they were written, once each: nothing
+// of this command is sanitized (it reads no settings file), and the plugin's own note is a path and a code.
+test('a failure to install the file keeps every warning the run already knew — the SDK\'s cleanup warnings and the note of a pac folder that stayed — once each, in the order a success prints them', async () => {
+  const sdkWarning = 'The staged copy of the package (stagesolutionupload 33333333-3333-4333-8333-333333333333) could not be deleted: HTTP 403. It stays until it is deleted.';
+  // 1. through the SDK: the name is taken while the SDK stages (OUT_EXISTS from the exclusive writer)
+  const dir = tempDir();
+  const { out } = files(dir);
+  const { sdk } = sdkStub({ result: { settings: template(), warnings: [sdkWarning] } });
+  const meanwhile = { ...sdk, getDeploymentSettingsTemplate: async (options) => { fs.writeFileSync(out, 'theirs'); return sdk.getDeploymentSettingsTemplate(options); } };
+  await assert.rejects(ss.runTemplate(templateRequest({ solution: 'Demo', outPath: out }), { sdkFirst: stubSdkFirst(meanwhile) }), (err) => {
+    assert.strictEqual(err.code, 'OUT_EXISTS');
+    assert.deepStrictEqual(ss.describeFailure(err, () => { throw new Error('they are carried, not read again'); }).warnings, [sdkWarning]);
+    return true;
+  });
+  assert.strictEqual(fs.readFileSync(out, 'utf8'), 'theirs');
+  // 2. through the SDK: the install fails for another reason (--force renames a finished copy over the name, and the file system refuses)
+  const realRename = fs.renameSync;
+  fs.renameSync = (from, to, ...rest) => {
+    if (/[\\/]\.[^\\/]+\.\d+\.[0-9a-f]{8}\.tmp$/.test(String(from))) throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+    return realRename(from, to, ...rest);
+  };
+  try {
+    await assert.rejects(ss.runTemplate(templateRequest({ solution: 'Demo', outPath: out, force: true }), { sdkFirst: stubSdkFirst(sdkStub({ result: { settings: template(), warnings: [sdkWarning] } }).sdk) }), (err) => {
+      assert.strictEqual(err.code, 'IO_ERROR', 'the write\'s own failure, as lib/safe-fs.js words it');
+      assert.match(err.message, /EIO/);
+      assert.deepStrictEqual(ss.describeFailure(err, () => { throw new Error('they are carried, not read again'); }).warnings, [sdkWarning]);
+      return true;
+    });
+  } finally {
+    fs.renameSync = realRename;
+  }
+  // 3. through pac: the SDK's warnings came across the fallback, the folder pac worked in cannot be removed, and the name is taken while pac runs
+  const dir3 = tempDir();
+  const { pkg, out: out3 } = files(dir3);
+  const realRemove = fs.rmSync;
+  let left;
+  fs.rmSync = (target, options) => {
+    if (/^solution-settings-[A-Za-z0-9]{6}$/.test(path.basename(String(target)))) {
+      left = String(target);
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${target}'`), { code: 'EBUSY' });
+    }
+    return realRemove(target, options);
+  };
+  const { pac } = fakePac((args) => {
+    fs.writeFileSync(out3, 'theirs');
+    fs.writeFileSync(flagValue(args, '--settings-file'), JSON.stringify(PAC_TEMPLATE));
+    return { status: 0, stdout: 'created', stderr: '' };
+  });
+  const carrying = async (env, plan) => ({ source: 'pac', value: await plan.fromPac({ code: 'SOLUTION_STAGING_UNREADABLE', message: 'unreadable' }), fallback: { code: 'SOLUTION_STAGING_UNREADABLE', message: 'unreadable' }, warnings: [sdkWarning] });
+  try {
+    await assert.rejects(ss.runTemplate({ command: 'template', env: ENV, packagePath: pkg, outPath: out3, force: false }, { sdkFirst: carrying, pac }), (err) => {
+      assert.strictEqual(err.code, 'OUT_EXISTS');
+      const note = `The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote. Delete it.`;
+      assert.deepStrictEqual(ss.describeFailure(err, () => { throw new Error('they are carried, not read again'); }).warnings, [sdkWarning, note]);
+      return true;
+    });
+    assert.strictEqual(fs.readFileSync(out3, 'utf8'), 'theirs', 'the file that appeared is not replaced');
+  } finally {
+    fs.rmSync = realRemove;
+    if (left) realRemove(left, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
+test('a failure to install the file with no warning to keep is the failure it always was — no `warnings` on the error, none printed', async () => {
+  const dir = tempDir();
+  const { out } = files(dir);
+  const { sdk } = sdkStub();
+  const meanwhile = { ...sdk, getDeploymentSettingsTemplate: async (options) => { fs.writeFileSync(out, 'theirs'); return sdk.getDeploymentSettingsTemplate(options); } };
+  await assert.rejects(ss.runTemplate(templateRequest({ solution: 'Demo', outPath: out }), { sdkFirst: stubSdkFirst(meanwhile) }), (err) => {
+    assert.ok(!('warnings' in err) && !('leftoverWarnings' in err));
+    assert.ok(!('warnings' in ss.describeFailure(err, () => undefined)));
+    return true;
+  });
+});
+
 test('--package is checked as far as a file can be before anything is requested: missing, a folder, empty, not a zip', async () => {
   const dir = tempDir();
   const { out } = files(dir);
@@ -1468,30 +1547,103 @@ test('the private copy is removed whichever way pac ends — it succeeded, faile
   }
 });
 
-test('a copy that cannot be made is a failure of the pac step — nothing is sent to pac, the folder is removed, and the reason pac was asked is kept', async () => {
-  const { request } = importFiles(withFeature(filled()));
-  const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
-  const real = fs.writeFileSync;
-  let folder;
-  fs.writeFileSync = (file, ...rest) => {
+// The copy is made in ONE guarded step — the folder, its access list, the file, its bytes — and a failure of any part of it is the same failure: the pac step could not be started. The reason pac was asked is kept
+// (`fallback`), the message holds the system's code and no value, pac is not run, the folder is removed, and no SDK import job is named — the SDK never sent an import, and pac mints its own.
+const COPY_FAILED = (reason) => `\`pac solution import\` was not run: a private copy of the settings file could not be made (${reason}).`;
+// Fails the first call that creates the copy's file, as a file system that refuses it would; `seen.folder` is where that was.
+function refusingTheCopyFile(seen, code = 'EACCES') {
+  const real = fs.openSync;
+  fs.openSync = (file, ...rest) => {
     if (path.basename(String(file)) === 'settings.json' && PRIVATE_FOLDER.test(path.basename(path.dirname(String(file))))) {
-      folder = path.dirname(String(file));
-      throw Object.assign(new Error(`EACCES: permission denied, open '${file}'`), { code: 'EACCES' });
+      seen.folder = path.dirname(String(file));
+      throw Object.assign(new Error(`${code}: permission denied, open '${file}'`), { code });
     }
     return real(file, ...rest);
   };
+  return () => { fs.openSync = real; };
+}
+
+test('a copy that cannot be made is a failure of the pac step — nothing is sent to pac, the folder is removed, and the reason pac was asked is kept', async () => {
+  const { request } = importFiles(withFeature(filled()));
+  const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
+  const seen = {};
+  const restore = refusingTheCopyFile(seen);
   try {
     await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac }), (err) => {
       assert.strictEqual(err.code, 'PAC_SETTINGS_COPY_FAILED');
-      assert.strictEqual(err.message, '`pac solution import` was not run: a private copy of the settings file could not be made (EACCES).');
+      assert.strictEqual(err.message, COPY_FAILED('EACCES'));
       assert.strictEqual(err.fallback.code, 'INVALID_ARGUMENT');
       return true;
     });
   } finally {
-    fs.writeFileSync = real;
+    restore();
   }
   assert.deepStrictEqual(calls, [], 'pac was never started');
-  assert.ok(folder && !fs.existsSync(folder), 'the folder was removed');
+  assert.ok(seen.folder && !fs.existsSync(seen.folder), 'the folder was removed');
+});
+
+test('a folder for the copy that cannot be made is the same failure — PAC_SETTINGS_COPY_FAILED with the reason pac was asked, no SDK import job named, pac never started', async () => {
+  const { request } = importFiles(withFeature(filled()));
+  const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
+  const real = fs.mkdtempSync;
+  fs.mkdtempSync = (prefix, ...rest) => {
+    if (String(prefix).endsWith('solution-settings-')) throw Object.assign(new Error(`EACCES: permission denied, mkdtemp '${prefix}XXXXXX'`), { code: 'EACCES' });
+    return real(prefix, ...rest);
+  };
+  let failure;
+  try {
+    await ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac, importJobId: JOB }).catch((err) => { failure = err; });
+  } finally {
+    fs.mkdtempSync = real;
+  }
+  assert.ok(failure, 'the import failed');
+  assert.strictEqual(failure.code, 'PAC_SETTINGS_COPY_FAILED');
+  assert.strictEqual(failure.message, COPY_FAILED('EACCES'));
+  assert.strictEqual(failure.fallback.code, 'INVALID_ARGUMENT', 'pac was asked because the SDK refused a feature of the file, and the failure says so');
+  assert.deepStrictEqual(ss.describeFailure(failure), { ok: false, error: COPY_FAILED('EACCES'), code: 'PAC_SETTINGS_COPY_FAILED', fallback: failure.fallback });
+  assert.ok(!('importJobId' in failure), 'the SDK sent no import, and pac mints its own job: there is none to look up');
+  assert.deepStrictEqual(calls, [], 'pac was never started');
+});
+
+test('a copy whose protection cannot be set or verified — the private-copy step refuses — is the same failure, however it words the reason: pac is not run and the folder is removed', async () => {
+  for (const [what, refused, reason] of [
+    ['an error with a system code', Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }), 'EPERM'],
+    ['an error with a reason of the plugin\'s own words', Object.assign(new Error('icacls failed'), { code: 'PRIVATE_FOLDER', reason: 'icacls exited 5 restricting the folder to the current user' }), 'icacls exited 5 restricting the folder to the current user'],
+    ['an error with neither', new TypeError('x'), 'TypeError'],
+  ]) {
+    const { request } = importFiles(withFeature(filled()));
+    const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
+    let folder;
+    const privateFile = (dir) => { folder = dir; throw refused; };
+    await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac, privateFile }), (err) => {
+      assert.strictEqual(err.code, 'PAC_SETTINGS_COPY_FAILED', what);
+      assert.strictEqual(err.message, COPY_FAILED(reason), what);
+      assert.strictEqual(err.fallback.code, 'INVALID_ARGUMENT', what);
+      assert.ok(!('importJobId' in ss.describeFailure(err)), what);
+      return true;
+    });
+    assert.deepStrictEqual(calls, [], `${what}: pac was never started`);
+    assert.ok(folder && PRIVATE_FOLDER.test(path.basename(folder)) && !fs.existsSync(folder), `${what}: the folder the copy was to be in is removed`);
+  }
+});
+
+test('the private-copy step is given the folder, the file name and the BYTES the run read — and what it answers is the file pac is given', async () => {
+  const { request, settings } = importFiles(withFeature(filled()));
+  const original = fs.readFileSync(settings);
+  let given;
+  const privateFile = (dir, name, bytes) => {
+    given = { dir, name, bytes: Buffer.from(bytes) };
+    const file = path.join(dir, 'chosen.json');
+    fs.writeFileSync(file, bytes);
+    return file;
+  };
+  const { seen, pac } = readingPac();
+  await ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac, privateFile });
+  assert.strictEqual(given.name, 'settings.json');
+  assert.ok(given.bytes.equals(original), 'the bytes of the one reading');
+  assert.match(path.basename(given.dir), PRIVATE_FOLDER);
+  assert.strictEqual(seen[0].file, path.join(given.dir, 'chosen.json'), 'pac was given what the step answered');
+  assert.strictEqual(fs.existsSync(given.dir), false);
 });
 
 test('the sentence for a copy that cannot be made is the plugin\'s own — a value of the file that is a word of it ("copy", "made", "pac", "file") does not withhold it', async () => {
@@ -1499,19 +1651,15 @@ test('the sentence for a copy that cannot be made is the plugin\'s own — a val
   const wordy = withFeature(template({ EnvironmentVariables: ['copy', 'made', 'pac', 'file'].map((Value, i) => ({ SchemaName: `new_V${i}`, Value, DefaultValue: '', TypeId: 100000000, IsRequired: false })), ConnectionReferences: [] }));
   const { request } = importFiles(wordy);
   const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
-  const real = fs.writeFileSync;
-  fs.writeFileSync = (file, ...rest) => {
-    if (path.basename(String(file)) === 'settings.json' && PRIVATE_FOLDER.test(path.basename(path.dirname(String(file))))) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
-    return real(file, ...rest);
-  };
+  const restore = refusingTheCopyFile({});
   try {
     await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac }), (err) => {
       assert.strictEqual(err.code, 'PAC_SETTINGS_COPY_FAILED');
-      assert.strictEqual(err.message, '`pac solution import` was not run: a private copy of the settings file could not be made (EACCES).');
+      assert.strictEqual(err.message, COPY_FAILED('EACCES'));
       return true;
     });
   } finally {
-    fs.writeFileSync = real;
+    restore();
   }
   assert.deepStrictEqual(calls, []);
 });
@@ -1920,13 +2068,36 @@ function platformFor({ sends, job = NO_SUCH_JOB }) {
   };
   return { http, requests, waits, events, imports: () => requests.filter(isImportSend), jobReads: () => requests.filter(isJobRead) };
 }
-// The long-action client over such a platform; `told` is what the client says of each refusal it sends again, and `observing: false` is a caller that gave it no listener.
+// The long-action client over such a platform; `told` is what the client says of each refusal it sends again, `stopped` what it says of a retry it ends for want of time, and `observing: false` is a caller
+// that gave it no listener.
 function refusedImport({ sends, job, observing = true, http = {} }) {
   const platform = platformFor({ sends, job });
   const told = [];
-  const client = ss.solutionHttpClient(ENV, { ...platform.http, ...http }, observing ? { onImportRefused: (event) => told.push(event) } : {});
-  return { ...platform, client, told, post: () => client.post(`${ENV}/api/data/v9.0/ImportSolution`, importBody()) };
+  const stopped = [];
+  const listeners = { onImportRefused: (event) => told.push(event), onImportRetryStopped: (event) => stopped.push(event) };
+  const client = ss.solutionHttpClient(ENV, { ...platform.http, ...http }, observing ? listeners : {});
+  return { ...platform, http: { ...platform.http, ...http }, client, told, stopped, post: () => client.post(`${ENV}/api/data/v9.0/ImportSolution`, importBody()) };
 }
+// The same, over a clock that only the waits move: `now` is what the client reads, a wait moves it by its length, and a read of the job moves it by `readMs` — so what the client spends is measured, as
+// it is when the waits are real. `sentAt` is when each send reached the platform, in milliseconds from the first.
+const CLOCK_ORIGIN = Date.UTC(2026, 9, 14, 12, 0, 0);
+function clockedImport({ sends, readMs = 0, observing = true }) {
+  const clock = { elapsed: 0, sentAt: [] };
+  const answers = sends.map((answer) => (options) => {
+    clock.sentAt.push(clock.elapsed);
+    return typeof answer === 'function' ? answer(options, clock) : answer;
+  });
+  const waits = [];
+  const world = refusedImport({
+    sends: answers,
+    job: () => { clock.elapsed += readMs; return NO_SUCH_JOB; },
+    observing,
+    http: { now: () => CLOCK_ORIGIN + clock.elapsed, sleep: async (ms) => { waits.push(ms); clock.elapsed += ms; world.events.push(`wait ${ms}`); } },
+  });
+  return { ...world, clock, waits };
+}
+// A refusal that asks, in either form of Retry-After, to wait `seconds` from the moment it arrives.
+const askingFor = (seconds) => ({ seconds: () => lockAnswer({ headers: { 'retry-after': String(seconds) } }), date: (options, clock) => lockAnswer({ headers: { 'retry-after': new Date(CLOCK_ORIGIN + clock.elapsed + seconds * 1000).toUTCString() } }) });
 
 test('an import the platform refused before it started — HTTP 429 with the lock\'s code — is sent again under a NEW job id, once the job the refused send named is shown not to exist', async () => {
   const world = refusedImport({ sends: [lockAnswer(), ok()] });
@@ -1943,12 +2114,16 @@ test('an import the platform refused before it started — HTTP 429 with the loc
   // In this order: the send, the wait, the one read of the refused send's job — the latest evidence before a second copy leaves — and the send again.
   assert.deepStrictEqual(world.events, [`send ${JOB}`, 'wait 10000', `read importjobs(${JOB})`, `send ${newId}`]);
   assert.deepStrictEqual(world.jobReads().map((r) => [r.method, new URL(r.url).search, new URL(r.url).origin]), [['GET', '?$select=importjobid', ENV]]);
-  assert.deepStrictEqual(world.told, [{ importJobId: JOB, status: 429, code: '0x80071151', waitedMs: 10000, nextImportJobId: newId }]);
+  assert.deepStrictEqual(world.told, [{ importJobId: JOB, status: 429, code: '0x8004F064', waitedMs: 10000, nextImportJobId: newId }]);
 });
 
-test('every code of the platform\'s "cannot start, another operation is running" family is a refusal to start — in either case of its hex digits — and no other code is', async () => {
-  // The error reference's names: SolutionConcurrencyFailure, then CustomizationLockEx_BothUnknown, _BlockedUnknown, _BothKnownSame, _BothKnownDifferent and _BlockingUnknown.
-  const family = ['0x80071151', '0x8004F061', '0x8004F062', '0x8004F063', '0x8004F064', '0x8004F067'];
+test('the codes that make a refusal to start are exactly the five customization-lock codes whose documented text says "Cannot start" — pinned, each in either case of its hex digits — and no other code is', async () => {
+  // The error reference's names: CustomizationLockEx_BothUnknown, _BlockedUnknown, _BothKnownSame, _BothKnownDifferent and _BlockingUnknown. Nothing else is in the set: SolutionConcurrencyFailure
+  // (0x80071151) is left out because its documented text says the installation or removal FAILED, which does not say that nothing started (the next test).
+  const family = ['0x8004F061', '0x8004F062', '0x8004F063', '0x8004F064', '0x8004F067'];
+  assert.deepStrictEqual([...ss.LOCK_REFUSAL_CODES], family, 'the exact set');
+  assert.ok(Object.isFrozen(ss.LOCK_REFUSAL_CODES));
+  assert.ok(!ss.LOCK_REFUSAL_CODES.some((code) => code.toLowerCase() === '0x80071151'), '0x80071151 is not in it');
   for (const code of family) {
     for (const spelled of [code, `0x${code.slice(2).toLowerCase()}`, `0x${code.slice(2).toUpperCase()}`]) {
       const world = refusedImport({ sends: [lockAnswer({ code: spelled }), ok()] });
@@ -1957,6 +2132,40 @@ test('every code of the platform\'s "cannot start, another operation is running"
       assert.strictEqual(world.told[0].code, code, `${spelled}: told as the reference spells it`);
     }
   }
+});
+
+// SolutionConcurrencyFailure is documented as "The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later." — an operation
+// that FAILED, which is not the platform saying it refused to start one. Answers that begin "Cannot start the requested operation …" and end with that sentence have been seen carrying this code, but the
+// documented text is what the list of codes follows: this code is not one this client sends again for, and the answer is the first and the last send, as every answer to an import was before the resend existed.
+const { CONCURRENCY_REFUSAL } = require('./helpers/fake-power-platform.js');
+test('SolutionConcurrencyFailure (0x80071151) is NOT a refusal to start — whatever words come with it, in either case of its hex digits, the import is sent ONCE: no job read, no wait, nothing told, the answer back as it came', async () => {
+  const documented = 'The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later.';
+  const cases = [
+    ['its documented text', documented],
+    ['the two-part message that begins "Cannot start the requested operation"', CONCURRENCY_REFUSAL.message],
+    ['the lock\'s own words', LOCK_REFUSAL.message],
+  ];
+  for (const [what, message] of cases) {
+    for (const spelled of ['0x80071151', '0X80071151']) {
+      const world = refusedImport({ sends: [lockAnswer({ code: spelled, message, headers: { 'retry-after': '5' } }), ok()] });
+      const res = await world.post();
+      assert.deepStrictEqual([res.status, res.body.error.code, res.body.error.message], [429, spelled, message], `${what}: the answer comes back as it came`);
+      assert.strictEqual(world.imports().length, 1, `${what}: one send`);
+      assert.deepStrictEqual([world.jobReads().length, world.waits.length, world.told.length], [0, 0, 0], `${what}: no job read, no wait, nothing told`);
+    }
+  }
+});
+
+test('import: a refusal with 0x80071151 is reported exactly as an import refused for any other reason always was — the SDK\'s code and the status, the job that was sent, no count, no list — and pac is not asked', async () => {
+  const { request } = importFiles();
+  const platform = platformFor({ sends: [lockAnswer({ code: CONCURRENCY_REFUSAL.code, message: CONCURRENCY_REFUSAL.message }), ok()] });
+  const { pac, calls } = fakePac(() => ({ status: 0, stdout: '', stderr: '' }));
+  await assert.rejects(ss.runImport(request, { http: platform.http, sdkFirst: importingOver(), importJobId: JOB, pac, readJobLog: async () => null }), (err) => {
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message}`);
+    assert.deepStrictEqual(ss.describeFailure(err), { ok: false, error: err.message, code: 'CONNECTION_ERROR', status: 429, importJobId: JOB });
+    return true;
+  });
+  assert.deepStrictEqual([platform.imports().length, platform.jobReads().length, platform.waits.length, calls.length], [1, 0, 0, 0]);
 });
 
 test('the job proves it: any answer to the read of the job but 404 — it exists, the read was refused, it failed, it got no answer — is NOT proof, and the import is not sent again', async () => {
@@ -1974,7 +2183,7 @@ test('the job proves it: any answer to the read of the job but 404 — it exists
   for (const [what, job] of cases) {
     const world = refusedImport({ sends: [lockAnswer(), ok()], job });
     const res = await world.post();
-    assert.deepStrictEqual([res.status, res.body.error.code], [429, '0x80071151'], `${what}: the refusal comes back as it came`);
+    assert.deepStrictEqual([res.status, res.body.error.code], [429, '0x8004F064'], `${what}: the refusal comes back as it came`);
     assert.strictEqual(world.imports().length, 1, `${what}: one send`);
     assert.strictEqual(world.jobReads().length, 1, `${what}: one read, never repeated`);
     assert.deepStrictEqual(world.told, [], what);
@@ -1999,7 +2208,7 @@ test('anything that is not the lock\'s refusal is sent ONCE, as before: a 429 of
     ['the lock\'s own words and no code', plain({ error: { message: LOCK_REFUSAL.message } })],
     ['the lock\'s own words in a body that is not JSON', plain(LOCK_REFUSAL.message)],
     ['the lock\'s code in a text around it', lockAnswer({ code: `error ${LOCK_REFUSAL.code}` })],
-    ['the lock\'s code in its decimal form', plain({ error: { code: -2147020463, message: LOCK_REFUSAL.message } })],
+    ['the lock\'s code in its decimal form', plain({ error: { code: -2147159964, message: LOCK_REFUSAL.message } })],
     ['the lock\'s code outside "error"', plain({ code: LOCK_REFUSAL.code, message: LOCK_REFUSAL.message })],
     ['an empty body', plain('')],
     ['a body that is not an object', plain('null')],
@@ -2028,31 +2237,120 @@ test('with the listener given, every answer that does not say the import was ref
   }
 });
 
-test('the wait before a send again is 10 s, then 20, 40 and 60 — longer when the platform\'s Retry-After asks for more, never beyond a minute and never shorter than that step — and a run waits four times at most', async () => {
-  const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
+test('the wait before a send again is 10 s, then 20, 40 and 60 — longer when the platform\'s Retry-After asks for more, in either form and WHOLE, and never shorter than that step — and a run waits four times at most', async () => {
   const waited = async (headers, refusals = 1) => {
-    const world = refusedImport({ sends: [...Array.from({ length: refusals }, () => lockAnswer({ headers })), ok()], http: { now: () => NOW } });
+    const world = clockedImport({ sends: [...Array.from({ length: refusals }, () => () => lockAnswer({ headers })), ok()] });
     await world.post();
     return world.waits;
   };
+  const date = (seconds) => new Date(CLOCK_ORIGIN + seconds * 1000).toUTCString();
   assert.deepStrictEqual(await waited({}), [10000]);
   assert.deepStrictEqual(await waited({ 'retry-after': '45' }), [45000]);
   assert.deepStrictEqual(await waited({ 'Retry-After': '45' }), [45000], 'the header\'s case does not matter');
+  assert.deepStrictEqual(await waited({ 'retry-after': ['45'] }), [45000], 'a header that arrives as a list');
   assert.deepStrictEqual(await waited({ 'retry-after': '5' }), [10000], 'a shorter Retry-After does not shorten the step');
-  assert.deepStrictEqual(await waited({ 'retry-after': '999' }), [60000], 'and a longer one is capped at a minute');
-  assert.deepStrictEqual(await waited({ 'retry-after': new Date(NOW + 30000).toUTCString() }), [30000], 'the date form, too');
+  assert.deepStrictEqual(await waited({ 'retry-after': date(30) }), [30000], 'the date form, too');
   assert.deepStrictEqual(await waited({ 'retry-after': 'soon' }), [10000], 'what cannot be read is no request');
+  assert.deepStrictEqual(await waited({ 'retry-after': date(-30) }), [10000], 'a date that has passed is no request either');
   assert.deepStrictEqual(await waited({}, 4), [10000, 20000, 40000, 60000]);
   assert.deepStrictEqual(await waited({ 'retry-after': '30' }, 4), [30000, 30000, 40000, 60000]);
-  // The bound, in the constants the client reads: five sends, four waits, two minutes and a half.
+  // The bound, in the constants the client reads: five sends, four waits at most, and five minutes in all for the whole of the retry — the wait the platform asks for and the proof reads included.
   assert.strictEqual(ss.IMPORT_MAX_SENDS, 5);
   assert.deepStrictEqual([...ss.IMPORT_RESEND_WAITS_MS], [10000, 20000, 40000, 60000]);
+  assert.strictEqual(ss.IMPORT_RETRY_BUDGET_MS, 5 * 60 * 1000);
+});
+
+// A Retry-After the platform sends is the time it asks the caller to wait, and a send before it is a send the platform has said it will refuse: so it is waited out WHOLE — not cut to the minute the client's own
+// retries cap it at — and, when it does not fit the budget of the retry, the import is not sent again at all: it is never sent early.
+for (const [form, header] of [['delay-seconds', askingFor(180).seconds], ['HTTP-date', askingFor(180).date]]) {
+  test(`a Retry-After of 180 s (${form}) is waited out whole — the platform is not sent the import again a minute into it — and the send comes after it`, async () => {
+    const world = clockedImport({ sends: [header, ok()] });
+    const res = await world.post();
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(world.waits, [180000], 'the whole of it, not 60 s');
+    assert.deepStrictEqual(world.clock.sentAt, [0, 180000], 'the second send is 180 s after the first, and not before');
+    assert.deepStrictEqual(world.events.map((event) => event.replace(/ [0-9a-f-]{36}.*$/, '').replace(/\(.*\)$/, '')), ['send', 'wait 180000', 'read importjobs', 'send']);
+    assert.deepStrictEqual(world.told.map((event) => event.waitedMs), [180000]);
+    assert.deepStrictEqual(world.stopped, []);
+  });
+}
+
+test('a wait that does not fit in what is left of the five minutes ends the retry — the refusal comes back as it came, with nothing sent early and nothing waited for — whatever the form of the Retry-After', async () => {
+  const tooLong = [
+    ['delay-seconds, beyond the budget', askingFor(301).seconds],
+    ['HTTP-date, beyond the budget', askingFor(301).date],
+    ['an hour', askingFor(3600).seconds],
+    ['a day, as a date', askingFor(86400).date],
+  ];
+  for (const [what, refusal] of tooLong) {
+    const world = clockedImport({ sends: [refusal, ok()] });
+    const res = await world.post();
+    assert.deepStrictEqual([res.status, res.body.error.code, res.body.error.message], [429, '0x8004F064', LOCK_REFUSAL.message], `${what}: the platform's refusal, as it came`);
+    assert.deepStrictEqual([world.imports().length, world.jobReads().length, world.waits.length, world.told.length], [1, 0, 0, 0], `${what}: one send, no proof, no wait, nothing sent again`);
+    assert.strictEqual(world.clock.elapsed, 0, `${what}: no time was spent`);
+    assert.strictEqual(world.stopped.length, 1, `${what}: the listener is told the retry was ended`);
+    assert.strictEqual(world.stopped[0].importJobId, JOB);
+    assert.strictEqual(world.stopped[0].spentMs, 0);
+    assert.ok(world.stopped[0].waitMs > 300000, what);
+  }
+  // The edge: a request for the whole five minutes fits, one second more does not.
+  const fits = clockedImport({ sends: [askingFor(300).seconds, ok()] });
+  assert.strictEqual((await fits.post()).status, 200);
+  assert.deepStrictEqual([fits.waits, fits.stopped], [[300000], []]);
+  const over = clockedImport({ sends: [askingFor(301).seconds, ok()] });
+  assert.strictEqual((await over.post()).status, 429);
+  assert.deepStrictEqual(over.waits, []);
+});
+
+test('the five minutes are one budget for the whole retry — what the first waits spent is not there for the next — and a refusal that asks for more than is left ends the retry with the attempts so far', async () => {
+  // Every refusal asks for two minutes: the first two waits fit (two, then four minutes in all), the third would end at six.
+  for (const [form, ask] of [['delay-seconds', askingFor(120).seconds], ['HTTP-date', askingFor(120).date]]) {
+    const world = clockedImport({ sends: [ask, ask, ask, ok()] });
+    const res = await world.post();
+    assert.strictEqual(res.status, 429, form);
+    assert.deepStrictEqual(world.waits, [120000, 120000], form);
+    assert.deepStrictEqual(world.clock.sentAt, [0, 120000, 240000], `${form}: three sends, two minutes apart — never early`);
+    assert.deepStrictEqual([world.imports().length, world.jobReads().length, world.told.length], [3, 2, 2], form);
+    assert.deepStrictEqual(world.stopped, [{ importJobId: world.imports().map(jobIdOf)[2], waitMs: 120000, spentMs: 240000 }], `${form}: the third refusal is the last answer, and it is the one that could not be waited out`);
+  }
+  // A shorter request that comes after a long one still fits what is left: the budget is a sum, not a count.
+  const mixed = clockedImport({ sends: [askingFor(200).seconds, askingFor(90).seconds, askingFor(30).seconds, ok()] });
+  assert.strictEqual((await mixed.post()).status, 429);
+  assert.deepStrictEqual(mixed.waits, [200000, 90000], '200 and 90 are 290 s, and the third wait — 30 s — would end at 320');
+  assert.strictEqual(mixed.stopped.length, 1);
+  // The default schedule never reaches the budget: 10, 20, 40 and 60 s are 130 s.
+  const schedule = clockedImport({ sends: [...Array.from({ length: 5 }, () => () => lockAnswer())] });
+  assert.strictEqual((await schedule.post()).status, 429);
+  assert.deepStrictEqual(schedule.waits, [10000, 20000, 40000, 60000]);
+  assert.deepStrictEqual(schedule.stopped, [], 'a refusal after the fifth send is the sends running out, not the time');
+});
+
+test('the proof reads count: time spent reading the refused send\'s job is time spent, and a read that leaves nothing of the budget ends the retry before the send, with the platform\'s refusal', async () => {
+  // Each read of the job takes 100 s. Send one, refused at 0; wait 10, read: 110 s; send two refused; wait 20, read: 230 s; send three refused; wait 40 (230 + 40 fits), read: 370 s — over.
+  const world = clockedImport({ sends: Array.from({ length: 5 }, () => () => lockAnswer()), readMs: 100000 });
+  const res = await world.post();
+  assert.strictEqual(res.status, 429);
+  assert.deepStrictEqual(world.waits, [10000, 20000, 40000]);
+  assert.deepStrictEqual(world.clock.sentAt, [0, 110000, 230000], 'a third send was made; a fourth was not');
+  assert.strictEqual(world.jobReads().length, 3);
+  assert.deepStrictEqual(world.told.length, 2, 'the third refusal is not sent again, so it is not told as one that was');
+  assert.deepStrictEqual(world.stopped, [{ importJobId: world.imports().map(jobIdOf)[2], waitMs: null, spentMs: 370000 }]);
+  // Without a clock that moves, the same refusals are sent again to the end: nothing but time ends a retry early.
+  const quick = clockedImport({ sends: Array.from({ length: 5 }, () => () => lockAnswer()) });
+  await quick.post();
+  assert.strictEqual(quick.imports().length, 5);
+});
+
+test('a client with no listener never waits for a refused import: the budget, like the retry, belongs to the caller that asked for it', async () => {
+  const world = clockedImport({ sends: [askingFor(180).seconds, ok()], observing: false });
+  assert.strictEqual((await world.post()).status, 429);
+  assert.deepStrictEqual([world.imports().length, world.waits.length, world.jobReads().length], [1, 0, 0]);
 });
 
 test('an import is sent FIVE times at most: when the fifth is refused too, that answer comes back as it came — each of the first four was followed by a wait and a proof, the fifth by neither', async () => {
   const world = refusedImport({ sends: Array.from({ length: 6 }, () => lockAnswer()) }); // a sixth would be answered, too: it must never be asked
   const res = await world.post();
-  assert.deepStrictEqual([res.status, res.body.error.code], [429, '0x80071151']);
+  assert.deepStrictEqual([res.status, res.body.error.code], [429, '0x8004F064']);
   assert.strictEqual(world.imports().length, 5);
   assert.strictEqual(world.jobReads().length, 4);
   assert.deepStrictEqual(world.waits, [10000, 20000, 40000, 60000]);
@@ -2104,7 +2402,7 @@ function importingOver() {
 }
 const APPLIED = { environmentVariables: ['new_Url'], connectionReferences: ['new_Dataverse'] };
 // The sentence an import that was sent more than once adds to its failure: how many sends, why each before the last was refused, and what the run waited.
-const RESENT = (sends, waits) => `ImportSolution was sent ${sends} times. Each send before the last was refused before it started (HTTP 429, code 0x80071151: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${waits} before sending again.`;
+const RESENT = (sends, waits) => `ImportSolution was sent ${sends} times. Each send before the last was refused before it started (HTTP 429, code 0x8004F064: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${waits} before sending again.`;
 
 test('import: a refused send that is sent again is reported — the job that RAN, how many sends it took, and each refusal with the wait that followed it', async () => {
   const { request } = importFiles();
@@ -2118,8 +2416,8 @@ test('import: a refused send that is sent again is reported — the job that RAN
     applied: APPLIED,
     importAttempts: 3,
     importRefusals: [
-      { importJobId: JOB, status: 429, code: '0x80071151', waitedMs: 10000 },
-      { importJobId: ids[1], status: 429, code: '0x80071151', waitedMs: 30000 },
+      { importJobId: JOB, status: 429, code: '0x8004F064', waitedMs: 10000 },
+      { importJobId: ids[1], status: 429, code: '0x8004F064', waitedMs: 30000 },
     ],
   });
   assert.notStrictEqual(ids[2], JOB);
@@ -2134,7 +2432,7 @@ test('import: when the sends run out the failure is the platform\'s own refusal 
     const ids = platform.imports().map(jobIdOf);
     assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${RESENT(5, '10 s, 20 s, 40 s, 60 s')} It sends at most 5 times: run the import again when the other operation has finished.`);
     assert.deepStrictEqual([err.code, err.statusCode, err.importJobId, err.importAttempts], ['CONNECTION_ERROR', 429, ids[4], 5]);
-    assert.deepStrictEqual(err.importRefusals, ids.slice(0, 4).map((id, i) => ({ importJobId: id, status: 429, code: '0x80071151', waitedMs: [10000, 20000, 40000, 60000][i] })));
+    assert.deepStrictEqual(err.importRefusals, ids.slice(0, 4).map((id, i) => ({ importJobId: id, status: 429, code: '0x8004F064', waitedMs: [10000, 20000, 40000, 60000][i] })));
     assert.ok(!('fallback' in err), 'a refusal that outlasted the sends is not a reason to ask pac');
     assert.deepStrictEqual(ss.describeFailure(err), {
       ok: false, error: err.message, code: 'CONNECTION_ERROR', status: 429, importJobId: ids[4], importAttempts: 5, importRefusals: err.importRefusals,
@@ -2144,6 +2442,67 @@ test('import: when the sends run out the failure is the platform\'s own refusal 
   assert.deepStrictEqual(calls, [], 'pac was not run');
 });
 
+// What an import that was refused and not sent again for want of time reports: the platform's own refusal, the sends there were (as for sends that ran out), and the plugin's own sentence — numbers only —
+// that says why the next one was not made.
+const NOT_SENT_AGAIN = (wait, spent) => `ImportSolution was not sent again: the next wait, ${wait}, does not fit in what is left of the 5 minutes this run spends in all on sending it again (${spent} are spent). Run the import again when the other operation has finished.`;
+const OUT_OF_TIME = (spent) => `ImportSolution was not sent again: the 5 minutes this run spends in all on sending it again were used up (${spent}) before the next send. Run the import again when the other operation has finished.`;
+
+test('import: a refusal whose Retry-After does not fit the five minutes is the platform\'s own refusal, and a sentence that says why it was not sent again — nothing was sent again, so no count and no list', async () => {
+  const { request } = importFiles();
+  const world = clockedImport({ sends: [askingFor(600).seconds, ok()] });
+  const { pac, calls } = fakePac(() => ({ status: 0, stdout: '', stderr: '' }));
+  await assert.rejects(ss.runImport(request, { http: world.http, sdkFirst: importingOver(), importJobId: JOB, pac, readJobLog: async () => null }), (err) => {
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${NOT_SENT_AGAIN('600 s', '0 s')}`);
+    assert.deepStrictEqual(ss.describeFailure(err), { ok: false, error: err.message, code: 'CONNECTION_ERROR', status: 429, importJobId: JOB });
+    return true;
+  });
+  assert.deepStrictEqual([world.imports().length, world.jobReads().length, world.waits.length, calls.length], [1, 0, 0, 0], 'one send, nothing read, nothing waited for, pac not asked');
+});
+
+test('import: after sends that were made, the refusal that cannot be waited out is the last answer — the attempts so far are counted and listed, the job named is the last send\'s, and the sentence says why', async () => {
+  const { request } = importFiles();
+  const world = clockedImport({ sends: [askingFor(120).seconds, askingFor(120).seconds, askingFor(120).seconds, ok()] });
+  await assert.rejects(ss.runImport(request, { http: world.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+    const ids = world.imports().map(jobIdOf);
+    assert.strictEqual(ids.length, 3);
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${RESENT(3, '120 s, 120 s')} ${NOT_SENT_AGAIN('120 s', '240 s')}`);
+    assert.deepStrictEqual([err.code, err.statusCode, err.importJobId, err.importAttempts], ['CONNECTION_ERROR', 429, ids[2], 3]);
+    assert.deepStrictEqual(err.importRefusals, [
+      { importJobId: JOB, status: 429, code: '0x8004F064', waitedMs: 120000 },
+      { importJobId: ids[1], status: 429, code: '0x8004F064', waitedMs: 120000 },
+    ]);
+    assert.deepStrictEqual(ss.describeFailure(err), { ok: false, error: err.message, code: 'CONNECTION_ERROR', status: 429, importJobId: ids[2], importAttempts: 3, importRefusals: err.importRefusals });
+    return true;
+  });
+});
+
+test('import: a retry whose budget the proof read used up says so — the refusal, the sends there were, and a sentence that names the time that was spent', async () => {
+  const { request } = importFiles();
+  const world = clockedImport({ sends: Array.from({ length: 5 }, () => () => lockAnswer()), readMs: 100000 });
+  await assert.rejects(ss.runImport(request, { http: world.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+    const ids = world.imports().map(jobIdOf);
+    assert.strictEqual(ids.length, 3);
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${RESENT(3, '10 s, 20 s')} ${OUT_OF_TIME('370 s')}`);
+    assert.deepStrictEqual([err.importJobId, err.importAttempts], [ids[2], 3]);
+    return true;
+  });
+});
+
+test('import: when the sends run out the failure is not described as one that ran out of time, and a retry that ended for time is not described as one whose sends ran out', async () => {
+  const { request } = importFiles();
+  const sends = clockedImport({ sends: Array.from({ length: 5 }, () => () => lockAnswer()) });
+  await assert.rejects(ss.runImport(request, { http: sends.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+    assert.ok(err.message.endsWith('It sends at most 5 times: run the import again when the other operation has finished.'));
+    assert.ok(!err.message.includes('was not sent again'));
+    return true;
+  });
+  const time = clockedImport({ sends: [askingFor(120).seconds, askingFor(120).seconds, askingFor(120).seconds, ok()] });
+  await assert.rejects(ss.runImport(importFiles().request, { http: time.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+    assert.ok(!err.message.includes('It sends at most 5 times'));
+    return true;
+  });
+});
+
 test('import: a send that follows a refusal and is answered by a gateway says it was not sent again and names its own job — with the refusals before it counted', async () => {
   const { request } = importFiles();
   const platform = platformFor({ sends: [lockAnswer(), { statusCode: 504, headers: {}, body: JSON.stringify({ error: { code: '0x80048d19', message: 'the gateway gave up' } }) }] });
@@ -2151,7 +2510,7 @@ test('import: a send that follows a refusal and is answered by a gateway says it
     const [, second] = platform.imports().map(jobIdOf);
     assert.strictEqual(err.message, `HTTP 504 from ${ENV}/api/data/v9.0/ImportSolution: the gateway gave up The last send was not sent again: the environment may have accepted it.${ss.lookUpJob(second)} ${RESENT(2, '10 s')}`);
     assert.deepStrictEqual([err.statusCode, err.importJobId, err.importAttempts], [504, second, 2]);
-    assert.deepStrictEqual(err.importRefusals, [{ importJobId: JOB, status: 429, code: '0x80071151', waitedMs: 10000 }]);
+    assert.deepStrictEqual(err.importRefusals, [{ importJobId: JOB, status: 429, code: '0x8004F064', waitedMs: 10000 }]);
     return true;
   });
 });

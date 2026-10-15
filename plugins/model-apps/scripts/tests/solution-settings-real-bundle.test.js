@@ -9,8 +9,11 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// The copy of the settings that pac is given is made the plain way here (helpers/plain-private-file.js: the real one asks Windows for an access list, half a second a copy); before the script is loaded.
+const plainPrivateFile = require('./helpers/plain-private-file.js');
+plainPrivateFile.install();
 const ss = require('../solution-settings.js');
-const { createCloud, LOCK_REFUSAL, ORG, DATAVERSE_TOKEN } = require('./helpers/fake-power-platform.js');
+const { createCloud, LOCK_REFUSAL, CONCURRENCY_REFUSAL, ORG, DATAVERSE_TOKEN } = require('./helpers/fake-power-platform.js');
 const { runScript } = require('./helpers/run-with-fakes.js');
 const { VALUES, spellingsOfValue } = require('./helpers/value-spellings.js');
 
@@ -527,7 +530,7 @@ test('REAL BUNDLE: a failed import reads its job\'s log once through the same cl
 // The platform refuses to START an import while another operation (a publish, another import) holds its customization lock: HTTP 429 and the lock's code (LOCK_REFUSAL). The refused
 // send names a job that never existed, so — and only so — the script waits and sends the import again under a new job id. Here the REAL SDK stages the package, sends the import,
 // and raises the ConnectionError for the refusal: what the stand-ins of solution-settings.test.js cannot say is that a second send is a second ImportSolution and nothing more.
-const SENT_AGAIN = (sends, waits) => `ImportSolution was sent ${sends} times. Each send before the last was refused before it started (HTTP 429, code 0x80071151: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${waits} before sending again.`;
+const SENT_AGAIN = (sends, waits) => `ImportSolution was sent ${sends} times. Each send before the last was refused before it started (HTTP 429, code 0x8004F064: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${waits} before sending again.`;
 const wireOf = (cloud) => cloud.requests.map((r) => `${r.method} ${r.path.replace(/^\/api\/data\/v9\.\d+\//, '')}${r.search}`);
 const withWaits = (http, waits) => ({ ...http, sleep: async (ms) => { waits.push(ms); } });
 
@@ -549,7 +552,7 @@ test('REAL BUNDLE: an import refused while another operation held the lock is se
     importJobId: accepted.ImportJobId,
     applied: { environmentVariables: ['new_Secret'], connectionReferences: ['new_Dataverse'] },
     importAttempts: 2,
-    importRefusals: [{ importJobId: JOB, status: 429, code: '0x80071151', waitedMs: 10000 }],
+    importRefusals: [{ importJobId: JOB, status: 429, code: '0x8004F064', waitedMs: 10000 }],
   });
   assert.deepStrictEqual(waits, [10000]);
   // The SDK staged ONCE and deleted its copy: a second send is a second ImportSolution, never a second staging. The one read in between is the proof that the refused send's job does not exist.
@@ -628,6 +631,9 @@ test('REAL BUNDLE: a 429 of another kind, and the lock\'s words under another co
     { status: 429, code: '0x80071154', message: 'The current Import operation failed due to another concurrent operation running at the same time. Please try again later.' },
     { ...LOCK_REFUSAL, code: '0x80048d19' },
     { ...LOCK_REFUSAL, status: 503 },
+    // SolutionConcurrencyFailure: its documented text says the installation or removal FAILED, so it is not taken to say that nothing started — with the lock's words or without them.
+    { ...CONCURRENCY_REFUSAL },
+    { ...CONCURRENCY_REFUSAL, message: 'The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later.' },
   ];
   for (const refusal of throttled) {
     const { cloud, http } = world({ importRefusals: [refusal] });
@@ -668,6 +674,106 @@ test('REAL BUNDLE: a refusal that quotes the settings file reaches no message �
     return true;
   });
   assert.strictEqual(cloud.state.refusedImports.length, 5);
+});
+
+// A clock that only the waits move, so that what the run spends is measured as it is when the waits are real: `now` is what the client reads, and a wait moves it by its length.
+const CLOCK_ORIGIN = Date.UTC(2026, 9, 14, 12, 0, 0);
+function clocked(http) {
+  const clock = { elapsed: 0 };
+  const waits = [];
+  return { clock, waits, http: { ...http, now: () => CLOCK_ORIGIN + clock.elapsed, sleep: async (ms) => { waits.push(ms); clock.elapsed += ms; } } };
+}
+const NOT_SENT_AGAIN = (wait, spent) => `ImportSolution was not sent again: the next wait, ${wait}, does not fit in what is left of the 5 minutes this run spends in all on sending it again (${spent} are spent). Run the import again when the other operation has finished.`;
+
+test('REAL BUNDLE: a Retry-After longer than a minute — in seconds, and as a date — is waited out WHOLE before the second send; the platform is never sent the import again early', async () => {
+  for (const [form, header] of [['delay-seconds', '180'], ['HTTP-date', new Date(CLOCK_ORIGIN + 180000).toUTCString()]]) {
+    const { cloud, http } = world({ importRefusals: [{ ...LOCK_REFUSAL, headers: { 'retry-after': header } }] });
+    const time = clocked(http);
+    const f = files();
+    const result = await ss.runImport(importRequest(f), { http: time.http, pac: never, importJobId: JOB });
+    assert.deepStrictEqual(time.waits, [180000], `${form}: the whole of what the platform asked, not a minute of it`);
+    assert.strictEqual(result.importAttempts, 2, form);
+    assert.deepStrictEqual(result.importRefusals, [{ importJobId: JOB, status: 429, code: '0x8004F064', waitedMs: 180000 }], form);
+    assert.strictEqual(cloud.state.imports.length, 1, form);
+  }
+});
+
+test('REAL BUNDLE: a Retry-After that does not fit the five minutes ends the retry at once — one send, no wait, no proof, no second import — and the failure is the platform\'s refusal with the reason', async () => {
+  for (const [form, header] of [['delay-seconds', '600'], ['HTTP-date', new Date(CLOCK_ORIGIN + 600000).toUTCString()]]) {
+    const { cloud, http } = world({ importRefusals: [{ ...LOCK_REFUSAL, headers: { 'retry-after': header } }] });
+    const time = clocked(http);
+    const f = files();
+    await assert.rejects(ss.runImport(importRequest(f), { http: time.http, pac: never, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.message, `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${NOT_SENT_AGAIN('600 s', '0 s')}`, form);
+      assert.deepStrictEqual([err.code, err.statusCode, err.importJobId, 'importAttempts' in err], ['CONNECTION_ERROR', 429, JOB, false], form);
+      return true;
+    }, form);
+    assert.deepStrictEqual([cloud.state.refusedImports.length, cloud.state.imports.length, time.waits.length], [1, 0, 0], `${form}: one send, nothing taken, nothing waited for`);
+    assert.deepStrictEqual(cloud.requests.filter((r) => r.path.includes('/importjobs(')).map((r) => r.search), ['?$select=data'], `${form}: only the failure's usual read of the log — no proof read, since nothing was to be sent again`);
+  }
+});
+
+// --- what a final write that fails must not make the run forget -------------------------------------------------------------------------------------
+// A template that is complete is installed as the LAST step, after the SDK has staged, refused and cleaned up (or not) and pac has made its folder: by then the run knows what it has left behind. The name `--out`
+// can be taken while all that runs — the exclusive install refuses to replace what a maker saved — and the failure that is then reported must still say the staged copy and the folder that stayed.
+const { readCleanupWarnings } = require('../lib/maker-sdk.js');
+const UPLOAD = '33333333-3333-4333-8333-333333333333';
+
+test('REAL BUNDLE: a template whose --out is taken while the SDK refuses and pac makes it fails OUT_EXISTS — and the staged copy the SDK could not delete is still said, with its upload id', async () => {
+  const { cloud, http } = world({ stage: { variables: [{ schemaName: 'new_Mode' }, { schemaName: 'new_Mode' }] }, deleteStagingAnswer: json(403, { error: { message: 'staging cleanup denied' } }) });
+  const f = files();
+  const pac = { spawn: (name, args) => {
+    fs.writeFileSync(args[args.indexOf('--settings-file') + 1], JSON.stringify({ EnvironmentVariables: [], ConnectionReferences: [] }));
+    fs.writeFileSync(f.out, '{"maker":"saved while staging"}');
+    return { status: 0, stdout: 'Template created', stderr: '' };
+  } };
+  let failure;
+  await ss.runTemplate(templateRequest(f, { solution: 'Demo' }), { http, pac }).catch((error) => { failure = ss.describeFailure(error, readCleanupWarnings); });
+  assert.ok(failure, 'the template failed');
+  assert.strictEqual(failure.code, 'OUT_EXISTS');
+  assert.deepStrictEqual(cloud.state.deletedStaging, [UPLOAD], 'the SDK tried to delete its staged copy');
+  assert.strictEqual(failure.warnings.length, 1, 'one warning, said once');
+  assert.match(failure.warnings[0], new RegExp(`stagesolutionupload ${UPLOAD}\\) could not be deleted`));
+  assert.strictEqual(fs.readFileSync(f.out, 'utf8'), '{"maker":"saved while staging"}', 'what the maker saved is untouched');
+});
+
+test('REAL BUNDLE: a template made by pac whose work folder cannot be removed, and whose --out is taken meanwhile, fails OUT_EXISTS — and the folder that stayed is still said, with its path', async (t) => {
+  const held = holdingWorkFolders(t);
+  const f = files();
+  const pac = { spawn: (name, args) => {
+    fs.writeFileSync(args[args.indexOf('--settings-file') + 1], JSON.stringify({ EnvironmentVariables: [], ConnectionReferences: [] }));
+    fs.writeFileSync(f.out, '{"maker":"saved while pac ran"}');
+    return { status: 0, stdout: 'Template created', stderr: '' };
+  } };
+  let failure;
+  await ss.runTemplate({ command: 'template', packagePath: f.pkg, outPath: f.out, force: false }, { pac }).catch((error) => { failure = ss.describeFailure(error, readCleanupWarnings); });
+  assert.ok(failure, 'the template failed');
+  assert.strictEqual(failure.code, 'OUT_EXISTS');
+  const [left] = held.dirs;
+  assert.ok(left && fs.existsSync(left), 'the folder stayed');
+  assert.deepStrictEqual(failure.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote. Delete it.`]);
+});
+
+// --- a folder for pac's copy that cannot be made --------------------------------------------------------------------------------------------------
+test('REAL BUNDLE: a folder for the settings copy that cannot be made — after the SDK refused a feature pac applies — is PAC_SETTINGS_COPY_FAILED with the reason pac was asked, and names no SDK import job', async (t) => {
+  const real = fs.mkdtempSync;
+  fs.mkdtempSync = (prefix, ...rest) => {
+    if (String(prefix).endsWith('solution-settings-')) throw Object.assign(new Error('EACCES: cannot allocate work folder'), { code: 'EACCES' });
+    return real(prefix, ...rest);
+  };
+  t.after(() => { fs.mkdtempSync = real; });
+  const { http } = world();
+  const f = files({ Workflows: [{ WorkflowId: 'x' }] });
+  let pacCalls = 0;
+  const pac = { spawn: () => { pacCalls += 1; return { status: 0, stdout: '', stderr: '' }; } };
+  let failure;
+  await ss.runImport(importRequest(f), { http, pac, importJobId: JOB }).catch((error) => { failure = ss.describeFailure(error, readCleanupWarnings); });
+  assert.ok(failure, 'the import failed');
+  assert.strictEqual(pacCalls, 0, 'pac was not started');
+  assert.strictEqual(failure.code, 'PAC_SETTINGS_COPY_FAILED');
+  assert.strictEqual(failure.error, '`pac solution import` was not run: a private copy of the settings file could not be made (EACCES).');
+  assert.strictEqual(failure.fallback.code, 'INVALID_ARGUMENT');
+  assert.ok(!('importJobId' in failure), 'no SDK import was attempted for a feature only pac applies');
 });
 
 // --- real processes -----------------------------------------------------------------------------------------------------------------
@@ -960,8 +1066,8 @@ test('PROCESS: an import refused while another operation held the lock is sent a
     applied: { environmentVariables: ['new_Secret'], connectionReferences: [] },
     importAttempts: 3,
     importRefusals: [
-      { importJobId: refusedIds[0], status: 429, code: '0x80071151', waitedMs: 10000 },
-      { importJobId: refusedIds[1], status: 429, code: '0x80071151', waitedMs: 20000 },
+      { importJobId: refusedIds[0], status: 429, code: '0x8004F064', waitedMs: 10000 },
+      { importJobId: refusedIds[1], status: 429, code: '0x8004F064', waitedMs: 20000 },
     ],
   });
   assert.deepStrictEqual(run.state.waits, [10000, 20000], 'the script waited as it says — the waits it asked for, which the preload did not really wait');
@@ -1283,20 +1389,20 @@ test('PROCESS: the private copy is its owner\'s alone where the system has permi
   assert.ok(snapshot.bytes > 0);
 });
 
-test('REAL BUNDLE: the copy is created exclusively with mode 0600 — as its owner\'s alone — in the folder mkdtemp made for the run, which is the owner\'s alone (0700) wherever the system has permission bits', async (t) => {
-  const realWrite = fs.writeFileSync;
+test('REAL BUNDLE: the copy is created exclusively with mode 0600 — as its owner\'s alone — in a folder made for the run (mkdtemp), once and nowhere else: the real private-folder code, which private-folder.test.js pins step by step and solution-settings-snapshot.test.js checks against the operating system', async (t) => {
+  const realOpen = fs.openSync;
   const made = [];
-  fs.writeFileSync = (file, data, options) => {
-    if (path.basename(String(file)) === 'settings.json' && WORK_FOLDER.test(path.basename(path.dirname(String(file))))) made.push(['write', options && options.mode && options.mode.toString(8), options && options.flag]);
-    return realWrite(file, data, options);
+  fs.openSync = (file, flags, mode, ...rest) => {
+    if (path.basename(String(file)) === 'settings.json' && WORK_FOLDER.test(path.basename(path.dirname(String(file))))) made.push(['open', flags, mode && mode.toString(8)]);
+    return realOpen(file, flags, mode, ...rest);
   };
-  t.after(() => { fs.writeFileSync = realWrite; });
+  t.after(() => { fs.openSync = realOpen; });
   const { http } = world();
   const f = files({ Workflows: [{ WorkflowId: 'x' }] });
-  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
+  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB, privateFile: plainPrivateFile.realCreatePrivateFile });
   assert.strictEqual(result.source, 'pac');
   // `wx` fails when the name exists — the folder is new, so it never does — instead of writing through a link or over a file somebody else put there.
-  assert.deepStrictEqual(made, [['write', '600', 'wx']]);
+  assert.deepStrictEqual(made, [['open', 'wx', '600']]);
 });
 
 // What a scanner does to a folder that was just written: every removal of it fails (`holdingWorkFolders`, above). The copy holds the settings file's values, so what cannot be removed is at least EMPTIED, and the folder is said.
@@ -1390,6 +1496,36 @@ test('PROCESS: nor does a part of it, or a transport failure that holds it — i
   assert.strictEqual(lost.status, 1);
   assert.match(JSON.parse(lost.lines[0]).error, /ImportSolution got no answer \(socket hang up while sending Authorization: Bearer <token>\)\. It was not sent again/);
   assertPrintsNone(lost, [ECHOED_TOKEN, ...ECHOED_TOKEN.split('.')], 'the Dataverse token in a transport failure');
+});
+
+// The log of an import job is read with a request that SUCCEEDED (a 200 answer), so the client hands it back as it came — a success is the caller's data — and the reason the failure quotes out of it is the one place
+// such a text reaches an output. A log is the platform's account of components, not an authorization transcript, and no way is known for it to hold a bearer token; but what is printed is scrubbed where it is
+// extracted, with every token the run sent, so the guarantee does not rest on that.
+test('PROCESS: a token that the import job\'s log repeats is taken out of the reason the failure prints — whole, or in a part — and the rest of the log\'s words stay', () => {
+  const [, payload] = ECHOED_TOKEN.split('.');
+  const log = `<importexportxml succeeded="failure" status="Import failed"><entities><entity name="new_t"><result result="failure" errorcode="0x80048d19" errortext="rejected ${ECHOED_TOKEN} (the claim ${payload}) for new_t" /></entity></entities></importexportxml>`;
+  const run = importInProcess({ platform: { tokens: { dataverse: ECHOED_TOKEN } }, solution: { importAnswer: json(400, { error: { code: '0x80048d19', message: 'the import failed' } }), jobLog: log } });
+  assert.strictEqual(run.status, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.strictEqual(out.error, `HTTP 400 from ${ORG}/api/data/v9.0/ImportSolution: the import failed The import job's log (importjobs(${out.importJobId})) says: rejected <token> (the claim <token>) for new_t`);
+  assert.strictEqual(run.stderr.trim(), out.error);
+  assertPrintsNone(run, [ECHOED_TOKEN, ...ECHOED_TOKEN.split('.')], 'the Dataverse token');
+  // A log that holds no token is quoted as it was.
+  const plain = importInProcess({ platform: { tokens: { dataverse: ECHOED_TOKEN } }, solution: { importAnswer: json(400, { error: { code: '0x80048d19', message: 'the import failed' } }), jobLog: log.replace(ECHOED_TOKEN, 'a value').replace(payload, 'a claim') } });
+  assert.strictEqual(JSON.parse(plain.lines[0]).error.endsWith('says: rejected a value (the claim a claim) for new_t'), true, plain.lines[0]);
+});
+
+test('PROCESS: a refusal whose Retry-After the five minutes cannot hold ends the run at once — exit 1, the platform\'s refusal and the reason it was not sent again, one send, nothing waited for', () => {
+  const run = importInProcess({ platform: { instantWaits: true }, solution: { importRefusals: [{ ...LOCK_REFUSAL, headers: { 'retry-after': '3600' } }] } });
+  assert.strictEqual(run.status, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.strictEqual(out.error, `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${NOT_SENT_AGAIN('3600 s', '0 s')}`);
+  assert.deepStrictEqual([out.ok, out.code, out.status, out.importJobId, 'importAttempts' in out], [false, 'CONNECTION_ERROR', 429, run.state.refusedImports[0].ImportJobId, false]);
+  assert.strictEqual(run.stderr.trim(), out.error, 'stderr says the same');
+  assert.deepStrictEqual(run.state.waits, [], 'it did not wait');
+  assert.strictEqual(importPosts(run), 1);
+  assert.strictEqual(run.state.imports.length, 0);
+  noSecrets(run);
 });
 
 test('PROCESS control: the Power Apps client already takes an echoed token out of the same kind of answer — connector.js prints <token>', () => {

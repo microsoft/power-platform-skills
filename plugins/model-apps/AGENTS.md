@@ -1857,7 +1857,7 @@ scripts/
   apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder run (`pac-replaced-docs.test.js` pins that their text names this script, not the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. The default public view of each table the pages read (the tables come from each page's own configuration, the views from the page backend: the definition `placeInApp` pins with) joins the app's components in the create itself — `components.views` of the app the SDK creates, written by the same AddAppComponents that adds the sitemap — as `pac model genpage upload --app-id` pinned them; the output says what was pinned (`dataSources`, `pinnedViews`), a table with no default public view or a page held as raw files is named in `warnings`, and a page that cannot be read refuses the create before the first write. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left of this create (its rows are recognised by their ids, and a row that holds the unique name under another id is named apart)
   list-tables.js               ← the replacement for `pac model list-tables` (the skills' and agents' text runs this script: `pac-replaced-docs.test.js`): the environment's tables — the SDK's `findTables(term)` for each comma-separated `--search` term, a few reads at a time, joined without repeats; `--exact` keeps the tables whose logical name IS a term and names the terms no table has (`missing`), from one read of every table; `--type custom|standard|all` is `pac`'s own filter, `custom` through the SDK's `customOnly` option. One pure-ASCII JSON line of `{ logicalName, displayName, schemaName, isCustom }` rows
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
-  solution-settings.js         ← Deployment settings: `template` writes the settings file of a solution or a package (pac's own format), `import` imports a package and applies the settings in the same import — the SDK first, `pac solution create-settings` / `import --settings-file` only where it refuses; ExportSolution, StageSolution and ImportSolution are each sent exactly once — but for an ImportSolution the platform refused to start because another operation held its customization lock (HTTP 429 with the lock's Dataverse error code), which is sent again under a new job id once `importjobs(<id>)` shows the refused send's job does not exist (at most five sends, `importAttempts` / `importRefusals` in the output) — every text it prints has the settings file's values taken out, and a failed import names its job and the job log's reason; one pure-ASCII JSON line with `source`
+  solution-settings.js         ← Deployment settings: `template` writes the settings file of a solution or a package (pac's own format), `import` imports a package and applies the settings in the same import — the SDK first, `pac solution create-settings` / `import --settings-file` only where it refuses (pac is given a private copy of the settings the run read, owner-only on every platform and removed however the process ends, never the file's path); ExportSolution, StageSolution and ImportSolution are each sent exactly once — but for an ImportSolution the platform refused to start because another operation held its customization lock (HTTP 429 with one of the customization-lock error codes whose documented text is "Cannot start …"), which is sent again under a new job id once `importjobs(<id>)` shows the refused send's job does not exist (at most five sends and five minutes in all, a `Retry-After` waited whole or the retry ended; `importAttempts` / `importRefusals` in the output) — every text it prints has the settings file's values taken out, and a failed import names its job and the job log's reason; one pure-ASCII JSON line with `source`
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data; --language-code)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
   write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
@@ -1884,7 +1884,7 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase — a length a failed attempt left unset is owed to the build's retry (`owedLengths`, paid only to the table that attempt created: proved by its MetadataId, and then written by requests addressed with the ids, which a table made again cannot answer to), and an alternate key over that column is made after it; and `mapLimit`, the bounded fan-out every parallel path reuses
     provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
-    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), the Azure CLI token for the Power Apps service (`getPowerAppsToken`: the same read for another resource, memoized apart from the Dataverse token and asked for only by the Power Apps service client and the connectivity preflight), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an answer that is not a success, and a transport failure's text, come back from `dataverseRequest` with every token the call sent taken out — the one `scrub` of `sdk-http-client.js`, a success untouched; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), the Azure CLI token for the Power Apps service (`getPowerAppsToken`: the same read for another resource, memoized apart from the Dataverse token and asked for only by the Power Apps service client and the connectivity preflight), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked — except a launcher that only forwards to the native program beside it, the Windows MSI's two-line `pac.cmd` (`@echo off` / `"%~dp0pac.launcher.exe" %*`): it is recognised by its exact lines — `@echo off` on a line of its own, then the forwarding line, as `cmd` reads lines, so a one-line `@echo off "%~dp0x.exe" %*`, which is an `echo`, is not one — and the program beside it (`forwardedProgram`) and that program is started directly, so a `%` or a double quote reaches it unchanged; every other batch file keeps the checked route and its refusal of them); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere, each only once `ps -o lstart= -p` shows its pid still has the start time the listing saw — a descendant that exited meanwhile can have its pid given to an unrelated process; best effort, since two processes can share a one-second start time and the moment between that read and the signal is not covered), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws. `spawnResultTree` is `spawnResultSync`'s asynchronous twin (same result shape, never rejects) for a call that may have to be ended: one that outlasts its `timeout`, or writes past `maxBuffer`, has its whole tree ended through `killProcessTree` before the call settles (`ETIMEDOUT`, `ENOBUFS`), after a short wait for the pipes of what was ended; the error says whether they closed (`containment`: `confirmed`, or `unconfirmed` when a process that outlived the ended tree still holds them, with the `pid` the call was started as)
     cli-failure.js             ← how a CLI child failed (timeout / missing / failed), the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out; `commandArg` writes an argument of a command a message tells you (or the agent) to paste so that, run from PowerShell (Windows PowerShell 5.1 or PowerShell 7) or a POSIX shell, the program gets it unchanged as one argument — bare when it is plain, single-quoted otherwise (a path from an untrusted checkout can hold `;`, `$(…)` or backticks) — or not at all when no spelling does that in every one of those shells: a quote or a line break, and the values Windows PowerShell changes on their way to a native program (a `"`, white space with a final `\`, the empty value) or both PowerShells read as the stop-parsing token (`--%`), all measured. `commandArgOrPlaceholder` then writes a placeholder and names the value outside the command
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
@@ -1925,6 +1925,8 @@ scripts/
     power-apps-service-client.js ← the HttpClient for the SDK's connection and connector reads: GET only, https only, a host allowlist that is exactly the hosts the SDK's connectivity code calls, redirects never followed, the Azure CLI token for the Power Apps service read only for a request that passed and never in a message, a body, a header or a key the service answers with (it is scrubbed, in whole and by part)
     sdk-first.js               ← the rule `list-connections.js`, `connector.js` and `solution-settings.js` share: read through the SDK, and through `pac` for the SDK's typed refusals (`sdkFirst`, `CONNECTIVITY_REFUSALS`) — an error counts only when it IS the bundle's `SdkError` (an HTTP body that carries a refusal's code does not); any other failure is thrown with the SDK's own code. An environment outside the Public cloud is judged from its host first (`connectivityCloudOf`, pinned to the bundle by a table of hosts) and answered by `pac` at once, with the code the SDK would give. What the SDK could not clean up before it refused (`readCleanupWarnings`: a staged copy of the package it could not delete, with its upload id) is carried across the fallback — as `warnings` on the answer, or attached to the error `pac` throws when it fails — so `solution-settings.js` shows it for `template` and `import` alike (an import's, sanitized once)
     pac-fallback.js            ← runs a `pac` fallback command through `process-runner.js` (`spawnResultTree`) within a fixed time limit (`PAC_READ_TIMEOUT_MS`, 3 minutes; `PAC_IMPORT_TIMEOUT_MS`, 60) — a call that runs out has its whole process tree ended before it is reported, and the message says what the runner confirmed — "`pac` and every process that held its output were stopped" — and, when the pipes did not close, that a process `pac` started may still be running — reads the JSON `pac` prints after its header, and keeps pac's sign-in banner and version lines out of every failure text (`pacErrorText`)
+    private-folder.js          ← a folder, and a file in it, that only the current user can use — the copy of a settings file that `pac solution import` is given: POSIX modes 0700 and 0600, set and read back; Windows an access list with the current user's SID as its ONE entry (`icacls /reset`, `/inheritance:r`, `/grant:r *<SID>:(OI)(CI)F`, read back as SDDL through `icacls /save`, the file's too before a byte is written), `whoami` and `icacls` looked up in the Windows folder's System32 alone through `process-runner.js`; whatever cannot be set or read back is an error with a `reason` (a tool, a step, a number — never a path or a value) and nothing is written
+    exit-cleanup.js            ← a synchronous cleanup that runs if the process ends while a run's work is going — `process.exit`, an uncaught error, SIGINT, SIGTERM, SIGHUP, SIGBREAK — after which the process ends as it would have (the signal is raised again once our listeners are off, unless another listener has it); a KILLED process runs nothing, which is its stated limit
     typescript-compiler.js     ← loads the vendored TypeScript 5.8.3 compiler (vendor/typescript/) for the SDK's page compile: lazily, once, only after its bytes match PROVENANCE.json
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
     lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
@@ -3062,7 +3064,9 @@ Dataverse simply are not in it.
 | The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | **No caller today.** The one that existed — `entityPrivileges` in `verify-model-app.js` — is gone: the SDK had no privilege READ at all, and `fetchEntityMetadata` drops `Privileges` permanently by design, so the check composed its own `EntityDefinitions(...)?$select=Privileges` request. The vendored bundle now carries `getEntityPrivileges`, and the reader takes it. The hatch stays documented because the *category* recurs; opening it again needs the same justification |
 
 **Prefer `dataverseRequest()` over the raw client.** It already handles the API path, auth, headers
-and timeouts. Reach for `httpClient` only when you must share the exact client instance the SDK is
+and timeouts, and a call that does not succeed hands back its answer — and throws the text of a transport failure —
+with the access token taken out (whole and by part: a service that rejects a token may repeat it, and callers print
+what fails), by the same scrubber the Dataverse HttpClient uses; a success is returned as it came. Reach for `httpClient` only when you must share the exact client instance the SDK is
 using — and check first that the SDK has not since grown the method, as it did for entity privileges.
 
 When you do go direct, all four of these apply:
@@ -3868,12 +3872,13 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     deadlock): a request that is named once is sent once, whatever the answer.
   - **The one exception: an import the platform refused to start** (`sendImport` in `solution-settings.js`; the
     client itself stays absolute). While a publish, or another import, holds the environment's customization lock the
-    platform answers `ImportSolution` with HTTP 429 and a Dataverse error code of the lock family — `0x80071151`
-    (`SolutionConcurrencyFailure`, the code that live answers of the same two-part message — "Cannot start the requested
-    operation [Uninstall] because there is another [EntityCustomization] running at this moment" — carry; an import refused
-    during a publish gets the same words, and its code is taken to be the same: one outside this list is sent once and fails
-    as it always did) and the `CustomizationLockEx_*` codes `0x8004F061`,
-    `0x8004F062`, `0x8004F063`, `0x8004F064` and `0x8004F067`. Matched on the code, never on the words. Such an answer
+    platform answers `ImportSolution` with HTTP 429 and a Dataverse error code of the lock family. The codes are the
+    customization-lock codes of the platform's error reference whose DOCUMENTED text says the operation could not be
+    started — `0x8004F061`, `0x8004F062`, `0x8004F063`, `0x8004F064` and `0x8004F067`, the `CustomizationLockEx_*` codes
+    ("Cannot start the requested operation …", and, for `0x8004F063`, "Cannot start another … because there is a previous …
+    running") — pinned as an exact set. `0x80071151` (`SolutionConcurrencyFailure`) is NOT one of them: its documented text
+    says the installation or removal FAILED, which does not say that nothing started, and an answer with that code is sent
+    once and reported as it always was, whatever words come with it. Matched on the code, never on the words. Such an answer
     is the one that says the
     import did not start, and it is the one send that may be repeated — with two conditions, both shown before the
     second copy leaves. The status and the code must be the lock's (a service protection 429, `0x80072321`/`22`/`26`,
@@ -3881,16 +3886,25 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     started); and `GET importjobs(<id>)` for the id the refused send carried must answer **404** — "the ID of the import
     job that will be created to perform the import" does not exist, so nothing started. Any other answer to that read
     (the job exists, 401, 403, 5xx, 429, no answer, no token) is not proof, and the run ends as it always did. The wait
-    comes first (10 s, then 20, 40 and 60 — or the platform's `Retry-After` when that is longer, capped at a minute),
-    so the proof is the latest evidence before the send, and the send carries a NEW job id (the body is otherwise
-    byte for byte the same, the package included, and the SDK does not stage again: the retry is below it, in the
-    transport). At most five sends in all; a send that follows a refusal is judged like a first send, so a gateway's
+    comes first (10 s, then 20, 40 and 60 — or the platform's `Retry-After` when that is longer, in either of its forms and
+    WHOLE: the client's own retries cap it at a minute, this one does not, since a send before the time the platform asked
+    for is a send it has said it will refuse), so the proof is the latest evidence before the send, and the send carries a
+    NEW job id (the body is otherwise byte for byte the same, the package included, and the SDK does not stage again: the
+    retry is below it, in the transport). At most five sends in all, and one budget of **five minutes** of elapsed time
+    for the whole retry, from the first refusal to the last send (`IMPORT_RETRY_BUDGET_MS`: every wait and every proof
+    read in between; not the time an import the platform ACCEPTED takes, which is the action's own hour, and a refused
+    send is answered in moments). Before each wait the run asks whether it fits in what is left; when it does not (a
+    `Retry-After` of ten minutes) the retry ENDS there — never an early send to make it fit — and so it does when the
+    proof read leaves nothing of the budget: the platform's refusal is the failure, with the sends so far, and a sentence
+    of the plugin's own that says why (`ImportSolution was not sent again: the next wait, …`), told by
+    `observe.onImportRetryStopped`. A send that follows a refusal is judged like a first send, so a gateway's
     answer to it is the failure, "the last send was not sent again", naming ITS job. The output names the job that ran
     (`importJobId`), how many sends it took (`importAttempts`) and each refused send with the wait after it
     (`importRefusals`); when the sends run out the failure is the platform's refusal with that count added. The retry is
     opt-in (`observe.onImportRefused`, which only `runImport` gives), so the client of any other caller sends once.
     It happens inside the SDK's call, so it can neither become the `pac` fallback nor follow one: a refusal is not a
-    fallback code, and the fallbacks all come before the first `ImportSolution`. Pinned in `solution-settings.test.js`,
+    fallback code, and the fallbacks all come before the first `ImportSolution`. Pinned in `solution-settings.test.js`
+    (the allowlist, the waits, the budget over a clock that only the waits and the reads move),
     `solution-settings-real-bundle.test.js` (the real SDK and client over a fake platform that refuses chosen sends and
     keeps a count of what it took) and in a child process (`instantWaits` in the preload).
   - **`pac`'s time limit** (`lib/pac-fallback.js`): two fixed constants, in the way `PAC_PROBE_TIMEOUT_MS` bounds
@@ -3924,24 +3938,48 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     `applied` names their entries — and the staging that comes before the SDK's refusal takes as long as the platform
     takes. A file saved in that time is one the run never looked at: read again by `pac`, its values would reach `pac`,
     and `pac`'s own words about them, which are printed, with no sanitizer that knows them. So `pac` is given a private
-    COPY of those bytes (byte order mark and line ends included) in a folder of the run's own: the folder is made by
-    `mkdtemp` (the owner's alone, mode 0700, on POSIX; on Windows it inherits the user's temp folder's access list), the
-    file is created exclusively (`wx`) with mode 0600, and both are removed however `pac` ends (next bullet). A copy was
-    chosen over refusing a file that changed: the import still happens, of the file the run checked, and an edit made
-    during the run is neither applied nor printed — save it again and run the import again to apply it. `pac` still
-    reads the package from its path. A copy that cannot be made is `PAC_SETTINGS_COPY_FAILED`, `pac` is then not started,
-    and the failure carries the reason `pac` was asked (`fallback`) like any other failure of the `pac` step.
+    COPY of those bytes (byte order mark and line ends included) in a folder of the run's own. The copy holds the values
+    the maker filled in, and the folder is in the temp directory, whose permissions everything inside it inherits — so it
+    is made PRIVATE before a byte is written, and what was set is read back (`lib/private-folder.js`). On Windows the
+    folder's access list is replaced by ONE entry, full control for the current user by SID (`whoami /user /fo csv /nh`;
+    then `icacls <dir> /reset`, `/inheritance:r` and `/grant:r *<SID>:(OI)(CI)F` — three steps, because a folder made in
+    a user's temp folder can hold SYSTEM, Administrators and the user as entries of its OWN, which `/inheritance:r` alone
+    leaves) and read back through `icacls /save` as SDDL (`D:PAI(A;OICI;FA;;;<SID>)`): protected, one allow entry, the
+    user's; the file is created exclusively (`wx`) and EMPTY, its list read back (`D:AI(A;ID;FA;;;<SID>)`), and only then
+    are the bytes written. Both tools are `.exe`s in the Windows folder's `System32` and nowhere else, started through
+    `lib/process-runner.js` with no shell. On POSIX the folder is set to 0700 and the file created as 0600 and set to it
+    (a umask cannot undo that), each read back with its owner and that it is not a link. Anything that cannot be set or
+    does not read back — a file system with no access lists, a tool that cannot start, an unexpected list — fails CLOSED:
+    `PAC_SETTINGS_COPY_FAILED`, `pac` is not started, and the reason is a tool and a step or the system's code, never a
+    path or a value. The folder is made, restricted and filled in as ONE guarded step (`inWorkFolder`'s `prepare`): the
+    failure of any part of it — the folder, its protection, the file — is that same failure, carrying the reason `pac`
+    was asked (`fallback`) and no SDK import job. A copy was chosen over refusing a file that changed: the import still
+    happens, of the file the run checked, and an edit made during the run is neither applied nor printed — save it again
+    and run the import again to apply it. `pac` still reads the package from its path. The copy and its folder are removed
+    however `pac` ends (next bullet).
   - **The folder a `pac` fallback works in is removed, and said when it stays** (`inWorkFolder`, `lib/safe-fs.js`
     `removeTreeWithRetry`). `pac solution create-settings` writes into a `solution-settings-<random>` folder under the
     temp directory, which holds the package the SDK exported and pac's template — defaults that can be values — and
-    `pac solution import` is given its copy of the settings in one (above). It is
-    removed however the run ends, with the bounded retry a Windows lock needs (a scanner or a sync client that holds
+    `pac solution import` is given its copy of the settings in one (above). It is removed however the run ends, with the
+    bounded retry a Windows lock needs (a scanner or a sync client that holds
     what pac just wrote answers `rm` with EBUSY, EPERM or EACCES: six attempts over about three quarters of a second;
     on other systems a lock code is not waited out). A folder that STILL stays is a warning with its path and what is in
     it — in `warnings` of a run that succeeded, and beside the failure of one that did not (`leftoverWarnings`, which
     `describeFailure` prints with the SDK's cleanup warnings and no sanitizer looks at: it is the plugin's own sentence, a
     path and a code) — never left unsaid. The copy of the settings is EMPTIED first, so that what stays holds no value, and
-    the warning says whether that worked.
+    the warning says whether that worked. It is removed, too, when the PROCESS ends while the work goes on, in every way
+    JavaScript can see (`lib/exit-cleanup.js`): `process.exit`, an error nothing catches (both through the `exit` event),
+    and SIGINT, SIGTERM, SIGHUP and SIGBREAK where the platform delivers them — the cleanup runs synchronously, the
+    listeners come off and the signal is raised again, so the process ends BY it, as it would have; a program that has a
+    handler of its own for the signal keeps it and decides (Windows has no signals to raise: `process.kill` there ends the
+    process with status 1). A process that is KILLED (SIGKILL, TerminateProcess) runs nothing, and the folder it made stays —
+    named `solution-settings-<random>` so that a sweep of the temp folder can find it; the plugin does not sweep for it
+    by that prefix itself.
+  - **A failure to install the template keeps what the run knew.** `writeTemplate` is the last step of `template`, after the
+    SDK has staged, refused and cleaned up (or not) and pac has made its folder. When it fails — `OUT_EXISTS` because the
+    name was taken while the run worked, or any file-system error — the SDK's cleanup warnings and the note of a pac folder
+    that stayed are carried on the error (`warnings`, once each, in the order a success prints them), so the staged copy
+    and the folder are still said. Nothing is sanitized there: `template` reads no settings file.
   - **Files are written without replacing another's** (`lib/safe-fs.js`). `solution-settings.js template` without
     `--force` installs its file as an exclusive create, and it must never remove a file it cannot prove it wrote:
     the whole content goes to a sibling file this process created exclusively (`.<name>.<pid>.<random>.tmp`), and is
@@ -3982,6 +4020,19 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     `pac model list-languages`, and `pac connection list`, the two connector verbs and the two solution verbs
     are written only in the one script that asks the SDK first, in the one function that runs them, which is called
     only from its fallback (or, for the tabular form and `--package` with no `--env`, its `pac`-only path).
+    `solution-settings-snapshot.test.js` says what only the operating system can: on Windows, in a temp folder that
+    grants the Users group read access and in a plain one under the user's own temp folder (where Windows gives a new
+    folder entries of its own for SYSTEM and Administrators), the folder and the copy each have the current user's SID as
+    their ONE access entry (read back through PowerShell, a route independent of the `icacls` the code uses), and when
+    `icacls` cannot be started the import is not run through `pac`; elsewhere the modes under a hostile umask; and, with
+    a real child process that runs the importer, that the copy is gone after `process.exit`, an uncaught error and — on
+    POSIX — SIGINT, SIGTERM and SIGHUP (the child ends BY the signal). `private-folder.test.js` runs the Windows
+    sequence over a stand-in for the process runner (the SDDL `icacls /save` writes, the CSV `whoami` prints, the order of
+    the steps, the System32-only lookup, every way to fail closed) and the POSIX one over a stand-in for `fs`;
+    `exit-cleanup.test.js` the signal handling over a stand-in for `process`, and real children for the rest. The two big
+    files above make the copy the plain way (`helpers/plain-private-file.js`: the real one starts `whoami` and `icacls`,
+    about half a second a copy, and is pinned in the two files just named), in-process and, through the preload, in a
+    child process — unless its configuration says `realPrivateFolder`.
 - **Two layers re-send, and for a delete they add** (`scripts/tests/sdk-resend-layers.test.js` pins every
   count). The HTTP client re-sends a 429 or 5xx — except a record delete and a `$batch`, which it
   re-sends only for a deadlock (SQL 1205) or a 429. The SDK re-sends a deadlock for reads, an app

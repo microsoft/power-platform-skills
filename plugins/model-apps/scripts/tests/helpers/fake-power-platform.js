@@ -9,8 +9,8 @@
 //     POST StageSolution                                          -> { StageSolutionResults: { StageSolutionStatus, StageSolutionUploadId, SolutionComponentsDetails } }
 //     DELETE stagesolutionuploads(<id>)                           -> 204
 //     POST ImportSolution                                         -> 204 (the body is recorded in `state.imports`) — or, for a send that config.solution.importRefusals
-//                                                                    refuses, the platform's answer when another operation holds its lock (HTTP 429 and a lock code),
-//                                                                    which starts nothing: the body goes to `state.refusedImports`, not to `state.imports`
+//                                                                    refuses, the platform's answer when another operation holds its lock (HTTP 429 and a lock code,
+//                                                                    LOCK_REFUSAL), which starts nothing: the body goes to `state.refusedImports`, not to `state.imports`
 //     GET  importjobs(<id>)?$select=…                             -> { importjobid, data: <the job's XML log> } (config.solution.jobLog), else 404
 //   Business Application Platform  https://api.bap.microsoft.com (Public) | https://test.api.bap.microsoft.com (Test)
 //     GET providers/Microsoft.BusinessAppPlatform/environments/<id>
@@ -27,12 +27,18 @@ const ENVIRONMENT_ID = '11111111-1111-4111-8111-111111111111';
 const DATAVERSE_TOKEN = 'dataverse-test-token';
 const POWER_APPS_TOKEN = 'power-apps-test-token';
 
-// What the platform answers when it cannot START an operation because another one holds the environment's customization lock. The words are the ones measured on a live
-// environment for an ImportSolution sent while a "publish all customizations" was running; the code is the one measured for the same two-part message on a solution uninstall
-// (`SolutionConcurrencyFailure` in the platform's error reference):
-//   HTTP 429  { "error": { "code": "0x80071151", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. … Please try again later." } }
+// What the platform answers when it cannot START an operation because another one holds the environment's customization lock: a customization-lock code of the error reference and
+// the text the reference documents for it (CustomizationLockEx_BothKnownDifferent, with the two operations filled in):
+//   HTTP 429  { "error": { "code": "0x8004F064", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details." } }
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes
 const LOCK_REFUSAL = Object.freeze({
+  status: 429,
+  code: '0x8004F064',
+  message: 'Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details.',
+});
+// The answer that is NOT a refusal to start, though it reads like one: the generic solution-concurrency code (`SolutionConcurrencyFailure`), whose documented text says the installation or
+// removal FAILED because another one ran at the same time. It does not say the operation never started, so an import answered with it is not sent again.
+const CONCURRENCY_REFUSAL = Object.freeze({
   status: 429,
   code: '0x80071151',
   message: 'Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details. '
@@ -290,6 +296,7 @@ module.exports = {
   stagedVariable,
   stagedReference,
   LOCK_REFUSAL,
+  CONCURRENCY_REFUSAL,
   ORG,
   ENVIRONMENT_ID,
   DATAVERSE_TOKEN,

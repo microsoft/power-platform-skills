@@ -52,14 +52,16 @@ const RETRY_AFTER_CAP_MS = 60000;
 const RAW_VALUE = /\/\$value(?:\?|$)/;
 
 /**
- * The wait a response asks for in `Retry-After`, in milliseconds, capped at RETRY_AFTER_CAP_MS; 0 when
+ * The wait a response asks for in `Retry-After`, in milliseconds, capped at `cap` (RETRY_AFTER_CAP_MS unless a caller says otherwise); 0 when
  * the header is absent or unreadable. RFC 9110 allows two forms, delay-seconds and an HTTP date:
  *   Retry-After: 20
  *   Retry-After: Wed, 30 Sep 2026 10:00:20 GMT
  * Node lowercases response header names; a test double may not, so the name is matched case-insensitively.
+ * The cap is for this client's own retries, which must not stall a build for minutes per attempt. A caller that has a bound of its own on the whole wait — solution-settings.js,
+ * when it sends a refused import again, inside one budget for the whole retry — passes `Infinity` and gets the platform's request as it is, to decide for itself whether it fits.
  * See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after
  */
-function retryAfterMs(headers, now = Date.now()) {
+function retryAfterMs(headers, now = Date.now(), cap = RETRY_AFTER_CAP_MS) {
   if (!headers || typeof headers !== 'object') return 0;
   const key = Object.keys(headers).find((k) => k.toLowerCase() === 'retry-after');
   if (key === undefined) return 0;
@@ -70,7 +72,7 @@ function retryAfterMs(headers, now = Date.now()) {
     const at = Date.parse(raw);
     if (Number.isFinite(at)) ms = at - now;
   }
-  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, RETRY_AFTER_CAP_MS) : 0;
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, cap) : 0;
 }
 
 /** True when a raw transport response says SQL rolled this request back as a deadlock victim. */

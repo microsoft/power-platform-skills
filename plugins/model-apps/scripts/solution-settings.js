@@ -32,7 +32,10 @@
 //             imported there.
 //             What pac is given of the settings is a PRIVATE COPY of the bytes this run read (importThroughPac), in a folder of the run's own that is removed afterwards — never the path: the staging that
 //             comes before the SDK's refusal takes as long as the platform takes, and a file saved in that time is one the sanitizer was not built from. An edit made during the run is neither applied nor
-//             printed; `applied` names the entries of the file that was read, which is the file pac imported.
+//             printed; `applied` names the entries of the file that was read, which is the file pac imported. The copy holds the filled values, so it is its OWNER'S ALONE before a byte is written and that is
+//             read back, or pac is not run (PAC_SETTINGS_COPY_FAILED): on Windows an access list with the current user as its one entry whatever the temp folder grants others, on POSIX the modes 0700 and
+//             0600 (lib/private-folder.js). It is removed however the run ends — success, failure, `process.exit`, an uncaught error, Ctrl+C or a terminated terminal (lib/exit-cleanup.js). A process that is
+//             KILLED runs nothing, so a copy such a run made stays, in a folder named `solution-settings-<random>`, for a sweep of the temp folder to find.
 // Any other failure is reported with the SDK's own code and is never answered by pac.
 //
 // ExportSolution, StageSolution and ImportSolution are sent EXACTLY ONCE (solutionHttpClient): they are long-running, a gateway can answer 502, 504 or 401
@@ -40,10 +43,14 @@
 // first one did. The first answer is the SDK's, with its status and code. When it does not say how the import ended (no answer, 401, 408, any 5xx) the failure says
 // the import was sent once and names its job, and the job's log is read once for the platform's own reason (never failing the report if it cannot be read).
 //
-// The one exception is an ImportSolution the platform REFUSED TO START: HTTP 429 with the Dataverse error code of "Cannot start the requested operation … because there is another … running at this
-// moment" (LOCK_REFUSAL_CODES) — a publish, or another import, holds the environment's customization lock. Such an import is sent again, under a NEW job id, but only after `GET importjobs(<id>)` for the
-// id the refused send carried answers 404, which proves it never started: at most five sends in all, after 10, 20, 40 and 60 s (or the platform's Retry-After, when that asks for longer). Any other
-// answer — another status, another kind of 429, a gateway's 5xx, no answer, a job that exists or a read that fails — is the first and the last send, as above. See `sendImport`.
+// The one exception is an ImportSolution the platform REFUSED TO START: HTTP 429 with a customization-lock Dataverse error code whose documented text says the operation "Cannot start" — "Cannot start the requested
+// operation … because there is another … running at this moment" (for 0x8004F063: "Cannot start another … because there is a previous … running") — (LOCK_REFUSAL_CODES: 0x8004F061, 0x8004F062, 0x8004F063, 0x8004F064,
+// 0x8004F067): a publish, or another import, holds the environment's customization lock. Such an import is
+// sent again, under a NEW job id, but only after `GET importjobs(<id>)` for the id the refused send carried answers 404, which proves it never started: at most five sends in all, after 10, 20, 40 and 60 s, or
+// the platform's Retry-After when that asks for longer — waited WHOLE, in either of its forms — and inside one budget of five minutes of elapsed time from the first refusal to the last send (IMPORT_RETRY_BUDGET_MS:
+// the waits and the proof reads together; the time an accepted import takes is not in it). A wait that does not fit in what is left of the budget ends the retry there: the platform's refusal is the failure, with
+// the sends so far, and the import is never sent early to make it fit. Any other answer — another status, another kind of 429, the generic solution-concurrency code 0x80071151 (whose documented text says an
+// operation FAILED), a gateway's 5xx, no answer, a job that exists or a read that fails — is the first and the last send, as above. See `sendImport`.
 //
 // What the output holds of the settings file: entry NAMES, and what the sanitizer lets through of a text that quotes a value — which is less than every value, as follows. The file is read from
 // and written to disk only, and every text another party wrote — the SDK's, the platform's, pac's, a job log's — goes through `sanitizer`, WHOLE, before it is shown. What it does with a value depends
@@ -55,7 +62,8 @@
 //     underscores must not touch another one: a one-letter value would otherwise withhold every message that holds the letter);
 //   - a variable the package says is not a secret, and a connection id: replaced by `<redacted>` where the text spells it as it is (the text is withheld whole when only a decoded form holds it).
 //     A value of that kind shorter than six characters is NOT hidden: it is a word as much as a value, and by the package's own definition there is nothing in it to protect.
-// A token is never printed. What remains is stated, not hidden: a value of the second kind that is shorter than six characters is printed when a text quotes it glued to word characters or inside an
+// A token is never printed: the Dataverse HttpClient (lib/sdk-http-client.js) takes the access token out of every answer that is not a success and out of a transport failure's text, and the reason read from
+// a failed import's job log — a 200 answer, which that client never alters — is scrubbed of every token the run sent where it is extracted (importFailure). What remains is stated, not hidden: a value of the second kind that is shorter than six characters is printed when a text quotes it glued to word characters or inside an
 // escape the decoders do not read (`\042`, `%u0022`, `&#x22` without its `;`), and any value is printed when a text quotes only part of it, hashes or base64-encodes it, writes it as a named HTML
 // entity beyond XML's five, normalizes its Unicode or nests the encodings more than three deep (a text of more than 1 MiB is withheld, not read). The whole-word rule has a cost too: a short value of the
 // second kind that is itself a whole word of the SDK's own sentence about an entry (`none`, `is`, `the`) still withholds that sentence, and with it which entry is wrong — its status and code stay. A sentence
@@ -78,7 +86,7 @@
 //   template  { "ok": true, "source": "sdk", "out": "<absolute path>", "environmentVariables": 2, "connectionReferences": 1 }
 //   import    { "ok": true, "source": "sdk", "importJobId": "<guid>", "applied": { "environmentVariables": ["new_Url"], "connectionReferences": ["new_Dataverse"] } }
 //   and, when the platform refused the import (another operation held its lock) and it was sent again: the same, with `importJobId` the job of the send that ran, "importAttempts": <sends>, and
-//   "importRefusals": [ { "importJobId": "<guid>", "status": 429, "code": "0x80071151", "waitedMs": 10000 } ] — each refused send and the wait the run made after it. A first send that is taken
+//   "importRefusals": [ { "importJobId": "<guid>", "status": 429, "code": "0x8004F064", "waitedMs": 10000 } ] — each refused send and the wait the run made after it. A first send that is taken
 //   prints none of these two.
 //   and, when pac answered because the SDK refused, "source": "pac" and "fallback": { "code": "<the SDK's code>", "message": "…" } — the SDK's own words, so
 //   the "Nothing was imported" in one is about the SDK's attempt, which stopped before any request; pac then did the work;
@@ -90,17 +98,20 @@
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
 //   { "ok": false, "error": "<message>", "code": "<the SDK's or the PAC step's code>" [, "status": <HTTP status of the answer>] [, "fallback": { … }, "importJobId": "<guid>"]
 //     [, "importAttempts": <sends>, "importRefusals": [ … ] — when the import was sent again after a refusal, the same two fields as on success; the failure is then the platform's own refusal or the
-//     failure of the last send, with the count added] [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
+//     failure of the last send, with the count added — and, when the sends ran out, or the retry ended because the wait the platform asked for did not fit in its five minutes, a sentence of the plugin's own
+//     that says which] [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
-const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl } = require('./lib/dataverse-auth.js');
-const { createAzHttpClient, retryAfterMs, scrubBearer } = require('./lib/sdk-http-client.js');
+const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl, getAuthToken } = require('./lib/dataverse-auth.js');
+const { createAzHttpClient, retryAfterMs, scrub, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { createPrivateFile } = require('./lib/private-folder.js');
+const { onProcessEnd } = require('./lib/exit-cleanup.js');
 
 const USAGE = [
   'Usage:',
@@ -129,23 +140,33 @@ const ACTION_TIMEOUT_MS = 60 * 60 * 1000;
 const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
 
 // The ONE exception to "sent exactly once" (solutionHttpClient): an ImportSolution that the platform REFUSED TO START is sent again, under a new import job id. The refusal is HTTP 429 with one of
-// these Dataverse error codes — matched as the code the Web API gives, never as English text. The answer has the Web API's error shape, with the words the platform reported for an import sent during a publish:
-//   { "error": { "code": "0x80071151", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details.
-//                                                  -- The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later." } }
-// The platform's error reference names them (https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes):
-//   0x80071151  SolutionConcurrencyFailure — the code the whole two-part message above carries on the live answers it was captured from (a solution uninstall refused while a table delete's customization was
-//               still running; a delete in a change set). An ImportSolution refused during a publish gets the same words, and its code is taken to be the same: one that is not listed is sent once, as every answer was.
-//   0x8004F061  CustomizationLockEx_BothUnknown, 0x8004F062 _BlockedUnknown, 0x8004F063 _BothKnownSame ("Cannot start another [{0}] because there is a previous [{1}] running at this moment"),
-//   0x8004F064  _BothKnownDifferent ("Cannot start the requested operation [{0}] because there is another [{1}] running at this moment"), 0x8004F067 _BlockingUnknown — the lock's own refusals
-// Left out on purpose: 0x80071154 ConcurrentOperationFailure ("The current {0} operation FAILED due to another concurrent operation": an operation that failed had started), the customization lock of
-// other services (0x8004F077, 0x80090412) and the service protection limits (0x80072321, 0x80072322, 0x80072326), a 429 of another kind with another remedy: those are sent once, as every answer was.
+// these Dataverse error codes — matched as the code the Web API gives, never as English text. The answer has the Web API's error shape, for the code of an import sent during a publish:
+//   { "error": { "code": "0x8004F064", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details." } }
+// The codes are the customization-lock codes of the platform's error reference whose DOCUMENTED text says the operation could not be STARTED — "Cannot start …" — so that what the code means is what the platform
+// says it means, and not what a run of live answers suggests (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes):
+//   0x8004F061  CustomizationLockEx_BothUnknown       "Cannot start the requested operation because there is a customization running at this moment. Use Solution History for more details."
+//   0x8004F062  CustomizationLockEx_BlockedUnknown    "Cannot start the requested operation because there is another [{0}] running at this moment. Use Solution History for more details."
+//   0x8004F063  CustomizationLockEx_BothKnownSame     "Cannot start another [{0}] because there is a previous [{1}] running at this moment. Use Solution History for more details."
+//   0x8004F064  CustomizationLockEx_BothKnownDifferent "Cannot start the requested operation [{0}] because there is another [{1}] running at this moment. Use Solution History for more details."
+//   0x8004F067  CustomizationLockEx_BlockingUnknown   "Cannot start the requested operation [{0}] because there is a customization running at this moment. Use Solution History for more details."
+// Left out on purpose — those answers are sent once, and reported as every answer to an import was before this retry existed:
+//   0x80071151  SolutionConcurrencyFailure  "The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later." An operation that
+//               failed is not one the platform says it refused to start. Answers that begin "Cannot start the requested operation" and end with that sentence have been seen with this code; this list follows what
+//               the reference documents for a code, not what a few answers suggest about it.
+//   0x80071154  ConcurrentOperationFailure  "The current {0} operation failed due to another concurrent operation running at the same time": an operation that failed had started.
+//   0x8004F077, 0x80090412 (the customization lock of other services) and the service protection limits 0x80072321, 0x80072322, 0x80072326: a 429 of another kind, with another remedy.
 // A code in this list says the import was refused; it is the job that proves it (importJobIsAbsent), because a refusal is what the platform SAYS and a gateway can say a good deal.
-const LOCK_REFUSAL_CODES = Object.freeze(['0x80071151', '0x8004F061', '0x8004F062', '0x8004F063', '0x8004F064', '0x8004F067']);
-// How many times one import is sent in all — the first send and up to four more — and how long the run waits before each of those: 10 s, 20 s, 40 s and 60 s, two and a half minutes in all, or the
-// platform's `Retry-After` when that is longer (retryAfterMs caps it at a minute; see https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations). A publish of all
-// customizations, the usual holder of the lock, is over in a minute or two; an import that holds it can run much longer, and the run then ends as it always did, with the platform's refusal.
+const LOCK_REFUSAL_CODES = Object.freeze(['0x8004F061', '0x8004F062', '0x8004F063', '0x8004F064', '0x8004F067']);
+// How many times one import is sent in all — the first send and up to four more — and how long the run waits before each of those: 10 s, 20 s, 40 s and 60 s, or the platform's `Retry-After` when that is longer
+// (https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations), WHOLE: a send before the time the platform asked for is a send it has said it will refuse.
 const IMPORT_MAX_SENDS = 5;
 const IMPORT_RESEND_WAITS_MS = Object.freeze([10 * 1000, 20 * 1000, 40 * 1000, 60 * 1000]);
+// And one budget of elapsed time for the whole retry: from the moment the first refusal arrives to the moment the last send leaves — every wait and every read of a refused send's job in between — not a
+// second more than five minutes. Before each wait the run asks whether it fits in what is left; when it does not (a `Retry-After` of ten minutes, say) the retry ENDS there and the platform's refusal is the
+// failure — the import is never sent early to make it fit. What is not in the budget is the time an import that the platform ACCEPTED takes: it runs for as long as it runs (ACTION_TIMEOUT_MS), and a send the
+// platform refuses is answered in moments. A publish of all customizations, the usual holder of the lock, is over in a minute or two; an import that holds it can run much longer, and the run then ends as it
+// always did, with the platform's refusal.
+const IMPORT_RETRY_BUDGET_MS = 5 * 60 * 1000;
 
 const REDACTED = '<redacted>';
 // The length from which a value is looked for as text. A value that is KNOWN not to be a secret and is shorter than this is not hidden from a message: it would be taken out of ordinary words
@@ -723,23 +744,43 @@ async function importJobIsAbsent(env, importJobId, http) {
  * Sends one ImportSolution request — and sends it AGAIN, under a NEW import job id, only while the platform's answer PROVES the import did not start. An import the platform may have accepted is
  * never sent twice (a gateway answers 502, 504 or 401 for an import it accepted and is running: the rule of solutionHttpClient); what is sent again is the one answer that says the platform
  * did not start it: its refusal because another operation holds the environment's customization lock (lockRefusalOf — the status and the Dataverse error code, not words), together with the
- * import job the refused send carried not existing (importJobIsAbsent), read after the wait, so that it is the latest evidence before a second copy leaves. Then, for at most IMPORT_MAX_SENDS sends:
- *   wait the step of IMPORT_RESEND_WAITS_MS, or the platform's `Retry-After` when that asks for longer  →  read the job  →  tell the listener  →  send again with a job id that was never used.
+ * import job the refused send carried not existing (importJobIsAbsent), read after the wait, so that it is the latest evidence before a second copy leaves. Then, for at most IMPORT_MAX_SENDS sends and
+ * inside IMPORT_RETRY_BUDGET_MS of elapsed time from the first refusal:
+ *   wait the step of IMPORT_RESEND_WAITS_MS, or the platform's `Retry-After` when that asks for longer — WHOLE, uncapped  →  read the job  →  tell the listener  →  send again with a job id that was never used.
+ * A wait that does not fit in what is left of the budget ends the retry BEFORE it is waited, and so does a read of the job that leaves nothing of it: the refusal that was last answered is returned as it came
+ * and the import is not sent again — never early, to make it fit. `onStopped({ importJobId, waitMs, spentMs })` says so (`waitMs` is the wait that did not fit, or null when the budget ran out during the read).
  * Whatever else answers — any other status, a 429 of another kind, a gateway's 5xx, no answer, a job that exists or cannot be read — is returned as it came, and the send is the last.
  * Returns `{ res, sent }`: the last answer, and the request that got it, whose job id is the one to look up.
  */
-async function sendImport(send, options, { env, http, sleep, onRefused }) {
+async function sendImport(send, options, { env, http, sleep, onRefused, onStopped }) {
+  // The same clock reads the HTTP-date form of Retry-After, and the budget: a test moves both at once.
+  const clock = http.now || Date.now;
   let sent = options;
+  let firstRefusedAt = null;
   for (let sends = 1; ; sends += 1) {
     const res = await send({ ...sent, timeout: ACTION_TIMEOUT_MS });
     const refusal = sends < IMPORT_MAX_SENDS ? lockRefusalOf(res) : null;
     const refusedId = refusal && importJobIdOf(sent.body);
     if (!refusedId) return { res, sent };
-    const waitedMs = Math.max(IMPORT_RESEND_WAITS_MS[sends - 1], retryAfterMs(res.headers, (http.now || Date.now)()));
-    await sleep(waitedMs);
+    if (firstRefusedAt === null) firstRefusedAt = clock();
+    // `Infinity`: the client's own retries cap a Retry-After at a minute (RETRY_AFTER_CAP_MS) so that a throttled build is not stalled for minutes per attempt; here the platform's request is taken as it is, and
+    // the budget below decides whether it can be waited. A cap would turn "wait 180 s" into a send after 60, which the platform has said it will refuse.
+    const waitMs = Math.max(IMPORT_RESEND_WAITS_MS[sends - 1], retryAfterMs(res.headers, clock(), Infinity));
+    const spentMs = clock() - firstRefusedAt;
+    if (spentMs + waitMs > IMPORT_RETRY_BUDGET_MS) {
+      onStopped({ importJobId: refusedId, waitMs, spentMs });
+      return { res, sent };
+    }
+    await sleep(waitMs);
     if (!(await importJobIsAbsent(env, refusedId, http))) return { res, sent };
+    // The read took time too (its own timeout is a minute): the budget is for the whole retry, so a send is not made after it.
+    const spentAfterMs = clock() - firstRefusedAt;
+    if (spentAfterMs > IMPORT_RETRY_BUDGET_MS) {
+      onStopped({ importJobId: refusedId, waitMs: null, spentMs: spentAfterMs });
+      return { res, sent };
+    }
     const nextImportJobId = crypto.randomUUID();
-    onRefused({ importJobId: refusedId, status: refusal.status, code: refusal.code, waitedMs, nextImportJobId });
+    onRefused({ importJobId: refusedId, status: refusal.status, code: refusal.code, waitedMs: waitMs, nextImportJobId });
     sent = { ...sent, body: withImportJobId(sent.body, refusedId, nextImportJobId) };
   }
 }
@@ -758,6 +799,7 @@ async function sendImport(send, options, { env, http, sleep, onRefused }) {
  * `observe.onImportRefused({ importJobId, status, code, waitedMs, nextImportJobId })` is what turns the one exception on, and the only caller that gives it is the import, which reports what it hears:
  * an ImportSolution the platform REFUSED TO START — HTTP 429 with a lock code (LOCK_REFUSAL_CODES) — is sent again when the import job its refused send carried does not exist (sendImport), and the
  * listener is told of each such send before it is made. Every other answer to ImportSolution, and every answer to the other two actions, is the first and the last send.
+ * `observe.onImportRetryStopped({ importJobId, waitMs, spentMs })` is told when that retry ends for want of time, with the refusal it ends on (IMPORT_RETRY_BUDGET_MS, see sendImport).
  */
 function solutionHttpClient(env, deps = {}, observe = {}) {
   const send = deps.request || makeRequest;
@@ -769,7 +811,7 @@ function solutionHttpClient(env, deps = {}, observe = {}) {
       const action = LONG_ACTION.exec(new URL(options.url).pathname);
       if (!action) return send(options);
       const { res, sent } = action[1] === 'ImportSolution' && typeof observe.onImportRefused === 'function'
-        ? await sendImport(send, options, { env, http: deps, sleep, onRefused: observe.onImportRefused })
+        ? await sendImport(send, options, { env, http: deps, sleep, onRefused: observe.onImportRefused, onStopped: observe.onImportRetryStopped || (() => {}) })
         : { res: await send({ ...options, timeout: ACTION_TIMEOUT_MS }), sent: options };
       if (!res.error) {
         if (action[1] === 'StageSolution' && observe.onStageReply) observe.onStageReply(res.body);
@@ -806,40 +848,78 @@ function pacError(code, message, refusal) {
   return error;
 }
 
+// The name every folder a pac fallback works in starts with, and the six characters mkdtemp adds. It is stable on purpose: a folder a KILLED run left behind (nothing runs when a process is killed: see
+// lib/exit-cleanup.js) is found by this name, and removed by whoever sweeps the temporary folder for what a dead run made.
+const WORK_FOLDER_PREFIX = 'solution-settings-';
+
+// Removes a work folder, with the bounded retry a Windows lock needs, and answers the note of one that STAYS — its path, the code, what is in it — else null. What is in a folder that stays can be sensitive,
+// so the files in `empty` (relative to the folder: the ones that hold values) are EMPTIED first, and the note says whether that worked. Never throws; removing a folder that is already gone is not a failure.
+function removeWorkFolder(dir, holds, empty) {
+  const stopped = removeTreeWithRetry(dir);
+  if (!stopped) return null;
+  const emptied = empty.map((name) => {
+    try {
+      fs.writeFileSync(path.join(dir, name), '');
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const kept = empty.length === 0 ? '' : emptied.every(Boolean) ? ' (emptied, so it keeps no value)' : " (it could not be emptied either, so it may still hold the settings file's values)";
+  return `The folder ${dir} could not be removed (${stopped}); it holds ${holds}${kept}. Delete it.`;
+}
+
 // A folder of this run's own under the temp directory — for what pac reads or writes — removed however `work(dir)` ends: its value, or its failure, which is rethrown. The removal has the bounded retry a
 // Windows lock needs (a scanner or a sync client holding a file pac has just written: removeTreeWithRetry), and a folder that STILL stays is never left unsaid. What it holds — pac's template, the package the SDK
 // exported, the copy of the settings file pac was given — is not worth keeping and can be sensitive (a template's defaults can be values; a settings file's values are), so a leftover is reported with its path: as
 // `leftover` beside the value of a run that worked, and on the error (`leftoverWarnings`, see withLeftover) of one that did not. `holds` says what is in the folder, for that note. The folder is made by
-// lib/temp-workspace.js in the plugin's own temp folder, named `solution-settings-<pid>-` and six characters.
+// lib/temp-workspace.js in the plugin's own temp folder, named WORK_FOLDER_PREFIX, the run's pid and six characters.
 // pac is another process and is given paths in this folder (the zip it reads, the file it writes, the settings copy it imports with). On POSIX it outlives a run that is killed (SIGKILL, an agent's timeout),
 // and a sweep that takes the folder because this run is gone would remove it from under pac. So the folder is made LENT — recorded as such once, when it is made — and a sweep keeps it for as long as it is
 // young, whether or not this run is still going (lib/temp-workspace.js). Nothing is recorded about pac itself, and nothing about the folder is changed after pac has started.
+// It is removed too when the process ends while the work is still going — `process.exit`, an error nothing catches, Ctrl+C, a terminated terminal or job (lib/exit-cleanup.js): the cleanup runs, synchronously, and
+// the process ends as it would have. A process that is KILLED runs nothing, and what it made stays: that limit is lib/exit-cleanup.js's to state, and the leftover is for a later run's sweep (lib/temp-workspace.js),
+// which removes a folder lent to pac once it is old.
 // `empty` names the files (relative to the folder) that hold values: when the folder cannot be removed they are EMPTIED, so that what stays on disk is at least not the values, and the note says whether that worked.
-async function inWorkFolder(holds, work, { empty = [] } = {}) {
-  const dir = makeTempWorkspace('solution-settings-', { lent: true });
+// `prepare(dir)` makes the folder ready for the work — for the settings copy, restricts it to its owner and writes the file. Making the folder and preparing it are ONE guarded step: a failure of either — the
+// folder could not be made, or could not be made private, or the file could not be written — is `prepareFailure(error)`, the error the caller throws instead, and the work is not started. A folder that was made
+// is removed first, as after any failure.
+async function inWorkFolder(holds, work, { empty = [], prepare = null, prepareFailure = (error) => error } = {}) {
+  let dir;
+  try {
+    dir = makeTempWorkspace(WORK_FOLDER_PREFIX, { lent: true });
+  } catch (err) {
+    throw prepareFailure(err);
+  }
+  const releaseCleanup = onProcessEnd(() => {
+    const note = removeWorkFolder(dir, holds, empty);
+    // A process that is ending has no output to put it in but stderr, and no way to wait for it: written synchronously, and given up on if it cannot be.
+    if (note) {
+      try {
+        fs.writeSync(2, `${note}\n`);
+      } catch {
+        // Nothing is left to say it to.
+      }
+    }
+  });
   let value;
   let failure;
   let failed = false;
   try {
+    if (prepare) {
+      try {
+        await prepare(dir);
+      } catch (err) {
+        throw prepareFailure(err);
+      }
+    }
     value = await work(dir);
   } catch (err) {
     failed = true;
     failure = err;
   }
-  const stopped = removeTreeWithRetry(dir);
-  let leftover = null;
-  if (stopped) {
-    const emptied = empty.map((name) => {
-      try {
-        fs.writeFileSync(path.join(dir, name), '');
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    const kept = empty.length === 0 ? '' : emptied.every(Boolean) ? ' (emptied, so it keeps no value)' : " (it could not be emptied either, so it may still hold the settings file's values)";
-    leftover = `The folder ${dir} could not be removed (${stopped}); it holds ${holds}${kept}. Delete it.`;
-  }
+  releaseCleanup();
+  const leftover = removeWorkFolder(dir, holds, empty);
   if (failed) throw leftover ? withLeftover(failure, leftover) : failure;
   return { value, leftover };
 }
@@ -883,23 +963,27 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
 
 // `pac solution import` is given the settings the run READ, never the path they were read from. The SDK's refusal comes after the staging, which takes as long as the platform takes, and a file a maker or a
 // deployment saves in that time is a file the sanitizer was not built from and `applied` does not describe: read by its path, its values would reach pac — and pac's own words about them, which are
-// printed — with nothing that knows them. So pac gets a private copy of the BYTES already read (`settingsBytes`: byte order mark and line ends as they were) in a folder of the run's own. The folder is
-// made by mkdtemp — the owner's alone (mode 0700) on POSIX; on Windows it inherits the access list of the user's temp folder — and the file is created exclusively (`wx`) with mode 0600, which Windows
-// reads as "not read-only", so the removal below still works. A copy was chosen over refusing a file that changed: the import still happens, of what the run checked, and an edit made meanwhile is
-// neither applied nor printed. The package is still read by pac from its path: it is not a secret, and the run checked it without keeping it.
-// The folder goes however pac ends, with the bounded retry (inWorkFolder); one that stays is emptied of the values and said — `warnings` on the answer, `leftoverWarnings` on the error.
+// printed — with nothing that knows them. So pac gets a private copy of the BYTES already read (`settingsBytes`: byte order mark and line ends as they were) in a folder of the run's own.
+// PRIVATE: the copy holds the values the maker filled in, and the folder is in the temp directory, whose permissions everything inside it inherits. So the folder is restricted to its owner before a byte is
+// written, and what was set is read back, or the copy is not made (lib/private-folder.js: on Windows an access list with the current user's SID as its one entry — whatever the temp folder grants other
+// accounts — on POSIX the modes 0700 and 0600; the file is created exclusively, `wx`, and empty, and checked before its bytes are written). Anything that cannot be established is PAC_SETTINGS_COPY_FAILED and pac is
+// not run: the folder is made, restricted and filled in ONE guarded step (inWorkFolder's `prepare`), and a failure of any part of it is that failure, with the reason pac was asked and a message that names the
+// system's code or the step that failed and never a value. A copy was chosen over refusing a file that changed: the import still happens, of what the run checked, and an edit made meanwhile is neither applied
+// nor printed. The package is still read by pac from its path: it is not a secret, and the run checked it without keeping it.
+// The folder goes however pac ends — and when the process is ended while pac runs, by anything that can be caught — with the bounded retry (inWorkFolder); one that stays is emptied of the values and said:
+// `warnings` on the answer, `leftoverWarnings` on the error. `deps.privateFile(dir, name, bytes)` is the test seam for making the copy; it answers the copy's path.
 async function importThroughPac({ env, packagePath, settingsBytes }, redact, refusal, deps = {}) {
   const label = 'pac solution import';
-  const { leftover } = await inWorkFolder('the copy of the settings file that pac was given, which can hold secrets', async (dir) => {
-    const copy = path.join(dir, 'settings.json');
-    try {
-      fs.writeFileSync(copy, settingsBytes, { mode: 0o600, flag: 'wx' });
-    } catch (err) {
-      // The system's code alone (EACCES, ENOSPC, …): the error's own text is not the plugin's sentence, and this message is marked as composed, so no sanitizer looks at it again.
-      const error = pacError('PAC_SETTINGS_COPY_FAILED', `\`${label}\` was not run: a private copy of the settings file could not be made (${(err && (err.code || err.name)) || 'Error'}).`, refusal);
-      COMPOSED_MESSAGE.add(error);
-      throw error;
-    }
+  // The reason is the system's code alone (EACCES, ENOSPC, …) or, for a step of the private folder, the plugin's own words — a tool, a step, a number: never a path or a value. The error's own text is not the
+  // plugin's sentence, and this message is marked as composed, so no sanitizer looks at it again.
+  const copyFailed = (err) => {
+    const reason = (err && err.code === 'PRIVATE_FOLDER' && typeof err.reason === 'string' && err.reason) || (err && (err.code || err.name)) || 'Error';
+    const error = pacError('PAC_SETTINGS_COPY_FAILED', `\`${label}\` was not run: a private copy of the settings file could not be made (${reason}).`, refusal);
+    COMPOSED_MESSAGE.add(error);
+    return error;
+  };
+  let copy;
+  const { leftover } = await inWorkFolder('the copy of the settings file that pac was given, which can hold secrets', async () => {
     const run = await runPac(
       ['solution', 'import', '--path', packagePath, '--environment', env, '--settings-file', copy],
       { label, kind: 'import', redact, ...(deps.pac || {}) }
@@ -912,7 +996,11 @@ async function importThroughPac({ env, packagePath, settingsBytes }, redact, ref
       COMPOSED_MESSAGE.add(error);
       throw error;
     }
-  }, { empty: ['settings.json'] });
+  }, {
+    empty: ['settings.json'],
+    prepare: (dir) => { copy = (deps.privateFile || createPrivateFile)(dir, 'settings.json', settingsBytes); },
+    prepareFailure: copyFailed,
+  });
   return leftover ? { warnings: [leftover] } : {};
 }
 
@@ -930,6 +1018,17 @@ function shownRefusal(refusal, settings, sanitize) {
 
 const countOf = (settings, list) => (Array.isArray(settings[list]) ? settings[list].length : 0);
 
+// What the run already knows when the last step fails: the SDK's cleanup warnings (a staged copy it could not delete, with its upload id), the note of a pac folder that stayed, and what the write itself could not
+// clean up. They are what the maker has left in the environment and on the disk, and a failure to INSTALL the file — the name was taken while the run worked, or the file system refused — must not make the
+// run forget them. They are carried on the error as they were written, once each, in the order a success prints them: `describeFailure` prints `warnings` as it finds it and does not read them from the SDK
+// again. Nothing here is sanitized: `template` reads no settings file, so there is no value for a sanitizer to know, and the plugin's own note is a path and a code.
+function withKnownWarnings(error, warnings) {
+  if (warnings.length === 0) return error;
+  const failure = error instanceof Error ? error : new Error(String(error));
+  failure.warnings = [...(Array.isArray(failure.warnings) ? failure.warnings : []), ...warnings];
+  return failure;
+}
+
 // Writes the settings file and describes it: where, and how many entries — never what they hold.
 function writeTemplate(request, text, settings, extra) {
   const writeWarnings = [];
@@ -939,11 +1038,12 @@ function writeTemplate(request, text, settings, extra) {
     // (writeFileSafe's `exclusive`), so there is no gap between a look and a write.
     writeFileSafe(request.outPath, text, { encoding: 'utf8', exclusive: !request.force, onWarning: (warning) => writeWarnings.push(warning) });
   } catch (err) {
-    if (err && err.code === 'IO_ERROR' && err.reason === 'exists') throw outExists(request.outPath, err.leftoverNote);
+    let failure = err;
+    if (err && err.code === 'IO_ERROR' && err.reason === 'exists') failure = outExists(request.outPath, err.leftoverNote);
     // The exclusive write needs a hard link (lib/safe-fs.js), which a FAT or exFAT volume and some network shares do not have. --force does not: it renames a finished copy over the target, which
     // is also what lets it replace a file, so it works there — and a file system that cannot link says so only to a run that did not ask for that.
-    if (err && err.code === 'IO_ERROR' && err.reason === 'no-hard-links') err.message += ' Or pass --force: it replaces the file at --out by renaming a finished copy over it, which needs no hard link.';
-    throw err;
+    else if (err && err.code === 'IO_ERROR' && err.reason === 'no-hard-links') err.message += ' Or pass --force: it replaces the file at --out by renaming a finished copy over it, which needs no hard link.';
+    throw withKnownWarnings(failure, [...((extra && extra.warnings) || []), ...writeWarnings]);
   }
   // The file is written and complete. What could not be cleaned up beside it — the SDK's staging copy, the write's temporary name — is said with it, as a warning: the run did what was asked.
   const warnings = [...((extra && extra.warnings) || []), ...writeWarnings];
@@ -1115,7 +1215,7 @@ function isComposed(error) {
  * What this function sanitizes: the SDK's own message (it quotes names, and can quote what the platform said), the SDK's staging-reply reason, its cleanup warnings, and a job log's reason (which is
  * appended to the plugin's own sentence AFTER it is sanitized, and the sentence around it is not looked at).
  */
-async function importFailure(err, { sanitize, settings, importJobId, env, deps, sends }) {
+async function importFailure(err, { sanitize, settings, importJobId, env, deps, sends, tokens = new Set() }) {
   const original = err instanceof Error ? err : new Error(String(err));
   const failure = new Error(isComposed(original) ? original.message : sanitize(original.message, 'message', sdkLead(original)));
   if (typeof original.code === 'string') failure.code = original.code;
@@ -1134,13 +1234,16 @@ async function importFailure(err, { sanitize, settings, importJobId, env, deps, 
   if (importRequestFailed(original)) {
     const reason = await readImportJobFailure(env, importJobId, deps);
     if (reason) {
-      failure.message += ` The import job's log (importjobs(${importJobId})) says: ${oneLine(sanitize(reason, "the job log's text"))}`;
+      // The log was read with a request that SUCCEEDED, so the client handed it back as it came (a success is the caller's data) and what it says is extracted here: it is scrubbed of every access token the run
+      // sent first, whole and by part, and only then of the settings file's values. A log is the platform's account of components and no way is known for it to hold a token, but what is printed does not rest on that.
+      failure.message += ` The import job's log (importjobs(${importJobId})) says: ${oneLine(sanitize(scrubTokens(reason, tokens), "the job log's text"))}`;
     } else if (outcomeUnknown(original.statusCode)) {
       failure.message += `${resent ? ' The last send was not sent again' : ' The request was sent once and was not sent again'}: the environment may have accepted it.${lookUpJob(importJobId)}`;
     }
   }
   // The plugin's own sentences, appended after the platform's words were sanitized and, like the ones above, not looked at again: they hold counts, ids it minted and the code it matched — no value.
   if (resent) failure.message += ` ${resendSentence(sends)}${original.statusCode === 429 && sends.refusals.length + 1 === IMPORT_MAX_SENDS ? ` It sends at most ${IMPORT_MAX_SENDS} times: run the import again when the other operation has finished.` : ''}`;
+  if (sends && sends.stopped) failure.message += ` ${stoppedSentence(sends.stopped)}`;
   return failure;
 }
 
@@ -1150,6 +1253,30 @@ async function importFailure(err, { sanitize, settings, importJobId, env, deps, 
 const resendReport = (sends) => (sends.refusals.length > 0 ? { importAttempts: sends.refusals.length + 1, importRefusals: sends.refusals } : {});
 const secondsOf = (ms) => `${Math.round(ms / 100) / 10} s`;
 const resendSentence = (sends) => `ImportSolution was sent ${sends.refusals.length + 1} times. Each send before the last was refused before it started (HTTP 429, code ${[...new Set(sends.refusals.map((refusal) => refusal.code))].join(', ')}: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${sends.refusals.map((refusal) => secondsOf(refusal.waitedMs)).join(', ')} before sending again.`;
+// Why a retry that the platform's refusal asked for was not made: the wait it asks for does not fit in what is left of IMPORT_RETRY_BUDGET_MS (`waitMs`), or the time went on the read that proves the refused send did not
+// start (`waitMs` null). Numbers only, like the sentences above.
+const RETRY_BUDGET_TEXT = `${IMPORT_RETRY_BUDGET_MS / 60000} minutes`;
+const stoppedSentence = ({ waitMs, spentMs }) => `ImportSolution was not sent again: ${waitMs === null
+  ? `the ${RETRY_BUDGET_TEXT} this run spends in all on sending it again were used up (${secondsOf(spentMs)}) before the next send`
+  : `the next wait, ${secondsOf(waitMs)}, does not fit in what is left of the ${RETRY_BUDGET_TEXT} this run spends in all on sending it again (${secondsOf(spentMs)} are spent)`}. Run the import again when the other operation has finished.`;
+
+// `text` with every access token in `tokens` taken out of it, whole and by each long part of it (the Dataverse client's own scrubber: lib/sdk-http-client.js).
+const scrubTokens = (text, tokens) => [...tokens].reduce((out, token) => scrub(out, token), String(text));
+
+// The HTTP seams of the run (`getToken`, `request`, `sleep`, `now`), with `getToken` made to remember every token it hands out, in `tokens`. Every client the run makes — the SDK's, the one that reads a refused
+// send's job, the one that reads a failed import's log — is given its token through the one function, so the set is every token the run sent, a refreshed one included, for scrubbing a success's text where it is
+// extracted (scrubTokens). Only a token long enough to be one is kept: the floor of the Dataverse client's own scrubbing.
+function recordingTokens(http, tokens) {
+  const getToken = (http && http.getToken) || ((url, options) => getAuthToken(url, options));
+  return {
+    ...http,
+    getToken: (url, options) => {
+      const token = getToken(url, options);
+      if (typeof token === 'string' && token.length >= MIN_SCRUBBED_TOKEN_LENGTH) tokens.add(token);
+      return token;
+    },
+  };
+}
 
 /** `import`: the package into `--env`, with the settings file applied in the same import. */
 async function runImport(asked, deps = {}) {
@@ -1163,16 +1290,20 @@ async function runImport(asked, deps = {}) {
   const sanitize = sanitizer(settings, definitions);
   const { base64 } = inspectPackage(request.packagePath, { withBytes: true });
   const importJobId = deps.importJobId || crypto.randomUUID();
-  // The import's sends, as the client tells of them (solutionHttpClient's `onImportRefused`): `jobId` is the job the last send carried — the first send's until a refusal is sent again.
-  const sends = { jobId: importJobId, refusals: [] };
+  // The import's sends, as the client tells of them (solutionHttpClient's `onImportRefused`): `jobId` is the job the last send carried — the first send's until a refusal is sent again. `stopped` is what it
+  // says when the retry ends for want of time (`onImportRetryStopped`): the refusal it ended on is then the failure, and the sentence that says why is added to it (importFailure).
+  const sends = { jobId: importJobId, refusals: [], stopped: null };
   const onImportRefused = ({ importJobId: refused, status, code, waitedMs, nextImportJobId }) => {
     sends.refusals.push({ importJobId: refused, status, code, waitedMs });
     sends.jobId = nextImportJobId;
   };
+  const onImportRetryStopped = (event) => { sends.stopped = event; };
+  const tokens = new Set();
+  const withTokens = { ...deps, http: recordingTokens(deps.http, tokens) };
   try {
     const outcome = await (deps.sdkFirst || sdkFirst)(request.env, {
       refusal: (error) => importRefusal(error, settings),
-      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize, onImportRefused }),
+      httpClient: (env) => solutionHttpClient(env, withTokens.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize, onImportRefused, onImportRetryStopped }),
       fromSdk: (sdk) => sdk.importSolution({
         base64,
         // pac's defaults: --force-overwrite and --activate-plugins are off. Both are required by the SDK, which no longer defaults them.
@@ -1202,7 +1333,7 @@ async function runImport(asked, deps = {}) {
     ];
     return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize), ...(warnings.length ? { warnings } : {}) };
   } catch (err) {
-    throw await importFailure(err, { sanitize, settings, importJobId: sends.jobId, env: request.env, deps, sends });
+    throw await importFailure(err, { sanitize, settings, importJobId: sends.jobId, env: request.env, deps: withTokens, sends, tokens });
   }
 }
 
@@ -1275,6 +1406,7 @@ module.exports = {
   LOCK_REFUSAL_CODES,
   IMPORT_MAX_SENDS,
   IMPORT_RESEND_WAITS_MS,
+  IMPORT_RETRY_BUDGET_MS,
   jobLogFailure,
   readImportJobFailure,
   lookUpJob,

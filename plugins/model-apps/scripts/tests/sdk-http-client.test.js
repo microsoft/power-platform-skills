@@ -788,6 +788,25 @@ test('a throttled answer\u2019s Retry-After is honoured, up to a cap, when it as
   assert.strictEqual(retryAfterMs({ 'retry-after': '-5' }), 0);
 });
 
+// A caller that has its own bound on the whole wait — solution-settings.js, when it sends a refused import again — asks for the platform's request as it is, with no cap of its own, and
+// decides for itself whether the wait fits. The default is what it always was.
+test('retryAfterMs: the cap is a default a caller may lift — both forms, whole — and what cannot be read is still no request', () => {
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  const date = (seconds) => new Date(NOW + seconds * 1000).toUTCString();
+  assert.strictEqual(retryAfterMs({ 'retry-after': '180' }, NOW), RETRY_AFTER_CAP_MS, 'capped by default');
+  assert.strictEqual(retryAfterMs({ 'retry-after': date(180) }, NOW), RETRY_AFTER_CAP_MS, 'the date form, capped by default');
+  assert.strictEqual(retryAfterMs({ 'retry-after': '180' }, NOW, Infinity), 180000);
+  assert.strictEqual(retryAfterMs({ 'retry-after': date(180) }, NOW, Infinity), 180000);
+  assert.strictEqual(retryAfterMs({ 'Retry-After': ['3600'] }, NOW, Infinity), 3600000);
+  assert.strictEqual(retryAfterMs({ 'retry-after': '20' }, NOW, Infinity), 20000, 'a short request is the same either way');
+  assert.strictEqual(retryAfterMs({ 'retry-after': '180' }, NOW, 90000), 90000, 'any other cap');
+  for (const unread of ['soon', '', '-5', '0', date(-30), '1e3']) {
+    assert.strictEqual(retryAfterMs({ 'retry-after': unread }, NOW, Infinity), 0, JSON.stringify(unread));
+  }
+  assert.strictEqual(retryAfterMs({}, NOW, Infinity), 0);
+  assert.strictEqual(retryAfterMs(undefined, NOW, Infinity), 0);
+});
+
 // An operation refused inside a batch is answered with its own headers, so its Retry-After can sit in the
 // part rather than on the outer response. Ignoring it spent the six attempts in ~23 s while the server had
 // asked for 30.

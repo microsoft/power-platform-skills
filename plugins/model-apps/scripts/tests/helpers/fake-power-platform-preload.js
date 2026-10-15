@@ -18,6 +18,8 @@
 //   realDataverseRequest                 dataverse-auth.js's own `dataverseRequest` runs — its token handling, its retries, its handling of an answer — over the fake transport and the
 //                                       Dataverse token, instead of the fake answering a script's connection-references read directly. What it asks is answered by the `failures`
 //                                       rules (a status and a body) — the fake platform itself answers no connection-references collection.
+//   realPrivateFolder                    the settings copy that solution-settings.js gives pac is made by lib/private-folder.js as it is — on Windows through whoami and icacls, half a second a copy.
+//                                       Without it the copy is made the plain way (helpers/plain-private-file.js), which is all a run that is not about the copy needs.
 // FAKE_PLATFORM_LOG names a file the requests, the state and the Azure CLI token reads ({ dataverse, powerApps }: one per call of getAuthToken[Async] /
 // getPowerAppsToken[Async], that is one per `az` process a real run would start) are written to when the process exits. The connection-references read a
 // script makes through `dataverseRequest` is answered without a token read here, so these counts are the reads of the SDK path and its preflight alone.
@@ -45,6 +47,7 @@ const cloud = createCloud({
 });
 
 const tokenReads = { dataverse: 0, powerApps: 0 };
+if (!config.realPrivateFolder) require('./plain-private-file.js').install();
 if (config.instantWaits) {
   cloud.state.waits = [];
   require('node:timers/promises').setTimeout = async (ms) => { cloud.state.waits.push(ms); };
