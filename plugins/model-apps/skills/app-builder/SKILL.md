@@ -757,7 +757,11 @@ child view id. Each step emits `[n/total]`.
   pruned — see `prune: false` below), column counts and spans. A **view** only *adds* columns: a
   column removed from the spec, or a new column order, does **not** apply, and neither do its filters
   or sort. A changed column type, and an edited command or dashboard, are not re-applied at all; an
-  existing chart takes only a changed description.
+  existing chart takes only a changed description, an existing app takes a changed name and description
+  (its icon is set when it is created: a different `app.icon` is reported as not applied), and an existing
+  business process flow takes the stage and step edits that cannot move a record — a stage added or renamed,
+  a step added, renamed, rebound or moved — and refuses, saying why, one that would remove a stage or a step
+  or reorder the stages.
   **To apply one of those edits, change it in Maker, or `teardown --apply` then rebuild fresh.**
   `--verify` catches what is **missing** — a spec view column, filter condition or sort key (authored
   sort keys must also keep their order), a relationship, command or dashboard — as a loud

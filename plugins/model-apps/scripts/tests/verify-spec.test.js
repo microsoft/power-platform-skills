@@ -2431,6 +2431,153 @@ test('verify FAILS an auto layout\'s flagged field that is missing, and ignores 
   assert.match(unverified[0].detail, /could not compile the layout to tell which fields the build places[\s\S]*unverified, not proven correct/);
 });
 
+// --- A form's LABELS are proven too: a relabel that never reached the published form is not a pass --------------------
+//
+// The build converges a matched tab's and section's label to the one the layout declares, and --verify matched containers by
+// it without ever comparing the result: a form whose relabel was saved but never went live (live-measured: a form's labels keep
+// their published text through a publish of the app that runs before the table's own) matched by NAME, kept the old label and
+// verified PASS. The published form is what is compared — any of the languages its label carries, because the build writes one —
+// and only a label the spec AUTHORS: a container it leaves unlabelled gets the compiler's default from the build, which the
+// spec never asked for.
+const lbl = (description, languagecode = 1033) => `<label description="${description}" languagecode="${languagecode}"/>`;
+// `layoutXml`'s form with a `<labels>` element on the tab and on each section, where a test gives one.
+const withLabels = (xml, { tab, left, right }) => {
+  let out = xml;
+  if (tab !== undefined) out = out.replace('<tab name="tab_overview">', `<tab name="tab_overview"><labels>${tab}</labels>`);
+  if (left !== undefined) out = out.replace('<section name="sec_left" columns="1">', `<section name="sec_left" columns="1"><labels>${left}</labels>`);
+  if (right !== undefined) out = out.replace('<section name="sec_right" columns="1">', `<section name="sec_right" columns="1"><labels>${right}</labels>`);
+  return out;
+};
+const relabelled = (spec) => { // TOPO_SPEC's layout, with the tab and the left section renamed in the spec
+  Object.assign(spec.forms[0].tabs[0], { label: 'Summary' });
+  Object.assign(spec.forms[0].tabs[0].columns[0].sections[0], { label: 'Left' });
+};
+
+test('verify FAILS a tab and a section the spec relabelled that the published form still labels as before', async () => {
+  const chk = await topoCheck(withLabels(layoutXml([overview()]), { tab: lbl('Overview'), left: lbl('L'), right: lbl('R') }), relabelled);
+  assert.strictEqual(chk.present, false, 'a relabel that never went live must not verify');
+  assert.match(chk.detail, /tab 'tab_overview' is deployed with label "Overview", the spec declares label: "Summary"/);
+  assert.match(chk.detail, /section 'sec_left' is deployed with label "L", the spec declares label: "Left"/);
+  assert.doesNotMatch(chk.detail, /sec_right/, 'the section the spec did not relabel is not reported');
+});
+
+test('verify PASSES once the published labels are the spec\'s, and for a layout that never relabelled anything', async () => {
+  const live = await topoCheck(withLabels(layoutXml([overview()]), { tab: lbl('Summary'), left: lbl('Left'), right: lbl('R') }), relabelled);
+  assert.strictEqual(live.present, true, live.detail);
+  const untouched = await topoCheck(withLabels(layoutXml([overview()]), { tab: lbl('Overview'), left: lbl('L'), right: lbl('R') }));
+  assert.strictEqual(untouched.present, true, untouched.detail);
+});
+
+test('verify holds only a label the spec AUTHORS: a tab or section it leaves unlabelled keeps whatever caption the published form has', async () => {
+  // The compiler's `General` / `Details` default is what the build writes on create and fills in on a rebuild, but the spec
+  // never asked for it — and a maker's own caption on such a container is not a relabel that failed to land.
+  const unlabelled = (spec) => { delete spec.forms[0].tabs[0].label; delete spec.forms[0].tabs[0].columns[0].sections[0].label; };
+  const customised = await topoCheck(withLabels(layoutXml([overview()]), { tab: lbl('Overview'), left: lbl('L') }), unlabelled);
+  assert.strictEqual(customised.present, true, customised.detail);
+  // An empty label is "none", exactly as the compiler reads it.
+  const blank = (spec) => { spec.forms[0].tabs[0].label = ''; spec.forms[0].tabs[0].columns[0].sections[0].label = ''; };
+  assert.strictEqual((await topoCheck(withLabels(layoutXml([overview()]), { tab: lbl('Overview'), left: lbl('L') }), blank)).present, true);
+  // The label the spec DOES author on the other section is still held to.
+  const oneAuthored = (spec) => { unlabelled(spec); spec.forms[0].tabs[0].columns[1].sections[0].label = 'Right'; };
+  const chk = await topoCheck(withLabels(layoutXml([overview()]), { left: lbl('L'), right: lbl('R') }), oneAuthored);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /section 'sec_right' is deployed with label "R", the spec declares label: "Right"/);
+  assert.doesNotMatch(chk.detail, /sec_left/);
+});
+
+test('verify accepts the spec\'s label in any language the published container carries, first or not', async () => {
+  const german = (spec) => { spec.forms[0].tabs[0].label = 'Uebersicht'; };
+  // The build writes one language; the others are a maker's translations, listed in whatever order the platform gives.
+  const either = withLabels(layoutXml([overview()]), { tab: lbl('Overview', 1033) + lbl('Uebersicht', 1031), left: lbl('L'), right: lbl('R') });
+  assert.strictEqual((await topoCheck(either, german)).present, true, 'the second language is the one the spec declares');
+  const wrong = withLabels(layoutXml([overview()]), { tab: lbl('Overview', 1033) + lbl('Apercu', 1036), left: lbl('L'), right: lbl('R') });
+  const chk = await topoCheck(wrong, german);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /tab 'tab_overview' is deployed with labels "Overview", "Apercu", the spec declares label: "Uebersicht"/);
+});
+
+test('verify decodes the XML entities in a published label before comparing it', async () => {
+  const rd = (spec) => { spec.forms[0].tabs[0].columns[0].sections[0].label = 'R & D <1>'; };
+  const chk = await topoCheck(withLabels(layoutXml([overview()]), { left: lbl('R &amp; D &lt;1&gt;') }), rd);
+  assert.strictEqual(chk.present, true, chk.detail);
+});
+
+test('verify does not compare a label the published container does not carry (no label is not a different label)', async () => {
+  // Nothing to compare: the formxml carries no <labels> for the tab or either section, as in every fixture above.
+  assert.strictEqual((await topoCheck(layoutXml([overview()]), relabelled)).present, true);
+  // …and a CELL's label is never taken for its section's.
+  const cellOnly = layoutXml([overview()]).replace('<cell><control datafieldname="new_name"', `<cell><labels>${lbl('Name')}</labels><control datafieldname="new_name"`);
+  assert.strictEqual((await topoCheck(cellOnly, relabelled)).present, true, 'the section has no label of its own');
+});
+
+test('verify holds a container matched by POSITION to the spec\'s label too — the build relabels it', async () => {
+  // Deployed under other names AND other labels, so only the position pass can pair them with the spec's containers;
+  // the build then converges their labels while keeping their names. A relabel that did not land is reported.
+  const xml = layoutXml([{ name: 'zz_tab', columns: [
+    { width: '60%', sections: [{ name: 'zz_a', cells: [{ field: 'new_name' }] }] },
+    { width: '40%', sections: [{ name: 'zz_b', cells: [{ field: 'new_notes' }] }] },
+  ] }]).replace('<tab name="zz_tab">', `<tab name="zz_tab"><labels>${lbl('Old tab')}</labels>`)
+    .replace('<section name="zz_a" columns="1">', `<section name="zz_a" columns="1"><labels>${lbl('Old left')}</labels>`);
+  const chk = await topoCheck(xml);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /tab 'tab_overview' is deployed with label "Old tab", the spec declares label: "Overview"/);
+  assert.match(chk.detail, /section 'sec_left' is deployed with label "Old left", the spec declares label: "L"/);
+  const relabelledLive = xml.replace('Old tab', 'Overview').replace('Old left', 'L');
+  assert.strictEqual((await topoCheck(relabelledLive)).present, true, 'once the labels are the spec\'s the same positional match verifies');
+});
+
+test('verify reports a label problem alongside the form\'s other layout problems, in one check', async () => {
+  const flattened = withLabels(layoutXml([{ name: 'tab_overview', columns: [
+    { width: '60%', sections: [{ name: 'sec_left', cells: [{ field: 'new_name' }, { field: 'new_notes' }] }] },
+    { width: '40%', sections: [{ name: 'sec_right', cells: [] }] },
+  ] }]), { tab: lbl('Overview') });
+  const chk = await topoCheck(flattened, relabelled);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /^deployed layout does not match the authored one — /);
+  assert.match(chk.detail, /label "Overview", the spec declares label: "Summary"/);
+  assert.match(chk.detail, /field 'new_notes' is deployed in section 'sec_left'/);
+});
+
+// --- A field held more than once is judged on every cell that holds it ---------------------------------------------
+// The build asserts a read-only or hidden field on every cell of it (a maker can place the field in a second section),
+// so verify proves every one of them: a second placement left editable or visible is a mismatch, as the first is.
+const twice = (secondCell) => layoutXml([{ name: 'tab_overview', columns: [
+  { width: '60%', sections: [{ name: 'sec_left', cells: [{ field: 'new_name', control: { disabled: 'true' }, attrs: { visible: 'false' } }] }] },
+  { width: '40%', sections: [{ name: 'sec_right', cells: [{ field: 'new_notes' }, secondCell] }] },
+] }]);
+const lockedAndHidden = (spec) => { spec.forms[0].tabs[0].columns[0].sections[0].fields = [{ name: 'new_name', readOnly: true, hidden: true }]; };
+
+test('verify FAILS a second placement of a read-only or hidden field that deployed editable or visible', async () => {
+  const chk = await topoCheck(twice({ field: 'new_name' }), lockedAndHidden);
+  assert.strictEqual(chk.present, false, 'the first cell is right; the second is not');
+  assert.match(chk.detail, /field 'new_name' \(another placement, in section 'sec_right'\) is deployed with visible="true" \(absent, the default\), the spec declares hidden: true/);
+  assert.match(chk.detail, /field 'new_name' \(another placement, in section 'sec_right'\) is deployed with disabled="false" \(absent, the default\), the spec declares readOnly: true/);
+  const both = await topoCheck(twice({ field: 'new_name', control: { disabled: 'true' }, attrs: { visible: 'false' } }), lockedAndHidden);
+  assert.strictEqual(both.present, true, both.detail);
+  // A field the spec does not flag has no state to prove on any of its cells.
+  const unflagged = await topoCheck(twice({ field: 'new_name' }));
+  assert.strictEqual(unflagged.present, true, unflagged.detail);
+});
+
+test('verify names the second placement of a field whose first cell is the one that is wrong, once each', async () => {
+  const wrongFirst = twice({ field: 'new_name', control: { disabled: 'true' }, attrs: { visible: 'false' } })
+    .replace('<control datafieldname="new_name" disabled="true" />', '<control datafieldname="new_name" />');
+  const chk = await topoCheck(wrongFirst, lockedAndHidden);
+  assert.strictEqual(chk.present, false);
+  assert.strictEqual((chk.detail.match(/field 'new_name' is deployed with disabled="false"/g) || []).length, 1, 'the first cell keeps its own wording');
+  assert.doesNotMatch(chk.detail, /another placement/, 'the second cell is right and is not reported');
+});
+
+test('verify proves the flags of an AUTO layout on every cell of the field too', async () => {
+  const auto = TOPO_SPEC();
+  auto.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions: { new_name: { readOnly: true } } }];
+  const stateOf = async (xml) => ((await verifySpec(auto, topoRead(xml))).checks || []).find((c) => c.kind === 'form-field-state');
+  const second = await stateOf(twice({ field: 'new_name' }));
+  assert.strictEqual(second.present, false);
+  assert.match(second.detail, /field 'new_name' \(another placement, in section 'sec_right'\) is deployed with disabled="false" \(absent, the default\), the spec declares readOnly: true/);
+  assert.strictEqual((await stateOf(twice({ field: 'new_name', control: { disabled: 'true' } }))).present, true);
+});
+
 // --- #586 item 3: a deployed dashboard must be internally consistent, not merely present ----------
 // A chart tile names a table, a view and a chart. The platform accepts and publishes a tile whose
 // chart belongs to another table — and a same-named chart elsewhere made the build produce exactly

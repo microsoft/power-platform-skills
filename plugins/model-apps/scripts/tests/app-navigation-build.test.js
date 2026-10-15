@@ -457,8 +457,12 @@ const GOLDEN = {
   applyNewUrl: { calls: 14, sha: 'c90699cef67fb3ec65692205fe42d3c8fe69e0018b96841cbc72c7b8e350a9e9' },
   dryLive: { calls: 2, sha: '4234a3bee2b8281a5346821c9eae1218743fae1213c841574d43e43b08e23698' },
   applyNewBesidePages: { calls: 28, sha: '8ed8cfad18ed2b5eb59b29bc1ab9a9d023ad9c30ec8c7a69efe714ef14e7ab78' },
-  applyExistingBesidePages: { calls: 28, sha: '4c3c5b51cdce4be9ebfbf22928368593e121c5660e31d1a9dbcda1ed57c8cc30' },
-  applyExistingAppStep: { calls: 23, sha: 'c1ab6a9048c51c8213bb11667697ecf4d10534707ff4c2f3e429286dd9cc18b5' },
+  // An EXISTING app now takes a changed name and description, so its fetched copy is read once more to compare them: one `getArtifact`
+  // (a read of the workspace copy — no request to the environment) after the sitemap write. Captured again with the fake's deployed
+  // app carrying the spec's own header; no other call of the sequence differs, and a new app's is exactly what it was.
+  applyExistingBesidePages: { calls: 29, sha: '789bf9a2cdcc1c653fe49a6ff3f363ce73e7d9c255e916a5d810b74f57dd25e3' },
+  // The same one added read (see above), here before the app step's own push of its sitemap and header.
+  applyExistingAppStep: { calls: 24, sha: 'c57951fa58f2709965565258ed26693f6567e067b3b0099f36f4e8a59a237749' },
 };
 
 const calledSameAs = (calls, golden, what) => {

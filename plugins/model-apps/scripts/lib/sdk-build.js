@@ -89,6 +89,7 @@ const {
   relationshipsInCreateOrder,
 } = require('./entity-provision.js');
 const { repairLookupCellLabels } = require('./lookup-cell-labels.js');
+const { diffBpfStages, deployedBpfStages, desiredBpfStages, describeBpfEdit, describeBpfRefusals } = require('./bpf-stages.js');
 const { hasLabelUses, makeChoiceReader, makeGlobalChoiceReader, resolveViewFilterLabels, checkViewFilterLabelsBeforeBuild, describeProblem, describeProblems } = require('./view-filter-labels.js');
 // Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
 const {
@@ -97,6 +98,7 @@ const {
   firstSectionRowsPointer,
   findFieldCellPointer,
   findFieldCellLocation,
+  findFieldCellLocations,
   findSectionLocation,
   findSectionById,
   declaredSectionByField,
@@ -1326,6 +1328,70 @@ async function applyAppAiDescription(provision, spec, appId) {
   return true;
 }
 
+// The app's display NAME and its tile DESCRIPTION, set on the FETCHED artifact of an app that already exists. They were set when the
+// app was created and never again: a rebuild with an edited description reported the app step as done and left the old text. Returns
+// true when the artifact changed and needs a push.
+//
+// The SDK's header push writes `name`, `description` and the routing description to the appmodule row, whichever of them the
+// artifact holds differently from the row (and none when all three are equal), conditioned on the row's own token — pinned
+// against the real bundle in app-header-text-real-bundle.test.js. So these edits ride the push the app already gets (the sitemap
+// rewrite): never a second push from the same fetch, which would race the first on its If-Match.
+//
+//   * Only a non-blank string is written, and only when it differs from the FETCHED artifact (the draft layer the push compares the
+//     header against). The two guards a view's and a chart's description already have: a spec that leaves the text out — or carries
+//     the "" a download writes, which validateDescription allows for `app.description` alone — says nothing, and writing it would
+//     blank text a maker typed.
+//   * The unique name is never written. It is the app's identity: appUniqueName takes it from `app.uniqueName` when the spec pins one
+//     (a download does) and otherwise derives it from the name, so a spec that renames an app without pinning it names a different
+//     app, which the app step creates, rather than renaming this one.
+//   * A fetched app always carries both keys (the adapter reads `description` as '' when the row has none), so updateElement has a
+//     path to write — unlike the routing description, which is added when the row has none.
+// Both columns are localizable, and this writes the value of the environment's base language; a translation a maker added stays as
+// it is. name holds at most 100 characters and description 2,000 (validateDescription).
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
+async function applyAppHeaderText(provision, spec, appId) {
+  const app = (spec && spec.app) || {};
+  const current = (await provision.getArtifact('app', appId)) || {};
+  let changed = false;
+  for (const key of ['name', 'description']) {
+    const want = app[key];
+    if (typeof want !== 'string' || !want.trim() || current[key] === want) continue;
+    await provision.updateElement('app', appId, `/${key}`, want);
+    changed = true;
+  }
+  return changed;
+}
+
+// Everything of an existing app's header the spec can change: its text and its routing description, applied to one fetched copy so
+// that one push writes them all. `text: false` leaves the name and description alone — for an app THIS run created, whose create
+// already wrote the spec's (appDef), the compare would be a read the build never made for a new app.
+async function applyAppHeader(provision, spec, appId, { text = true } = {}) {
+  const textChanged = text ? await applyAppHeaderText(provision, spec, appId) : false;
+  const routingChanged = await applyAppAiDescription(provision, spec, appId);
+  return textChanged || routingChanged;
+}
+
+// An app's tile icon is written when the app is created and a rebuild cannot replace it: the appmodule's `webresourceid` is effectively
+// write-once, and the SDK's header push — the name, the description, the routing description — does not carry it (pinned in
+// app-header-text-real-bundle.test.js). So when the spec NAMES an icon (`app.icon`) that is not the one the app has, the build says so
+// instead of letting the app step read as done over an icon that stayed. A spec with no `app.icon` gets the generated default at create
+// and is left alone afterwards (a maker may have chosen another), so there is nothing to compare. Read-only and best-effort: a read
+// that fails proves nothing, so it says nothing.
+async function warnAppIconNotApplied(provision, spec, wantIconId, warn) {
+  const app = (spec && spec.app) || {};
+  if (!app.icon || !wantIconId || typeof warn !== 'function') return;
+  let have;
+  try {
+    const rows = await provision.queryRecords('appmodule', { select: ['webresourceid'], filter: `uniquename eq '${odataLit(appUniqueName(spec))}'`, top: 1 });
+    have = rows && rows[0] && rows[0].webresourceid;
+  } catch {
+    return;
+  }
+  const same = (a, b) => String(a).replace(/[{}]/g, '').toLowerCase() === String(b).replace(/[{}]/g, '').toLowerCase();
+  if (!have || same(have, wantIconId)) return;
+  warn(`app "${app.name}": its icon was NOT changed — the spec's app.icon ('${app.icon}') is not the icon the app has. An app's icon is set when the app is created and a rebuild does not replace it: change it in the app designer, or point app.icon at the web resource the app already uses.`);
+}
+
 // #583: halt precisely when the push of an app whose routing description this run changed was refused
 // because the app was never PUBLISHED: Dataverse takes no write to a draft appmodule's name, description
 // or routing description until it is, and the SDK THROWS APP_DRAFT_HEADER_NOT_WRITABLE (see
@@ -1463,9 +1529,10 @@ function bpfFilter(name, entityLogical) {
 //      is silently discarded and the step deploys bound to nothing. Measured against the real bundle
 //      and pinned in bpf-real-bundle.test.js.
 //
-// Ids are deliberately NOT minted here: the adapter assigns any missing stage/step id itself, and a
-// stable id would only matter for an edit-in-place path the build does not have (a flow is
-// reused-as-is or created whole).
+// Ids are deliberately NOT minted here: the adapter assigns any missing stage/step id itself. The
+// edit-in-place path (applyBpfStages) works on the ids the SDK minted and the build read back from the
+// deployed flow, so nothing here needs a stable one — and a stage or step it adds is written from this
+// same mapping, exactly as a create writes it.
 function bpfDef(flow) {
   const entityLogicalName = String(flow.entity).toLowerCase();
   const def = {
@@ -1487,6 +1554,117 @@ function bpfDef(flow) {
   if (flow.description !== undefined) def.description = flow.description;
   if (flow.order !== undefined) def.order = flow.order;
   return def;
+}
+
+// --- Stage edits to a flow a rebuild reuses ---------------------------------------------------------
+// lib/bpf-stages.js decides WHICH edits a rebuild applies and which it refuses, and why (it is pure,
+// and the change classifier asks it the same question of two specs). These read the deployed flow and
+// write the edits.
+
+// Read the deployed flow and compare its stages with the spec's. Resolves { kind, plan?, reason? }:
+//   'same' | 'edit' | 'refused' — diffBpfStages' verdict, with its `plan`;
+//   'unchecked'                 — the flow could not be read, or came back with no stages: `reason` says why;
+//   'unavailable'               — the SDK handle cannot fetch a flow (a test double), so nothing is compared.
+// It NEVER throws: a flow that cannot be compared is left as it is — as every flow was before stage
+// edits were applied — and the build goes on; one unreadable flow must not stop an otherwise good app.
+//
+// The flow is fetched with `overwrite: true` so the plan is made on what is DEPLOYED. A plain fetch
+// keeps a workspace copy still holding edits an earlier run never pushed (a build interrupted between
+// an edit and its push, or one whose push was refused), and the plan would then call the flow "already
+// as the spec says" while the environment holds none of it: the edit would be lost and the flow
+// reported as reused. Nothing else edits a flow's copy, and applyBpfStages pushes or abandons every
+// edit it makes, so there is no other writer's change for the overwrite to lose — unlike the app's
+// copy, which several phases edit (see refuseUnpushedAppCopy).
+async function inspectBpfStages(provision, flow, flowId) {
+  if (typeof provision.fetchArtifact !== 'function') return { kind: 'unavailable' };
+  let artifact;
+  try {
+    artifact = await provision.fetchArtifact('bpf', flowId, { overwrite: true });
+  } catch (e) {
+    return { kind: 'unchecked', reason: String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 300) };
+  }
+  if (!artifact || !Array.isArray(artifact.stages)) return { kind: 'unavailable' };
+  if (!artifact.stages.length) return { kind: 'unchecked', reason: 'the SDK read the flow with no stages' };
+  const plan = diffBpfStages(deployedBpfStages(artifact.stages), desiredBpfStages(flow), { entity: flow.entity });
+  return { kind: plan.verdict, plan };
+}
+
+// Write the edits of an applicable plan (inspectBpfStages' `edit`) onto the workspace copy it just
+// read, then push ONCE. Throws what the SDK throws; a push that comes back refused halts through
+// requireSuccessfulPush.
+//
+// The order keeps the flow valid after EVERY element operation, because the SDK validates after each
+// one — a stage with no step, or an id used twice, is refused on the spot. So a stage only ever GAINS
+// steps (added first, in the spec's order; nothing is removed, the plan refuses any removal), and a
+// stage or step is found again by its id before each operation, since an insert shifts every index
+// after it. A stage is renamed by id, never recreated: the id is what a record's stage refers to.
+//
+// What a stage or step this ADDS carries is bpfDef's own mapping, so it is written exactly as the
+// create path writes it. What goes over the wire is the SDK's: a Draft flow takes one PATCH of its
+// definition; an Active flow takes ONE `$batch` change set (the header under the row's token, then
+// the XAML) when the transport has `postRaw`, as this plugin's has — otherwise the SDK deactivates the
+// flow, patches it and reactivates it (BPF_LEFT_DEACTIVATED if the reactivation fails, which halts
+// the build). Both are pinned against the vendored bundle in bpf-stage-edits.test.js.
+async function applyBpfStages(provision, flow, flowId, plan, opts = {}) {
+  const wanted = bpfDef(flow).stages;
+  const stageOf = async (stageId) => {
+    const stages = ((await provision.getArtifact('bpf', flowId)) || {}).stages || [];
+    const index = stages.findIndex((s) => s && s.id === stageId);
+    if (index < 0) throw Object.assign(new Error(`stage ${stageId} is not in the flow the SDK holds`), { code: 'PATH_NOT_FOUND' });
+    return { index, stage: stages[index] };
+  };
+  for (let j = 0; j < plan.target.length; j += 1) {
+    const target = plan.target[j];
+    if (target.isNew) {
+      // Existing stages never move, so when stage j is reached the flow holds exactly the first j
+      // stages of the target followed by the deployed ones still to come: index j is its place.
+      await provision.addElement('bpf', flowId, '/stages', wanted[j], { position: { index: j } });
+      continue;
+    }
+    const { index } = await stageOf(target.stageId);
+    if (target.renamedFrom) await provision.updateElement('bpf', flowId, `/stages/${index}/name`, target.name);
+    if (!target.stepsChanged) continue;
+    const stepsPointer = `/stages/${index}/steps`;
+    for (let k = 0; k < target.steps.length; k += 1) {
+      const step = target.steps[k];
+      if (!step.stepId) {
+        await provision.addElement('bpf', flowId, stepsPointer, wanted[j].steps[k], { position: { index: k } });
+        continue;
+      }
+      const steps = (await stageOf(target.stageId)).stage.steps || [];
+      const at = steps.findIndex((s) => s && s.id === step.stepId);
+      // Steps 0..k-1 are already final, so the one wanted at k is at or after k: this only ever
+      // moves a step EARLIER, which keeps `index` unambiguous (it is the place after the removal).
+      if (at !== k) await provision.moveElement('bpf', flowId, `${stepsPointer}/${at}`, stepsPointer, { index: k });
+      const live = steps[at];
+      // Only what differs, as a merge patch of the step: the SDK throws PATH_NOT_FOUND for a leaf
+      // such as `/required` that the step does not carry yet.
+      const patch = {};
+      if (live.name !== step.name) patch.name = step.name;
+      if (String(live.fieldName || '').toLowerCase() !== step.field) patch.fieldName = step.field;
+      if ((live.required === true) !== step.required) patch.required = step.required;
+      if (Object.keys(patch).length) await provision.updateElement('bpf', flowId, `${stepsPointer}/${k}`, patch);
+    }
+  }
+  return requireSuccessfulPush(await provision.pushArtifact('bpf', flowId), `business process flow ${flow.name}`, opts.warn);
+}
+
+// The codes with which the SDK refuses a stage edit BEFORE it writes anything to the environment: an
+// edit it cannot author (NOT_IMPLEMENTED — adding, removing or reordering the stages of a flow that
+// holds branches or other non-stage activities is thrown at push, with no request sent), or one that
+// does not validate (INVALID_ARGUMENT, VALIDATION_ERROR, PATH_NOT_FOUND). An element operation only
+// edits the workspace copy, so for any of them the environment's flow is exactly as it was and the
+// build goes on with it. Only the error's OWN code is read, never its cause chain:
+// BPF_LEFT_DEACTIVATED — a flow the SDK deactivated and could not reactivate — carries the failure
+// that started it as its cause, and following the chain would make a half-applied live flow look
+// untouched.
+const BPF_EDIT_NOT_WRITTEN = new Set(['NOT_IMPLEMENTED', 'INVALID_ARGUMENT', 'VALIDATION_ERROR', 'PATH_NOT_FOUND']);
+
+// What the build says about a flow whose stage edit the plan refused: the reason, why a build never
+// goes ahead, and the ways forward. Nothing is written to the flow — not even the edits that would
+// have been safe — so the answer to "what did it do?" is always "nothing".
+function bpfRefusalWarning(flow, refusals) {
+  return `business process flow "${flow.name}" on ${flow.entity}: NOT changed — ${describeBpfRefusals(refusals).join('; ')}. A build never removes or moves a stage or a step: a record that is partway through the flow sits on one of its stages, and the platform does not document what becomes of a record whose stage is removed or moved. Nothing was written to this flow, including the edits that would have been safe. To keep the flow as it is, list in the spec what it has (a stage or step added in Maker, say). To make the flow match the spec, make the change in Maker (move or finish the records on a stage before removing it); the next build then finds the flow as the spec says. If the flow's process records can be lost, delete the flow (which deletes its backing table and the records in it) and run the build again, which creates it afresh.`;
 }
 
 
@@ -3047,6 +3225,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //
   // Consequence, documented rather than worked around: turning a flag back OFF through the spec is
   // not supported — remove the field and let the next build re-add it, or clear it in the designer.
+  //
+  // EVERY cell of the field is asserted, each on its own. A spec places a field once (the layout gate refuses a
+  // second placement), but a deployed form is not bound by that gate: a maker can place the same field in a second
+  // section, and a field the spec makes read-only or hidden is so wherever the form shows it. Patching only the
+  // first cell left the second one editable or visible. The lookup-label repair walks a field's cells the same way
+  // (lookup-cell-labels.js).
   const applyFieldControlOptions = async (formId, def, want, wantCellByLogical) => {
     for (const logical of want) {
       const wantCell = wantCellByLogical[logical];
@@ -3054,12 +3238,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const wantReadOnly = !!(wantCell.control && wantCell.control.isReadOnly);
       const wantHidden = wantCell.visible === false;
       if (!wantReadOnly && !wantHidden) continue; // nothing asserted for this field
-      // Re-read per field: each updateElement rewrites the artifact, and a stale pointer would
-      // patch whatever now sits at that index.
-      const loc = findFieldCellLocation(await provision.getArtifact('form', formId) || {}, logical);
-      if (!loc) continue;
-      if (wantReadOnly) await provision.updateElement('form', formId, `${loc.cellPointer}/control`, { isReadOnly: true });
-      if (wantHidden) await provision.updateElement('form', formId, loc.cellPointer, { visible: false });
+      let form = (await provision.getArtifact('form', formId)) || {};
+      const cells = findFieldCellLocations(form, logical).length;
+      for (let i = 0; i < cells; i++) {
+        // Re-read before every cell after the first: each updateElement rewrites the artifact, and a stale pointer
+        // would patch whatever now sits at that index. A patch of a cell's own control or visibility moves no cell,
+        // so the i-th cell of the field is still the i-th after the earlier writes.
+        if (i > 0) form = (await provision.getArtifact('form', formId)) || {};
+        const loc = findFieldCellLocations(form, logical)[i];
+        if (!loc) break;
+        if (wantReadOnly) await provision.updateElement('form', formId, `${loc.cellPointer}/control`, { isReadOnly: true });
+        if (wantHidden) await provision.updateElement('form', formId, loc.cellPointer, { visible: false });
+      }
     }
   };
 
@@ -5263,7 +5453,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // the same reasons: a flow is identified by (entity, name), and pushing unconditionally on every
   // rebuild would stack duplicate processes on the table. Unlike a rule, a BPF goes through the SDK's
   // GENERIC artifact surface (createArtifact -> pushArtifact) — there is no bound member and no
-  // fallback path, so there is no double-write hazard to sweep up after.
+  // fallback path, so there is no double-write hazard to sweep up after. A flow that EXISTS has its
+  // Active/Draft state converged and its stages and steps compared with the spec's: an edit that
+  // leaves every deployed stage where it is in the process is applied in place, and one that would
+  // remove or move a stage or a step is refused (see lib/bpf-stages.js for which, and why).
   if (has('business-process-flows')) {
     for (const flow of spec.businessProcessFlows || []) {
       const entityLogical = String(flow.entity).toLowerCase();
@@ -5292,25 +5485,57 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // Exists, but a flow left in Draft is invisible on the form — "exists, so skip" would report
         // success over a process nobody can run. Converge the one property that is cheap and safe to
         // reconcile, in BOTH directions, exactly as the business-rule phase does.
+        const flowLabel = `business process flow "${flow.name}" on ${flow.entity}`;
+        const warnFlow = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
         const wantActive = (flow.status || 'Active') === 'Active';
         const isActive = existing[0].statecode === 1;
-        if (wantActive !== isActive) {
-          // statecode 1 / statuscode 2 = Activated; 0 / 1 = Draft. Best-effort, NOT a build halt: a
-          // process the platform refuses to toggle should not block an otherwise-good app, and
-          // `--verify` reports the real deployed state.
-          const target = wantActive ? { statecode: 1, statuscode: 2 } : { statecode: 0, statuscode: 1 };
-          const verb = wantActive ? 'activated' : 'deactivated';
+        const verb = wantActive ? 'activated' : 'deactivated';
+        // Resolves true (converged), false (the platform refused, and it was warned about) or null
+        // (nothing to do). statecode 1 / statuscode 2 = Activated; 0 / 1 = Draft. Best-effort, NOT a
+        // build halt: a process the platform refuses to toggle should not block an otherwise-good
+        // app, and `--verify` reports the real deployed state.
+        const convergeState = async () => {
+          if (wantActive === isActive) return null;
           try {
-            await provision.updateRecord('workflow', existingId, target);
-            runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (existed in the wrong state — ${verb})`);
+            await provision.updateRecord('workflow', existingId, wantActive ? { statecode: 1, statuscode: 2 } : { statecode: 0, statuscode: 1 });
+            return true;
           } catch (e) {
-            if (typeof opts.warn === 'function') {
-              opts.warn(`business process flow "${flow.name}" on ${flow.entity} exists but could not be ${verb} (${e && e.message}). It is ${isActive ? 'still running' : 'inert'}. Delete it and rebuild to recreate it cleanly.`);
-            }
-            runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists but could not be ${verb})`);
+            warnFlow(`${flowLabel} exists but could not be ${verb} (${e && e.message}). It is ${isActive ? 'still running' : 'inert'}. Delete it and rebuild to recreate it cleanly.`);
+            return false;
           }
+        };
+        // Its stages and steps (lib/bpf-stages.js): an edit that leaves every deployed stage where it
+        // is in the process is applied in place, in one push; one that removes or moves a stage or a
+        // step is refused, and the whole flow is then left exactly as it is.
+        const stageCheck = await inspectBpfStages(provision, flow, existingId);
+        if (stageCheck.kind === 'edit') {
+          // The state follows the edit and never precedes it: the SDK conditions the push on the
+          // row's version, and a state change in between would move that version (a 412).
+          await runner.run('business-process-flows', `${flowLabel} (exists — applying ${describeBpfEdit(stageCheck.plan)} in place${wantActive === isActive ? '' : `, then ${wantActive ? 'activating' : 'deactivating'}`})`, async () => {
+            await applyBpfStages(provision, flow, existingId, stageCheck.plan, opts);
+          }, {
+            // An edit the SDK refuses before it writes anything leaves the flow as it was: say so and
+            // go on, as for a flow that cannot be compared. Anything else may have half-applied a live
+            // flow and halts the build.
+            skipIf: (err) => {
+              if (!BPF_EDIT_NOT_WRITTEN.has(err && err.code)) return false;
+              warnFlow(`${flowLabel}: its stage edits were NOT applied — ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}. Nothing was written to this flow. Make the change in Maker (the SDK cannot edit a flow with branches or other advanced constructs), or put the spec back in line with the flow.`);
+              return 'NOT applied: the SDK cannot edit this flow — see the warning';
+            },
+          });
+          await convergeState();
         } else {
-          runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists — reuse; stage edits aren't applied on rebuild, recreate to change)`);
+          let note = '';
+          if (stageCheck.kind === 'refused') {
+            warnFlow(bpfRefusalWarning(flow, stageCheck.plan.refusals));
+            note = 'its stages and steps were NOT changed: see the warning';
+          } else if (stageCheck.kind === 'unchecked') {
+            warnFlow(`${flowLabel}: its stages could not be compared with the spec (${stageCheck.reason}); it was left as it is.`);
+            note = 'its stages could not be compared: see the warning';
+          }
+          const converged = await convergeState();
+          const state = converged === true ? `existed in the wrong state — ${verb}` : converged === false ? `exists but could not be ${verb}` : 'exists — reuse';
+          runner.skip('business-process-flows', `${flowLabel} (${state}${note ? `; ${note}` : ''})`);
         }
         result.created.businessProcessFlows[key] = existingId;
         // The DEPLOYED backing-table name, read back rather than derived (see the select above). A
@@ -5655,8 +5880,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
           await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', await siteMapOverLive(provision, existingId, def.siteMap, opts, result.created));
-          const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
-          requireSuccessfulPush(await appWriters.push(existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
+          // The header — its text (name, description) and its routing description — rides this one push, as the sitemap does.
+          const headerChanged = await applyAppHeader(provision, spec, existingId);
+          requireSuccessfulPush(await appWriters.push(existingId, def.name, headerChanged), `app ${def.name}`, opts.warn);
           reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
         } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
@@ -5665,16 +5891,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // and which is the live one only because a copy holding an earlier run's unpushed edits was
           // refused above (refuseUnpushedAppCopy): replaying a stale sitemap rewrite detached live pages
           // with no gate and no --allow-destructive, and the copy's routing description may be this very
-          // edit, left unpushed, so "unchanged" against it would skip the push the server still needs.
+          // edit, left unpushed, so "unchanged" against it would skip the push the server still needs. A changed name or
+          // description is written with it, on the same push. A run with no routing description does not push the app at all
+          // here, so a partial run of that kind leaves the header's text to the pages phase, which writes the navigation and
+          // the header together.
           const current = await provision.getArtifact('app', existingId) || {};
           await assertAuthorizedSitemapRewrite(provision, existingId, current.siteMap || {}, opts.authorizedSitemapRemovals, 'app-shell');
-          if (await applyAppAiDescription(provision, spec, existingId)) {
+          if (await applyAppHeader(provision, spec, existingId)) {
             // Nothing wrote the spec's navigation into the copy, so the push sends the copy's own (`resendsCopy`): the tables whose Main forms it adds are that navigation's.
             requireSuccessfulPush(await appWriters.push(existingId, def.name, true, { resendsCopy: true }), `app ${def.name} routing description`, opts.warn);
             reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
           }
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName, solutionMembers);
+        // The icon is written at create only: a spec that names one the app does not have is told so, not left reading as done.
+        await warnAppIconNotApplied(provision, spec, iconWebResourceId, opts.warn);
         return existingId;
       }
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
@@ -6400,9 +6631,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const full = appDef(spec, result.created, { mainFormsByTable });
           await assertAuthorizedSitemapRewrite(provision, result.created.app, full.siteMap, opts.authorizedSitemapRemovals, 'pages');
           await provision.updateElement('app', result.created.app, '/siteMap', await siteMapOverLive(provision, result.created.app, full.siteMap, opts, result.created));
-          // #583: the routing description rides THIS push whenever the pages phase runs (the app-shell
-          // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.
-          const headerChanged = await applyAppAiDescription(provision, spec, result.created.app);
+          // #583: the header — its routing description, and the app's name and description — rides THIS push whenever the pages
+          // phase runs (the app-shell branch defers it here). An app this run created already carries its name and description from
+          // that create, so only the routing description is looked at there, as before.
+          const headerChanged = await applyAppHeader(provision, spec, result.created.app, { text: appWasExisting });
           const appName = (spec.app && spec.app.name) || result.created.app;
           requireSuccessfulPush(await appWriters.push(result.created.app, appName, headerChanged), 'app sitemap finalize', opts.warn);
           reportPartialPush(await appWriters.publish(result.created.app), `app ${appName}`, opts.warn);
@@ -7220,4 +7452,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages };

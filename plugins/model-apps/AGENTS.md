@@ -174,7 +174,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   edit so an interrupted split cannot persist duplicated cells. Anchors run in dependency order
   after new-field insertion; remaining unsatisfied requests are warned in `skipped.layout`.
   Existing fields are not list-reordered. Verify checks form-wide cell/control ID uniqueness,
-  including auto forms, but not field order or anchor adjacency. See the
+  including auto forms, and the tab and section **labels** a layout authors (against the published form, in any
+  language; a label the spec does not write, or a container the published form gives none, is not compared),
+  but not field order or anchor adjacency. A field's `readOnly`/`hidden` flag goes on **every** cell the form
+  holds of the field (`applyFieldControlOptions` visits each one, as the lookup-label repair does: on a form a
+  maker placed a field on twice, the first cell alone left the second editable or visible), and verify checks
+  every cell too. See the
   [form-layout contract](references/app-spec-schema.md).
   **The Notes timeline** (#680, `lib/form-timeline.js` — one definition shared by the compiler, the
   build's repair and verify) is written in the shape Dynamics renders: the fixed control id
@@ -337,8 +342,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   It also builds **business process flows** (`businessProcessFlows[]` — the staged process bar on a
   record): a `workflows` row of category 4 / type 1 / businessprocesstype 0 whose XAML the SDK compiles
   from ordered `stages[]`/`steps[]`, activated in the same push. The phase is additive
-  discover-reconcile keyed on `(entity, name)` like `business-rules` — it creates what is missing and
-  converges only Active/Draft **state**, never stage structure — and `bpfFilter` scopes every query in
+  discover-reconcile keyed on `(entity, name)` like `business-rules` — it creates what is missing,
+  converges Active/Draft **state**, and applies a **stage or step edit in place** when that leaves every
+  deployed stage where it is (below) — and `bpfFilter` scopes every query in
   build/verify/teardown to the DEFINITION row, excluding both the platform's activated `type 2` copy and
   same-named TASK flows (also category 4). v1 is deliberately single-entity and linear: cross-entity
   stages, branching and stage actions are **rejected at the spec gate** rather than silently dropped,
@@ -360,6 +366,39 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a backing table with that name; and a stage must carry **at least one step**, because the SDK
   substitutes a placeholder step named "New Step" for an empty one (its own `stage-needs-step` rule
   never fires, as the placeholder is injected before it looks).
+  **A rebuild applies the stage edits that cannot move a record, and refuses the rest**
+  (`lib/bpf-stages.js`; `inspectBpfStages` / `applyBpfStages` in `sdk-build.js`; `bpf-stage-edits.test.js`).
+  A flow that exists is read from the environment (`fetchArtifact('bpf', id, { overwrite: true })` — the plan
+  is made on what is DEPLOYED, never on a workspace copy an interrupted run left holding unpushed edits) and
+  its stages and steps are compared with the spec's **by name**, since the spec carries no ids. A record that
+  runs the flow holds the stage it is on in `activestageid`, a lookup to the flow's `processstage` row
+  ([the table](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/processstage),
+  [the column](https://learn.microsoft.com/en-us/power-automate/best-practices-entity-attributes)). The
+  platform does not document what becomes of a record whose stage is removed or moved, so a build never
+  removes or moves one; it does apply a rename, because the SDK keeps the stage's id (that a record then stays
+  where it was is measured against the vendored SDK so far, not yet against an environment). So:
+  - *Applied, in ONE push*: a stage added (anywhere); a stage renamed (the deployed stage and the desired
+    one that sit between the same two stages both lists have, when there are as many of each — the SDK
+    keeps the stage's id, so the lookup a record holds still points at it); a step added, renamed, rebound
+    to another column, made required or optional, or moved. An Active flow is written as one conditional
+    `$batch` change set (the plugin's client has `postRaw`) and stays Active; a Draft flow as one PATCH. The
+    Active/Draft state is converged AFTER the edit — a state change before it would move the row's version,
+    and the SDK's push is conditioned on it (a 412).
+  - *Refused — the whole flow is left exactly as it was, never half-applied*: a stage or step the flow has
+    and the spec does not list (a build never removes either, and cannot tell a spec that dropped one from
+    a maker who added it in Maker); the same stages in another order; a different number of stages where one
+    is replaced (a rename cannot be told from a removal); two stages or two steps that share a name; a stage
+    on another table. The warning says why, that nothing was written, and the ways forward (list what the
+    flow has, make the change in Maker, or delete and recreate the flow).
+  - A flow holding branches or other non-stage activities cannot have a stage added through the SDK
+    (`NOT_IMPLEMENTED`, thrown before any request): the edit is reported **NOT applied** with the SDK's reason
+    and the flow is left as it was — as is a flow whose stages cannot be read. Any other push failure
+    **halts** the build: a flow the SDK deactivated and could not reactivate is never skipped
+    (`BPF_LEFT_DEACTIVATED`). A rename or a step edit on such a flow does work, and keeps what the SDK does not
+    model (it states that the rest of the process round-trips losslessly; pinned in the test).
+  The flow's own `description` and `order` are not reapplied, and `--verify` does not compare stages.
+  `stageEditApplies` hands the change classifier the same plan, so an applied stage edit is not filed as
+  `businessProcessFlow-edit-not-convergent` debt and a refused one still is.
   Following a **genpage-first policy**, overview/dashboard/analytics surfaces are authored as **generative
   pages** (`pages[]`) rather than classic dashboards — the build's `pages` phase uses a **three-authority
   model**: IDENTITY (durable `<app>_pagemanifest`, outranked by a downloaded spec's `pages[].pageId`),
@@ -685,6 +724,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   this looked unavailable for a long time. Best-effort: the feature rolls out by tenant, so a failure
   warns and records `created.newLook: false` rather than failing an otherwise-good build or reporting
   a silent success.
+  **An existing app's name and description are applied on a rebuild** (`applyAppHeaderText`, `lib/sdk-build.js`).
+  They were written at create only, so a rebuild with an edited description reported the app step as done and left
+  the old text. They are edited on the fetched artifact and ride the push that already writes the app — the
+  app-shell's page-less rewrite, the pages finalizer's, or the routing-description push — never a push of their own.
+  Only a non-blank text is written, and only when it differs from the fetched copy (the guards a view's and a chart's
+  description have), so a spec that leaves the description out or carries the `""` a download writes never blanks
+  one a maker typed; the spec wins over a text changed in Maker, as it does for those. The unique name is the app's
+  identity and is never written: a spec that pins `app.uniqueName` (a download does) is renamed, one that does not
+  names a different app. A never-published app refuses the write and halts as the routing description does. **The icon
+  is the one header field a rebuild cannot change** (`webresourceid` is write-once and the SDK's header push does not
+  carry it): when the spec names an `app.icon` that is not the app's, `warnAppIconNotApplied` says so; a spec with no
+  `app.icon` is never compared. `--verify` checks the routing description but not the name or the description.
   **`app.aiDescription` (the routing description) is written only when the spec sets it** — at create,
   and on an existing app when it differs from the fetched draft, riding that run's app push. The
   platform may author this text itself, so an omitted field is never written or blanked. A
@@ -1935,6 +1986,7 @@ scripts/
     surface-resolver.js        ← pure: resolve personas[].jobs[].surfaces[] to the spec artifacts that satisfy them
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
                                   (also the oracle for `roleGrants[]`, which is additive rather than converged)
+    bpf-stages.js              ← pure: which stage and step edits a rebuild applies to a business process flow it reuses, in place (a stage added or renamed, a step added, renamed, rebound, made required or optional, moved) and which it refuses (a stage or step the spec does not list, the stages reordered, names that cannot be told apart, a stage on another table); `inspectBpfStages` / `applyBpfStages` (sdk-build.js) and the change classifier (`stageEditApplies`) all ask it
     odata.js                   ← OData literal escaping helpers
     genpage-sdk.js             ← the one generative-page backend, over the bundled SDK (`makeGenpageSdk(env, deps)`; it replaced the `pac model genpage` wrapper): `enumerateEnv` (every page of the environment, drafts included, with the name its own row holds — `unescapePacName` reads back the `\"` an earlier release's pac stored), `enumeratePages(appId)` (an app's navigation, saved or published layer), `read(id)` (the page as the SDK projects it, from the server), `create` (the id is minted on the client — or taken from a caller resuming a create, which passes what it sent before (`sentBefore`) and hears the new send through `beforeSend(id, { name, sourceSha256 })` before anything is sent — one atomic change set, published and proven; an unknown outcome is settled by reading the id, and sent once more under the same id; a page found under a resumed id is recognised by the name and source a create sent (`holdsWhatWasSent`), and what it still holds of an earlier create is converged by the update path) and `update` (writes only what differs, records the new turn under one identity, publishes — except a page that already holds the content and is given the `publishedFingerprint` of that content as published, which is left as it is (`publish.kind: 'skipped'`); every result of `create` and `update` carries the `fingerprint` of the content, for a caller that keeps one; an unknown outcome is read, and sent once more only if nothing landed), `placeInApp(appId, { pages, dataSources, finish, finishIfUnpublished, beforeAppWrite })` (an app edit: the page becomes a sub-area of its navigation, and the default public view of each table the page reads joins the app's components — those views and nothing else of the app's components, since the push is limited to what the edit owns (`app-component-scope.js`); `finish` is a caller completing an earlier placement: it publishes the app even when nothing is left to write, and proves the page in the PUBLISHED navigation; `finishIfUnpublished` is the same for a caller with no record of an earlier run — it asks the app: a page the saved navigation already names is left alone when the published navigation shows it, and the app is published, and the page proved, when it does not; `beforeAppWrite` is an async function awaited once right before the call first writes the app — its push, or its publish when there is nothing to push — and never called for a placement that writes and publishes nothing: the build hands it the request that publishes the tables whose forms the app's publish ships, since only the placement knows when it is about to write and what it sends, so it is called with `{ pushes, entityTables, mainFormsByTable }` — whether the app is pushed at all, the tables whose Main forms the push adds (none for an SDK this backend made: its transport limits the push to the views it pins; for a lent SDK, whose push is not limited, the tables of the Entity entries of the navigation the push sends, the server's: `entityTablesOfSiteMap`), and the Main-form list the pushed app carries (a fetched app carries none); the edits are only in the throwaway workspace copy by then, so a hook that throws leaves the app as it was and the call throws what the hook threw), `removeFromApp(appId, pageId, { allowEmpty })` (takes every GenPage entry that names the page out of the saved navigation, whichever area and group; the page, its views and every other entry stay, and no component is added to the app; the app is published and the page proved gone from the PUBLISHED navigation, and a removal that was saved and never published is finished by running it again; a navigation left with no entry at all is refused (`GENPAGE_NAVIGATION_WOULD_BE_EMPTY`) unless `allowEmpty` — the platform accepts one on an app that exists, so this is a judgement, not a rule of the platform), `describe(pageId)` (a page's name, `dataSources` — `null`, not "none", for a page the SDK holds as raw files, which `read` refuses — and the size of its folder and conversation), `delete(pageId)` (the SDK's delete of the project row, its files and then its conversation messages, after the page is read and every app's navigation, published AND saved, is scanned for it — `GENPAGE_IN_APP` names the apps, `GENPAGE_APPS_UNREADABLE` when an app that could hold it cannot be read; what a failed delete did is judged by reading the page again, and "deleted" is only reported once it is read back as gone), `runtimeTypes(dataSources, { detail })` (the SDK's RuntimeTypes generator), `defaultViews(tables)` and `baseLanguage()`, `fileVersions(pageIds)` (the versionnumber of every file row of each page, from the PLAIN collection in chunks of 50 — one `Map<row id, version>` per page, `null` for a page whose rows are none, repeated, or not exact; the publish record's reader, see `lib/page-publish-records.js`; `{ ok: false, error }` when the read fails), `discardWorkspaces()` and `dispose({ waitMs })` (close the throwaway workspace's storage, so work still running cannot write into it or put it back, and remove it once the storage calls under way have settled; the folder is made by `temp-workspace.js`, so one a killed run could not remove is removed by the next run's sweep; both answer `{ left }`, the folders still on disk, and `dispose()` joins every cleanup an earlier call started — within `waitMs` — and also closes the backend). A caller may lend an SDK of its own (`deps.sdk`), whose workspace is then its owner's to close, and whose transport is its owner's too: a page edit through it is not limited to the components it owns. Every page-write error carries `transient: false` and `outcome`, and `pageId` once the write got as far as the send; only a failure that proves nothing was written is `nothing` (`PRE_WRITE_REFUSALS`, a 4xx), every other error at or after the send is `unknown`. The text of a page is made from its bytes once (`sourceText`) and then used as it is. The pure helpers (`sourceText`, `dataSourcesOf`, `pageFolderFiles`, `genPagesOfSiteMap`, `entityTablesOfSiteMap`, `writeOutcome`, `contentFingerprint`) are exported for the callers and the tests
     workspace-storage-guard.js ← wraps the SDK's workspace storage so it can be CLOSED: once closed every call rejects, and the calls under way can be waited for (`guardWorkspaceStorage`) — what lets `genpage-sdk.js` remove a folder only after the storage calls that were writing into it have settled
@@ -3441,13 +3493,15 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   is the second line. A fake Dataverse that stores a systemform must answer its `type` (a Main form is 2),
   honour `$select` and leave a null column out, as the platform does; otherwise every form read in a
   real-bundle test is refused.
-- **An app header write is never unconditional** (`scripts/tests/app-ai-description-real-bundle.test.js`). The
+- **An app header write is never unconditional** (`scripts/tests/app-ai-description-real-bundle.test.js`,
+  `scripts/tests/app-header-text-real-bundle.test.js`). The
   SDK writes the app's name, description and routing description conditioned on the appmodule ROW token a
   fetch read, even when its own read of the header fails (the header PATCH carries `name`, `description` and,
   when one is supplied, `aiappdescription`; the icon is written at create only). A header edit made while it
   holds no token throws `APP_UPDATE_NO_ETAG` before anything is written (it used to send the PATCH plain,
   which overwrote another writer's header). The plugin edits an existing app's header only on a copy it has
-  just fetched, and only the routing description — every other header field is written at create — so the
+  just fetched, and only its text (`name`, `description`: `applyAppHeaderText`) and the routing description
+  — the icon and the unique name are written at create and never again — so the
   build does not meet the refusal; a sitemap-only push needs no header token at all. If a push ever did meet
   it, `pushAppHeader` resets the copy and the next run, whose fetch reads a token, saves the edit.
 - **Metadata reads ask for the latest definition** (`scripts/tests/sdk-uptake-contract.test.js`). The SDK
@@ -4117,14 +4171,19 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   dependency if the skill row is still there, and a model left behind blocks only a later row summary for the
   same table, by name.
 - **Changes in the same SDK release that no plugin path reaches** — read these again before a plugin change
-  reaches one. An Active
-  business process flow is edited in one conditional change set and stays Active — it needs a client with
-  `postRaw`, which the plugin's has — where the build only creates a flow and toggles the state of one that
-  exists, never editing a definition. (`importSolution`, which now requires `overwriteUnmanagedCustomizations`
+  reaches one. (`importSolution`, which now requires `overwriteUnmanagedCustomizations`
   and `publishWorkflows`, was on this list while no script called it. `solution-settings.js import` does, with
-  `pac`'s defaults for both; `sdk-surface-contract.test.js` fails on a call that is not listed.)
+  `pac`'s defaults for both; `sdk-surface-contract.test.js` fails on a call that is not listed. An Active
+  business process flow's edit in one conditional change set was on it too, while the build only created a
+  flow and toggled the state of one that existed; a rebuild now edits stages through it — below.)
 - **Changes in the same release that the plugin's paths DO reach, with the outcome unchanged** — re-test them
   when one of these paths changes.
+  - *Business process flows.* A flow the build reuses has its stages and steps compared with the spec's, and the
+    edits that leave every deployed stage in place are written through the element surface and pushed once: an
+    Active flow in one conditional change set (it needs a client with `postRaw`, which the plugin's has) and left
+    Active, a Draft flow in one PATCH, every stage and step keeping its id. A flow with branches or other
+    non-stage activities refuses a stage addition before any request, and a rename or a step edit keeps what the
+    SDK does not model. All of it is pinned against the real bundle in `bpf-stage-edits.test.js`.
   - *Commands.* A command push writes only its own table's bar, with every check before the first write. The
     build's commands phase is a command push (`createArtifact('command')`, then `pushArtifact`), so the
     anchoring, the table-id resolution and the write plan run on it; the requests are the same two as before

@@ -149,7 +149,7 @@ function mockSdk(opts = {}) {
         if (m) {
           const oi = (opts.otherApps || []).findIndex((a) => a.uniquename === m[1]);
           if (oi >= 0) return [{ appmoduleid: opts.otherApps[oi].appmoduleid || `app-${oi + 2}`, appmoduleidunique: `uv-${oi + 2}`, uniquename: m[1] }];
-          return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1] }];
+          return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1], ...(opts.existingAppIconId ? { webresourceid: opts.existingAppIconId } : {}) }];
         }
         if (opts.failAppList) throw new Error('appmodule list failed'); // shared-check fail-closed
         const rows = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique }];
@@ -263,7 +263,13 @@ function mockSdk(opts = {}) {
         // when its pointer resolves to undefined, whereas this mock's jpSet would happily create the
         // key. Omitting it would let a test pass against an artifact the SDK would have rejected.
         else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), description: opts.existingViewDescription !== undefined ? opts.existingViewDescription : '' };
-        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] }, ...(opts.existingAppAiDescription ? { aiDescription: opts.existingAppAiDescription } : {}) };
+        else if (t === 'app') store[`${t}:${id}`] = { id,
+          // What a fetched app carries: its header text (the real adapter reads both, `description` as '' when the row has none). The defaults are
+          // makeSpec's own, so a rebuild of an existing app starts with a header that already matches it; a test that needs a different deployed
+          // one sets existingAppName / existingAppDescription.
+          name: opts.existingAppName !== undefined ? opts.existingAppName : 'Support Desk',
+          description: opts.existingAppDescription !== undefined ? opts.existingAppDescription : 'Tickets',
+          siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] }, ...(opts.existingAppAiDescription ? { aiDescription: opts.existingAppAiDescription } : {}) };
         // The chart description reconcile reads through fetchArtifact/getArtifact rather than
         // queryRecords, because a plain query returns the PUBLISHED row while the PATCH writes the
         // unpublished one (measured live). Seed `description` for the same reason as the view.
@@ -814,11 +820,138 @@ test('#583 an existing app whose routing description already matches is left alo
 test('#583 a spec with no routing description never reads or writes one', async () => {
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: 'Written by the platform.' });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases });
-  // One read, for the live sitemap the rewrite re-attaches to (AB#6726727) — the routing description
-  // is never looked at: applyAppAiDescription returns before reading when the spec sets none.
-  assert.strictEqual(appCalls(calls, 'getArtifact').length, 1, 'read once, for the sitemap');
+  // Two reads, both of the fetched copy: the live sitemap the rewrite re-attaches to (AB#6726727) and the header text the run
+  // compares with the spec's (name, description). The routing description is never looked at: applyAppAiDescription returns before
+  // reading when the spec sets none.
+  assert.strictEqual(appCalls(calls, 'getArtifact').length, 2, 'read for the sitemap and for the header text');
   assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+// The app's NAME and DESCRIPTION were set when the app was created and never touched again: a rebuild with an edited
+// description reported the app step as done and left the old text (the same in 2.13.0). The SDK's header push carries `name`,
+// `description` and the routing description — whichever of them the artifact holds differently from the row (pinned against the
+// real bundle in app-header-text-real-bundle.test.js) — so the build edits the FETCHED artifact, as it does for the routing
+// description, and the change rides the push that already writes the app. Like a view's or a chart's description, only a
+// non-blank text is written and only when it differs: a spec that leaves the description out, or carries the "" a download writes,
+// never blanks one a maker typed.
+const DESCRIBED = 'Track tickets, orders and escalations in one place.';
+const describedSpec = (app = {}) => makeSpec({ app: { name: 'Support Desk', description: DESCRIBED, ...app } });
+const headerEdits = (calls) => appCalls(calls, 'updateElement', (c) => c.args[2] === '/name' || c.args[2] === '/description').map((c) => [c.args[2], c.args[3]]);
+
+test('app header: a rebuild applies an edited description to the existing app, on the push that already writes its sitemap', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true }); // deployed: 'Tickets'
+  await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]], 'the description is edited, and nothing else of the header');
+  const pushes = appCalls(calls, 'pushArtifact');
+  assert.strictEqual(pushes.length, 1, 'one push carries the sitemap and the description (a second from the same fetch would race the first on its If-Match)');
+  const edit = appCalls(calls, 'updateElement', (c) => c.args[2] === '/description')[0];
+  assert.ok(calls.indexOf(appCalls(calls, 'fetchArtifact')[0]) < calls.indexOf(edit) && calls.indexOf(edit) < calls.indexOf(pushes[0]), 'edited on the fetched copy, before the push');
+  assert.strictEqual(appCalls(calls, 'publishArtifact').length, 1, 'and published, as the sitemap write is');
+});
+
+test('app header: with the pages phase the description rides the finalizer\u2019s push — app-shell pushes nothing', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(describedSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages });
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one app push in the whole run');
+  const fetches = appCalls(calls, 'fetchArtifact');
+  const pushes = appCalls(calls, 'pushArtifact');
+  const edit = appCalls(calls, 'updateElement', (c) => c.args[2] === '/description')[0];
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/description').length, 1);
+  assert.ok(calls.indexOf(fetches[1]) < calls.indexOf(edit) && calls.indexOf(edit) < calls.indexOf(pushes[0]), 'applied after the finalizer\u2019s fetch, before its push');
+});
+
+test('app header: a renamed app (its unique name pinned) gets its new display name — the unique name is its identity and never changes', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  const spec = makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: 'Tickets' } });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk']]);
+  assert.deepStrictEqual(find(calls, 'findArtifact').filter((c) => c.args[0] === 'app').map((c) => c.args[1]), [{ uniqueName: 'new_supportdesk' }], 'found by its unique name, not by the display name');
+  assert.ok(!appCalls(calls, 'updateElement').some((c) => /uniqueName/i.test(String(c.args[2]))), 'no write ever touches the unique name');
+  assert.ok(!appCalls(calls, 'createArtifact').length, 'renamed, not recreated');
+});
+
+test('app header: the name and the description are edited together, and with the routing description on one push', async () => {
+  const spec = makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED, aiDescription: ROUTING } });
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk'], ['/description', DESCRIBED]]);
+  assert.deepStrictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').map((c) => c.args[3]), [{ aiDescription: ROUTING }]);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one push for the whole header');
+});
+
+test('app header: when only the routing description keeps the sitemap write off the app, the description rides that push', async () => {
+  // A page subarea defers the existing app's sitemap write to the pages finalizer, which an app-shell-only build does not run: the
+  // routing description gets a push of its own, and a changed description is written with it, not by a second one.
+  const spec = describedSpec({ aiDescription: ROUTING });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]]);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+});
+
+test('app header: nothing is written for a header that already matches, and a blank or absent description never blanks one', async () => {
+  // Pins: the neighbours of the fix stay as they were.
+  const same = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk: same.sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(same.calls), [], 'equal text is not rewritten');
+  for (const [what, app] of [['an empty description (what a download writes)', { name: 'Support Desk', description: '' }], ['a blank one', { name: 'Support Desk', description: '   ' }], ['none', { name: 'Support Desk' }]]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppDescription: 'Typed in the maker.' });
+    await runSdkBuild(makeSpec({ app }), { sdk, apply: true, phases: appShellPhases });
+    assert.deepStrictEqual(headerEdits(calls), [], `${what} leaves the deployed description alone`);
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, `${what}: the sitemap push is as before`);
+  }
+});
+
+test('app header: a NEW app is created with its name and description as before, and edits nothing', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases });
+  const def = appCalls(calls, 'createArtifact')[0].args[1];
+  assert.strictEqual(def.name, 'Support Desk');
+  assert.strictEqual(def.description, DESCRIBED);
+  assert.deepStrictEqual(headerEdits(calls), []);
+});
+
+test('app header: an edit to the text of a never-published app halts with the precise "publish first" refusal', async () => {
+  // Dataverse takes no write to a draft appmodule's name or description until it is published — the same refusal the routing
+  // description meets — so a changed description is no longer silently left unwritten: the operator is told what to do.
+  const { sdk } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
+  await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    assert.match(e.message, /name, description or routing description/);
+    return true;
+  });
+});
+
+test('app header: the icon is set at create only — a spec icon the app does not have is reported as NOT applied, never silently dropped', async () => {
+  // `webresourceid` is effectively write-once and the SDK's header push does not carry it, so a rebuild cannot change an app's
+  // icon. When the spec NAMES an icon that is not the app's, the build says so instead of reporting the app step as done over it.
+  const iconSpec = makeSpec({ app: { name: 'Support Desk', description: 'Tickets', icon: 'new_appicon' }, webResources: [{ name: 'new_appicon', type: 'png', contentBase64: 'AAAA' }] });
+  const phases = ['solution', 'data-model', 'web-resources', 'app-shell'];
+  const different = mockSdk({ artifactsExist: true, existingWebResource: true, existingAppIconId: 'wr-maker-chose-this' });
+  const warnings = [];
+  await runSdkBuild(iconSpec, { sdk: different.sdk, apply: true, phases, warn: (m) => warnings.push(m) });
+  assert.ok(warnings.some((w) => /app "Support Desk": its icon was NOT changed — the spec's app\.icon \('new_appicon'\) is not the icon the app has\. An app's icon is set when the app is created and a rebuild does not replace it: change it in the app designer, or point app\.icon at the web resource the app already uses\./.test(w)), JSON.stringify(warnings));
+  assert.deepStrictEqual(headerEdits(different.calls), [], 'and nothing is written for it');
+  // The same icon: nothing to say.
+  const same = mockSdk({ artifactsExist: true, existingWebResource: true, existingAppIconId: 'wr-existing' });
+  const quiet = [];
+  await runSdkBuild(iconSpec, { sdk: same.sdk, apply: true, phases, warn: (m) => quiet.push(m) });
+  assert.ok(!quiet.some((w) => /icon/.test(w)), JSON.stringify(quiet));
+  // A spec with no icon of its own gets the generated default at create and leaves a maker's choice alone afterwards: no read, no word.
+  const generated = mockSdk({ artifactsExist: true, existingAppIconId: 'wr-maker-chose-this' });
+  const silent = [];
+  await runSdkBuild(makeSpec(), { sdk: generated.sdk, apply: true, phases: appShellPhases, warn: (m) => silent.push(m) });
+  assert.ok(!silent.some((w) => /icon/.test(w)), JSON.stringify(silent));
+  assert.ok(!find(generated.calls, 'queryRecords').some((c) => c.args[0] === 'appmodule' && (c.args[1].select || []).includes('webresourceid')), 'the deployed icon is not read when the spec names none');
+  // A read that fails proves nothing: no warning, and the build goes on.
+  const unreadable = mockSdk({ artifactsExist: true, existingWebResource: true });
+  const failing = unreadable.sdk.queryRecords;
+  unreadable.sdk.queryRecords = async (e, o) => { if (e === 'appmodule' && (o.select || []).includes('webresourceid')) throw new Error('read failed'); return failing(e, o); };
+  const none = [];
+  await runSdkBuild(iconSpec, { sdk: unreadable.sdk, apply: true, phases, warn: (m) => none.push(m) });
+  assert.ok(!none.some((w) => /icon/.test(w)), JSON.stringify(none));
 });
 
 test('#583 when the sitemap write is deferred, the routing description is pushed on its own', async () => {
@@ -3494,6 +3627,114 @@ test('form reconcile: a partial control patch PRESERVES fieldName (updateElement
   const control = form.tabs[0].columns[0].sections[0].rows[1].cells[0].control;
   assert.strictEqual(control.fieldName, 'new_tier', 'the control lost its binding');
   assert.strictEqual(control.isReadOnly, true);
+});
+
+// A deployed form can hold a field more than once — a maker places it in a second section — and a spec, which
+// places each field once, still declares the state of THE FIELD: a read-only or hidden field is read-only or hidden
+// wherever the form shows it. The assertion used to visit the first cell only, so the second stayed editable or
+// visible, exactly as the lookup-label repair once left a second cell's label (lookup-cell-labels.js, which visits all).
+// `section_more` is a maker's own section: it is neither in the auto layout nor pruned (auto layouts are additive).
+function formHoldingTierTwice() {
+  const cell = (fn) => ({ cells: [{ control: { fieldName: fn } }] });
+  return { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+      columns: [{ width: '100%', sections: [
+        { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: false, columns: 1, rows: [cell('new_name'), cell('new_tier')] },
+        { id: 's1', name: 'section_more', label: 'More', visible: true, showLabel: true, columns: 1, rows: [cell('new_notes'), cell('new_tier')] },
+      ] }] },
+  ], bag: { a: [], c: [] } };
+}
+const FIRST_TIER = '/tabs/0/columns/0/sections/0/rows/1/cells/0';
+const SECOND_TIER = '/tabs/0/columns/0/sections/1/rows/1/cells/0';
+const controlPatches = (calls) => find(calls, 'updateElement').filter((c) => c.args[0] === 'form' && /\/control$/.test(String(c.args[2])));
+const cellPatches = (calls) => find(calls, 'updateElement').filter((c) => c.args[0] === 'form' && /\/cells\/\d+$/.test(String(c.args[2])));
+
+test('form reconcile: readOnly is applied to EVERY cell a deployed form holds the field in', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => [c.args[2], c.args[3]]), [
+    [`${FIRST_TIER}/control`, { isReadOnly: true }],
+    [`${SECOND_TIER}/control`, { isReadOnly: true }],
+  ], 'both placements of the field are locked, each patched at its own pointer');
+  // Read the mutated artifact back: each cell keeps its binding (updateElement merges) and carries the flag.
+  const form = await sdk.getArtifact('form', 'form-existing');
+  for (const where of [form.tabs[0].columns[0].sections[0].rows[1], form.tabs[0].columns[0].sections[1].rows[1]]) {
+    assert.strictEqual(where.cells[0].control.fieldName, 'new_tier');
+    assert.strictEqual(where.cells[0].control.isReadOnly, true);
+  }
+  assert.ok(!('isReadOnly' in form.tabs[0].columns[0].sections[0].rows[0].cells[0].control), 'a field the spec did not flag stays as it was');
+});
+
+test('form reconcile: hidden is applied to EVERY cell a deployed form holds the field in', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { hidden: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(cellPatches(calls).map((c) => [c.args[2], c.args[3]]), [
+    [FIRST_TIER, { visible: false }],
+    [SECOND_TIER, { visible: false }],
+  ], 'both placements of the field are hidden');
+});
+
+test('form reconcile: a field that is both readOnly and hidden gets both flags on each of its cells', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true, hidden: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'updateElement').filter((c) => /\/(control|cells\/\d+)$/.test(String(c.args[2]))).map((c) => [c.args[2], c.args[3]]), [
+    [`${FIRST_TIER}/control`, { isReadOnly: true }],
+    [FIRST_TIER, { visible: false }],
+    [`${SECOND_TIER}/control`, { isReadOnly: true }],
+    [SECOND_TIER, { visible: false }],
+  ]);
+});
+
+test('form reconcile: a flag set on an EXPLICIT layout\'s inline field entry reaches every cell of that field too', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit', prune: false, tabs: [{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', { name: 'new_tier', readOnly: true }] },
+  ] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => c.args[2]), [`${FIRST_TIER}/control`, `${SECOND_TIER}/control`]);
+});
+
+test('form reconcile: a field held ONCE is patched ONCE, and nothing else is touched (the single-placement path is unchanged)', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => [c.args[2], c.args[3]]), [['/tabs/0/columns/0/sections/0/rows/1/cells/0/control', { isReadOnly: true }]]);
+  assert.deepStrictEqual(cellPatches(calls), [], 'no visibility write when the spec asks for none');
+});
+
+test('form reconcile: a second cell of a field the spec does NOT flag is left exactly as it is', async () => {
+  // The flag is asserted for the field the spec names, never for a neighbour that merely shares a section — and a field the
+  // spec says nothing about keeps both cells as they were (a maker's lock or hide survives, as with one cell).
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/0/cells/0/control'], 'only the one cell of new_name');
+  const none = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(makeSpec(), { sdk: none.sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual([...controlPatches(none.calls), ...cellPatches(none.calls)], [], 'a spec that flags nothing writes no per-control attribute, however many cells a field has');
+});
+
+test('form reconcile: the flags are written after each cell is re-read, so a cell the write moved is not patched at a stale pointer', async () => {
+  // Each updateElement rewrites the artifact, so every cell is located again just before its own write (as the label repair
+  // does). A double that re-sorts the tree on every write would otherwise send the second write to a stale index.
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const order = calls.filter((c) => (c.name === 'getArtifact' && c.args[0] === 'form') || (c.name === 'updateElement' && /\/control$/.test(String(c.args[2]))))
+    .map((c) => (c.name === 'getArtifact' ? 'read' : 'write'));
+  const firstWrite = order.indexOf('write');
+  assert.strictEqual(order[firstWrite + 1], 'read', 'a read separates the first control write from the second');
+  assert.strictEqual(order.filter((x) => x === 'write').length, 2);
 });
 
 test('form reconcile: no control/cell patch is issued when the spec asserts neither flag', async () => {

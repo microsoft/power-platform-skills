@@ -71,6 +71,18 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Omit it** and the build generates a simple default SVG icon **inside the solution** — either
   way the app never depends on an arbitrary external/managed icon (which would fail to import into
   a new environment). The app's **sitemap** is also added to the solution automatically.
+  **The icon is set when the app is created, and a rebuild cannot change it** (the platform stores it once): when
+  `app.icon` names a web resource that is not the icon the app has, the build warns that it was **not applied** —
+  change it in the app designer, or point `app.icon` at the web resource the app already uses. A spec with no
+  `app.icon` is never compared, so an icon a maker chose is left alone.
+- **`app.name`** and **`app.description`** — the app's display name and the text on its tile. **A rebuild applies a
+  change to either** on the existing app (on the push that already writes its navigation), where it used to leave the
+  old text. The app is found by its **unique name**, which a rebuild never changes: a spec that pins `app.uniqueName`
+  (a download does) renames the app, while one that does not derives the unique name from `app.name`, so a different
+  name there is a *different* app. Only a non-blank text is written and only when it differs from the deployed one, so
+  an omitted `description`, or the `""` a download writes, never blanks one a maker typed — and a text changed in Maker
+  is put back to the spec's. An app that was **never published** refuses the write: the build halts and says to
+  publish it first.
 - **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
   Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
   **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
@@ -320,15 +332,15 @@ partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted
 `""`.
 
 **Rebuild behaviour:** a description is written at CREATE, and is additionally **reconciled on an
-artifact that already exists** for **views and charts** — so authoring one on a table whose
-Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still lands. Those two
-write only when the spec **explicitly sets** a description **and** it differs from the deployed
-value, so an ordinary rebuild issues no extra write and an omitted description never blanks text a
-maker typed in the UI.
+artifact that already exists** for **views, charts and the app itself (`app.description`)** — so authoring
+one on a table whose Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still
+lands, and an edited `app.description` reaches the app on the next build. These write only when the spec
+**explicitly sets** a description **and** it differs from the deployed value, so an ordinary rebuild
+issues no extra write and an omitted description never blanks text a maker typed in the UI.
 
 Everything else is **create-only** — the description reaches Dataverse when the artifact is first
 created and is not revisited: tables, columns, the solution, global choices, `webResources[]`,
-`app.description`, forms, dashboards and business rules. Adding a description to one of those *after*
+forms, dashboards and business rules. Adding a description to one of those *after*
 it exists is accepted by validation, builds green, and does not change the deployed artifact.
 
 **The routing signal goes in `app.aiDescription`, not `app.description`.** An orchestrator deciding
@@ -344,7 +356,7 @@ the signed-in contributor's own assigned items."`
 Weak: `"An app for managing projects."` (no persona, no scope boundary, nothing to disambiguate)
 
 It follows its own rules, not the ones above: up to **1,048,576** characters, and **one string for
-every language** — the column is not localizable, so it takes no LCID map. Unlike `app.description`
+every language** — the column is not localizable, so it takes no LCID map. Like `app.description`
 it is **reconciled on an existing app**: a rebuild writes it whenever it differs from the deployed
 value. A download copies the deployed value into the spec — including one the platform generated —
 and from then on the spec owns it: if the platform later rewrites it, `--verify` reports the
@@ -1214,8 +1226,11 @@ artifact edit**. A failed write cannot leave an appended-but-unpositioned new fi
 intermediate row, or duplicated trailing cells. A retry uses either the prior layout or the complete
 planned layout, preserving existing cell/control identities.
 
-`--verify` checks tab/section order, row occupancy and **cell/control ID uniqueness across each
-whole form**, including headers, footers and unbound controls. Auto forms also require readable
+`--verify` checks tab/section order, the tab and section **labels** a layout authors, row occupancy and
+**cell/control ID uniqueness across each whole form**, including headers, footers and unbound controls.
+A label is compared with the published form in any language it carries, so a relabel that never reached
+the published form fails; a label the spec does not write, or a tab or section the published form gives no
+label, is not compared. Auto forms also require readable
 FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
 It does **not** check field order or `after` adjacency.
 To reposition an existing field, use `fieldOptions[x].after` outside the explicit field list, below.
@@ -1279,6 +1294,10 @@ them and writes *nothing* when you do not, so a rebuild never clears a lock or a
 in the form designer. The corollary is that `readOnly: false` / `hidden: false` cannot turn a flag
 back off — they are rejected at author time rather than accepted and ignored. To un-set one, clear it
 in the designer, or drop the field and let the next build re-add it.
+
+A flag goes on **every** cell the deployed form holds of the field. A layout lists a field once per form
+(a second cell is rejected), but a maker can place one in two sections in the designer; the build flags
+each of those cells, and `--verify` checks each, naming the section of one that is not flagged.
 
 **Under an `auto` layout the flags apply to the fields the layout places** — the primary column, the
 table's declared columns and its parent lookups. A `readOnly`/`hidden` on any other field (a stock

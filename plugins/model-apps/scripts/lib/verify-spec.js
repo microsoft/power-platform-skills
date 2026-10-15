@@ -791,27 +791,53 @@ async function verifySpec(spec, read, opts = {}) {
         }
       };
       const stateFlag = (what, specKey, xmlAttr, deployedValue, want) => flagProblem(what, xmlAttr, deployedValue, want, true, `${specKey}: ${want}`);
+      // A container's published label against the one the spec AUTHORS for it. Held against every language the container carries,
+      // because the build writes the label in one of them and a maker's translations stay beside it, in the order the platform
+      // lists them. Two things are deliberately not compared: a container the spec gives no label (the compiler's `General` /
+      // `Details` default is what the build writes on create and fills in on a rebuild, but the spec never asked for it, and
+      // a maker's own caption on such a container is not a relabel that failed to land) and a container with no label at all in the
+      // published form (there is nothing published to hold against the spec, and "no label" is not a different one — a form
+      // trimmed by hand, and every fixture written without <labels>).
+      const labelProblem = (what, container, authored) => {
+        const have = (container && container.labels) || [];
+        if (!have.length || typeof authored !== 'string' || authored === '' || have.includes(authored)) return;
+        problems.push(`${what} is deployed with ${have.length === 1 ? 'label' : 'labels'} ${have.map((l) => JSON.stringify(l)).join(', ')}, the spec declares label: ${JSON.stringify(authored)}`);
+      };
       // The state the build asserts for a field: only the ENABLED flags are ever written (a rebuild never
-      // clears a lock or a hide applied in the designer), so only `true` is proven.
-      const fieldStateProblems = (fl, eff, dc) => {
-        if (eff.hidden === true) flagProblem(`field '${fl}'`, 'visible', dc.visible, false, true, 'hidden: true');
-        if (eff.readOnly === true) flagProblem(`field '${fl}'`, 'disabled', (dc.control || {}).disabled, true, false, 'readOnly: true');
+      // clears a lock or a hide applied in the designer), so only `true` is proven. `where` names the section of a SECOND (or
+      // later) cell of the field, which the message then says is another placement; the first cell reads as it always did.
+      const fieldStateProblems = (fl, eff, dc, where) => {
+        const what = where === undefined ? `field '${fl}'` : `field '${fl}' (another placement, in section '${where}')`;
+        if (eff.hidden === true) flagProblem(what, 'visible', dc.visible, false, true, 'hidden: true');
+        if (eff.readOnly === true) flagProblem(what, 'disabled', (dc.control || {}).disabled, true, false, 'readOnly: true');
+      };
+      // EVERY cell of a bound field on the published form, in form order, each with the section that holds it. The build asserts a
+      // read-only or hidden field on all of them (a deployed form can hold a field more than once: a maker can place it in a second
+      // section), so verify holds all of them to it — a second placement left editable or visible is a mismatch, like the first.
+      const cellsOf = (fl) => {
+        const out = [];
+        for (const t of deployed) for (const c of t.columns || []) for (const s of c.sections || []) for (const r of s.rows || []) for (const cell of r.cells || []) {
+          if (cell.control && cell.control.fieldName === fl && !isNonFieldControl(cell.control)) out.push({ cell, section: s });
+        }
+        return out;
+      };
+      // The cells of `fl` other than `first` — the one already judged — held to the same flags.
+      const otherPlacementProblems = (fl, eff, first) => {
+        for (const { cell, section } of cellsOf(fl)) if (cell !== first) fieldStateProblems(fl, eff, cell, String(section.name || '(unnamed)'));
       };
       if (!explicit) {
-        // The FIRST cell binding the field — the one the build's cell lookup patches. Every field here is
-        // one the build places on the form, so a flagged field the deployed form does not carry is a
+        // Every field here is one the build places on the form, so a flagged field the deployed form does not carry is a
         // mismatch: its state cannot be deployed without it. Skipping it passed a form whose read-only
-        // field a maker had removed.
-        const cellOf = (fl) => deployed.flatMap((t) => (t.columns || []).flatMap((c) => (c.sections || []).flatMap((s) => (s.rows || []).flatMap((r) => r.cells || []))))
-          .find((c) => c.control && c.control.fieldName === fl && !isNonFieldControl(c.control));
+        // field a maker had removed. The build asserts the flags on every cell of the field, so each cell is proven.
         for (const { field, readOnly, hidden } of autoFlagged) {
-          const dc = cellOf(field);
+          const dc = (cellsOf(field)[0] || {}).cell;
           if (!dc) {
             const declared = [readOnly && 'readOnly: true', hidden && 'hidden: true'].filter(Boolean).join(' and ');
             problems.push(`field '${field}' is not on the deployed form, so its ${declared} is not deployed`);
             continue;
           }
           fieldStateProblems(field, { readOnly, hidden }, dc);
+          otherPlacementProblems(field, { readOnly, hidden }, dc);
         }
         add(kind, `${entity}.${name}`, problems.length === 0,
           problems.length ? `deployed field state does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
@@ -869,6 +895,7 @@ async function verifySpec(spec, read, opts = {}) {
       // Tabs follow the same rule, from the same kind of set.
       const authoredNames = authoredSectionNames(f);
       const tabSkip = claimedByAuthoredName(authoredTabNames(f));
+      const otherPlacementsChecked = new Set();
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
@@ -885,6 +912,7 @@ async function verifySpec(spec, read, opts = {}) {
         const compiledTab = compiledTabs[ti] || {};
         stateFlag(`tab '${tabName}'`, 'expanded', 'expanded', got.expanded, compiledTab.expanded !== false);
         stateFlag(`tab '${tabName}'`, 'visible', 'visible', got.visible, compiledTab.visible !== false);
+        labelProblem(`tab '${tabName}'`, got, t.label);
         const authoredColumns = formColumnsOf(t);
         if ((got.columns || []).length < authoredColumns.length) {
           problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
@@ -919,6 +947,7 @@ async function verifySpec(spec, read, opts = {}) {
             const compiledSection = (compiledColumn.sections || [])[si] || {};
             stateFlag(`section '${secName}'`, 'visible', 'visible', secHit.item.visible, compiledSection.visible !== false);
             stateFlag(`section '${secName}'`, 'showLabel', 'showlabel', secHit.item.showLabel, compiledSection.showLabel !== false);
+            labelProblem(`section '${secName}'`, secHit.item, sec.label);
             // The grid width the COMPILER emits for this authored section — taken from the same
             // function the compiler uses, never re-derived here. Reading the raw `columns` instead
             // failed forms that deployed exactly as compiled: an omitted `columns` compiles to 1,
@@ -971,6 +1000,12 @@ async function verifySpec(spec, read, opts = {}) {
               const dc = deployedCellOf(fl);
               if (!dc) continue; // placement is reported separately below
               fieldStateProblems(fl, eff, dc);
+              // …and every other cell the form holds the field in, wherever it sits — once per field: a layout that lists one twice
+              // (the spec gate refuses it) would otherwise report its other placements twice.
+              if (!otherPlacementsChecked.has(fl)) {
+                otherPlacementsChecked.add(fl);
+                otherPlacementProblems(fl, eff, dc);
+              }
               for (const key of ['colspan', 'rowspan']) {
                 const declared = Number(eff[key]);
                 if (!Number.isFinite(declared) || declared < 1) continue; // not declared
@@ -2475,11 +2510,17 @@ function parseFormTopology(xml) {
     // FormXML carries the display label in a nested <labels><label description="..."/></labels>,
     // not an attribute. The BUILD matches containers name -> label -> position, so without this the
     // verifier can never make the label pass and would disagree with a label-matched reshape.
+    // `label` is the FIRST one, which is what the container matching reads; `labels` is every language the container carries
+    // (a label per <label languagecode>), which is what --verify holds the layout's label against: the build writes one language
+    // and a maker's translations stay beside it, listed in whatever order the platform gives them.
     else if (tag === 'label' && !inCell) {
       const d = attr(raw, 'description') === undefined ? undefined : decodeXmlEntities(attr(raw, 'description'));
       if (d !== undefined) {
-        if (section && section.label === undefined) section.label = d;
-        else if (!section && tab && tab.label === undefined) tab.label = d;
+        const owner = section || tab;
+        if (owner) {
+          (owner.labels = owner.labels || []).push(d);
+          if (owner.label === undefined) owner.label = d;
+        }
       }
     }
     else if (tag === 'control' && section) {

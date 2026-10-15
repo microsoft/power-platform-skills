@@ -221,8 +221,10 @@ apart deliberately.
   copy and same-named **task flows** (also category 4) — the two mistakes that cost real time on
   business rules.
 - Additive on rebuild (matched by `entity` + `name`, reused if present, Active/Draft state converged
-  in both directions, and re-added to the solution on every run so a failed component add is repaired
-  rather than inherited); torn down with the app, deactivate-then-delete, before its table. Deleting
+  in both directions, a stage or step edit that leaves every deployed stage in place applied in one
+  push — one that would remove or move a stage or step is refused, with the reason — and the flow
+  re-added to the solution on every run so a failed component add is repaired rather than inherited);
+  torn down with the app, deactivate-then-delete, before its table. Deleting
   an activated flow cascades a **backing-table** drop that used to run past the client's 60 s HTTP
   timeout; writes now wait up to 5 minutes, and teardown still polls the row rather than reporting a
   failure for work the server completed if even that is exceeded.

@@ -22,6 +22,7 @@
 // PURE + I/O-free. Consumes the ANNOTATED specs (caller runs annotateContentHashes first).
 
 const { diffPhases, stableStringify } = require('./phase-diff.js');
+const { stageEditApplies } = require('./bpf-stages.js');
 
 // Phases that, when changed, always force a full build. data-model ripples into everything; solution/
 // sample-data/ai have no convergent fast shape. A full build applies them correctly, so NO debt.
@@ -162,6 +163,11 @@ function classifyAdditive(cur, prior, phase, type, arrKey, opts = {}) {
   // converge `status` (each reuse branch flips statecode in both directions), so a Draft->Active edit
   // must not be filed as `-edit-not-convergent`.
   const convergedKeys = opts.convergedKeys || [];
+  // `appliedEdit` is the same idea for a field the engine applies only SOMETIMES: { keys, applies(cur, prior) }. An edit confined to
+  // `convergedKeys` plus `keys` is applied when `applies` says so — a business process flow's `stages`, where an edit that leaves
+  // every deployed stage in place is written in place and one that would remove or move a stage or a step is refused.
+  const appliedEdit = opts.appliedEdit || null;
+  const reconciledKeys = [...convergedKeys, ...(appliedEdit ? appliedEdit.keys : [])];
   const out = { fast: [], full: [], debt: [] };
   const { added, removed, common } = alignByIdentity(cur[arrKey], prior[arrKey], identityOf[type]);
   if (added.length) out.full.push(`${phase}: ${added.length} new ${type}(s) added — full build`);
@@ -169,13 +175,14 @@ function classifyAdditive(cur, prior, phase, type, arrKey, opts = {}) {
   for (const c of common) {
     if (stableStringify(c.cur) !== stableStringify(c.prior)) {
       const onlyConverged = convergedKeys.length && equalExcept(c.cur, c.prior, convergedKeys);
+      const applied = onlyConverged || (appliedEdit && equalExcept(c.cur, c.prior, reconciledKeys) && appliedEdit.applies(c.cur, c.prior));
       // Name only the keys that actually differ. "status/securityRoles changed" when just one did is
       // the kind of small inaccuracy that makes a reader stop trusting the whole report.
-      const changed = convergedKeys.filter((k) => stableStringify(c.cur && c.cur[k]) !== stableStringify(c.prior && c.prior[k]));
-      out.full.push(onlyConverged
+      const changed = reconciledKeys.filter((k) => stableStringify(c.cur && c.cur[k]) !== stableStringify(c.prior && c.prior[k]));
+      out.full.push(applied
         ? `${phase}: ${type} '${c.id}' ${(changed.length ? changed : convergedKeys).join('/')} changed — reconciled by a full build`
         : `${phase}: ${type} '${c.id}' edited — the additive build engine skips edits to an existing ${type}`);
-      if (!onlyConverged) out.debt.push({ artifactType: type, identity: c.id, reason: `${type}-edit-not-convergent` });
+      if (!applied) out.debt.push({ artifactType: type, identity: c.id, reason: `${type}-edit-not-convergent` });
     }
   }
   return out;
@@ -230,17 +237,26 @@ function classifyChanges(current, prior) {
       case 'commands': merge(classifyAdditive(cur, prior, 'commands', 'command', 'commands')); break;
       case 'dashboards': merge(classifyAdditive(cur, prior, 'dashboards', 'dashboard', 'dashboards')); break;
       case 'web-resources': merge(classifyAdditive(cur, prior, 'web-resources', 'webResource', 'webResources')); break;
-      // Both are additive discover-reconcile: the engine creates what is missing and explicitly does
-      // NOT reapply stage/condition edits to an existing rule/flow ("recreate to change"), so an edit
-      // is real debt. The ONE exception is `status`: both reuse branches converge statecode in both
-      // directions, so a status-only change is applied by a rebuild and is not debt.
+      // Both are additive discover-reconcile: the engine creates what is missing and does NOT reapply
+      // condition edits to an existing rule ("recreate to change"), so an edit is real debt. The ONE
+      // exception is `status`: both reuse branches converge statecode in both directions, so a
+      // status-only change is applied by a rebuild and is not debt. A flow's stages are the other
+      // exception, but only for the edits the build applies in place (below).
       case 'business-rules': merge(classifyAdditive(cur, prior, 'business-rules', 'businessRule', 'businessRules', { convergedKeys: ['status'] })); break;
       // `securityRoles` converges too, and for a stronger reason than `status`: a BPF grant always
       // targets a PERSONA role, which the security phase applies with `ReplacePrivilegesRole` — so a
       // rebuild both ADDS a newly-declared persona and REMOVES one that was dropped. Filing it as
       // permanent debt disabled every later fast apply over a divergence that a full build erases.
       // (`roleGrants[]` would NOT qualify: it is additive and cannot revoke.)
-      case 'business-process-flows': merge(classifyAdditive(cur, prior, 'business-process-flows', 'businessProcessFlow', 'businessProcessFlows', { convergedKeys: ['status', 'securityRoles'] })); break;
+      //
+      // `stages` converge when the build applies the edit in place: a stage added or renamed, a step
+      // added, renamed, rebound, made required or optional or moved. One that would remove a stage or
+      // a step, or reorder the stages, is REFUSED by the build (a record may sit on that stage), so
+      // it stays debt. stageEditApplies asks the build's own plan, so the two cannot disagree.
+      case 'business-process-flows': merge(classifyAdditive(cur, prior, 'business-process-flows', 'businessProcessFlow', 'businessProcessFlows', {
+        convergedKeys: ['status', 'securityRoles'],
+        appliedEdit: { keys: ['stages'], applies: (curFlow, priorFlow) => stageEditApplies(priorFlow, curFlow) },
+      })); break;
       default:
         // An unrecognized changed phase must never silently pass as fast (fail-closed).
         fullReasons.push(`${phase}: changed — no fast-path shape recognized`);

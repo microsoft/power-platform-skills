@@ -89,8 +89,10 @@ function pagesEnvironment({ existing = false, existingSitemap = { areas: [] } } 
     },
     findArtifact: async (kind) => (kind === 'app' && existing ? 'app-existing' : null),
     listArtifacts: async (kind) => (kind === 'app' && existing ? [{ type: 'app', id: 'app-existing', isDirty: false }] : []),
+    // A deployed app as the SDK fetches it: `name` and `description` are always there (the adapter reads a description the row does not
+    // hold as ''), and here they are what `specFor` writes — an app whose header already says what the spec says.
     fetchArtifact: async (type, id) => {
-      if (!store[`${type}:${id}`]) store[`${type}:${id}`] = type === 'app' ? { id, siteMap: jclone(existingSitemap) } : { id };
+      if (!store[`${type}:${id}`]) store[`${type}:${id}`] = type === 'app' ? { id, name: 'Support Desk', description: 'Tickets', siteMap: jclone(existingSitemap) } : { id };
       return store[`${type}:${id}`];
     },
     createPublisher: async () => ({ id: 'pub-new' }),

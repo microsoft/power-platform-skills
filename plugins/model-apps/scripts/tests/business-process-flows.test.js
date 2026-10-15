@@ -796,13 +796,20 @@ test('a business-RULE-only edit is a real change too (the same map governs both)
   assert.deepStrictEqual(diffPhases(current, prior), ['business-rules']);
 });
 
-test('an EDITED flow forces a full build and records debt — the engine skips edits to an existing flow', () => {
+test('an EDITED flow forces a full build, and records debt only for an edit the build refuses — it applies the rest in place', () => {
   const prior = specWith([FLOW]);
-  const current = specWith([{ ...FLOW, stages: [{ name: 'Renamed', steps: [{ name: 'Subject', field: 'new_subject' }] }, FLOW.stages[1]] }]);
-  const r = classifyChanges(current, prior);
-  assert.strictEqual(r.verdict, 'full');
-  assert.ok(r.fullReasons.some((x) => /business-process-flows.*edited/.test(x)), JSON.stringify(r.fullReasons));
-  assert.deepStrictEqual(r.debt, [{ artifactType: 'businessProcessFlow', identity: 'new_ticket|Ticket Handling', reason: 'businessProcessFlow-edit-not-convergent' }]);
+  // Renaming a stage and editing a step is applied in place (bpf-stage-edits.test.js): a full build, and nothing left behind.
+  const renamed = specWith([{ ...FLOW, stages: [{ name: 'Renamed', steps: [{ name: 'Subject', field: 'new_subject' }] }, FLOW.stages[1]] }]);
+  const applied = classifyChanges(renamed, prior);
+  assert.strictEqual(applied.verdict, 'full');
+  assert.ok(applied.fullReasons.some((x) => /business-process-flows.*stages changed — reconciled by a full build/.test(x)), JSON.stringify(applied.fullReasons));
+  assert.deepStrictEqual(applied.debt, []);
+  // Dropping a stage is refused (a record may sit on it), so a rebuild leaves the flow as it was — which is debt.
+  const dropped = specWith([{ ...FLOW, stages: [FLOW.stages[0]] }]);
+  const refused = classifyChanges(dropped, prior);
+  assert.strictEqual(refused.verdict, 'full');
+  assert.ok(refused.fullReasons.some((x) => /business-process-flows.*edited/.test(x)), JSON.stringify(refused.fullReasons));
+  assert.deepStrictEqual(refused.debt, [{ artifactType: 'businessProcessFlow', identity: 'new_ticket|Ticket Handling', reason: 'businessProcessFlow-edit-not-convergent' }]);
 });
 
 test('an ADDED flow forces a full build with NO debt — a full build creates it correctly', () => {
@@ -967,7 +974,7 @@ test('REGRESSION: a status-only edit is a full build but NOT permanent debt', ()
   assert.ok(statusOnly.changedPhases.includes('business-process-flows'), 'it still needs a full build');
   assert.ok(statusOnly.fullReasons.some((r) => /status changed — reconciled/.test(r)), JSON.stringify(statusOnly.fullReasons));
 
-  // A stage edit is NOT converged and must still be debt.
+  // A stage edit the build REFUSES — two stages replaced by one, which it cannot tell from a removal — is NOT converged and must still be debt.
   const restaged = specWith([{ ...FLOW, stages: [{ name: 'Only', steps: [{ name: 'S', field: 'new_notes' }] }] }]);
   const stageEdit = classifyChanges(restaged, draft);
   assert.ok(stageEdit.debt.some((d) => /edit-not-convergent/.test(d.reason)), `a stage edit is real debt; got ${JSON.stringify(stageEdit.debt)}`);
