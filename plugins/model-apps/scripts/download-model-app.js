@@ -27,6 +27,7 @@ const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
 const { mapLimit } = require('./lib/entity-provision.js');
+const { compareText } = require('./lib/compare-text.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -34,19 +35,8 @@ const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7:
 // How a download orders every list it writes. Dataverse promises no order for a query that has no `$orderby`, and a directory
 // listing (`fs.readdirSync`) is in the file system's order — name order on NTFS, hash order on ext4 — so a list written in the
 // order it arrived made two downloads of one app differ only in order (and a page key minted from a name two pages share went
-// to whichever page came first). Text is compared by UTF-16 code units after lower-casing, with the raw text breaking a tie
-// between texts that differ only in case, so the order is a function of the strings alone and is the same on every machine.
-// `localeCompare` is not: it follows the host's ICU locale (Swedish puts "ä" after "z"; the root locale puts "_" before a
-// digit, code units after it). `toLowerCase`, unlike `toLocaleLowerCase`, is not locale-sensitive. A missing value reads as
-// the empty text.
-function compareText(a, b) {
-  const x = a === undefined || a === null ? '' : String(a);
-  const y = b === undefined || b === null ? '' : String(b);
-  const lx = x.toLowerCase();
-  const ly = y.toLowerCase();
-  if (lx !== ly) return lx < ly ? -1 : 1;
-  return x < y ? -1 : (x > y ? 1 : 0);
-}
+// to whichever page came first). Every list is ordered with `compareText` (lib/compare-text.js): by code units, never by the
+// host's locale, so the order is a function of the strings alone and is the same on every machine.
 
 // Pages: by name, then by id. The name is the page's own — what the maker called it, which a second download of the app reads
 // the same — so the order does not hang on ids, which differ between environments. Two pages that share a name are told apart

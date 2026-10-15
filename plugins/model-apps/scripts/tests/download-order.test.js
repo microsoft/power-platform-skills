@@ -182,6 +182,8 @@ test('compareText orders by UTF-16 code units after lower-casing, so it gives th
   assert.strictEqual(compareText(undefined, null), 0, 'a missing value reads as the empty text, not as "undefined"');
   assert.ok(compareText(undefined, 'a') < 0);
   assert.ok(compareText('Page', 'page') < 0 && compareText('page', 'Page') > 0, 'texts that differ only in case still have one fixed order');
+  // One comparator for the whole download: the Main-form names the membership read lists use the very function the rest does.
+  assert.strictEqual(compareText, require('../lib/compare-text.js').compareText);
 });
 
 test('two downloads of one app write the same bytes whatever order the server answers in (pages, artifacts, tables, notes)', async () => {

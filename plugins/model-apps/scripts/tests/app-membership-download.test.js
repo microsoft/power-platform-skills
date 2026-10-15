@@ -299,6 +299,25 @@ test('a non-empty strict active Main subset emits names and the capability floor
   assert.deepEqual(result.spec.forms, [], 'membership capture must not invent a lossy form layout');
 });
 
+test('the Main names of a restriction are listed in code-unit order, whatever the host locale collates them as', async (t) => {
+  // "Übersicht" collates before "Zusammenfassung" in the root locale ("Ü" sorts as a U) and after it in code units, so a list
+  // sorted with `localeCompare` came out differently on a machine with another locale or ICU version.
+  const { result } = await download(t, {
+    tables: ['account', 'contact'], members: [FORM_A, FORM_B],
+    catalog: [catalogForm(FORM_A, '\u00dcbersicht'), catalogForm(FORM_B, 'Zusammenfassung'), catalogForm(FORM_C, 'Other')],
+  });
+  assert.deepEqual(result.spec.app.mainForms, { account: ['Zusammenfassung', '\u00dcbersicht'] });
+});
+
+test('the Main names of a restriction stay in alphabetical order whatever their case', async (t) => {
+  // Raw code units would put "Summary" before "alternate"; the order is the dictionary's, as it was.
+  const { result } = await download(t, {
+    tables: ['account', 'contact'], members: [FORM_A, FORM_B],
+    catalog: [catalogForm(FORM_A, 'Summary'), catalogForm(FORM_B, 'alternate'), catalogForm(FORM_C, 'Other')],
+  });
+  assert.deepEqual(result.spec.app.mainForms, { account: ['alternate', 'Summary'] });
+});
+
 test('full active Main membership is omitted instead of inventing a restriction', async (t) => {
   const { result } = await download(t, { tables: ['account', 'contact'], members: [FORM_A, FORM_B] });
   assert.equal(result.spec.app.mainForms, undefined);

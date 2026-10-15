@@ -8,6 +8,7 @@
 const { odataLit } = require('./odata.js');
 const { dashboardNameKey, FORM_GUID_RE, formIdentityKey, compareVersions, isPluginVersion, APP_MEMBERSHIP_MIN_VERSION } = require('./app-spec.js');
 const { isMainForm } = require('./form-order.js');
+const { compareText } = require('./compare-text.js');
 
 const guidKey = (id) => String(id || '').replace(/^\{|\}$/g, '').toLowerCase();
 const reasonOf = (error) => String((error && error.message) || error || 'read failed');
@@ -537,7 +538,9 @@ async function downloadAppMainForms(client, appModuleIdUnique, tables, { compone
         reason: `ambiguous or unreadable Main form name(s) ${ambiguous.map((row) => `'${row.name || row.formid}'`).join(', ')} of ${table}; app.mainForms cannot address them by name` });
       continue;
     }
-    mainForms[table] = members.map((row) => row.name).sort((a, b) => a.localeCompare(b));
+    // The download's `app.mainForms` list: by code units, not `localeCompare`, so two downloads of one app list the same names in
+    // the same order on every machine (compare-text.js).
+    mainForms[table] = members.map((row) => row.name).sort(compareText);
   }
   return { mainForms, notes };
 }
