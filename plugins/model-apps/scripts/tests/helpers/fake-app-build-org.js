@@ -13,9 +13,12 @@
 //   org.appPublishes(since)   the PublishXml requests that name the app
 //   org.refuseNextTablePublish(status)   answers the next PublishXml that names tables with that status
 //   org.addToApp(kind, id)    a maker adds a view, form or chart to the app in the designer
+//   org.intercept(match, answer)   answers the requests `match({ method, path, body })` accepts with `answer(request)` instead of the
+//                             fake's own answer, until the returned function is called: a refused read, or an answer that leaves a row out
 //
 // An app is a draft until a PublishXml names it. The generated app icon and the roles exist already, as in an environment that has built
-// an app before.
+// an app before. The read of a view, form or chart by id answers every saved record of the fake, published or not; the platform's plain
+// read answers the published layer only, so a test about a record that was never published answers that read itself (`intercept`).
 const assert = require('node:assert/strict');
 const { createFakeDataverse } = require('./fake-dataverse.js');
 
@@ -39,6 +42,7 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
   let appVersion = 1;
   let sitemapVersion = 1;
   let refusal = null;
+  const overrides = [];
   const headers = (version) => ({ etag: `W/"${version}"` });
   const response = (body, version = 1) => ({ status: 200, headers: headers(version), body });
   const rows = (value) => response({ value });
@@ -48,7 +52,10 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
     const parsed = new URL(url);
     assert.equal(parsed.origin, ORIGIN);
     const p = decodeURIComponent(parsed.pathname + parsed.search).replace(/^\/api\/data\/v9\.\d/, '');
-    calls.push({ method, path: p, ...(body === undefined ? {} : { body }) });
+    const recorded = { method, path: p, ...(body === undefined ? {} : { body }) };
+    calls.push(recorded);
+    const overridden = overrides.find((o) => o.match(recorded));
+    if (overridden) return overridden.answer(recorded);
     if (method === 'POST' && p === '/PublishXml') {
       if (refusal && /<entities>/.test(body.ParameterXml)) {
         const status = refusal;
@@ -145,6 +152,11 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
     publishLog: (since = 0) => calls.slice(since).filter((c) => c.method === 'POST' && c.path === '/PublishXml')
       .map((c) => [entitiesOf(c.body).length ? `tables ${entitiesOf(c.body).join(', ')}` : '', namesApp(c.body) ? 'app' : ''].filter(Boolean).join(' + ')),
     refuseNextTablePublish: (status = 400) => { refusal = status; },
+    intercept: (match, answer) => {
+      const entry = { match, answer };
+      overrides.push(entry);
+      return () => { overrides.splice(overrides.indexOf(entry), 1); };
+    },
     addToApp: (kind, id) => {
       assert.ok(COMPONENT_TYPE[kind], `a view, form or chart collection: ${kind}`);
       components.push({ objectid: id, componenttype: COMPONENT_TYPE[kind] });

@@ -26,14 +26,14 @@ for (const publish of [false, true]) {
     assert.deepEqual(fake.pushes[0].components.mainFormsByTable, { contoso_item: [FORM_A] });
     const firstPush = fake.events.findIndex(([event]) => event === 'push');
     const pin = fake.events.findIndex(([event, action]) => event === 'post' && action === '/AddAppComponents');
-    // The PublishXml that names the app: with --publish the build first publishes the tables the spec names, which names none.
+    // The PublishXml that names the app: with --publish the build first publishes the tables it changed and the app is proven to hold forms or charts of.
     const republish = fake.events.findIndex(([event, action, body]) => event === 'post' && action === '/PublishXml' && /<appmodule>/.test(body.ParameterXml));
     assert.ok(pin > firstPush, JSON.stringify(fake.events));
     assert.ok(republish > pin, 'a fresh create already published before pinning; its hidden tables must not be left pending');
-    // With --publish the tables the app is about to hold are published before the app is created (its push publishes the app); without it, none is.
+    // This build changes no table and the app does not exist yet, so there is nothing to publish before it is created, with or without --publish: a table
+    // the spec only navigates to or pins is not proven to hold a form or a chart.
     const tablePublishes = fake.events.filter(([event, action, body]) => event === 'post' && action === '/PublishXml' && !/<appmodule>/.test(body.ParameterXml));
-    assert.deepEqual(tablePublishes.map(([, , body]) => [...body.ParameterXml.matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1])), publish ? [['contoso_item', 'task']] : []);
-    if (publish) assert.ok(fake.events.indexOf(tablePublishes[0]) < firstPush, 'before the app is created');
+    assert.deepEqual(tablePublishes, []);
     assert.equal(fake.pending, false);
     assert.equal(fake.events.filter(([event, url]) => event === 'get' && url.includes("objecttypecode eq 'contoso_item'")).length, 1,
       'resolve the directive once per run, even across a fetch and finalizer push');

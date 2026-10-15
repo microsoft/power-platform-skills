@@ -1,14 +1,15 @@
 'use strict';
-// The tables a spec names, which of them the app holds, the one PublishXml that publishes tables, and the read of which forms, views and
+// The tables a spec names, the tables the build publishes before the app, the one PublishXml that publishes tables, and the read of which forms, views and
 // charts of the spec's tables are saved but not published. The build (sdk-build.js) uses them twice:
-//   * before it writes or publishes the app, it publishes the tables the app holds or is about to hold, and the ones it changed
-//     (publishTablesBeforeApp; preAppTables says which);
-//   * a build that stops before its publish phase says what ALL the spec's tables still hold saved and not published (settleOwedPublishes;
-//     specTables is the list it reads). That read changes nothing, so it can be as wide as the spec; the publish above cannot.
-// A table's publish ships everything saved on that table, whoever saved it, so the two lists are deliberately not the same list: a table
-// the spec only declares, or the target of a lookup column, is read and reported but never published, because the app does not hold it.
-// Both go through the raw client the build already uses for table metadata (`provision.dataverse`): the SDK's artifact publish names a table
-// only through a form, view or chart it holds in its workspace, and a table the spec only names has none.
+//   * before it writes or publishes the app, it publishes the tables it changed and the ones the app is PROVEN to hold a form or chart of
+//     (publishTablesBeforeApp; preAppTables says which, and readAppFormChartTables is the proof);
+//   * a build that stops before its publish phase says what ALL the spec's tables still hold saved and not published (settleOwedPublishes; specTables
+//     is the list it reads). That read changes nothing, so it can be as wide as the spec; the publish above cannot.
+// A table's publish ships everything saved on that table, whoever saved it, so the two lists are deliberately not the same list: a table the spec only
+// declares, a lookup column's target, a table only a page reads and one the app only lists in its navigation are read and reported but never published,
+// because nothing says the app holds a form or a chart of them.
+// Both go through the raw client the build already uses for table metadata (`provision.dataverse`): the SDK's artifact publish names a table only through
+// a form, view or chart it holds in its workspace, and a table the build did not change has none.
 const { collectionRows, readAppComponentInventory } = require('./app-components.js');
 const { sitemapEntityTables } = require('./app-spec.js');
 const { odataLit } = require('./odata.js');
@@ -53,7 +54,8 @@ const specObject = (spec) => (spec && typeof spec === 'object' ? spec : {});
 // Every table the spec names, as lower-case logical names, each once, in the order the spec gives them: the tables it declares (`existing` ones
 // too: the build reuses them), then whatever its forms, views, charts, `app.tables`, navigation and pages' data sources name that it does not
 // declare. A spec that passed validation names no other table than the ones it declares, except in `app.tables` and in a page's `dataSources`.
-// This is what a halted build READS; it is not what the build publishes (preAppTables).
+// This is what a halted build READS, and it is as wide as the spec on purpose: that read changes nothing. It is not what the build publishes
+// (preAppTables): naming a table in the spec says nothing about what the app holds of it.
 function specTables(spec) {
   const s = specObject(spec);
   const collected = namesCollector();
@@ -61,39 +63,18 @@ function specTables(spec) {
   return collected.list();
 }
 
-// The tables the SPEC makes the app hold: its navigation (every table subarea becomes an app component), `app.tables` (pinned), and the tables of
-// its pages' data sources (the default public view of each is pinned into the app). A NEW app is also created holding the forms, views and
-// charts the spec authors, so with `newApp` their tables are the app's as well; an existing app is not given them again (they are added at create
-// only), and what it already holds of them is read from the server instead (readAppHeldTables).
-// A declaration in `entities` and the target of a relationship's lookup column are NOT membership: the app holds nothing of such a table.
-function specAppTables(spec, { newApp = false } = {}) {
-  const s = specObject(spec);
-  const collected = namesCollector();
-  for (const name of [...(newApp ? authoredTables(s) : []), ...pinnedTables(s), ...navigationTables(s), ...pageDataSources(s)]) collected.add(name);
-  return collected.list();
-}
-
-// The tables the build publishes before the app, and the ones it cannot place until the app's components are read.
-//   spec         the spec
-//   reconciled   the tables whose existing views and forms the build reconciled (the tables the SDK's publish of them covered before)
-//   charted      the tables of the charts the build wrote: a created chart, or a description it PATCHed
-//   existingApp  whether the app already exists on the server
-//   held         the spec's tables the app holds on the server, when they were read (readAppHeldTables); omit it when they were not
-// `tables` are the tables to publish, in the order `specTables` gives them: the reconciled and charted ones, the ones the spec makes the app hold
-// (specAppTables), and — only when `held` is given — the spec's tables the server says the app holds. Never a table the spec does not name,
-// except one the build itself reconciled or wrote a chart on. `undetermined` are the spec's other tables when the app exists and `held` is not
-// known: tables that may be the app's through components the spec does not say, which only a read of the app can tell.
-function preAppTables({ spec, reconciled = [], charted = [], existingApp = false, held } = {}) {
-  const changed = namesCollector();
-  for (const name of [...reconciled, ...charted]) changed.add(name);
-  const decided = new Set([...specAppTables(spec, { newApp: !existingApp }), ...changed.list()]);
-  const universe = specTables(spec);
-  const heldHere = held instanceof Set ? universe.filter((name) => held.has(name)) : [];
-  const named = new Set([...decided, ...heldHere]);
-  // The spec's own order, then what the build changed that the spec does not name.
-  const tables = [...universe.filter((name) => named.has(name)), ...changed.list().filter((name) => !universe.includes(name))];
-  const undetermined = existingApp && !(held instanceof Set) ? universe.filter((name) => !decided.has(name)) : [];
-  return { tables, undetermined };
+// The tables the build publishes before the app:
+//   reconciled  the tables whose existing views and forms the build reconciled (the tables the SDK's own publish of them covered before)
+//   charted     the tables of the charts the build wrote: a created chart, or a description it PATCHed
+//   held        the tables whose forms or charts the app holds on the server (readAppFormChartTables), when that read was complete; omit it otherwise
+// Without `held` this is exactly what the build changed, which is also what it publishes when the app is new (it holds nothing on the server yet) or
+// when what it holds could not be proven. The spec decides none of it: what the app holds is what its component list says, whether or not the spec names
+// the table, and a table the spec only names (declared, a lookup column's target, a page's data source, a navigation entry) is not the app's to publish.
+// In name order: the reconciles finish in no fixed order, and the same request every run is easier to compare and to assert.
+function preAppTables({ reconciled = [], charted = [], held } = {}) {
+  const names = namesCollector();
+  for (const name of [...reconciled, ...charted, ...(held instanceof Set ? held : [])]) names.add(name);
+  return names.list().sort();
 }
 
 // `a, b and 3 more`: at most `max` names, then how many were left out. For a message, where a spec of fifty tables must not print fifty names.
@@ -223,21 +204,35 @@ async function readSavedNotPublished(client, tables) {
   return { ok: true, byTable };
 }
 
-// Which of the app's components, as tables: the tables it holds as components and the tables of the views, forms and charts it holds, read from
-// the app's current (saved) layer on the server (app-components.js readAppComponentInventory, which the download makes the same read with).
-//   { ok: true, tables: Set<lower-case logical name> }
-//   { ok: false, reason, tables }   some of it could not be read; `tables` holds what WAS read, which is proven, so it is the app's whatever the rest is
-// Never throws: a build that cannot tell what the app holds publishes less, and says so (describeUnreadAppTables).
-async function readAppHeldTables(sdk, appId) {
-  const none = (reason) => ({ ok: false, reason, tables: new Set() });
+// The component types whose tables prove the app holds a FORM or a CHART of a table: 60 and 59 (app-components.js APP_COMPONENT_ENTITY_SOURCES). A table
+// component (1) says the app lists the table, and a view (26) says it holds a view of it; neither says a form or a chart of the table is in the app. A
+// page's pinned default view is a view, a navigation entry a table component, and the app's publish is only known to leave a saved form label out
+// (measured), with a chart's description the open question; so only these two count. It also keeps the read cheap: a table component costs one
+// metadata read each, which an app of fifty tables would pay serially on every build.
+const FORM_COMPONENT = 60;
+const CHART_COMPONENT = 59;
+
+// The tables whose forms or charts an EXISTING app holds, read from its current (saved) layer on the server: its component list, and the table of each
+// form and chart in it (app-components.js readAppComponentInventory, the read the download makes, narrowed to these two types and required to identify
+// every component):
+//   { ok: true, tables: Set<lower-case logical name>, forms: Set<...> }   `forms` are the tables the app holds a FORM of; `tables` adds the charts'
+//   { ok: false, reason }                                                  something could not be read or identified, and then NO tables
+// Complete or nothing: a list that left out a table the app holds a form of would let the build publish less than it should without saying so, and a
+// partial list handed back would invite a caller to treat it as the whole. The component list names ids; one that no lookup answers for (a stale
+// component, a record the caller may not read, a form never published, which a plain read does not answer) is such a hole.
+// Never throws: a build that cannot tell what the app holds publishes only what it changed, and says so (describeUnreadAppComponents).
+async function readAppFormChartTables(sdk, appId) {
+  const none = (reason) => ({ ok: false, reason });
   if (!appId) return none('the app has no id to read its components by');
   if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return none('no client to read the app with');
   try {
-    const inventory = await readAppComponentInventory(sdk, appId);
-    const tables = new Set(inventory.logicalNames.map((name) => String(name).toLowerCase()));
-    // The layer's own reason when the app could not be found at all; otherwise the first of the notes about what could not be read.
+    const inventory = await readAppComponentInventory(sdk, appId, { componentTypes: [FORM_COMPONENT, CHART_COMPONENT], requireIdentified: true });
+    // The layer's own reason when the app could not be found at all; otherwise the first of the notes about what could not be read or identified.
     const reason = !inventory.layer.ok ? inventory.layer.reason : (inventory.notes[0] && inventory.notes[0].reason);
-    return reason ? { ok: false, reason: clipReason(reason), tables } : { ok: true, tables };
+    if (reason) return none(clipReason(reason));
+    const lowerCased = (names) => new Set([...(names || [])].map((name) => String(name).toLowerCase()));
+    const forms = lowerCased(inventory.assetTablesByType.get(FORM_COMPONENT));
+    return { ok: true, tables: new Set([...forms, ...lowerCased(inventory.assetTablesByType.get(CHART_COMPONENT))]), forms };
   } catch (e) {
     return none(clipReason((e && e.message) || e));
   }
@@ -282,16 +277,20 @@ const LABEL_RISK = 'a label someone saved on a form there and did not publish ma
 //   tables   the tables the request named that nothing else published
 //   saved    Map<table, names[]> of what THIS build saved on a table (`view Open Tickets`, `chart By Area`): what it created, or a chart whose description it wrote
 //   described  Map<table, Set<chart name>> of the charts whose DESCRIPTION this build wrote, which a name in `saved` reads the same as a created chart
-// What this build saved goes out with the build's final publish, after the app's own; a table it did not touch is the app's through what the spec or the
-// server says, and carries the label risk. Nothing is claimed for a chart's description: whether the app's publish holds it back has not been measured.
-function describePreAppRefusal({ reason, tables, saved, described } = {}) {
+//   forms    Set<table> of the tables the app is PROVEN to hold a form of (readAppFormChartTables), when that was read
+// The concerns are independent and a table can carry both: what this build saved goes out with the build's final publish, after the app's own (nothing is
+// claimed for a chart's description: whether the app's publish holds it back has not been measured), and a form the app holds on the table may have a
+// label somebody else saved and never published, which carries the measured risk. A table is not "this build's" or "somebody else's": the chart this
+// build wrote and the form a maker saved can be on the same one, and each is said.
+function describePreAppRefusal({ reason, tables, saved, described, forms } = {}) {
   const names = [...new Set((Array.isArray(tables) ? tables : []).map((t) => String(t)))];
   if (!names.length) return null;
   const savedOn = saved instanceof Map ? saved : new Map();
   const describedOn = described instanceof Map ? described : new Map();
+  const formsOn = forms instanceof Set ? forms : new Set();
   const itemsOf = (table) => [...(savedOn.get(table) || [])].map((item) => (/^chart /.test(item) && describedOn.has(table) && describedOn.get(table).has(item.slice(6)) ? `the description of ${item}` : item));
   const own = names.filter((table) => itemsOf(table).length);
-  const untouched = names.filter((table) => !itemsOf(table).length);
+  const labelled = names.filter((table) => formsOn.has(table));
   const many = names.length > 1;
   const parts = [`could not publish ${many ? 'tables' : 'table'} ${tableList(names, MAX_NAMES)} before the app (${reason}), so the app's publish will come first and the protection the build gives what is saved on ${many ? 'them' : 'it'} did not apply.`];
   if (own.length) {
@@ -301,27 +300,23 @@ function describePreAppRefusal({ reason, tables, saved, described } = {}) {
     parts.push(`This build saved ${listed}; ${several ? 'they go' : 'it goes'} out with the build's final publish, after the app's.`
       + `${chart ? " Whether the app's publish holds back a chart's description saved before it has not been measured." : ''}`);
   }
-  if (untouched.length) {
-    const some = untouched.length > 1;
-    parts.push(`${tableList(untouched, MAX_NAMES)} ${some ? 'are' : 'is'} held by the app and the build changed nothing on ${some ? 'them' : 'it'}: ${LABEL_RISK}`);
-  }
+  if (labelled.length) parts.push(`The app holds forms of ${tableList(labelled, MAX_NAMES)}: ${LABEL_RISK}`);
   parts.push(`Publish ${many ? 'those tables' : 'that table'} in Power Apps before the app is next published, or run the build again once the cause is cleared: it sends this request first again.`);
   return parts.join(' ');
 }
 
-// The warning for the app's components not being readable (or not all of them), when the spec alone does not say whether the app holds a table:
-// those tables were left out of the publish before the app's own, which is the safe side — a table's publish ships what anyone saved on it — and
-// the label risk of the app's publish is open for any of them whose forms the app does hold.
-function describeUnreadAppTables({ reason, tables } = {}) {
-  const names = [...new Set((Array.isArray(tables) ? tables : []).map((t) => String(t)))];
-  if (!names.length) return null;
-  const many = names.length > 1;
-  return `could not read which of the spec's tables the app already holds (${reason}), so ${tableList(names, MAX_NAMES)} ${many ? 'were' : 'was'} left out of the publish before the app's own. `
-    + 'A label someone saved on a form there and did not publish may stay unpublished once the app is published if the app holds that form (Dataverse leaves it out of the published '
-    + `form, and a later publish of the table does not release it, as measured for forms). Publish ${many ? 'those tables' : 'that table'} in Power Apps first, or run the build again once the cause is cleared.`;
+// The warning for what the app holds not being readable, or not identifiable (readAppFormChartTables answered `ok: false`): only what the build changed
+// was published before the app's own publish, which is the safe side — a table's publish ships what anyone saved on it, so a table not PROVEN to be the
+// app's is not published on a guess. It says which proof failed and that a build that can read it covers those tables, and what the risk is for a table
+// whose forms the app does hold. It names no table and tells nobody to publish one: it cannot say which tables the app holds, which is the point.
+function describeUnreadAppComponents({ reason } = {}) {
+  return `could not tell which tables the forms and charts the app already holds belong to (${reason}), so only the tables this build changed were published before the app's own publish. `
+    + 'Any other table the app holds a form or chart of was not published first: a label someone saved on a form there and did not publish may stay unpublished once the app is published '
+    + '(Dataverse leaves it out of the published form, and a later publish of the table does not release it, as measured for forms), so one that does not show may have to be saved again. '
+    + "Run the build again once the cause is cleared: it then publishes the tables whose forms or charts the app holds before the app's own publish.";
 }
 
 module.exports = {
-  specTables, specAppTables, preAppTables, tableList, publishTablesXml, readSavedNotPublished, describeSavedNotPublished,
-  readAppHeldTables, describePreAppRefusal, describeUnreadAppTables,
+  specTables, preAppTables, tableList, publishTablesXml, readSavedNotPublished, describeSavedNotPublished,
+  readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents,
 };

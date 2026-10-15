@@ -508,35 +508,47 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   form's save and before its table's publish, leaves the form's label changes unpublished for good, while
   the structure saved with them goes live. That does not depend on who saved the label, and the app's
   publish ships the forms the app holds, so with `--publish` the same step publishes, in ONE `PublishXml`,
-  every table the app holds or is about to hold and every table the build changed: the tables the reconcile
-  published, the tables of the charts the run wrote, and the spec's tables the app holds (`preAppTables`, in
-  `lib/table-publish.js`: the navigation's tables, `app.tables`, the tables of its pages' data sources — whose
-  default public view the pages phase pins into the app — and, for a NEW app, the tables of the forms, views and
-  charts it is created holding). It is NOT every table the spec names: a table that is only declared in
-  `entities`, or is the target of a lookup column, is not the app's, and a table's publish ships everything
-  saved on it, whoever saved it, so naming one would release a maker's unfinished work there for nothing.
-  What an EXISTING app already holds beyond what the spec says — a form a maker added to it, a table an earlier
-  spec gave it — is read from the server (`readAppHeldTables`, the app's component inventory) only when the
-  spec leaves a table of its undecided, so a rebuild whose every table is decided makes no extra read; a read
-  that fails leaves those tables out, and says so (`describeUnreadAppTables`), because publishing what is not
-  proven to be the app's is the one thing this step must not do. The request goes by name through the raw
+  every table the build changed and every table the app is PROVEN to hold a form or chart of (`preAppTables`,
+  in `lib/table-publish.js`): the tables the reconcile published (what the SDK's own publish of them covered),
+  the tables of the charts the run wrote, and the tables of the form and chart components the app's component
+  list names on the server (`readAppFormChartTables`), whether or not the spec names the table — a form a maker
+  added to the app in the designer, on a table the spec never mentions, counts. The spec decides nothing here,
+  because a table's publish ships everything saved on it, whoever saved it: naming a table the app is not known
+  to hold a form or chart of would release a maker's unfinished work there for nothing. So it is NOT every
+  table the spec names, nor the target of a lookup column, nor a table only a page reads (the pages phase pins
+  its default VIEW, which is no form or chart), nor one the app only lists as a table component in its
+  navigation. The SDK writes a navigation table's active Main forms, public views and charts into the app as
+  components whenever the build writes the app, so such a table is proven from the build after the one that
+  wrote them; the build that first writes a form into the app publishes only what it changed, and so does a
+  first build, which has no app on the server to read (it creates the app, and publishes it, holding the existing
+  forms of its tables: the exposure 2.14.0 had). The read — `readAppComponentInventory` narrowed to the two
+  component types that count — is made for every build that publishes into an existing app: the app's layer, one
+  component list per type and one lookup of the tables per 20 components; no table metadata and no view is read,
+  which is what an app of fifty tables would otherwise pay serially on every build. It must be COMPLETE:
+  `requireIdentified` makes every component id come back as a row of its own that names a table (a dashboard's
+  is `none`), and one that does not — a stale component, a record the caller may not read, a form never
+  published, which a plain read does not answer — makes the whole read unreadable. Then the request names
+  exactly what the build changed, and the build says which proof failed, naming no table and recommending no
+  publication, because it cannot say which tables the app holds (`describeUnreadAppComponents`): publishing what
+  is not proven to be the app's is the one thing this step must not do. The request goes by name through the raw
   client, because the SDK's artifact publish names a table only through a form, view or chart it holds. It
   closes a label a maker saved and never published on a table whose forms the app holds, and publishes the
   description of a chart the run wrote (a PATCH of the saved row in the charts phase, which waited for phase 8,
   after the app's own publish; whether the platform holds it back as it holds a form's labels was not
   measured) with its table. The request takes the place of the reconciled tables' envelope, so a rebuild whose
   views or forms exist sends the same three publishes as before (the tables, the app's finalize, phase 8) and
-  a build that reconciled nothing, a first build for one, sends one more. Phase 8's envelope names only the
-  tables the build has artifacts of, so a table the app holds only through its navigation is published once,
-  before the app, and not again by the final publish. A raw publish does not re-baseline
+  a build that reconciled nothing sends one more when the request is not empty. Phase 8's envelope names only the
+  tables the build has artifacts of, so a table the app holds a form of and the build did not change is published
+  once, before the app, and not again by the final publish. A raw publish does not re-baseline
   the SDK's workspace copies of the views and forms it publishes; nothing pushes one again in the run, and the
   next run fetches each before it edits it (`publish-by-name-sdk-state.test.js` runs that against the real
   SDK). If the request is refused, nothing is assumed published: the reconciled tables go through the SDK as
   before, and the build says plainly that its protection did not apply to the others (`describePreAppRefusal`),
-  separating what this run saved on them (a chart's description is named as such, with the plain statement
-  that whether the app's publish holds one back has not been measured) from a table it did not touch, whose
-  risk is the measured one for form labels — a later publish of the table does not release them, so one that
-  does not show may have to be saved again and then published with its table before the app. It does not stop
+  reporting what this run saved on them (a chart's description is named as such, with the plain statement that
+  whether the app's publish holds one back has not been measured) and, separately, the measured risk to the
+  forms the app holds there — a later publish of the table does not release a label, so one that does not show
+  may have to be saved again and then published with its table before the app. A table can carry both, and
+  each is said. It does not stop
   the build, because stopping every build over a table it did not change would be out of proportion. Without
   `--publish` it is not made, and an SDK with no raw client (a test double) publishes the reconciled tables as
   before. The enrichment's default views (columns only) wait for the bulk publish as far as the reconciled
@@ -1810,7 +1822,7 @@ scripts/
     app-components.js          ← shared current/published app layers (`currentLayerRows`, and `currentLayerRow` — the authored layer wins — for a listing), component inventory, hidden-table pin/proof, Main-form resolution/membership and push directives, `collectionRows`, the one reader of a paged collection, and `savedPageRows`, the one reader of the generative-page rows in the SAVED layer (RetrieveUnpublishedMultiple, 50 ids a read): a plain read of the page table answers the published layer only, so a page that was created and never published is "not found" by it — `apps.js` and teardown read pages here
     solution-membership.js     ← one read of a solution's components (the types the build adds, plus its tables: a table held with all its subcomponents vouches for its views, forms and charts, which have no rows of their own), so a rebuild adds just what the solution is not PROVEN to hold; every doubt reads as "add"
     unsynced-edits.js          ← the SDK's own dirty tracking (`diffArtifact`) as the one proof that a reconcile has nothing to push; every doubt reads as "push"
-    table-publish.js           ← the tables a spec names (`specTables`, the wide READ-ONLY list a halted build reads) and the narrower ones the app holds (`specAppTables`, `preAppTables`: what the build publishes before the app, never a table that is only declared or a lookup's target), the app's server-side holdings (`readAppHeldTables`), the ONE `PublishXml` that publishes tables by name (`publishTablesXml`: the build's pre-app publish, and the lookup-label repair's), the read of which of the spec's views, forms and charts are saved but not published (`readSavedNotPublished`, the SAVED layer through `RetrieveUnpublishedMultiple`, `componentstate` 1 and 3) with the line a halted build prints from it (`describeSavedNotPublished`), and the warnings for a refused pre-app publish and for an unreadable app (`describePreAppRefusal`, `describeUnreadAppTables`); every doubt in a read says so and names the tables, never a shorter list
+    table-publish.js           ← the tables a spec names (`specTables`, the wide READ-ONLY list a halted build reads), the tables the build publishes before the app (`preAppTables`: what it changed — reconciled tables, the tables of the charts it wrote — and the tables the app is PROVEN to hold a form or chart of; the spec decides nothing, so never a table that is only declared, a lookup's target, read only by a page or only in the navigation), the proof (`readAppFormChartTables`: the app's form and chart components on the server, complete or nothing), the ONE `PublishXml` that publishes tables by name (`publishTablesXml`: the build's pre-app publish, and the lookup-label repair's), the read of which of the spec's views, forms and charts are saved but not published (`readSavedNotPublished`, the SAVED layer through `RetrieveUnpublishedMultiple`, `componentstate` 1 and 3) with the line a halted build prints from it (`describeSavedNotPublished`), and the warnings for a refused pre-app publish and for an app whose components could not be read (`describePreAppRefusal`, `describeUnreadAppComponents`); every doubt in a read says so and names the tables, never a shorter list
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
@@ -3906,9 +3918,13 @@ table's MetadataId, the subcomponents of a whole table get no row, and `$select`
 (`publish-halt-warning.test.js`; `table-publish.test.js` pins the pieces, and the order and count of the publishes before the app
 are pinned in `sdk-build.test.js`). Which tables the build publishes before the app is pinned end to end in
 `publish-scope-real-bundle.test.js`, over the real bundle and `helpers/fake-app-build-org.js` (the same fake with the app, its
-sitemap and its components added): a table that is only a lookup's target keeps a maker's unfinished form unpublished, a table the
-app holds through its navigation or through a form a maker added to it is published before the app, and the sequences of
-`PublishXml` requests of a first build and of an unchanged rebuild are pinned in order.
+sitemap and its components added, and an `intercept` hook that makes the platform refuse a read or leave a row out): a table that
+is only a lookup's target, only read by a page, or only a navigation entry keeps a maker's unfinished form unpublished, a table
+the app holds a form or chart of — through a form a maker added to it, on a table the spec never names, included — is published
+before the app, a read of the app's components that is refused or incomplete publishes only what the build changed and says which
+read failed, and the sequences of `PublishXml` requests of a first build and of an unchanged rebuild are pinned in order. The
+fake's read of a component by id answers every saved record, published or not, where the platform's plain read answers the
+published layer only: a form the app holds that was never published is therefore pinned there by intercepting the read.
 `rebuild-writes-reuse-sites.test.js` and the `rebuild writes:` tests in `sdk-build.test.js` pin each
 reuse site (rule, flow, role, app, sitemap, page manifest) the same way; `solution-membership.test.js`
 and `unsynced-edits.test.js` pin the two helpers' contracts, every doubt of which reads as "add" and

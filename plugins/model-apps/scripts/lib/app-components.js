@@ -391,10 +391,19 @@ async function appMainFormsFor(sdk, appUnique, tables) {
   }
 }
 
-async function readAppComponentInventory(sdk, appId) {
+// What an app holds, from the server's CURRENT (saved) layer of it: its table components (resolved to logical names), and the tables of the views, forms and charts
+// it holds, resolved through the collection of each. The download builds its spec from this; the build's publish before the app reads the form and chart
+// components of it (table-publish.js readAppFormChartTables).
+//   options.componentTypes     read only these component types (1 table, 26 view, 59 chart, 60 form); all four when omitted. A table component costs one
+//                              metadata read EACH, and a view lookup one read per 20 views, so a caller that does not use them does not pay for them.
+//   options.requireIdentified  also note an asset component whose table the lookup did not answer for. Each component id must come back as a row of its own that names a
+//                              table (a dashboard's is `none`); an id with no row (a stale component, a record the caller may not read, one never published: a plain read answers
+//                              the published layer) or a row with no id or no table is a hole in the inventory, and a caller that proves something from what the inventory does hold
+//                              must not read it as complete. Off by default: the download reports what it has always reported.
+async function readAppComponentInventory(sdk, appId, { componentTypes, requireIdentified = false } = {}) {
   const inventory = {
     layer: { ok: false, reason: 'app id is missing' }, components: new Map(), componentProblems: new Map(),
-    tables: new Map(), logicalNames: [], assetTables: [], notes: [],
+    tables: new Map(), logicalNames: [], assetTables: [], assetTablesByType: new Map(), notes: [],
   };
   if (!appId) return inventory;
   try {
@@ -410,7 +419,8 @@ async function readAppComponentInventory(sdk, appId) {
     return inventory;
   }
   const assetTables = new Set();
-  for (const componentType of [1, ...APP_COMPONENT_ENTITY_SOURCES.map((source) => source.componentType)]) {
+  const everyType = [1, ...APP_COMPONENT_ENTITY_SOURCES.map((source) => source.componentType)];
+  for (const componentType of everyType.filter((type) => !componentTypes || componentTypes.includes(type))) {
     let components;
     try {
       components = await appComponentRows(sdk, inventory.layer.appModuleIdUnique, componentType);
@@ -449,6 +459,9 @@ async function readAppComponentInventory(sdk, appId) {
       continue;
     }
     const source = APP_COMPONENT_ENTITY_SOURCES.find((candidate) => candidate.componentType === componentType);
+    const tablesOfType = new Set();
+    inventory.assetTablesByType.set(componentType, tablesOfType);
+    const identified = new Set();
     try {
       for (let start = 0; start < ids.length; start += 20) {
         const filter = ids.slice(start, start + 20).map((id) => `${source.idField} eq ${requireGuid(id, 'asset component objectid')}`).join(' or ');
@@ -456,8 +469,14 @@ async function readAppComponentInventory(sdk, appId) {
         if (!Array.isArray(rows)) throw componentError('APP_COMPONENTS_UNVERIFIED', `${source.set} returned no readable result set`);
         for (const row of rows) {
           const logical = row && row[source.entityField] ? String(row[source.entityField]).toLowerCase() : '';
-          if (logical && logical !== 'none') assetTables.add(logical);
+          if (logical && logical !== 'none') { assetTables.add(logical); tablesOfType.add(logical); }
+          if (logical) identified.add(guidKey(row[source.idField]));
         }
+      }
+      const unidentified = ids.filter((id) => !identified.has(id));
+      if (requireIdentified && unidentified.length) {
+        inventory.notes.push({ kind: 'tables', reason: `tables derived from app component type ${componentType} could not be fully identified `
+          + `(no ${source.set} record answered for ${unidentified.slice(0, 3).join(', ')}${unidentified.length > 3 ? ` and ${unidentified.length - 3} more` : ''})` });
       }
     } catch (error) {
       inventory.notes.push({ kind: 'tables', reason: `tables derived from app component type ${componentType} could not be read (${reasonOf(error)})` });

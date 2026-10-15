@@ -130,7 +130,7 @@ const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings } = require('./app-components.js');
-const { preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppHeldTables, describePreAppRefusal, describeUnreadAppTables } = require('./table-publish.js');
+const { preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { navigationEntryKind, navigationVerdict } = require('./app-navigation.js');
@@ -2395,10 +2395,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // reconcile has run by then, and nothing before that step publishes the app: the command and dashboard steps publish
   // nothing, and the app icon publishes only its web resource. Phase 8 still publishes these tables with everything
   // else. The default views the enrichment (4b) saved stay owed to phase 8 alone as far as THIS publish goes: it re-saves
-  // their columns on every build, never a label, so their table waits for phase 8 (and is published earlier only if the app holds it:
-  // publishTablesBeforeApp), not here.
-  // This is the SDK's publish of the reconciled tables: publishTablesBeforeApp sends them by name, with the other tables the app holds,
-  // when it can, and comes here when that request is refused and when there is no raw client.
+  // their columns on every build, never a label, so their table waits for phase 8 (and is published earlier only if the app is proven to hold a
+  // form or chart of it: publishTablesBeforeApp), not here.
+  // This is the SDK's publish of the reconciled tables: publishTablesBeforeApp sends them by name, with the other tables it publishes before the
+  // app, when it can, and comes here when that request is refused and when there is no raw client.
   const publishReconciledTables = async () => {
     const targets = [...reconciledTables].map((logical) => owed.tables.get(logical)).filter(Boolean);
     reconciledTables.clear();
@@ -2423,19 +2423,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
     throw halt;
   };
 
-  // ...and the tables the app holds that the reconcile did not change. The measured strand follows from the order of the publishes, not from who
-  // saved the label. The app's publish ships the forms it holds (the tables in its navigation or `app.tables`, and the tables of a chart or a page's
-  // default view it holds), so a label a maker saved in Maker and never published on a form of one of them can be held back the same way by the app's
-  // publish — the sitemap finalize of every rebuild of an existing app, the create of a new one, the hidden-table pin. The chart is the case 2.13.0
-  // left unmeasured: its description is a PATCH of the saved row, made in the charts phase, and was published only with phase 8, after the app's own
-  // publish; whether the platform holds that text back as it holds a form's labels was not measured, so the table of a chart this run wrote is
-  // published before the app too. So the app step publishes, in ONE PublishXml before it writes the app, the tables the reconcile published, the
-  // tables of the charts this run wrote, and the spec's tables the app holds or is about to hold (preAppTables, which says which, and why).
-  // NOT a table that is only declared, or the target of a lookup column: a table's publish ships everything saved on it, whoever saved it, so
-  // naming a table the app does not hold would release a maker's unfinished work there, for a protection it does not need.
-  // What an EXISTING app holds on the server beyond what the spec says (a form a maker added to it, a table it was given earlier) is read
-  // (readAppHeldTables) only when the spec leaves one of its tables undecided, so a rebuild whose every table is decided makes no extra read. A
-  // read that fails leaves the undecided tables out, and says so: publishing what is not proven to be the app's is the one thing this must not do.
+  // ...and the tables the app is PROVEN to hold a form or chart of, and the charts this run wrote. The measured strand follows from the order of the
+  // publishes, not from who saved the label. The app's publish ships the forms it holds, so a label a maker saved in Maker and never published on one
+  // of them can be held back the same way by the app's publish — the sitemap finalize of every rebuild of an existing app, the create of a new one, the
+  // hidden-table pin. The chart is the case 2.13.0 left unmeasured: its description is a PATCH of the saved row, made in the charts phase, and was
+  // published only with phase 8, after the app's own publish; whether the platform holds that text back as it holds a form's labels was not measured,
+  // so the table of a chart this run wrote is published before the app too. So the app step publishes, in ONE PublishXml before it writes the app, the
+  // tables the reconcile published, the tables of the charts this run wrote, and the tables whose forms or charts the app's component list on the
+  // server proves it holds (readAppFormChartTables), whether or not the spec names the table (preAppTables).
+  // Only a PROVEN form or chart counts, because a table's publish ships everything saved on it, whoever saved it: naming a table the app is not known to
+  // hold a form of would release a maker's unfinished work there, for a protection it does not need. So not a table that is only declared, nor the target of
+  // a lookup column, nor one only a page reads (the pages phase pins its default VIEW, which is no form or chart), nor one the app only lists in its
+  // navigation as a table component. (The SDK writes a navigation table's active Main forms, public views and charts into the app as components
+  // whenever it writes the app, so such a table is proven by the NEXT build's read; a first build, whose app does not exist yet, and the build that
+  // first writes a form into the app publish only what they changed.) The app's components are read for an EXISTING app, on every build that
+  // publishes: a new app has nothing on the server to read, and what it is created with are the forms and charts this build creates or reconciles,
+  // which are covered above. The read is complete or it does not count — a component the lookup cannot place makes it unreadable — and then the
+  // request names exactly what the build changed, and the build says which proof failed (describeUnreadAppComponents).
   // That one request takes the place of the reconciled tables' envelope, so a build that reconciled something (every rebuild of an app whose
   // views or forms exist) sends the publishes it always did, and a build that reconciled nothing (a first build) sends one more (four one-table
   // publishes took 10-19 s, one envelope 3.6-3.8 s, as the SDK measured).
@@ -2454,23 +2458,27 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const reconciled = new Set(reconciledTables);
     const client = provision.dataverse;
     if (!publishInPhase8 || !client || typeof client.post !== 'function') return publishReconciledTables();
-    const known = { spec, reconciled, charted: [...chartsToPublish.keys()], existingApp: !!existingAppId };
-    let scope = preAppTables(known);
-    if (scope.undetermined.length) {
-      const read = await readAppHeldTables(provision, existingAppId);
-      const unplaced = scope.undetermined.filter((logical) => !read.tables.has(logical));
-      scope = preAppTables({ ...known, held: read.tables });
-      if (!read.ok && unplaced.length && typeof opts.warn === 'function') opts.warn(describeUnreadAppTables({ reason: read.reason, tables: unplaced }));
+    let held;
+    let heldForms;
+    if (existingAppId) {
+      const read = await readAppFormChartTables(provision, existingAppId);
+      if (read.ok) {
+        held = read.tables;
+        heldForms = read.forms;
+      } else if (typeof opts.warn === 'function') {
+        opts.warn(describeUnreadAppComponents({ reason: read.reason }));
+      }
     }
-    const outcome = await publishTablesXml(client, scope.tables);
+    const tables = preAppTables({ reconciled, charted: [...chartsToPublish.keys()], held });
+    const outcome = await publishTablesXml(client, tables);
     if (outcome.ok) {
       reconciledTables.clear();
       return undefined;
     }
     await publishReconciledTables();
-    const unprotected = scope.tables.filter((logical) => !reconciled.has(logical));
+    const unprotected = tables.filter((logical) => !reconciled.has(logical));
     if (unprotected.length && typeof opts.warn === 'function') {
-      opts.warn(describePreAppRefusal({ reason: outcome.reason, tables: unprotected, saved: savedOnTable, described: describedCharts }));
+      opts.warn(describePreAppRefusal({ reason: outcome.reason, tables: unprotected, saved: savedOnTable, described: describedCharts, forms: heldForms }));
     }
     return undefined;
   };
@@ -5487,7 +5495,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const iconWebResourceId = await ensureAppIcon(spec, result.created, { provision, sol, runner });
     const def = appDef(spec, result.created, { omitUnbuiltPages: true, iconWebResourceId, mainFormsByTable });
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
-      // Whether the app exists says which tables are the app's before it is written (publishTablesBeforeApp), so it is looked up first.
+      // Whether the app exists says whether its components can be read to prove which tables it holds forms or charts of (publishTablesBeforeApp), so it is looked up first.
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
       // Before anything below publishes the app: see publishTablesBeforeApp and publishReconciledTables.
       await publishTablesBeforeApp(existingId);

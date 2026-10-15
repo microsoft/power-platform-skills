@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   currentAppLayer, currentLayerRow, savedPageRows, tableRefs, tableComponentIds, pinAppTables, resolveMainForms,
-  readMainFormMembership, appEntityComponentsFor, collectionRows,
+  readMainFormMembership, appEntityComponentsFor, collectionRows, readAppComponentInventory,
 } = require('../lib/app-components.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
@@ -486,4 +486,103 @@ test('the shared table verifier keeps published-layer, missing-table and placeho
   assert.equal(calls[0].set, 'appmodule');
   assert.equal(calls[1].options.paginate, true);
   assert.ok(calls[1].options.filter.includes(PUBLISHED));
+});
+
+// --- readAppComponentInventory: which component types are read, and whether every asset was identified ----------------------------
+
+const ASSET_SOURCES = {
+  26: { set: 'savedquery', id: 'savedqueryid', table: 'returnedtypecode' },
+  59: { set: 'savedqueryvisualization', id: 'savedqueryvisualizationid', table: 'primaryentitytypecode' },
+  60: { set: 'systemform', id: 'formid', table: 'objecttypecode' },
+};
+const compId = (n) => `44444444-0000-4000-8000-${String(n).padStart(12, '0')}`;
+// An SDK double that holds one app: `tables` maps a table component's MetadataId to its logical name, `assets` maps a component type to { id: the table
+// of the view, form or chart }, and `shape(type, rows)` changes what a lookup of those tables answers. `reads` keeps every request, in order.
+function inventorySdk({ tables = {}, assets = {}, shape = (type, rows) => rows } = {}) {
+  const reads = [];
+  return {
+    reads,
+    dataverse: {
+      get: async (url) => {
+        reads.push(url);
+        if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) return response([layer(CURRENT, 1)]);
+        const m = /^\/EntityDefinitions\(([0-9a-f-]{36})\)/.exec(url);
+        return m && tables[m[1]] ? { status: 200, body: { LogicalName: tables[m[1]], IsCustomEntity: true } } : { status: 404, body: null };
+      },
+    },
+    queryRecords: async (set, options) => {
+      const filter = (options && options.filter) || '';
+      reads.push(`${set}: ${filter}`);
+      if (set === 'appmodulecomponent') {
+        const type = Number((/componenttype eq (\d+)/.exec(filter) || [])[1]);
+        return type === 1 ? Object.keys(tables).map((objectid) => ({ objectid, componenttype: 1 })) : Object.keys(assets[type] || {}).map((objectid) => ({ objectid, componenttype: type }));
+      }
+      const [type, source] = Object.entries(ASSET_SOURCES).find(([, s]) => s.set === set);
+      return shape(Number(type), Object.entries(assets[type] || {}).filter(([id]) => filter.includes(id)).map(([id, table]) => ({ [source.id]: id, [source.table]: table })));
+    },
+  };
+}
+const componentTypesRead = (sdk) => sdk.reads.filter((read) => read.startsWith('appmodulecomponent:')).map((read) => Number((/componenttype eq (\d+)/.exec(read) || [])[1]));
+
+test('readAppComponentInventory with no options reads the table components and every kind of asset: the inventory the download is built on', async () => {
+  const sdk = inventorySdk({
+    tables: { [compId(1)]: 'Contoso_Table' },
+    assets: { 26: { [compId(10)]: 'contoso_view' }, 59: { [compId(11)]: 'contoso_chart' }, 60: { [compId(12)]: 'contoso_form', [compId(13)]: 'none' } },
+  });
+  const inventory = await readAppComponentInventory(sdk, APP);
+  assert.deepEqual(componentTypesRead(sdk), [1, 26, 59, 60]);
+  assert.deepEqual([...inventory.tables.keys()], ['contoso_table']);
+  assert.deepEqual(inventory.assetTables.sort(), ['contoso_chart', 'contoso_form', 'contoso_view']);
+  assert.deepEqual(inventory.logicalNames.sort(), ['contoso_chart', 'contoso_form', 'contoso_table', 'contoso_view']);
+  assert.deepEqual(inventory.notes, []);
+  assert.deepEqual(Object.fromEntries([...inventory.assetTablesByType].map(([type, set]) => [type, [...set]])), { 26: ['contoso_view'], 59: ['contoso_chart'], 60: ['contoso_form'] }, 'which kind of component each table was found through');
+});
+
+test('readAppComponentInventory with componentTypes reads only those kinds: no other component list, no table metadata, no lookup of another kind', async () => {
+  const sdk = inventorySdk({
+    tables: { [compId(1)]: 'contoso_table' },
+    assets: { 26: { [compId(10)]: 'contoso_view' }, 59: { [compId(11)]: 'contoso_chart' }, 60: { [compId(12)]: 'contoso_form' } },
+  });
+  const inventory = await readAppComponentInventory(sdk, APP, { componentTypes: [60, 59] });
+  assert.deepEqual(componentTypesRead(sdk), [59, 60], 'in the order the inventory always reads them');
+  assert.ok(!sdk.reads.some((read) => read.includes('EntityDefinitions') || read.startsWith('savedquery:')));
+  assert.equal(inventory.tables.size, 0);
+  assert.deepEqual(inventory.logicalNames.sort(), ['contoso_chart', 'contoso_form']);
+  assert.deepEqual([...inventory.assetTablesByType.keys()].sort(), [59, 60]);
+});
+
+test('a component no row answers for is not a note by default, so the download reads what it always read, and is one when the caller needs every component identified', async () => {
+  const assets = { 60: { [compId(12)]: 'contoso_form', [compId(13)]: 'contoso_unresolved' } };
+  const lookup = { shape: (type, rows) => rows.filter((row) => row.formid !== compId(13)) };
+  const lenient = await readAppComponentInventory(inventorySdk({ assets, ...lookup }), APP);
+  assert.deepEqual(lenient.notes, [], 'unchanged: the download does not report it');
+  assert.deepEqual(lenient.assetTables, ['contoso_form']);
+  const strict = await readAppComponentInventory(inventorySdk({ assets, ...lookup }), APP, { componentTypes: [60], requireIdentified: true });
+  assert.deepEqual(strict.notes, [{ kind: 'tables', reason: `tables derived from app component type 60 could not be fully identified (no systemform record answered for ${compId(13)})` }]);
+  assert.deepEqual(strict.assetTables, ['contoso_form'], 'what was identified is still reported; the caller decides what an incomplete answer is worth');
+});
+
+test('requireIdentified: a dashboard (`none`) identifies its component; a row with no id, no table or a blank table does not; a long list of ids is cut', async () => {
+  const dashboard = await readAppComponentInventory(inventorySdk({ assets: { 60: { [compId(13)]: 'none' } } }), APP, { componentTypes: [60], requireIdentified: true });
+  assert.deepEqual(dashboard.notes, []);
+  const ids = Array.from({ length: 5 }, (_, i) => compId(20 + i));
+  const assets = { 59: Object.fromEntries(ids.map((id) => [id, 'contoso_chart'])) };
+  for (const [what, shape] of [
+    ['no id', (type, rows) => rows.map((row) => ({ primaryentitytypecode: row.primaryentitytypecode }))],
+    ['no table', (type, rows) => rows.map((row) => ({ savedqueryvisualizationid: row.savedqueryvisualizationid }))],
+    ['a blank table', (type, rows) => rows.map((row) => ({ ...row, primaryentitytypecode: '' }))],
+  ]) {
+    const read = await readAppComponentInventory(inventorySdk({ assets, shape }), APP, { componentTypes: [59], requireIdentified: true });
+    assert.equal(read.notes.length, 1, what);
+    assert.equal(read.notes[0].reason, `tables derived from app component type 59 could not be fully identified (no savedqueryvisualization record answered for ${ids.slice(0, 3).join(', ')} and 2 more)`, what);
+  }
+});
+
+test('requireIdentified: an id spelled with braces or capitals in the answer is the component it names, and a row for another id does not identify this one', async () => {
+  const id = compId(30);
+  const braces = (type, rows) => rows.map((row) => ({ ...row, formid: `{${row.formid.toUpperCase()}}` }));
+  const same = await readAppComponentInventory(inventorySdk({ assets: { 60: { [id]: 'contoso_form' } }, shape: braces }), APP, { componentTypes: [60], requireIdentified: true });
+  assert.deepEqual(same.notes, []);
+  const other = await readAppComponentInventory(inventorySdk({ assets: { 60: { [id]: 'contoso_form' } }, shape: (type, rows) => rows.map((row) => ({ ...row, formid: compId(31) })) }), APP, { componentTypes: [60], requireIdentified: true });
+  assert.equal(other.notes.length, 1);
 });
