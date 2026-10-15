@@ -305,6 +305,27 @@ for (const [route, setup] of PROOF_ROUTES) {
     assert.match(retry.skipped.join('\n'), notProven(PAGE_B, 'Page B'));
   });
 
+  // xmldom keeps a tag's attribute names in a plain object, so an attribute named hasOwnProperty followed by another one is an error to it, and the SDK's app delete refuses the document — after this
+  // teardown had recorded, from its own reading, the pages to delete. Those records outlived the refusal, and the retry after the sitemap was repaired deleted the page only the bad document named.
+  for (const [where, bad] of [
+    ['on an entry', navigation(entry(PAGE_A), `<SubArea hasOwnProperty="x" GenPageId="${PAGE_B}"/>`)],
+    ['on the Group', navigation(entry(PAGE_A), entry(PAGE_B)).replace('<Group Id="g">', '<Group hasOwnProperty="x" Id="g">')],
+  ]) {
+    test(`REAL BUNDLE: ${route}: an attribute named hasOwnProperty ${where}, which the SDK's parser cannot read, proves nothing and records nothing — and the retry after the sitemap is repaired deletes only the pages the repaired navigation names`, async (t) => {
+      const w = await world(t, { ...setup, xml: bad });
+      assert.strictEqual((await w.teardown()).ok, false);
+      assert.deepStrictEqual(w.writes(), []);
+      assert.deepStrictEqual(w.records(), [], 'no page was recorded as one to delete from a document the SDK cannot read');
+      assert.deepStrictEqual([w.org.state.apps.length, w.org.state.sitemaps.length], [1, 1]);
+      w.org.state.sitemaps[0].sitemapxml = navigation(entry(PAGE_A));
+      const retry = await w.teardown();
+      assert.strictEqual(retry.ok, true, JSON.stringify(retry.errors));
+      assert.deepStrictEqual(w.retained, [PAGE_A], 'the SDK\'s own reader sees only A');
+      assert.deepStrictEqual(retry.deleted.genpage, [PAGE_A], 'B is in neither the repaired navigation nor any record');
+      assert.deepStrictEqual(pagesWritten(w.writes()), [PAGE_A]);
+    });
+  }
+
   for (const [damage, broken] of [
     ['ends inside its Group', `<SiteMap><Area Id="a"><Group Id="g">${PAGES_IN_NAVIGATION.join('')}`],
     ['has an element that is never closed after its root', `${navigation(...PAGES_IN_NAVIGATION)}<Dangling>`],

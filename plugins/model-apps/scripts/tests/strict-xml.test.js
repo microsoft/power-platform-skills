@@ -31,9 +31,11 @@ test('readXmlElements: it answers the elements the caller asks for, in document 
   assert.strictEqual(Object.getPrototypeOf(found[0].attrs), null, 'no prototype: an attribute called constructor or __proto__ is an attribute');
   assert.deepStrictEqual(ok(xml, (name) => name === 'SiteMap').map((e) => e.path), [''], 'the root has no path');
   assert.deepStrictEqual(ok(xml, () => false), []);
-  const [loose] = ok('<a __proto__="1" constructor="2" toString="3"/>');
-  assert.deepStrictEqual(Object.keys(loose.attrs), ['__proto__', 'constructor', 'toString']);
-  assert.deepStrictEqual([loose.attrs.__proto__, loose.attrs.constructor, loose.attrs.toString], ['1', '2', '3']);
+  // An attribute named like a member of Object.prototype is not read here at all: the SDK's parser (xmldom) keeps a tag's attribute names in a plain object and cannot read some such
+  // documents, so none is one a page may be deleted on. (The map above has no prototype, so such a name could never confuse this reader itself.)
+  for (const name of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.match(refused(`<a ${name}="1" b="2"/>`), new RegExp(`an attribute named ${name}, which the SDK's parser cannot read`), name);
+  }
 });
 
 test('readXmlElements: a document that is not read answers no element — not the ones before the fault — and says what is wrong and where', () => {

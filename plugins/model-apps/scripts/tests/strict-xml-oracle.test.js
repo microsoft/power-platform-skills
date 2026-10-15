@@ -206,6 +206,12 @@ const FIXED = [
   ['a script element in no namespace that holds a CDATA section with its own end tag', navigation(entry(A), '<script><![CDATA[ </script> ]]></script>', entry(B)), [A, B]],
   ['a name with U+FEFF in it', navigation(entry(A), `<Sub\uFEFFArea GenPageId="${D}"/>`), null],
   ['non-ASCII letters in names of elements that are no entries', navigation(entry(A), `<SubAreaÜ GenPageId="${D}"/>`, `<保存><SubArea GenPageId="${D}"/></保存>`, entry(B)), [A, B]],
+  // — an attribute named like a member of Object.prototype: xmldom keeps a tag's attribute names in a plain object, so `hasOwnProperty` followed by another attribute is an error to it (and the SDK's app delete
+  //   refuses the document after the pages were recorded); any such name, anywhere, is unreadable here
+  ['hasOwnProperty before GenPageId on an entry', navigation(entry(A), `<SubArea hasOwnProperty="x" GenPageId="${B}"/>`), null],
+  ['hasOwnProperty before Id on the Group', `<SiteMap><Area Id="a"><Group hasOwnProperty="x" Id="g">${entry(A)}${entry(B)}</Group></Area></SiteMap>`, null],
+  ['hasOwnProperty as the last attribute of an entry', navigation(entry(A), `<SubArea GenPageId="${B}" hasOwnProperty="x"/>`), null],
+  ['constructor on an entry', navigation(entry(A), `<SubArea constructor="x" GenPageId="${B}"/>`), null],
 ];
 
 // What can be written between two entries without making a page of anything that is not one: each answers { text, ids } — the ids are those of the entries it holds, which are real. `inGroup` is false where an
@@ -433,4 +439,35 @@ test('ORACLE: documents built from what the SDK\'s parser misreads — end tags 
   assertNone(problems, 'quirk documents');
   assert.ok(seen.readable > GENERATED / 40 && seen.unreadable > GENERATED / 40, `both kinds: ${JSON.stringify(seen)}`);
   assert.ok(seen.sdkRefused > GENERATED / 200, `the SDK's reader refuses some of them: ${JSON.stringify(seen)}`);
+});
+
+test('ORACLE: an attribute named like a member of Object.prototype, on any element and in any position, makes the document unreadable — and the documents xmldom cannot read are among them', () => {
+  const names = Object.getOwnPropertyNames(Object.prototype);
+  assert.ok(names.includes('hasOwnProperty') && names.includes('__proto__'), `the members this test is about: ${names.join(', ')}`);
+  const problems = [];
+  let sdkRefused = 0;
+  let documents = 0;
+  for (const name of names) {
+    const odd = `${name}="x"`;
+    for (const xml of [
+      navigation(entry(A), `<SubArea ${odd} GenPageId="${B}"/>`),
+      navigation(entry(A), `<SubArea GenPageId="${B}" ${odd}/>`),
+      `<SiteMap><Area Id="a"><Group ${odd} Id="g">${entry(A)}${entry(B)}</Group></Area></SiteMap>`,
+      `<SiteMap><Area Id="a"><Group Id="g" ${odd}>${entry(A)}${entry(B)}</Group></Area></SiteMap>`,
+      `<SiteMap><Area ${odd} Id="a"><Group Id="g">${entry(A)}</Group></Area></SiteMap>`,
+      `<SiteMap ${odd} Id="m"><Area Id="a"><Group Id="g">${entry(A)}</Group></Area></SiteMap>`,
+      navigation(entry(A), `<Titles><Title ${odd} LCID="1033" Title="x"/></Titles>`),
+    ]) {
+      documents += 1;
+      const ids = readable(xml);
+      if (ids !== null) problems.push(`read as [${ids}] although it has an attribute named ${name}: ${show(xml)}`);
+      const sdk = sdkReads(xml);
+      if (!sdk.ok) sdkRefused += 1;
+      const wrong = judge(xml, sdk);
+      if (wrong) problems.push(wrong);
+    }
+  }
+  assertNone(problems, 'documents with an Object.prototype attribute name');
+  // hasOwnProperty followed by another attribute is what xmldom cannot read: the corpus holds such documents, so the rule above is held to them.
+  assert.ok(sdkRefused >= 2, `the SDK's reader refuses some of these ${documents} documents: ${sdkRefused}`);
 });

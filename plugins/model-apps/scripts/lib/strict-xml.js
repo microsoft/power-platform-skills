@@ -261,6 +261,12 @@ function scan(xml, wanted) {
       if (quote !== DQUOTE && quote !== SQUOTE) throw new Refusal(p, `the value of attribute ${attr[0]} is not in quotes`);
       const value = attributeValue(p + 1, quote);
       if (attr[0] in attrs) throw new Refusal(next, `attribute ${attr[0]} twice in one tag`);
+      // The SDK's parser (xmldom) keeps a tag's attribute names in a plain object and asks it `attributeNames.hasOwnProperty(…)`,
+      // so an attribute named like a member of Object.prototype (`hasOwnProperty`, `constructor`, `toString`, …) breaks its
+      // reading of the tag: with `hasOwnProperty` followed by another attribute it reports an error and the SDK's app delete
+      // refuses the document, after the pages were recorded here. No sitemap the platform or the SDK writes has such an
+      // attribute, so any of them, in any position, makes the document one this reader does not read.
+      if (!misread && attr[0] in Object.prototype) misread = new Refusal(next, `an attribute named ${attr[0]}, which the SDK's parser cannot read`);
       attrs[attr[0]] = value.text;
       p = value.end;
     }
