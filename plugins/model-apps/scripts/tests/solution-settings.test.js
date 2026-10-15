@@ -1494,6 +1494,28 @@ test('a copy that cannot be made is a failure of the pac step — nothing is sen
   assert.ok(folder && !fs.existsSync(folder), 'the folder was removed');
 });
 
+test('the sentence for a copy that cannot be made is the plugin\'s own — a value of the file that is a word of it ("copy", "made", "pac", "file") does not withhold it', async () => {
+  // The pac route reads no package, so a short value of a variable is looked for as a WHOLE WORD (secrecyOf): a sanitizer that looked at this sentence would find them and withhold it.
+  const wordy = withFeature(template({ EnvironmentVariables: ['copy', 'made', 'pac', 'file'].map((Value, i) => ({ SchemaName: `new_V${i}`, Value, DefaultValue: '', TypeId: 100000000, IsRequired: false })), ConnectionReferences: [] }));
+  const { request } = importFiles(wordy);
+  const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
+  const real = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (path.basename(String(file)) === 'settings.json' && PRIVATE_FOLDER.test(path.basename(path.dirname(String(file))))) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    return real(file, ...rest);
+  };
+  try {
+    await assert.rejects(ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac }), (err) => {
+      assert.strictEqual(err.code, 'PAC_SETTINGS_COPY_FAILED');
+      assert.strictEqual(err.message, '`pac solution import` was not run: a private copy of the settings file could not be made (EACCES).');
+      return true;
+    });
+  } finally {
+    fs.writeFileSync = real;
+  }
+  assert.deepStrictEqual(calls, []);
+});
+
 test('an ordinary invalid file whose key or name holds "this SDK does not apply" is NOT sent to pac — the SDK\'s normal complaint quotes it, and the import fails with the SDK\'s code', async () => {
   const phrase = 'this SDK does not apply';
   const cases = [
