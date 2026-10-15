@@ -241,6 +241,80 @@ test('dataverseRequest does not replay a POST whose response was cut off, but re
   assert.strictEqual(gets, 2);
 });
 
+// --- the access token is not in what a call that did not succeed reports ---------------------------------------------------------------------------
+// `dataverseRequest` hands back what the service answered — `{ status, data }` — and a caller that fails prints it (`ensureOk` quotes `data.error.message`; list-connections.js reads the connection
+// references with it, and prints what failed). An authorization layer, or a gateway, that rejects a token may repeat it — whole, or one part of it — in the body or in a header, and a transport failure's
+// text can repeat the request it was sending. So an answer that is not a success is handed back with the token taken out of it, and so is the text of a transport failure, by the scrubber the plugin's
+// Dataverse HttpClient uses (lib/sdk-http-client.js: one scrubber). A SUCCESS is the caller's data and is never touched, whatever it holds.
+const ECHOED = ['syntheticHeaderPartOfTheEchoedToken', 'syntheticPayloadPartOfTheEchoedToken', 'syntheticSignaturePartOfTheEchoedToken'].join('.');
+const ORG_URL = 'https://contoso.crm.dynamics.com';
+
+test('dataverseRequest takes the token out of the answer to a call that did not succeed — the body, whole or in a part, whatever its shape — and leaves the status and the typed code', async () => {
+  const { dataverseRequest, ensureOk } = require('../lib/dataverse-auth.js');
+  const [header, payload] = ECHOED.split('.');
+  const answers = [
+    [400, JSON.stringify({ error: { code: '0x80048d19', message: `Rejected bearer ${ECHOED}` } }), (res) => { assert.equal(res.data.error.message, 'Rejected bearer <token>'); assert.equal(res.data.error.code, '0x80048d19'); }],
+    [403, JSON.stringify({ error: { message: `the claim ${payload} is not valid`, details: [`and ${header}`] } }), (res) => { assert.equal(res.data.error.message, 'the claim <token> is not valid'); assert.deepEqual(res.data.error.details, ['and <token>']); }],
+    [410, `<html>Gone: Authorization: Bearer ${ECHOED}</html>`, (res) => assert.equal(res.data, '<html>Gone: Authorization: Bearer <token></html>')],
+    [404, JSON.stringify({ [`key ${ECHOED}`]: 1 }), (res) => assert.deepEqual(res.data, { 'key <token>': 1 })],
+  ];
+  for (const [statusCode, body, check] of answers) {
+    const res = await dataverseRequest(ORG_URL, 'GET', 'connectionreferences', null, { getToken: () => ECHOED, request: async () => ({ statusCode, body }) });
+    assert.equal(res.status, statusCode);
+    check(res);
+    assert.ok(!JSON.stringify(res).includes(ECHOED) && !JSON.stringify(res).includes(payload), `${statusCode}: no part of the token is left`);
+  }
+  // What a caller prints is what it quotes of the answer: the message of the failure it raises holds no token either.
+  const refused = await dataverseRequest(ORG_URL, 'GET', 'connectionreferences', null, { getToken: () => ECHOED, request: async () => ({ statusCode: 403, body: JSON.stringify({ error: { message: `Rejected bearer ${ECHOED}` } }) }) });
+  assert.throws(() => ensureOk(refused, 'List connection references'), (error) => error.message === 'List connection references failed: HTTP 403 — Rejected bearer <token>');
+});
+
+test('dataverseRequest takes the token out of an answer\u2019s headers when it hands them back — and out of the answer to the request that was sent with the token a 401 replaced', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const refreshed = 'syntheticRefreshedTokenOfTheSecondRequest0123456789';
+  const reads = [];
+  const sent = [];
+  const answers = [
+    { statusCode: 401, body: JSON.stringify({ error: { message: `token ${ECHOED} expired` } }), headers: {} },
+    { statusCode: 403, body: JSON.stringify({ error: { message: `old ${ECHOED} new ${refreshed}` } }), headers: { 'www-authenticate': `Bearer error="invalid_token", error_description="${refreshed}"`, 'x-request-id': 'abc' } },
+  ];
+  const res = await dataverseRequest(ORG_URL, 'GET', 'WhoAmI', null, {
+    includeHeaders: true,
+    getToken: (url, options) => { reads.push(options); return options && options.fresh ? refreshed : ECHOED; },
+    request: async (options) => { sent.push(options.headers.Authorization); return answers[sent.length - 1]; },
+  });
+  assert.deepEqual(sent, [`Bearer ${ECHOED}`, `Bearer ${refreshed}`], 'the first token, refused, and the one that replaced it');
+  assert.equal(res.status, 403);
+  assert.equal(res.data.error.message, 'old <token> new <token>', 'both tokens the call sent are taken out');
+  assert.deepEqual(res.headers, { 'www-authenticate': 'Bearer error="invalid_token", error_description="<token>"', 'x-request-id': 'abc' });
+});
+
+test('dataverseRequest takes the token out of the text of a transport failure — a GET that never got an answer, and a POST whose answer was cut off', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  await assert.rejects(
+    dataverseRequest(ORG_URL, 'GET', 'WhoAmI', null, { getToken: () => ECHOED, request: async () => ({ error: `socket hang up while sending Authorization: Bearer ${ECHOED}` }) }),
+    (error) => error.message === 'Request failed: socket hang up while sending Authorization: Bearer <token>',
+  );
+  await assert.rejects(
+    dataverseRequest(ORG_URL, 'POST', 'accounts', { name: 'A' }, { getToken: () => ECHOED, request: async () => ({ error: `reset (${ECHOED.split('.')[1]})`, incompleteResponse: true, statusCode: 201 }) }),
+    (error) => error.message === 'Request failed: reset (<token>) — the server had already answered 201, so this POST may have been applied; it was not re-sent. Check the result before running it again.',
+  );
+});
+
+test('dataverseRequest never alters a success — its data and its headers come back exactly as they arrived, token text and all — and a value too short to be a token is never taken out of anything', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  // A record whose field happens to hold the token, a text body, and a header that repeats it: successes are the caller's data.
+  const record = JSON.stringify({ value: [{ name: ECHOED, note: ECHOED.split('.')[1] }] });
+  const ok = await dataverseRequest(ORG_URL, 'GET', 'accounts', null, { includeHeaders: true, getToken: () => ECHOED, request: async () => ({ statusCode: 200, body: record, headers: { 'x-echo': ECHOED } }) });
+  assert.deepEqual(ok.data, JSON.parse(record));
+  assert.deepEqual(ok.headers, { 'x-echo': ECHOED });
+  const text = await dataverseRequest(ORG_URL, 'GET', 'accounts', null, { getToken: () => ECHOED, request: async () => ({ statusCode: 200, body: `plain ${ECHOED}` }) });
+  assert.equal(text.data, `plain ${ECHOED}`);
+  // The floor is the Dataverse client's: a token shorter than 16 characters is no access token (the tests' own stand-ins are), and taking it out would blank every place a message has the same letters.
+  const short = await dataverseRequest(ORG_URL, 'GET', 'accounts', null, { getToken: () => 'TOK', request: async () => ({ statusCode: 400, body: JSON.stringify({ error: { message: 'TOKEN TOK' } }) }) });
+  assert.equal(short.data.error.message, 'TOKEN TOK');
+});
+
 test('getAuthToken reuses a non-empty token per normalized resource URL', () => {
   const { getAuthToken } = require('../lib/dataverse-auth.js');
   const calls = [];

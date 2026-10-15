@@ -15,6 +15,9 @@
 //                                       (its length in milliseconds) is recorded in `state.waits`. That wait is `require('node:timers/promises').setTimeout`: nothing
 //                                       else in these scripts uses it, so no other timer changes — the job log's 20-second race, the client's own backoff and every
 //                                       timeout stay real. It is replaced here, before the script loads, because the script takes the function when it loads.
+//   realDataverseRequest                 dataverse-auth.js's own `dataverseRequest` runs — its token handling, its retries, its handling of an answer — over the fake transport and the
+//                                       Dataverse token, instead of the fake answering a script's connection-references read directly. What it asks is answered by the `failures`
+//                                       rules (a status and a body) — the fake platform itself answers no connection-references collection.
 // FAKE_PLATFORM_LOG names a file the requests, the state and the Azure CLI token reads ({ dataverse, powerApps }: one per call of getAuthToken[Async] /
 // getPowerAppsToken[Async], that is one per `az` process a real run would start) are written to when the process exits. The connection-references read a
 // script makes through `dataverseRequest` is answered without a token read here, so these counts are the reads of the SDK path and its preflight alone.
@@ -51,7 +54,10 @@ auth.getAuthToken = () => { tokenReads.dataverse += 1; return config.noDataverse
 auth.getAuthTokenAsync = async () => auth.getAuthToken();
 auth.getPowerAppsToken = () => { tokenReads.powerApps += 1; return config.noPowerAppsToken ? null : cloud.tokens.powerApps; };
 auth.getPowerAppsTokenAsync = async () => auth.getPowerAppsToken();
-auth.dataverseRequest = async (envUrl, method, apiPath) => cloud.dataverseCollection(apiPath);
+const realDataverseRequest = auth.dataverseRequest;
+auth.dataverseRequest = config.realDataverseRequest
+  ? (envUrl, method, apiPath, body, opts = {}) => realDataverseRequest(envUrl, method, apiPath, body, { request: cloud.request, getToken: () => cloud.tokens.dataverse, ...opts })
+  : async (envUrl, method, apiPath) => cloud.dataverseCollection(apiPath);
 
 process.on('exit', () => {
   if (process.env.FAKE_PLATFORM_LOG) fs.writeFileSync(process.env.FAKE_PLATFORM_LOG, JSON.stringify({ requests: cloud.requests, state: cloud.state, tokenReads }));

@@ -678,6 +678,46 @@ test('PROCESS: a pac that fails after the SDK refused says why pac was asked —
   assert.strictEqual(refused.pacCalls.length, 1);
 });
 
+// The connection references are read with `dataverseRequest` (lib/dataverse-auth.js), whose failure this script prints. Here the REAL `dataverseRequest` runs over the fake transport (`realDataverseRequest` in the
+// preload) — its token handling and its handling of an answer are the real ones — and the service repeats the Dataverse token in the refusal of that read.
+const DATAVERSE_ECHO = ['syntheticDataverseHeaderPartNotARealCredential', 'syntheticDataversePayloadPartNotARealCredential', 'syntheticDataverseSignaturePartNotARealCredential'].join('.');
+const referencesRead = (status, body) => ({ host: new URL(ORG).hostname, pathIncludes: 'connectionreferences', method: 'GET', status, body });
+
+test('PROCESS: a refused read of the connection references prints no Dataverse token that the service repeats — whole or in a part — and keeps its status and its words; the failure is still ONE ok:false line', () => {
+  const [, payload] = DATAVERSE_ECHO.split('.');
+  const run = runScript('list-connections.js', [ORG], {
+    platform: {
+      tokens: { dataverse: DATAVERSE_ECHO },
+      connections: CONNECTIONS,
+      realDataverseRequest: true,
+      failures: [referencesRead(403, { error: { code: '0x80048306', message: `Rejected bearer ${DATAVERSE_ECHO}; the claim ${payload} may not read connection references` } })],
+    },
+  });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(run.lines.length, 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual(out, { ok: false, error: 'List connection references failed: HTTP 403 \u2014 Rejected bearer <token>; the claim <token> may not read connection references' });
+  assert.strictEqual(run.stderr.trim(), out.error);
+  for (const text of [run.stdout, run.stderr]) {
+    for (const secret of [DATAVERSE_ECHO, ...DATAVERSE_ECHO.split('.')]) assert.ok(!text.includes(secret), `the Dataverse token (or a part of it) was printed: ${text}`);
+  }
+  assert.strictEqual(run.requests.filter((r) => r.path.endsWith('/connectionreferences')).length, 1, 'the read was made once: a 403 is not retried');
+});
+
+test('PROCESS control: a read of the connection references that SUCCEEDS is printed as it came, even when a value in it is the token\'s own text — a success is the caller\'s data and is never altered', () => {
+  const run = runScript('list-connections.js', [ORG], {
+    platform: {
+      tokens: { dataverse: DATAVERSE_ECHO },
+      connections: CONNECTIONS,
+      realDataverseRequest: true,
+      failures: [referencesRead(200, { value: [{ connectionreferencelogicalname: 'new_weather', connectorid: WEATHER, connectionid: DATAVERSE_ECHO }] })],
+    },
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual(out.connectionReferences, [{ logicalName: 'new_weather', connectorId: WEATHER, connectionId: DATAVERSE_ECHO }]);
+});
+
 test('PROCESS: a usage error of list-connections.js — no environment URL, a flag it does not take — is the problem on stderr alone: exit 1, nothing on stdout, nothing asked of anyone', () => {
   for (const [what, argv, problem] of [
     ['no environment URL', [], /^Usage: node list-connections\.js <envUrl>\n$/],

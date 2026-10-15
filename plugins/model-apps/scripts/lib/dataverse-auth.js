@@ -518,8 +518,19 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     throw new Error(tokenFailureMessage(cleanUrl, `Failed to get Azure CLI token for ${cleanUrl}. Run 'az login' first.`));
   }
 
+  // What this call hands back or throws is what its callers print when it fails — `ensureOk` quotes `data.error.message`, and list-connections.js prints the failure of its connection-references read — and
+  // an authorization layer, or a gateway, that rejects a token may repeat it in the answer: whole, or one part of it, in the body or in a header. The text of a transport failure can repeat the request it was
+  // sending, too. So every token this call sent (the one a 401 replaced as well: a service may repeat either) is taken out of an answer that is NOT a success, and out of that text, by the scrubber the
+  // plugin's Dataverse HttpClient uses — the one scrubber, in lib/sdk-http-client.js; it is required here, and not at the top of the file, because that module requires this one when it loads. A success is
+  // the caller's data and is returned exactly as it came, whatever it holds. A value shorter than MIN_SCRUBBED_TOKEN_LENGTH is no access token and is never taken out (a test's stand-in token is one).
+  const { scrub, scrubAnswer, MIN_SCRUBBED_TOKEN_LENGTH } = require('./sdk-http-client.js');
+  const tokensSent = new Set();
+  const scrubText = (text) => [...tokensSent].reduce((out, sent) => scrub(out, sent), String(text));
+  const scrubValue = (value) => [...tokensSent].reduce((out, sent) => scrubAnswer(out, sent), value);
+
   const maxRetries = 2;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (token.length >= MIN_SCRUBBED_TOKEN_LENGTH) tokensSent.add(token);
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',
@@ -536,10 +547,10 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
       // creates or runs something, so it may already have been applied; re-sending it can create a
       // second row. Report the uncertain outcome instead — reads and idempotent methods still retry.
       if (res.incompleteResponse && String(method).toUpperCase() === 'POST') {
-        throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Check the result before running it again.`);
+        throw new Error(`Request failed: ${scrubText(res.error)} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Check the result before running it again.`);
       }
       if (attempt < maxRetries) continue;
-      throw new Error(`Request failed: ${res.error}`);
+      throw new Error(`Request failed: ${scrubText(res.error)}`);
     }
 
     if (res.statusCode === 401 && refreshOn401 && attempt < maxRetries) {
@@ -557,8 +568,10 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     if (res.body) {
       try { data = JSON.parse(res.body); } catch { data = res.body; }
     }
-    const out = { status: res.statusCode, data };
-    if (includeHeaders) out.headers = res.headers;
+    // Only an answer that is not a success is cleaned (see the scrubber above): a 2xx is the caller's data.
+    const success = res.statusCode >= 200 && res.statusCode < 300;
+    const out = { status: res.statusCode, data: success ? data : scrubValue(data) };
+    if (includeHeaders) out.headers = success ? res.headers : scrubValue(res.headers);
     return out;
   }
   throw new Error('Unreachable retry loop');
