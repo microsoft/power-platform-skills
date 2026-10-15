@@ -37,6 +37,11 @@
 // first one did. The first answer is the SDK's, with its status and code. When it does not say how the import ended (no answer, 401, 408, any 5xx) the failure says
 // the import was sent once and names its job, and the job's log is read once for the platform's own reason (never failing the report if it cannot be read).
 //
+// The one exception is an ImportSolution the platform REFUSED TO START: HTTP 429 with the Dataverse error code of "Cannot start the requested operation … because there is another … running at this
+// moment" (LOCK_REFUSAL_CODES) — a publish, or another import, holds the environment's customization lock. Such an import is sent again, under a NEW job id, but only after `GET importjobs(<id>)` for the
+// id the refused send carried answers 404, which proves it never started: at most five sends in all, after 10, 20, 40 and 60 s (or the platform's Retry-After, when that asks for longer). Any other
+// answer — another status, another kind of 429, a gateway's 5xx, no answer, a job that exists or a read that fails — is the first and the last send, as above. See `sendImport`.
+//
 // What the output holds of the settings file: entry NAMES, and what the sanitizer lets through of a text that quotes a value — which is less than every value, as follows. The file is read from
 // and written to disk only, and every text another party wrote — the SDK's, the platform's, pac's, a job log's — goes through `sanitizer`, WHOLE, before it is shown. What it does with a value depends
 // on what is KNOWN of the variable (secrecyOf): the package's own definition — the type the staging reply the SDK reads gives it — decides, never the file's optional `TypeId`, which can only add secrecy.
@@ -69,6 +74,9 @@
 // Output (stdout, one pure-ASCII JSON line), exit 0:
 //   template  { "ok": true, "source": "sdk", "out": "<absolute path>", "environmentVariables": 2, "connectionReferences": 1 }
 //   import    { "ok": true, "source": "sdk", "importJobId": "<guid>", "applied": { "environmentVariables": ["new_Url"], "connectionReferences": ["new_Dataverse"] } }
+//   and, when the platform refused the import (another operation held its lock) and it was sent again: the same, with `importJobId` the job of the send that ran, "importAttempts": <sends>, and
+//   "importRefusals": [ { "importJobId": "<guid>", "status": 429, "code": "0x80071151", "waitedMs": 10000 } ] — each refused send and the wait the run made after it. A first send that is taken
+//   prints none of these two.
 //   and, when pac answered because the SDK refused, "source": "pac" and "fallback": { "code": "<the SDK's code>", "message": "…" } — the SDK's own words, so
 //   the "Nothing was imported" in one is about the SDK's attempt, which stopped before any request; pac then did the work;
 //   "warnings": [...] when something the run made could not be cleaned up: the SDK could not delete the staged copy of the package it made, or `template` could not remove the temporary name its
@@ -77,12 +85,14 @@
 //
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
 //   { "ok": false, "error": "<message>", "code": "<the SDK's or the PAC step's code>" [, "status": <HTTP status of the answer>] [, "fallback": { … }, "importJobId": "<guid>"]
-//     [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
+//     [, "importAttempts": <sends>, "importRefusals": [ … ] — when the import was sent again after a refusal, the same two fields as on success; the failure is then the platform's own refusal or the
+//     failure of the last send, with the count added] [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { setTimeout: delay } = require('node:timers/promises');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl } = require('./lib/dataverse-auth.js');
-const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { createAzHttpClient, retryAfterMs } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
@@ -113,6 +123,24 @@ const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 // AGAIN: a second import of the same job id, or a second staging copy left behind. pac's own longest wait for an import is 60 minutes (`--max-async-wait-time`).
 const ACTION_TIMEOUT_MS = 60 * 60 * 1000;
 const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
+
+// The ONE exception to "sent exactly once" (solutionHttpClient): an ImportSolution that the platform REFUSED TO START is sent again, under a new import job id. The refusal is HTTP 429 with one of
+// these Dataverse error codes — matched as the code the Web API gives, never as English text:
+//   { "error": { "code": "0x80071151", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details.
+//                                                  -- The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later." } }
+// The platform's error reference names them (https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes):
+//   0x80071151  SolutionConcurrencyFailure — the code the whole two-part message above carries (measured on a live environment, for an uninstall and for an import)
+//   0x8004F061  CustomizationLockEx_BothUnknown, 0x8004F062 _BlockedUnknown, 0x8004F063 _BothKnownSame ("Cannot start another [{0}] because there is a previous [{1}] running at this moment"),
+//   0x8004F064  _BothKnownDifferent ("Cannot start the requested operation [{0}] because there is another [{1}] running at this moment"), 0x8004F067 _BlockingUnknown — the lock's own refusals
+// Left out on purpose: 0x80071154 ConcurrentOperationFailure ("The current {0} operation FAILED due to another concurrent operation": an operation that failed had started), the customization lock of
+// other services (0x8004F077, 0x80090412) and the service protection limits (0x80072321, 0x80072322, 0x80072326), a 429 of another kind with another remedy: those are sent once, as every answer was.
+// A code in this list says the import was refused; it is the job that proves it (importJobIsAbsent), because a refusal is what the platform SAYS and a gateway can say a good deal.
+const LOCK_REFUSAL_CODES = Object.freeze(['0x80071151', '0x8004F061', '0x8004F062', '0x8004F063', '0x8004F064', '0x8004F067']);
+// How many times one import is sent in all — the first send and up to four more — and how long the run waits before each of those: 10 s, 20 s, 40 s and 60 s, two and a half minutes in all, or the
+// platform's `Retry-After` when that is longer (retryAfterMs caps it at a minute; see https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations). A publish of all
+// customizations, the usual holder of the lock, is over in a minute or two; an import that holds it can run much longer, and the run then ends as it always did, with the platform's refusal.
+const IMPORT_MAX_SENDS = 5;
+const IMPORT_RESEND_WAITS_MS = Object.freeze([10 * 1000, 20 * 1000, 40 * 1000, 60 * 1000]);
 
 const REDACTED = '<redacted>';
 // The length from which a value is looked for as text. A value that is KNOWN not to be a secret and is shorter than this is not hidden from a message: it would be taken out of ordinary words
@@ -636,8 +664,80 @@ const lookUpJob = (id) => ` Look up import job ${id} (importjobs(${id}) in the W
 // (solutionHttpClient). `importFailure` does not give such a message to the sanitizer again: see there.
 const COMPOSED_MESSAGE = new WeakSet();
 
+// A client for ONE read: `sendOnce`, so a read that fails is not read again and the 401 refresh is not attempted. Both reads of an import job — the proof that a refused send did not start
+// (importJobIsAbsent) and the log of a failed one (readImportJobFailure) — are made through it, over the same seams as the import's own client (`http`: getToken, request, sleep, now).
+const readOnceClient = (env, http = {}) => createAzHttpClient(env, { ...http, sendOnce: () => true });
+
 /**
- * The az-token client of `env`, with the three solution actions given an hour to answer and sent EXACTLY ONCE.
+ * The platform's refusal to START an import, from a raw transport answer: `{ status: 429, code }` — the code spelled as the error reference spells it — when the answer is HTTP 429 and its Dataverse
+ * error body (`{ "error": { "code": "0x80071151", "message": "…" } }`) carries one of LOCK_REFUSAL_CODES, in either case of its hex digits; else null. Anything that does not say so — another status,
+ * another code, a body that is not JSON or has no `error.code` text, the lock's English words under another code — is not a refusal to start, and the import is not sent again.
+ */
+function lockRefusalOf(res) {
+  if (!res || res.error || res.statusCode !== 429) return null;
+  let body = res.body;
+  try {
+    if (typeof body === 'string') body = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const code = body && body.error && typeof body.error.code === 'string' ? body.error.code : null;
+  const known = code === null ? undefined : LOCK_REFUSAL_CODES.find((candidate) => candidate.toLowerCase() === code.toLowerCase());
+  return known ? { status: 429, code: known } : null;
+}
+
+// The job id an ImportSolution request carries, and the same request under another one. The body is the SDK's JSON text, and the package — a base64 string, up to ~170 MB — is nearly all of it, so the id is
+// found and swapped as TEXT: parsing that body and writing it again would hold it twice more in memory. Every other byte stays what it was. The key appears once — the package is base64, and every other
+// string in the body has its quotes escaped, so no text can spell `"ImportJobId":"` — and a body that has it any other number of times has no id, and so is never sent again.
+const IMPORT_JOB_ID = /"ImportJobId":"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"/g;
+function importJobIdOf(body) {
+  if (typeof body !== 'string') return null;
+  const found = [...body.matchAll(IMPORT_JOB_ID)];
+  return found.length === 1 ? found[0][1] : null;
+}
+const withImportJobId = (body, from, to) => body.replace(`"ImportJobId":"${from}"`, () => `"ImportJobId":"${to}"`);
+
+/**
+ * Whether the platform has NO import job with this id: `GET importjobs(<id>)` answered 404. "The ID of the import job that will be created to perform the import" is what the action's parameter is
+ * (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/importsolution), so an import that started has a job under the id it carried, and one that was refused has none.
+ * ANY other answer is not proof and is `false`: the job exists, the read was refused (401, 403), it failed (5xx), it was throttled, it got no answer, no token could be had.
+ */
+async function importJobIsAbsent(env, importJobId, http) {
+  try {
+    const answer = await readOnceClient(env, http).get(webApiUrl(env, `importjobs(${importJobId})?$select=importjobid`));
+    return answer.status === 404;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sends one ImportSolution request — and sends it AGAIN, under a NEW import job id, only while the platform's answer PROVES the import did not start. An import the platform may have accepted is
+ * never sent twice (a gateway answers 502, 504 or 401 for an import it accepted and is running: the rule of solutionHttpClient); what is sent again is the one answer that says the platform
+ * did not start it: its refusal because another operation holds the environment's customization lock (lockRefusalOf — the status and the Dataverse error code, not words), together with the
+ * import job the refused send carried not existing (importJobIsAbsent), read after the wait, so that it is the latest evidence before a second copy leaves. Then, for at most IMPORT_MAX_SENDS sends:
+ *   wait the step of IMPORT_RESEND_WAITS_MS, or the platform's `Retry-After` when that asks for longer  →  read the job  →  tell the listener  →  send again with a job id that was never used.
+ * Whatever else answers — any other status, a 429 of another kind, a gateway's 5xx, no answer, a job that exists or cannot be read — is returned as it came, and the send is the last.
+ * Returns `{ res, sent }`: the last answer, and the request that got it, whose job id is the one to look up.
+ */
+async function sendImport(send, options, { env, http, sleep, onRefused }) {
+  let sent = options;
+  for (let sends = 1; ; sends += 1) {
+    const res = await send({ ...sent, timeout: ACTION_TIMEOUT_MS });
+    const refusal = sends < IMPORT_MAX_SENDS ? lockRefusalOf(res) : null;
+    const refusedId = refusal && importJobIdOf(sent.body);
+    if (!refusedId) return { res, sent };
+    const waitedMs = Math.max(IMPORT_RESEND_WAITS_MS[sends - 1], retryAfterMs(res.headers, (http.now || Date.now)()));
+    await sleep(waitedMs);
+    if (!(await importJobIsAbsent(env, refusedId, http))) return { res, sent };
+    const nextImportJobId = crypto.randomUUID();
+    onRefused({ importJobId: refusedId, status: refusal.status, code: refusal.code, waitedMs, nextImportJobId });
+    sent = { ...sent, body: withImportJobId(sent.body, refusedId, nextImportJobId) };
+  }
+}
+
+/**
+ * The az-token client of `env`, with the three solution actions given an hour to answer and sent EXACTLY ONCE — but for the one answer that proves an import did not start (below).
  * The plain client re-sends a POST that got no answer after five minutes, and one whose answer was a 401 or a transient status (429, 500, 502, 503, 504).
  * For these actions every one of those is wrong (see ACTION_TIMEOUT_MS): a gateway answers 504 or 502 for an import the platform has accepted and is still
  * running, and a second send is a second import of the same job, a second staging copy left behind, or a refusal that hides what the first one did. So the
@@ -647,23 +747,30 @@ const COMPOSED_MESSAGE = new WeakSet();
  * variable is) are in it, and an import needs them to know what is a secret (secrecyOf). It only listens — the answer goes on to the SDK untouched.
  * `observe.sanitize(text, what)` is given the transport's own words in the error of a request that got no answer ("Request timed out", a socket error): they are another party's text, so they are
  * looked at where they are read, and the sentence the plugin puts around them is its own and is marked as composed (COMPOSED_MESSAGE) so that it is not looked at again.
+ * `observe.onImportRefused({ importJobId, status, code, waitedMs, nextImportJobId })` is what turns the one exception on, and the only caller that gives it is the import, which reports what it hears:
+ * an ImportSolution the platform REFUSED TO START — HTTP 429 with a lock code (LOCK_REFUSAL_CODES) — is sent again when the import job its refused send carried does not exist (sendImport), and the
+ * listener is told of each such send before it is made. Every other answer to ImportSolution, and every answer to the other two actions, is the first and the last send.
  */
 function solutionHttpClient(env, deps = {}, observe = {}) {
   const send = deps.request || makeRequest;
+  const sleep = deps.sleep || delay;
   return createAzHttpClient(env, {
     ...deps,
     sendOnce: (method, url) => method === 'POST' && LONG_ACTION.test(new URL(url).pathname),
     request: async (options) => {
       const action = LONG_ACTION.exec(new URL(options.url).pathname);
       if (!action) return send(options);
-      const res = await send({ ...options, timeout: ACTION_TIMEOUT_MS });
+      const { res, sent } = action[1] === 'ImportSolution' && typeof observe.onImportRefused === 'function'
+        ? await sendImport(send, options, { env, http: deps, sleep, onRefused: observe.onImportRefused })
+        : { res: await send({ ...options, timeout: ACTION_TIMEOUT_MS }), sent: options };
       if (!res.error) {
         if (action[1] === 'StageSolution' && observe.onStageReply) observe.onStageReply(res.body);
         return res;
       }
       let job = '';
       try {
-        const id = action[1] === 'ImportSolution' ? JSON.parse(options.body).ImportJobId : undefined;
+        // The job of the send that got no answer: after a refusal sent again, that is not the first one's.
+        const id = action[1] === 'ImportSolution' ? JSON.parse(sent.body).ImportJobId : undefined;
         job = id ? lookUpJob(id) : '';
       } catch {
         // The body is the SDK's own JSON; had it not parsed there would be no id to name.
@@ -900,7 +1007,7 @@ async function readImportJobFailure(env, importJobId, deps = {}) {
   try {
     if (deps.readJobLog) return jobLogFailure(await deps.readJobLog(env, importJobId));
     // `sendOnce`: a read that fails is not read again, and the 401 refresh is not attempted — one request, on the failure path.
-    const client = createAzHttpClient(env, { ...(deps.http || {}), sendOnce: () => true });
+    const client = readOnceClient(env, deps.http);
     const answer = await Promise.race([
       client.get(webApiUrl(env, `importjobs(${importJobId})?$select=data`)),
       new Promise((resolve) => {
@@ -939,7 +1046,7 @@ function isComposed(error) {
  * What this function sanitizes: the SDK's own message (it quotes names, and can quote what the platform said), the SDK's staging-reply reason, its cleanup warnings, and a job log's reason (which is
  * appended to the plugin's own sentence AFTER it is sanitized, and the sentence around it is not looked at).
  */
-async function importFailure(err, { sanitize, settings, importJobId, env, deps }) {
+async function importFailure(err, { sanitize, settings, importJobId, env, deps, sends }) {
   const original = err instanceof Error ? err : new Error(String(err));
   const failure = new Error(isComposed(original) ? original.message : sanitize(original.message, 'message', sdkLead(original)));
   if (typeof original.code === 'string') failure.code = original.code;
@@ -949,16 +1056,29 @@ async function importFailure(err, { sanitize, settings, importJobId, env, deps }
   if (warnings && warnings.length) failure.warnings = warnings.map((warning) => sanitize(warning, 'warning'));
   // The job is the SDK's: pac mints its own and never sees this one, so a failure of the pac import (it carries the reason pac was asked) names none.
   if (original.fallback) return failure;
+  // After a refusal that was sent again `importJobId` is the LAST send's, the one whose outcome there is to look up; the sends before it are listed, each with the wait that followed it.
+  const resent = sends && sends.refusals.length > 0;
   failure.importJobId = importJobId;
-  if (!importRequestFailed(original)) return failure;
-  const reason = await readImportJobFailure(env, importJobId, deps);
-  if (reason) {
-    failure.message += ` The import job's log (importjobs(${importJobId})) says: ${oneLine(sanitize(reason, "the job log's text"))}`;
-  } else if (outcomeUnknown(original.statusCode)) {
-    failure.message += ` The request was sent once and was not sent again: the environment may have accepted it.${lookUpJob(importJobId)}`;
+  if (resent) Object.assign(failure, resendReport(sends));
+  if (importRequestFailed(original)) {
+    const reason = await readImportJobFailure(env, importJobId, deps);
+    if (reason) {
+      failure.message += ` The import job's log (importjobs(${importJobId})) says: ${oneLine(sanitize(reason, "the job log's text"))}`;
+    } else if (outcomeUnknown(original.statusCode)) {
+      failure.message += `${resent ? ' The last send was not sent again' : ' The request was sent once and was not sent again'}: the environment may have accepted it.${lookUpJob(importJobId)}`;
+    }
   }
+  // The plugin's own sentences, appended after the platform's words were sanitized and, like the ones above, not looked at again: they hold counts, ids it minted and the code it matched — no value.
+  if (resent) failure.message += ` ${resendSentence(sends)}${original.statusCode === 429 && sends.refusals.length + 1 === IMPORT_MAX_SENDS ? ` It sends at most ${IMPORT_MAX_SENDS} times: run the import again when the other operation has finished.` : ''}`;
   return failure;
 }
+
+// What a run that sent its import again reports, in the output: how many sends it took (`importAttempts`), and each send that was refused and waited out (`importRefusals`) — the job it carried,
+// the status and the code of the refusal, and how long the run waited before the next send. The last send is the output's own `importJobId`. Nothing but numbers, ids the plugin minted and the
+// code it matched: no word of the platform's, so nothing in it needs the sanitizer.
+const resendReport = (sends) => (sends.refusals.length > 0 ? { importAttempts: sends.refusals.length + 1, importRefusals: sends.refusals } : {});
+const secondsOf = (ms) => `${Math.round(ms / 100) / 10} s`;
+const resendSentence = (sends) => `ImportSolution was sent ${sends.refusals.length + 1} times. Each send before the last was refused before it started (HTTP 429, code ${[...new Set(sends.refusals.map((refusal) => refusal.code))].join(', ')}: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${sends.refusals.map((refusal) => secondsOf(refusal.waitedMs)).join(', ')} before sending again.`;
 
 /** `import`: the package into `--env`, with the settings file applied in the same import. */
 async function runImport(request, deps = {}) {
@@ -969,10 +1089,16 @@ async function runImport(request, deps = {}) {
   const sanitize = sanitizer(settings, definitions);
   const { base64 } = inspectPackage(request.packagePath, { withBytes: true });
   const importJobId = deps.importJobId || crypto.randomUUID();
+  // The import's sends, as the client tells of them (solutionHttpClient's `onImportRefused`): `jobId` is the job the last send carried — the first send's until a refusal is sent again.
+  const sends = { jobId: importJobId, refusals: [] };
+  const onImportRefused = ({ importJobId: refused, status, code, waitedMs, nextImportJobId }) => {
+    sends.refusals.push({ importJobId: refused, status, code, waitedMs });
+    sends.jobId = nextImportJobId;
+  };
   try {
     const outcome = await (deps.sdkFirst || sdkFirst)(request.env, {
       refusal: (error) => importRefusal(error, settings),
-      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize }),
+      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize, onImportRefused }),
       fromSdk: (sdk) => sdk.importSolution({
         base64,
         // pac's defaults: --force-overwrite and --activate-plugins are off. Both are required by the SDK, which no longer defaults them.
@@ -987,20 +1113,21 @@ async function runImport(request, deps = {}) {
       const { appliedSettings, warnings } = outcome.value;
       return {
         source: 'sdk',
-        importJobId,
+        importJobId: sends.jobId,
         applied: appliedSettings || { environmentVariables: [], connectionReferences: [] },
         ...(warnings && warnings.length ? { warnings: warnings.map((warning) => sanitize(warning, 'warning')) } : {}),
+        ...resendReport(sends),
       };
     }
     return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize) };
   } catch (err) {
-    throw await importFailure(err, { sanitize, settings, importJobId, env: request.env, deps });
+    throw await importFailure(err, { sanitize, settings, importJobId: sends.jobId, env: request.env, deps, sends });
   }
 }
 
-// The failure a run prints: the message, the SDK's or the PAC step's code, the HTTP status of the answer that failed it, the reason pac was asked, the import job, and
-// the warnings the SDK attached about what it could not clean up (a staged copy of the package) — each only when there is one. An import's error arrives with its
-// warnings already read and cleaned (importFailure); any other reads them here.
+// The failure a run prints: the message, the SDK's or the PAC step's code, the HTTP status of the answer that failed it, the reason pac was asked, the import job, how many times the import was
+// sent when it was sent again (and each refused send), and the warnings the SDK attached about what it could not clean up (a staged copy of the package) — each only when there is one. An import's
+// error arrives with its warnings already read and cleaned (importFailure); any other reads them here.
 function describeFailure(error, readWarnings = () => undefined) {
   const code = error && typeof error.code === 'string' ? error.code : undefined;
   const warnings = error && Array.isArray(error.warnings) ? error.warnings : readWarnings(error);
@@ -1011,6 +1138,7 @@ function describeFailure(error, readWarnings = () => undefined) {
     ...(error && Number.isInteger(error.statusCode) && error.statusCode > 0 ? { status: error.statusCode } : {}),
     ...(error && error.fallback ? { fallback: error.fallback } : {}),
     ...(error && error.importJobId ? { importJobId: error.importJobId } : {}),
+    ...(error && Number.isInteger(error.importAttempts) ? { importAttempts: error.importAttempts, importRefusals: error.importRefusals } : {}),
     ...(warnings && warnings.length ? { warnings } : {}),
   };
 }
@@ -1058,6 +1186,10 @@ module.exports = {
   importRefusal,
   pacOnlyFeatureMessages,
   solutionHttpClient,
+  lockRefusalOf,
+  LOCK_REFUSAL_CODES,
+  IMPORT_MAX_SENDS,
+  IMPORT_RESEND_WAITS_MS,
   jobLogFailure,
   readImportJobFailure,
   lookUpJob,

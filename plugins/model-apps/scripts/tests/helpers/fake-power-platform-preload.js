@@ -11,6 +11,10 @@
 //                                       answer at all (a timeout, a dropped connection), as the transport reports it: { error: "<text>" }
 //   hooks: [ { pathIncludes, method, writeFile, content } ]   when such a request arrives, write that file (a path relative to the run's folder, which is the
 //                                       working directory) before the fake answers — what another program or a person does while a script waits for the service
+//   instantWaits                         the wait solution-settings.js makes before it sends a refused import again returns at once, and each wait it asked for
+//                                       (its length in milliseconds) is recorded in `state.waits`. That wait is `require('node:timers/promises').setTimeout`: nothing
+//                                       else in these scripts uses it, so no other timer changes — the job log's 20-second race, the client's own backoff and every
+//                                       timeout stay real. It is replaced here, before the script loads, because the script takes the function when it loads.
 // FAKE_PLATFORM_LOG names a file the requests, the state and the Azure CLI token reads ({ dataverse, powerApps }: one per call of getAuthToken[Async] /
 // getPowerAppsToken[Async], that is one per `az` process a real run would start) are written to when the process exits. The connection-references read a
 // script makes through `dataverseRequest` is answered without a token read here, so these counts are the reads of the SDK path and its preflight alone.
@@ -38,6 +42,10 @@ const cloud = createCloud({
 });
 
 const tokenReads = { dataverse: 0, powerApps: 0 };
+if (config.instantWaits) {
+  cloud.state.waits = [];
+  require('node:timers/promises').setTimeout = async (ms) => { cloud.state.waits.push(ms); };
+}
 auth.makeRequest = cloud.request;
 auth.getAuthToken = () => { tokenReads.dataverse += 1; return config.noDataverseToken ? null : cloud.tokens.dataverse; };
 auth.getAuthTokenAsync = async () => auth.getAuthToken();

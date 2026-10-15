@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const ss = require('../solution-settings.js');
-const { createCloud, ORG, DATAVERSE_TOKEN } = require('./helpers/fake-power-platform.js');
+const { createCloud, LOCK_REFUSAL, ORG, DATAVERSE_TOKEN } = require('./helpers/fake-power-platform.js');
 const { runScript } = require('./helpers/run-with-fakes.js');
 const { VALUES, spellingsOfValue } = require('./helpers/value-spellings.js');
 
@@ -384,6 +384,153 @@ test('REAL BUNDLE: a failed import reads its job\'s log once through the same cl
   assert.deepStrictEqual(reads.map((r) => [r.method, r.search]), [['GET', '?$select=data']]);
 });
 
+// --- an import the platform refused before it started ---------------------------------------------------------------------------------------------
+// The platform refuses to START an import while another operation (a publish, another import) holds its customization lock: HTTP 429 and the lock's code (LOCK_REFUSAL). The refused
+// send names a job that never existed, so — and only so — the script waits and sends the import again under a new job id. Here the REAL SDK stages the package, sends the import,
+// and raises the ConnectionError for the refusal: what the stand-ins of solution-settings.test.js cannot say is that a second send is a second ImportSolution and nothing more.
+const SENT_AGAIN = (sends, waits) => `ImportSolution was sent ${sends} times. Each send before the last was refused before it started (HTTP 429, code 0x80071151: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${waits} before sending again.`;
+const wireOf = (cloud) => cloud.requests.map((r) => `${r.method} ${r.path.replace(/^\/api\/data\/v9\.\d+\//, '')}${r.search}`);
+const withWaits = (http, waits) => ({ ...http, sleep: async (ms) => { waits.push(ms); } });
+
+test('REAL BUNDLE: an import refused while another operation held the lock is sent again under a new job id — the package is staged once, the second send carries the same package and parameters — and one import is accepted', async () => {
+  const { cloud, http } = world({ importRefusals: [LOCK_REFUSAL] });
+  const waits = [];
+  const f = files();
+  const result = await ss.runImport(importRequest(f), { http: withWaits(http, waits), pac: never, importJobId: JOB });
+  assert.strictEqual(cloud.state.imports.length, 1, 'the platform took one import');
+  assert.strictEqual(cloud.state.refusedImports.length, 1, 'and refused one');
+  const [accepted] = cloud.state.imports;
+  const [refused] = cloud.state.refusedImports;
+  assert.strictEqual(refused.ImportJobId, JOB);
+  assert.match(accepted.ImportJobId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.notStrictEqual(accepted.ImportJobId, JOB);
+  assert.deepStrictEqual({ ...accepted, ImportJobId: JOB }, refused, 'the same package and the same ComponentParameters: only the job id differs');
+  assert.deepStrictEqual(result, {
+    source: 'sdk',
+    importJobId: accepted.ImportJobId,
+    applied: { environmentVariables: ['new_Secret'], connectionReferences: ['new_Dataverse'] },
+    importAttempts: 2,
+    importRefusals: [{ importJobId: JOB, status: 429, code: '0x80071151', waitedMs: 10000 }],
+  });
+  assert.deepStrictEqual(waits, [10000]);
+  // The SDK staged ONCE and deleted its copy: a second send is a second ImportSolution, never a second staging. The one read in between is the proof that the refused send's job does not exist.
+  assert.deepStrictEqual(wireOf(cloud), [
+    'POST StageSolution',
+    'DELETE stagesolutionuploads(33333333-3333-4333-8333-333333333333)',
+    'POST ImportSolution',
+    `GET importjobs(${JOB})?$select=importjobid`,
+    'POST ImportSolution',
+  ]);
+  assert.deepStrictEqual(cloud.state.jobReads, [JOB]);
+  assert.strictEqual(cloud.state.staged.length, 1);
+  assert.ok(!JSON.stringify(result).includes(SECRET) && !JSON.stringify(result).includes(CONNECTION_ID), 'the output names entries, never their values');
+  assert.ok(cloud.requests.every((r) => r.authorization === `Bearer ${DATAVERSE_TOKEN}`), 'every request — the proof read too — carried the Dataverse token');
+});
+
+test('REAL BUNDLE: a file that fills nothing in is a plain import, and its refusal is sent again just the same — no staging, either time', async () => {
+  const { cloud, http } = world({ importRefusals: [LOCK_REFUSAL, LOCK_REFUSAL] });
+  const f = files({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: '' }], ConnectionReferences: [{ LogicalName: 'new_Dataverse', ConnectionId: '' }] });
+  const result = await ss.runImport(importRequest(f), { http: withWaits(http, []), pac: never, importJobId: JOB });
+  const refusedIds = cloud.state.refusedImports.map((body) => body.ImportJobId);
+  assert.deepStrictEqual(refusedIds.length, 2);
+  assert.deepStrictEqual(wireOf(cloud), [
+    'POST ImportSolution',
+    `GET importjobs(${refusedIds[0]})?$select=importjobid`,
+    'POST ImportSolution',
+    `GET importjobs(${refusedIds[1]})?$select=importjobid`,
+    'POST ImportSolution',
+  ]);
+  assert.strictEqual(cloud.state.staged.length, 0);
+  assert.strictEqual(result.importAttempts, 3);
+  assert.deepStrictEqual(result.applied, { environmentVariables: [], connectionReferences: [] });
+});
+
+test('REAL BUNDLE: five refusals in a row end the run: the SDK\'s own failure for the fifth, with the count added — every send named a job of its own, no import was taken, and pac is not asked', async () => {
+  const { cloud, http } = world({ importRefusals: Array.from({ length: 5 }, () => LOCK_REFUSAL) });
+  const waits = [];
+  const f = files();
+  await assert.rejects(ss.runImport(importRequest(f), { http: withWaits(http, waits), pac: never, importJobId: JOB }), (err) => {
+    const ids = cloud.state.refusedImports.map((body) => body.ImportJobId);
+    assert.strictEqual(new Set(ids).size, 5);
+    assert.strictEqual(err.message, `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${SENT_AGAIN(5, '10 s, 20 s, 40 s, 60 s')} It sends at most 5 times: run the import again when the other operation has finished.`);
+    assert.deepStrictEqual([err.code, err.statusCode, err.importJobId, err.importAttempts], ['CONNECTION_ERROR', 429, ids[4], 5]);
+    assert.deepStrictEqual(err.importRefusals.map((r) => [r.importJobId, r.waitedMs]), ids.slice(0, 4).map((id, i) => [id, [10000, 20000, 40000, 60000][i]]));
+    return true;
+  });
+  assert.strictEqual(cloud.state.imports.length, 0, 'the platform took no import');
+  assert.deepStrictEqual(waits, [10000, 20000, 40000, 60000]);
+  // Four proofs, one after each of the first four refusals; then the one read of the last job's log that every failed import makes (`$select=data`).
+  assert.deepStrictEqual(cloud.requests.filter((r) => r.path.includes('/importjobs(')).map((r) => r.search), [...Array(4).fill('?$select=importjobid'), '?$select=data']);
+  assert.strictEqual(cloud.requests.filter((r) => r.path.endsWith('/StageSolution')).length, 1, 'staged once, for five sends');
+});
+
+test('REAL BUNDLE: a refusal whose job exists, or whose job cannot be read, is NOT sent again — the SDK\'s failure as it always was, and the log of the job read once after it', async () => {
+  for (const [what, jobLogAnswer] of [
+    ['the job exists', json(200, { importjobid: JOB, data: '<importexportxml succeeded="success" status="Completed"/>' })],
+    ['the read is refused', json(403, { error: { message: 'principal user is missing prvReadImportJob privilege' } })],
+    ['the read fails', json(503, { error: { message: 'service unavailable' } })],
+    ['the read gets no answer', { error: 'Request timed out' }],
+  ]) {
+    const { cloud, http } = world({ importRefusals: [LOCK_REFUSAL], jobLogAnswer });
+    const f = files();
+    await assert.rejects(ss.runImport(importRequest(f), { http: withWaits(http, []), pac: never, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.message, `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message}`, what);
+      assert.deepStrictEqual([err.statusCode, err.importJobId, 'importAttempts' in err, 'importRefusals' in err], [429, JOB, false, false], what);
+      return true;
+    }, what);
+    assert.strictEqual(cloud.requests.filter((r) => r.path.endsWith('/ImportSolution')).length, 1, `${what}: one ImportSolution`);
+    assert.deepStrictEqual(cloud.requests.filter((r) => r.path.includes('/importjobs(')).map((r) => r.search), ['?$select=importjobid', '?$select=data'], `${what}: the proof, then the failure's usual read of the log`);
+  }
+});
+
+test('REAL BUNDLE: a 429 of another kind, and the lock\'s words under another code, are sent once — no proof, no wait — as every 429 was before', async () => {
+  const throttled = [
+    { status: 429, code: '0x80072322', message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.', headers: { 'retry-after': '20' } },
+    { status: 429, code: '0x80071154', message: 'The current Import operation failed due to another concurrent operation running at the same time. Please try again later.' },
+    { ...LOCK_REFUSAL, code: '0x80048d19' },
+    { ...LOCK_REFUSAL, status: 503 },
+  ];
+  for (const refusal of throttled) {
+    const { cloud, http } = world({ importRefusals: [refusal] });
+    const waits = [];
+    const f = files();
+    await assert.rejects(ss.runImport(importRequest(f), { http: withWaits(http, waits), pac: never, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.statusCode, refusal.status);
+      assert.deepStrictEqual(['importAttempts' in err, 'importRefusals' in err], [false, false]);
+      return true;
+    }, refusal.code);
+    assert.deepStrictEqual([cloud.state.refusedImports.length, waits.length], [1, 0], `${refusal.code}: one send, no wait`);
+    assert.deepStrictEqual(cloud.requests.filter((r) => r.path.includes('/importjobs(')).map((r) => r.search), ['?$select=data'], `${refusal.code}: only the failure's usual read of the log`);
+  }
+});
+
+test('REAL BUNDLE: a send that follows a refusal and is answered by a gateway is the failure — one more send is not made — and the job to look up is the one that send carried', async () => {
+  // The platform refuses the first send, takes the second (it is recorded) and a gateway answers 504 for it: the second send's outcome is unknown.
+  const { cloud, http } = world({ importRefusals: [LOCK_REFUSAL], importAnswer: json(504, { error: { code: '0x80048d19', message: 'gateway timeout' } }) });
+  const f = files();
+  await assert.rejects(ss.runImport(importRequest(f), { http: withWaits(http, []), pac: never, importJobId: JOB }), (err) => {
+    const second = cloud.state.imports[0].ImportJobId;
+    assert.notStrictEqual(second, JOB);
+    assert.strictEqual(err.message, `HTTP 504 from ${ORG}/api/data/v9.0/ImportSolution: gateway timeout The last send was not sent again: the environment may have accepted it.${ss.lookUpJob(second)} ${SENT_AGAIN(2, '10 s')}`);
+    assert.deepStrictEqual([err.statusCode, err.importJobId, err.importAttempts], [504, second, 2]);
+    return true;
+  });
+  assert.strictEqual(cloud.requests.filter((r) => r.path.endsWith('/ImportSolution')).length, 2);
+});
+
+test('REAL BUNDLE: a refusal that quotes the settings file reaches no message — the SDK\'s words are withheld, the resend\'s own sentences hold no value and are shown whole', async () => {
+  const quoting = { ...LOCK_REFUSAL, message: `${LOCK_REFUSAL.message} (value ${SECRET}, connection ${CONNECTION_ID})` };
+  const { cloud, http } = world({ importRefusals: Array.from({ length: 5 }, () => quoting) });
+  const f = files();
+  await assert.rejects(ss.runImport(importRequest(f), { http: withWaits(http, []), pac: never, importJobId: JOB }), (err) => {
+    assert.strictEqual(err.message, `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${WITHHELD('message')} ${SENT_AGAIN(5, '10 s, 20 s, 40 s, 60 s')} It sends at most 5 times: run the import again when the other operation has finished.`);
+    const printed = JSON.stringify(ss.describeFailure(err));
+    assert.ok(!printed.includes(SECRET) && !printed.includes(CONNECTION_ID), printed);
+    return true;
+  });
+  assert.strictEqual(cloud.state.refusedImports.length, 5);
+});
+
 // --- real processes -----------------------------------------------------------------------------------------------------------------
 
 const STAGE_CONFIG = { solution: { packageBase64: ZIP.toString('base64'), stage: STAGE } };
@@ -657,6 +804,57 @@ test('PROCESS: ExportSolution and StageSolution are sent once too — a gateway\
   assert.strictEqual(staged.status, 1);
   assert.strictEqual(staged.state.staged.length, 1, 'one StageSolution');
   assert.deepStrictEqual([JSON.parse(staged.lines[0]).code, JSON.parse(staged.lines[0]).status], ['CONNECTION_ERROR', 503]);
+});
+
+test('PROCESS: an import refused while another operation held the lock is sent again — exit 0, one line naming the job that ran, the sends and each refusal — and no secret or connection id is anywhere', () => {
+  const run = importInProcess({ platform: { instantWaits: true }, solution: { importRefusals: [LOCK_REFUSAL, LOCK_REFUSAL] } });
+  assert.strictEqual(run.status, 0, run.stderr);
+  const [accepted] = run.state.imports;
+  const refusedIds = run.state.refusedImports.map((body) => body.ImportJobId);
+  assert.strictEqual(refusedIds.length, 2, 'two sends were refused');
+  assert.strictEqual(run.state.imports.length, 1, 'one import was taken');
+  assert.strictEqual(importPosts(run), 3);
+  assert.deepStrictEqual(JSON.parse(run.lines[0]), {
+    ok: true,
+    source: 'sdk',
+    importJobId: accepted.ImportJobId,
+    applied: { environmentVariables: ['new_Secret'], connectionReferences: [] },
+    importAttempts: 3,
+    importRefusals: [
+      { importJobId: refusedIds[0], status: 429, code: '0x80071151', waitedMs: 10000 },
+      { importJobId: refusedIds[1], status: 429, code: '0x80071151', waitedMs: 20000 },
+    ],
+  });
+  assert.deepStrictEqual(run.state.waits, [10000, 20000], 'the script waited as it says — the waits it asked for, which the preload did not really wait');
+  assert.strictEqual(run.stderr, '');
+  noSecrets(run);
+  assertPrintsNone(run, [SECRET, CONNECTION_ID]);
+});
+
+test('PROCESS: five refusals in a row end the run — exit 1, one ok:false line with the count, the last job and each refused one, the same words on stderr — and nothing is imported', () => {
+  const run = importInProcess({ platform: { instantWaits: true }, solution: { importRefusals: Array.from({ length: 5 }, () => LOCK_REFUSAL) } });
+  assert.strictEqual(run.status, 1);
+  const out = JSON.parse(run.lines[0]);
+  const ids = run.state.refusedImports.map((body) => body.ImportJobId);
+  assert.strictEqual(ids.length, 5);
+  assert.deepStrictEqual([out.ok, out.code, out.status, out.importJobId, out.importAttempts], [false, 'CONNECTION_ERROR', 429, ids[4], 5]);
+  assert.deepStrictEqual(out.importRefusals.map((r) => [r.importJobId, r.waitedMs]), ids.slice(0, 4).map((id, i) => [id, [10000, 20000, 40000, 60000][i]]));
+  assert.strictEqual(out.error, `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${SENT_AGAIN(5, '10 s, 20 s, 40 s, 60 s')} It sends at most 5 times: run the import again when the other operation has finished.`);
+  assert.strictEqual(run.stderr.trim(), out.error, 'stderr says the same');
+  assert.deepStrictEqual(run.state.waits, [10000, 20000, 40000, 60000]);
+  assert.strictEqual(importPosts(run), 5);
+  assert.strictEqual(run.state.imports.length, 0);
+  assert.ok(!('fallback' in out), 'pac was not asked');
+  noSecrets(run);
+});
+
+test('PROCESS: a refusal whose job exists is not sent again — exit 1, the line a refused import always had, with no count', () => {
+  const run = importInProcess({ platform: { instantWaits: true }, solution: { importRefusals: [LOCK_REFUSAL], jobLogAnswer: json(200, { importjobid: 'x' }) } });
+  assert.strictEqual(run.status, 1);
+  assert.strictEqual(importPosts(run), 1);
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual(out, { ok: false, error: `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message}`, code: 'CONNECTION_ERROR', status: 429, importJobId: run.state.refusedImports[0].ImportJobId });
+  assert.deepStrictEqual(run.state.waits, [10000], 'the proof is read after the wait: this is the one wait that came to nothing');
 });
 
 // --- nothing a settings file holds comes back out ------------------------------------------------------------------------------------------------

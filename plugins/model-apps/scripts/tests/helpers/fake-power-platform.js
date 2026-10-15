@@ -8,8 +8,10 @@
 //     POST ExportSolution                                         -> { ExportSolutionFile: <base64 package> }
 //     POST StageSolution                                          -> { StageSolutionResults: { StageSolutionStatus, StageSolutionUploadId, SolutionComponentsDetails } }
 //     DELETE stagesolutionuploads(<id>)                           -> 204
-//     POST ImportSolution                                         -> 204 (the body is recorded)
-//     GET  importjobs(<id>)?$select=data                          -> { importjobid, data: <the job's XML log> } (config.solution.jobLog), else 404
+//     POST ImportSolution                                         -> 204 (the body is recorded in `state.imports`) — or, for a send that config.solution.importRefusals
+//                                                                    refuses, the platform's answer when another operation holds its lock (HTTP 429 and a lock code),
+//                                                                    which starts nothing: the body goes to `state.refusedImports`, not to `state.imports`
+//     GET  importjobs(<id>)?$select=…                             -> { importjobid, data: <the job's XML log> } (config.solution.jobLog), else 404
 //   Business Application Platform  https://api.bap.microsoft.com (Public) | https://test.api.bap.microsoft.com (Test)
 //     GET providers/Microsoft.BusinessAppPlatform/environments/<id>
 //   Power Apps runtime             the origin the BAP row names, e.g. https://unitedstates.api.powerapps.com
@@ -24,6 +26,18 @@ const ORG = 'https://contoso.crm.dynamics.com';
 const ENVIRONMENT_ID = '11111111-1111-4111-8111-111111111111';
 const DATAVERSE_TOKEN = 'dataverse-test-token';
 const POWER_APPS_TOKEN = 'power-apps-test-token';
+
+// What the platform answers when it cannot START an operation because another one holds the environment's customization lock. The words are the ones measured on a live
+// environment for an ImportSolution sent while a "publish all customizations" was running; the code is the one measured for the same two-part message on a solution uninstall
+// (`SolutionConcurrencyFailure` in the platform's error reference):
+//   HTTP 429  { "error": { "code": "0x80071151", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. … Please try again later." } }
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes
+const LOCK_REFUSAL = Object.freeze({
+  status: 429,
+  code: '0x80071151',
+  message: 'Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details. '
+    + '-- The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later.',
+});
 
 const json = (statusCode, body, headers = {}) => ({ statusCode, headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 const empty = (statusCode) => ({ statusCode, headers: {}, body: '' });
@@ -98,7 +112,9 @@ function stagedReference({ logicalName, connectorId }) {
  * @param {object[]} [config.references] - Dataverse `connectionreferences` rows
  * @param {{ status: number, data?: any }} [config.referencesAnswer] - what the `connectionreferences` read answers instead of those rows
  * @param {object} [config.bapRow] - properties merged over the BAP row's own
- * @param {object} [config.solution] - { packageBase64, stage: { status, variables, references, uploadId }, exportAnswer, importAnswer, deleteStagingAnswer, jobLog, jobLogAnswer }
+ * @param {object} [config.solution] - { packageBase64, stage: { status, variables, references, uploadId }, exportAnswer, importAnswer, importRefusals, deleteStagingAnswer, jobLog, jobLogAnswer }.
+ *   `importRefusals` is a list with one entry per ImportSolution SEND, in order: `{ status, code, message, headers? }` is the platform refusing that send before it starts
+ *   (see LOCK_REFUSAL), and `null` — or the end of the list — is the platform taking it (recorded, answered by `importAnswer`, else 204)
  * @param {(request: object) => (object|undefined)} [config.override] - answers a request itself (return a response) or defers (undefined)
  * @param {object} [config.tokens] - the token each audience must carry: { dataverse, powerApps }
  */
@@ -111,7 +127,7 @@ function createCloud(config = {}) {
   const tokens = { dataverse: DATAVERSE_TOKEN, powerApps: POWER_APPS_TOKEN, ...(config.tokens || {}) };
   const solution = config.solution || {};
   const requests = [];
-  const state = { staged: [], deletedStaging: [], imports: [], exports: [], jobReads: [] };
+  const state = { staged: [], deletedStaging: [], imports: [], refusedImports: [], exports: [], jobReads: [], importSends: 0 };
 
   const filter = `environment eq '${environmentId}'`;
   const filterOk = (u) => u.searchParams.get('$filter') === filter;
@@ -151,6 +167,12 @@ function createCloud(config = {}) {
       return solution.deleteStagingAnswer || empty(204);
     }
     if (method === 'POST' && route === 'ImportSolution') {
+      const refusal = (solution.importRefusals || [])[state.importSends];
+      state.importSends += 1;
+      if (refusal) {
+        state.refusedImports.push(body);
+        return json(refusal.status, { error: { code: refusal.code, message: refusal.message } }, refusal.headers || {});
+      }
       state.imports.push(body);
       return solution.importAnswer || empty(204);
     }
@@ -267,6 +289,7 @@ module.exports = {
   swagger,
   stagedVariable,
   stagedReference,
+  LOCK_REFUSAL,
   ORG,
   ENVIRONMENT_ID,
   DATAVERSE_TOKEN,

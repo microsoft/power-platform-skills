@@ -1169,7 +1169,14 @@ writes the settings file of the solution (an empty `ConnectionId` for each conne
 file already filled in is not lost), the deployer fills it in, and
 `node "${PLUGIN_ROOT}/scripts/solution-settings.js" import --env '<target-envUrl>' --package '<solution.zip>' --settings '<settings.json>'`
 imports the package and applies the settings in the same import. Each prints one JSON line with
-`source` (`"sdk"`, or `"pac"` with a `fallback` that says why the SDK did not do the work). A secret value
+`source` (`"sdk"`, or `"pac"` with a `fallback` that says why the SDK did not do the work). The import is
+sent once: a gateway's answer for an import the platform may have accepted is never answered with a second one.
+The one exception is the platform's refusal to start it because a publish, or another import, holds the
+environment's lock (HTTP 429, "Cannot start the requested operation … because there is another … running"):
+the script then waits and sends it again under a new job id — only after it has read that no import job exists
+for the refused one, in at most five sends over about two and a half minutes — and says so in its output
+(`importAttempts`, `importRefusals`). When the sends run out the failure is the platform's refusal: run the
+import again when the other operation has finished. A secret value
 and a connection id are kept out of what they print — a text that quotes one is withheld, or has it
 replaced by `<redacted>` — with these limits: a value of fewer than six characters that is known not to be
 a secret is not hidden; one whose type is not known (the `pac` route, a name the package does not define)
