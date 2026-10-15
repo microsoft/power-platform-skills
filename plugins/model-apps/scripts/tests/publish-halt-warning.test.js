@@ -17,6 +17,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const { runSdkBuild, settleOwedPublishes } = require('../lib/sdk-build.js');
+const { validateAppSpec } = require('../lib/app-spec.js');
 const { STAGES } = require('../lib/stages.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { createFakeDataverse } = require('./helpers/fake-dataverse.js');
@@ -239,13 +240,13 @@ function cliSdk(dataverse) {
   const published = [];
   return { published, sdk: { dataverse, publishArtifact: async (type, id) => { published.push(`${type} ${id}`); return { type, id, shipped: true, publish: { kind: 'verified' } }; } } };
 }
-async function runCli({ attempts, dataverse, opts = {}, warn = true }) {
+async function runCli({ attempts, dataverse, opts = {}, warn = true, spec = desk }) {
   const { sdk, published } = cliSdk(dataverse);
   let n = 0;
   const runBuild = async () => { const outcome = attempts[Math.min(n, attempts.length - 1)]; n += 1; if (outcome instanceof Error) throw outcome; return outcome; };
   const warnings = [];
   const deps = { sdk, provisionSdk: sdk, runBuild, discoverOpDiffState: async () => quietState, ...(warn ? { warn: (m) => warnings.push(String(m)) } : {}) };
-  const settled = await buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0, ...opts }, deps).then((r) => ({ result: r }), (error) => ({ error }));
+  const settled = await buildModelApp(spec, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0, ...opts }, deps).then((r) => ({ result: r }), (error) => ({ error }));
   return { ...settled, warnings, published, attempts: n };
 }
 
@@ -302,4 +303,61 @@ test('an SDK with no client to read with, or no warning callback, changes nothin
   assert.deepStrictEqual(warnings, []);
   const silent = await runCli({ attempts: [new Error('bad request')], dataverse: platformLayers({ savedqueries: [savedRow('savedqueries', 'Open Tickets', 'new_ticket')] }), warn: false });
   assert.match(silent.error.message, /bad request/);
+});
+
+// A page's data sources are tables the spec names that validation does not make it declare, and the app holds the default view of each:
+// a saved view on one of them is as unpublished as one on a declared table, and the line has to say so.
+function deskWithPage() {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'insights', name: 'Insights', dataSources: ['contoso_page_only'], source: { kind: 'tsx', codeFile: 'Insights.tsx' } }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'insights', title: 'Insights' });
+  return spec;
+}
+
+test('a table only a page names is read like the others, so a saved view on it is not missed', async () => {
+  const spec = deskWithPage();
+  const validated = validateAppSpec(spec);
+  assert.deepStrictEqual({ ok: validated.ok, errors: validated.errors }, { ok: true, errors: [] }, 'a valid spec: the table is not declared in entities');
+  assert.ok(!spec.entities.some((e) => e.schemaName === 'contoso_page_only'));
+  const dataverse = platformLayers({ savedqueries: [savedRow('savedqueries', 'Unpublished page default view', 'contoso_page_only')] });
+  const { error, warnings } = await runCli({ attempts: [new Error('bad request')], dataverse, spec });
+  assert.match(error.message, /bad request/);
+  for (const url of dataverse.urls) assert.ok(url.includes("'contoso_page_only'"), `${url} asks about the page's table`);
+  assert.strictEqual(warnings.length, 1, warnings.join('\n'));
+  assert.match(warnings[0], /\u2014 contoso_page_only: view Unpublished page default view\. /);
+});
+
+// A halt after the publish phase completed did not stop before it: the build says nothing about what is unpublished then, because what
+// the phase published is live and the rest is not what this line is about.
+const haltAfterPublish = (message, paid) => Object.defineProperties(new Error(message), { owedPublishes: { value: [] }, owedPaid: { value: paid } });
+
+test('a halt after the publish phase completed reads nothing and does not say the build stopped before it', async () => {
+  const dataverse = platformLayers({ savedqueries: [savedRow('savedqueries', 'Open Tickets', 'new_ticket')] });
+  const { error, warnings, published } = await runCli({ attempts: [haltAfterPublish('ai features refused', true)], dataverse });
+  assert.match(error.message, /ai features refused/, 'the halt is what the run reports');
+  assert.deepStrictEqual(dataverse.urls, [], 'no read');
+  assert.deepStrictEqual(warnings, []);
+  assert.deepStrictEqual(published, []);
+});
+
+test('the same halt from a build that retried first is also after the publish phase: what an earlier attempt owed was paid by it', async () => {
+  const dataverse = platformLayers({ savedqueries: [savedRow('savedqueries', 'Open Tickets', 'new_ticket')] });
+  const earlier = owing(TRANSIENT, [['view', 'v1', ['view Open Tickets']]]);
+  const { error, warnings, published, attempts } = await runCli({ attempts: [earlier, haltAfterPublish('ai features refused', true)], dataverse });
+  assert.strictEqual(attempts, 2);
+  assert.match(error.message, /ai features refused/);
+  assert.deepStrictEqual(published, [], 'nothing is owed any more');
+  assert.deepStrictEqual(dataverse.urls, []);
+  assert.deepStrictEqual(warnings.filter((w) => /before its publish phase/.test(w)), []);
+});
+
+test('control: a halt whose publish phase did not complete still reads, and says so', async () => {
+  for (const attempt of [haltAfterPublish('the publish phase halted', false), new Error('forms phase halted')]) {
+    const dataverse = platformLayers({ savedqueries: [savedRow('savedqueries', 'Open Tickets', 'new_ticket')] });
+    const { warnings } = await runCli({ attempts: [attempt], dataverse });
+    assert.strictEqual(dataverse.urls.length, 3, 'three reads, one per collection');
+    assert.strictEqual(warnings.length, 1, warnings.join('\n'));
+    assert.match(warnings[0], /^the build stopped before its publish phase; forms, views and charts saved but not published on the spec's tables \u2014 new_ticket: view Open Tickets\. /);
+  }
 });

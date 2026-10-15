@@ -693,9 +693,11 @@ async function buildModelApp(spec, opts, deps) {
       // First publish the views and forms this build's attempts had saved and no publish phase paid: no
       // retry follows now (see settleOwedPublishes, sdk-build.js). Best-effort, so the halt below is still
       // what this run reports. The spec's tables ride along so the settle can say what they still hold saved and
-      // not published — but only for a build that HAS a publish phase it stopped before (an apply with --publish
-      // and the phase in its range), and not for a halt before anything was written.
-      const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight');
+      // not published — but only for a build that stopped BEFORE a publish phase it has: an apply with --publish
+      // and the phase in its range, not a halt before anything was written, and not one after the phase completed
+      // (`owedPaid`: the halt of a step that runs after it, the AI features' re-confirmation, say). What the phase
+      // published is live, and a line that says the build stopped before it would be false.
+      const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight') && !(err && err.owedPaid);
       await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
       await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });

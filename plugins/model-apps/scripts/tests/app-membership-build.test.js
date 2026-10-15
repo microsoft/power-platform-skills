@@ -30,7 +30,7 @@ for (const publish of [false, true]) {
     const republish = fake.events.findIndex(([event, action, body]) => event === 'post' && action === '/PublishXml' && /<appmodule>/.test(body.ParameterXml));
     assert.ok(pin > firstPush, JSON.stringify(fake.events));
     assert.ok(republish > pin, 'a fresh create already published before pinning; its hidden tables must not be left pending');
-    // With --publish every table the spec names is published before the app is created (its push publishes the app); without it, none is.
+    // With --publish the tables the app is about to hold are published before the app is created (its push publishes the app); without it, none is.
     const tablePublishes = fake.events.filter(([event, action, body]) => event === 'post' && action === '/PublishXml' && !/<appmodule>/.test(body.ParameterXml));
     assert.deepEqual(tablePublishes.map(([, , body]) => [...body.ParameterXml.matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1])), publish ? [['contoso_item', 'task']] : []);
     if (publish) assert.ok(fake.events.indexOf(tablePublishes[0]) < firstPush, 'before the app is created');
