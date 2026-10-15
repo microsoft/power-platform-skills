@@ -99,6 +99,7 @@ const {
   findFieldCellPointer,
   findFieldCellLocation,
   findFieldCellLocations,
+  findFieldOuterCells,
   findSectionLocation,
   findSectionById,
   declaredSectionByField,
@@ -1330,7 +1331,8 @@ async function applyAppAiDescription(provision, spec, appId) {
 
 // The app's display NAME and its tile DESCRIPTION, set on the FETCHED artifact of an app that already exists. They were set when the
 // app was created and never again: a rebuild with an edited description reported the app step as done and left the old text. Returns
-// true when the artifact changed and needs a push.
+// the text each edit REPLACED — `{ description: 'Tickets' }`, `{}` when nothing was edited — which is what a refused push puts back
+// (pushAppHeader), and which says whether the artifact now needs a push.
 //
 // The SDK's header push writes `name`, `description` and the routing description to the appmodule row, whichever of them the
 // artifact holds differently from the row (and none when all three are equal), conditioned on the row's own token — pinned
@@ -1346,29 +1348,57 @@ async function applyAppAiDescription(provision, spec, appId) {
 //     app, which the app step creates, rather than renaming this one.
 //   * A fetched app always carries both keys (the adapter reads `description` as '' when the row has none), so updateElement has a
 //     path to write — unlike the routing description, which is added when the row has none.
-// Both columns are localizable, and this writes the value of the environment's base language; a translation a maker added stays as
-// it is. name holds at most 100 characters and description 2,000 (validateDescription).
+//   * Only a header that is PLAIN TEXT is written over. Both columns are localizable, and whether a plain write of the base-language
+//     text keeps a translation beside it has not been measured against an environment; the adapter hands back one string, so a
+//     translation held beside it is invisible here. What this can see is a value that is not a string at all — a text per language,
+//     as an LCID map — and that is never replaced by a scalar, nor is a value of any other shape: it is left as it is and the
+//     build says so. A localized value the spec's text already equals (the unchanged-name, changed-description case) needs no edit
+//     and no word. Nothing here writes a map: these are String columns, and a map-shaped PATCH of one is no write the platform defines.
+// name holds at most 100 characters and description 2,000 (validateDescription).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
-async function applyAppHeaderText(provision, spec, appId) {
+async function applyAppHeaderText(provision, spec, appId, warn) {
   const app = (spec && spec.app) || {};
   const current = (await provision.getArtifact('app', appId)) || {};
-  let changed = false;
+  const replaced = {};
   for (const key of ['name', 'description']) {
     const want = app[key];
-    if (typeof want !== 'string' || !want.trim() || current[key] === want) continue;
+    // Read BEFORE the write: getArtifact can hand back the stored tree itself, which updateElement then changes under `current`.
+    const have = current[key];
+    if (typeof want !== 'string' || !want.trim() || have === want) continue;
+    const kept = whyAppTextIsKept(key, have, want);
+    if (kept !== undefined) {
+      if (kept && typeof warn === 'function') warn(`app "${app.name}": its ${key} was not applied: ${kept}`);
+      continue;
+    }
     await provision.updateElement('app', appId, `/${key}`, want);
-    changed = true;
+    replaced[key] = have;
   }
-  return changed;
+  return replaced;
+}
+
+// Why an app's name or description (`have`, as fetched) is NOT written over with the spec's text (`want`) — or `undefined` when it is
+// plain text and is. `''` means the spec asks for nothing the header does not already say, so there is nothing to report.
+function whyAppTextIsKept(key, have, want) {
+  if (typeof have === 'string') return undefined;
+  if (have !== null && typeof have === 'object' && !Array.isArray(have)) {
+    if (Object.values(have).includes(want)) return '';
+    const languages = Object.keys(have);
+    return `it is localized (${languages.length} language${languages.length === 1 ? '' : 's'}: ${languages.join(', ')}), and a rebuild does not replace a localized text — it cannot tell which language the spec's text is for, nor that the other translations would be kept. Change it in Power Apps.`;
+  }
+  const kind = have === null ? 'null' : have === undefined ? 'no value' : Array.isArray(have) ? 'a list' : `a ${typeof have}`;
+  return `the app's ${key} could not be read as plain text (it came back as ${kind}), so a rebuild does not replace it. Change it in Power Apps.`;
 }
 
 // Everything of an existing app's header the spec can change: its text and its routing description, applied to one fetched copy so
 // that one push writes them all. `text: false` leaves the name and description alone — for an app THIS run created, whose create
-// already wrote the spec's (appDef), the compare would be a read the build never made for a new app.
-async function applyAppHeader(provision, spec, appId, { text = true } = {}) {
-  const textChanged = text ? await applyAppHeaderText(provision, spec, appId) : false;
-  const routingChanged = await applyAppAiDescription(provision, spec, appId);
-  return textChanged || routingChanged;
+// already wrote the spec's (appDef), the compare would be a read the build never made for a new app. Answers
+//   changed   whether the artifact now holds any header change, and so needs a push;
+//   routing   whether one of them is the routing description — an explicit request that a never-published app's refusal must HALT on;
+//   replaced  the text the name / description edits replaced (applyAppHeaderText), for pushAppHeader to put back.
+async function applyAppHeader(provision, spec, appId, { text = true, warn } = {}) {
+  const replaced = text ? await applyAppHeaderText(provision, spec, appId, warn) : {};
+  const routing = await applyAppAiDescription(provision, spec, appId);
+  return { changed: routing || Object.keys(replaced).length > 0, routing, replaced };
 }
 
 // An app's tile icon is written when the app is created and a rebuild cannot replace it: the appmodule's `webresourceid` is effectively
@@ -1432,24 +1462,65 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
   throw new BuildHalt(`push app ${name} failed: the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is. Re-downloading reads the same draft and fails the same way: publish the app in Power Apps, then re-run the build.${workspace}`, { phase: 'push', code: 'app-header-unpublished', recoverable: true, cause: pushed.error });
 }
 
-// #583: push an app artifact whose header this run may have changed (the routing description). A refusal
+// #583: push an app artifact whose header this run may have changed (the routing description, the app's text). A refusal
 // that means "publish first" — thrown or returned — goes through haltOnUnpublishedAppHeader; everything
 // else is exactly the plain push (the result is still for requireSuccessfulPush to judge) — except that a
 // FAILED push first resets the workspace copy (discardUnrecordedEdits).
-async function pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable) {
-  let pushed;
-  try {
-    await applyAppMainForms(provision, appId, mainFormsByTable);
-    pushed = await provision.pushArtifact('app', appId);
-    pushed = await explainAppPushWarnings(provision.dataverse, pushed, name);
-  } catch (e) {
-    if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
-    await discardUnrecordedEdits(provision, appId, e, true);
-    throw e;
+//
+// `header` is what applyAppHeader answered (or the bare boolean the routing-description callers pass: true says the push
+// carries a header change a never-published app's refusal must halt on).
+//
+// ONE refusal is not a halt: the never-published app's refusal of an edit of its NAME or DESCRIPTION alone. Those edits are
+// applied because a rebuild reaches them, and nothing is lost by leaving them unapplied; stopping every other phase for them
+// — the navigation this push also writes, and everything after it — was a regression for an app that had always rebuilt. The
+// SDK throws APP_DRAFT_HEADER_NOT_WRITABLE before it writes its sitemap, naming that nothing was modified by the call ("Nothing was
+// modified by this call", pinned against the real bundle in app-header-text-real-bundle.test.js), and writes the header only when the
+// artifact holds one that differs from the row's. So the fetched text is put back on the copy (`header.replaced`) and the push
+// is made once more: it now writes the navigation and the rest alone, exactly as a rebuild with no text edit always has, and the build
+// says the text was not applied. Not recovered from, because each is a different fact: a routing description in the push (an explicit request
+// that cannot be honoured — it halts, as it always did), a 412 (a concurrent edit), any other failure, and a refusal that comes back
+// with the header already put back (halted on, never looped on). A header that cannot be put back halts too: pushing a copy that
+// still holds the edit would be refused again.
+async function pushAppHeader(provision, appId, name, header, mainFormsByTable, warn) {
+  const { routing, replaced } = header !== null && typeof header === 'object' ? header : { routing: header === true, replaced: {} };
+  const textKeys = Object.keys(replaced || {});
+  const carriesHeader = routing || textKeys.length > 0;
+  const attempt = async (first) => {
+    try {
+      if (first) await applyAppMainForms(provision, appId, mainFormsByTable);
+      return { pushed: await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', appId), name) };
+    } catch (thrown) {
+      return { thrown };
+    }
+  };
+  let outcome = await attempt(true);
+  const refusal = outcome.thrown || (pushFailed(outcome.pushed) ? outcome.pushed.error : undefined);
+  if (!routing && textKeys.length && refusal && refusal.code === 'APP_DRAFT_HEADER_NOT_WRITABLE' && await putBackAppText(provision, appId, replaced)) {
+    outcome = await attempt(false);
+    if (!outcome.thrown && !pushFailed(outcome.pushed) && typeof warn === 'function') {
+      warn(`app "${name}": its ${textKeys.join(' and ')} ${textKeys.length === 1 ? 'was' : 'were'} not applied: the app was never published; publish it in Power Apps and re-run. Dataverse takes no write to a never-published app's name or description until it is published, so the navigation and the rest of this build went ahead without ${textKeys.length === 1 ? 'it' : 'them'}.`);
+    }
   }
-  if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
+  if (outcome.thrown) {
+    if (carriesHeader) await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: outcome.thrown }, name);
+    await discardUnrecordedEdits(provision, appId, outcome.thrown, true);
+    throw outcome.thrown;
+  }
+  const pushed = outcome.pushed;
+  if (carriesHeader) await haltOnUnpublishedAppHeader(provision, appId, pushed, name);
   if (pushFailed(pushed)) await discardUnrecordedEdits(provision, appId, pushed.error, false);
   return pushed;
+}
+
+// Put the text a refused push's edits replaced (applyAppHeaderText's answer) back on the workspace copy, so the next push carries no
+// header write. True when every one is back; false when a write failed, which leaves the copy holding an edit the caller must not push.
+async function putBackAppText(provision, appId, replaced) {
+  try {
+    for (const [key, text] of Object.entries(replaced)) await provision.updateElement('app', appId, `/${key}`, text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // #583: after a push of the app FAILED, reset the workspace copy to the server's. Its edits were never
@@ -1650,21 +1721,25 @@ async function applyBpfStages(provision, flow, flowId, plan, opts = {}) {
 }
 
 // The codes with which the SDK refuses a stage edit BEFORE it writes anything to the environment: an
-// edit it cannot author (NOT_IMPLEMENTED — adding, removing or reordering the stages of a flow that
-// holds branches or other non-stage activities is thrown at push, with no request sent), or one that
+// edit it cannot author (NOT_IMPLEMENTED — adding, removing or reordering the stages of a flow whose
+// primary composite holds something that is not a stage, or the steps of a stage that holds something
+// that is not a step, is thrown at push with no request sent; a rename or a rebind is not refused), or one that
 // does not validate (INVALID_ARGUMENT, VALIDATION_ERROR, PATH_NOT_FOUND). An element operation only
-// edits the workspace copy, so for any of them the environment's flow is exactly as it was and the
-// build goes on with it. Only the error's OWN code is read, never its cause chain:
+// edits the workspace copy, so for any of them the environment's flow DEFINITION is exactly as it was
+// (its Active/Draft state is converged on its own) and the build goes on with it. Only the error's
+// OWN code is read, never its cause chain:
 // BPF_LEFT_DEACTIVATED — a flow the SDK deactivated and could not reactivate — carries the failure
 // that started it as its cause, and following the chain would make a half-applied live flow look
 // untouched.
 const BPF_EDIT_NOT_WRITTEN = new Set(['NOT_IMPLEMENTED', 'INVALID_ARGUMENT', 'VALIDATION_ERROR', 'PATH_NOT_FOUND']);
 
 // What the build says about a flow whose stage edit the plan refused: the reason, why a build never
-// goes ahead, and the ways forward. Nothing is written to the flow — not even the edits that would
-// have been safe — so the answer to "what did it do?" is always "nothing".
+// goes ahead, and the ways forward. No stage or step edit is applied — not even the ones that would
+// have been safe — but that is NOT "nothing is written to the flow": the Active/Draft state the spec
+// asks for is converged by a step of its own (a flow left in the wrong one is invisible or running),
+// so the warning says what was not done and that the state is handled independently.
 function bpfRefusalWarning(flow, refusals) {
-  return `business process flow "${flow.name}" on ${flow.entity}: NOT changed — ${describeBpfRefusals(refusals).join('; ')}. A build never removes or moves a stage or a step: a record that is partway through the flow sits on one of its stages, and the platform does not document what becomes of a record whose stage is removed or moved. Nothing was written to this flow, including the edits that would have been safe. To keep the flow as it is, list in the spec what it has (a stage or step added in Maker, say). To make the flow match the spec, make the change in Maker (move or finish the records on a stage before removing it); the next build then finds the flow as the spec says. If the flow's process records can be lost, delete the flow (which deletes its backing table and the records in it) and run the build again, which creates it afresh.`;
+  return `business process flow "${flow.name}" on ${flow.entity}: NOT changed — ${describeBpfRefusals(refusals).join('; ')}. A build never removes or moves a stage or a step: a record that is partway through the flow sits on one of its stages, and the platform does not document what becomes of a record whose stage is removed or moved. No stage or step edits were applied; the requested Active/Draft state is handled independently. That includes the edits that would have been safe. To keep the flow as it is, list in the spec what it has (a stage or step added in Maker, say). To make the flow match the spec, make the change in Maker (move or finish the records on a stage before removing it); the next build then finds the flow as the spec says. If the flow's process records can be lost, delete the flow (which deletes its backing table and the records in it) and run the build again, which creates it afresh.`;
 }
 
 
@@ -2728,7 +2803,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           ? appPushTables(entityTablesOfSiteMap(((await provision.getArtifact('app', appId)) || {}).siteMap), mainFormsByTable)
           : appWriteTables(spec, mainFormsByTable)),
       });
-      return pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable);
+      return pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable, opts.warn);
     },
     // The publish of an app: it ships the forms the app holds, whoever last saved them. It adds none.
     async publish(appId) {
@@ -3231,6 +3306,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // section, and a field the spec makes read-only or hidden is so wherever the form shows it. Patching only the
   // first cell left the second one editable or visible. The lookup-label repair walks a field's cells the same way
   // (lookup-cell-labels.js).
+  //
+  // "Wherever the form shows it" includes the form's HEADER and FOOTER and a tab's own `tabheader` and `tabfooter`, which the SDK does not
+  // model: it keeps their XML in the bag of the form (or the tab) and writes it back as it read it (findFieldOuterCells). Those cells are
+  // flagged by an edit of the one attribute — the control's `disabled`, the cell's `visible` — and nothing else of the node is touched.
   const applyFieldControlOptions = async (formId, def, want, wantCellByLogical) => {
     for (const logical of want) {
       const wantCell = wantCellByLogical[logical];
@@ -3250,6 +3329,34 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (wantReadOnly) await provision.updateElement('form', formId, `${loc.cellPointer}/control`, { isReadOnly: true });
         if (wantHidden) await provision.updateElement('form', formId, loc.cellPointer, { visible: false });
       }
+      // The header, the footer and each tab's own: found on the form as read (the body writes above leave the bags as they were), and
+      // located again before each write, as the body cells are.
+      const outerCells = findFieldOuterCells(form, logical).length;
+      for (let i = 0; i < outerCells; i++) {
+        form = (await provision.getArtifact('form', formId)) || {};
+        const at = findFieldOuterCells(form, logical)[i];
+        if (!at) break;
+        if (wantReadOnly) await setRawAttribute(formId, at.controlPointer, at.control, 'disabled', 'true', /^(true|1)$/i);
+        if (wantHidden) await setRawAttribute(formId, at.cellPointer, at.cell, 'visible', 'false', /^(false|0)$/i);
+      }
+    }
+  };
+
+  // Set one attribute of a RAW node of the form's bag — a header or footer cell or control, whose attributes are `a`, a list of
+  // [name, value] pairs in document order (findFieldOuterCells). One the node carries is replaced where it stands, so the others
+  // keep their order; one it does not is appended; one that already means the wanted state is not written at all (`already` is
+  // every spelling of it: the schema's xs:boolean takes "true"/"1" and "false"/"0").
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/form-xml-schema
+  const setRawAttribute = async (formId, pointer, node, name, value, already) => {
+    const pairs = Array.isArray(node.a) ? node.a : null;
+    const at = pairs ? pairs.findIndex((pair) => Array.isArray(pair) && String(pair[0]).toLowerCase() === name) : -1;
+    if (at >= 0) {
+      if (already.test(String(pairs[at][1]).trim())) return;
+      await provision.updateElement('form', formId, `${pointer}/a/${at}`, [pairs[at][0], value]);
+    } else if (pairs) {
+      await provision.addElement('form', formId, `${pointer}/a`, [name, value]);
+    } else {
+      await provision.updateElement('form', formId, pointer, { a: [[name, value]] });
     }
   };
 
@@ -5506,7 +5613,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         };
         // Its stages and steps (lib/bpf-stages.js): an edit that leaves every deployed stage where it
         // is in the process is applied in place, in one push; one that removes or moves a stage or a
-        // step is refused, and the whole flow is then left exactly as it is.
+        // step is refused, and no stage or step edit of the flow is then applied (its Active/Draft
+        // state is still converged below, on its own).
         const stageCheck = await inspectBpfStages(provision, flow, existingId);
         if (stageCheck.kind === 'edit') {
           // The state follows the edit and never precedes it: the SDK conditions the push on the
@@ -5514,12 +5622,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
           await runner.run('business-process-flows', `${flowLabel} (exists — applying ${describeBpfEdit(stageCheck.plan)} in place${wantActive === isActive ? '' : `, then ${wantActive ? 'activating' : 'deactivating'}`})`, async () => {
             await applyBpfStages(provision, flow, existingId, stageCheck.plan, opts);
           }, {
-            // An edit the SDK refuses before it writes anything leaves the flow as it was: say so and
+            // An edit the SDK refuses before it writes anything leaves the flow's definition as it was: say so and
             // go on, as for a flow that cannot be compared. Anything else may have half-applied a live
             // flow and halts the build.
             skipIf: (err) => {
               if (!BPF_EDIT_NOT_WRITTEN.has(err && err.code)) return false;
-              warnFlow(`${flowLabel}: its stage edits were NOT applied — ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}. Nothing was written to this flow. Make the change in Maker (the SDK cannot edit a flow with branches or other advanced constructs), or put the spec back in line with the flow.`);
+              warnFlow(`${flowLabel}: its stage edits were NOT applied — ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}. No stage or step edits were applied; the requested Active/Draft state is handled independently. Make the change in Maker (the SDK cannot make this edit to a flow with branches or other advanced constructs), or put the spec back in line with the flow.`);
               return 'NOT applied: the SDK cannot edit this flow — see the warning';
             },
           });
@@ -5881,8 +5989,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', await siteMapOverLive(provision, existingId, def.siteMap, opts, result.created));
           // The header — its text (name, description) and its routing description — rides this one push, as the sitemap does.
-          const headerChanged = await applyAppHeader(provision, spec, existingId);
-          requireSuccessfulPush(await appWriters.push(existingId, def.name, headerChanged), `app ${def.name}`, opts.warn);
+          const header = await applyAppHeader(provision, spec, existingId, { warn: opts.warn });
+          requireSuccessfulPush(await appWriters.push(existingId, def.name, header), `app ${def.name}`, opts.warn);
           reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
         } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
@@ -5897,9 +6005,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // the header together.
           const current = await provision.getArtifact('app', existingId) || {};
           await assertAuthorizedSitemapRewrite(provision, existingId, current.siteMap || {}, opts.authorizedSitemapRemovals, 'app-shell');
-          if (await applyAppHeader(provision, spec, existingId)) {
+          const header = await applyAppHeader(provision, spec, existingId, { warn: opts.warn });
+          if (header.changed) {
             // Nothing wrote the spec's navigation into the copy, so the push sends the copy's own (`resendsCopy`): the tables whose Main forms it adds are that navigation's.
-            requireSuccessfulPush(await appWriters.push(existingId, def.name, true, { resendsCopy: true }), `app ${def.name} routing description`, opts.warn);
+            requireSuccessfulPush(await appWriters.push(existingId, def.name, header, { resendsCopy: true }), `app ${def.name} routing description`, opts.warn);
             reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
           }
         }
@@ -6634,9 +6743,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // #583: the header — its routing description, and the app's name and description — rides THIS push whenever the pages
           // phase runs (the app-shell branch defers it here). An app this run created already carries its name and description from
           // that create, so only the routing description is looked at there, as before.
-          const headerChanged = await applyAppHeader(provision, spec, result.created.app, { text: appWasExisting });
+          const header = await applyAppHeader(provision, spec, result.created.app, { text: appWasExisting, warn: opts.warn });
           const appName = (spec.app && spec.app.name) || result.created.app;
-          requireSuccessfulPush(await appWriters.push(result.created.app, appName, headerChanged), 'app sitemap finalize', opts.warn);
+          requireSuccessfulPush(await appWriters.push(result.created.app, appName, header), 'app sitemap finalize', opts.warn);
           reportPartialPush(await appWriters.publish(result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });

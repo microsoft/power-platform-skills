@@ -81,8 +81,10 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   (a download does) renames the app, while one that does not derives the unique name from `app.name`, so a different
   name there is a *different* app. Only a non-blank text is written and only when it differs from the deployed one, so
   an omitted `description`, or the `""` a download writes, never blanks one a maker typed — and a text changed in Maker
-  is put back to the spec's. An app that was **never published** refuses the write: the build halts and says to
-  publish it first.
+  is put back to the spec's. Two cases leave the text as it is, and **warn that it was not applied** while the rest of
+  the build goes ahead: an app that was **never published** (Dataverse takes no write to its name or description until
+  it is — publish it in Power Apps and re-run), and a name or description that is **localized** (held as one text per
+  language), which a rebuild never replaces with one text: change it in Power Apps.
 - **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
   Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
   **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
@@ -334,7 +336,8 @@ partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted
 **Rebuild behaviour:** a description is written at CREATE, and is additionally **reconciled on an
 artifact that already exists** for **views, charts and the app itself (`app.description`)** — so authoring
 one on a table whose Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still
-lands, and an edited `app.description` reaches the app on the next build. These write only when the spec
+lands, and an edited `app.description` reaches the app on the next build (a never-published app, or one whose
+description is localized, is left as it is with a warning — see `app.name` and `app.description` above). These write only when the spec
 **explicitly sets** a description **and** it differs from the deployed value, so an ordinary rebuild
 issues no extra write and an omitted description never blanks text a maker typed in the UI.
 
@@ -1228,9 +1231,11 @@ planned layout, preserving existing cell/control identities.
 
 `--verify` checks tab/section order, the tab and section **labels** a layout authors, row occupancy and
 **cell/control ID uniqueness across each whole form**, including headers, footers and unbound controls.
-A label is compared with the published form in any language it carries, so a relabel that never reached
-the published form fails; a label the spec does not write, or a tab or section the published form gives no
-label, is not compared. Auto forms also require readable
+A label is compared in the language the build wrote it — a string label in the build's authoring language (the
+spec's `languageCode`, else the organization's base language), a label map at each language it declares, with no
+word about a translation it leaves out — so a relabel that never reached the published form fails even when
+ANOTHER language carries the wanted text, and a caption or language the published form lacks is a mismatch, never a pass.
+A label the spec does not write is not compared. Auto forms also require readable
 FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
 It does **not** check field order or `after` adjacency.
 To reposition an existing field, use `fieldOptions[x].after` outside the explicit field list, below.
@@ -1296,8 +1301,10 @@ back off — they are rejected at author time rather than accepted and ignored. 
 in the designer, or drop the field and let the next build re-add it.
 
 A flag goes on **every** cell the deployed form holds of the field. A layout lists a field once per form
-(a second cell is rejected), but a maker can place one in two sections in the designer; the build flags
-each of those cells, and `--verify` checks each, naming the section of one that is not flagged.
+(a second cell is rejected), but a maker can place one in two sections in the designer, or in the form's
+**header** or **footer** or a tab's own header or footer (Main forms); the build flags each of those cells — the
+rest of the cell, its attributes and its control, is kept as it is — and `--verify` checks each, naming the
+section, the header or the footer of one that is not flagged.
 
 **Under an `auto` layout the flags apply to the fields the layout places** — the primary column, the
 table's declared columns and its parent lookups. A `readOnly`/`hidden` on any other field (a stock

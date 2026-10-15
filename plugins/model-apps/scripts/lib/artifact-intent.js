@@ -864,6 +864,60 @@ function findFieldCellLocations(formJson, logical) {
   return found;
 }
 
+// The cells of the form's HEADER and FOOTER, and of each tab's own `tabheader` and `tabfooter`, that host the bound field `logical` —
+// the form's two parts first, header before footer, then the tabs' in tab order, each in document order. They are the placements
+// findFieldCellLocations does not see, which a field the spec makes read-only or hidden is as much in as a section's.
+//
+// The SDK does not model those parts: it keeps their XML in the bag of the form (header, footer) or of the tab (tabheader, tabfooter), as
+// raw nodes, and writes it back as it read it. A node
+// is `{ n: 'cell', a: [['visible', 'true'], …], c: [child nodes] }` — `a` the attribute pairs in document order, `c` the children —
+// and the markup is a section's own rows:
+//   <header id="…" columns="1"><rows><row><cell id="…" visible="true"><labels>…</labels>
+//     <control id="header_new_code" classid="{4273EDBD-…}" datafieldname="new_code" disabled="false" /></cell></row></rows></header>
+// A tab's own parts are the same markup under `<tab>`, before its `<columns>`: <tab …><labels>…</labels><tabheader …>…</tabheader>
+// <tabfooter …>…</tabfooter><columns>…</columns></tab>.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/form-xml-schema
+// A location gives the JSON pointer of the cell and of its control, and the nodes (for the attributes a caller reads). The SDK takes an
+// `updateElement` at `<pointer>/a/<n>` with a new `[name, value]` pair, and an `addElement` at `<pointer>/a` with one to append, and
+// validates nothing else there — so a caller must edit exactly the attribute it means to and leave every other of the node as it is.
+// Same exclusions as the body scan: a control that is not the field itself (a quick view bound to the lookup) is skipped.
+function findFieldOuterCells(formJson, logical) {
+  const lg = String(logical || '').toLowerCase();
+  const found = [];
+  const named = (node, name) => (node && Array.isArray(node.c)
+    ? node.c.map((child, index) => ({ child, index })).filter(({ child }) => child && child.n === name) : []);
+  const attr = (node, name) => {
+    const pair = ((node && node.a) || []).find((p) => Array.isArray(p) && String(p[0]).toLowerCase() === name);
+    return pair ? pair[1] : undefined;
+  };
+  // The cells of one part. `base` is the JSON pointer of the part's node, `tab` the name of the tab that holds it when it is a tab's own.
+  const collect = (part, base, tab) => {
+    for (const rows of named(part, 'rows')) {
+      for (const row of named(rows.child, 'row')) {
+        for (const cell of named(row.child, 'cell')) {
+          for (const control of named(cell.child, 'control')) {
+            const fieldName = attr(control.child, 'datafieldname');
+            if (!fieldName || String(fieldName).toLowerCase() !== lg || isNonFieldControl({ classId: attr(control.child, 'classid') })) continue;
+            const cellPointer = base + '/c/' + rows.index + '/c/' + row.index + '/c/' + cell.index;
+            found.push({ part: part.n, ...(tab === undefined ? {} : { tab }), cellPointer, controlPointer: cellPointer + '/c/' + control.index, cell: cell.child, control: control.child });
+          }
+        }
+      }
+    }
+  };
+  (((formJson && formJson.bag) || {}).c || []).forEach((entry, i) => {
+    const part = entry && entry.node;
+    if (part && (part.n === 'header' || part.n === 'footer')) collect(part, '/bag/c/' + i + '/node');
+  });
+  ((formJson && formJson.tabs) || []).forEach((tab, t) => {
+    (((tab && tab.bag) || {}).c || []).forEach((entry, i) => {
+      const part = entry && entry.node;
+      if (part && (part.n === 'tabheader' || part.n === 'tabfooter')) collect(part, '/tabs/' + t + '/bag/c/' + i + '/node', tab.name);
+    });
+  });
+  return found;
+}
+
 // A deployed section, located by NAME (case-insensitive) across the WHOLE form, or null.
 //
 // The search is form-wide rather than scoped to the expected tab on purpose: section names are
@@ -973,6 +1027,7 @@ module.exports = {
   findFieldCellPointer,
   findFieldCellLocation,
   findFieldCellLocations,
+  findFieldOuterCells,
   findSectionLocation,
   findSectionById,
   declaredSectionByField,

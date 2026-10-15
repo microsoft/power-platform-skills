@@ -11,7 +11,7 @@ const { sitemapEntityTables } = require('./app-spec.js');
 // XML_TAG / XML_ATTR are the one tag and attribute grammar for FormXML and SiteMap XML; they live with
 // liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
 const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName, normalizeLanguageCode, isLocalizedLabelMap } = require('./app-spec.js');
 const { sameRelationship, describeRelationship } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
@@ -22,7 +22,7 @@ const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSe
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { isVisualizationUnsupported, mapLimit } = require('./entity-provision.js');
+const { isVisualizationUnsupported, mapLimit, resolveLanguageCode } = require('./entity-provision.js');
 const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl, formFieldLogicals, declaredSectionByField } = require('./artifact-intent.js');
 // The fields an explicit layout prunes, as the destructive gate and the build's prune pass both name them.
 const { formRemovals } = require('./op-diff.js');
@@ -691,6 +691,12 @@ async function verifySpec(spec, read, opts = {}) {
   // `typeof read.formTopology === 'function'` let a reader without it skip every layout check, so an
   // explicit form passed verify on identity and default checks alone with no layout proof at all.
   const canReadTopology = useCombinedFormRead || typeof read.formTopology === 'function';
+  // The language the build writes a STRING tab or section label in, which a label is held to (labelProblem): the build's own resolution —
+  // the spec's `languageCode`, else the organization's base language, else 1033 (resolveLanguageCode) — without the `--language-code` flag
+  // a build may have been run with, which verify cannot know: a build run with one needs `languageCode` pinned in the spec to be verified.
+  // Read once per pass, and only when a form authors a string label.
+  let authoringLanguageP;
+  const authoringLanguage = () => authoringLanguageP || (authoringLanguageP = resolveLanguageCode({ provision: read, spec }));
   {
     plan.each(spec.forms || [], async ({ add }, forms) => {
     for (const f of forms) {
@@ -753,7 +759,7 @@ async function verifySpec(spec, read, opts = {}) {
       // the whole form, including header/footer and unbound controls, even for an unshaped auto form.
       const identityProblems = formIdentityProblems(xml);
       add('form-identities', `${entity}.${name}`, identityProblems.length === 0, identityProblems.join('; '));
-      const deployed = parseFormTopology(xml);
+      const { tabs: deployed, outer } = parseFormTopology(xml);
       // The Notes timeline, on any layout: Dynamics renders it only under the control id `notescontrol` in a
       // tall cell (lib/form-timeline.js), so a form that carries it in the shape an older build wrote — or not at
       // all — has not got the timeline the spec asks for, however many other checks pass. The form need only
@@ -791,46 +797,61 @@ async function verifySpec(spec, read, opts = {}) {
         }
       };
       const stateFlag = (what, specKey, xmlAttr, deployedValue, want) => flagProblem(what, xmlAttr, deployedValue, want, true, `${specKey}: ${want}`);
-      // A container's published label against the one the spec AUTHORS for it. Held against every language the container carries,
-      // because the build writes the label in one of them and a maker's translations stay beside it, in the order the platform
-      // lists them. Two things are deliberately not compared: a container the spec gives no label (the compiler's `General` /
-      // `Details` default is what the build writes on create and fills in on a rebuild, but the spec never asked for it, and
-      // a maker's own caption on such a container is not a relabel that failed to land) and a container with no label at all in the
-      // published form (there is nothing published to hold against the spec, and "no label" is not a different one — a form
-      // trimmed by hand, and every fixture written without <labels>).
-      const labelProblem = (what, container, authored) => {
+      // A container's published labels against the one the spec AUTHORS for it, language by language. A label is a (languagecode,
+      // description) pair: the platform keeps one per language, and a maker's translations stay beside the one the build writes, so
+      // a label is held to the pair the spec declares and never to the same text in any other language — "Summary" published only in
+      // French is not the English relabel that never landed. A string is the build's authoring language (`language`); a localized
+      // label, a map keyed by LCID, is one pair per entry, and only what it declares is held (a translation it does not mention is a
+      // maker's). A declared label the published container carries in no such language — or carries no label at all — is a mismatch
+      // like any other: nothing published is no proof of the caption, so it never certifies one. Not compared: a container the spec
+      // gives no label (the compiler's `General` / `Details` default is what the build writes on create and fills in on a rebuild, but
+      // the spec never asked for it, and a maker's own caption on such a container is not a relabel that failed to land).
+      const labelProblem = (what, container, authored, language) => {
         const have = (container && container.labels) || [];
-        if (!have.length || typeof authored !== 'string' || authored === '' || have.includes(authored)) return;
-        problems.push(`${what} is deployed with ${have.length === 1 ? 'label' : 'labels'} ${have.map((l) => JSON.stringify(l)).join(', ')}, the spec declares label: ${JSON.stringify(authored)}`);
+        for (const [lcid, text] of declaredLabels(authored, language)) {
+          if (have.some((l) => l.lcid === lcid && l.text === text)) continue;
+          const declared = `the spec declares label: ${JSON.stringify(text)} in language ${lcid}`;
+          const same = have.filter((l) => l.lcid === lcid);
+          if (same.length) problems.push(`${what} is deployed with ${same.length === 1 ? 'label' : 'labels'} ${same.map((l) => JSON.stringify(l.text)).join(', ')} in language ${lcid}, ${declared}`);
+          else if (have.length) problems.push(`${what} is deployed with no label in language ${lcid} (it has ${have.map((l) => `${JSON.stringify(l.text)} in ${l.lcid === undefined ? 'no language' : l.lcid}`).join(', ')}), ${declared}`);
+          else problems.push(`${what} is deployed with no label, ${declared}`);
+        }
       };
       // The state the build asserts for a field: only the ENABLED flags are ever written (a rebuild never
-      // clears a lock or a hide applied in the designer), so only `true` is proven. `where` names the section of a SECOND (or
-      // later) cell of the field, which the message then says is another placement; the first cell reads as it always did.
+      // clears a lock or a hide applied in the designer), so only `true` is proven. `where` says where a SECOND (or
+      // later) cell of the field sits — "section 'x'", "the form header" — which the message then names as another placement; the first
+      // cell reads as it always did.
       const fieldStateProblems = (fl, eff, dc, where) => {
-        const what = where === undefined ? `field '${fl}'` : `field '${fl}' (another placement, in section '${where}')`;
+        const what = where === undefined ? `field '${fl}'` : `field '${fl}' (another placement, in ${where})`;
         if (eff.hidden === true) flagProblem(what, 'visible', dc.visible, false, true, 'hidden: true');
         if (eff.readOnly === true) flagProblem(what, 'disabled', (dc.control || {}).disabled, true, false, 'readOnly: true');
       };
-      // EVERY cell of a bound field on the published form, in form order, each with the section that holds it. The build asserts a
-      // read-only or hidden field on all of them (a deployed form can hold a field more than once: a maker can place it in a second
-      // section), so verify holds all of them to it — a second placement left editable or visible is a mismatch, like the first.
-      const cellsOf = (fl) => {
+      // EVERY cell of a bound field on the published form, each with where it sits: the body's sections in form order, then the form's
+      // header and its footer, and each tab's own header and footer, which hold cells of their own (a maker can place a field there). The
+      // build asserts a read-only or hidden field on all of them (a deployed form can hold a field more than once: a maker can place it in
+      // a second section, or in the header), so verify holds all of them to it — a second placement left editable or visible is a mismatch,
+      // like the first.
+      const bodyCellsOf = (fl) => {
         const out = [];
         for (const t of deployed) for (const c of t.columns || []) for (const s of c.sections || []) for (const r of s.rows || []) for (const cell of r.cells || []) {
-          if (cell.control && cell.control.fieldName === fl && !isNonFieldControl(cell.control)) out.push({ cell, section: s });
+          if (cell.control && cell.control.fieldName === fl && !isNonFieldControl(cell.control)) out.push({ cell, where: `section '${String(s.name || '(unnamed)')}'` });
         }
         return out;
       };
+      const cellsOf = (fl) => [...bodyCellsOf(fl), ...outer
+        .filter(({ cell }) => cell.control && cell.control.fieldName === fl && !isNonFieldControl(cell.control))
+        .map(({ part, tab, cell }) => ({ cell, where: part === 'header' || part === 'footer' ? `the form ${part}` : `the ${part.slice(3)} of tab '${String(tab || '(unnamed)')}'` }))];
       // The cells of `fl` other than `first` — the one already judged — held to the same flags.
       const otherPlacementProblems = (fl, eff, first) => {
-        for (const { cell, section } of cellsOf(fl)) if (cell !== first) fieldStateProblems(fl, eff, cell, String(section.name || '(unnamed)'));
+        for (const { cell, where } of cellsOf(fl)) if (cell !== first) fieldStateProblems(fl, eff, cell, where);
       };
       if (!explicit) {
         // Every field here is one the build places on the form, so a flagged field the deployed form does not carry is a
         // mismatch: its state cannot be deployed without it. Skipping it passed a form whose read-only
         // field a maker had removed. The build asserts the flags on every cell of the field, so each cell is proven.
         for (const { field, readOnly, hidden } of autoFlagged) {
-          const dc = (cellsOf(field)[0] || {}).cell;
+          // The first cell is the one the layout places, in the body: a field only the header holds is not on the form's layout.
+          const dc = (bodyCellsOf(field)[0] || {}).cell;
           if (!dc) {
             const declared = [readOnly && 'readOnly: true', hidden && 'hidden: true'].filter(Boolean).join(' and ');
             problems.push(`field '${field}' is not on the deployed form, so its ${declared} is not deployed`);
@@ -849,6 +870,8 @@ async function verifySpec(spec, read, opts = {}) {
       // form-columns and their sections line up index for index with the spec's; the compiler only APPENDS
       // (the notes section, after the first tab's authored sections). The build compiled this same layout,
       // so it compiles here too.
+      // The language a string label of this layout is held to, when it authors one (labelProblem).
+      const labelLanguage = authorsStringLabel(f) ? await authoringLanguage() : undefined;
       const compiledTabs = compileFormIntent(spec, f).tabs || [];
       // Where the DEPLOYED form actually placed each bound field, as the IDENTITY of the section
       // holding it — not merely its name.
@@ -912,7 +935,7 @@ async function verifySpec(spec, read, opts = {}) {
         const compiledTab = compiledTabs[ti] || {};
         stateFlag(`tab '${tabName}'`, 'expanded', 'expanded', got.expanded, compiledTab.expanded !== false);
         stateFlag(`tab '${tabName}'`, 'visible', 'visible', got.visible, compiledTab.visible !== false);
-        labelProblem(`tab '${tabName}'`, got, t.label);
+        labelProblem(`tab '${tabName}'`, got, t.label, labelLanguage);
         const authoredColumns = formColumnsOf(t);
         if ((got.columns || []).length < authoredColumns.length) {
           problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
@@ -947,7 +970,7 @@ async function verifySpec(spec, read, opts = {}) {
             const compiledSection = (compiledColumn.sections || [])[si] || {};
             stateFlag(`section '${secName}'`, 'visible', 'visible', secHit.item.visible, compiledSection.visible !== false);
             stateFlag(`section '${secName}'`, 'showLabel', 'showlabel', secHit.item.showLabel, compiledSection.showLabel !== false);
-            labelProblem(`section '${secName}'`, secHit.item, sec.label);
+            labelProblem(`section '${secName}'`, secHit.item, sec.label, labelLanguage);
             // The grid width the COMPILER emits for this authored section — taken from the same
             // function the compiler uses, never re-derived here. Reading the raw `columns` instead
             // failed forms that deployed exactly as compiled: an omitted `columns` compiles to 1,
@@ -2431,6 +2454,25 @@ function subgridPlacementChecks(spec, f, deployed, match) {
   return out;
 }
 
+// The (LCID, text) pairs a spec's tab or section label declares. A non-empty string is one pair, in `language` — the language the build
+// writes a string label in; a localized label, a map keyed by LCID ({ "1033": "Overview", "1036": "Aperçu" }), is one pair per entry
+// that has a valid LCID and a non-empty text; anything else (no label, an empty one, a shape the build cannot write) declares nothing, and so
+// is not held to anything.
+function declaredLabels(authored, language) {
+  if (typeof authored === 'string') return authored === '' ? [] : [[language, authored]];
+  if (!isLocalizedLabelMap(authored)) return [];
+  return Object.entries(authored)
+    .map(([key, text]) => [normalizeLanguageCode(key), text])
+    .filter(([lcid, text]) => lcid !== null && typeof text === 'string' && text !== '');
+}
+
+// Whether a form's explicit layout authors a tab or section label as a string, which is held to the build's authoring language.
+function authorsStringLabel(f) {
+  const isString = (label) => typeof label === 'string' && label !== '';
+  return (f.tabs || []).some((t) => t && typeof t === 'object' && (isString(t.label)
+    || formColumnsOf(t).some((c) => c && Array.isArray(c.sections) && c.sections.some((s) => s && typeof s === 'object' && isString(s.label)))));
+}
+
 // Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
 //
 // Why this exists: form verification used to prove only that a form row EXISTS with the right
@@ -2447,6 +2489,12 @@ function subgridPlacementChecks(spec, f, deployed, match) {
 //           <row><cell ...><control datafieldname="new_name" .../></cell></row>
 //   … and a cell may carry no control at all (a spacer), or a control with no datafieldname
 //   (a sub-grid, the notes timeline, a web resource) — those are NOT bound fields and are skipped.
+//   The form's HEADER and FOOTER, and a tab's own TABHEADER and TABFOOTER (before the tab's <columns>), hold cells in rows of their own,
+//   outside the sections of the body:
+//     <header id="…"><rows><row><cell …><control datafieldname="new_name" disabled="false" /></cell></row></rows></header>
+//   They are returned beside the tabs, as `outer`: [{ part: 'header' | 'footer' | 'tabheader' | 'tabfooter', tab, cell }] in document
+//   order, `tab` being the name of the tab a tabheader or tabfooter belongs to. A field placed there is a placement of the field as much as
+//   a section's is, and the build flags it (artifact-intent.js findFieldOuterCells), so verify must see it.
 //
 // Written as a depth scanner rather than nested non-greedy regexes: tabs contain columns contain
 // sections contain rows contain cells, and a non-greedy `<section>[\s\S]*?</section>` stops at the
@@ -2454,10 +2502,13 @@ function subgridPlacementChecks(spec, f, deployed, match) {
 function parseFormTopology(xml) {
   const s = String(xml || '');
   const tabs = [];
-  let tab = null, column = null, section = null, row = null, cell = null;
+  const outer = [];
+  // `part` is the form's header or footer, or a tab's own, while the scan is inside one: a cell then belongs to `outer`, not to a section's row.
+  let tab = null, column = null, section = null, row = null, cell = null, part = null;
   // A <cell> carries its own <labels>, so a cell's label must not be attributed to its section.
   let inCell = false;
-  const re = /<(\/?)(tab|column|section|row|cell|control|label|relationshipname)\b([^>]*?)(\/?)>/gi;
+  const re = /<(\/?)(tab|column|section|row|cell|control|label|relationshipname|header|footer|tabheader|tabfooter)\b([^>]*?)(\/?)>/gi;
+  const isPart = (name) => name === 'header' || name === 'footer' || name === 'tabheader' || name === 'tabfooter';
   const attr = (raw, name) => {
     const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
     return m ? (m[1] != null ? m[1] : m[2]) : undefined;
@@ -2483,8 +2534,10 @@ function parseFormTopology(xml) {
       else if (tag === 'section') { section = null; row = null; cell = null; }
       else if (tag === 'row') { row = null; cell = null; }
       else if (tag === 'cell') { inCell = false; cell = null; }
+      else if (isPart(tag)) { part = null; row = null; cell = null; }
       continue;
     }
+    if (isPart(tag)) { part = selfClosing ? null : tag; continue; }
     if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, expanded: flag(raw, 'expanded'), visible: flag(raw, 'visible'), columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
     else if (tag === 'section' && column) {
@@ -2505,25 +2558,29 @@ function parseFormTopology(xml) {
       cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1, visible: flag(raw, 'visible') };
       if (attr(raw, 'auto') !== undefined) cell.auto = attr(raw, 'auto');
       if (row) row.cells.push(cell);
+      else if (part) outer.push({ part, tab: tab ? tab.name : undefined, cell });
       if (selfClosing) cell = null;
     }
     // FormXML carries the display label in a nested <labels><label description="..."/></labels>,
     // not an attribute. The BUILD matches containers name -> label -> position, so without this the
     // verifier can never make the label pass and would disagree with a label-matched reshape.
-    // `label` is the FIRST one, which is what the container matching reads; `labels` is every language the container carries
-    // (a label per <label languagecode>), which is what --verify holds the layout's label against: the build writes one language
-    // and a maker's translations stay beside it, listed in whatever order the platform gives them.
+    // `label` is the FIRST one, which is what the container matching reads; `labels` is every language the container carries,
+    // each as { lcid, text } (a label per <label languagecode="1033" description="…">), which is what --verify holds the layout's
+    // label against: the build writes one language and a maker's translations stay beside it, listed in whatever order the platform
+    // gives them. The language is kept because a label is only the spec's if it is the spec's in ITS language; one a label never
+    // names (no `languagecode`) has `lcid: undefined`, and is the spec's in no language.
     else if (tag === 'label' && !inCell) {
       const d = attr(raw, 'description') === undefined ? undefined : decodeXmlEntities(attr(raw, 'description'));
       if (d !== undefined) {
         const owner = section || tab;
         if (owner) {
-          (owner.labels = owner.labels || []).push(d);
+          const lcid = normalizeLanguageCode(attr(raw, 'languagecode'));
+          (owner.labels = owner.labels || []).push({ lcid: lcid === null ? undefined : lcid, text: d });
           if (owner.label === undefined) owner.label = d;
         }
       }
     }
-    else if (tag === 'control' && section) {
+    else if (tag === 'control' && (section || part)) {
       // Only BOUND fields reach `fields[]`. A control with no `datafieldname` is a sub-grid, the
       // notes timeline or a web resource — engine-owned, never something the spec's field list
       // claims to place. The CELL still records that a control was present, because that is what
@@ -2537,7 +2594,7 @@ function parseFormTopology(xml) {
       // A quick view binds a LOOKUP's datafieldname too, but it is not that field: counted as one, it placed
       // the lookup wherever the quick view sat and lent the field its visibility and state. The build skips it
       // the same way (isNonFieldControl) when it picks the cell to place or patch.
-      if (f && !isNonFieldControl({ classId })) section.fields.push(String(f).toLowerCase());
+      if (section && f && !isNonFieldControl({ classId })) section.fields.push(String(f).toLowerCase());
       // `id` is what tells a timeline Dynamics renders (`notescontrol`) from one it does not (a generated id).
       if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {}, controlId === undefined ? {} : { id: controlId }, disabled === undefined ? {} : { disabled });
     }
@@ -2552,7 +2609,7 @@ function parseFormTopology(xml) {
       if (text) cell.control.relationshipName = decodeXmlEntities(text);
     }
   }
-  return tabs;
+  return { tabs, outer };
 }
 
 function conditionMatches(want, got) {

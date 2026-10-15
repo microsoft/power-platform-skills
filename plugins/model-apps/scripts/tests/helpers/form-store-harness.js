@@ -20,7 +20,7 @@ const SUBGRID_CLASS_ID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
 const VIEW_ID = guid(7777);
 const DEFAULT_ATTRIBUTES = { new_name: 'String', new_code: 'String', new_notes: 'Memo', new_area: 'String', new_extra: 'String' };
 
-function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES } = {}) {
+function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES, languageCode = 1033 } = {}) {
   const dirs = [];
   const store = { row: { formid: formId, name: formName, objecttypecode: entity, type: 2, isdefault: true } };
   const writes = [];
@@ -36,6 +36,9 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
           Attributes: Object.entries(attributes).map(([LogicalName, AttributeType]) => ({ LogicalName, AttributeType })) });
       }
       if (/EntityDefinitions\(LogicalName='systemform'\)/.test(decoded)) return response({ EntitySetName: 'systemforms' });
+      // The organization's base language: `--verify` reads it to know which language the build wrote a string tab or section label in.
+      if (/EntityDefinitions\(LogicalName='organization'\)/.test(decoded)) return response({ EntitySetName: 'organizations' });
+      if (/\/organizations(?:\?|$)/i.test(url)) return response({ value: [{ languagecode: languageCode }] });
       if (/systemforms\(/i.test(url)) {
         assert.ok(store.row.formxml, 'a fetch reads a form that has been serialized');
         return response(clone(store.row));

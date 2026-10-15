@@ -1048,7 +1048,9 @@ test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify th
 
 test('readerFor + verifySpec reads isdefault and formxml once per verify, and re-reads on the next', async () => {
   const calls = [];
-  const xml = '<form><tabs><tab name="tab_main"><columns><column width="100%"><sections><section name="sec_main"><rows><row><cell><control datafieldname="contoso_name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>';
+  // The tab and the section carry the captions the spec declares, as the build writes them: verify holds a label the spec authors.
+  const labels = '<labels><label description="Main" languagecode="1033" /></labels>';
+  const xml = `<form><tabs><tab name="tab_main">${labels}<columns><column width="100%"><sections><section name="sec_main">${labels}<rows><row><cell><control datafieldname="contoso_name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>`;
   const sdk = {
     findTables: async () => [{ logicalName: 'contoso_task' }],
     findColumns: async () => [{ logicalName: 'contoso_name' }],

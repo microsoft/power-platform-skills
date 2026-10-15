@@ -174,12 +174,19 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   edit so an interrupted split cannot persist duplicated cells. Anchors run in dependency order
   after new-field insertion; remaining unsatisfied requests are warned in `skipped.layout`.
   Existing fields are not list-reordered. Verify checks form-wide cell/control ID uniqueness,
-  including auto forms, and the tab and section **labels** a layout authors (against the published form, in any
-  language; a label the spec does not write, or a container the published form gives none, is not compared),
-  but not field order or anchor adjacency. A field's `readOnly`/`hidden` flag goes on **every** cell the form
-  holds of the field (`applyFieldControlOptions` visits each one, as the lookup-label repair does: on a form a
-  maker placed a field on twice, the first cell alone left the second editable or visible), and verify checks
-  every cell too. See the
+  including auto forms, and the tab and section **labels** a layout authors, each in the language the build wrote
+  it: a string label in the build's authoring language (the spec's `languageCode`, else the organization's base
+  language, read once), a label map at every LCID it declares — a translation the spec leaves out is never
+  required or changed. A caption the published form holds only in ANOTHER language does not stand in for the
+  declared one, and a missing caption or language is a mismatch, not a pass; a label the spec does not write is
+  not compared. Field order and anchor adjacency are not verified. A field's `readOnly`/`hidden` flag goes on
+  **every** cell the form holds of the field — in a section, in a maker's tab or section, in the form
+  **header and footer**, and in a tab's own header and footer (`tabheader`/`tabfooter`): on a form a maker placed a
+  field on twice, the first cell alone left the second editable or visible. `applyFieldControlOptions` visits each
+  one; the SDK keeps those parts as raw XML (in the form's bag, or the tab's), so `findFieldOuterCells`
+  (`lib/artifact-intent.js`) finds their cells there and the flag is written in place, every
+  other attribute and child kept. Verify checks every cell too, saying where one is wrong ("in the form header",
+  "in the footer of tab 'x'"). See the
   [form-layout contract](references/app-spec-schema.md).
   **The Notes timeline** (#680, `lib/form-timeline.js` — one definition shared by the compiler, the
   build's repair and verify) is written in the shape Dynamics renders: the fixed control id
@@ -384,18 +391,24 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     `$batch` change set (the plugin's client has `postRaw`) and stays Active; a Draft flow as one PATCH. The
     Active/Draft state is converged AFTER the edit — a state change before it would move the row's version,
     and the SDK's push is conditioned on it (a 412).
-  - *Refused — the whole flow is left exactly as it was, never half-applied*: a stage or step the flow has
+  - *Refused — no stage or step edit of the flow is applied, never half of them*: a stage or step the flow has
     and the spec does not list (a build never removes either, and cannot tell a spec that dropped one from
     a maker who added it in Maker); the same stages in another order; a different number of stages where one
     is replaced (a rename cannot be told from a removal); two stages or two steps that share a name; a stage
-    on another table. The warning says why, that nothing was written, and the ways forward (list what the
-    flow has, make the change in Maker, or delete and recreate the flow).
-  - A flow holding branches or other non-stage activities cannot have a stage added through the SDK
-    (`NOT_IMPLEMENTED`, thrown before any request): the edit is reported **NOT applied** with the SDK's reason
-    and the flow is left as it was — as is a flow whose stages cannot be read. Any other push failure
-    **halts** the build: a flow the SDK deactivated and could not reactivate is never skipped
-    (`BPF_LEFT_DEACTIVATED`). A rename or a step edit on such a flow does work, and keeps what the SDK does not
-    model (it states that the rest of the process round-trips losslessly; pinned in the test).
+    on another table. The warning says why and the ways forward (list what the flow has, make the change in
+    Maker, or delete and recreate the flow), and says: "No stage or step edits were applied; the requested
+    Active/Draft state is handled independently." The state is not a stage edit — it is converged by a step of its
+    own — so a flow the spec asks to be Draft is still deactivated, and the flow's stages and steps are as they were.
+  - The SDK refuses a structural edit **per container**, not per flow (`NOT_IMPLEMENTED`, thrown before any
+    request): a stage added, removed or reordered on a flow whose primary composite holds something that is not
+    a stage (a branch, say), and a step added, removed or moved on a stage that also holds something that is not a
+    step (a stage action). The edit is reported **NOT applied** with the SDK's reason, on the same terms as a
+    plan refusal (no stage or step edits were applied; the requested Active/Draft state is handled
+    independently) — as is a flow whose stages cannot be read. A stage action does not stop a stage being added
+    to the flow; a rename, a rebind or a required/optional change works on either kind of flow and keeps what
+    the SDK does not model (it states that the rest of the process round-trips losslessly; all of it is pinned
+    against the real bundle in `bpf-stage-edits.test.js`). Any other push failure **halts** the build: a flow
+    the SDK deactivated and could not reactivate is never skipped (`BPF_LEFT_DEACTIVATED`).
   The flow's own `description` and `order` are not reapplied, and `--verify` does not compare stages.
   `stageEditApplies` hands the change classifier the same plan, so an applied stage edit is not filed as
   `businessProcessFlow-edit-not-convergent` debt and a refused one still is.
@@ -732,7 +745,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   description have), so a spec that leaves the description out or carries the `""` a download writes never blanks
   one a maker typed; the spec wins over a text changed in Maker, as it does for those. The unique name is the app's
   identity and is never written: a spec that pins `app.uniqueName` (a download does) is renamed, one that does not
-  names a different app. A never-published app refuses the write and halts as the routing description does. **The icon
+  names a different app. **Only a header that is plain text is written over.** Both columns are localizable, and a plain
+  write of the base-language text has not been measured to keep the translations beside it, so a name or description
+  that comes back as one text per language is never replaced by a scalar — in either direction, the unchanged name
+  of an edited description included: it is left as it is and the build warns that the edit was not applied (change it in
+  Power Apps). The build never sends a map for a String column. A **never-published** app takes no write to its name or
+  description until it is published, and the SDK refuses the push before it writes anything
+  (`APP_DRAFT_HEADER_NOT_WRITABLE`). For a text edit alone that is a warning, not a halt: `pushAppHeader` puts the fetched
+  text back, pushes again — the navigation and the rest of the build are then written as they always were for such an
+  app — and warns *not applied: the app was never published; publish it in Power Apps and re-run*. It still halts for
+  a routing description in the same push (below), for a 412 (a concurrent edit), for any refusal that survives the
+  put-back, and when the text cannot be put back. **The icon
   is the one header field a rebuild cannot change** (`webresourceid` is write-once and the SDK's header push does not
   carry it): when the spec names an `app.icon` that is not the app's, `warnAppIconNotApplied` says so; a spec with no
   `app.icon` is never compared. `--verify` checks the routing description but not the name or the description.
@@ -4181,8 +4204,9 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   - *Business process flows.* A flow the build reuses has its stages and steps compared with the spec's, and the
     edits that leave every deployed stage in place are written through the element surface and pushed once: an
     Active flow in one conditional change set (it needs a client with `postRaw`, which the plugin's has) and left
-    Active, a Draft flow in one PATCH, every stage and step keeping its id. A flow with branches or other
-    non-stage activities refuses a stage addition before any request, and a rename or a step edit keeps what the
+    Active, a Draft flow in one PATCH, every stage and step keeping its id. A flow whose primary composite holds a
+    branch (or another non-stage activity) refuses a stage addition before any request, a stage action does not
+    refuse one, and a rename keeps what the
     SDK does not model. All of it is pinned against the real bundle in `bpf-stage-edits.test.js`.
   - *Commands.* A command push writes only its own table's bar, with every check before the first write. The
     build's commands phase is a command push (`createArtifact('command')`, then `pushArtifact`), so the

@@ -233,15 +233,20 @@ works through.
   stages and steps are compared with the spec's by name. These edits are applied **in place, in one push**,
   and every stage and step keeps its id, so no record leaves the stage it is on: a stage added (anywhere) or
   renamed, and a step added, renamed, rebound to another `field`, made `required` or optional, or moved. These
-  are **refused**, and the flow is then left exactly as it was (nothing of it is applied, the safe edits
-  included) with a warning that says why and what to do: a stage or a step the flow has and the spec does not
+  are **refused**: no stage or step edit is applied (none of the safe ones either), with a warning that says why
+  and what to do, and says "No stage or step edits were applied; the requested Active/Draft state is handled
+  independently." The state is not a stage edit: it is still converged, so a flow the spec asks to be Draft is
+  deactivated all the same. Refused: a stage or a step the flow has and the spec does not
   list (a build never removes one — a record may sit on that stage, and the platform does not document what
   becomes of it; it also cannot tell a spec that dropped it from a maker who added it in Maker), the same
   stages in another order, a stage replaced by a different number of stages (a rename cannot be told from a
   removal), and names that cannot be told apart. To go ahead with one of those, make the change in Maker
   (move or finish the records on a stage before removing it) or delete and recreate the flow (which deletes
-  its backing table and the records in it). A flow with branches or stage actions cannot have a stage added
-  through the SDK; that edit is reported as not applied, and a rename or a step edit on it keeps the branches.
+  its backing table and the records in it). The SDK limits an advanced flow **per container**, not as a whole: it
+  refuses (before any request) to add, remove or reorder the stages of a flow whose primary composite holds something that is
+  not a stage — a branch, say — and to add, remove or move the steps of a stage that also holds something that is not a
+  step, such as a stage action. A stage action does not stop a stage being added, and a rename or a rebind keeps what the
+  SDK does not model. An edit the SDK refuses is reported as not applied on the same terms.
   The flow's own `description` and `order` are not reapplied, and `--verify` does not compare stages.
 - Verified by `--verify` on three axes: it exists, there is exactly **one** of it (duplicates would
   offer users the same process twice), and its deployed state matches `status`.

@@ -17,8 +17,9 @@
 //     a step is the spec stripping what a maker may have added to the flow in Maker, which no reconcile of this plugin does (a
 //     reconcile adds and never removes — docs/app-builder-design.md §14). A stage or step the flow has and the spec does not list
 //     is a removal whether its author dropped it from the spec or a maker added it in Maker: nothing here can tell which, and a
-//     removal is never made on a guess. Nothing of a refused flow is applied, the safe edits included: a flow is either brought
-//     to what the spec says or left exactly as it is.
+//     removal is never made on a guess. No stage or step edit of a refused flow is applied, the safe edits included: its stages and
+//     steps are either brought to what the spec says or left exactly as they are (the flow's Active/Draft state is converged on its
+//     own, whatever the plan says).
 //
 // The spec identifies a stage and a step by NAME (it carries no id), so a rename cannot be told from a removal plus an addition by
 // names alone. It is told by position: the deployed stages the spec no longer names, and the stages it names that are not deployed,
@@ -75,7 +76,7 @@ function matchSteps(deployedSteps, desiredSteps) {
 //   verdict: 'same'    — nothing to change;
 //            'edit'    — `target` is what to apply: one entry per desired stage, in order —
 //                        { name, isNew, stageId, renamedFrom, steps: [{ name, field, required, stepId, renamedFrom }], stepsChanged };
-//            'refused' — `refusals` says why, and nothing is applied: [{ code, ... }] with `code` one of
+//            'refused' — `refusals` says why, and no stage or step edit is applied: [{ code, ... }] with `code` one of
 //                        'ambiguous-stages' (the deployed flow names two stages alike), 'ambiguous-steps' (two steps of a stage),
 //                        'removed-stages' ({ deployed, desired }: stages dropped, or replaced by a different number),
 //                        'reordered' ({ deployed, desired }: the stages both lists have, in the order each lists them),

@@ -114,6 +114,14 @@ function mockSdk(opts = {}) {
   let idc = 0;
   const ex = opts.existingTables || {};
   const store = {}; // `${type}:${id}` -> in-memory artifact (form/view/app), mutated by the generic surface
+  // What the existing app's header holds on the server. A real fetched app always carries both texts (the adapter reads `description` as ''
+  // when the row has none), and the defaults are makeSpec's own, so a rebuild of an existing app starts with a header that already matches
+  // it; a test that needs a different deployed one sets existingAppName / existingAppDescription (a LOCALIZED value is an LCID map).
+  const deployedHeader = {
+    name: opts.existingAppName !== undefined ? opts.existingAppName : 'Support Desk',
+    description: opts.existingAppDescription !== undefined ? opts.existingAppDescription : 'Tickets',
+    aiDescription: opts.existingAppAiDescription,
+  };
   const sdk = {
     queryRecords: async (e, o) => {
       calls.push({ name: 'queryRecords', args: [e, o] });
@@ -264,11 +272,9 @@ function mockSdk(opts = {}) {
         // key. Omitting it would let a test pass against an artifact the SDK would have rejected.
         else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), description: opts.existingViewDescription !== undefined ? opts.existingViewDescription : '' };
         else if (t === 'app') store[`${t}:${id}`] = { id,
-          // What a fetched app carries: its header text (the real adapter reads both, `description` as '' when the row has none). The defaults are
-          // makeSpec's own, so a rebuild of an existing app starts with a header that already matches it; a test that needs a different deployed
-          // one sets existingAppName / existingAppDescription.
-          name: opts.existingAppName !== undefined ? opts.existingAppName : 'Support Desk',
-          description: opts.existingAppDescription !== undefined ? opts.existingAppDescription : 'Tickets',
+          // What a fetched app carries: its header text (see deployedHeader above).
+          name: deployedHeader.name,
+          description: deployedHeader.description,
           siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] }, ...(opts.existingAppAiDescription ? { aiDescription: opts.existingAppAiDescription } : {}) };
         // The chart description reconcile reads through fetchArtifact/getArtifact rather than
         // queryRecords, because a plain query returns the PUBLISHED row while the PATCH writes the
@@ -403,9 +409,20 @@ function mockSdk(opts = {}) {
     // `appPushResult` lets a test answer an APP push the way the real SDK answers a 412: it RESOLVES with
     // `saved:false` and a VERSION_CONFLICT error rather than throwing. `appPushThrows` is the other shape:
     // refusals the SDK THROWS (a never-published app's header, a sitemap target that no longer exists).
+    // `draftHeader` models the one refusal that depends on the push's content: the app was NEVER published, so Dataverse refuses a write to its
+    // header (name, description, routing description) — and the SDK, which writes the header only when the artifact holds one that differs
+    // from the row's, throws APP_DRAFT_HEADER_NOT_WRITABLE before it writes anything ("Nothing was modified by this call"). A push whose
+    // header matches the row's goes through, as the real one does (the sitemap alone needs no header write).
     pushArtifact: async (t, id) => {
       calls.push({ name: 'pushArtifact', args: [t, id] });
       if (t === 'app' && opts.appPushThrows) throw Object.assign(new Error(`push refused: ${opts.appPushThrows}`), { code: opts.appPushThrows });
+      if (t === 'app' && opts.draftHeader) {
+        const held = store[`${t}:${id}`] || {};
+        const differs = (key) => held[key] !== undefined && JSON.stringify(held[key]) !== JSON.stringify(deployedHeader[key]);
+        if (differs('name') || differs('description') || differs('aiDescription')) {
+          throw Object.assign(new Error(`Refusing to update app '${id}': its appmodule row is UNPUBLISHED, and Dataverse cannot resolve version numbers for a draft appmodule (HTTP 400). Publish the app first, then push the header edit. Nothing was modified by this call.`), { code: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
+        }
+      }
       if (t === 'app' && opts.appPushResult) return { type: t, id, ...opts.appPushResult };
       return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } };
     },
@@ -913,15 +930,220 @@ test('app header: a NEW app is created with its name and description as before, 
   assert.deepStrictEqual(headerEdits(calls), []);
 });
 
-test('app header: an edit to the text of a never-published app halts with the precise "publish first" refusal', async () => {
-  // Dataverse takes no write to a draft appmodule's name or description until it is published — the same refusal the routing
-  // description meets — so a changed description is no longer silently left unwritten: the operator is told what to do.
-  const { sdk } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
+// A never-published app takes no write to its header — name, description or routing description — until it is published, and the SDK
+// THROWS APP_DRAFT_HEADER_NOT_WRITABLE before it writes anything (its message: "Nothing was modified by this call"); it writes the header
+// only when the artifact holds one that differs from the row's, so a push whose header matches goes through. The routing description is
+// an explicit request the build cannot honour, so it halts, as it always did. The app's name and description are different: a rebuild
+// applies them because it can, and a refusal of THEM alone must not stop the navigation and everything after it. The build says they
+// were not applied, puts the fetched header back so the push no longer carries a header write, and goes on.
+const NEVER_PUBLISHED = /the app was never published; publish it in Power Apps and re-run/;
+const notAppliedWarnings = (warnings) => warnings.filter((w) => NEVER_PUBLISHED.test(w));
+
+test('app header: a text edit on a never-published app is NOT applied — the build warns, puts the fetched header back, and carries on with the navigation', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true }); // deployed: 'Tickets'
+  const warnings = [];
+  const events = [];
+  const result = await runSdkBuild(describedSpec(), { sdk, apply: true, publish: true, phases: [...appShellPhases, 'publish'], warn: (m) => warnings.push(m), emit: (e) => events.push(e) });
+  assert.strictEqual(result.ok, true, 'the build succeeds');
+  assert.strictEqual(notAppliedWarnings(warnings).length, 1, JSON.stringify(warnings));
+  assert.match(notAppliedWarnings(warnings)[0], /^app "Support Desk": its description was not applied: the app was never published; publish it in Power Apps and re-run\./);
+  // The edit was made, refused, and put back — the second push carries no header write.
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED], ['/description', 'Tickets']]);
+  const pushes = appCalls(calls, 'pushArtifact');
+  assert.strictEqual(pushes.length, 2, 'the refused push, then the push that writes the navigation');
+  const siteMapEdits = appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap');
+  assert.strictEqual(siteMapEdits.length, 1, 'the sitemap rewrite is made once and rides the second push');
+  assert.ok(calls.indexOf(siteMapEdits[0]) < calls.indexOf(pushes[0]), 'made before the first push');
+  const held = await sdk.getArtifact('app', pushes[0].args[1]);
+  assert.strictEqual(held.description, 'Tickets', 'the artifact holds the deployed header again');
+  assert.ok(appCalls(calls, 'publishArtifact').length >= 1, 'the app is published');
+  assert.ok(calls.indexOf(appCalls(calls, 'publishArtifact')[0]) > calls.indexOf(pushes[1]), 'after the push that saved');
+  assert.ok(!events.some((e) => e.status === 'error'), JSON.stringify(events.filter((e) => e.status === 'error')));
+  assert.ok(events.some((e) => e.phase === 'app-shell' && e.status === 'ok'), 'the app step is reported as done');
+  assert.ok(events.some((e) => e.phase === 'publish'), 'and the phases after it still run');
+});
+
+test('app header: with the pages phase the same refusal is not applied and the finalizer goes on, then so does the pages phase', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const warnings = [];
+  const events = [];
+  const result = await runSdkBuild(describedSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages, warn: (m) => warnings.push(m), emit: (e) => events.push(e) });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(notAppliedWarnings(warnings).length, 1, JSON.stringify(warnings));
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 2, 'the finalizer\u2019s refused push and its second');
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED], ['/description', 'Tickets']]);
+  assert.ok(events.some((e) => e.phase === 'pages' && e.status === 'ok' && /finalize sitemap/.test(e.label)), 'the finalizer step is reported as done');
+  assert.ok(!events.some((e) => e.status === 'error'), JSON.stringify(events.filter((e) => e.status === 'error')));
+  assert.strictEqual(appCalls(calls, 'publishArtifact').length, 1, 'and the app is published once');
+});
+
+test('app header: a rename and a description edit that are both refused are both put back, and the warning names both', async () => {
+  const spec = makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED } });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk'], ['/description', DESCRIBED], ['/name', 'Support Desk'], ['/description', 'Tickets']]);
+  assert.strictEqual(notAppliedWarnings(warnings).length, 1);
+  assert.match(notAppliedWarnings(warnings)[0], /^app "Help Desk": its name and description were not applied: the app was never published; publish it in Power Apps and re-run\./);
+  const held = await sdk.getArtifact('app', appCalls(calls, 'pushArtifact')[0].args[1]);
+  assert.deepStrictEqual([held.name, held.description], ['Support Desk', 'Tickets']);
+});
+
+test('app header: a never-published app that takes a rebuild with no text edit builds exactly as before — one push, no warning', async () => {
+  // Pins the neighbour: the refusal is met only by an EDIT of the header.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const warnings = [];
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), []);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+  assert.deepStrictEqual(warnings.filter((w) => /^app "/.test(w)), [], 'nothing is said about the app');
+});
+
+test('app header: the routing description on a never-published app still halts with the precise refusal — whether or not the text changed too', async () => {
+  // An explicit request the build cannot honour is never skipped, and a push carrying it is not retried without it.
+  for (const [what, spec] of [['the routing description alone', routingSpec()], ['with a text edit beside it', makeSpec({ app: { name: 'Support Desk', description: DESCRIBED, aiDescription: ROUTING } })]]) {
+    for (const phases of [appShellPhases, fullPhases]) {
+      const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+      const warnings = [];
+      await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases, genpageCli: noPages, warn: (m) => warnings.push(m) }), (e) => {
+        assert.strictEqual(e.code, 'app-header-unpublished', `${what}, ${phases.join(',')}: ${e.message}`);
+        assert.match(e.message, /name, description or routing description/);
+        return true;
+      });
+      assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, `${what}: the refused push is the only one`);
+      assert.deepStrictEqual(headerEdits(calls).filter(([, value]) => value === 'Tickets'), [], `${what}: no header is put back`);
+      assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, `${what}: the copy is reset`);
+      assert.deepStrictEqual(notAppliedWarnings(warnings), [], `${what}: no \u201cnot applied\u201d is claimed over a halt`);
+    }
+  }
+});
+
+test('app header: when the never-published app refuses even the push with the header put back, the build halts with the precise refusal', async () => {
+  // The recovery is one retry, on the SDK's own promise that the refused call wrote nothing; a second refusal is not looped on.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
   await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
     assert.match(e.message, /name, description or routing description/);
     return true;
   });
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 2, 'the refused push and one retry, never more');
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'the copy is reset before the halt');
+});
+
+test('app header: the refusal is recovered from whether the SDK throws it or returns it', async () => {
+  // The vendored SDK throws; the older shape resolved `saved:false` (or `success:false`) with the same code. Both mean "nothing was written".
+  for (const result of [{ saved: false }, { success: false }]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true });
+    const push = sdk.pushArtifact;
+    let refused = false;
+    sdk.pushArtifact = async (t, id) => {
+      if (t !== 'app' || refused) return push(t, id);
+      refused = true;
+      calls.push({ name: 'pushArtifact', args: [t, id] });
+      return { type: t, id, ...result, error: Object.assign(new Error('The retrieval of version numbers failed.'), { code: 'APP_DRAFT_HEADER_NOT_WRITABLE' }) };
+    };
+    const warnings = [];
+    const built = await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+    assert.strictEqual(built.ok, true, JSON.stringify(result));
+    assert.strictEqual(notAppliedWarnings(warnings).length, 1, JSON.stringify(result));
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 2, JSON.stringify(result));
+  }
+});
+
+test('app header: a 412 on a push that carried a text edit is a concurrent edit — never skipped, never retried, and the copy is kept', async () => {
+  for (const phases of [appShellPhases, fullPhases]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+    const warnings = [];
+    await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases, genpageCli: noPages, warn: (m) => warnings.push(m) }), (e) => {
+      assert.strictEqual(e.code, 'version-conflict', `${phases.join(',')}: ${e.message}`);
+      return true;
+    });
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one attempt');
+    assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]], 'the edit is not put back');
+    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, 'the copy is kept as the fence');
+    assert.deepStrictEqual(notAppliedWarnings(warnings), []);
+  }
+});
+
+test('app header: a push that fails for any other reason propagates unchanged and is not retried, a text edit or not', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND' });
+  await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'SITEMAP_TARGET_NOT_FOUND');
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]]);
+});
+
+test('app header: if the fetched header cannot be put back the build halts rather than push an edit it could not take out', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const update = sdk.updateElement;
+  sdk.updateElement = async (t, id, ptr, patch) => {
+    if (t === 'app' && ptr === '/description' && patch === 'Tickets') { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); throw new Error('workspace write failed'); }
+    return update(t, id, ptr, patch);
+  };
+  await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'app-header-unpublished');
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'no second push of a copy still holding the edit');
+});
+
+// Both columns are localizable (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule), and whether
+// a plain write of the base-language text keeps the translations beside it has not been measured against an environment. Until it has, a
+// header that is not plain text — a localized one, held as one text per language — is never replaced by a
+// scalar: the edit is left unapplied, with a warning, and nothing else about the push changes.
+const localized = (english, french) => ({ '1033': english, '1036': french });
+
+test('app header: a localized name and description are never replaced by a scalar — they are left as they are and the build says the edit was not applied', async () => {
+  const name = localized('Support Desk', 'Bureau d\u2019assistance');
+  const description = localized('Tickets', 'Billets');
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: name, existingAppDescription: description });
+  const warnings = [];
+  const result = await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(headerEdits(calls), [], 'no write to the header text at all');
+  const held = await sdk.getArtifact('app', appCalls(calls, 'pushArtifact')[0].args[1]);
+  assert.deepStrictEqual(held.name, name, 'the name is still the map — the spec\u2019s name is its English text: the unchanged-name, changed-description case');
+  assert.deepStrictEqual(held.description, description, 'the description is still the map');
+  const notApplied = warnings.filter((w) => /was not applied/.test(w));
+  assert.strictEqual(notApplied.length, 1, JSON.stringify(warnings));
+  assert.match(notApplied[0], /^app "Support Desk": its description was not applied: it is localized \(2 languages: 1033, 1036\)/);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'the sitemap push is as it always is');
+});
+
+test('app header: a localized name the spec changes is not applied either — and neither is the description beside it', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: localized('Support Desk', 'Bureau d\u2019assistance'), existingAppDescription: localized('Tickets', 'Billets') });
+  const warnings = [];
+  await runSdkBuild(makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED } }), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), []);
+  assert.strictEqual(warnings.filter((w) => /was not applied/.test(w)).length, 2, JSON.stringify(warnings));
+  assert.ok(warnings.some((w) => /^app "Help Desk": its name was not applied: it is localized/.test(w)));
+  assert.ok(warnings.some((w) => /^app "Help Desk": its description was not applied: it is localized/.test(w)));
+});
+
+test('app header: a plain-text header beside a localized one is still applied — only what cannot be applied safely is left', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppDescription: localized('Tickets', 'Billets') });
+  const warnings = [];
+  await runSdkBuild(makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED } }), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk']], 'the name is plain text and is applied');
+  assert.deepStrictEqual(warnings.filter((w) => /was not applied/.test(w)).length, 1);
+});
+
+test('app header: a header of an unknown shape is left as it is and reported, the same as a localized one', async () => {
+  for (const [what, value] of [['an array', ['Tickets']], ['a number', 42], ['null', null]]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppDescription: value });
+    const warnings = [];
+    await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+    assert.deepStrictEqual(headerEdits(calls), [], what);
+    assert.strictEqual(warnings.filter((w) => /^app "Support Desk": its description was not applied: .* could not be read as plain text/.test(w)).length, 1, `${what}: ${JSON.stringify(warnings)}`);
+  }
+});
+
+test('app header: a localized header the spec says nothing new about is left alone without a word', async () => {
+  // The spec's name and description are the app's English texts, and a spec with no description says nothing: nothing to apply, nothing to warn.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: localized('Support Desk', 'Bureau d\u2019assistance'), existingAppDescription: localized('Tickets', 'Billets') });
+  const warnings = [];
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  const quiet = mockSdk({ artifactsExist: true, existingAppDescription: localized('Tickets', 'Billets') });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk' } }), { sdk: quiet.sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), []);
+  assert.deepStrictEqual(headerEdits(quiet.calls), []);
+  assert.deepStrictEqual(warnings.filter((w) => /^app "/.test(w)), []);
 });
 
 test('app header: the icon is set at create only — a spec icon the app does not have is reported as NOT applied, never silently dropped', async () => {
@@ -3735,6 +3957,111 @@ test('form reconcile: the flags are written after each cell is re-read, so a cel
   const firstWrite = order.indexOf('write');
   assert.strictEqual(order[firstWrite + 1], 'read', 'a read separates the first control write from the second');
   assert.strictEqual(order.filter((x) => x === 'write').length, 2);
+});
+
+// A Main form's HEADER and FOOTER hold cells too, and a maker can put a field there as well as in a section. The SDK does not model them: it
+// keeps their XML in the form's bag — raw nodes `{ n, a: [[name, value], …], c: [children] }` — and writes it back as it read it. A field the
+// spec makes read-only or hidden is so wherever the form shows it, so those cells get the flags too, by an edit of the one attribute (the
+// control's `disabled`, the cell's `visible`) that leaves every other attribute and child of the node as it is.
+const rawNode = (n, attrs = {}, c = []) => ({ n, a: Object.entries(attrs), c });
+const TEXT_CLASS = '{4273EDBD-AC1D-40D3-9FB2-095C621B552D}';
+const outerCellNode = (part, field, { cell = {}, control = {}, classid = TEXT_CLASS } = {}) => rawNode('cell', { id: `${part}-cell-${field}`, ...cell },
+  [rawNode('labels', {}, [rawNode('label', { description: field, languagecode: '1033' })]), rawNode('control', { id: `${part}_${field}`, classid, datafieldname: field, ...control }), rawNode('extra', { keep: '1' })]);
+const outerPart = (part, cells) => ({ node: rawNode(part, { id: `${part}-id`, columns: '1' }, [rawNode('rows', {}, [rawNode('row', {}, cells)])]) });
+const withBag = (form, parts) => Object.assign(form, { bag: { a: [], c: parts.map((p, i) => ({ i: i + 1, ...p })) } });
+const HEADER_CELL = '/bag/c/0/node/c/0/c/0/c/0';
+const FOOTER_CELL = '/bag/c/1/node/c/0/c/0/c/0';
+const attrPatches = (calls) => calls.filter((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form' && /^\/bag\//.test(String(c.args[2])))
+  .map((c) => [c.name === 'updateElement' ? 'update' : 'add', c.args[2], c.args[3]]);
+// header: the control carries `disabled` and the cell `visible`; footer: neither (an absent attribute is added).
+const tierInHeaderAndFooter = () => withBag(seedForm('f1', ['new_name', 'new_tier']), [
+  outerPart('header', [outerCellNode('header', 'new_tier', { cell: { visible: 'true' }, control: { disabled: 'false' } })]),
+  outerPart('footer', [outerCellNode('footer', 'new_tier')]),
+]);
+const flagSpec = (options) => { const spec = makeSpec(); spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: options } }]; return spec; };
+const buildForms = async (spec, form) => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: form });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  return { sdk, calls, after: await sdk.getArtifact('form', 'form-existing') };
+};
+
+test('form reconcile: readOnly reaches the field\u2019s cell in the form HEADER and in the FOOTER, by an edit of the control\u2019s one attribute', async () => {
+  const { calls, after } = await buildForms(flagSpec({ readOnly: true }), tierInHeaderAndFooter());
+  const before = tierInHeaderAndFooter();
+  assert.deepStrictEqual(attrPatches(calls), [
+    ['update', `${HEADER_CELL}/c/1/a/3`, ['disabled', 'true']],
+    ['add', `${FOOTER_CELL}/c/1/a`, ['disabled', 'true']],
+  ], 'the header\u2019s attribute is replaced where it stands, the footer\u2019s absent one is appended');
+  // …and nothing else of either part changed: every other attribute and child (the label, the unmodeled `extra` node, the
+  // cell\u2019s own attributes) is exactly what the form held.
+  const expected = JSON.parse(JSON.stringify(before.bag));
+  expected.c[0].node.c[0].c[0].c[0].c[1].a[3] = ['disabled', 'true'];
+  expected.c[1].node.c[0].c[0].c[0].c[1].a.push(['disabled', 'true']);
+  assert.deepStrictEqual(after.bag, expected);
+  assert.strictEqual(controlPatches(calls).length, 1, 'the body cell is still patched, once');
+});
+
+test('form reconcile: hidden reaches the field\u2019s cell in the header and the footer, by an edit of the cell\u2019s `visible` attribute', async () => {
+  const { calls, after } = await buildForms(flagSpec({ hidden: true }), tierInHeaderAndFooter());
+  assert.deepStrictEqual(attrPatches(calls), [
+    ['update', `${HEADER_CELL}/a/1`, ['visible', 'false']],
+    ['add', `${FOOTER_CELL}/a`, ['visible', 'false']],
+  ]);
+  assert.deepStrictEqual(after.bag.c[0].node.c[0].c[0].c[0].a, [['id', 'header-cell-new_tier'], ['visible', 'false']]);
+  assert.deepStrictEqual(after.bag.c[1].node.c[0].c[0].c[0].a, [['id', 'footer-cell-new_tier'], ['visible', 'false']]);
+  assert.strictEqual(cellPatches(calls).length, 1, 'the body cell is still hidden, once');
+});
+
+test('form reconcile: a field that is both readOnly and hidden gets both flags on every body, header and footer cell', async () => {
+  const { calls } = await buildForms(flagSpec({ readOnly: true, hidden: true }), tierInHeaderAndFooter());
+  assert.strictEqual(controlPatches(calls).length + cellPatches(calls).length, 2);
+  assert.deepStrictEqual(attrPatches(calls).map(([, pointer]) => pointer), [`${HEADER_CELL}/c/1/a/3`, `${HEADER_CELL}/a/1`, `${FOOTER_CELL}/c/1/a`, `${FOOTER_CELL}/a`]);
+});
+
+test('form reconcile: a header or footer cell already carrying the flag is not written again, and one of another field is never touched', async () => {
+  const flagged = withBag(seedForm('f1', ['new_name', 'new_tier']), [
+    outerPart('header', [outerCellNode('header', 'new_tier', { cell: { visible: '0' }, control: { disabled: 'TRUE' } }), outerCellNode('header', 'new_owner')]),
+    outerPart('footer', [outerCellNode('footer', 'new_tier', { cell: { visible: 'false' }, control: { disabled: '1' } })]),
+  ]);
+  const { calls, after } = await buildForms(flagSpec({ readOnly: true, hidden: true }), flagged);
+  assert.deepStrictEqual(attrPatches(calls), [], 'xs:boolean spellings of the wanted state are the wanted state: nothing to write');
+  assert.deepStrictEqual(after.bag, flagged.bag);
+  // A field the spec does not flag keeps its header cell as it is, even when it shares the part with one that is flagged.
+  const owner = withBag(seedForm('f1', ['new_name', 'new_tier']), [outerPart('header', [outerCellNode('header', 'new_owner', { control: { disabled: 'false' } })])]);
+  assert.deepStrictEqual(attrPatches((await buildForms(flagSpec({ readOnly: true }), owner)).calls), []);
+});
+
+test('form reconcile: a header or footer control that is not the field itself (a quick view bound to the lookup) is skipped', async () => {
+  const QUICK_VIEW = '{5C5600E0-1D6E-4205-A272-BE80DA87FD42}';
+  const form = withBag(seedForm('f1', ['new_name', 'new_tier']), [outerPart('header', [outerCellNode('header', 'new_tier', { classid: QUICK_VIEW, control: { disabled: 'false' } })])]);
+  assert.deepStrictEqual(attrPatches((await buildForms(flagSpec({ readOnly: true }), form)).calls), []);
+});
+
+test('form reconcile: a field held twice in the header and once in the footer is flagged in all three, each located again after the last write', async () => {
+  const form = withBag(seedForm('f1', ['new_name', 'new_tier']), [
+    outerPart('header', [outerCellNode('header', 'new_tier', { control: { disabled: 'false' } }), outerCellNode('header', 'new_tier', { control: { disabled: 'false' } })]),
+    outerPart('footer', [outerCellNode('footer', 'new_tier', { control: { disabled: 'false' } })]),
+  ]);
+  const { calls, after } = await buildForms(flagSpec({ readOnly: true }), form);
+  assert.strictEqual(attrPatches(calls).length, 3);
+  for (const cell of [after.bag.c[0].node.c[0].c[0].c[0], after.bag.c[0].node.c[0].c[0].c[1], after.bag.c[1].node.c[0].c[0].c[0]]) {
+    assert.deepStrictEqual(cell.c[1].a.find(([name]) => name === 'disabled'), ['disabled', 'true']);
+  }
+  const reads = calls.filter((c) => (c.name === 'getArtifact' && c.args[0] === 'form') || (c.name === 'updateElement' && /^\/bag\//.test(String(c.args[2]))) || (c.name === 'addElement' && /^\/bag\//.test(String(c.args[2]))))
+    .map((c) => (c.name === 'getArtifact' ? 'read' : 'write')).join(',');
+  assert.match(reads, /write,read,write,read,write/, 'a read separates each outer write from the next');
+});
+
+test('form reconcile: a form with no header or footer is flagged as before, with no extra write and no read it did not make', async () => {
+  const withoutOuter = await buildForms(flagSpec({ readOnly: true, hidden: true }), seedForm('f1', ['new_name', 'new_tier']));
+  assert.deepStrictEqual(attrPatches(withoutOuter.calls), []);
+  assert.strictEqual(controlPatches(withoutOuter.calls).length, 1);
+  assert.strictEqual(cellPatches(withoutOuter.calls).length, 1);
+});
+
+test('form reconcile: no header or footer cell is written when the spec asserts neither flag', async () => {
+  const { calls } = await buildForms(makeSpec(), tierInHeaderAndFooter());
+  assert.deepStrictEqual(attrPatches(calls), []);
 });
 
 test('form reconcile: no control/cell patch is issued when the spec asserts neither flag', async () => {

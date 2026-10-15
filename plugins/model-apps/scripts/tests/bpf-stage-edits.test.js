@@ -6,7 +6,8 @@
 // runs it. The build now compares the deployed definition with the spec and applies, in place and in ONE push, every edit that
 // leaves each deployed stage where it is in the process — a stage added or renamed, a step added, renamed, rebound, made required or
 // optional or moved — and REFUSES (with the reason and what to do) any that removes a stage or a step or reorders the stages,
-// applying nothing of that flow. The platform facts it rests on, and what is still to be measured live, are in lib/bpf-stages.js.
+// applying no stage or step edit of that flow (its Active/Draft state is converged on its own). The platform facts it rests on, and what is
+// still to be measured live, are in lib/bpf-stages.js.
 //
 // Layered like business-process-flows.test.js:
 //   1. the pure plan (lib/bpf-stages.js) — which edits are applied, which refused, and how;
@@ -487,7 +488,8 @@ test('REFUSED: a stage the flow has and the spec does not list is not removed �
   const w = r.warnings[0];
   assert.match(w, /^business process flow "Ticket Handling" on new_ticket: NOT changed — the flow has stage 'Resolve', which the spec does not list\./);
   assert.match(w, /A build never removes or moves a stage or a step: a record that is partway through the flow sits on one of its stages, and the platform does not document what becomes of a record whose stage is removed or moved\./);
-  assert.match(w, /Nothing was written to this flow, including the edits that would have been safe\./);
+  assert.match(w, /No stage or step edits were applied; the requested Active\/Draft state is handled independently\. That includes the edits that would have been safe\./);
+  assert.doesNotMatch(w, /nothing was written/i, 'the state may still be converged, so the warning must not claim that nothing was written');
   assert.match(w, /To keep the flow as it is, list in the spec what it has \(a stage or step added in Maker, say\)\./);
   assert.match(w, /To make the flow match the spec, make the change in Maker \(move or finish the records on a stage before removing it\); the next build then finds the flow as the spec says\./);
   assert.match(w, /If the flow's process records can be lost, delete the flow \(which deletes its backing table and the records in it\) and run the build again, which creates it afresh\.$/);
@@ -545,7 +547,8 @@ for (const [how, refusePush] of [['thrown', notImplemented()], ['returned by val
     assert.strictEqual(r.done.length, 1);
     assert.strictEqual(r.done[0].status, 'skip');
     assert.match(r.done[0].label, /NOT applied: the SDK cannot edit this flow — see the warning\)$/);
-    assert.match(r.warnings[0], /^business process flow "Ticket Handling" on new_ticket: its stage edits were NOT applied — .*not implemented yet.*Nothing was written to this flow\. Make the change in Maker \(the SDK cannot edit a flow with branches or other advanced constructs\), or put the spec back in line with the flow\.$/);
+    assert.match(r.warnings[0], /^business process flow "Ticket Handling" on new_ticket: its stage edits were NOT applied — .*not implemented yet.*No stage or step edits were applied; the requested Active\/Draft state is handled independently\. Make the change in Maker \(the SDK cannot make this edit to a flow with branches or other advanced constructs\), or put the spec back in line with the flow\.$/);
+    assert.doesNotMatch(r.warnings[0], /nothing was written/i);
   });
 }
 
@@ -557,6 +560,33 @@ test('STATE: an edit the SDK refuses does not stop the flow\'s state from being 
   assert.deepStrictEqual(r.calls.filter((c) => c.name === 'updateRecord').map((c) => c.args), [['workflow', 'flow-1', { statecode: 1, statuscode: 2 }]], 'a Draft flow the spec wants Active is still activated');
   assert.strictEqual(r.done.length, 1);
   assert.strictEqual(r.done[0].status, 'skip');
+});
+
+// A refused stage edit says what it did NOT do — apply a stage or step edit — and not that the flow was left as it was: the Active/Draft
+// state the spec asks for is converged by its own step (the state is not a stage edit, and a flow a maker left in the wrong one stays
+// invisible or running), so "nothing was written" was untrue whenever the two differed. Both refusals say it the same way: the plan's
+// (a stage or step the spec does not list) and the SDK's before it writes (a branch it cannot author).
+test('REFUSED: the Active/Draft state the spec asks for is still converged, and the warning says that instead of claiming nothing was written', async () => {
+  const d = DEPLOYED();
+  const r = await rebuild(flowOf([d.stages[0], d.stages[2]], { status: 'Draft' }), d, { statecode: 1 });
+  assert.strictEqual(r.error, null);
+  assert.deepStrictEqual(writes(r.calls).filter((c) => c.name !== 'updateRecord'), [], 'no stage or step edit, and no push, was made');
+  assert.deepStrictEqual(r.calls.filter((c) => c.name === 'updateRecord').map((c) => c.args), [['workflow', 'flow-1', { statecode: 0, statuscode: 1 }]], 'but the flow the spec wants in Draft is deactivated');
+  assert.strictEqual(r.warnings.length, 1);
+  assert.match(r.warnings[0], /No stage or step edits were applied; the requested Active\/Draft state is handled independently\./);
+  assert.doesNotMatch(r.warnings[0], /nothing was written/i);
+  assert.match(r.done[0].label, /\(existed in the wrong state — deactivated; its stages and steps were NOT changed: see the warning\)$/);
+});
+
+test('NOT applied by the SDK: the Active/Draft state the spec asks for is still converged, and the warning says that instead of claiming nothing was written', async () => {
+  const d = DEPLOYED();
+  const r = await rebuild(flowOf([...d.stages, stage('Archive', 'Notes:new_notes')], { status: 'Draft' }), d, { statecode: 1, refusePush: notImplemented() });
+  assert.strictEqual(r.error, null);
+  assert.deepStrictEqual(structure(r.server()), structure({ stages: artifactStages(d) }), 'the definition on the server is untouched');
+  assert.deepStrictEqual(r.calls.filter((c) => c.name === 'updateRecord').map((c) => c.args), [['workflow', 'flow-1', { statecode: 0, statuscode: 1 }]]);
+  assert.strictEqual(r.warnings.length, 1);
+  assert.match(r.warnings[0], /No stage or step edits were applied; the requested Active\/Draft state is handled independently\./);
+  assert.doesNotMatch(r.warnings[0], /nothing was written/i);
 });
 
 test('a push the platform refuses AFTER the write began halts the build — a half-applied live flow is never skipped', async () => {
@@ -809,6 +839,55 @@ test('REAL BUNDLE: a flow whose primary composite holds something that is not a 
   await applyBpfStages(again, rename, id, second.plan, {});
   assert.deepStrictEqual(xamlStages(row()), ['Triage', 'Fix', 'Close']);
   assert.ok(row().xaml.includes(branch), 'the activity the SDK does not model is still in the definition, untouched');
+});
+
+// The SDK refuses a structural edit per CONTAINER, not per flow: an activity it does not model stops the structural edit of the one
+// collection that holds it, and no other. What an action held by a stage looks like to the SDK: another kind of activity beside the
+// stage's steps. Adding a STAGE is not stopped by it (the stages' own collection holds nothing but stages); adding a STEP to that
+// stage is.
+const STAGE_ACTION = '<mxswa:ActivityReference AssemblyQualifiedName="Microsoft.Crm.Workflow.Activities.ActionComposite, Microsoft.Crm.Workflow, Version=9.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35" DisplayName="ActionStep9: kept"><mxswa:ActivityReference.Properties><sco:Collection x:TypeArguments="Activity" x:Key="Activities" /></mxswa:ActivityReference.Properties></mxswa:ActivityReference>';
+function holdStageAction(row) {
+  const firstStageSteps = /(<sco:Collection x:TypeArguments="Activity" x:Key="Activities">)(<mxswa:ActivityReference AssemblyQualifiedName="Microsoft\.Crm\.Workflow\.Activities\.StepComposite)/;
+  const injected = row.xaml.replace(firstStageSteps, `$1${STAGE_ACTION}$2`);
+  assert.notStrictEqual(injected, row.xaml, 'the fixture really holds the action');
+  row.xaml = injected;
+}
+
+test('REAL BUNDLE: an action held by one STAGE does not stop a stage being added — and the action is kept, and the flow stays Active', async () => {
+  const { open, id, row } = await realBpf();
+  holdStageAction(row());
+  const d = DEPLOYED();
+  const add = flowOf([...d.stages, stage('Archive', 'Notes:new_notes')]);
+  const sdk = await open();
+  const inspected = await inspectBpfStages(sdk, add, id);
+  assert.strictEqual(inspected.kind, 'edit', JSON.stringify(inspected));
+  const pushed = await applyBpfStages(sdk, add, id, inspected.plan, {});
+  assert.strictEqual(pushed.saved, true);
+  assert.deepStrictEqual(xamlStages(row()), ['Triage', 'Resolve', 'Close', 'Archive']);
+  assert.ok(row().xaml.includes(STAGE_ACTION), 'the action the SDK does not model is still in the definition, untouched');
+  assert.strictEqual(row().statecode, 1, 'the flow is still Active');
+});
+
+test('REAL BUNDLE: a step added to the stage that holds an action is refused before any request, the flow is left as it was, and a step rename on that stage still works', async () => {
+  const { fake, open, id, row } = await realBpf();
+  holdStageAction(row());
+  const original = row().xaml;
+  const d = DEPLOYED();
+  const addStep = flowOf([stage('Triage', 'Subject:new_subject!', 'Priority:new_priority', 'Region:new_region'), d.stages[1], d.stages[2]]);
+  const sdk = await open();
+  const inspected = await inspectBpfStages(sdk, addStep, id);
+  assert.strictEqual(inspected.kind, 'edit', JSON.stringify(inspected));
+  await assert.rejects(applyBpfStages(sdk, addStep, id, inspected.plan, {}), (e) => e && e.code === 'NOT_IMPLEMENTED');
+  assert.deepStrictEqual(fake.log, [], 'nothing was sent');
+  assert.strictEqual(row().xaml, original, 'the stored definition is exactly as it was');
+  // A rename of a step is not a structural edit of the stage's collection: it works, and what the SDK does not model stays.
+  const again = await open();
+  const rename = flowOf([stage('Triage', 'Subject:new_subject!', 'Urgency:new_priority'), d.stages[1], d.stages[2]]);
+  const second = await inspectBpfStages(again, rename, id);
+  assert.strictEqual(second.kind, 'edit', JSON.stringify(second));
+  await applyBpfStages(again, rename, id, second.plan, {});
+  assert.deepStrictEqual(xamlSteps(row()).slice(0, 2), ['Subject', 'Urgency']);
+  assert.ok(row().xaml.includes(STAGE_ACTION), 'the action is still in the definition');
 });
 
 test('REAL BUNDLE: the deployed flow is read as the plan expects — stage and step ids, names, columns, required', async () => {

@@ -222,7 +222,8 @@ apart deliberately.
   business rules.
 - Additive on rebuild (matched by `entity` + `name`, reused if present, Active/Draft state converged
   in both directions, a stage or step edit that leaves every deployed stage in place applied in one
-  push — one that would remove or move a stage or step is refused, with the reason — and the flow
+  push — one that would remove or move a stage or step is refused, with the reason: no stage or step
+  edit is then applied, and the requested Active/Draft state is handled independently — and the flow
   re-added to the solution on every run so a failed component add is repaired rather than inherited);
   torn down with the app, deactivate-then-delete, before its table. Deleting
   an activated flow cascades a **backing-table** drop that used to run past the client's 60 s HTTP

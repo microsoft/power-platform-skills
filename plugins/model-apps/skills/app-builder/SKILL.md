@@ -758,10 +758,13 @@ child view id. Each step emits `[n/total]`.
   column removed from the spec, or a new column order, does **not** apply, and neither do its filters
   or sort. A changed column type, and an edited command or dashboard, are not re-applied at all; an
   existing chart takes only a changed description, an existing app takes a changed name and description
-  (its icon is set when it is created: a different `app.icon` is reported as not applied), and an existing
+  (an app that was never published, or one whose name or description is localized, keeps its text and the build
+  warns it was not applied; the icon is set when the app is created: a different `app.icon` is reported as not
+  applied), and an existing
   business process flow takes the stage and step edits that cannot move a record — a stage added or renamed,
   a step added, renamed, rebound or moved — and refuses, saying why, one that would remove a stage or a step
-  or reorder the stages.
+  or reorder the stages (no stage or step edit is then applied; the requested Active/Draft state is handled
+  independently).
   **To apply one of those edits, change it in Maker, or `teardown --apply` then rebuild fresh.**
   `--verify` catches what is **missing** — a spec view column, filter condition or sort key (authored
   sort keys must also keep their order), a relationship, command or dashboard — as a loud
