@@ -86,7 +86,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
-const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeTempWorkspace, lendWorkspace } = require('./lib/temp-workspace.js');
 
 const USAGE = [
   'Usage:',
@@ -701,7 +701,9 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
     }
     const file = path.join(dir, 'settings.json');
     const label = 'pac solution create-settings';
-    const run = await runPac(['solution', 'create-settings', '--solution-zip', zip, '--settings-file', file], { label, ...(deps.pac || {}) });
+    // pac is another process, and it is given paths in this folder (the zip it reads, the file it writes): a run that is killed while it works leaves pac running on POSIX, and the
+    // sweep that finds this run gone must not remove the folder from under it. The folder is lent to pac for the call: its process id is recorded as soon as it exists.
+    const run = await lendWorkspace(dir, (onSpawn) => runPac(['solution', 'create-settings', '--solution-zip', zip, '--settings-file', file], { label, onSpawn, ...(deps.pac || {}) }));
     if (!run.ok) throw pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
     let text;
     try {

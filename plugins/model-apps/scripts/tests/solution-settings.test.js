@@ -1208,6 +1208,30 @@ test('for a package on disk pac is given that file', async () => {
   assert.strictEqual(result.fallback.code, 'SOLUTION_STAGING_UNREADABLE');
 });
 
+test('the scratch folder pac writes in is LENT to it: while pac runs the record names its process, so that a run killed meanwhile does not have the folder removed from under pac', async () => {
+  const dir = tempDir();
+  const { pkg, out } = files(dir);
+  const { sdk } = sdkStub();
+  sdk.getDeploymentSettingsTemplate = async () => { throw refusal('SOLUTION_STAGING_UNREADABLE'); };
+  const seen = {};
+  const pac = {
+    spawn: (name, args, options) => {
+      const file = flagValue(args, '--settings-file');
+      const lent = () => JSON.parse(fs.readFileSync(path.join(path.dirname(file), '.owner.json'), 'utf8')).lent;
+      seen.beforeStart = lent();
+      assert.strictEqual(typeof options.onSpawn, 'function', 'the runner is asked to say which process pac is');
+      options.onSpawn(424242); // what the process runner does the moment pac exists
+      seen.running = lent();
+      fs.writeFileSync(file, JSON.stringify(PAC_TEMPLATE, null, 2));
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  };
+  const result = await ss.runTemplate(templateRequest({ packagePath: pkg, outPath: out }), { sdkFirst: stubSdkFirst(sdk), pac });
+  assert.strictEqual(result.source, 'pac');
+  assert.deepStrictEqual([seen.beforeStart.pending, seen.beforeStart.pids], [1, []], 'before pac is started the record says that a program is about to be given the folder');
+  assert.deepStrictEqual([seen.running.pending, seen.running.pids.map((p) => p.pid)], [0, [424242]], 'once it runs, which one');
+});
+
 test('without --env there is nothing to stage a package in: pac reads the zip, offline, and the SDK is never made — no fallback to report', async () => {
   const dir = tempDir();
   const { pkg, out } = files(dir);

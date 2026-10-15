@@ -88,6 +88,8 @@ test('isOwnerStamp accepts what ownerStamp writes, and nothing that merely looks
     ['no time', { ...good, at: undefined }], ['a time that is not finite', { ...good, at: Infinity }],
     ['no host', { ...good, host: undefined }], ['an empty host', { ...good, host: '' }], ['no platform', { ...good, platform: '' }],
     ['an ns that is not text', { ...good, ns: 7 }], ['a start that is not text', { ...good, start: 7 }],
+    ['an ns that is empty', { ...good, ns: '' }], ['an ns that is not a pid namespace link', { ...good, ns: 'net:[4026531836]' }], ['an ns that is cut short', { ...good, ns: 'pid:[4026' }],
+    ['a start that is empty', { ...good, start: '' }], ['a start that is cut short', { ...good, start: `${BOOT}:` }], ['a start with no boot id', { ...good, start: ':900' }], ['a start that is no token at all', { ...good, start: 'truncated-token' }],
   ]) {
     assert.strictEqual(isOwnerStamp(bad), false, what);
   }
@@ -114,7 +116,7 @@ test('ownerState: a pid handed out again (Linux) is another process — a differ
   const running = (start, state = 'S') => ({ probe: () => 'alive', startOf: () => ({ token: start, state }) });
   assert.strictEqual(verdict(stampOf(), running(`${BOOT}:900`)).state, 'alive', 'the same start: the same process');
   assert.strictEqual(verdict(stampOf(), running(`${BOOT}:901`)).state, 'gone', 'another start: the pid was handed out again');
-  assert.strictEqual(verdict(stampOf(), running('another-boot:900')).state, 'gone', 'another boot');
+  assert.strictEqual(verdict(stampOf(), running('66666666-7777-8888-9999-000000000000:900')).state, 'gone', 'another boot');
   for (const state of ['Z', 'X', 'x']) assert.strictEqual(verdict(stampOf(), running(`${BOOT}:900`, state)).state, 'gone', `state ${state}`);
   for (const state of ['R', 'S', 'D', 'T', 't', 'I']) assert.strictEqual(verdict(stampOf(), running(`${BOOT}:900`, state)).state, 'alive', `state ${state}`);
   assert.strictEqual(verdict(stampOf(), { probe: () => 'alive', startOf: () => null }).state, 'alive');
@@ -138,13 +140,123 @@ test('ownerState: a record that is not this machine\'s, this system\'s or this p
   assert.strictEqual(unknown(stampOf({ ns: 'pid:[4026532000]' })), 'unknown', 'another pid namespace: a container with the same host name');
   assert.strictEqual(unknown(stampOf({ ns: undefined })), 'unknown', 'a record with no namespace, read where there is one');
   assert.strictEqual(unknown(stampOf(), { ns: null }), 'unknown', 'a record with a namespace, read where it cannot be named');
-  assert.strictEqual(unknown(stampOf({ ns: undefined }), { ns: null }), 'gone', 'no namespace on either side (no /proc): the same pid space as far as anything shows');
+  assert.strictEqual(unknown(stampOf({ ns: undefined }), { ns: null }), 'unknown', 'no namespace on either side: nothing shows the two pid spaces to be one (the next test)');
   assert.strictEqual(unknown({ pid: 200, at: 1 }), 'unknown', 'a lock from a release before the record: { pid, at }');
   assert.strictEqual(unknown(stampOf({ v: 2 })), 'unknown');
   assert.strictEqual(unknown(null), 'unknown');
   assert.strictEqual(unknown('not a record'), 'unknown');
   assert.strictEqual(unknown(stampOf({ pid: 'two hundred' })), 'unknown');
   assert.strictEqual(verdict(stampOf({ host: 'BUILD-BOX' }), gone).state, 'unknown', 'a host name is compared as it is: a name that differs in case is not shown to be this machine');
+});
+
+// A /proc that cannot be read — a container that hides it, hidepid, a sandbox: the Linux reads fail, as they do for a person who is not allowed them.
+const unreadable = () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); };
+const BLIND = { readFile: unreadable, readlink: unreadable };
+
+test('ownerState (Linux): a local "no such process" proves death only when the record\'s pid namespace AND this process\'s are both readable, valid and equal — missing on either side, or on both, is unknown', () => {
+  // Two containers can have one host name and one volume and two pid spaces: a pid that is not found in this one says nothing of the other.
+  const gone = { probe: () => 'gone', startOf: () => null };
+  const read = (stampNs, readerNs) => verdict(stampOf({ ns: stampNs }), { ...gone, ns: readerNs });
+  assert.strictEqual(read(NS, NS).state, 'gone', 'control: both present, valid and equal');
+  assert.strictEqual(read(undefined, NS).state, 'unknown', 'the record names none, this process names its own');
+  assert.strictEqual(read(NS, null).state, 'unknown', 'the record names one, this process cannot name its own');
+  assert.strictEqual(read(undefined, null).state, 'unknown', 'neither side names one — which is the case that used to be taken as "the same pid space"');
+  assert.match(read(undefined, null).reason, /pid namespace/);
+  // The same through the real reads: a reader whose /proc cannot be read, with a record made where it could be (and the reverse).
+  const blindReader = { ...here, ns: undefined, ...BLIND, ...gone };
+  assert.strictEqual(ownerState(stampOf(), blindReader).state, 'unknown');
+  assert.strictEqual(ownerState(stampOf({ ns: undefined }), blindReader).state, 'unknown', 'a record made blind, read blind: the record in the review of this');
+  const blindStamp = ownerStamp({ ...LINUX, pid: 4242, now: () => 1, ...BLIND, ns: undefined });
+  assert.strictEqual(blindStamp.ns, undefined, 'a blind maker records no namespace');
+  assert.strictEqual(ownerState(blindStamp, blindReader).state, 'unknown', 'the same host name, the same volume, two blind sides');
+  // A namespace that is not what the kernel writes is not one, on either side.
+  for (const odd of ['', 'pid:[]', 'pid:[x]', 'net:[4026531836]', 'pid:[4026531836] ', ' pid:[4026531836]', '4026531836']) {
+    assert.strictEqual(read(odd, odd).state, 'unknown', `${JSON.stringify(odd)} on both sides`);
+    assert.strictEqual(read(NS, odd).state, 'unknown', `${JSON.stringify(odd)} read here`);
+  }
+  // Elsewhere there is no namespace to name, and the pid decides as before.
+  const win = { platform: 'win32', hostname: () => 'DESKTOP-1', pid: 100, probe: () => 'gone' };
+  assert.strictEqual(ownerState({ v: 1, pid: 200, at: 1, host: 'DESKTOP-1', platform: 'win32' }, win).state, 'gone');
+  assert.strictEqual(ownerState({ v: 1, pid: 200, at: 1, host: 'DESKTOP-1', platform: 'win32', ns: NS }, win).state, 'unknown', 'a namespace in a record made elsewhere does not belong there');
+});
+
+test('ownerState: a recorded start that is empty, truncated or malformed makes the record untrusted — kept — and is never proof that a pid was handed out again, in any branch, this process\'s own pid included', () => {
+  const malformed = ['', ' ', 'truncated-token', BOOT, `${BOOT}:`, ':900', `${BOOT.slice(0, -1)}:900`, `${BOOT.replace(/-/g, '')}:900`, `${BOOT}:90x`, `${BOOT}:-1`, `${BOOT}: 900`, `${BOOT}:900\n`, 'x'.repeat(5000)];
+  const running = (token) => ({ probe: () => 'alive', startOf: () => ({ token, state: 'S' }) });
+  for (const start of malformed) {
+    const what = JSON.stringify(start.length > 60 ? `${start.slice(0, 20)}… (${start.length} characters)` : start);
+    assert.strictEqual(isOwnerStamp(stampOf({ start })), false, `${what} is no start`);
+    // Another pid that runs, with a start that differs from what a valid token would be: a damaged field is not "another process".
+    assert.strictEqual(verdict(stampOf({ start }), running(`${BOOT}:901`)).state, 'unknown', `${what}: a pid that runs`);
+    // Another pid that no process has: an untrusted record is kept as well.
+    assert.strictEqual(verdict(stampOf({ start }), { probe: () => 'gone' }).state, 'unknown', `${what}: a pid that is gone`);
+    // This very process: the record cannot be said to be an earlier process's by a field that is not a start.
+    assert.strictEqual(verdict(stampOf({ pid: 100, start }), { startOf: () => ({ token: `${BOOT}:777`, state: 'R' }) }).state, 'unknown', `${what}: this process's own pid`);
+  }
+  // The control for each branch: a valid start that differs IS proof, and one that is the same is not.
+  assert.strictEqual(verdict(stampOf(), running(`${BOOT}:901`)).state, 'gone');
+  assert.strictEqual(verdict(stampOf({ pid: 100 }), { startOf: () => ({ token: `${BOOT}:777`, state: 'R' }) }).state, 'gone');
+  assert.strictEqual(verdict(stampOf(), running(`${BOOT}:900`)).state, 'alive');
+});
+
+test('ownerState: a start the machine reports that is not a start (a malformed reading) is not proof of a pid handed out again either', () => {
+  const running = (token) => ({ probe: () => 'alive', startOf: () => ({ token, state: 'S' }) });
+  for (const token of ['another-boot:900', '', `${BOOT}:`, undefined, null, 5]) {
+    assert.strictEqual(verdict(stampOf(), running(token)).state, 'alive', `a reading of ${JSON.stringify(token)} for another pid`);
+    assert.strictEqual(verdict(stampOf({ pid: 100 }), { startOf: () => ({ token, state: 'R' }) }).state, 'alive', `a reading of ${JSON.stringify(token)} for this process`);
+  }
+  assert.strictEqual(verdict(stampOf(), running('66666666-7777-8888-9999-000000000000:900')).state, 'gone', 'control: another boot, read properly, is another process');
+  // A maker never writes a start that is not one.
+  assert.strictEqual(ownerStamp({ ...LINUX, startOf: () => ({ token: 'garbage', state: 'S' }) }).start, undefined);
+  assert.strictEqual(ownerStamp({ ...LINUX, startOf: () => ({ token: `${BOOT}:5`, state: 'S' }) }).start, `${BOOT}:5`);
+});
+
+// What a maker adds to its record when it lends what it made to a program of another make (lib/temp-workspace.js lendWorkspace).
+const LENT_DAY = 24 * 60 * 60 * 1000;
+const lentOf = (overrides = {}) => ({ at: 1000000, pending: 0, pids: [{ pid: 300 }], ...overrides });
+
+test('a record may say what its maker lent it to: isOwnerStamp reads that field strictly, and a damaged one makes the whole record untrusted', () => {
+  assert.strictEqual(LENT_DAY, require('../lib/process-owner.js').LENT_PENDING_MS, 'a spawn that was never recorded keeps what it was for 24 hours');
+  const good = stampOf({ lent: lentOf({ pids: [{ pid: 300 }, { pid: 301, start: `${BOOT}:5` }], pending: 1 }) });
+  assert.ok(isOwnerStamp(good));
+  assert.ok(isOwnerStamp(stampOf({ lent: lentOf({ pids: [] }) })), 'none lent yet');
+  const { MAX_LENT_PIDS } = require('../lib/process-owner.js');
+  assert.ok(isOwnerStamp(stampOf({ lent: lentOf({ pids: Array.from({ length: MAX_LENT_PIDS }, (_, i) => ({ pid: 1000 + i })) }) })));
+  for (const [what, lent] of [
+    ['not an object', 5], ['a list', []], ['null', null], ['no time', lentOf({ at: undefined })], ['a time that is not finite', lentOf({ at: Infinity })], ['a time that is text', lentOf({ at: '1' })],
+    ['a pending count that is not an integer', lentOf({ pending: 1.5 })], ['a negative pending count', lentOf({ pending: -1 })], ['no pending count', lentOf({ pending: undefined })], ['too many pending', lentOf({ pending: MAX_LENT_PIDS + 1 })],
+    ['no list of pids', lentOf({ pids: undefined })], ['a list that is not one', lentOf({ pids: { pid: 3 } })], ['more pids than are ever recorded', lentOf({ pids: Array.from({ length: MAX_LENT_PIDS + 1 }, (_, i) => ({ pid: 1000 + i })) })],
+    ['a pid that is text', lentOf({ pids: [{ pid: '300' }] })], ['pid 0', lentOf({ pids: [{ pid: 0 }] })], ['a pid that is not a record', lentOf({ pids: [300] })],
+    ['a start that is empty', lentOf({ pids: [{ pid: 300, start: '' }] })], ['a start that is malformed', lentOf({ pids: [{ pid: 300, start: 'truncated' }] })],
+  ]) {
+    assert.strictEqual(isOwnerStamp(stampOf({ lent })), false, what);
+    assert.strictEqual(verdict(stampOf({ lent }), { probe: () => 'gone' }).state, 'unknown', `${what}: kept`);
+  }
+});
+
+test('ownerState: a maker that is gone has not proven that what it lent its work to is — every program it recorded must be gone, and a spawn it never recorded keeps the work for a day', () => {
+  const owner = (alive = []) => ({ probe: (pid) => (alive.includes(pid) ? 'alive' : 'gone'), startOf: () => null, now: () => 1000000 + 5000 });
+  const verdictOf = (lent, deps) => verdict(stampOf({ pid: 200, lent }), deps);
+  assert.strictEqual(verdictOf(undefined, owner()).state, 'gone', 'control: nothing lent, the maker is gone');
+  assert.strictEqual(verdictOf(lentOf(), owner()).state, 'gone', 'the program it lent to is gone too');
+  assert.strictEqual(verdictOf(lentOf(), owner([300])).state, 'alive', 'the maker is gone and the program it lent to RUNS');
+  assert.match(verdictOf(lentOf(), owner([300])).reason, /300/);
+  assert.strictEqual(verdictOf(lentOf({ pids: [{ pid: 300 }, { pid: 301 }, { pid: 302 }] }), owner([302])).state, 'alive', 'one of several is enough');
+  assert.strictEqual(verdictOf(lentOf(), { ...owner(), probe: (pid) => (pid === 300 ? 'unknown' : 'gone') }).state, 'unknown', 'a program that cannot be checked is not shown to be gone');
+  assert.strictEqual(verdict(stampOf({ pid: 200, lent: lentOf() }), { ...owner([200]) }).state, 'alive', 'a maker that runs is alive, whatever it lent');
+  // A spawn whose process id was never recorded (the launcher died between starting the program and writing its pid): the program may be running, and is not known by id.
+  const pending = { pending: 1, pids: [] };
+  assert.strictEqual(verdictOf(lentOf(pending), owner()).state, 'unknown', 'just now');
+  assert.match(verdictOf(lentOf(pending), owner()).reason, /never recorded|not recorded/);
+  assert.strictEqual(verdictOf(lentOf(pending), { ...owner(), now: () => 1000000 + LENT_DAY - 1 }).state, 'unknown', 'a millisecond short of a day');
+  assert.strictEqual(verdictOf(lentOf(pending), { ...owner(), now: () => 1000000 + LENT_DAY }).state, 'gone', 'a day: no program of ours runs that long');
+  assert.strictEqual(verdictOf(lentOf(pending), { ...owner(), now: () => 1000000 - 1 }).state, 'unknown', 'a clock set back keeps it as well');
+  assert.strictEqual(verdictOf(lentOf({ pending: 1, pids: [{ pid: 300 }] }), { ...owner([300]), now: () => 1000000 + 2 * LENT_DAY }).state, 'alive', 'a day passed, but a recorded program that runs still keeps it');
+  // On Linux a recorded program is known by its start as well: the same pid with another start is another process.
+  const child = { pid: 300, start: `${BOOT}:42` };
+  const onLinux = (token, alive = true) => ({ probe: (pid) => (pid === 300 && alive ? 'alive' : 'gone'), startOf: (pid) => (pid === 300 ? { token, state: 'S' } : null), now: () => 1000000 });
+  assert.strictEqual(verdictOf(lentOf({ pids: [child] }), onLinux(`${BOOT}:42`)).state, 'alive', 'the same start');
+  assert.strictEqual(verdictOf(lentOf({ pids: [child] }), onLinux(`${BOOT}:43`)).state, 'gone', 'another start: the pid was handed out again');
 });
 
 test('REAL PROCESSES: a process that runs is alive, and the same process after it is killed is gone — on every platform, with no seam', async (t) => {
@@ -200,10 +312,12 @@ test('the Linux reads together: a /proc as the kernel lays it out gives the star
     if (files2['/proc/4242/stat'] === undefined) delete files2['/proc/4242/stat'];
     assert.strictEqual(ownerState(stamp, { platform: 'linux', hostname: () => 'build-box', pid: 100, probe: () => 'alive', ...proc(files2) }).state, 'alive', what);
   }
-  // A record made where /proc has no start or namespace to give carries neither, and is read the same way.
+  // A record made where /proc has no start or namespace to give carries neither, and is read the same way — and cannot be proven gone by anyone: with no namespace
+  // on either side nothing shows that the pid it names is in the pid space the reader looks in (a pid that is not found here may be running in another container).
   const bare = ownerStamp({ platform: 'linux', hostname: () => 'build-box', pid: 4242, now: () => 7, ...proc({}) });
   assert.deepStrictEqual(Object.keys(bare), ['v', 'pid', 'at', 'host', 'platform']);
-  assert.strictEqual(ownerState(bare, { platform: 'linux', hostname: () => 'build-box', pid: 100, probe: () => 'gone', ...proc({}) }).state, 'gone');
+  assert.strictEqual(ownerState(bare, { platform: 'linux', hostname: () => 'build-box', pid: 100, probe: () => 'gone', ...proc({}) }).state, 'unknown');
+  assert.strictEqual(ownerState(bare, { platform: 'linux', hostname: () => 'build-box', pid: 100, probe: () => 'gone', ...proc({ '/proc/self/ns/pid': NS }) }).state, 'unknown', 'read where a namespace can be named');
 });
 
 test('describeOwner names the pid, the machine and the time — and a time that cannot be shown does not stop the message', () => {

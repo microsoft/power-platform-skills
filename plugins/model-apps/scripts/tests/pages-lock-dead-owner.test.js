@@ -78,6 +78,64 @@ test('a lock whose owner cannot be proven gone stays: another machine, another k
   }
 });
 
+// What a Linux process that cannot read /proc sees (a container that hides it, hidepid, a sandbox): its own pid namespace cannot be named.
+const unreadable = () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); };
+const NS = 'pid:[4026531836]';
+const BOOT = '11111111-2222-3333-4444-555555555555';
+const HOST = 'same-container-hostname';
+
+test('on Linux a lock whose owner is not found is released only when its pid namespace AND this process\'s are both readable, valid and equal — otherwise it is refused in the same words, untouched', (t) => {
+  // Two containers can share a host name and a volume and have two pid spaces: a pid that is not found in this one proves nothing of the other.
+  const side = (ns, extra = {}) => ({ platform: 'linux', hostname: () => HOST, startOf: () => null, ...(ns ? { ns } : { readFile: unreadable, readlink: unreadable }), ...extra });
+  const lockOf = (ns) => JSON.stringify({ ...ownerStamp({ ...side(ns), pid: 4242, now: () => 1 }), rnd: 'killed' });
+  // Control: both sides name the same namespace — the lock of a build that is not found is released, and said so.
+  const control = workspace(t);
+  fs.writeFileSync(lockFile(control), lockOf(NS));
+  const said = [];
+  acquireAppPagesLease(control, APP, { owner: side(NS, { pid: 100, probe: () => 'gone' }), warn: (message) => said.push(message) }).release();
+  assert.strictEqual(said.length, 1, 'released, and said so');
+  for (const [what, recordedNs, readerNs] of [
+    ['a record that names no namespace, read where one is named', undefined, NS],
+    ['a record that names one, read where this process cannot name its own', NS, undefined],
+    ['neither side names one (both blind): the lock of a process in another container looks just like a dead one\'s', undefined, undefined],
+    ['another namespace', NS, 'pid:[4026532000]'],
+  ]) {
+    const dir = workspace(t);
+    const file = lockFile(dir);
+    const content = lockOf(recordedNs);
+    fs.writeFileSync(file, content);
+    const warnings = [];
+    assert.throws(() => acquireAppPagesLease(dir, APP, { owner: side(readerNs, { pid: 100, probe: () => 'gone' }), warn: (message) => warnings.push(message) }), refused(file), what);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), content, `${what}: the lock is as it was`);
+    assert.deepStrictEqual(warnings, [], `${what}: nothing was released, so nothing is said`);
+    assert.deepStrictEqual(fs.readdirSync(dir), [path.basename(file)], `${what}: no claim or other file was left`);
+  }
+});
+
+test('a lock whose recorded start is empty, truncated or malformed is not taken — not from this very process, not from a pid that is gone — in the same words, untouched', (t) => {
+  const here = { platform: 'linux', hostname: () => HOST, ns: NS, pid: process.pid, probe: () => 'alive', startOf: () => ({ token: `${BOOT}:900`, state: 'S' }) };
+  for (const start of ['', 'truncated-token', BOOT, `${BOOT}:`, `${BOOT.slice(0, -1)}:900`, `${BOOT}:90x`]) {
+    const dir = workspace(t);
+    const file = lockFile(dir);
+    const first = acquireAppPagesLease(dir, APP, { owner: here });
+    const held = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.strictEqual(held.start, `${BOOT}:900`, 'control: the lock records the start it was taken with');
+    // Only the start is damaged: the lock is still JSON, and says whose it is.
+    const damaged = JSON.stringify({ ...held, start });
+    fs.writeFileSync(file, damaged);
+    const what = JSON.stringify(start);
+    // The same process (a build that is running): a second lease before the first is released.
+    assert.throws(() => acquireAppPagesLease(dir, APP, { owner: here }), refused(file), `${what}: this process's own lock`);
+    // A process that is not found: an untrusted record is not a dead one's.
+    const warnings = [];
+    assert.throws(() => acquireAppPagesLease(dir, APP, { owner: { ...here, pid: 100, probe: () => 'gone' }, warn: (message) => warnings.push(message) }), refused(file), `${what}: a pid that is not found`);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), damaged, `${what}: the lock is as it was`);
+    assert.deepStrictEqual(warnings, []);
+    first.release();
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), damaged, `${what}: the first build's late release leaves a lock that is not its token alone`);
+  }
+});
+
 test('a lock held by a process that is running is never taken — however old it says it is — and neither is one made by this process', async (t) => {
   const dir = workspace(t);
   const file = lockFile(dir);

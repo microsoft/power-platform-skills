@@ -4,23 +4,26 @@
 // Real processes decide what a kill leaves, and race the sweep; the rest is driven through the module's seams, in folders of the test's own.
 const { test } = require('node:test');
 const assert = require('node:assert');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  PARENT_NAME, OWNER_FILE, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning,
+  PARENT_NAME, OWNER_FILE, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, lendWorkspace,
 } = require('../lib/temp-workspace.js');
-const { ownerStamp, isOwnerStamp } = require('../lib/process-owner.js');
-const { privateTempRoot, tempEnv, startTarget, deadPid, pause } = require('./helpers/kill-target-client.js');
+const { ownerStamp, isOwnerStamp, LENT_PENDING_MS } = require('../lib/process-owner.js');
+const { privateTempRoot, tempEnv, startTarget, deadPid, pause, isRunning, waitUntil } = require('./helpers/kill-target-client.js');
 
 const POSIX = process.platform !== 'win32';
 const onlyPosix = { skip: !POSIX && 'POSIX modes, owners and links' };
 
-// A temp folder of the test's own, and the `os` that names it, so that nothing the plugin makes is outside it.
-function tempRoot(t) {
+// A temp folder of the test's own, and the `os` that names it, so that nothing the plugin makes is outside it. On Windows an existing plugin's folder is judged by its access list (lib/windows-folder-acl.js), which
+// in a folder made in the machine's own temp folder is whatever that machine gives it: the tests of what the maker and the sweep do with a folder of their own are not about that machine, so the reader is
+// stood in for (`folderPrivacy`, a seam that POSIX ignores) — `realReader` takes the stand-in away, for the few tests that are about the reader.
+function tempRoot(t, { realReader = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temp-ws-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { root, deps: { os: { tmpdir: () => root } } };
+  return { root, deps: { os: { tmpdir: () => root }, ...(realReader ? {} : { folderPrivacy: () => ({ ok: true, reason: 'stood in for' }) }) } };
 }
 const entriesOf = (dir) => fs.readdirSync(dir).sort();
 
@@ -122,7 +125,7 @@ test('the folder is made by the maker the caller gives (a test seam of the page 
   assert.ok(isOwnerStamp(JSON.parse(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'))), 'and it is recorded all the same');
 });
 
-test('a plugin\'s folder removed under a run — another process ended just now with nothing left in it — is made again; any other failure is the caller\'s, once', (t) => {
+test('a plugin\'s folder removed under a run — another process ended just now with nothing left in it — is made again; a refusal of the plugin\'s folder is not the run\'s failure, only the temp folder\'s own', (t) => {
   const { deps } = tempRoot(t);
   const parent = workspaceParent(deps);
   let calls = 0;
@@ -138,15 +141,16 @@ test('a plugin\'s folder removed under a run — another process ended just now 
   assert.strictEqual(path.dirname(dir), parent);
   assert.ok(fs.existsSync(path.join(dir, OWNER_FILE)));
 
+  // Every place refuses (the disk is full, no permission anywhere): the temp folder's own error, as the old call gave it — after the plugin's folder, which is optional, was tried.
   const refused = tempRoot(t);
-  let asked = 0;
-  assert.throws(() => makeTempWorkspace('genpage-', { ...refused.deps, mkdtempSync: () => { asked += 1; throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } }), (e) => e.code === 'EACCES');
-  assert.strictEqual(asked, 1, 'asked once: the plain temp folder would have said the same');
-  // A folder that is gone every time is not made forever.
+  const asked = [];
+  assert.throws(() => makeTempWorkspace('genpage-', { ...refused.deps, mkdtempSync: (start) => { asked.push(start); throw Object.assign(new Error(`EROFS: read-only file system, mkdir '${start}'`), { code: 'EROFS' }); } }), (e) => e.code === 'EROFS' && e.message.includes(path.join(refused.root, 'genpage-')) && !e.message.includes(PARENT_NAME));
+  assert.deepStrictEqual(asked, [path.join(workspaceParent(refused.deps), `genpage-${process.pid}-`), path.join(refused.root, 'genpage-')], 'the plugin\'s folder first, then the call it always made: the error is that one\'s');
+  // A folder that is gone every time is not made forever: six attempts in it, and then the temp folder.
   const vanishing = tempRoot(t);
   let tries = 0;
-  const fallback = makeTempWorkspace('genpage-', { ...vanishing.deps, mkdtempSync: (start) => { tries += 1; if (tries <= 3) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return fs.mkdtempSync(start); } });
-  assert.strictEqual(tries, 4);
+  const fallback = makeTempWorkspace('genpage-', { ...vanishing.deps, mkdtempSync: (start) => { tries += 1; if (tries <= 6) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return fs.mkdtempSync(start); } });
+  assert.strictEqual(tries, 7);
   assert.strictEqual(path.dirname(fallback), vanishing.root, 'then it is made in the temp folder, as before');
 
   // Removed between the make of the plugin's folder and the look at it: the same, and the workspace is still the plugin's.
@@ -451,7 +455,10 @@ function listedWorkspaces(deps, count, system) {
     realpathSync: Object.assign((p) => fs.realpathSync(p), { native: (p) => (folderOf(p) ? path.join(realParent, folderOf(p)) : fs.realpathSync.native(p)) }),
     lstatSync: (p, ...rest) => (isRecord(p) ? { isFile: () => true, size: 100 } : fs.lstatSync(p, ...rest)),
     readFileSync: (p, ...rest) => (isRecord(p) ? JSON.stringify(ownerStamp({ pid: Number(/-(\d+)-/.exec(folderOf(p))[1]), platform: system, now: () => 1 })) : fs.readFileSync(p, ...rest)),
-    rmSync: (p, ...rest) => { if (folderOf(p)) { removed.push(p); return undefined; } return fs.rmSync(p, ...rest); },
+    // A folder is removed by taking its record out of it and then removing the folder (lib/temp-workspace.js removeWorkspace): the folder counts as removed when it is.
+    renameSync: (from, to) => (isRecord(from) ? undefined : fs.renameSync(from, to)),
+    rmdirSync: (p, ...rest) => { if (folderOf(p)) { removed.push(p); return undefined; } return fs.rmdirSync(p, ...rest); },
+    rmSync: (p, ...rest) => (folderOf(p) ? undefined : fs.rmSync(p, ...rest)),
   };
   return { served, removed };
 }
@@ -590,11 +597,22 @@ test('REAL PROCESSES: runs that make and remove workspaces while others sweep �
   // The test sweeps too, as fast as it can, while they work.
   let sweeping = true;
   const sweeper = (async () => { while (sweeping) { sweepDeadWorkspaces(deps); await pause(1); } })();
-  const answers = await Promise.all(runs.map((run) => run.waitFor(/^loop-done \d+$/)));
-  sweeping = false;
-  await sweeper;
-  assert.deepStrictEqual(answers, Array(RUNS).fill('loop-done 0'), 'no run ever found its own workspace gone or unrecorded');
-  assert.ok(!fs.existsSync(deadFolder), 'the dead run\'s workspace was removed, by one of the sweeps');
+  let answers;
+  try {
+    answers = await Promise.all(runs.map((run) => run.waitFor(/^loop-done \d+ \d+$/)));
+  } finally {
+    // A run that ends before it says it is done fails the test — and the sweeping has to stop either way: a loop that is left going keeps the process from ever ending (a failure
+    // that is a hang, and a CI job that runs out its whole time instead of saying which run failed).
+    sweeping = false;
+    await sweeper;
+  }
+  // `lost`: a workspace that a run found gone, or — in the plugin's folder — unrecorded. `plain`: a workspace that was made in the temp folder because the plugin's folder could not be
+  // used at that moment (on Windows another run, ending, was removing it): a courtesy that was not available, which is no one's loss, but not a thing a run may do for the most part.
+  const [lost, plain] = [0, 1].map((at) => answers.reduce((sum, line) => sum + Number(line.split(' ')[at + 1]), 0));
+  assert.strictEqual(lost, 0, `no run ever found its own workspace gone, or unrecorded in the plugin's folder: ${answers.join(', ')}`);
+  assert.ok(plain * 10 <= RUNS * ITERATIONS, `most of the workspaces were made in the plugin's folder: ${plain} of ${RUNS * ITERATIONS} were not`);
+  sweepDeadWorkspaces(deps);
+  assert.ok(!fs.existsSync(deadFolder), 'the dead run\'s workspace was removed, by one of the sweeps (the last made after the runs had ended)');
   for (const run of runs) assert.strictEqual((await run.exited).code, 0, `a run ended cleanly — none had its own removal fail: ${run.stderr()}`);
 });
 
@@ -614,4 +632,600 @@ test('when a process ends it removes the plugin\'s folder if nothing is left in 
   // The run has ended — it is gone — so the next sweep takes its workspace, and not the folder.
   assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(left)]);
   assert.ok(fs.existsSync(workspaceParent(deps)));
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A pid that is "not found" proves nothing where the pid spaces are not shown to be one, and a record's fields are believed only when they are well formed
+// ---------------------------------------------------------------------------------------------------------------------
+
+// A Linux process that cannot read /proc (a container that hides it, hidepid, a sandbox) can name neither its pid namespace nor a start time.
+const unreadable = () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); };
+const LINUX_HOST = 'same-container-hostname';
+const LINUX_NS = 'pid:[4026531836]';
+const LINUX_BOOT = '11111111-2222-3333-4444-555555555555';
+const linuxSide = (ns, extra = {}) => ({ platform: 'linux', hostname: () => LINUX_HOST, startOf: () => null, ...(ns ? { ns } : { readFile: unreadable, readlink: unreadable }), ...extra });
+
+test('(Linux) a workspace is removed only when the record\'s pid namespace AND this process\'s are both readable, valid and equal — a pid that is not found proves nothing where the pid spaces are not shown to be one', (t) => {
+  // Two containers can share a host name and a volume and have two pid spaces; the sweep of one must not take the workspace of a run that is going in the other.
+  const made = (ns) => ownerStamp({ ...linuxSide(ns), pid: deadPid(), now: () => 1 });
+  const sweep = (deps, ns) => sweepDeadWorkspaces({ ...deps, owner: linuxSide(ns, { pid: 100, probe: () => 'gone' }) });
+  const control = tempRoot(t);
+  const controlDir = plant(control.deps, made(LINUX_NS));
+  assert.deepStrictEqual(sweep(control.deps, LINUX_NS).removed.map((r) => r.name), [path.basename(controlDir)], 'control: both sides name one namespace, and the pid is not found in it');
+  for (const [what, recorded, reader] of [
+    ['a record that names no namespace, swept where one can be named', undefined, LINUX_NS],
+    ['a record that names one, swept where this process cannot name its own', LINUX_NS, undefined],
+    ['neither side names one: the same host name, the same volume, two blind sides', undefined, undefined],
+    ['another namespace', LINUX_NS, 'pid:[4026532000]'],
+  ]) {
+    const { deps } = tempRoot(t);
+    const dir = plant(deps, made(recorded));
+    const result = sweep(deps, reader);
+    assert.deepStrictEqual([result.removed, result.failed], [[], []], what);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'apps', 'page.json'), 'utf8'), 'the page source', `${what}: the source is untouched`);
+    assert.ok(fs.existsSync(path.join(dir, OWNER_FILE)), `${what}: and still recorded`);
+  }
+});
+
+test('(Linux) a workspace whose recorded start is empty, truncated or malformed is kept — the folder of a run that is going (this process\'s own pid) and the folder of a pid that is not found alike', (t) => {
+  for (const start of ['', 'truncated-token', LINUX_BOOT, `${LINUX_BOOT}:`, `${LINUX_BOOT}:90x`]) {
+    const what = JSON.stringify(start);
+    // A run that is going. On Linux a folder named for a pid that runs is looked into, since its record's start can show the pid was handed out again: here the record's start
+    // is damaged, which shows nothing — and used to be read as "another process", and the folder of the run that is going removed.
+    const going = tempRoot(t);
+    const goingStart = { token: `${LINUX_BOOT}:900`, state: 'S' };
+    const goingDir = plant(going.deps, { ...ownerStamp({ ...linuxSide(LINUX_NS), pid: 4242, now: () => 1, startOf: () => goingStart }), start });
+    const live = sweepDeadWorkspaces({ ...going.deps, owner: linuxSide(LINUX_NS, { pid: 4242, probe: () => 'alive', startOf: () => goingStart }) });
+    assert.deepStrictEqual([live.removed, live.failed], [[], []], `${what}: this process's own pid`);
+    assert.ok(fs.existsSync(path.join(goingDir, 'apps', 'page.json')), `${what}: the workspace of the run that is going is whole`);
+    // A pid that is not found: an untrusted record is not a dead run's.
+    const dead = tempRoot(t);
+    const deadDir = plant(dead.deps, { ...ownerStamp({ ...linuxSide(LINUX_NS), pid: deadPid(), now: () => 1 }), start });
+    const gone = sweepDeadWorkspaces({ ...dead.deps, owner: linuxSide(LINUX_NS, { pid: 100, probe: () => 'gone' }) });
+    assert.deepStrictEqual([gone.removed, gone.failed], [[], []], `${what}: a pid that is not found`);
+    assert.ok(fs.existsSync(path.join(deadDir, OWNER_FILE)), `${what}: still recorded`);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The plugin's folder is a courtesy to the next run: used when it can be, never a reason for this run to fail
+// ---------------------------------------------------------------------------------------------------------------------
+
+const rootCanWrite = POSIX && process.getuid() === 0;
+const WINDOWS = process.platform === 'win32';
+const onlyWindows = { skip: !WINDOWS && 'Windows access control lists' };
+// icacls and whoami are the programs of Windows itself, started by name as the tests of the access-list reader start them.
+const runWindows = (program, args) => {
+  const run = spawnSync(program, args, { encoding: 'utf8', windowsHide: true });
+  if (run.error || run.status !== 0) throw new Error(`${program} ${args.join(' ')} → ${run.error ? run.error.message : run.status}: ${run.stdout}${run.stderr}`);
+  return run.stdout;
+};
+const currentSid = () => /S-1-\d+(?:-\d+)+/.exec(runWindows('whoami', ['/user', '/fo', 'csv', '/nh']))[0];
+
+test('a plugin\'s folder that exists, is the user\'s and will not take a new folder is skipped for the temp folder, as before — whatever refuses, and only there — and the error is the temp folder\'s, when it fails too', (t) => {
+  for (const code of ['EROFS', 'ENOSPC', 'EIO', 'EMFILE', undefined]) {
+    const { root, deps } = tempRoot(t);
+    const parent = workspaceParent(deps);
+    fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+    const asked = [];
+    const dir = makeTempWorkspace('genpage-', {
+      ...deps,
+      mkdtempSync: (start) => {
+        asked.push(start);
+        if (path.dirname(start) === parent) throw Object.assign(new Error(`${code}: refused in the plugin's folder`), { code });
+        return fs.mkdtempSync(start);
+      },
+    });
+    assert.strictEqual(path.dirname(dir), root, `${code}: made in the temp folder`);
+    assert.match(path.basename(dir), /^genpage-[A-Za-z0-9]{6}$/, `${code}: named exactly as fs.mkdtempSync names it`);
+    assert.deepStrictEqual(asked, [path.join(parent, `genpage-${process.pid}-`), path.join(root, 'genpage-')], `${code}: the plugin's folder first, then the call it always made`);
+    assert.deepStrictEqual(fs.readdirSync(dir), [], `${code}: unrecorded, so never swept`);
+    assert.deepStrictEqual(fs.readdirSync(parent), [], `${code}: nothing was made in the folder that refused`);
+  }
+});
+
+// Windows removes a folder in two steps — it is marked, and it goes when the last handle on it closes — and in between it refuses a new entry with EPERM (measured, with four runs
+// ending and starting at once, each ending run removing the plugin's folder when it was the last to leave it). That is not a refusal of the folder: it is asked again after a short wait.
+// `uid: null` is the system with no owners to compare — Windows — whatever this one is.
+test('(Windows) a plugin\'s folder that is being removed refuses a new entry for a moment: the run asks again after a short wait and uses it — and one that keeps refusing is not used, and not asked again', (t) => {
+  const refusal = (code) => Object.assign(new Error(`${code}: operation not permitted, mkdir`), { code });
+  // mkdir of the plugin's folder, refused twice, then made.
+  const a = tempRoot(t);
+  const slept = [];
+  let mkdirs = 0;
+  const flakyMkdir = { ...fs, mkdirSync: (target, ...rest) => { if (target === workspaceParent({ ...a.deps, uid: null }) && (mkdirs += 1) <= 2) throw refusal('EPERM'); return fs.mkdirSync(target, ...rest); } };
+  const made = makeTempWorkspace('genpage-', { ...a.deps, uid: null, fs: flakyMkdir, folderPrivacy: () => ({ ok: true }), pause: (ms) => slept.push(ms) });
+  assert.strictEqual(path.dirname(made), workspaceParent({ ...a.deps, uid: null }), 'the folder was made, and is used');
+  assert.ok(isOwnerStamp(JSON.parse(fs.readFileSync(path.join(made, OWNER_FILE), 'utf8'))), 'and the workspace is recorded');
+  assert.deepStrictEqual([mkdirs, slept], [3, [25, 50]], 'asked three times, with short waits between');
+
+  // mkdtemp in it, refused twice, then made.
+  const b = tempRoot(t);
+  const parentB = workspaceParent({ ...b.deps, uid: null });
+  fs.mkdirSync(parentB);
+  const sleptB = [];
+  let refusals = 0;
+  const viaB = makeTempWorkspace('genpage-', { ...b.deps, uid: null, folderPrivacy: () => ({ ok: true }), pause: (ms) => sleptB.push(ms), mkdtempSync: (start) => { if (path.dirname(start) === parentB && (refusals += 1) <= 2) throw refusal('EBUSY'); return fs.mkdtempSync(start); } });
+  assert.strictEqual(path.dirname(viaB), parentB);
+  assert.deepStrictEqual([refusals, sleptB], [3, [25, 50]]);
+
+  // A folder that refuses every time: the waits, the plain temp folder — and the next workspace of this process does not ask it again.
+  const c = tempRoot(t);
+  const parentC = workspaceParent({ ...c.deps, uid: null });
+  fs.mkdirSync(parentC);
+  const sleptC = [];
+  const askedC = [];
+  const refusing = { ...c.deps, uid: null, folderPrivacy: () => ({ ok: true }), pause: (ms) => sleptC.push(ms), mkdtempSync: (start) => { askedC.push(path.dirname(start)); if (path.dirname(start) === parentC) throw refusal('EACCES'); return fs.mkdtempSync(start); } };
+  const first = makeTempWorkspace('genpage-', refusing);
+  assert.strictEqual(path.dirname(first), c.root);
+  assert.deepStrictEqual(askedC, [parentC, parentC, parentC, parentC, parentC, parentC, c.root], 'six tries in the folder, then the temp folder');
+  assert.deepStrictEqual(sleptC, [25, 50, 100, 200, 400]);
+  askedC.length = 0;
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', refusing)), c.root);
+  assert.deepStrictEqual(askedC, [c.root], 'the folder that refused is not asked again by this process');
+});
+
+// A folder that is being removed cannot be opened, so its access list cannot be got either — icacls runs and says so (lib/windows-folder-acl.js `unreadable`). That says nothing about who may change
+// the folder: it is not remembered as a verdict, and the run asks again after a wait, finding the folder gone (and making it) or readable.
+test('(Windows) an access list that cannot be got for a moment is no verdict: it is not remembered, and the run asks again after a short wait — and a folder that is replaced while it is being judged is judged again', (t) => {
+  const unreadable = { ok: false, unreadable: true, reason: 'its access list could not be saved (icacls /save)' };
+  // Unreadable twice, then private.
+  const a = tempRoot(t);
+  const parentA = workspaceParent({ ...a.deps, uid: null });
+  fs.mkdirSync(parentA);
+  const slept = [];
+  let askedA = 0;
+  const made = makeTempWorkspace('genpage-', { ...a.deps, uid: null, folderPrivacy: () => ((askedA += 1) <= 2 ? unreadable : { ok: true, reason: 'private' }), pause: (ms) => slept.push(ms) });
+  assert.strictEqual(path.dirname(made), parentA, 'the folder is used once it can be read');
+  assert.ok(recordOfFolder(made), 'and the workspace is recorded');
+  assert.deepStrictEqual([askedA, slept], [3, [25, 50]], 'asked three times: what could not be got was not taken for an answer');
+
+  // Unreadable every time: the waits, then the plain temp folder, unrecorded — and the folder is not asked about again by this process.
+  const b = tempRoot(t);
+  const parentB = workspaceParent({ ...b.deps, uid: null });
+  fs.mkdirSync(parentB);
+  const sleptB = [];
+  let askedB = 0;
+  const stuck = { ...b.deps, uid: null, folderPrivacy: () => { askedB += 1; return unreadable; }, pause: (ms) => sleptB.push(ms) };
+  const fallback = makeTempWorkspace('genpage-', stuck);
+  assert.strictEqual(path.dirname(fallback), b.root);
+  assert.strictEqual(recordOfFolder(fallback), null, 'unrecorded, so never swept');
+  assert.deepStrictEqual([askedB, sleptB], [6, [25, 50, 100, 200, 400]]);
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', stuck)), b.root);
+  assert.strictEqual(askedB, 6, 'not asked again');
+
+  // A verdict about a folder that was replaced while it was being judged — removed and made again by another run, which is a folder with another file id — is not the verdict of the folder now there.
+  const c = tempRoot(t);
+  const parentC = workspaceParent({ ...c.deps, uid: null });
+  fs.mkdirSync(parentC);
+  let identity = 1;
+  const identified = { ...fs, lstatSync: (target, ...rest) => {
+    const st = fs.lstatSync(target, ...rest);
+    return target === parentC ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { ino: identity }) : st;
+  } };
+  const verdicts = [];
+  const replaced = { ...c.deps, uid: null, fs: identified, pause: () => {}, folderPrivacy: () => {
+    verdicts.push(identity);
+    if (verdicts.length === 1) identity = 2;
+    return { ok: verdicts.length > 1, reason: 'judged' };
+  } };
+  const viaC = makeTempWorkspace('genpage-', replaced);
+  assert.strictEqual(path.dirname(viaC), parentC, 'the folder that is there now is used, on the verdict about it');
+  assert.deepStrictEqual(verdicts, [1, 2], 'a "no" about the folder that was there is not taken for a "no" about this one');
+});
+
+// Where the system has owners (POSIX), a folder that answers EPERM or EACCES is saying what it says: it does not go away in a moment. On Windows, which has none, the folder is shown
+// to the maker as one this user owns, so that the same rule is held there.
+test('a refusal that is not Windows\'s is the answer it sounds like: EPERM or EACCES from a plugin\'s folder where the system has owners is not asked again', (t) => {
+  const uid = POSIX ? process.getuid() : 4242;
+  for (const code of ['EACCES', 'EPERM']) {
+    const { root, deps } = tempRoot(t);
+    const parent = workspaceParent({ ...deps, uid });
+    fs.mkdirSync(parent, { mode: 0o700 });
+    const ownedByUs = { isDirectory: () => true, uid, mode: 0o40700 };
+    const fsx = POSIX ? fs : { ...fs, lstatSync: (target, ...rest) => (target === parent ? ownedByUs : fs.lstatSync(target, ...rest)) };
+    const asked = [];
+    const slept = [];
+    const dir = makeTempWorkspace('genpage-', { ...deps, uid, fs: fsx, pause: (ms) => slept.push(ms), mkdtempSync: (start) => { asked.push(path.dirname(start)); if (path.dirname(start) === parent) throw Object.assign(new Error(`${code}: refused`), { code }); return fs.mkdtempSync(start); } });
+    assert.strictEqual(path.dirname(dir), root, code);
+    assert.deepStrictEqual([asked, slept], [[parent, root], []], `${code}: asked once, no waiting`);
+  }
+});
+
+test('POSIX: a plugin\'s folder this user owns but cannot add to (mode 0500) is not a reason to fail: the workspace is made in the temp folder', { skip: (!POSIX && 'POSIX modes') || (rootCanWrite && 'root can add to any folder') }, (t) => {
+  const { root, deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  fs.mkdirSync(parent, { mode: 0o700 });
+  fs.chmodSync(parent, 0o500);
+  t.after(() => fs.chmodSync(parent, 0o700));
+  const dir = makeTempWorkspace('genpage-', deps);
+  assert.strictEqual(path.dirname(dir), root);
+  assert.deepStrictEqual(fs.readdirSync(parent), []);
+});
+
+test('Windows: a plugin\'s folder that exists and denies this user the right to add a folder (as a read-only one does) is skipped — the workspace is made in the temp folder', onlyWindows, (t) => {
+  const { root, deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  fs.mkdirSync(parent);
+  const sid = currentSid();
+  runWindows('icacls', [parent, '/deny', `*${sid}:(AD)`]);
+  try {
+    const dir = makeTempWorkspace('genpage-', deps);
+    assert.strictEqual(path.dirname(dir), root);
+    assert.deepStrictEqual(fs.readdirSync(parent), []);
+  } finally {
+    runWindows('icacls', [parent, '/remove:d', `*${sid}`]);
+  }
+});
+
+test('Windows: an existing plugin\'s folder that others can write to is neither used nor swept — its access list is read — and one that only this user, the system and the administrators can change is', onlyWindows, (t) => {
+  const open = tempRoot(t, { realReader: true });
+  const openParent = workspaceParent(open.deps);
+  fs.mkdirSync(openParent);
+  runWindows('icacls', [openParent, '/grant', '*S-1-1-0:(OI)(CI)M']); // Everyone: modify
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', open.deps)), open.root, 'Everyone can modify it: the workspace is made in the temp folder');
+  assert.deepStrictEqual(fs.readdirSync(openParent), [], 'and nothing was made in it');
+  const planted = plant(open.deps, goneRecord());
+  assert.deepStrictEqual(sweepDeadWorkspaces(open.deps).removed, [], 'a workspace of a dead run in a folder anyone can write to is not believed');
+  assert.ok(fs.existsSync(planted));
+
+  // The control: a folder whose access list is this user's alone — the list is set, not left to the machine's temp folder. (On a runner whose user is the machine's own Administrator, renamed,
+  // SDDL writes that user as LA: this is the run that shows the alias is read.)
+  const clean = tempRoot(t, { realReader: true });
+  const cleanParent = workspaceParent(clean.deps);
+  fs.mkdirSync(cleanParent);
+  runWindows('icacls', [cleanParent, '/inheritance:r', '/grant:r', `*${currentSid()}:(OI)(CI)F`]);
+  const { windowsFolderIsPrivate } = require('../lib/windows-folder-acl.js');
+  const verdict = windowsFolderIsPrivate(cleanParent);
+  assert.strictEqual(verdict.ok, true, verdict.reason);
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', clean.deps)), cleanParent, 'an existing folder only this user can change is used');
+});
+
+test('where the system has no owners to compare (Windows) an EXISTING plugin\'s folder is used and swept only if its access list says it is private to this user — asked once per folder and process — and a folder the process makes itself is not asked about', (t) => {
+  const asked = [];
+  const privacy = (ok) => (folder) => { asked.push(folder); return { ok, reason: ok ? 'private' : 'Everyone can write to it' }; };
+  // An existing folder that is not private.
+  const shared = tempRoot(t);
+  const sharedDeps = { ...shared.deps, uid: null, folderPrivacy: privacy(false) };
+  fs.mkdirSync(workspaceParent(sharedDeps));
+  const planted = plant(sharedDeps, goneRecord());
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', sharedDeps)), shared.root, 'not used');
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', sharedDeps)), shared.root, 'not used the next time either');
+  assert.deepStrictEqual(sweepDeadWorkspaces(sharedDeps).removed, [], 'nor swept');
+  assert.ok(fs.existsSync(planted), 'what is in it is not believed');
+  assert.deepStrictEqual(asked, [workspaceParent(sharedDeps)], 'the access list was read once, for all three');
+  // An existing folder that is.
+  const own = tempRoot(t);
+  const ownDeps = { ...own.deps, uid: null, folderPrivacy: privacy(true) };
+  fs.mkdirSync(workspaceParent(ownDeps));
+  const dead = plant(ownDeps, goneRecord());
+  const made = makeTempWorkspace('genpage-', ownDeps);
+  assert.strictEqual(path.dirname(made), workspaceParent(ownDeps), 'used');
+  assert.ok(!fs.existsSync(dead), 'and swept');
+  // A folder this process makes itself is as exposed as the temp folder it is made in — which is where the workspace was before there was a folder of the plugin's own.
+  const fresh = tempRoot(t);
+  asked.length = 0;
+  const freshDeps = { ...fresh.deps, uid: null, folderPrivacy: privacy(false) };
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', freshDeps)), workspaceParent(freshDeps));
+  assert.deepStrictEqual(asked, [], 'not asked');
+  // A folder that is a link is not one, whoever it belongs to, and is not asked about either.
+  const link = tempRoot(t);
+  const linkDeps = { ...link.deps, uid: null, folderPrivacy: privacy(true) };
+  const elsewhere = fs.mkdtempSync(path.join(link.root, 'elsewhere-'));
+  fs.symlinkSync(elsewhere, workspaceParent(linkDeps), 'junction');
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', linkDeps)), link.root);
+  assert.deepStrictEqual(asked, []);
+});
+
+test('a folder that is removed while its access list is being read — another run ended with nothing left in it — is made again, not taken for an unsafe one', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  fs.mkdirSync(parent);
+  let asked = 0;
+  // What the reader makes of a folder that goes away under it: it cannot save a list of what is not there, and says no.
+  const own = { ...deps, uid: null, folderPrivacy: () => { asked += 1; fs.rmdirSync(parent); return { ok: false, reason: 'its access list could not be saved' }; } };
+  const dir = makeTempWorkspace('genpage-', own);
+  assert.strictEqual(path.dirname(dir), parent, 'made again in the plugin\'s folder, as the run that asked is owed — not in the temp folder, unrecorded');
+  assert.ok(recordOfFolder(dir), 'and recorded');
+  assert.strictEqual(asked, 1, 'the folder it was made in is the run\'s own, which is not asked about');
+});
+
+test('the answer about a folder is the answer about THAT folder: one that is removed and made again — by someone else — is asked about again', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  fs.mkdirSync(parent);
+  let identity = 1;
+  let private_ = true;
+  const asked = [];
+  // The same path with another file id: what a folder that was removed and made again looks like.
+  const identified = { ...fs, lstatSync: (target, ...rest) => {
+    const st = fs.lstatSync(target, ...rest);
+    return target === parent ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { ino: identity }) : st;
+  } };
+  const own = { ...deps, uid: null, fs: identified, folderPrivacy: (folder) => { asked.push(folder); return { ok: private_, reason: 'asked' }; } };
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', own)), parent, 'a folder that is private is used');
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', own)), parent, 'and is not asked about again');
+  assert.strictEqual(asked.length, 1);
+  identity = 2;
+  private_ = false;
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', own)), deps.os.tmpdir(), 'another folder under the same name has to answer for itself');
+  assert.strictEqual(asked.length, 2);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A workspace lent to a program of another make. The program is not the run: pac, given a path inside the workspace, outlives a run that is killed on POSIX, and the workspace is its
+// until it ends. The record names every such program; a sweep needs all of them gone, and a spawn that was never recorded keeps the workspace for a day.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const recordOfFolder = (dir) => {
+  try {
+    const stamp = JSON.parse(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'));
+    return isOwnerStamp(stamp) ? stamp : null;
+  } catch {
+    return null;
+  }
+};
+const lentOf = (dir) => { const stamp = recordOfFolder(dir); return stamp ? stamp.lent : undefined; };
+// A program that runs until it is killed.
+const runningProgram = (t) => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  t.after(() => child.kill('SIGKILL'));
+  return { pid: child.pid, kill: () => { child.kill('SIGKILL'); return exited; } };
+};
+
+test('lendWorkspace: the record says a program is about to be given the workspace, then which one — what the launch answers is what comes back — and with the program gone it is the plain record again', async (t) => {
+  const { deps } = tempRoot(t);
+  const dir = makeTempWorkspace('genpage-', deps);
+  const before = fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8');
+  assert.strictEqual(recordOfFolder(dir).lent, undefined);
+  const gone = deadPid();
+  const seen = {};
+  const answer = await lendWorkspace(dir, async (onSpawn) => {
+    seen.starting = lentOf(dir);
+    onSpawn(gone);
+    seen.started = lentOf(dir);
+    return { ok: true };
+  }, deps);
+  assert.deepStrictEqual(answer, { ok: true });
+  assert.deepStrictEqual([seen.starting.pending, seen.starting.pids], [1, []], 'before the program is started the record says one is about to be');
+  assert.ok(Number.isFinite(seen.starting.at));
+  assert.deepStrictEqual([seen.started.pending, seen.started.pids.map((p) => p.pid)], [0, [gone]], 'once it exists the record names it, and no longer says one is about to be');
+  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before, 'the program is gone and the launch is over: the record is byte for byte the one the maker wrote');
+  assert.deepStrictEqual(fs.readdirSync(dir), [OWNER_FILE], 'no temp copy of the record is left');
+});
+
+test('lendWorkspace: a program that still runs when the launch is over stays recorded; on Linux it is recorded with its start, as the maker is', async (t) => {
+  const { deps } = tempRoot(t);
+  const dir = makeTempWorkspace('genpage-', deps);
+  const program = runningProgram(t);
+  await lendWorkspace(dir, async (onSpawn) => { onSpawn(program.pid); }, deps);
+  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid), [program.pid]);
+  assert.strictEqual(lentOf(dir).pending, 0);
+  await program.kill();
+  await lendWorkspace(dir, async () => undefined, deps);
+  assert.strictEqual(lentOf(dir), undefined, 'the next lend finds it gone, and drops it');
+  // Linux: the start the machine gives for the program's pid, so that a pid handed out again is not taken for it.
+  const linux = makeTempWorkspace('genpage-', tempRoot(t).deps);
+  const owner = linuxSide(LINUX_NS, { startOf: (pid) => ({ token: `${LINUX_BOOT}:${pid}`, state: 'S' }) });
+  await lendWorkspace(linux, async (onSpawn) => { onSpawn(program.pid); }, { owner });
+  assert.deepStrictEqual(lentOf(linux).pids, [{ pid: program.pid, start: `${LINUX_BOOT}:${program.pid}` }]);
+});
+
+test('a workspace lent to a program is kept by a sweep for as long as the program runs after its maker is gone — the sweep needs EVERY recorded process gone', async (t) => {
+  const { deps } = tempRoot(t);
+  const dir = plant(deps, goneRecord());
+  const a = runningProgram(t);
+  const b = runningProgram(t);
+  await lendWorkspace(dir, async (onSpawn) => { onSpawn(a.pid); }, deps);
+  await lendWorkspace(dir, async (onSpawn) => { onSpawn(b.pid); }, deps);
+  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid).sort(), [a.pid, b.pid].sort());
+  const during = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual([during.removed, during.failed], [[], []], 'its maker is gone and two programs it lent it to run');
+  assert.ok(fs.existsSync(path.join(dir, 'apps', 'page.json')), 'the source is whole');
+  await a.kill();
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed, [], 'one of the two is gone: still kept');
+  assert.ok(fs.existsSync(dir));
+  await b.kill();
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(dir)], 'both gone: removed');
+});
+
+test('a launch that never reports the program it started — the run died between starting it and writing its pid — keeps the workspace for a day by the record\'s own time, and then releases it', async (t) => {
+  const { deps } = tempRoot(t);
+  const dir = plant(deps, goneRecord());
+  const never = lendWorkspace(dir, () => new Promise(() => {}), deps);
+  never.catch(() => {});
+  assert.strictEqual(lentOf(dir).pending, 1);
+  const { at } = lentOf(dir);
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed, [], 'a program may have been started with it, and nothing says which');
+  assert.deepStrictEqual(sweepDeadWorkspaces({ ...deps, owner: { now: () => at + LENT_PENDING_MS - 1 } }).removed, [], 'a millisecond short of a day');
+  assert.strictEqual(LENT_PENDING_MS, 24 * 60 * 60 * 1000);
+  assert.deepStrictEqual(sweepDeadWorkspaces({ ...deps, owner: { now: () => at + LENT_PENDING_MS } }).removed.map((r) => r.name), [path.basename(dir)], 'a day: no program of ours runs that long');
+});
+
+test('lendWorkspace: a launch that throws, or that never started a program, leaves no spawn pending — and the error is the launch\'s own', async (t) => {
+  const { deps } = tempRoot(t);
+  const dir = makeTempWorkspace('genpage-', deps);
+  const before = fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8');
+  await assert.rejects(lendWorkspace(dir, async () => { throw new Error('pac could not be started'); }, deps), /pac could not be started/);
+  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
+  await assert.rejects(lendWorkspace(dir, () => { throw new Error('thrown at once'); }, deps), /thrown at once/);
+  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
+  assert.strictEqual(await lendWorkspace(dir, async () => 'no program was started', deps), 'no program was started');
+  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
+  // Reports that are not a process id are not recorded.
+  await lendWorkspace(dir, async (onSpawn) => { for (const odd of [undefined, null, 'x', -3, 0, 1.5, NaN]) onSpawn(odd); }, deps);
+  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
+});
+
+test('lendWorkspace: two programs lent at once are both recorded, whichever ends first', async (t) => {
+  const { deps } = tempRoot(t);
+  const dir = makeTempWorkspace('genpage-', deps);
+  const a = runningProgram(t);
+  const b = runningProgram(t);
+  let end;
+  const first = lendWorkspace(dir, (onSpawn) => new Promise((resolve) => { onSpawn(a.pid); end = resolve; }), deps);
+  const second = lendWorkspace(dir, async (onSpawn) => { onSpawn(b.pid); }, deps);
+  await second;
+  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid).sort(), [a.pid, b.pid].sort());
+  assert.strictEqual(lentOf(dir).pending, 0);
+  end();
+  await first;
+  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid).sort(), [a.pid, b.pid].sort(), 'both run still');
+});
+
+test('lendWorkspace on a folder nothing records — the plain temp folder\'s, one whose record could not be written or is damaged — just runs the launch: such a folder is never swept', async (t) => {
+  const { root, deps } = tempRoot(t);
+  const plain = fs.mkdtempSync(path.join(root, 'genpage-'));
+  const damaged = plant(deps, 'not json {', { pid: deadPid() });
+  let ran = 0;
+  assert.strictEqual(await lendWorkspace(plain, async (onSpawn) => { ran += 1; onSpawn(deadPid()); return 'answer'; }, deps), 'answer');
+  assert.strictEqual(await lendWorkspace(damaged, async () => { ran += 1; return 'answer'; }, deps), 'answer');
+  assert.strictEqual(ran, 2);
+  assert.deepStrictEqual(fs.readdirSync(plain), [], 'nothing was written in the plain folder');
+  assert.strictEqual(fs.readFileSync(path.join(damaged, OWNER_FILE), 'utf8'), 'not json {', 'and the damaged record is as it was');
+});
+
+test('lendWorkspace never starts a program while its record cannot say so: it takes the record away — an unrecorded folder is never swept — or does not start the program', async (t) => {
+  const { deps } = tempRoot(t);
+  const full = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  // The rewrite fails, the record can be removed: the program is started, and the folder is no longer one a sweep may remove.
+  const dir = makeTempWorkspace('genpage-', deps);
+  const noRewrite = { ...fs, writeFileSync: (file, ...rest) => { if (path.basename(file) !== OWNER_FILE && path.basename(file).startsWith(OWNER_FILE)) throw full; return fs.writeFileSync(file, ...rest); } };
+  let started = 0;
+  await lendWorkspace(dir, async () => { started += 1; }, { ...deps, fs: noRewrite });
+  assert.strictEqual(started, 1);
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'unrecorded now: no sweep can take it from under the program, and no half-written copy is left');
+  // Neither can be done: the program is not started, and the record is as it was.
+  const stuck = makeTempWorkspace('genpage-', deps);
+  const before = fs.readFileSync(path.join(stuck, OWNER_FILE), 'utf8');
+  const denied = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+  const unremovable = { ...noRewrite, rmSync: (file, ...rest) => { if (path.basename(file) === OWNER_FILE) throw denied(); return fs.rmSync(file, ...rest); }, unlinkSync: (file) => { if (path.basename(file) === OWNER_FILE) throw denied(); return fs.unlinkSync(file); } };
+  await assert.rejects(lendWorkspace(stuck, async () => { started += 1; }, { ...deps, fs: unremovable }), (e) => e === full);
+  assert.strictEqual(started, 1, 'the program was not started');
+  assert.strictEqual(fs.readFileSync(path.join(stuck, OWNER_FILE), 'utf8'), before);
+  assert.deepStrictEqual(fs.readdirSync(stuck), [OWNER_FILE]);
+});
+
+test('the record is rewritten whole — a temp file beside it, renamed over it — so a sweep or a kill sees the old record or the new, never half; a rewrite that fails leaves the old one and no temp file', async (t) => {
+  const { deps } = tempRoot(t);
+  const dir = makeTempWorkspace('genpage-', deps);
+  const log = [];
+  const watched = {
+    ...fs,
+    writeFileSync: (file, data, options) => { log.push(['write', path.basename(file), options && options.flag]); return fs.writeFileSync(file, data, options); },
+    renameSync: (from, to) => { log.push(['rename', path.basename(from), path.basename(to)]); return fs.renameSync(from, to); },
+  };
+  await lendWorkspace(dir, async (onSpawn) => { onSpawn(deadPid()); }, { ...deps, fs: watched });
+  const writes = log.filter((entry) => entry[0] === 'write');
+  assert.ok(writes.length >= 3, JSON.stringify(log));
+  for (const [, name, flag] of writes) assert.ok(name.startsWith(`${OWNER_FILE}.`) && name.endsWith('.tmp') && flag === 'wx', `written to a new temp file, never in place: ${name}`);
+  for (const [, from, to] of log.filter((entry) => entry[0] === 'rename')) assert.ok(from.startsWith(`${OWNER_FILE}.`) && to === OWNER_FILE, `${from} → ${to}`);
+  assert.deepStrictEqual(fs.readdirSync(dir), [OWNER_FILE]);
+
+  // The report of the program's pid cannot be written: the record keeps saying one is about to be (more than is needed, never less), whole, with no temp file left.
+  const other = makeTempWorkspace('genpage-', deps);
+  let renames = 0;
+  const flaky = { ...fs, renameSync: (from, to) => { renames += 1; if (renames === 2) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); return fs.renameSync(from, to); } };
+  let during;
+  await lendWorkspace(other, async (onSpawn) => { onSpawn(deadPid()); during = lentOf(other); }, { ...deps, fs: flaky });
+  assert.deepStrictEqual([during.pending, during.pids], [1, []], 'the old record stood while the new one could not be written');
+  assert.deepStrictEqual(fs.readdirSync(other), [OWNER_FILE], 'no temp file is left');
+  assert.ok(lentOf(other).pending >= 1, 'and what was recorded is not less than what was known');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A file another process holds open. Windows keeps a file that is deleted while it is open in its folder, listed, until the holder lets go (Node 22 asks for POSIX delete semantics
+// and does not; Node 20 does): the folder cannot be removed meanwhile, and a removal that had already taken the record with the rest left a folder nothing could ever prove dead.
+// ---------------------------------------------------------------------------------------------------------------------
+
+test('REAL HANDLES: a file another process holds open — a page, one nested, or the record itself — never leaves a workspace that no later sweep can find: what is left is recorded, and the next sweep removes it once the holder lets go', async (t) => {
+  for (const held of ['manifest.json', path.join('apps', 'page.json'), OWNER_FILE]) {
+    const { deps } = tempRoot(t);
+    const parent = workspaceParent(deps);
+    const dir = plant(deps, goneRecord());
+    const holder = startTarget(t, ['hold', path.join(dir, held)]);
+    try {
+      await holder.waitFor(/^ready$/);
+      const first = sweepDeadWorkspaces(deps);
+      if (fs.existsSync(dir)) {
+        // The platform kept the file that was deleted while it was open (Windows, Node 20): the folder could not go, and must be known as a dead run's still.
+        assert.deepStrictEqual([first.removed.length, first.failed.map((f) => f.name)], [0, [path.basename(dir)]], `${held}: reported as a failure to remove`);
+        assert.ok(recordOfFolder(dir), `${held}: and the folder that is left is still recorded`);
+      } else {
+        assert.deepStrictEqual(first.removed.map((r) => r.name), [path.basename(dir)], `${held}: where a file that is open can be deleted the folder goes at once`);
+      }
+    } finally {
+      // Before anything else, and whatever the sweep did: a holder that is still running keeps the folder from being removed by the test's own cleanup, and its pipe keeps the test process alive.
+      await holder.kill();
+    }
+    // The platform completes a deletion that was pending when the last handle goes — a moment after.
+    await waitUntil(() => { if (fs.existsSync(dir)) sweepDeadWorkspaces(deps); return fs.existsSync(dir) ? null : true; }, `${held}: the next sweep to remove the folder`, 30000);
+    await waitUntil(() => (fs.readdirSync(parent).length === 0 ? true : null), `${held}: nothing to be left in the plugin's folder`, 30000);
+  }
+});
+
+test('a removal that fails at its LAST step — the folder itself will not go — leaves the record where it was, whatever the platform did to the rest: the next sweep finds the folder again', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const dir = plant(deps, goneRecord());
+  let stuck = true;
+  const eperm = () => Object.assign(new Error('EPERM: operation not permitted, rmdir'), { code: 'EPERM' });
+  // How Windows with Node 20 treats a folder in which another process still holds a file: everything in it can be deleted — a recursive removal does — and the folder cannot.
+  const held = {
+    ...fs,
+    rmSync: (target, options) => {
+      if (stuck && target === dir) {
+        for (const name of fs.readdirSync(dir)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+        throw eperm();
+      }
+      return fs.rmSync(target, options);
+    },
+    rmdirSync: (target, ...rest) => { if (stuck && target === dir) throw eperm(); return fs.rmdirSync(target, ...rest); },
+  };
+  const first = sweepDeadWorkspaces({ ...deps, fs: held });
+  assert.deepStrictEqual([first.removed, first.failed.map((f) => [f.name, f.error])], [[], [[path.basename(dir), 'EPERM']]]);
+  assert.ok(recordOfFolder(dir), 'the record is where it was: the folder is known as a dead run\'s still');
+  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(dir)], 'and nothing else is in the plugin\'s folder: no stray copy of the record');
+  assert.match(sweepWarning(first), /could not remove 1 such workspace/);
+  stuck = false;
+  assert.deepStrictEqual(sweepDeadWorkspaces({ ...deps, fs: held }).removed.map((r) => r.name), [path.basename(dir)]);
+  assert.deepStrictEqual(fs.readdirSync(parent), []);
+});
+
+test('a record that cannot be taken out of its folder — a program holds it open and will not let it go — keeps the folder recorded: reported, and tried again by the next sweep', (t) => {
+  const { deps } = tempRoot(t);
+  const dir = plant(deps, goneRecord());
+  let busy = true;
+  const locked = { ...fs, renameSync: (from, to) => {
+    if (busy && path.basename(from) === OWNER_FILE) throw Object.assign(new Error('EBUSY: resource busy or locked, rename'), { code: 'EBUSY' });
+    return fs.renameSync(from, to);
+  } };
+  const first = sweepDeadWorkspaces({ ...deps, fs: locked });
+  assert.deepStrictEqual([first.removed, first.failed.map((f) => [f.name, f.error])], [[], [[path.basename(dir), 'EBUSY']]]);
+  assert.ok(recordOfFolder(dir), 'still recorded');
+  assert.deepStrictEqual(fs.readdirSync(dir), [OWNER_FILE], 'what was inside is gone, and the record is the last thing left');
+  busy = false;
+  assert.deepStrictEqual(sweepDeadWorkspaces({ ...deps, fs: locked }).removed.map((r) => r.name), [path.basename(dir)]);
+  assert.ok(!fs.existsSync(dir));
+});
+
+test('a record that was taken out of a folder that then will not go, and cannot be moved back, is written again — the folder is never left recorded by nothing', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const dir = plant(deps, goneRecord());
+  const before = fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8');
+  const eperm = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+  const stuck = {
+    ...fs,
+    rmdirSync: (target, ...rest) => { if (target === dir) throw eperm(); return fs.rmdirSync(target, ...rest); },
+    // The way back is shut as well: only a record that is written again is left.
+    renameSync: (from, to) => { if (to === path.join(dir, OWNER_FILE)) throw eperm(); return fs.renameSync(from, to); },
+  };
+  const result = sweepDeadWorkspaces({ ...deps, fs: stuck });
+  assert.deepStrictEqual(result.failed.map((f) => [f.name, f.error]), [[path.basename(dir), 'EPERM']]);
+  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before, 'the record is back, word for word');
+  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(dir)], 'and no copy of it is left beside the folder');
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(dir)], 'and the next sweep removes the folder');
+  assert.deepStrictEqual(fs.readdirSync(parent), []);
 });

@@ -255,6 +255,8 @@ const TREE_CLOSE_GRACE_MS = 5000;
  * (killProcessTree) before the call settles. spawnSync cannot do that: it ends only the process it started, and on Windows that is cmd.exe running a batch launcher
  * (`pac.cmd`), whose child — the program that is actually working, and may be importing a solution — goes on running after the call has reported that it timed out.
  * The result of a call that was ended has `error.code` `ETIMEDOUT`; one that wrote past `maxBuffer` was ended too, with `ENOBUFS`.
+ * One more option, `onSpawn(pid)`, is called with the process id of the program the call started, as soon as it is started (never for one that could not be) — for a caller that has
+ * to record who has a path it gave the program (lib/temp-workspace.js lendWorkspace). It is not an option of the spawn, and an exception in it changes nothing.
  *
  * What such an error says about the process is `error.containment`, and a caller must not claim more than it says. `'confirmed'`: the pipes closed after the kill, so nothing that was holding them
  * is left — the call's process and every process that held its output were stopped. That is ALL it proves: a process the call started that never held the pipes (detached, with streams of its
@@ -266,7 +268,7 @@ const TREE_CLOSE_GRACE_MS = 5000;
  * `deps` are the seams of `invocation`, plus `killTree` and `clock` ({ setTimeout, clearTimeout }) for a test.
  */
 function spawnResultTree(name, args, options = {}, deps = {}) {
-  const { timeout = 0, maxBuffer = 1024 * 1024, encoding = 'utf8', ...spawnOptions } = options;
+  const { timeout = 0, maxBuffer = 1024 * 1024, encoding = 'utf8', onSpawn, ...spawnOptions } = options;
   const killTree = deps.killTree || killProcessTree;
   const clock = deps.clock || { setTimeout, clearTimeout };
   return new Promise((resolve) => {
@@ -276,6 +278,12 @@ function spawnResultTree(name, args, options = {}, deps = {}) {
     } catch (error) {
       resolve({ status: null, signal: null, stdout: '', stderr: '', error });
       return;
+    }
+    // A caller that gives the program a path it must not lose — a workspace made for pac — is told the program's process id the moment it exists, so that it can record it: a run that is
+    // killed after this leaves the program running (POSIX), and what the program was given must be kept for as long as it runs. A program that could not be started has no pid, and
+    // nothing is said. The listener only listens: whatever it does, or throws, the call goes on as it would have.
+    if (typeof onSpawn === 'function' && Number.isInteger(child.pid)) {
+      try { onSpawn(child.pid); } catch { /* a listener never changes what the call does */ }
     }
     const out = [];
     const err = [];

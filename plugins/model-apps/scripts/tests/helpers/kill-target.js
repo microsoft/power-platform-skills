@@ -17,8 +17,20 @@
 //   node kill-target.js workspace-exit <prefix>        makes one, removes it as a run does when it is done, and ends: `done`.
 //   node kill-target.js workspace-keep <prefix>        makes one and ends without removing it (a run that failed to): `workspace <folder>`.
 //   node kill-target.js workspace-loop <prefix> <n> <ms> [<gateFile>]
-//        n times: sweeps, makes a workspace, puts a file in it, waits <ms>, sweeps, checks that its own workspace and its record are still there, removes it.
-//        Says `ready`, waits for <gateFile> when one is given, and says `loop-done <how many times a workspace of its own was gone or unrecorded>`.
+//        n times: sweeps, makes a workspace, puts a file in it, waits <ms>, sweeps, checks that its own workspace is still whole (and recorded, if it is in the plugin's folder), removes it.
+//        Says `ready`, waits for <gateFile> when one is given, and says `loop-done <how many times a workspace of its own was gone or unrecorded> <how many were made in the plain temp folder>`.
+//   node kill-target.js hold <file>
+//        opens <file> and keeps it open — a program that reads a file, or a scanner — says `ready`, and waits to be killed.
+//   node kill-target.js pac-template <workDir> [detached]
+//        runs the deployment-settings template through pac (solution-settings.js runTemplate: the scratch folder it makes for pac is a workspace, LENT to pac) over a fake pac that
+//        starts a real program, this file's `pac-worker`, with the folder it was given. Says `workspace <folder>` when the fake pac is handed its folder and `done` when the
+//        template is written. `detached` starts the program detached, so that it outlives a hard kill of this process on Windows too (on POSIX every child does).
+//   node kill-target.js pac-worker <settingsFile> <workDir>
+//        the fake pac's program: writes the first half of <settingsFile>, writes its pid to <workDir>/worker.json, waits for <workDir>/resume, writes the rest and
+//        <workDir>/worker-result.json (what its write said), and ends.
+//   node kill-target.js pac-pending <workDir>
+//        as pac-template, but the fake pac never starts anything: it says `pending <folder>` and waits to be killed — a run that dies between "about to start pac"
+//        and "pac started".
 //
 // The test sets TMPDIR, TEMP and TMP to a folder of its own for these, so everything the process makes is in a place the test removes.
 const fs = require('node:fs');
@@ -96,21 +108,58 @@ async function main() {
     fs.writeFileSync(path.join(folder, 'page.tsx'), 'x');
     say(`workspace ${folder}`);
   } else if (mode === 'workspace-loop') {
-    const { makeTempWorkspace, sweepDeadWorkspaces } = require('../../lib/temp-workspace.js');
+    const { makeTempWorkspace, sweepDeadWorkspaces, workspaceParent } = require('../../lib/temp-workspace.js');
     const [prefix, iterations, ms, gate] = args;
     say('ready');
     if (gate) while (!fs.existsSync(gate)) pause(1);
     let lost = 0;
+    let plain = 0;
     for (let i = 0; i < Number(iterations); i += 1) {
       sweepDeadWorkspaces();
       const folder = makeTempWorkspace(prefix);
+      // The plugin's folder is a courtesy: where it could not be used — another run was removing it just then (Windows) — the workspace is made in the temp folder, unrecorded and never swept.
+      // That is a workspace like any other for this run, but it is counted, so that a run that always did so is seen.
+      const inPluginFolder = path.dirname(folder) === workspaceParent();
+      if (!inPluginFolder) plain += 1;
       fs.writeFileSync(path.join(folder, 'page.tsx'), 'x');
       await new Promise((resolve) => setTimeout(resolve, Number(ms)));
       sweepDeadWorkspaces();
-      if (!fs.existsSync(path.join(folder, 'page.tsx')) || !fs.existsSync(path.join(folder, '.owner.json'))) lost += 1;
+      if (!fs.existsSync(path.join(folder, 'page.tsx')) || (inPluginFolder && !fs.existsSync(path.join(folder, '.owner.json')))) lost += 1;
       fs.rmSync(folder, { recursive: true, force: true });
     }
-    say(`loop-done ${lost}`);
+    say(`loop-done ${lost} ${plain}`);
+  } else if (mode === 'hold') {
+    fs.openSync(args[0], 'r');
+    say('ready');
+    wait();
+  } else if (mode === 'pac-worker') {
+    const [settingsFile, workDir] = args;
+    fs.writeFileSync(settingsFile, '{"EnvironmentVariables":');
+    fs.writeFileSync(path.join(workDir, 'worker.json'), JSON.stringify({ pid: process.pid }));
+    while (!fs.existsSync(path.join(workDir, 'resume'))) pause(20);
+    // What pac would do next: finish writing its file in the folder it was given. If that folder has been removed from under it, the write says so.
+    let error = null;
+    try { fs.writeFileSync(settingsFile, '{"EnvironmentVariables":[],"ConnectionReferences":[]}'); } catch (e) { error = (e && e.code) || String(e); }
+    fs.writeFileSync(path.join(workDir, 'worker-result.json'), JSON.stringify({ error, fileExists: fs.existsSync(settingsFile) }));
+  } else if (mode === 'pac-template' || mode === 'pac-pending') {
+    const [workDir, detached] = args;
+    const { runTemplate } = require('../../solution-settings.js');
+    const { spawnResultTree, withPathFirst } = require('../../lib/process-runner.js');
+    // The runner looks programs up on PATH and never in the current folder: the fake pac is `node`, found where this one is.
+    const env = withPathFirst(process.env, path.dirname(process.execPath));
+    const nodeName = path.basename(process.execPath, path.extname(process.execPath));
+    const packagePath = path.join(workDir, 'package.zip');
+    fs.writeFileSync(packagePath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x01]));
+    const spawn = (_name, pacArgs, options) => {
+      const folder = path.dirname(pacArgs[pacArgs.indexOf('--settings-file') + 1]);
+      if (mode === 'pac-pending') { say(`pending ${folder}`); return new Promise(() => {}); }
+      say(`workspace ${folder}`);
+      return spawnResultTree(nodeName, [__filename, 'pac-worker', pacArgs[pacArgs.indexOf('--settings-file') + 1], workDir], { ...options, env, ...(detached === 'detached' ? { detached: true } : {}) }, { env });
+    };
+    wait();
+    await runTemplate({ command: 'template', packagePath, outPath: path.join(workDir, 'settings-out.json'), force: false }, { pac: { spawn } });
+    say('done');
+    process.exit(0);
   } else {
     process.stderr.write(`unknown mode ${mode}\n`);
     process.exit(2);

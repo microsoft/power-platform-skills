@@ -1886,6 +1886,18 @@ async function storedPage(server, id) {
 
 test('REAL SDK: hostile text — a prompt, an agent message, a quoted name — is stored exactly as written; no process is started, and the workspace is gone before the report', async (t) => {
   const server = serverWithAccount();
+  // The backend's workspace is made in the plugin's own folder of the temp folder, and where another run has made that folder (every test file of the suite runs at once, in one
+  // temp folder) it is checked before it is used — on Windows by the programs of the system itself, icacls and whoami. This test is about what the text starts, so it runs in a
+  // temp folder of its own, where the folder is made by this run and nothing is started to check it.
+  const privateTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-upload-temp-'));
+  const savedTemp = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
+  for (const name of Object.keys(savedTemp)) process.env[name] = privateTemp;
+  t.after(() => {
+    for (const [name, value] of Object.entries(savedTemp)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    fs.rmSync(privateTemp, { recursive: true, force: true });
+  });
   const childProcess = require('node:child_process');
   const started = [];
   for (const fn of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {

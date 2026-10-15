@@ -67,6 +67,23 @@ test('an import is given the long budget', async () => {
   assert.strictEqual(a.calls[0].options.timeout, PAC_IMPORT_TIMEOUT_MS);
 });
 
+test('a caller that lends a path to pac can hear its process id: `onSpawn` goes to the runner among the options — only when there is one — and the real runner reports the program it started', async () => {
+  const onSpawn = () => {};
+  const a = spawnReturning({ status: 0, stdout: '', stderr: '' });
+  await runPac(['x'], { label: LABEL, spawn: a.spawn, onSpawn });
+  assert.strictEqual(a.calls[0].options.onSpawn, onSpawn);
+  await runPac(['x'], { label: LABEL, spawn: a.spawn });
+  await runPac(['x'], { label: LABEL, spawn: a.spawn, onSpawn: 'not a function' });
+  assert.ok(!('onSpawn' in a.calls[1].options) && !('onSpawn' in a.calls[2].options), 'a call with none, or with something that cannot be called, carries none');
+  // Through the real runner, with node standing in for pac: the process id the program had.
+  const heard = [];
+  const node = path.basename(process.execPath, path.extname(process.execPath));
+  const env = { ...process.env, Path: path.dirname(process.execPath), PATH: path.dirname(process.execPath) };
+  const run = await runPac(['x'], { label: LABEL, onSpawn: (pid) => heard.push(pid), spawn: (name, args, options) => spawnResultTree(node, ['-e', 'process.stdout.write(String(process.pid))'], options, { env }) });
+  assert.deepStrictEqual([run.ok, String(heard[0])], [true, run.stdout]);
+  assert.strictEqual(heard.length, 1);
+});
+
 test('the runner may answer asynchronously: a promise of the result is awaited, and a runner that is not given is the one that ends a whole process tree', async () => {
   const run = await runPac(['x'], { label: LABEL, spawn: async () => ({ status: 0, stdout: 'late', stderr: '' }) });
   assert.deepStrictEqual(run, { ok: true, stdout: 'late', stderr: '' });

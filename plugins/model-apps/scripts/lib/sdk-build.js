@@ -1204,8 +1204,10 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
 // when that process is no longer running on this machine.
 //
 // "Provably" is the whole rule, and every doubt keeps the lock, in the words it has always had: a lock whose
-// pid still runs, one made on another machine, platform or pid namespace, one with no readable record (a
-// release before the record existed, a damaged file) is never taken — and none is ever taken by AGE, since a
+// pid still runs, one made on another machine, platform or pid namespace — or where the maker's or this
+// process's pid namespace cannot be told (on Linux a pid that is not found proves nothing unless both name
+// the same pid space) — one with no readable record (a release before the record existed, a damaged file, a
+// field of it that is not what it should be) is never taken — and none is ever taken by AGE, since a
 // live build may be paused as long as a laptop sleeps. The take-over itself is the snapshot lease's
 // (apply-snapshot-store.js acquireLease): one claim file makes exactly one of several builds that start
 // together the winner, and a lock that changed meanwhile is left alone. Release is OWNER-CHECKED: remove
