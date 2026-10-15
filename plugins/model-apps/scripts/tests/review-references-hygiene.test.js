@@ -19,21 +19,29 @@
 //   * Each pattern is anchored on a shape that only a review pointer has ("(C4)", "reviewer C4", "Round-2",
 //     "(Plan 3)", "new-Important-1", a test title that opens "I1:"), not on a bare letter-and-digit token.
 //   * The shapes that contain an id only look at text a person wrote for a reader: comments, Markdown
-//     prose, test titles and assertion messages (scope 'text'). They never look at code, where `T1`, `C1`
+//     prose, test titles and assertion messages (scope 'note'). They never look at code, where `T1`, `C1`
 //     and `M1<T>` are ordinary type parameters, names and test inputs (a TypeScript snippet such as
-//     "(T1 | T2)[]" must not fail the build). The one broad rule, `id-bare-in-prose`, is narrower still:
-//     comments and Markdown prose only, never fenced code, and it skips function keys.
+//     "(T1 | T2)[]" must not fail the build), nor at the data beside a message. The one broad rule,
+//     `id-bare-in-prose`, is narrower still: comments and Markdown prose only, never fenced code, and
+//     it skips function keys.
 //   * The plain words a pointer is made of ("Task 1", "Plan 2", "Addendum") are also ordinary data: a fixture
-//     row, a slug test's input, the name of a contract document. They are flagged only in the SHAPE of a
-//     pointer (in parentheses, hyphenated, a label before a colon or dash, followed by an id) and only where a
-//     person wrote prose (scope 'note': a comment, Markdown prose outside a code fence, the title of a test, the
-//     message of an assertion) — never in a JSON value, an object literal, an assertion's data, or fenced code.
+//     row, a slug test's input, the name of a contract document, an app called "Task 1 (Plan 2)". They are
+//     flagged only in the SHAPE of a pointer (in parentheses, hyphenated, a label before a colon or dash,
+//     followed by an id) and only where a person wrote prose (scope 'note') — never in a JSON value, an
+//     object literal, an assertion's data, or fenced code.
+//   * A message is found by its POSITION, not by looking like one. An assertion takes its message last,
+//     after what it compares — assert.ok(value[, message]), assert.equal(actual, expected[, message]),
+//     assert.match(string, regexp[, message]) — so the second argument of a two-argument
+//     `assert.equal(label, 'Task-6: Overview')` is the expected value, which is data, and the third of
+//     `assert.equal(label, 'x', 'Task-6: Overview')` is a message. That needs the lexical structure of the call
+//     (a comma inside a nested call, a string, a template or a regular expression separates nothing; a call
+//     written inside a string or a comment is not one), so `lex` below reads it.
 //   * Every pattern carries examples it must flag, and LEGITIMATE carries text that no pattern may flag;
 //     the first two tests below run both, so a pattern cannot drift without this file noticing.
 //
 // NOT SCANNED: the vendored SDK bundle (not authored here) and the genpage fixtures (recorded agent runs:
 // their text is whatever the agent produced, not guidance written for this repository). JSON, XML and
-// transcript files are only checked by the patterns with scope 'any' or 'unfenced'.
+// transcript files are only checked by the patterns with scope 'any'.
 //
 // When this fails: reword the line so the reason stays and the pointer goes. If the token is not a review
 // pointer (a table column, a fixture row), spell it out ("the first column") instead of using the bare id.
@@ -62,14 +70,13 @@ const TOKEN_END = String.raw`(?![\w'"\x60-])`;
 // broad rule runs.
 const FUNCTION_KEY = /\bF(?:[1-9]|1[0-2])\b(?=\s*(?:→|->|keys?\b))|\b[Pp]ress\s+F(?:[1-9]|1[0-2])\b/g;
 
-// scope 'any': every line. scope 'unfenced': every line except those of a Markdown code fence (an example's code is data).
-// scope 'text': comments, Markdown prose, test titles and assertion messages (the whole line of a test or an
-// assertion). scope 'prose': comments and Markdown prose only. scope 'note': what a person wrote for a reader and nothing a program
-// reads — prose, the title literal of a test, the message literal of an assertion — never the data on the same line.
+// scope 'any': every line. scope 'prose': comments and Markdown prose only (a Markdown code fence is data). scope 'note': what a person wrote for a
+// reader and nothing a program reads — prose, the title literal of a test, the message of an assertion or of a skip (found by its position among the
+// call's arguments) — never the data on the same line.
 const PATTERNS = [
   {
     name: 'id-in-parens',
-    scope: 'text',
+    scope: 'note',
     why: 'a finding id opening a parenthesis: "(C4)", "(R2/R3)", "(H4: ...)", "(I1 recovery guard ...)". A word character before the paren means a call, `fn(T1)`, which is not a pointer.',
     re: new RegExp(String.raw`(?<![\w$.)\]'"\x60-])\(${ID}(?:[\s,;:/)]|$)`),
     bad: [
@@ -83,7 +90,7 @@ const PATTERNS = [
   },
   {
     name: 'id-closing-paren',
-    scope: 'text',
+    scope: 'note',
     why: 'a finding id closing a parenthesis: "(stale snapshot, C2)", "(see T3)".',
     re: new RegExp(String.raw`(?<![\w$.'"\x60#%(-])${ID}\)`),
     bad: [
@@ -95,7 +102,7 @@ const PATTERNS = [
   },
   {
     name: 'id-after-review-word',
-    scope: 'text',
+    scope: 'note',
     why: 'an id introduced by a word that names where it came from: "reviewer C4", "finding I3", "addendum I5", "per T4", "rule T5", "design §9 T5".',
     re: new RegExp(String.raw`\b(?:[Rr]eview(?:er)?|[Ff]indings?|[Aa]ddend(?:um|a)|[Tt]enet|[Rr]ule|[Pp]er|[Ss]pec)\s+\*{0,2}#?${ID}${TOKEN_END}|§\d+(?:\.\d+)*\s+${ID}${TOKEN_END}`),
     bad: [
@@ -107,14 +114,14 @@ const PATTERNS = [
   },
   {
     name: 'id-slash-list',
-    scope: 'text',
+    scope: 'note',
     why: 'several ids in one list: "C1/I1/R2/R3/T5".',
     re: new RegExp(String.raw`${TOKEN_START}(?:[CIRT]\d{1,2}/)+[CIRT]\d{1,2}${TOKEN_END}`),
     bad: ['// C2/I3/R4/R5/T6 all apply here', '// the retry fix (R7/R8) covers it'],
   },
   {
     name: 'id-before-guard-word',
-    scope: 'text',
+    scope: 'note',
     why: 'an id used as the name of a rule: "the I1 gate", "I1-gate exception", "the C1 hazard".',
     re: new RegExp(String.raw`${TOKEN_START}${ID}-?\s*(?:gate|guard|exception|hazard|invariant|mitigation|recovery)\b`),
     bad: [
@@ -126,7 +133,7 @@ const PATTERNS = [
   },
   {
     name: 'new-hash-id',
-    scope: 'text',
+    scope: 'note',
     why: 'a numbered new finding: "#N2".',
     re: /#N\d{1,2}\b/,
     bad: ['// --- #N6: widening a field must re-pack its row ---', "test('#N7: the verifier matches containers', () => {});"],
@@ -215,8 +222,8 @@ const PATTERNS = [
   },
   {
     name: 'plan-task-in-parens',
-    scope: 'unfenced',
-    why: 'a pointer into a numbered plan, in the parentheses a pointer is written in: "(Plan 4)", "(Task 3 / Plan 5 v2)", "(design §7 / Plan-3 C2)". A year ("Plan 2026") has more than two digits, and a name in quotes or brackets ("Task 1", [\'Task 1\']) is data, not flagged.',
+    scope: 'note',
+    why: 'a pointer into a numbered plan, in the parentheses a pointer is written in: "(Plan 4)", "(Task 3 / Plan 5 v2)", "(design §7 / Plan-3 C2)". A year ("Plan 2026") has more than two digits, and a name in quotes or brackets ("Task 1", [\'Task 1\']) is data, not flagged; so is the same shape in a JSON value, an object literal or an assertion\'s expected value ("Task 1 (Plan 2)").',
     re: /\((?!\s*['"\x60[{])(?:[^()"\x60'[\]{}]|\w'\w)*\b(?:Plan|Task)[- ]\d{1,2}(?!\d)\b/,
     bad: [
       '// not landed (Plan 4)',
@@ -364,19 +371,190 @@ const LEGITIMATE = [
   ['a.md', 'Create two tasks, named Task 1 and Task 2, then open the first one. A contract addendum is a document.'],
   ['a.md', '```js\nconst source = { name: "Task 1" };\nconst title = "Plan 2"; // Task 3: a sample\n// (Plan 4) and (Task 5)\ntest("Task-6: a title", () => {});\n```'],
   ['a.md', '~~~json\n{ "app": { "name": "Task 1 (Plan 2)", "note": "see the addenda" } }\n~~~'],
+  // The same names in data, parenthesised or labelled: a JSON value, an object literal, and the expected value of an assertion. The second argument of a
+  // two-argument assert.equal is what the code under test must give, not a message; only the argument after it is read as one.
+  ['fixture.json', '{"app":{"name":"Task 1 (Plan 2)"}}'],
+  ['a.js', 'const source = { name: "Task 1 (Plan 2)" };'],
+  ['a.js', "assert.equal(label, 'Task-6: Overview');"],
+  ['a.js', "assert.equal(label, 'see the addenda');"],
+  ['a.js', "assert.equal(label, 'Task-6: Overview', 'name kept');"],
+  ['a.js', "assert.strictEqual(rows[0].title, 'Task 3 — every page');"],
+  ['a.js', "assert.deepEqual(titles, ['Task 12: the verify gate', 'Task 1 (Plan 2)']);"],
+  ['a.js', "assert.deepStrictEqual(f(a, 'x'), { name: 'Task 1 (Plan 2)' });"],
+  ['a.js', "assert.match(text, /Task-6: (Plan 4)/);"],
+  ['a.js', "assert.throws(run, 'Task-6: Overview');"],
+  ['a.js', "assert.ok('Task 12: a value');"],
+  ['a.js', "assert.ok(ok, `Task ${n} follows ${'Task 1 (Plan 2)'}`);"],
+  ['a.js', "assert.equal(app.name,\n  'Task 1 (Plan 2)');"],
+  ['a.js', "const sample = `\nassert.ok(x, 'Task 12: the gate (Plan 4)');\n`;"],
+  ['a.js', "const rule = /assert.ok(x, 'Task 12: gate')/;"],
   ['a.js', '// a per-table OVERRIDE that beats the default, and an override of the default view'],
   ['a.js', '// the important part is that a minor change keeps its key; Major versions bump'],
 ];
 
 const COMMENT_LEAD = /^\s*(?:\/\/|\/\*|\*(?!\/)|#|<!--)/;
 const TRAILING_COMMENT = /\s\/\/\s(.*)$/;
-// A line that carries a message for the reader: a test title or an assertion (whose last argument is the message).
-const MESSAGE_LINE = /^\s*(?:(?:test|it|describe)(?:\.\w+)?|assert(?:\.\w+)?)\(/;
 // The title of a test: its first argument, a string literal.   test('a page keeps its key', async () => {
 const TITLE_LITERAL = /^\s*(?:test|it|describe)(?:\.\w+)?\(\s*(['"\x60])((?:\\.|(?!\1)[^\\])*)\1/;
-// The message of an assertion: its last argument, a string literal that closes the call.   assert.ok(ok, 'the final persist is deduped');
-// The other arguments are data (`assert.equal(slug("Task 1"), "task-1")` has no message: its last literal is the expected value).
-const ASSERT_MESSAGE = /^\s*assert(?:\.\w+)?\(.*,\s*(['"\x60])((?:\\.|(?!\1)[^\\])*)\1\s*\)\s*;?\s*(?:\/\/.*)?$/;
+// JavaScript and TypeScript source, whose calls `messageLiterals` reads.
+const SOURCE_FILE = /\.(?:[cm]?js|jsx|ts|tsx)$/i;
+
+// ── where the message of an assertion sits ─────────────────────────────────────────────────────────────────────────────────────
+
+// A call whose message is a string a person reads, and the position of that argument among its top-level arguments. An assertion takes its message
+// LAST, after what it compares: assert.ok(value[, message]), assert.equal(actual, expected[, message]), assert.match(string, regexp[, message]).
+// With fewer arguments there is none, whatever the last one is: `assert.equal(label, 'Task-6: Overview')` asserts a label. assert.throws and its
+// kin take (fn[, error][, message]), so with two arguments the second may be the error to expect, and only a third is read. A skip takes its reason.
+const MESSAGE_ARGUMENT = {
+  assert: 1, 'assert.ok': 1,
+  'assert.equal': 2, 'assert.notEqual': 2, 'assert.strictEqual': 2, 'assert.notStrictEqual': 2,
+  'assert.deepEqual': 2, 'assert.notDeepEqual': 2, 'assert.deepStrictEqual': 2, 'assert.notDeepStrictEqual': 2,
+  'assert.match': 2, 'assert.doesNotMatch': 2,
+  'assert.throws': 2, 'assert.doesNotThrow': 2, 'assert.rejects': 2, 'assert.doesNotReject': 2,
+  'assert.fail': 0,
+  skip: 0, todo: 0, 't.skip': 0, 't.todo': 0,
+};
+const CALLEE = /(?<![\w$.])(assert(?:\.[A-Za-z]+)?|t\.skip|t\.todo|skip|todo)\s*\(/g;
+
+const CODE = 0;
+const STRING = 1;
+const COMMENT = 2;
+const REGEX = 3;
+// A `/` opens a regular expression, not a division, after one of these characters or words: where an operand is expected.
+const REGEX_AFTER_CHAR = /[(,=:[!&|?{};+\-*%<>~^]/;
+const REGEX_AFTER_WORD = /^(?:return|typeof|case|in|of|delete|void|throw|new|else|do)$/;
+
+// Classifies every character of a JavaScript source as code, string (the quotes, and the text of a template), comment or regular expression, and
+// records where each string or template starts and ends (`ends`: start -> index after the last character) and which stretches of it are its own text
+// (`texts`: start -> [from, to) ranges; a template's `${ ... }` is code again, with braces that nest, and a string inside it is another token). It does
+// not parse: whatever it cannot read (a string that does not close, a regular expression that does not close on its line) ends where the line does,
+// because a wrong guess may lose a message and must never make one up.
+function lex(text) {
+  const kind = new Uint8Array(text.length);
+  const ends = new Map();
+  const texts = new Map();
+  const templates = [];
+  let depth = 0;
+  const mark = (from, to, as) => kind.fill(as, from, Math.min(to, text.length));
+  const lineEnd = (from) => { const at = text.indexOf('\n', from); return at < 0 ? text.length : at; };
+  const own = (start, from, to) => { if (to > from) texts.set(start, [...(texts.get(start) || []), [from, to]]); };
+  const quoted = (from, quote) => {
+    let j = from + 1;
+    while (j < text.length && text[j] !== '\n') {
+      if (text[j] === '\\') j += 2;
+      else if (text[j] === quote) { j += 1; break; } else j += 1;
+    }
+    return Math.min(j, text.length);
+  };
+  // A template's own text, from `from` to the closing backtick (which ends the token) or the next `${` (which hands back to code).
+  const templateText = (start, from) => {
+    let j = from;
+    while (j < text.length) {
+      if (text[j] === '\\') { mark(j, j + 2, STRING); j += 2; continue; }
+      if (text[j] === '`') { mark(j, j + 1, STRING); own(start, from, j); ends.set(start, j + 1); return j + 1; }
+      if (text[j] === '$' && text[j + 1] === '{') { own(start, from, j); templates.push({ start, depth }); depth += 1; return j + 2; }
+      mark(j, j + 1, STRING);
+      j += 1;
+    }
+    own(start, from, text.length);
+    ends.set(start, text.length);
+    return text.length;
+  };
+  const regexAllowed = (at) => {
+    let j = at - 1;
+    while (j >= 0 && /\s/.test(text[j])) j -= 1;
+    if (j < 0) return true;
+    if (/[\w$]/.test(text[j])) {
+      let k = j;
+      while (k > 0 && /[\w$]/.test(text[k - 1])) k -= 1;
+      return REGEX_AFTER_WORD.test(text.slice(k, j + 1));
+    }
+    return text[j] === '}' || REGEX_AFTER_CHAR.test(text[j]);
+  };
+  // A regular expression from `from` to its closing slash (a slash inside [...] does not close it) and flags; 0 when it does not close on its line.
+  const regex = (from) => {
+    let j = from + 1;
+    let inClass = false;
+    while (j < text.length && text[j] !== '\n') {
+      if (text[j] === '\\') j += 2;
+      else if (text[j] === '[') { inClass = true; j += 1; } else if (text[j] === ']') { inClass = false; j += 1; } else if (text[j] === '/' && !inClass) {
+        j += 1;
+        while (/[a-z]/i.test(text[j] || '')) j += 1;
+        return j;
+      } else j += 1;
+    }
+    return 0;
+  };
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === '/' && next === '/') { const stop = lineEnd(i); mark(i, stop, COMMENT); i = stop; continue; }
+    if (c === '/' && next === '*') { const close = text.indexOf('*/', i + 2); const stop = close < 0 ? text.length : close + 2; mark(i, stop, COMMENT); i = stop; continue; }
+    if (c === "'" || c === '"') { const stop = quoted(i, c); mark(i, stop, STRING); ends.set(i, stop); own(i, i + 1, Math.max(i + 1, stop - 1)); i = stop; continue; }
+    if (c === '`') { mark(i, i + 1, STRING); i = templateText(i, i + 1); continue; }
+    if (c === '/' && regexAllowed(i)) { const stop = regex(i); if (stop) { mark(i, stop, REGEX); i = stop; continue; } }
+    if (c === '{') depth += 1;
+    else if (c === '}') {
+      depth -= 1;
+      // The brace that closes a `${ ... }` hands the text back to its template.
+      if (templates.length && templates[templates.length - 1].depth === depth) { const open = templates.pop(); i = templateText(open.start, i + 1); continue; }
+    }
+    i += 1;
+  }
+  return { kind, ends, texts };
+}
+
+// The messages of `text` by line: Map<line index, string[]>. Each is the text of the string or template literal that sits at the message position of an
+// assertion or a skip (MESSAGE_ARGUMENT) — a template's own text, not the code of its `${ }` — credited to the line it is written on.
+function messageLiterals(text) {
+  const { kind, ends, texts } = lex(text);
+  const lineStarts = [0];
+  for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n', at + 1)) lineStarts.push(at + 1);
+  const lineOf = (offset) => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) { const mid = (low + high + 1) >> 1; if (lineStarts[mid] <= offset) low = mid; else high = mid - 1; }
+    return low;
+  };
+  const found = new Map();
+  for (const call of text.matchAll(CALLEE)) {
+    if (kind[call.index] !== CODE) continue;
+    const position = MESSAGE_ARGUMENT[call[1]];
+    // The top-level arguments: `[from, to)` of each, without the white space and comments around it.
+    const args = [];
+    let depth = 0;
+    let from = -1;
+    let to = -1;
+    let closed = false;
+    for (let at = call.index + call[0].length; at < text.length; at += 1) {
+      if (kind[at] === COMMENT || (kind[at] === CODE && /\s/.test(text[at]))) continue;
+      const c = text[at];
+      if (kind[at] === CODE && (c === ')' || c === ']' || c === '}') && depth === 0) {
+        if (c === ')') { if (from >= 0) args.push({ from, to }); closed = true; }
+        break;
+      }
+      if (kind[at] === CODE && c === ',' && depth === 0) { args.push({ from, to }); from = -1; continue; }
+      if (kind[at] === CODE && (c === '(' || c === '[' || c === '{')) depth += 1;
+      else if (kind[at] === CODE && (c === ')' || c === ']' || c === '}')) depth -= 1;
+      if (from < 0) from = at;
+      to = at + 1;
+    }
+    if (!closed || position === undefined || args.length <= position || args[position].from < 0) continue;
+    const literal = args[position];
+    // One string or template and nothing else: `'a' + b` and `fn('a')` are not a message.
+    if (ends.get(literal.from) !== literal.to) continue;
+    // Its own text by line, so a pointer's shape on one line survives an interpolation on another.
+    const written = new Map();
+    for (const [start, stop] of texts.get(literal.from) || []) {
+      for (let at = start; at < stop; at += 1) {
+        if (text[at] !== '\n' && text[at] !== '\r') written.set(lineOf(at), (written.get(lineOf(at)) || '') + text[at]);
+      }
+    }
+    for (const [line, piece] of written) found.set(line, [...(found.get(line) || []), piece]);
+  }
+  return found;
+}
 
 // The part of `line` that is prose: a whole comment line, the comment after code (`foo(); // why`), or any
 // Markdown line outside a fenced code block. Null for code.
@@ -387,21 +565,25 @@ function proseOf(file, line, inFence) {
   return trailing ? `// ${trailing[1]}` : null;
 }
 
-// What a person wrote for a reader, and not the data beside it: the prose, the title of a test, the message of an assertion. Null for
-// code, a JSON value, and a Markdown code fence (`prose` is already null there, and a fence is never searched for titles).
-function noteOf(file, line, prose) {
-  if (prose !== null) return prose;
-  if (/\.md$/i.test(file)) return null;
-  const title = TITLE_LITERAL.exec(line) || ASSERT_MESSAGE.exec(line);
-  return title ? title[2] : null;
+// What a person wrote for a reader, and not the data beside it: the prose, the title of a test, and the messages of the assertions and skips written on the
+// line (found by their position: see messageLiterals). Null for code, a JSON value, and a Markdown code fence (`prose` is already null there, and a fence
+// is never searched for titles).
+function noteOf(file, line, prose, messages) {
+  const parts = [];
+  if (prose !== null) parts.push(prose);
+  if (!/\.md$/i.test(file)) {
+    const title = TITLE_LITERAL.exec(line);
+    if (title) parts.push(title[2]);
+    if (messages) parts.push(...messages);
+  }
+  return parts.length ? parts.join('\n') : null;
 }
 
-function flagsFor(file, line, prose, fenced) {
-  const text = MESSAGE_LINE.test(line) ? line : prose;
-  const note = noteOf(file, line, prose);
+function flagsFor(file, line, prose, messages) {
+  const note = noteOf(file, line, prose, messages);
   const names = [];
   for (const p of PATTERNS) {
-    const subject = p.scope === 'any' ? line : p.scope === 'unfenced' ? (fenced ? null : line) : p.scope === 'text' ? text : p.scope === 'note' ? note : prose;
+    const subject = p.scope === 'any' ? line : p.scope === 'note' ? note : prose;
     if (subject === null) continue;
     if (p.re.test(p.strip ? subject.replace(p.strip, ' ') : subject)) names.push(p.name);
   }
@@ -411,11 +593,12 @@ function flagsFor(file, line, prose, fenced) {
 function scanText(file, text) {
   const hits = [];
   const markdown = /\.md$/i.test(file);
+  const messages = SOURCE_FILE.test(file) ? messageLiterals(text) : new Map();
   let inFence = false;
   text.split(/\r?\n/).forEach((line, index) => {
     // A fence line toggles the state and is itself code: ```js
     if (markdown && /^\s*(?:```|~~~)/.test(line)) inFence = !inFence;
-    for (const name of flagsFor(file, line, proseOf(file, line, inFence), markdown && inFence)) {
+    for (const name of flagsFor(file, line, proseOf(file, line, inFence), messages.get(index))) {
       hits.push({ file, line: index + 1, name, text: line.trim().slice(0, 160) });
     }
   });
@@ -477,11 +660,14 @@ test('the plain words of a plan pointer are flagged in its shape and in prose, n
   assert.deepEqual(names('a.js', "test('Task-6: a Maker-added page gets a minted key', () => {});"), ['1:plan-task-label']);
   assert.deepEqual(names('a.js', "assert.ok(ok, 'the step is not landed (Task 3)');"), ['1:plan-task-in-parens']);
   assert.deepEqual(names('a.js', "return skip('the resolver is not landed (Plan 3)');"), ['1:plan-task-in-parens'], 'a message in code is still a message');
-  // Data: the very same words are not flagged in a JSON value, an object literal or an assertion's data.
+  // Data: the very same words are not flagged in a JSON value, an object literal or an assertion's data — parenthesised or not.
   assert.deepEqual(names('f.json', '{ "name": "Task 1", "title": "Plan 2" }'), []);
+  assert.deepEqual(names('f.json', '{"app":{"name":"Task 1 (Plan 2)"}}'), []);
   assert.deepEqual(names('a.js', 'const row = { name: "Task 1", note: \'Plan 2\' };'), []);
+  assert.deepEqual(names('a.js', 'const source = { name: "Task 1 (Plan 2)" };'), []);
   assert.deepEqual(names('a.js', 'assert.equal(slug("Task 1"), "task-1");'), []);
   assert.deepEqual(names('a.js', "assert.equal(label, 'Task 1');"), []);
+  assert.deepEqual(names('a.js', "assert.equal(label, 'Task 1 (Plan 2)');"), []);
   // A code fence is code, whatever it holds — a label, a parenthesis, a test title — and the same text outside the fence is prose.
   const md = ['Before.', '```js', '// Task 3: sample', 'test("Task-6: a title", () => {}); // (Plan 4)', '```', 'After: (Plan 4)'].join('\n');
   assert.deepEqual(names('a.md', md), ['6:plan-task-in-parens']);
@@ -495,7 +681,7 @@ test('the plain words of a plan pointer are flagged in its shape and in prose, n
 test('a title that opens with a finding id, a hyphenated finding label and a numbered severity are flagged', () => {
   const names = (text) => scanText('a.js', text).map((hit) => hit.name);
   assert.deepEqual(names("test('I1: apply refuses a partial phase range', async () => {});"), ['id-title-prefix']);
-  assert.deepEqual(names("test('C2 exception: a changed-only apply is not refused', async () => {});"), ['id-title-prefix']);
+  assert.deepEqual(names("test('C2 exception: a changed-only apply is not refused', async () => {});"), ['id-before-guard-word', 'id-title-prefix'], 'it also names the exception as a rule');
   assert.deepEqual(names('// new-Important-1 (fail-closed): a nav pageId must be declared'), ['finding-label-hyphenated']);
   assert.deepEqual(names('// OVERRIDE 2: the nav check also rejects a dynamic id'), ['override-number']);
   assert.deepEqual(names('// Minor #7 additions ---------------'), ['severity-numbered']);
@@ -505,13 +691,82 @@ test('a title that opens with a finding id, a hyphenated finding label and a num
   assert.deepEqual(names("test('C is a column, I is an index', () => {});"), []);
 });
 
+test('an assertion\'s message is the argument after what it compares: the second argument of a two-argument assert.equal is data', () => {
+  const names = (text) => scanText('a.js', text).map((hit) => `${hit.line}:${hit.name}`);
+  // Two arguments: the expected value, whatever it says. Three: the third is the message, and is read.
+  assert.deepEqual(names("assert.equal(label, 'Task-6: Overview');"), []);
+  assert.deepEqual(names("assert.equal(label, 'see the addenda');"), []);
+  assert.deepEqual(names("assert.equal(label, 'Task-6: Overview', 'name kept');"), []);
+  assert.deepEqual(names("assert.equal(label, 'x', 'Task-6: Overview');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.strictEqual(label, 'Task-6: Overview', 'Task 12: the verify gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.deepStrictEqual(rows, ['Task 3 — a page'], 'the step is not landed (Task 3)');"), ['1:plan-task-in-parens']);
+  assert.deepEqual(names("assert.equal(label, 'x', 'see the addenda');"), ['1:addenda']);
+  // assert.ok takes its message second, and assert.match third; with one (two) argument(s) there is none.
+  assert.deepEqual(names("assert.ok(ok, 'the step is not landed (Task 3)');"), ['1:plan-task-in-parens']);
+  assert.deepEqual(names("assert.ok('Task 12: a value');"), []);
+  assert.deepEqual(names("assert.match(text, /Task 12: gate/, 'Task 12: the verify gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.match(text, /Task-6: (Plan 4)/);"), []);
+  // assert.throws takes (fn[, error][, message]): with two arguments the second may be the error to expect, so only a third is a message.
+  assert.deepEqual(names("assert.throws(run, 'Task-6: Overview');"), []);
+  assert.deepEqual(names("assert.throws(run, /gate/, 'Task 12: the verify gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.fail('the step is not landed (Task 3)');"), ['1:plan-task-in-parens']);
+  assert.deepEqual(names("assert(ok, 'Task 12: the verify gate');"), ['1:plan-task-label']);
+  // A skip gives its reason.
+  assert.deepEqual(names("return skip('the resolver is not landed (Plan 3)');"), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('return skip(reason);'), []);
+  // Commas inside a nested call, a string, a template or a regular expression separate no arguments.
+  assert.deepEqual(names("assert.equal(f(a, 'Task-6: Overview'), 'x', 'Task 12: the gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.equal(f(a, b), 'Task-6: Overview');"), []);
+  assert.deepEqual(names("assert.equal([a, b], `Task-6, Overview`, 'Task 12: the gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.match(text, /it's (a), \"b\"/, 'Task 12: the gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.deepEqual(f({ a: 1, b: 'Task 12: x' }), { c: 'Task-6: y' });"), []);
+  // The message may continue on a line of its own, and so may the data before it.
+  assert.deepEqual(names("assert.strictEqual(rows.length, 0,\n  'the step is not landed (Task 3)');"), ['2:plan-task-in-parens']);
+  assert.deepEqual(names("assert.deepEqual(rows,\n  ['Task-6: Overview']);"), []);
+  assert.deepEqual(names("assert.equal(app.name,\n  'Task 1 (Plan 2)');"), []);
+  assert.deepEqual(names("assert.ok(\n  ok,\n  `Task 12: the verify gate ${n}`,\n);"), ['3:plan-task-label']);
+  // A message is one literal. Whatever else is there is code, or a value built at run time, and says nothing to a reader of the source.
+  assert.deepEqual(names("assert.ok(ok, 'Task 12: ' + why);"), []);
+  assert.deepEqual(names("assert.ok(ok, label('Task 12: the gate'));"), []);
+  assert.deepEqual(names("assert.ok(ok, `fine ${'(Task 3)'}`);"), []);
+  // A call written in a string, a template, a regular expression or a comment is not one.
+  assert.deepEqual(names("const sample = 'assert.ok(ok, \"Task 12: the gate\")';"), []);
+  assert.deepEqual(names("const sample = `\nassert.ok(ok, 'Task 12: the gate');\n`;"), []);
+  assert.deepEqual(names("const rule = /assert.ok(ok, 'Task 12: the gate')/;"), []);
+  assert.deepEqual(names("// assert.ok(ok, 'the step is not landed (Task 3)') was the old check"), ['1:plan-task-in-parens'], 'a comment is prose, whatever it quotes');
+  assert.deepEqual(names("// assert.ok(\nok, 'Task 12: the gate');"), [], 'what follows a commented-out call is not its arguments');
+  assert.deepEqual(names("foo.assert.ok(ok, 'Task 12: the gate'); myassert(ok, 'Task 12: the gate');"), []);
+  // A division is not a regular expression, after a name, a call or an index: the commas around it still separate arguments.
+  assert.deepEqual(names("assert.equal(a / 2, b / 2, 'Task 12: the gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.equal(f(a) / 2, g(b) / 2, 'Task 12: the gate');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.equal(rows[0] / 2, rows[1] / 2, 'Task 12: the gate');"), ['1:plan-task-label']);
+  // A comment after the call does not hide its message.
+  assert.deepEqual(names("assert.ok(ok, 'the step is not landed (Task 3)'); // why"), ['1:plan-task-in-parens']);
+  assert.deepEqual(names("test('Task-6: a title', () => {}); // fine"), ['1:plan-task-label']);
+});
+
+test('the reader of messages follows the language: a division is not a regular expression, templates nest, and comments and strings hide what they hold', () => {
+  const messages = (text) => [...messageLiterals(text)].map(([line, pieces]) => `${line}:${pieces.join('|')}`);
+  assert.deepEqual(messages("assert.ok(a / b > 1 && c / d, 'x / y');"), ['0:x / y'], 'two divisions, and a slash in the message');
+  assert.deepEqual(messages("assert.ok(/'/.test(s), 'm');"), ['0:m'], 'a quote inside a regular expression opens no string');
+  assert.deepEqual(messages("assert.ok(/[/']+/.test(s), 'm');"), ['0:m'], 'a slash inside a class does not close the regular expression');
+  assert.deepEqual(messages("assert.ok(`a ${f(`b ${c}`, 'd, e')} f`.length, 'm');"), ['0:m'], 'a template inside the expression of a template');
+  assert.deepEqual(messages('assert.ok(ok, `one\ntwo ${n} three`);'), ['0:one', '1:two  three'], 'a template over two lines is credited to each');
+  assert.deepEqual(messages("assert.ok(x, /* why, (really) */ 'm');"), ['0:m'], 'a comment inside the arguments');
+  assert.deepEqual(messages("// assert.ok(x, 'm');\nassert.ok(x, 'n');"), ['1:n'], 'a comment holds no call');
+  assert.deepEqual(messages("const s = \"assert.ok(x, 'm')\"; assert.ok(x, 'n');"), ['0:n'], 'a string holds no call');
+  assert.deepEqual(messages("assert.ok(x, 'it\\'s, fine');"), ["0:it\\'s, fine"], 'an escaped quote');
+  assert.deepEqual(messages("assert.ok(x, 'unfinished"), [], 'a call that does not close says nothing');
+  assert.deepEqual(messages("assert.ok(x, 'a'); assert.equal(y, 'b'); assert.equal(y, 'c', 'd');"), ['0:a|d']);
+});
+
 test('a schema-valid fixture whose names read like pointers is data, whatever it is called', () => {
-  // The app, a table and a page are named with the words a pointer is made of. The spec is valid (so a fixture like it is a legitimate thing to
-  // commit), and the guard reads none of it as a review reference.
+  // The app, a table and a page are named with the words a pointer is made of, the app's even in the parentheses a pointer is written in. The spec is
+  // valid (so a fixture like it is a legitimate thing to commit), and the guard reads none of it as a review reference.
   const spec = {
     schemaVersion: 2,
     solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
-    app: { name: 'Task 1', description: 'Contract Addendum - Plan 2 of the offsite' },
+    app: { name: 'Task 1 (Plan 2)', description: 'Contract Addendum - Plan 2 of the offsite' },
     entities: [{ schemaName: 'contoso_task', displayName: 'Task 1', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
     appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'contoso_task', title: 'Task 1' }] }] }] },
   };
