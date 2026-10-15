@@ -121,6 +121,9 @@ failure, mark the failed row and top-level status `failed`. The page keeps a pho
 right while work is active. Keep `devicePreviewReady: false` until this edit's Step 8 phone command
 succeeds. Then set it to `true` in the final progress write, mark every applicable row settled, and
 set top-level status `done`. A QR left by an earlier run is never current-run preview evidence.
+Every branch that ends the workflow must publish a terminal progress write. Preserve the operation's
+actual result, mark completed rows `done` or `failed`, mark rows that will not run `skipped`, clear
+`waiting`, and set the top-level status to `done` or `failed`.
 
 Open `<edit-temp-dir>/edit-app-progress.html` once after the first write using the host's file
 opener. If no opener is available, print the absolute path. The page refreshes itself while work
@@ -322,6 +325,8 @@ plan section and stop unchanged; for a mixed request, continue with only the
 requested plan proposal.
 
 Use this fast path when the request is only to enable Application Insights, change its resource, or disable it. Application Insights is host/runtime configuration, not a connector or plan section, so do not run the planner, data-model, native, design, screen, or preview flows.
+For a configuration-only request, use a `configure-insights` checklist row. Mark `inspect: done`
+and `configure-insights: active` before delegation.
 
 If the request also adds or changes custom events in app screens, configure Application Insights here first, then continue through the normal edit workflow for those source changes.
 
@@ -348,10 +353,10 @@ Handle the return per the status protocol (AGENTS.md rule #12):
 
 - `DONE` → print the action completed. Then, if the return includes `instrumentation_offer: available` (a successful enable/change-resource), ask the user one question, defaulting to **No**: "Application Insights is on. Want me to add custom telemetry to your app's major operations (create / update / delete)?"
   - **Yes** → continue into the normal edit workflow (Step 1 onward) with this brief: *"Add custom events at each successful create, update, and delete boundary for the app's main entities; emit named events through `getCustomEventsLogger` with approved scalar properties only (no operation results, payloads, form values, free text, record titles, personal identifiers, tokens, precise coordinates, nested objects, or complete URLs); use `trackScenario()` for any duration."* Screen-planner and screen-builder own the source edits under their existing privacy allowlist.
-  - **No** (or `instrumentation_offer: none`) → stop; do not continue to Step 1.
-- `DONE_WITH_CONCERNS` → surface concerns, then stop.
+  - **No** (or `instrumentation_offer: none`) → mark `configure-insights: done`, mark every remaining row `skipped`, clear `waiting`, set top-level `phase: done` and `status: done`, publish the progress page, then stop.
+- `DONE_WITH_CONCERNS` → mark `configure-insights: done`, mark every remaining row `skipped`, clear `waiting`, set top-level `phase: done` and `status: done`, include the concerns in the note, publish the progress page, surface the concerns, then stop.
 - `NEEDS_CONTEXT` → surface the question, re-invoke with the answer.
-- `BLOCKED` → surface the error (usually `app.json` unusable) and stop.
+- `BLOCKED` → mark `configure-insights: failed`, mark every remaining row `skipped`, clear `waiting`, set top-level `phase: done` and `status: failed`, publish the progress page, surface the error (usually `app.json` unusable), then stop.
 
 ### Step 1 — Discover intent + inspect existing app
 
@@ -688,6 +693,10 @@ proposal and concerns to that owner now, without saving the live plan or
 opening an implementation gate. Do not turn the caller's planning consent
 into approval to apply the edit. A direct `--plan-only` request retains the
 explicit plan-document approval below.
+Before returning, mark `inspect`, `impact`, and `plan` as `done`; mark approval, save,
+implementation, verification, preview, sync, and device rows `skipped`; clear `waiting`; set
+top-level `phase: done`, `status: done`, and `devicePreviewReady: false`; and publish one final
+progress write. The note must say that the validated proposal was returned to the owning workflow.
 
 Show the user a side-by-side diff (or before/after) for every changed plan section. Also show an app mutation preview:
 
@@ -1105,8 +1114,18 @@ If any UI, design, navigation, native interaction, or visible data state changed
 
 Unless this is `--plan-only`, finish with a real-device handoff. Read
 `/create-mobile-app` Step 12 from **Launch command** through **Put the QR in the plan** and execute
-that sequence from the same `<working_dir>`. Start Metro with the template-owned `npm run dev`,
-capture the URL Expo prints, and generate `.expo/metro-qr.png` with the pinned
+that sequence from the same `<working_dir>`. Before launching, apply `/debug-app` Phase 0.0's
+project-local log, PID, and port-ownership checks to every
+`<working_dir>/.powernative/metro-logs/metro-*-pid-*-port-*.log` candidate.
+
+- When exactly one session is live, reuse it. Read its native Metro URL from the sanitized log,
+  verify that the URL port matches the live log's port, and do not run `npm run dev`.
+- When no session is live, start Metro with the template-owned `npm run dev` and capture the URL it
+  prints.
+- When several sessions are live, or the PID, port, log, and URL disagree, show the sessions and
+  ask which one to use. Do not start another server while the choice is unresolved.
+
+Generate `.expo/metro-qr.png` from the selected URL with the pinned
 `npx --no-install qrcode`. Then update both documents through the existing phone command:
 
 ```bash

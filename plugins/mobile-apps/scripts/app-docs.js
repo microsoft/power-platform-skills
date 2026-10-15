@@ -127,6 +127,39 @@ function editTempDir(projectRoot) {
   return path.join(os.tmpdir(), 'power-platform-mobile-app', projectHash);
 }
 
+function ensurePrivateDirectory(directory) {
+  try {
+    fs.mkdirSync(directory, { mode: 0o700 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+
+  const stat = fs.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Refusing unsafe temporary directory: ${directory}`);
+  }
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+    throw new Error(`Temporary directory is owned by another user: ${directory}`);
+  }
+
+  // POSIX temp roots such as /tmp are shared between users. Restrict both the stable parent and
+  // project namespace so separate CLI invocations can reuse them without exposing payloads.
+  // Windows temp directories are already user-scoped, and its chmod mode bits are not POSIX ACLs.
+  if (process.platform !== 'win32') {
+    fs.chmodSync(directory, 0o700);
+    if ((fs.lstatSync(directory).mode & 0o077) !== 0) {
+      throw new Error(`Temporary directory permissions are not private: ${directory}`);
+    }
+  }
+}
+
+function prepareEditTempDir(projectRoot) {
+  const directory = editTempDir(projectRoot);
+  ensurePrivateDirectory(path.dirname(directory));
+  ensurePrivateDirectory(directory);
+  return directory;
+}
+
 function loadState(projectRoot) {
   return readJson(statePath(projectRoot));
 }
@@ -735,8 +768,7 @@ function writeEditProgress(projectRoot, options = {}) {
         ? 'No device preview was started.'
         : 'The phone switches to the live QR code when the edit is ready.';
 
-  const filePath = path.join(editTempDir(projectRoot), 'edit-app-progress.html');
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const filePath = path.join(prepareEditTempDir(projectRoot), 'edit-app-progress.html');
 
   const rows = items.map((item) => {
     const itemNote = item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : '';
@@ -782,6 +814,7 @@ function writeEditProgress(projectRoot, options = {}) {
     });
     setInterval(function () {
       if (document.hidden || Date.now() - lastInteraction < QUIET_MS) return;
+      try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (error) { /* private mode */ }
       var fresh = location.href.split('#')[0].split('?')[0] + '?t=' + Date.now();
       location.replace(fresh);
     }, RELOAD_MS);`;
@@ -987,6 +1020,7 @@ function writeEditProgress(projectRoot, options = {}) {
   <script nonce="${nonce}">
   (function () {
     var STORE_TAB = 'mobile-edit-plan-tab';
+    var STORE_SCROLL = 'mobile-edit-plan-scroll';
     var diagramBlocks = Array.from(document.querySelectorAll('.diagram-block'));
     function markDiagramUnavailable(block) {
       block.classList.add('diagram-unavailable');
@@ -1039,9 +1073,14 @@ function writeEditProgress(projectRoot, options = {}) {
         try { sessionStorage.setItem(STORE_TAB, button.dataset.tab); } catch (error) { /* private mode */ }
       });
     });
+    window.addEventListener('beforeunload', function () {
+      try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (error) { /* private mode */ }
+    });
     try {
       var savedTab = sessionStorage.getItem(STORE_TAB);
       if (savedTab) showTab(savedTab);
+      var savedScroll = Number(sessionStorage.getItem(STORE_SCROLL) || 0);
+      if (savedScroll > 0) window.scrollTo(0, savedScroll);
     } catch (error) { /* sessionStorage unavailable; Changes stays selected */ }
     ${autoRefresh}
   }());
@@ -1199,8 +1238,7 @@ if (require.main === module) {
       const state = loadState(root);
       process.stdout.write(`${JSON.stringify(state ? summarize(state) : { total: 0, done: 0 })}\n`);
     } else if (options.command === 'temp') {
-      const directory = editTempDir(root);
-      fs.mkdirSync(directory, { recursive: true });
+      const directory = prepareEditTempDir(root);
       process.stdout.write(`${JSON.stringify({
         directory,
         progress: path.join(directory, 'edit-app-progress.json'),
@@ -1303,6 +1341,7 @@ module.exports = {
   applyStep,
   docsDir,
   editTempDir,
+  prepareEditTempDir,
   initState,
   loadState,
   outputPath,

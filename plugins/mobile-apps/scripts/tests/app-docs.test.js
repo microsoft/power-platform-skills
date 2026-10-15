@@ -10,6 +10,7 @@ const test = require('node:test');
 const {
   EDIT_ITEM_STATUSES, PHASES, PHONE_STAGES, SECTIONS, applyStep, initState, loadState, outputPath,
   save, setPhone, setSection, summarize, syncPlanToCurrentApp, writeEditProgress, editTempDir,
+  prepareEditTempDir,
 } = require('../app-docs');
 
 const scriptPath = path.resolve(__dirname, '..', 'app-docs.js');
@@ -205,6 +206,27 @@ test('the CLI refuses a step before init and reports the reason', () => {
   assert.equal(JSON.parse(set.stdout.trim()).section, 'auth');
 });
 
+test('edit temp paths are stable, private, and reject redirected namespaces', (t) => {
+  const root = project('docs-edit-temp');
+  const directory = prepareEditTempDir(root);
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  assert.equal(prepareEditTempDir(root), directory, 'separate invocations must reuse the namespace');
+  assert.equal(fs.lstatSync(directory).isSymbolicLink(), false);
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(directory).mode & 0o077, 0, 'project namespace must be owner-only');
+    assert.equal(fs.statSync(path.dirname(directory)).mode & 0o077, 0,
+      'stable parent namespace must be owner-only');
+  }
+
+  const redirectedTarget = project('docs-edit-temp-target');
+  fs.rmSync(directory, { recursive: true, force: true });
+  fs.symlinkSync(redirectedTarget, directory, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => prepareEditTempDir(root), /Refusing unsafe temporary directory/);
+  fs.rmSync(directory, { force: true });
+  fs.rmSync(redirectedTarget, { recursive: true, force: true });
+});
+
 test('edit progress renders each operation state and settles when work completes', (t) => {
   const root = project('docs-edit-progress');
   t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
@@ -290,6 +312,9 @@ test('edit progress renders each operation state and settles when work completes
   assert.match(html, /1 of 3 operations complete/);
   assert.match(html, /aria-valuenow="33"/);
   assert.match(html, /location\.replace\(fresh\)/);
+  assert.match(html, /sessionStorage\.setItem\(STORE_SCROLL/);
+  assert.match(html, /sessionStorage\.getItem\(STORE_SCROLL/);
+  assert.match(html, /window\.scrollTo\(0, savedScroll\)/);
   assert.match(html, /Waiting for your approval/);
 
   seeded(root);
@@ -313,6 +338,8 @@ test('edit progress renders each operation state and settles when work completes
   });
   const completedHtml = fs.readFileSync(progress, 'utf8');
   assert.doesNotMatch(completedHtml, /location\.replace\(fresh\)/);
+  assert.match(completedHtml, /sessionStorage\.getItem\(STORE_SCROLL/);
+  assert.match(completedHtml, /window\.scrollTo\(0, savedScroll\)/);
   assert.match(completedHtml, /Scan to test the changes/);
   assert.match(completedHtml, /data:image\/png;base64,iVBORw0KGgo=/);
   assert.match(completedHtml, /exp:\/\/192\.168\.1\.4:8081/);
@@ -576,6 +603,12 @@ test('edit-app wires progress, imported-app inference, and final plan sync into 
   assert.doesNotMatch(skill, /If `native-app-plan\.md` is missing → STOP/);
   assert.match(skill, /devicePreviewReady: false[\s\S]*earlier run/);
   assert.match(skill, /`--plan-only`[\s\S]*mark `save-plan: done`[\s\S]*publish one final progress/);
+  assert.match(skill, /Every branch that ends the workflow must publish a terminal progress write/);
+  assert.match(skill, /configuration-only request[\s\S]*`configure-insights` checklist row/);
+  assert.match(skill, /planning-phase handoff[\s\S]*validated proposal was returned to the owning workflow/);
+  assert.match(skill, /When exactly one session is live, reuse it/);
+  assert.match(skill, /do not run `npm run dev`/);
+  assert.match(skill, /When several sessions are live[\s\S]*Do not start another server/);
   const tempAllocation = skill.indexOf('Immediately run the edit documentation protocol');
   const inferredPlanSync = skill.indexOf('Create `<edit-temp-dir>/app-plan-sync.json`');
   assert.ok(tempAllocation > -1 && tempAllocation < inferredPlanSync);
