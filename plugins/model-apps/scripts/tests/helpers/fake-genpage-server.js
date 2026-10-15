@@ -145,7 +145,7 @@ class FakeGenPageServer {
   }
 
   seedProject(id, name) {
-    this.state.projects.set(id, { id, name, etag: this.nextEtag() });
+    this.state.projects.set(id, { id, name, etag: this.nextEtag(), version: this.nextVersion() });
   }
 
   seedFile(projectId, id, filename, filetype, content) {
@@ -220,7 +220,8 @@ class FakeGenPageServer {
 
   // What a PublishXml does to one page. MEASURED: it rotates the project's token and EVERY row's — synchronously — and changes no bytes (a push after a publish sees exactly what it would on a real org).
   // The `versionnumber` of a file row, read with a plain GET, is a separate measure: a publish moves the version of each file row whose content changed since the last publish, and an unchanged row keeps
-  // its own (a draft-only write of a file's content already moved it, `execute`; publishing that draft moves it again).
+  // its own (a draft-only write of a file's content already moved it, `execute`; publishing that draft moves it again). The page's own row is modelled the same way: a write to it (a rename) moves its version, and
+  // publishing that draft moves it again; a publish with nothing written to the row leaves it (an ASSUMPTION about the service for the row, the measured one for the files).
   publishProject(state, id) {
     this.published.push(id);
     const project = state.projects.get(id);
@@ -236,6 +237,8 @@ class FakeGenPageServer {
       file.draft = false;
     }
     if (project && !this.holdPublishedProjection) {
+      if (project.draft) project.version = this.nextVersion();
+      project.draft = false;
       this.publishedPages.set(id, {
         project: { ...project },
         files: [...state.files.values()].filter((f) => f.projectId === id).map((f) => ({ ...f, ...(f.content ? { content: f.content.slice() } : {}) })),
@@ -378,8 +381,13 @@ class FakeGenPageServer {
           : json(404, { error: { message: 'Does Not Exist' } });
       }
       if (/^\/uxagentprojects\?/.test(path)) {
-        const rows = unpublishedVisible ? [...state.projects.values()] : [...this.publishedPages.values()].map((p) => p.project);
-        return json(200, { value: rows.map((p) => ({ uxagentprojectid: p.id, name: p.name, '@odata.etag': `W/"${p.etag}"` })) });
+        // `$filter=uxagentprojectid eq <id> or …` narrows the list to those pages, as a read of their versions asks. A plain read is the published layer — the rows as the last publish left them — each with the version the row has
+        // NOW, as the files' are (below); a read that unpublished rows are visible to answers the draft.
+        const wanted = [...path.matchAll(new RegExp(`uxagentprojectid eq ${GUID}`, 'g'))].map((m) => m[1].toLowerCase());
+        const rows = unpublishedVisible
+          ? [...state.projects.values()]
+          : [...this.publishedPages.values()].map((p) => ({ ...p.project, version: state.projects.has(p.project.id) ? state.projects.get(p.project.id).version : p.project.version }));
+        return json(200, { value: rows.filter((p) => !wanted.length || wanted.includes(p.id)).map((p) => ({ uxagentprojectid: p.id, name: p.name, versionnumber: p.version, '@odata.etag': `W/"${p.etag}"` })) });
       }
       const contentRead = new RegExp(`^/uxagentprojectfiles\\(${GUID}\\)/filecontent/\\$value`).exec(path);
       if (contentRead) {
@@ -430,7 +438,7 @@ class FakeGenPageServer {
     if (method === 'POST' && path === '/uxagentprojects') {
       const id = String(record.uxagentprojectid || this.nextId()).toLowerCase();
       if (state.projects.has(id)) return json(412, { error: { code: '0x80040237', message: 'A record with matching key values already exists.' } });
-      state.projects.set(id, { id, name: String(record.name === undefined ? '' : record.name), etag: this.nextEtag() });
+      state.projects.set(id, { id, name: String(record.name === undefined ? '' : record.name), etag: this.nextEtag(), version: this.nextVersion(), draft: true });
       return json(204, undefined, { 'OData-EntityId': `${API}/uxagentprojects(${id})` });
     }
     if (method === 'POST' && path === '/uxagentprojectfiles') {
@@ -494,6 +502,9 @@ class FakeGenPageServer {
       if (gate) return gate;
       project.name = String(record.name === undefined ? project.name : record.name);
       project.etag = this.nextEtag();
+      // A write to the row moves its versionnumber — in the plain read as well as in the unpublished one, as a draft-only write of a file's content does — and the draft it leaves moves it again when it is published.
+      project.version = this.nextVersion();
+      project.draft = true;
       return json(204);
     }
     const messageRow = new RegExp(`^/agentconversationmessages\\(${GUID}\\)$`).exec(path);

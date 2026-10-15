@@ -2725,7 +2725,7 @@ test('deploy: the record keeps only the pages the spec still binds — a page it
 const isVersionRead = (requestPath) => /^\/uxagentprojectfiles\?.*versionnumber/.test(requestPath);
 const versionReads = (server, from = 0) => server.requests.slice(from).filter((r) => r.method === 'GET' && isVersionRead(r.path));
 // The versions of a page's file rows as the server holds them right now: what the record is expected to hold after a publish.
-const versionsNow = (server, pageId) => new Map(server.filesOf(pageId).map((f) => [f.id, String(f.version)]));
+const versionsNow = (server, pageId) => new Map([[pageId, String(server.state.projects.get(pageId).version)], ...server.filesOf(pageId).map((f) => [f.id, String(f.version)])]);
 const PAGE_FILE = 'src/pages/page.tsx';
 
 test('deploy: the record keeps the version of every file row of each page as it was right after its publish — and an unchanged rebuild reads them all in ONE request and publishes nothing', async () => {
@@ -2842,7 +2842,7 @@ test('deploy: a record with no versions — one of the earlier format, or one ma
     let from = server.requests.length;
     await rebuildPages(spec, appDir, server, ids);
     assert.deepStrictEqual([requestsOf(server, from).changeSets, requestsOf(server, from).publishes], [0, 2], 'both pages are published: nothing says their files are as they were');
-    assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).schemaVersion, 2, 'and the record is of the current format now');
+    assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).schemaVersion, 3, 'and the record is of the current format now');
     for (const id of Object.values(ids)) assert.deepStrictEqual(publishedOf(spec, appDir).get(id).files, versionsNow(server, id));
 
     from = server.requests.length;
@@ -2973,9 +2973,9 @@ test('deploy: a page another writer publishes over at any point while the build 
         return readVersions(ids);
       };
       const readCopy = genpage.publishedDiffers;
-      genpage.publishedDiffers = async (id, args) => {
+      genpage.publishedDiffers = async (id, args, expected) => {
         if (!done && when === 'while') await act(id);
-        return readCopy(id, args);
+        return readCopy(id, args, expected);
       };
       const warnings = [];
       const first = await buildPages(spec, appDir, genpage, { warn: (m) => warnings.push(m) });
@@ -3008,12 +3008,12 @@ test('deploy: a published copy that cannot be read back is not recorded — the 
     assert.strictEqual(typeof genpage.publishedDiffers, 'function', 'the backend can read a page\'s published copy back');
     const readCopy = genpage.publishedDiffers;
     let reads = 0;
-    genpage.publishedDiffers = async (id, args) => {
+    genpage.publishedDiffers = async (id, args, expected) => {
       // The service refuses the reads of the first page's files while its copy is read back — and only then: the SDK's own check of the publish is over, and the next page's is not under way.
       reads += 1;
-      if (reads > 1) return readCopy(id, args);
+      if (reads > 1) return readCopy(id, args, expected);
       server.failOn = (method, requestPath) => (method === 'GET' && /\/filecontent\/\$value/.test(requestPath) ? 503 : undefined);
-      try { return await readCopy(id, args); } finally { server.failOn = undefined; }
+      try { return await readCopy(id, args, expected); } finally { server.failOn = undefined; }
     };
     const warnings = [];
     const first = await buildPages(spec, appDir, genpage, { warn: (m) => warnings.push(m) });
@@ -3848,3 +3848,191 @@ test('deploy: a listing of the environment\'s pages that fails is judged by the 
   }
 });
 
+// ── The record certifies the runtime that was published, and the row that names the page ────────────────────────────────────────────────────────────
+// What the record says is: this content was published, and the page's rows have not moved since. Two things the proof of it used to miss. (1) The compiled output — what actually runs — was not compared: another
+// writer that published other compiled bytes under the SAME source, and put the original back as a draft, left a page whose draft equalled the file, whose source matched and whose versions agreed twice, so every
+// rebuild skipped it while it ran the other writer's bytes. The build now asks the backend for the hash of the compiled output the draft held when it published (`runtimeEvidence`), and the published copy read
+// back must hold it. (2) The page's own row — its name — is not one of its files: a rename inside the two reads of the file versions moved none of them. The row's version is read beside the files', in the proof
+// and in every later check. And a record the earlier proof wrote (schema 2) can no longer vouch for anything: it is read as a record with no versions, and the page is proved again.
+const publishedText = (server, pageId, file) => Buffer.from(server.publishedPages.get(pageId).files.find((f) => f.filename === file).content).toString('utf8');
+
+test('deploy: a page whose COMPILED OUTPUT alone was published over by another writer is not recorded as published — the record certifies the runtime that runs, not only the source', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const gp = realPageBackend(server);
+  const other = realPageBackend(server);
+  try {
+    let target = null;
+    let original = null;
+    const readVersions = gp.fileVersions;
+    gp.fileVersions = async (ids) => {
+      if (target === null) {
+        target = ids[0];
+        original = server.rowText(target, COMPILED_FILE);
+        const different = original.replace('"Alpha"', '"Other published runtime"');
+        assert.notStrictEqual(different, original, 'the compiled output of the fixture names the page');
+        // Another writer saves other compiled bytes under the SAME source and publishes them, then puts the original bytes back as a draft: the source and the settings never change.
+        server.otherWorkspaceDraft(target, COMPILED_FILE, different);
+        assert.strictEqual((await other.update(target, { source: server.rowText(target, PAGE_FILE) })).publish.kind, 'verified');
+        server.otherWorkspaceDraft(target, COMPILED_FILE, original);
+      }
+      return readVersions(ids);
+    };
+    const warnings = [];
+    const first = await buildPages(spec, appDir, gp, { warn: (m) => warnings.push(m) });
+    const ids = { ...first.created.pages };
+    assert.strictEqual(target, ids.alpha);
+    assert.match(publishedText(server, target, COMPILED_FILE), /Other published runtime/, 'what runs is the other writer\'s compiled output, and the draft holds the original');
+    assert.strictEqual(server.rowText(target, COMPILED_FILE), original);
+    const entry = publishedOf(spec, appDir).get(target);
+    assert.ok(!entry || entry.files === null, 'so the page is not recorded with versions');
+    assert.ok(publishedOf(spec, appDir).get(ids.beta).files, 'the page next to it, which nobody touched, is recorded');
+    assert.ok(warnings.some((m) => /page "Alpha"/.test(m) && /compiled output/.test(m) && /published again from elsewhere/.test(m)), `the build said why: ${warnings.join(' | ')}`);
+
+    const before = server.published.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(server.published.slice(before), [target], 'the next build publishes that page, and only that page');
+    assert.strictEqual(publishedText(server, target, COMPILED_FILE), original, 'and what runs is the original compiled output again');
+    const after = server.published.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(server.published.length, after, 'after which the page is left alone');
+  } finally {
+    await other.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: a page another writer RENAMED inside the proof — published, and the draft put back — is not recorded as published, though no file row moved', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const gp = realPageBackend(server);
+  const other = realPageBackend(server);
+  try {
+    const readCopy = gp.publishedDiffers;
+    let target = null;
+    gp.publishedDiffers = async (id, args, expected) => {
+      const answer = await readCopy(id, args, expected);
+      if (target === null) {
+        target = id;
+        const files = server.filesOf(id).map((f) => [f.id, f.version]);
+        // After the published copy was read, another writer renames the page and publishes it, and puts the name back as a draft. Its publish moves no file row: the content did not change.
+        assert.strictEqual((await other.update(id, { source: server.rowText(id, PAGE_FILE), name: 'Other published name' })).publish.kind, 'verified');
+        const draft = server.state.projects.get(id);
+        draft.name = args.name;
+        draft.etag = server.nextEtag();
+        assert.deepStrictEqual(server.filesOf(id).map((f) => [f.id, f.version]), files, 'a rename moves no file row\'s version, so the two reads of the files agree');
+      }
+      return answer;
+    };
+    const first = await buildPages(spec, appDir, gp);
+    const ids = { ...first.created.pages };
+    assert.strictEqual(target, ids.alpha);
+    assert.strictEqual(server.publishedPages.get(target).project.name, 'Other published name', 'what runs is under the other writer\'s name, and the draft is named as the spec says');
+    const entry = publishedOf(spec, appDir).get(target);
+    assert.ok(!entry || entry.files === null, 'so the page is not recorded with versions');
+    const before = server.published.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(server.published.slice(before), [target], 'the next build publishes that page, and only that page');
+    assert.strictEqual(server.publishedPages.get(target).project.name, 'Alpha', 'under the name the spec gives it');
+  } finally {
+    await other.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: a page renamed from elsewhere AFTER it was recorded is published again — the record\'s check reads the page\'s own row, as the proof does', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const other = realPageBackend(server);
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    assert.ok(publishedOf(spec, appDir).get(ids.alpha).files.has(ids.alpha), 'the record holds the version of the page\'s own row, keyed by the page\'s id');
+    assert.strictEqual((await other.update(ids.alpha, { source: server.rowText(ids.alpha, PAGE_FILE), name: 'Renamed elsewhere' })).publish.kind, 'verified');
+    const draft = server.state.projects.get(ids.alpha);
+    draft.name = 'Alpha';
+    draft.etag = server.nextEtag();
+    const before = server.published.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(server.published.slice(before), [ids.alpha], 'the page that was renamed is published again, and the one beside it is not');
+    assert.strictEqual(server.publishedPages.get(ids.alpha).project.name, 'Alpha');
+    const after = server.published.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(server.published.length, after, 'and then it is left alone');
+  } finally {
+    await other.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// What the proof cannot read, it does not certify. Each of these leaves a page unrecorded and costs the next build one publish of it — never a wrong skip.
+test('deploy: a page whose own row\'s version cannot be read, or whose publish gave no evidence of the compiled output, is not recorded — the next build publishes it and records it', async () => {
+  const ways = {
+    'the row\'s version cannot be read': (gp) => { gp.projectVersions = async () => ({ ok: false, error: 'unavailable' }); },
+    'the backend cannot read the row\'s version': (gp) => { gp.projectVersions = undefined; },
+    'the publish gave no evidence of the compiled output': (gp) => {
+      for (const verb of ['create', 'update']) {
+        const original = gp[verb];
+        gp[verb] = async (...args) => { const done = await original(...args); delete done.runtimeSha256; return done; };
+      }
+    },
+    'the backend answers without the compiled output it read — it did not compare the runtime': (gp) => {
+      const original = gp.publishedDiffers;
+      gp.publishedDiffers = async (id, args) => original(id, args);
+    },
+  };
+  for (const [what, impair] of Object.entries(ways)) {
+    const { appDir, spec } = twoPageApp();
+    const server = new FakeGenPageServer();
+    try {
+      const gp = realPageBackend(server);
+      impair(gp);
+      const first = await buildPages(spec, appDir, gp);
+      const ids = { ...first.created.pages };
+      for (const id of Object.values(ids)) {
+        const entry = publishedOf(spec, appDir).get(id);
+        assert.ok(!entry || entry.files === null, `${what}: ${id} is not recorded with versions`);
+      }
+      const before = server.published.length;
+      await rebuildPages(spec, appDir, server, ids);
+      assert.deepStrictEqual(server.published.slice(before).sort(), Object.values(ids).sort(), `${what}: the next build publishes both pages`);
+      const after = server.published.length;
+      await rebuildPages(spec, appDir, server, ids);
+      assert.strictEqual(server.published.length, after, `${what}: and records them, so the build after that publishes nothing`);
+      for (const id of Object.values(ids)) assert.ok(publishedOf(spec, appDir).get(id).files.size >= 5, `${what}: with the rows' versions`);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
+test('deploy: a record the earlier proof wrote (schema 2) does not skip a publish — it is read as a record with no versions, so the page is proved again', async () => {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const other = realPageBackend(server);
+  try {
+    const first = await buildPages(spec, appDir, realPageBackend(server));
+    const ids = { ...first.created.pages };
+    const alphaText = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+    // Another writer publishes other content and puts the build's content back as a draft: the draft is the file, and the page that runs is not.
+    await publishOver(server, other, ids.alpha, alphaText.replace('>Alpha<', '>Somebody else<'));
+    // What the earlier proof recorded for such a page: this build's hash, with the versions of the FILE rows as they were by then (it read them once, after the publish, and nothing else).
+    const pages = {};
+    for (const id of Object.values(ids)) {
+      pages[id] = { fingerprint: publishedOf(spec, appDir).get(id).fingerprint, files: Object.fromEntries(server.filesOf(id).map((f) => [f.id, String(f.version)])) };
+    }
+    const { environmentFingerprint } = require('../lib/page-ownership-records.js');
+    const workspace = path.join(appDir, '.maker-workspace');
+    fs.writeFileSync(publishedRecordPath(workspace, appUniqueName(spec), BUILD_ENV), `${JSON.stringify({ schemaVersion: 2, environmentFingerprint: environmentFingerprint(BUILD_ENV), appUniqueName: appUniqueName(spec).toLowerCase(), pages })}\n`);
+    assert.ok([...publishedOf(spec, appDir).values()].every((entry) => entry.files === null), 'a schema 2 record is read as one with no versions');
+
+    const before = server.published.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(server.published.slice(before).sort(), Object.values(ids).sort(), 'every page is proved again, which costs one publish each, once');
+    assert.strictEqual(publishedSource(server, ids.alpha), alphaText, 'and the page the other writer published over runs the file again');
+    const after = server.published.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.strictEqual(server.published.length, after, 'after which a rebuild publishes nothing');
+  } finally {
+    await other.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});

@@ -5,8 +5,8 @@
 //   genpage.enumerateEnv()                  every page of the environment, drafts included  -> { ok, ids, pages: [{ pageId, name }], error }
 //   genpage.enumeratePages(appId, options)  the pages an app's navigation names             -> { ok, pages: [{ pageId, name }], empty, error }
 //   genpage.read(pageId)                    one page as the SDK projects it                  -> { id, name, source, dataSources, model, … }
-//   genpage.create(args)                    mint an id (or take one), write, publish, prove  -> { pageId, name, publish, fingerprint, warnings }
-//   genpage.update(pageId, args)            write only what differs, publish, prove          -> { pageId, unchanged?, publish, fingerprint, warnings }
+//   genpage.create(args)                    mint an id (or take one), write, publish, prove  -> { pageId, name, publish, fingerprint, runtimeSha256?, warnings }
+//   genpage.update(pageId, args)            write only what differs, publish, prove          -> { pageId, unchanged?, publish, fingerprint, runtimeSha256?, warnings }
 //   genpage.placeInApp(appId, options)      pages into an app's navigation + their tables' default views into its components
 //   genpage.removeFromApp(appId, pageId, options)  a page's sub-area out of an app's navigation (the page itself stays)
 //   genpage.describe(pageId)                one page's identity and size, without needing a source -> { pageId, name, editable, dataSources, fileRows, conversationMessages }
@@ -15,7 +15,8 @@
 //   genpage.defaultViews(tables)            the default public view of each table                  -> { views: [{ table, viewId }], warnings }
 //   genpage.baseLanguage()                  the environment's base language (an LCID)
 //   genpage.fileVersions(pageIds)           the versionnumber of every file row of each page, from one plain read -> { ok, versions: Map<pageId, Map<fileRowId, version> | null>, error }
-//   genpage.publishedDiffers(pageId, args)  what a page's PUBLISHED copy differs from `args` in, read back with plain reads -> { ok, differing: [field…], fingerprint, error }
+//   genpage.projectVersions(pageIds)        the versionnumber of each page's own row, from one plain read          -> { ok, versions: Map<pageId, version | null>, error }
+//   genpage.publishedDiffers(pageId, args, expected)  what a page's PUBLISHED copy differs from `args` (and its compiled output from `expected.runtimeSha256`) in, read back with plain reads -> { ok, differing: [field…], fingerprint, error }
 //   genpage.dispose({ waitMs })             close the backend and remove its throwaway workspaces -> a promise of { left } (await it before the process ends)
 //   genpage.discardWorkspaces({ waitMs })   the same for the workspaces made so far, leaving the backend open for the next operation
 //
@@ -41,8 +42,8 @@ const { isDeepStrictEqual } = require('node:util');
 const { genPageSubArea, genPageSubAreaId } = require('./genpage-subarea.js');
 const { guardWorkspaceStorage } = require('./workspace-storage-guard.js');
 const { sha256 } = require('./hash.js');
-
 const { withCause } = require('./retry-policy.js');
+
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 // How many pages one read of their files' versions asks for: the pages are named in the query's filter, so this keeps the request line short however many pages an app has.
@@ -274,7 +275,7 @@ function bytesOf(body) {
 //   GET /uxagentprojectfiles(<file id>)/filecontent/$value                         the file's bytes: the source row, and `config.json` when the page has one
 // The settings are read as the SDK reads them: a JSON object (one leading byte order mark is ignored), `dataSources` a list of names, `model` a text, the two bindings as they are, every other key left alone.
 // A page laid out otherwise — no source row or two, a file that is not UTF-8, settings that are not those — is one this reads no content from. It throws, and what a caller takes from that is "cannot be told".
-async function readPublishedPage(sdk, id) {
+async function readPublishedPage(sdk, id, { runtime = false } = {}) {
   const client = sdk.dataverse;
   if (!client || typeof client.get !== 'function') throw genpageError('the SDK has no Dataverse client to read the published layer with', { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
   const get = async (path, what) => {
@@ -316,7 +317,39 @@ async function readPublishedPage(sdk, id) {
     }
     for (const key of ['connectorBindings', 'actionBindings']) if (key in config) page[key] = config[key];
   }
+  // `runtime`: the hash of the same copy's compiled output too (`runtimeSha256`, null for a copy that has none), from the listing of rows just read — a caller that compares the copy with evidence of what was published asks for it.
+  if (runtime) page.runtimeSha256 = await compiledOutputSha256(sdk, id, { rows: rows || [] });
   return page;
+}
+
+// The filetype of a page's COMPILED output row: the one after the text rows (TEXT_ROW_TYPE) — the bytes the runtime serves. The SDK writes it with the source, and a publish copies it to the published layer.
+const COMPILED_ROW_TYPE = TEXT_ROW_TYPE + 1;
+
+// The hash of the bytes of a page's compiled-output row as one layer serves them — the DRAFT (`unpublished`: the header `MSCRM.IncludeUnpublished`, which is what makes a read answer the draft) or the PUBLISHED layer
+// (a plain read) — or null when the page has no such row, or it has no readable content. What the build certifies is a RUNTIME, and the source and the settings do not say what runs: another writer that published other
+// compiled bytes under the SAME source, and put the original back as a draft, left a page whose draft, source and file versions all agreed with the file while the page that ran was theirs. Two plain reads:
+//   GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id>     { "value": [ { "uxagentprojectfileid": "…", "filename": "src/pages/page.compiled", "filetype": 200000001 }, … ] }
+//   GET /uxagentprojectfiles(<file id>)/filecontent/$value                                                               the bytes (a 404 is a row with no content)
+// A read that fails throws, which a caller takes as "cannot be told" — never as "there is none". `rows` are the rows of the page's files when the caller has just listed them (the published copy's read does): the listing is then not made again.
+async function compiledOutputSha256(sdk, id, { unpublished = false, rows: listed } = {}) {
+  const client = sdk.dataverse;
+  if (!client || typeof client.get !== 'function') throw genpageError('the SDK has no Dataverse client to read the compiled output with', { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+  const options = unpublished ? { headers: { 'MSCRM.IncludeUnpublished': 'true' } } : undefined;
+  const get = async (path, what) => {
+    const response = options ? await client.get(path, options) : await client.get(path);
+    if (!response || (response.status !== 404 && (response.status < 200 || response.status >= 300))) {
+      throw genpageError(`${what}: HTTP ${response && response.status}`, { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+    }
+    return response;
+  };
+  const rows = listed || (await get(`/uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq ${id}`, 'the page\'s files')).body?.value;
+  const compiled = (Array.isArray(rows) ? rows : []).filter((row) => row && Number(row.filetype) === COMPILED_ROW_TYPE && typeof row.filename === 'string' && row.filename.includes('page.compiled'));
+  if (compiled.length !== 1) return null;
+  const fileId = String(compiled[0].uxagentprojectfileid || '').replace(/[{}]/g, '').toLowerCase();
+  if (!GUID_RE.test(fileId)) return null;
+  const content = await get(`/uxagentprojectfiles(${fileId})/filecontent/$value`, 'the compiled output');
+  const bytes = content.status === 404 ? null : bytesOf(content.body);
+  return bytes ? sha256(bytes) : null;
 }
 
 // Whether a page read from the environment holds what one of the creates sent under its id sent: its name, and its source. `sent` is [{ name, sourceSha256 }] —
@@ -587,6 +620,7 @@ function makeGenpageSdk(env, deps = {}) {
   //   'verified'      the published projection serves exactly what was saved
   //   'unverifiable'  the publish was submitted but the published projection does not show the page yet (PublishXml is asynchronous)
   //   'failed'        the publish was refused
+  // The answer carries the failure itself as a non-enumerable `cause` (withCause, retry-policy.js) when there was one — the SDK's reported `publish.error`, or what the call threw.
   async function publish(sdk, type, id, options) {
     try {
       const outcome = await sdk.publishArtifact(type, id, options);
@@ -598,6 +632,17 @@ function makeGenpageSdk(env, deps = {}) {
   }
 
   const label = (name, id) => (name ? `"${name}" (${id})` : String(id));
+  // The hash of the compiled output the page's DRAFT holds right now — read just BEFORE the publish, so it is what the publish copies — for a caller that asked (`runtimeEvidence: true`) because it keeps a record of what it
+  // published and certifies the RUNTIME in it (lib/page-publish-records.js; `publishedDiffers` compares the published copy with it). It is evidence and nothing more: a read that fails, or a page with no compiled row, answers
+  // `undefined`, and the caller then has nothing to certify with.
+  async function runtimeEvidenceOf(sdk, id, args) {
+    if (!args || args.runtimeEvidence !== true) return undefined;
+    try {
+      return (await compiledOutputSha256(sdk, id, { unpublished: true })) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
   // The warnings a finished write carries: the SDK's own, and what a publish that could not be proven says.
   const warningsOf = (pushed, published, who) => [
     ...((pushed && pushed.result && pushed.result.warnings) || []),
@@ -620,7 +665,6 @@ function makeGenpageSdk(env, deps = {}) {
     },
 
     // The pages the navigation of an app names. `name` is the navigation TITLE, not the page's own name (a rename of the page
-  // The answer carries the failure itself as a non-enumerable `cause` (withCause, retry-policy.js) when there was one — the SDK's reported `publish.error`, or what the call threw.
     // leaves the title as it was), so a listed name is never evidence of what the page is called.
     // `includeUnpublished` reads the app's SAVED navigation (what the designer holds, the latest the maker made); without it the
     // PUBLISHED one (appmodule -> sitemap, as the build and verify read it). An app that was never published has no published
@@ -659,7 +703,9 @@ function makeGenpageSdk(env, deps = {}) {
     },
 
     // CREATE: mint the page's id here, write it as one atomic change set, publish it, and prove the published copy.
-    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, pageId, sentBefore, caller, beforeSend }
+    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, pageId, sentBefore, caller, beforeSend, runtimeEvidence }
+    //   `runtimeEvidence: true` makes the result carry `runtimeSha256`, the hash of the compiled output the draft held when the page was published (read just before the publish), for a caller that records what it published
+    //   and wants the record to certify the runtime that was published and not only its source (`publishedDiffers`'s `expected`). Without it nothing more is read.
     //   `source` is the text the caller checked (sourceText turns the bytes of a file into it, once); bytes given here are decoded the
     //   same way, a string is used exactly as it is.
     //   `pageId` is an id to create the page under instead of a new one — a caller RESUMING a create that did not finish passes the id it
@@ -767,13 +813,13 @@ function makeGenpageSdk(env, deps = {}) {
             const differing = edits.map((e) => e.key);
             let updated;
             try {
-              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile });
+              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence });
             } catch (error) {
               // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
               throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });
             }
             return {
-              pageId: id, name, publish: updated.publish, fingerprint,
+              pageId: id, name, publish: updated.publish, fingerprint, ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}),
               warnings: [`the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
             };
           }
@@ -798,12 +844,13 @@ function makeGenpageSdk(env, deps = {}) {
         pushed = await pushOnce(sdk, id);
       }
 
+      const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, name, publish: published, fingerprint, warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
+      return { pageId: id, name, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
     },
 
     // UPDATE: read the page, write only what differs from it, record the turn, publish, and prove the published copy.
-    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, caller, appId, sourceFile, publishedFingerprint }
+    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, caller, appId, sourceFile, publishedFingerprint, runtimeEvidence } (`runtimeEvidence`: see create)
     //   A field the caller leaves out (`undefined`) is left alone — an omitted data-source list, model, name or binding list is the
     //   page's own, not an instruction to clear it; `[]` clears a list. The page's FIRST prompt is kept and the new one is recorded
     //   as a turn of its conversation (pac overwrote the first prompt on every upload).
@@ -852,8 +899,9 @@ function makeGenpageSdk(env, deps = {}) {
         if (typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === fingerprint) {
           return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, and the caller recorded that this content was published' }, fingerprint, warnings: [] };
         }
+        const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
         const published = await publish(sdk, 'genPage', id, { verify: true });
-        return { pageId: id, unchanged: true, publish: published, fingerprint, warnings: warningsOf(null, published, `page ${who()}`) };
+        return { pageId: id, unchanged: true, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: warningsOf(null, published, `page ${who()}`) };
       }
 
       // Where to look before an update that may have landed is run again.
@@ -926,8 +974,9 @@ function makeGenpageSdk(env, deps = {}) {
         pushed = await pushOnce(sdk, id);
       }
 
+      const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, publish: published, fingerprint, warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
+      return { pageId: id, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
     },
 
     // Place pages into an app that exists, as the app designer does: each page becomes a sub-area of the app's navigation (the shape
@@ -1275,14 +1324,56 @@ function makeGenpageSdk(env, deps = {}) {
       return { ok: true, versions: new Map([...versions].map(([id, files]) => [id, unknown.has(id) || !files.size ? null : files])) };
     },
 
+    // The versionnumber of each page's OWN row (`uxagentprojects`), read as `fileVersions` reads the files' — one plain query per PAGE_VERSION_CHUNK pages, followed to its last page:
+    //   GET /uxagentprojects?$select=uxagentprojectid,versionnumber&$filter=uxagentprojectid eq <id> or uxagentprojectid eq <id>
+    //   { "value": [ { "uxagentprojectid": "…", "versionnumber": 1234500 }, … ] }
+    // A file row cannot show what the page's row holds — its NAME is there, not in a file — so a page renamed and published from elsewhere moves no file's version. The build's publish record keeps this version
+    // beside the files' (lib/page-publish-records.js): a write to the row moves it as a write to a file moves that file's, and the SAME plain read must be used when it is recorded and when it is checked.
+    //   -> { ok: true, versions: Map<page id (lower case), version (digits) | null> } | { ok: false, error }
+    // A page whose row cannot be taken as one known version is `null`, "not known": no row came back (a page that has no published copy has none in the plain read), a row listed twice, a version that is no whole
+    // number or too large to be one exactly. A read that fails is `ok: false`, never an empty answer.
+    async projectVersions(pageIds) {
+      const ids = [...new Set((pageIds || []).map((id) => String(id).toLowerCase()))];
+      const bad = ids.find((id) => !GUID_RE.test(id));
+      if (bad !== undefined) return { ok: false, error: `'${bad}' is not a page id` };
+      const versions = new Map(ids.map((id) => [id, null]));
+      const seen = new Set();
+      const unknown = new Set();
+      try {
+        const sdk = await getSdk();
+        for (let at = 0; at < ids.length; at += PAGE_VERSION_CHUNK) {
+          const chunk = ids.slice(at, at + PAGE_VERSION_CHUNK);
+          const rows = await sdk.queryRecords('uxagentproject', {
+            select: ['uxagentprojectid', 'versionnumber'],
+            filter: chunk.map((id) => `uxagentprojectid eq ${id}`).join(' or '),
+            paginate: true,
+          });
+          for (const row of rows || []) {
+            const id = row && typeof row.uxagentprojectid === 'string' ? row.uxagentprojectid.replace(/[{}]/g, '').toLowerCase() : '';
+            if (!versions.has(id)) continue;
+            const version = typeof row.versionnumber === 'number' ? (Number.isSafeInteger(row.versionnumber) && row.versionnumber >= 0 ? String(row.versionnumber) : '') : row.versionnumber;
+            if (seen.has(id) || typeof version !== 'string' || !/^[0-9]{1,19}$/.test(version)) unknown.add(id);
+            else versions.set(id, version);
+            seen.add(id);
+          }
+        }
+      } catch (error) {
+        return { ok: false, error: `could not read the versions of the pages' rows: ${messageOf(error)}`, ...codeOf(error) };
+      }
+      return { ok: true, versions: new Map([...versions].map(([id, version]) => [id, unknown.has(id) ? null : version])) };
+    },
+
     // What the PUBLISHED copy of a page differs from `args` in: the content a caller that keeps a record of what it published (the build: lib/page-publish-records.js) needs to see held before it records a publish.
     //   args: what `update` takes — only the content fields count (the source, and the name, data sources, model and bindings given); an omitted one is the page's own and cannot differ
-    //   -> { ok: true, differing: [key…], fingerprint } | { ok: false, error }
+    //   expected: `{ runtimeSha256 }` — the hash of the compiled output the DRAFT held when it was published (what `create` and `update` answer with `runtimeEvidence: true`); the published copy's compiled output must hash to it
+    //   -> { ok: true, differing: [key…], fingerprint, runtimeSha256? } | { ok: false, error }
     // `differing` names the fields whose published value is not the one asked for, in `planEdits`' own words — the one definition of "holds that content", made on the published layer where `update` makes it on the
-    // draft — and is empty when the published copy holds the content. `fingerprint` is `contentFingerprint` of the content that was asked about, so the caller can hold the answer to the hash it keeps. `ok: false` is
+    // draft — and, given `expected.runtimeSha256`, `compiled output` when the published copy's compiled bytes are not those (or it has none): the runtime is what a record certifies, and the source does not say what
+    // runs. It is empty when the published copy holds the content. `fingerprint` is `contentFingerprint` of the content that was asked about, so the caller can hold the answer to the hash it keeps; and given evidence the
+    // answer carries `runtimeSha256`, the hash of the compiled output of the published copy it read (null when it has none), so the caller can hold it to the evidence too. `ok: false` is
     // "cannot be told", and never "holds it": a page with no published copy, a read that fails, a page laid out otherwise (see readPublishedPage). The reads are one after another, not one state: a caller that needs
-    // them as one reads `fileVersions` before and after, and takes the answer only when those two agree.
-    async publishedDiffers(pageId, args = {}) {
+    // them as one reads `fileVersions` and `projectVersions` before and after, and takes the answer only when those agree.
+    async publishedDiffers(pageId, args = {}, expected = {}) {
       if (!GUID_RE.test(String(pageId || ''))) return { ok: false, error: `'${pageId}' is not a page id` };
       const id = String(pageId).toLowerCase();
       let fields;
@@ -1292,9 +1383,14 @@ function makeGenpageSdk(env, deps = {}) {
         return { ok: false, error: messageOf(error), ...codeOf(error) };
       }
       try {
-        const page = await readPublishedPage(await getSdk(), id);
+        const sdk = await getSdk();
+        const wantsRuntime = !!expected && typeof expected.runtimeSha256 === 'string';
+        const page = await readPublishedPage(sdk, id, { runtime: wantsRuntime });
         if (page === null) return { ok: false, error: `page ${id} has no published copy` };
-        return { ok: true, differing: planEdits(fields, page).map((edit) => edit.key), fingerprint: contentFingerprint(fields) };
+        const differing = planEdits(fields, page).map((edit) => edit.key);
+        if (wantsRuntime && page.runtimeSha256 !== expected.runtimeSha256) differing.push('compiled output');
+        // Given evidence, the answer says which compiled output it read (`runtimeSha256`, null for a copy with none), so a caller can see that the comparison was made: an answer that does not carry it was not about the runtime.
+        return { ok: true, differing, fingerprint: contentFingerprint(fields), ...(wantsRuntime ? { runtimeSha256: page.runtimeSha256 } : {}) };
       } catch (error) {
         return { ok: false, error: `could not read the published copy of page ${id}: ${messageOf(error)}`, ...codeOf(error) };
       }
@@ -1380,7 +1476,7 @@ function makeGenpageSdk(env, deps = {}) {
   // The operations are counted while they run: what release() waits for on an SDK it does not own. A closed backend refuses them in getSdk,
   // which the two listings reach inside their own try — a listing never rejects (a listing that cannot be read is `{ ok: false, error }`, and a
   // caller decides between creating a page and reusing one on that), so on a closed backend it answers exactly that.
-  for (const name of ['enumerateEnv', 'enumeratePages', 'read', 'create', 'update', 'placeInApp', 'removeFromApp', 'describe', 'delete', 'runtimeTypes', 'defaultViews', 'baseLanguage', 'fileVersions', 'publishedDiffers']) {
+  for (const name of ['enumerateEnv', 'enumeratePages', 'read', 'create', 'update', 'placeInApp', 'removeFromApp', 'describe', 'delete', 'runtimeTypes', 'defaultViews', 'baseLanguage', 'fileVersions', 'projectVersions', 'publishedDiffers']) {
     const operation = api[name];
     api[name] = (...args) => {
       const run = operation(...args);

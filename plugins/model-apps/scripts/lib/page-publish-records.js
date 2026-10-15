@@ -8,19 +8,21 @@
 //
 // After a publish that was SEEN to take effect (`publish.kind` `verified`) it records, per page, two things:
 //   fingerprint  the hash of the content the page was published with (`contentFingerprint`): what the build WROTE, which the next `update` compares with what the page holds
-//   files        the versionnumber of EVERY file row of the page, as the PLAIN collection answers it (genpage.fileVersions) on both sides of a read-back of the page's PUBLISHED copy that held that content: what the page's published copy WAS
-// A page skips its publish only when the page holds that content (the fingerprint, in `update`) AND the file rows read now are exactly the recorded set with the recorded versions
+//   files        the versionnumber of EVERY file row of the page AND of the page's own row (keyed by the page's id), as the PLAIN collection answers it (genpage.fileVersions and genpage.projectVersions) on both sides
+//                of a read-back of the page's PUBLISHED copy that held that content: what the page's published copy WAS
+// A page skips its publish only when the page holds that content (the fingerprint, in `update`) AND the rows read now are exactly the recorded set with the recorded versions
 // (`sameFileVersions`, in the build). The fingerprint alone says what this workspace sent; it cannot say that nobody has published anything else since. A page published from another
 // workspace, another machine or Maker, and then put back to the file's content as a draft, holds the content and is NOT live — and the fingerprint matches. The versions are what moved.
 //
 // The versions are recorded only when they provably belong to a published copy that holds that content. One read of them after the publish was seen to take effect was not enough: a writer that published other
 // content, and put the build's content back as a draft, in the moments between the SDK's check of the publish and that read left the versions of ITS publication beside this build's hash — and every rebuild after
 // that trusted the pair, found the draft equal to the file, and skipped the page's publish while the page that runs was the other writer's, each of them reporting success. So the build reads the versions, reads the
-// page's PUBLISHED copy back (genpage.publishedDiffers: plain reads of the published layer, compared field by field with the content it sent — the source, the name, the data sources, the model and the bindings), and reads
-// the versions again. It records them when the two reads are the same set of rows at the same versions and the copy holds the content, and records none otherwise: a copy that differs (it was published again from
-// elsewhere), a set that moved while the copy was read, a read that failed, a page laid out otherwise. An entry with no versions never skips a publish. What the proof cannot see: the copy is compared on the content the
-// hash is of, so the compiled output, the first prompt and any other file are not part of it — a change to one of those, published from elsewhere in the moments before the first read, is not seen, where a change
-// after it moves a version and is.
+// page's PUBLISHED copy back (genpage.publishedDiffers: plain reads of the published layer, compared field by field with the content it sent — the source, the name, the data sources, the model and the bindings — and
+// with the compiled output the draft held when it was published, by hash), and reads the versions again. It records them when the two reads are the same set of rows at the same versions and the copy holds the
+// content, and records none otherwise: a copy that differs (it was published again from elsewhere), a set that moved while the copy was read, a read that failed, a page laid out otherwise, a publish that gave no evidence
+// of the compiled output it published, a page whose own row's version could not be read. An entry with no versions never skips a publish. What the proof cannot see: the first prompt and any other file that is not the
+// source, the settings or the compiled output are not compared with anything — a change to one of those, published from elsewhere in the moments before the first read, is not seen, where a change after it moves a
+// version and is.
 //
 // MEASURED on a real environment (a page is a `uxagentprojects` row and its `uxagentprojectfiles` rows; `versionnumber` read with a plain GET):
 //   1. Publishing new content moves the versionnumber of each file row whose content changed; a file row whose content did not change keeps its own. The PAGE row's versionnumber does not move for
@@ -30,23 +32,27 @@
 //   3. Publishing that draft moves it again; both layers then agree (componentstate 0). Nothing moves on its own.
 // So a file row's version in the PLAIN read changes when anyone changes the file — saved or published — and stays put otherwise. The layer matters only in being the SAME one: the record is made
 // with the plain read and checked with the plain read (genpage.fileVersions is the one reader), because the two layers answer different numbers for a draft (fact 2) and would never compare equal.
+// The page row is read the same way, for what a file's version cannot show: its name lives in the row, not in a file, so a page renamed from elsewhere and published moves no file's version. A write to the row
+// is expected to move its versionnumber as a write to a file row moves a file's (fact 1 says an SDK update that wrote the row moved it), and the record keeps it beside the files', so a rename that
+// came between the reads of the proof, or after it, shows as a moved version, as a changed file does.
 //
 // Everything that is not a clear "yes" is a "no", and a "no" costs one publish: no file, a file that cannot be read or is damaged, one written for another app or environment, a page with
 // no entry, an entry for other content (the spec changed, or the page's publish did not finish after it was written), an entry with no versions (one in the format an earlier build of this release wrote, or one whose
-// versions could not be proved to be those of a published copy that held the content, above), a read of the versions that fails or cannot be taken as one consistent set, a file row that was added, removed or moved, and a publish that
-// was accepted but not seen to take effect. So the file is a cache that can only ever be wrong in one direction — a publish that did not need to happen — with one residual: what the
-// versions of the FILE rows cannot show. The page row's own fields (its name, kept in the project row, not in a file) are not covered, so a page renamed from elsewhere and published, then
-// renamed back as a draft, is not seen. Nor is a page that is published over from elsewhere after the build's one read of the versions, which is taken before the pages are looked at: the build after it finds the
-// version moved and publishes the page. The release before pages went through the SDK re-uploaded and re-published every page of a full rebuild (through the CLI), so the cost of a publish
-// per page was paid on every rebuild; this record is what removes it, and the residual above is what it costs.
+// versions could not be proved to be those of a published copy that held the content, above), a read of the versions that fails or cannot be taken as one consistent set, a row that was added, removed or moved, and a publish that
+// was accepted but not seen to take effect. So the file is a cache that can only ever be wrong in one direction — a publish that did not need to happen — with one residual: a page that is published over from elsewhere after
+// the build's one read of the versions, which is taken before the pages are looked at: the build after it finds the version moved and publishes the page. The release before pages went through the SDK re-uploaded and
+// re-published every page of a full rebuild (through the CLI), so the cost of a publish per page was paid on every rebuild; this record is what removes it, and the residual above is what it costs.
 //
 // One file per app and environment, beside the page-ownership records but not one of them — it grants and blocks nothing, and is not read by anything that decides what may be updated or
 // deleted — named by the hash of that pair, so another app or environment in the same folder has a file of its own:
 //   page-published.<64 hex>.json
-//   { "schemaVersion": 2, "environmentFingerprint": "<sha256 of the origin>", "appUniqueName": "contoso_app",
+//   { "schemaVersion": 3, "environmentFingerprint": "<sha256 of the origin>", "appUniqueName": "contoso_app",
 //     "pages": { "11111111-1111-4111-8111-111111111111": { "fingerprint": "<sha256 of the content published>",
-//                                                           "files": { "22222222-2222-4222-8222-222222222222": "1234567", … } } } }
-// A file of schema version 1 (the format an earlier build of this release wrote — no release shipped it: `"pages": { "<id>": "<sha256>" }`, no versions) is read as entries with no `files`, which never skip a publish.
+//                                                           "files": { "11111111-1111-4111-8111-111111111111": "1234500",
+//                                                                      "22222222-2222-4222-8222-222222222222": "1234567", … } } } }
+// (`files` holds the page's own row, under the page's id, and each of its file rows.) A file of schema version 1 or 2 — the formats the builds before this one wrote: version 1 `"pages": { "<id>": "<sha256>" }`, no
+// versions; version 2 versions of the file rows only, proved without the page's own row or the compiled output — is read as entries with no `files`, which never skip a publish: what they were proved against is not
+// what is proved now, and the one publish it costs each page is what finds a page that is published over from elsewhere in a way the old proof could not see.
 // Written atomically (a crash leaves the old file or the new one), so a half-written file is never read as a record.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -55,6 +61,9 @@ const { writeFileAtomic } = require('./apply-snapshot-store.js');
 const { environmentFingerprint, workspaceRoot } = require('./page-ownership-records.js');
 
 const PREFIX = 'page-published.';
+// The version of the format a record is written in, and the only one whose versions are trusted. 3: the versions include the page's own row and were proved against the compiled output as well as the source (see the
+// header). A record of an earlier schema can still be READ — for its fingerprints — but never skips a publish, so the schema is the proof's version: raise it whenever what the versions are proved against changes.
+const SCHEMA_VERSION = 3;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
 // A versionnumber is a 64-bit integer (Edm.Int64); it is kept as the digits it was read as, so no precision is lost on the way through JSON.
@@ -71,8 +80,8 @@ function publishedRecordPath(workspaceDir, appUniqueName, environment) {
   return recordFile(path.resolve(workspaceDir), environmentFingerprint(environment), String(appUniqueName || '').toLowerCase());
 }
 
-// The file rows of an entry as Map<row id, version>, or null when the entry has no usable set: absent, not an object, empty (a page always has file rows, so none is not a state anyone saw),
-// or with a key that is not a row id or a value that is not a version — the set is then not trusted at all, never trimmed to the rows that look right.
+// The rows of an entry as Map<row id, version> — the page's own row (under the page's id) and its file rows — or null when the entry has no usable set: absent, not an object, empty (a page always has file rows, so none is
+// not a state anyone saw), or with a key that is not a row id or a value that is not a version — the set is then not trusted at all, never trimmed to the rows that look right.
 function filesOf(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const entries = Object.entries(value);
@@ -85,8 +94,8 @@ function filesOf(value) {
   return files;
 }
 
-// The pages `appUniqueName` is known to have published in `environment`, as Map<page id (lower case), { fingerprint, files }>: `files` is Map<file row id, version> or null for an entry that
-// has none. It never throws and never fails a build: whatever stops the file from being read — a missing workspace, a link where the file should be, a damaged file — is an empty map,
+// The pages `appUniqueName` is known to have published in `environment`, as Map<page id (lower case), { fingerprint, files }>: `files` is Map<row id, version> or null for an entry that
+// has none (every entry of an earlier schema: see the header). It never throws and never fails a build: whatever stops the file from being read — a missing workspace, a link where the file should be, a damaged file — is an empty map,
 // which is "nothing is known to be published".
 function readPublishedPages(workspaceDir, appUniqueName, environment) {
   const known = new Map();
@@ -101,21 +110,22 @@ function readPublishedPages(workspaceDir, appUniqueName, environment) {
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1 || stat.size > MAX_BYTES) return known;
     const record = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (!record || (record.schemaVersion !== 1 && record.schemaVersion !== 2) || record.environmentFingerprint !== fingerprint || record.appUniqueName !== app
+    if (!record || (record.schemaVersion !== 1 && record.schemaVersion !== 2 && record.schemaVersion !== SCHEMA_VERSION) || record.environmentFingerprint !== fingerprint || record.appUniqueName !== app
       || !record.pages || typeof record.pages !== 'object' || Array.isArray(record.pages)) return known;
     for (const [id, entry] of Object.entries(record.pages)) {
       if (!GUID.test(id)) continue;
       if (record.schemaVersion === 1) {
         if (typeof entry === 'string' && HASH.test(entry)) known.set(id, { fingerprint: entry, files: null });
       } else if (entry && typeof entry === 'object' && typeof entry.fingerprint === 'string' && HASH.test(entry.fingerprint)) {
-        known.set(id, { fingerprint: entry.fingerprint, files: filesOf(entry.files) });
+        // The versions an earlier schema (2) recorded were proved against less — no page row, no compiled output — so they vouch for nothing now: the entry is kept for its fingerprint and never skips a publish.
+        known.set(id, { fingerprint: entry.fingerprint, files: record.schemaVersion === SCHEMA_VERSION ? filesOf(entry.files) : null });
       }
     }
   } catch { /* an unreadable record is "nothing is known": the pages are published, as they were before there was a record */ }
   return known;
 }
 
-// Replace the record of `appUniqueName` in `environment` with `published` (a Map of page id to { fingerprint, files }, `files` a Map<file row id, version> or absent). The caller keeps the whole map
+// Replace the record of `appUniqueName` in `environment` with `published` (a Map of page id to { fingerprint, files }, `files` a Map<row id, version> or absent). The caller keeps the whole map
 // and prunes it to the pages the app still has, so the file stays as small as the app. Throws what the write throws — the caller decides it is only a warning: a record that could not be
 // written costs the next build one publish per page.
 function writePublishedPages(workspaceDir, appUniqueName, environment, published) {
@@ -130,11 +140,11 @@ function writePublishedPages(workspaceDir, appUniqueName, environment, published
     const recorded = files ? filesOf(Object.fromEntries([...files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))) : null;
     pages[id] = { fingerprint: entry.fingerprint, ...(recorded ? { files: Object.fromEntries(recorded) } : {}) };
   }
-  writeFileAtomic(recordFile(root, fingerprint, app), `${JSON.stringify({ schemaVersion: 2, environmentFingerprint: fingerprint, appUniqueName: app, pages })}\n`);
+  writeFileAtomic(recordFile(root, fingerprint, app), `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, environmentFingerprint: fingerprint, appUniqueName: app, pages })}\n`);
 }
 
-// Whether the file rows read now are exactly the ones recorded, each with the version it had: the same rows, no more and no fewer, and no version moved. `recorded` and `current` are
-// Map<file row id, version>; anything else — no record, a read that was not one consistent set (`null`) — is not "the same", because a set nobody could read says nothing.
+// Whether the rows read now are exactly the ones recorded, each with the version it had: the same rows — the page's own and its files' — no more and no fewer, and no version moved. `recorded` and `current` are
+// Map<row id, version>; anything else — no record, a read that was not one consistent set (`null`) — is not "the same", because a set nobody could read says nothing.
 function sameFileVersions(recorded, current) {
   if (!(recorded instanceof Map) || !(current instanceof Map) || !recorded.size || recorded.size !== current.size) return false;
   for (const [id, version] of recorded) if (current.get(id) !== version) return false;

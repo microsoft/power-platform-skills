@@ -5827,6 +5827,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return await genpage.create({
             ...fields,
             caller: 'build',
+            // The hash of the compiled output the draft holds when the page is published, for the publish record: what is certified is the runtime, not only the source (`provedVersions`).
+            runtimeEvidence: true,
             ...(resumeIds.has(key) ? { pageId: resumeIds.get(key), sentBefore: resumeSent.get(key) } : {}),
             beforeSend: async (id, sent) => {
               sentUnder = id;
@@ -5977,43 +5979,63 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // published already (`publishedFingerprint`, genpage.update): the server cannot say whether an earlier run's publish of a page finished, and a page whose publish did not finish has to be
       // published by the next run. Without a record of its own that would publish EVERY unchanged page on EVERY rebuild — one PublishXml of several seconds each, ten pages ten publishes. So the build keeps the
       // record (lib/page-publish-records.js), written once a publish was SEEN to take effect (`verified`) and never otherwise: per page the hash of the content it was published with, and the versionnumber
-      // of each of its file rows, taken only from a published copy that was read back and found to hold that content (`provedVersions`, below).
+      // of each of its file rows and of its own row, taken only from a published copy that was read back and found to hold that content and the compiled output the draft held at the publish (`provedVersions`, below).
       // The hash says what this workspace SENT; it cannot say that nobody has published anything else since — another workspace, another machine or Maker publishing other content and then leaving the
-      // draft equal to the file would match it. The file rows' versions are what moves (measured: publishing new content, or a draft-only save, moves the version of each file row it changes; an unchanged row
-      // keeps its own), so the hash is handed to `update` only while the versions read NOW are exactly the recorded ones (`publishesStillStanding`, below). A page that is not in the record, is there with
-      // other content, has no versions (an earlier record, or a read that failed), or whose files were added, removed or moved — new, changed since, saved by a run whose publish failed or was not proven,
-      // changed from elsewhere, or a workspace that is new or cleared — is "not known to be published", and is published. A page a changed-only run leaves alone keeps its entry; the entry of a page the spec
+      // draft equal to the file would match it. The rows' versions are what moves (measured: publishing new content, or a draft-only save, moves the version of each file row it changes; an unchanged row
+      // keeps its own; the page's own row moves with a write to it, a rename), so the hash is handed to `update` only while the versions read NOW are exactly the recorded ones (`publishesStillStanding`, below). A page that is not in the record, is there with
+      // other content, has no versions (an earlier record, or a read that failed), or whose rows were added, removed or moved — new, changed since, saved by a run whose publish failed or was not proven,
+      // changed from elsewhere, renamed, or a workspace that is new or cleared — is "not known to be published", and is published. A page a changed-only run leaves alone keeps its entry; the entry of a page the spec
       // no longer binds is dropped when the next is written. A full rebuild of the release before pages went through the SDK re-uploaded and re-published every page; this is what spares an unchanged
       // page that, and what it cannot see is spelled out in the record's header.
       const publishedPages = readPublishedPages(opts.workspaceDir, appUnique, opts.env);
       let publishRecordWarned = false;
-      // The versions of a page's files that may go into the record: Map<file row id, version>, or null — "no versions", which costs the next build a publish and nothing else. The versions only mean "the published
+      // The versions of every row a page's record vouches for, as one Map<row id, version> per page: its file rows (genpage.fileVersions) and its OWN row, keyed by the page's id (genpage.projectVersions). The name is in the
+      // page's row and in none of its files, so a page renamed from elsewhere moves no file's version — the row's has to be read beside them. Map<page id, Map<row id, version> | null>: a page whose files or row could not be taken
+      // as one known set is `null`. A backend that cannot read the row's version at all, or a read that fails, is `{ ok: false }`: nothing is certified, or found to stand, on rows that could not be read.
+      const readRowVersions = async (ids) => {
+        if (typeof genpage.fileVersions !== 'function' || typeof genpage.projectVersions !== 'function') return { ok: false, error: 'the page backend cannot read them' };
+        const files = await genpage.fileVersions(ids);
+        if (!files.ok) return files;
+        const rows = await genpage.projectVersions(ids);
+        if (!rows.ok) return rows;
+        const versions = new Map();
+        for (const id of ids) {
+          const own = files.versions.get(id);
+          const row = rows.versions.get(id);
+          versions.set(id, own instanceof Map && typeof row === 'string' ? new Map([...own, [id, row]]) : null);
+        }
+        return { ok: true, versions };
+      };
+      // The versions of a page's rows that may go into the record: Map<row id, version>, or null — "no versions", which costs the next build a publish and nothing else. The versions only mean "the published
       // copy held this content while the files read so" when they belong to such a copy, and a read of them taken AFTER the SDK saw the publish take effect does not say that: a writer that published other content and
       // put this content back as a draft in between left the versions of ITS publication, with this build's hash beside them, and every rebuild then trusted the pair. So they are proved, in the order that proves them: the
-      // versions, then the page's PUBLISHED copy read back and compared with the content that was sent (`publishedDiffers`), then the versions again. They are recorded only when both reads of the versions are one
-      // consistent set and the same set — nothing moved while the copy was read — and the copy held the content: the versions are then those of a published copy that holds it, whoever published it. A copy that differs
-      // was published over from elsewhere and is said so; a read that fails, a set that moved or a backend that cannot read the copy back says nothing and records none, as a failed read of the versions never said anything.
-      const provedVersions = async (p, pageId, fields, fingerprint) => {
+      // versions, then the page's PUBLISHED copy read back and compared with the content that was sent (`publishedDiffers`) AND with the compiled output the draft held when it was published (`runtimeSha256`: the runtime is
+      // what is certified, and the source does not say what runs), then the versions again. They are recorded only when both reads of the versions are one
+      // consistent set and the same set — nothing moved while the copy was read, the page's own row (its name) included — and the copy held the content: the versions are then those of a published copy that holds it, whoever published it. A copy that differs
+      // was published over from elsewhere and is said so; a read that fails, a set that moved, a publish that gave no evidence of the compiled output, or a backend that cannot read the copy or the row back says nothing and records none, as a failed read of the versions never said anything.
+      const provedVersions = async (p, pageId, fields, fingerprint, runtimeSha256) => {
         try {
-          if (!fields || typeof genpage.fileVersions !== 'function' || typeof genpage.publishedDiffers !== 'function') return null;
-          const first = await genpage.fileVersions([pageId]);
+          if (!fields || typeof runtimeSha256 !== 'string' || typeof genpage.publishedDiffers !== 'function') return null;
+          const first = await readRowVersions([pageId]);
           const before = first.ok ? first.versions.get(pageId) : null;
           if (!before) return null;
-          const copy = await genpage.publishedDiffers(pageId, fields);
+          const copy = await genpage.publishedDiffers(pageId, fields, { runtimeSha256 });
           // `fingerprint` is the hash of the content the copy was compared with: it must be the hash the record keeps, or the answer is about other content.
           if (!copy.ok || copy.fingerprint !== fingerprint) return null;
           if (copy.differing.length) {
             if (typeof opts.warn === 'function') opts.warn(`page "${p.name}": its published copy, read back right after the publish, differs from what this build sent in its ${copy.differing.join(', ')} — it was published again from elsewhere — so it is not recorded as published, and the next build publishes it again`);
             return null;
           }
-          const second = await genpage.fileVersions([pageId]);
+          // The answer must carry the compiled output it read, and it must be the one the draft held: an answer that says nothing of it — a backend that did not compare the runtime — certifies nothing.
+          if (copy.runtimeSha256 !== runtimeSha256) return null;
+          const second = await readRowVersions([pageId]);
           return second.ok && sameFileVersions(before, second.versions.get(pageId)) ? before : null;
         } catch { return null; }
       };
       const rememberPublished = async (written, p, fields) => {
         if (!opts.workspaceDir || !written.publish || written.publish.kind !== 'verified' || typeof written.fingerprint !== 'string') return;
         const pageId = String(written.pageId).toLowerCase();
-        const files = await provedVersions(p, pageId, fields, written.fingerprint);
+        const files = await provedVersions(p, pageId, fields, written.fingerprint, written.runtimeSha256);
         publishedPages.set(pageId, { fingerprint: written.fingerprint, files });
         const bound = new Set(Array.from(keyToId.values(), (id) => String(id).toLowerCase()));
         try {
@@ -6028,14 +6050,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       };
       // The recorded publishes that still stand: Map<page id, fingerprint> for each page whose rows read now — its files' and its own — are exactly the recorded set with the recorded versions. ONE read for all of the pages
       // that have a record with versions. Anything else is absent from the map and costs the page a publish: a page with no versions in its record, a read that fails (said once), a page whose rows
-      // cannot be read as one consistent set, a row added, removed or moved. The read is the plain one both here and when the versions were recorded (genpage.fileVersions): see the record's header.
+      // cannot be read as one consistent set, a row added, removed or moved, a page renamed. The read is the plain one both here and when the versions were recorded (readRowVersions): see the record's header.
       const publishesStillStanding = async () => {
         const standing = new Map();
         const recorded = Array.from(keyToId.values(), (id) => String(id).toLowerCase()).filter((id) => publishedPages.has(id) && publishedPages.get(id).files);
         if (!recorded.length) return standing;
         let read;
         try {
-          read = typeof genpage.fileVersions === 'function' ? await genpage.fileVersions(recorded) : { ok: false, error: 'the page backend cannot read them' };
+          read = await readRowVersions(recorded);
         } catch (e) {
           read = { ok: false, error: String((e && e.message) || e) };
         }
@@ -6160,7 +6182,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
             // `publishedFingerprint` is what this workspace recorded about the page's last publish, handed over only while the page's files still read as they did right after it (`publishesStillStanding`):
             // a page that already holds this very content, and was not touched from elsewhere since, is not published again.
-            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
+            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', runtimeEvidence: true, publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
             // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
