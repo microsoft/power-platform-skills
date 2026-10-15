@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { withThrowawaySdk } = require('../lib/throwaway-sdk.js');
+const { workspaceParent } = require('../lib/temp-workspace.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
@@ -42,7 +43,7 @@ async function trackingFolders(body) {
   return folders;
 }
 
-test('make() builds SDKs over ONE folder under the OS temp directory, named by the prefix, for the origin, with ONE client — and the run\u2019s value is the answer', async () => {
+test('make() builds SDKs over ONE folder in the plugin\u2019s own folder of the OS temp directory, named by the prefix, for the origin, with ONE client — and the run\u2019s value is the answer', async () => {
   const { deps, made, clients } = stubs();
   let seen;
   const folders = await trackingFolders(async () => {
@@ -56,7 +57,8 @@ test('make() builds SDKs over ONE folder under the OS temp directory, named by t
   });
   assert.strictEqual(folders.length, 1);
   assert.strictEqual(seen.exists, true, 'the folder exists while the run is going');
-  assert.strictEqual(path.dirname(folders[0]), os.tmpdir());
+  assert.strictEqual(path.dirname(folders[0]), workspaceParent(), 'the folder is in the plugin\u2019s own folder of the temp directory (lib/temp-workspace.js), where a killed run\u2019s is found and removed by the next');
+  assert.strictEqual(path.dirname(workspaceParent()), os.tmpdir());
   assert.ok(path.basename(folders[0]).startsWith('probe-'), 'the prefix says whose folder it was');
   assert.deepStrictEqual(made.map((cfg) => cfg.workspaceStorage.dir), [folders[0], folders[0]], 'one folder for both');
   assert.deepStrictEqual(made.map((cfg) => cfg.instanceUrl), [ENV, ENV]);
@@ -110,7 +112,7 @@ test('an SDK the SDK module cannot make, a module that cannot be loaded and a cl
 test('apps.js, list-tables.js and list-languages.js make their SDK through the helper — none writes the folder lifecycle out again', () => {
   const { scriptsMatching } = require('./helpers/production-scripts.js');
   const users = scriptsMatching(/\bwithThrowawaySdk\(/);
-  const ownFolders = scriptsMatching(/\bmkdtempSync\b/);
+  const ownFolders = scriptsMatching(/\bmakeTempWorkspace\(/);
   for (const file of ['apps.js', 'list-tables.js', 'list-languages.js']) {
     assert.ok(users.includes(file), `${file} uses withThrowawaySdk`);
     assert.ok(!ownFolders.includes(file), `${file} makes no workspace folder of its own`);

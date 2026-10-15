@@ -168,7 +168,7 @@ test('constructs the download SDK on a temp workspace outside the output folder,
   const constructed = [];
   const made = await makeDownloadSdk(ENV, {
     mkdtempSync: (prefix) => {
-      assert.match(prefix, /model-app-download-$/);
+      assert.match(prefix, /model-app-download-\d+-$/, 'the maker is asked for a name in the plugin\u2019s folder: the prefix, then the pid of this process');
       return tmp('model-app-download-');
     },
     createHttpClient: () => ({ get: async () => ({ status: 200, headers: {}, body: { value: [] } }) }),

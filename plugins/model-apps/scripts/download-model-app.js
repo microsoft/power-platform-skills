@@ -17,7 +17,6 @@
 // binds each key to the page it built there, so a fresh key can make that copy update another page.
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
@@ -36,6 +35,7 @@ const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, cu
 const { mapLimit } = require('./lib/entity-provision.js');
 const { compareText } = require('./lib/compare-text.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -474,7 +474,7 @@ function relationshipsSkippedWarning(skipped) {
 // and the caller's `finally` is not reachable until this function returns (as in build-model-app.js).
 // `deps` is a test seam: the bundle's factories, the HTTP client, and the temp-directory calls.
 async function makeDownloadSdk(env, deps = {}) {
-  const workspaceDir = (deps.mkdtempSync || fs.mkdtempSync)(path.join(os.tmpdir(), 'model-app-download-'));
+  const workspaceDir = makeTempWorkspace('model-app-download-', { mkdtempSync: deps.mkdtempSync });
   const cleanup = () => (deps.rmSync || fs.rmSync)(workspaceDir, { recursive: true, force: true });
   try {
     const { createMakerSdk, createNodeWorkspaceStorage } = (deps.createMakerSdk && deps.createNodeWorkspaceStorage)

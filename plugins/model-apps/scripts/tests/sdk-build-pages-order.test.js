@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild, appUniqueName, acquireAppPagesLease } = require('../lib/sdk-build.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { startTarget } = require('./helpers/kill-target-client.js');
 
 // Real GUIDs for the three-authority sitemap mock. fetchSitemap(self) resolves via SELF_* to a
 // page-less EMPTY sitemap — these ordering/restart tests converge on EXISTENCE (env list), not membership.
@@ -167,9 +168,40 @@ test('CONCURRENCY: a second build HALTs (pages-locked) while a FRESH app-scoped 
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// A build that was KILLED while it held the lock (a real process, ended with SIGKILL) leaves the lock behind. The next build releases it itself and says so;
+// while the build that took it is still running, the lock holds and nothing is written. (The unit tests of the lock are in pages-lock-dead-owner.test.js.)
+test('CONCURRENCY: the lock a KILLED build left is released by the next build, which warns, goes on and releases it again — while a RUNNING build\'s lock still HALTs it', async (t) => {
+  const { appDir, spec } = twoPageApp();
+  try {
+    const wsDir = path.join(appDir, '.maker-workspace');
+    const lockPath = path.join(wsDir, `pages-${appUniqueName(spec).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`);
+    const holder = startTarget(t, ['lock', wsDir, appUniqueName(spec)]);
+    await holder.waitFor(/^held$/);
+
+    const blocked = harness();
+    await assert.rejects(
+      runSdkBuild(spec, { sdk: blocked.sdk, apply: true, env: 'https://x', appDir, genpage: blocked.genpage, phases: PHASES }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-locked'
+    );
+    assert.strictEqual(blocked.uploads().length, 0, 'nothing was written while the build that holds the lock is running');
+
+    await holder.kill();
+    assert.ok(fs.existsSync(lockPath), 'the killed build\'s lock is still there');
+    const warnings = [];
+    const h = harness();
+    const result = await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpage: h.genpage, phases: PHASES, warn: (m) => warnings.push(m) });
+    assert.deepStrictEqual(Object.keys(result.created.pages).sort(), ['detail', 'overview'], 'the build went on and made both pages');
+    const released = warnings.filter((w) => /released the pages lock/.test(w));
+    assert.strictEqual(released.length, 1, `one warning that says so: ${JSON.stringify(warnings)}`);
+    assert.ok(released[0].includes(`pid ${holder.pid}`), released[0]);
+    assert.ok(!fs.existsSync(lockPath), 'and the build that took it over released it when it finished');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 // Direct unit tests of the DESCOPED advisory lease: the DESCOPED advisory lease
-// NEVER steals and NEVER age-reclaims — a held lock HALTs a second acquire (manual delete required);
-// release is owner-checked. Correctness rests on the convergence spine, not the lock.
+// NEVER steals from a build that may still be running and NEVER age-reclaims — a held lock HALTs a second acquire (manual
+// delete required) unless its owner is provably gone (pages-lock-dead-owner.test.js); release is owner-checked.
+// Correctness rests on the convergence spine, not the lock.
 test('LEASE: a FRESH lock HALTs a second acquire (never steals); release then allows re-acquire', () => {
   const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-'));
   try {

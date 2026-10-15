@@ -11,10 +11,9 @@
 // The SDK is made on a throwaway workspace (`createMakerSdk` requires a storage, though none of these reads touch it): created before
 // the SDK, removed whichever way the read ends. tests/sdk-async-surface.test.js holds every file that makes a workspace to that shape.
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const auth = require('./dataverse-auth.js');
 const { createAzHttpClient } = require('./sdk-http-client.js');
+const { makeTempWorkspace } = require('./temp-workspace.js');
 const { TOKEN_UNAVAILABLE, PowerAppsClientError } = require('./power-apps-service-client.js');
 
 // The codes with which the SDK's connection and connector reads (api/ConnectivityApi.ts, api/connectivityRouter.ts, api/connectivityShared.ts and
@@ -171,7 +170,7 @@ const connectivity = Object.freeze({
 async function sdkFirst(env, plan, deps = {}) {
   let refused = plan.preflight ? await plan.preflight(env, deps) : null;
   if (!refused) {
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-first-'));
+    const workspaceDir = makeTempWorkspace('sdk-first-');
     try {
       const { createMakerSdk, createNodeWorkspaceStorage } = deps.sdkModule || require('./maker-sdk.js');
       const sdk = createMakerSdk({

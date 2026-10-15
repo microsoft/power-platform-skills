@@ -80,13 +80,13 @@
 //     [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 const USAGE = [
   'Usage:',
@@ -692,7 +692,7 @@ function pacError(code, message, refusal) {
 // read back and checked before it goes anywhere, so a failed or odd run cannot leave a half-made file at --out. `packageBytes` is the package when
 // only its bytes are at hand (it was exported by the SDK); pac needs a file.
 async function templateThroughPac({ packagePath, packageBytes }, refusal, deps = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'solution-settings-'));
+  const dir = makeTempWorkspace('solution-settings-');
   try {
     let zip = packagePath;
     if (!zip) {

@@ -34,12 +34,11 @@
 // only when every send it made is accounted for (see `open` in create and the loop in update).
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 const { genPageSubArea, genPageSubAreaId } = require('./genpage-subarea.js');
 const { guardWorkspaceStorage } = require('./workspace-storage-guard.js');
 const { makeAppComponentScope } = require('./app-component-scope.js');
+const { makeTempWorkspace } = require('./temp-workspace.js');
 const { sha256 } = require('./hash.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -460,7 +459,9 @@ function makeGenpageSdk(env, deps = {}) {
         const create = deps.createSdk || (async (options) => {
           const { createMakerSdk, createNodeWorkspaceStorage } = require('./maker-sdk.js');
           const { createAzHttpClient } = require('./sdk-http-client.js');
-          const dir = (deps.mkdtempSync || fs.mkdtempSync)(path.join(os.tmpdir(), 'genpage-'));
+          // The folder is made through the plugin's one maker of them (lib/temp-workspace.js): it goes in the plugin's own temp folder with a record of whose it is,
+          // so a run that is killed — and cannot remove it, here, in dispose() — has it removed by the next run (the folder holds the source of every page this run reads).
+          const dir = makeTempWorkspace('genpage-', { mkdtempSync: deps.mkdtempSync });
           // The SDK reaches the disk only through its storage, so closing this one (dispose) is closing the workspace: a read or an
           // initialization that is still running when the folder is removed can neither write into it nor put it back.
           const guard = guardWorkspaceStorage((deps.createStorage || createNodeWorkspaceStorage)(dir), closedError);

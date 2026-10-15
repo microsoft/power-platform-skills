@@ -12,7 +12,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 const { parseArgs, validateFlags, readJsonArg, emitResult, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
@@ -23,6 +22,7 @@ const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relations
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { mapLimit } = require('./lib/entity-provision.js');
 const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
@@ -43,7 +43,7 @@ const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
 // local copy to read, discard or race with, and a fresh SDK no cached read to hand back. One per read, not per run:
 // a second read of the same dashboard must not come from the first one's cache.
 async function throwawaySdk(env, httpClient, prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = makeTempWorkspace(prefix);
   const dispose = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } };
   try {
     return { sdk: await makeProvision(env, dir, httpClient), dispose };

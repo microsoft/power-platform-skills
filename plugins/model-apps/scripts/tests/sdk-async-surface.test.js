@@ -758,7 +758,7 @@ function calledName(call) {
 }
 
 /**
- * How `src` guards the throwaway workspace it makes. null when it makes none — no `mkdtempSync`, or no `createMakerSdk` call
+ * How `src` guards the throwaway workspace it makes. null when it makes none — no `mkdtempSync` or `makeTempWorkspace`, or no `createMakerSdk` call
  * to guard — else `{ problem }`: null when the guard is sound, otherwise what is wrong with it. The construction is found by
  * position, as the first one after the directory is made (verify-model-app.js builds its SDK in a helper below the factory).
  */
@@ -771,7 +771,10 @@ function throwawayWorkspaceGuard(src) {
   walk(parsed.ast, (node, ancestors) => {
     // `ancestors` is closest first: the first function in it is the one this node is written in (null at the top level).
     const scope = ancestors.find((a) => FUNCTION_NODES.has(a.type)) || null;
+    // The directory is made by `fs.mkdtempSync` — what every entry point called before the plugin had one maker of throwaway workspaces — or by a call of
+    // `makeTempWorkspace` (lib/temp-workspace.js), which is what they call now. A CALL: the name is also in the import that brings the function in.
     if (node.type === 'Identifier' && node.name === 'mkdtempSync') made.push({ node, scope });
+    else if (node.type === 'CallExpression' && calledName(node) === 'makeTempWorkspace') made.push({ node, scope });
     else if (node.type === 'CallExpression' && calledName(node) === 'createMakerSdk') constructions.push({ node, scope });
     else if (node.type === 'TryStatement') tries.push({ node, scope });
   });
@@ -857,6 +860,24 @@ test('the guard check accepts the cleanups the entry points use, in a catch or i
   ]) {
     assert.deepStrictEqual(throwawayWorkspaceGuard(factory(guard)), { problem: null }, guard);
   }
+});
+
+test('the guard check reads a directory made by makeTempWorkspace — what the entry points call — exactly as one made by mkdtempSync', () => {
+  const made = (guard) => `
+    async function make(env) {
+      const dir = makeTempWorkspace('model-app-');
+      try { const sdk = createMakerSdk({ instanceUrl: env }); await sdk.initWorkspace(); return { sdk }; } ${guard}
+    }`;
+  assert.deepStrictEqual(throwawayWorkspaceGuard(made('catch (err) { fs.rmSync(dir, { recursive: true, force: true }); throw err; }')), { problem: null });
+  assert.match(throwawayWorkspaceGuard(made('catch (err) { throw err; }')).problem, GUARD_PROBLEM);
+  const unguarded = `
+    async function make(env) {
+      const dir = makeTempWorkspace('model-app-');
+      const sdk = createMakerSdk({ instanceUrl: env });
+      try { await sdk.initWorkspace(); } catch (err) { cleanup(); throw err; }
+      return sdk;
+    }`;
+  assert.match(throwawayWorkspaceGuard(unguarded).problem, /must be inside a try/);
 });
 
 test('the guard check does not take for a cleanup what is not one: no clause, a comment, a string, a helper it does not know', () => {
@@ -966,7 +987,7 @@ test('every CLI that mints a throwaway workspace constructs the SDK INSIDE its c
   const checked = [];
   for (const file of files) {
     const src = fs.readFileSync(path.join(dir, file), 'utf8');
-    if (!src.includes('mkdtempSync') || !/createMakerSdk\(/.test(src)) continue;
+    if (!/\b(mkdtempSync|makeTempWorkspace)\b/.test(src) || !/createMakerSdk\(/.test(src)) continue;
     const guard = throwawayWorkspaceGuard(src);
     if (!guard) continue;
     assert.ok(guard.problem === null, `${file}: ${guard.problem}`);

@@ -846,8 +846,10 @@ test('REAL BUNDLE: the throwaway workspace is removed after a create, after a re
   } finally {
     fs.mkdtempSync = mkdtemp;
   }
-  // One folder for each of the four runs, and one more for the page backend of the two creates that got as far as the pages' reads (the refusal did not).
-  assert.deepStrictEqual(made.map((dir) => path.basename(dir).replace(/[A-Za-z0-9]{6}$/, '')).sort(), ['apps-', 'apps-', 'apps-', 'apps-', 'genpage-', 'genpage-']);
+  // One folder for each of the four runs, and one more for the page backend of the two creates that got as far as the pages' reads (the refusal did not). Each is
+  // named for what made it: its prefix, this process, and mkdtemp's six characters (lib/temp-workspace.js).
+  const prefixOf = (dir) => path.basename(dir).replace(new RegExp(`${process.pid}-[A-Za-z0-9]{6}$`), '');
+  assert.deepStrictEqual(made.map(prefixOf).sort(), ['apps-', 'apps-', 'apps-', 'apps-', 'genpage-', 'genpage-']);
   for (const dir of made) assert.strictEqual(fs.existsSync(dir), false, dir);
 });
 

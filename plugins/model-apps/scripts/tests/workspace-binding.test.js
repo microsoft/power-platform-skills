@@ -37,6 +37,7 @@ const { loadCli } = require('./helpers/cli-harness.js');
 const { scriptsMatching } = require('./helpers/production-scripts.js');
 const { isWorkspaceOrgMismatch, workspaceBindingError, workspaceBindingNote } = require('../lib/workspace-binding.js');
 const { recordPageCreation } = require('../lib/page-ownership-records.js');
+const { workspaceParent } = require('../lib/temp-workspace.js');
 
 const scriptsDir = path.join(__dirname, '..');
 const BUNDLE = path.join(scriptsDir, 'vendor', 'cds-maker-sdk.cjs');
@@ -955,7 +956,7 @@ test('verify runs against any environment: a folder bound to another one is neit
   });
   assert.ok(requests.length > 0);
   assert.deepStrictEqual(treeOf(app.workspace), before, 'the folder is exactly as verify found it');
-  assert.ok(sdkDirs.length >= 1 && sdkDirs.every((dir) => path.dirname(dir) === os.tmpdir() && !fs.existsSync(dir)), `every SDK worked in a temporary workspace that is gone again: ${JSON.stringify(sdkDirs)}`);
+  assert.ok(sdkDirs.length >= 1 && sdkDirs.every((dir) => path.dirname(dir) === workspaceParent() && !fs.existsSync(dir)), `every SDK worked in a temporary workspace (in the plugin\u2019s own folder of the OS temp directory) that is gone again: ${JSON.stringify(sdkDirs)}`);
 });
 
 test('verify does not bind a folder that has no workspace yet to the environment it verified', async () => {

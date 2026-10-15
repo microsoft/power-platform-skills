@@ -7,9 +7,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { makeGenpageSdk, pageFolderFiles, contentFingerprint } = require('../lib/genpage-sdk.js');
+const { workspaceParent } = require('../lib/temp-workspace.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE: accountTable } = require('./helpers/fake-genpage-server.js');
 const { sha256 } = require('../lib/hash.js');
 
@@ -436,7 +436,7 @@ test('REAL BUNDLE: dispose() removes the throwaway workspace the SDK worked in â
   assert.strictEqual(made.length, 1);
   assert.ok(fs.existsSync(made[0]), 'the workspace exists while the backend works');
   assert.ok(path.basename(made[0]).startsWith('genpage-'));
-  assert.strictEqual(path.dirname(made[0]), os.tmpdir(), 'in the temp directory, never the app folder');
+  assert.strictEqual(path.dirname(made[0]), workspaceParent(), 'in the plugin\u2019s own folder of the temp directory (lib/temp-workspace.js), never the app folder');
   genpage.dispose();
   assert.ok(!fs.existsSync(made[0]));
   genpage.dispose();

@@ -10,7 +10,6 @@
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
-const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -46,6 +45,7 @@ const { verifySpec } = require('./lib/verify-spec.js');
 const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
 // missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
@@ -81,7 +81,7 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   assertWorkspaceDir(workspaceDir, { create: persistent });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const httpClient = createAzHttpClient(env);
-  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
+  const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };

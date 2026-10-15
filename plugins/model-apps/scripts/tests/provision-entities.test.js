@@ -327,6 +327,10 @@ function provisionHarness({ initThrows = null, constructThrows = null, provision
         seen.removed.push({ dir, opts });
       },
     },
+    // The throwaway workspaces are made by the plugin's one maker of them (lib/temp-workspace.js), which works on the real file system: the harness stands
+    // in for it with the very call the script made before it existed, so what this test pins — both are made, and both removed before the result is
+    // printed — is as it was.
+    './lib/temp-workspace.js': { makeTempWorkspace: (prefix) => requires['node:fs'].mkdtempSync(path.join(os.tmpdir(), prefix)) },
     './lib/sdk-http-client.js': {
       createAzHttpClient: (env) => {
         seen.http.push(env);

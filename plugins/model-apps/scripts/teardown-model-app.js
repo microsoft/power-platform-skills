@@ -20,7 +20,6 @@
 //   per entity, not per button).
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { runTeardown } = require('./lib/sdk-teardown.js');
 const { classifyOps } = require('./lib/op-diff.js');
@@ -29,6 +28,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const snapStore = require('./lib/apply-snapshot-store.js');
 const { checkPageOwnershipClearable } = require('./lib/page-ownership-records.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
 async function makeSdk(env) {
@@ -36,7 +36,7 @@ async function makeSdk(env) {
   const httpClient = createAzHttpClient(env);
   // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
   // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.
-  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-'));
+  const sdkTempDir = makeTempWorkspace('teardown-');
   try {
     const sdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),

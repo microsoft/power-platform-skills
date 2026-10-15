@@ -322,6 +322,9 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
   const customRequire = (id) => {
     if (id === 'node:fs') return fakeFs;
     if (id === 'node:path') return path;
+    // The throwaway workspaces are made by the plugin's one maker of them (lib/temp-workspace.js), which works on the real file system: the harness stands
+    // in for it with the very call the script made before it existed, so what this test pins — each is made under the OS temp folder, by name, and removed — is as it was.
+    if (id === './lib/temp-workspace.js') return { makeTempWorkspace: (prefix) => fakeFs.mkdtempSync(path.join(os.tmpdir(), prefix)) };
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,

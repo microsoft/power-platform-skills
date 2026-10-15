@@ -19,6 +19,7 @@
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth');
 const { createAzHttpClient } = require('./lib/sdk-http-client');
 const { odataLit } = require('./lib/odata.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 /**
  * Finds the publisher to use for the solution:
@@ -148,7 +149,7 @@ async function main() {
   }
   const [envUrl, uniqueName, friendlyName] = positional;
 
-  const sdkTempDir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'provision-solution-'));
+  const sdkTempDir = makeTempWorkspace('provision-solution-');
 
   let result;
   let error;

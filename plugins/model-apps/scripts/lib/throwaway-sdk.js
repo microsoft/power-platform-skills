@@ -3,7 +3,8 @@
 //
 // `createMakerSdk` requires a workspace storage even for a call that never touches it (the SDK's design: "no workspace, no cache"), so every
 // such script made a folder under the OS temp directory, built the SDK over it and removed the folder whichever way the run ended. That was
-// written out in each of them; this is the one copy.
+// written out in each of them; this is the one copy. The folder is made by lib/temp-workspace.js, in the plugin's own folder of the temp directory
+// and with a record of whose it is: a run that is killed cannot remove it, and the next run does.
 //
 //   const tables = await withThrowawaySdk({ env, httpClient, prefix: 'list-tables-' }, async (make) => {
 //     const sdk = make();                       // a reader
@@ -18,21 +19,20 @@
 // to the same rule by tests/sdk-async-surface.test.js, which reads their syntax tree; this module's own tests (tests/throwaway-sdk.test.js)
 // make each of those things fail and look for the folder.
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { createAzHttpClient } = require('./sdk-http-client.js');
+const { makeTempWorkspace } = require('./temp-workspace.js');
 
 /**
  * Runs `run(make)` with a way to make SDK instances over one throwaway workspace folder, removed whichever way the run ends.
  * @param {object} options
  * @param {string} options.env - a Dataverse https origin
- * @param {string} options.prefix - what the folder's name starts with (under the OS temp directory), so a folder left behind says whose it was
+ * @param {string} options.prefix - what the folder's name starts with (in the plugin's folder of the OS temp directory), so a folder left behind says whose it was
  * @param {object} [options.httpClient] - the SDK's HttpClient; the az-token one for `env` when omitted (a test seam). One client serves every instance made
  * @param {object} [options.deps] - a test seam: { makerSdk: { createMakerSdk, createNodeWorkspaceStorage }, createAzHttpClient }
  * @param {(make: (extra?: object) => object) => Promise<*>} run
  */
 async function withThrowawaySdk({ env, prefix, httpClient, deps = {} }, run) {
-  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const workspaceDir = makeTempWorkspace(prefix);
   try {
     const { createMakerSdk, createNodeWorkspaceStorage } = deps.makerSdk || require('./maker-sdk.js');
     const client = httpClient || (deps.createAzHttpClient || createAzHttpClient)(env);

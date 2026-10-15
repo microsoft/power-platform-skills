@@ -19,6 +19,9 @@ const { resolveAppSource } = require('./app-source-path.js');
 const { readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, creationIds } = require('./page-ownership-records.js');
 const { readPublishedPages, writePublishedPages, sameFileVersions } = require('./page-publish-records.js');
 const { leftOnDiskWarning } = require('./left-on-disk.js');
+// The pages lock is taken through the snapshot lease's exclusive create-and-reclaim, and reclaimed only from a build that is provably gone.
+const { acquireLease, releaseLease } = require('./apply-snapshot-store.js');
+const { ownerStamp, ownerState, describeOwner } = require('./process-owner.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
@@ -1194,21 +1197,36 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
 // A courtesy to stop two LOCAL builds of the same app racing to CREATE duplicate pages; correctness does
 // NOT depend on it — the convergence spine (fail-closed enumeration + create-absent-first + persist-after-
 // each-create) makes any re-run idempotent. Atomic exclusive create picks one winner; if the lock already
-// exists we HALT (never steal, no age-reclaim). Release is OWNER-CHECKED: remove only if the file still
-// holds OUR exact token. Cross-machine/worktree concurrency for the SAME app is UNSUPPORTED. `deps` = seam.
+// exists we HALT — unless the build that took it is PROVABLY GONE. A build killed outright (SIGKILL, "End
+// task", a timeout, a power cut) cannot release its lock, and used to leave every later build stopped on it
+// until a person deleted the file; the lock now records who took it (lib/process-owner.js: pid, host, platform,
+// and on Linux the process's start time), and a later build releases it itself, and says so (`deps.warn`),
+// when that process is no longer running on this machine.
+//
+// "Provably" is the whole rule, and every doubt keeps the lock, in the words it has always had: a lock whose
+// pid still runs, one made on another machine, platform or pid namespace, one with no readable record (a
+// release before the record existed, a damaged file) is never taken — and none is ever taken by AGE, since a
+// live build may be paused as long as a laptop sleeps. The take-over itself is the snapshot lease's
+// (apply-snapshot-store.js acquireLease): one claim file makes exactly one of several builds that start
+// together the winner, and a lock that changed meanwhile is left alone. Release is OWNER-CHECKED: remove
+// only if the file still holds OUR exact token. Cross-machine/worktree concurrency for the SAME app is
+// UNSUPPORTED. `deps` = seams: now, warn, and owner (the process-owner.js seams).
 function acquireAppPagesLease(wsDir, appUnique, deps = {}) {
   const now = deps.now || (() => Date.now());
-  fs.mkdirSync(wsDir, { recursive: true });
-  const lockPath = path.join(wsDir, `pages-${String(appUnique).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`);
-  const token = JSON.stringify({ pid: process.pid, at: now() });
-  try {
-    fs.writeFileSync(lockPath, token, { flag: 'wx' }); // atomic exclusive create — the OS guarantees one winner
-  } catch (e) {
-    if (e.code === 'EEXIST') throw new BuildHalt(`another build is deploying pages for '${appUnique}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${lockPath} if it is stale.`, { phase: 'pages', code: 'pages-locked', recoverable: true });
-    throw e;
+  const file = `pages-${String(appUnique).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`;
+  const lockPath = path.join(wsDir, file);
+  const lease = acquireLease(wsDir, { file, now, stamp: ownerStamp({ ...deps.owner, now }), isStale: (held) => ownerState(held, deps.owner).state === 'gone' });
+  if (!lease.ok) {
+    // A create that failed for any other reason than the lock being there (a workspace that cannot be written) is that error, as it always was.
+    if (lease.error) throw lease.error;
+    // `stale`: the lock's owner is gone, but the lock could not be released (another build was releasing it at the same moment, or died doing so).
+    const unreleased = lease.stale ? ` The build that held it is no longer running, but its lock could not be released: ${lease.reason}.` : '';
+    throw new BuildHalt(`another build is deploying pages for '${appUnique}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${lockPath} if it is stale.${unreleased}`, { phase: 'pages', code: 'pages-locked', recoverable: true });
   }
-  // Owner-checked release: never delete a lock a DIFFERENT live build now holds. No age-reclaim/steal.
-  return { release: () => { try { if (fs.readFileSync(lockPath, 'utf8') === token) fs.rmSync(lockPath, { force: true }); } catch { /* gone/unreadable — best-effort */ } } };
+  if (lease.reclaimed && typeof deps.warn === 'function') {
+    deps.warn(`released the pages lock for '${appUnique}': the build that held it (${describeOwner(lease.previous)}) is no longer running`);
+  }
+  return { release: () => releaseLease(lease) };
 }
 
 function appDef(spec, result, opts = {}) {
@@ -5702,7 +5720,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const wsDir = opts.workspaceDir || path.join(path.resolve(opts.appDir || '.'), '.maker-workspace');
     // Advisory lease: acquired OUTSIDE the try so a failed acquire (pages-locked HALT) never triggers the
     // finally that would release a lease we never held. Correctness rests on the convergence spine, not this.
-    const lease = acquireAppPagesLease(wsDir, appUnique);
+    // A lock a killed build left behind is released by this call, and `opts.warn` says so.
+    const lease = acquireAppPagesLease(wsDir, appUnique, { warn: opts.warn });
     try {
       // ── THREE AUTHORITIES (Identity · Existence · Membership) ─────────────────────────────────────
       // EXISTENCE (the environment-wide page list, drafts included) drives create-vs-reuse. Fail-closed: a failed

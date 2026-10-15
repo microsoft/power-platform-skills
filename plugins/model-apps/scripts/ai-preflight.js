@@ -10,9 +10,8 @@
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { AI_APP_SETTING, AI_SETTING_CODEC, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 
 // Human-readable label + admin-action hint for each feature key returned by getAiReadiness.
 const FEATURE_META = {
@@ -156,7 +155,7 @@ async function main() {
   // getAiReadiness is a read-only org/app query, but the vendored SDK expects an initialized
   // workspace (throws WorkspaceNotInitializedError otherwise) — mirror the other entrypoints:
   // create a throwaway workspace, initWorkspace(), and remove it in finally.
-  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-preflight-'));
+  const workspaceDir = makeTempWorkspace('ai-preflight-');
 
   let report;
   try {
