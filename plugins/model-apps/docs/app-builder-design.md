@@ -257,8 +257,13 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
 - **Canonical symbolic source is retained** in the working dir / app-spec sidecar (the `.tsx` with
   `PAGEREF_<key>`); the resolved deployment derivative is never written back over it.
 - **Download reconstructs keys** from the manifest and **reverse-normalizes** sibling page-GUID
-  literals in downloaded source back to `PAGEREF_<key>`; absent a manifest (legacy app), it falls
-  back to name matching and assigns fresh keys. Downloaded pages hydrate as `source.kind === 'tsx'`.
+  literals in downloaded source back to `PAGEREF_<key>`. A page the manifest does not bind (a legacy or
+  Maker-authored app) keeps the key an earlier download of the same app gave it — matched by page id, from
+  the `app-spec.json` already in the output folder — and only a page with neither gets a fresh slug key,
+  minted in the order of the page ids, never of the names. A key never moves between two downloads of an
+  unchanged app: a spec deployed to another environment holds no page ids, so that environment binds each
+  key to the page it built, and a moved key would swap what two pages hold there. Downloaded pages
+  hydrate as `source.kind === 'tsx'`.
 - **Migration:** specs without `schemaVersion`/keys (name-referenced) are upgraded on load — keys
   minted from names, `navigatesTo`/`appShell` references rewritten name→key.
 

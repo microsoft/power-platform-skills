@@ -316,6 +316,7 @@ function reconcilePageIds(pages, manifest, existenceIds, sitemapIds, storedNames
 
 module.exports = {
   MANIFEST_SCHEMA_VERSION,
+  KEY_GRAMMAR,
   manifestResourceName,
   buildManifest,
   serializeManifest,

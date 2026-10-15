@@ -1405,8 +1405,11 @@ custom control), but the spec validator emits a warning.
   carrying `{ schemaVersion, pages: [{ key, name, pageId, purpose, dataSources, navigatesTo, pageInput }], design }`.
   This manifest is the source of truth for a download round-trip: download fetches it, enumerates
   deployed pages fail-closed, and uses `reconcilePageIds` to reconstruct keys and reverse-normalize
-  navigation placeholders back to `"PAGEREF_<key>"` in each page's source. Legacy apps with no
-  manifest get fresh keys assigned on first download.
+  navigation placeholders back to `"PAGEREF_<key>"` in each page's source. A page the manifest does not
+  bind (a legacy or Maker-authored app) keeps the `key` an earlier download of the app gave it — read from
+  the `app-spec.json` already in the output folder, matched by `pageId` — and only a page with neither gets
+  a fresh key. A key never changes between two downloads of an unchanged app: a copy of the spec deployed
+  to another environment is bound to the pages it built there by key.
 - **Three-authority page identity.** Generative-page management consults three authorities, each
   for a distinct question — all matching is **by id**, never by display name:
   1. **IDENTITY** — the `<appUnique>_pagemanifest` (`key → pageId` map). For an *edit-snapshot* spec

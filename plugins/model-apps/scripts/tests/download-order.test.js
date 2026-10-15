@@ -316,8 +316,9 @@ test('assignPageKeys mints the same key for the same page whatever order the pag
   const forward = keysFor(make());
   const backward = keysFor(make().reverse());
   assert.deepStrictEqual(backward, forward);
-  // "Work Order" sorts before "work order" (same lower-cased text, so the raw text decides: "W" < "w"); the ids then tell the two "Work Order"s apart.
-  assert.deepStrictEqual(forward, { [g('10000000', 1)]: 'work-order', [g('f0000000', 1)]: 'work-order-2', [g('50000000', 1)]: 'work-order-3' });
+  // New pages are minted in the order of their IDS, never of their names (download-page-keys.test.js says why): the plain slug goes to the lowest id,
+  // whatever the names say. The pages are WRITTEN by name, then id (the order test above), which is another list and decides no key.
+  assert.deepStrictEqual(forward, { [g('10000000', 1)]: 'work-order', [g('50000000', 1)]: 'work-order-2', [g('f0000000', 1)]: 'work-order-3' });
 });
 
 test('readDescriptionInventory lists each class in one order, however Dataverse answered', async () => {

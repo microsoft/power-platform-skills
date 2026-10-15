@@ -18,7 +18,7 @@ const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageSdk, unescapePacName, pageFolderFiles } = require('./lib/genpage-sdk.js');
-const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
+const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR } = require('./lib/page-manifest.js');
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
@@ -34,15 +34,25 @@ const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7:
 
 // How a download orders every list it writes. Dataverse promises no order for a query that has no `$orderby`, and a directory
 // listing (`fs.readdirSync`) is in the file system's order — name order on NTFS, hash order on ext4 — so a list written in the
-// order it arrived made two downloads of one app differ only in order (and a page key minted from a name two pages share went
-// to whichever page came first). Every list is ordered with `compareText` (lib/compare-text.js): by code units, never by the
-// host's locale, so the order is a function of the strings alone and is the same on every machine.
+// order it arrived made two downloads of one app differ only in order. Every list is ordered with `compareText`
+// (lib/compare-text.js): by code units, never by the host's locale, so the order is a function of the strings alone and is the
+// same on every machine. The ORDER a list is written in decides nothing else: in particular no page key (see assignPageKeys).
 
-// Pages: by name, then by id. The name is the page's own — what the maker called it, which a second download of the app reads
-// the same — so the order does not hang on ids, which differ between environments. Two pages that share a name are told apart
-// by id, the only thing that does, and an id is stable for the app in the environment it is downloaded from.
+// Pages, as they are written: by name, then by id. The name is the page's own — what the maker called it, which a second download
+// of the app reads the same — so the order does not hang on ids, which differ between environments. Two pages that share a name are
+// told apart by id, the only thing that does. This is the order of `pages[]` and of what is reported about pages; the keys are
+// minted in another (comparePageIds).
 function comparePages(a, b) {
   return compareText(a && a.name, b && b.name) || compareText(a && a.pageId, b && b.pageId);
+}
+
+// Pages by id alone: the order NEW pages are minted keys in (assignPageKeys). A page's id is its own and never changes, while its
+// name can be changed in Maker, can make the same slug as another page's, and sorts into another place under another comparison —
+// a key decided by that order moves with it. By id it is also the order a file system that lists names in order (NTFS, HFS+: the
+// folders are named by GUID) gave the page folders, which is the order earlier releases minted in: a spec they wrote, and that was
+// deployed to another environment, keeps the keys it was built with.
+function comparePageIds(a, b) {
+  return compareText(a && a.pageId, b && b.pageId);
 }
 
 // A deployed artifact the download inventories ({ id, name, entity }): by table, then name, then id.
@@ -835,8 +845,8 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
   // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
-  // not the same on every machine, and this loop decides the order of `pages[]` in the spec, of the unreadable-config and
-  // unkept-model reports, and — through assignPageKeys — which of two pages that share a name is minted the plain key.
+  // not the same on every machine, and this loop decides the order of `pages[]` in the spec and of the unreadable-config and
+  // unkept-model reports. It decides no page key: assignPageKeys mints in the order of the pages' ids, whatever order it is given.
   const nameOf = (entry) => (nameById && nameById.get(String(entry).toLowerCase())) || entry;
   const entries = fs.readdirSync(pagesRoot)
     .map((entry) => ({ pageId: entry, name: nameOf(entry) }))
@@ -904,13 +914,65 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
   return pages;
 }
 
-// Assign a STABLE key to every downloaded page + carry the manifest's v2 semantics. `keyToId` (from
-// reconcilePageIds — the authority: manifest-confirmed-live id → unique live-name, ambiguous already
-// HALTed upstream) binds manifest keys to live ids; a page bound there reuses that key + purpose/
-// navigatesTo/pageInput/dataSources. A page with NO binding (legacy app / Maker-authored) gets a FRESH
-// unique slug key (design §7.3 — NOT the old name shape, which drifted on rename). Returns idToKey for
-// reverse-normalizing nav literals. Mutates pages. This uses reconcilePageIds, NOT a name-collapsing Map.
-function assignPageKeys(pages, manifest, keyToId) {
+// The page keys an earlier download of this app left in the output folder: { keys: Map<lower-cased page id, key>, problem }, read from the
+// app-spec.json this download is about to replace (the working folder of an edit session holds it). A key is a page's identity in a
+// rebuild — a copy of that spec deployed to another environment binds each key to the page it created there — so a page whose id is read
+// again keeps the key it had, whatever it is called now or however the names sort, instead of being given one afresh (assignPageKeys).
+//
+// What is read of the file is each page's `pageId` and `key`, and `app.uniqueName` to tell another app's spec from this one's:
+//   { "app": { "uniqueName": "contoso_app" }, "pages": [ { "key": "work-order", "pageId": "10000000-0000-4000-8000-000000000001", ... }, ... ] }
+// A spec that names no app (one written by hand) is read; one that names another app is not. An entry with no id or no key, or a key outside
+// the key grammar, is skipped. A key two pages claim, or a page given two keys, is ambiguous — the file was edited by hand — and is kept for
+// none of them.
+//
+// Best-effort, like the other things read back from this file (preserveAuthoredLanguageCode): a missing file keeps nothing and says
+// nothing; one that cannot be read keeps nothing and says so (`problem`), because the keys are then minted afresh and may differ from the
+// ones a deployed copy was built with. `problem` never quotes the file: a parse error carries a piece of the text, and a link planted at
+// this name could point at any file.
+function readPreviousPageKeys(specPath, appUnique) {
+  const none = (problem = null) => ({ keys: new Map(), problem });
+  let prior;
+  try {
+    assertPlainFileTarget(specPath); // a missing file passes; a link, a folder or a hard link is refused, unread
+    prior = JSON.parse(fs.readFileSync(specPath, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return none();
+    if (error && error.code === 'UNSAFE_OUTPUT') return none(`it is not a regular file with one name (${error.reason})`);
+    return none(error instanceof SyntaxError ? 'it is not valid JSON' : String((error && error.code) || (error && error.message) || error));
+  }
+  if (!prior || typeof prior !== 'object' || !Array.isArray(prior.pages)) return none();
+  const named = prior.app && typeof prior.app.uniqueName === 'string' ? prior.app.uniqueName.trim().toLowerCase() : '';
+  if (named && appUnique && named !== String(appUnique).trim().toLowerCase()) return none();
+  const idsOfKey = new Map();
+  const keysOfId = new Map();
+  const add = (map, from, to) => { if (!map.has(from)) map.set(from, new Set()); map.get(from).add(to); };
+  for (const page of prior.pages) {
+    if (!page || typeof page.key !== 'string' || !KEY_GRAMMAR.test(page.key) || typeof page.pageId !== 'string' || !page.pageId.trim()) continue;
+    const id = page.pageId.trim().toLowerCase();
+    add(idsOfKey, page.key, id);
+    add(keysOfId, id, page.key);
+  }
+  const keys = new Map();
+  for (const [id, own] of keysOfId) {
+    const [key] = own;
+    if (own.size === 1 && idsOfKey.get(key).size === 1) keys.set(id, key);
+  }
+  return { keys, problem: null };
+}
+
+// Assign a STABLE key to every downloaded page + carry the manifest's v2 semantics. A page's key is its identity in a rebuild (a spec
+// deployed to another environment holds no page ids, so that environment binds each key to the page it created there): once a page has
+// one it keeps it, and a key never depends on the order pages are read or written in. It comes from, in this order:
+//   1. the manifest: `keyToId` (from reconcilePageIds — the authority: manifest-confirmed-live id → unique live-name, ambiguous already
+//      HALTed upstream) binds manifest keys to live ids; a page bound there reuses that key + purpose/navigatesTo/pageInput/dataSources;
+//   2. `previousKeys` (Map<lower-cased page id, key>, readPreviousPageKeys): the key an earlier download of this app gave the page,
+//      matched by the page's id — unless the manifest already gave that key to another page;
+//   3. a FRESH unique slug of the page's name, for a page with neither (legacy app / Maker-authored; design §7.3 — NOT the old name
+//      shape, which drifted on rename). Only these are minted, after every key above is taken, and in the order of the pages' IDS: when two
+//      names make one slug, the lower id gets the plain slug and the next `-2`. Never by name, which is not stable, never by the order
+//      the pages arrive in. (It is the order earlier releases minted in on a file system that lists its folders by name.)
+// Returns idToKey for reverse-normalizing nav literals. Mutates pages. This uses reconcilePageIds, NOT a name-collapsing Map.
+function assignPageKeys(pages, manifest, keyToId, previousKeys) {
   const idToKey = new Map();
   const used = new Set();
   const manifestByKey = new Map(((manifest && manifest.pages) || []).map((m) => [m.key, m]));
@@ -941,10 +1003,23 @@ function assignPageKeys(pages, manifest, keyToId) {
       if (m.dataSources && !(p.dataSources || []).length) p.dataSources = m.dataSources;
     }
   }
-  // Second pass: pages that had no binding get a fresh unique slug key. Minted in the pages' own order (comparePages), whatever
-  // order `pages` arrives in: when two names make one slug, the plain key is the same page's every time and the other gets `-2`.
-  // Minted in arrival order, a second download of the same app could swap them.
-  for (const p of pages.filter((q) => !q.key).sort(comparePages)) {
+  // Second pass: a page the manifest does not bind keeps the key an earlier download of this app gave it. Taken in id order, so that even
+  // a map that gives one key to two pages has one answer; a key the manifest bound to another page is not taken twice (it stays with the
+  // manifest's page, and this one is minted below).
+  const unkeyed = () => pages.filter((q) => !q.key).sort(comparePageIds);
+  for (const p of unkeyed()) {
+    const id = String(p.pageId).toLowerCase();
+    const kept = previousKeys && previousKeys.get(id);
+    if (!kept || used.has(kept)) continue;
+    p.key = kept;
+    used.add(kept);
+    idToKey.set(id, kept);
+  }
+  // Third pass: the pages that are new get a fresh unique slug key, minted in the order of their ids (comparePageIds) after every key above
+  // is reserved: a new page cannot take a key an existing page holds, and the page that gets the plain slug of a shared one does not depend
+  // on the order of `pages`, which is the order they are written in (name, then id), nor on how the names compare. Minted in arrival or
+  // name order, an app downloaded again could swap two pages' keys, and a deployed copy of the spec would swap what the pages hold.
+  for (const p of unkeyed()) {
     p.key = mint(p.name);
     idToKey.set(String(p.pageId).toLowerCase(), p.key);
   }
@@ -2173,9 +2248,20 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     }
 
     // Assign stable keys + carry v2 semantics (navigatesTo/purpose/pageInput) from the manifest.
-    // Pages bound to manifest keys reuse their key and semantics; Maker-added pages (not in the
-    // manifest) get a fresh slug key minted from their env-wide name.
-    const idToKey = assignPageKeys(pages, manifest, keyToId);
+    // Pages bound to manifest keys reuse their key and semantics; the other pages keep the key an earlier download of this app
+    // gave them (the app-spec.json this download replaces); only pages with neither (Maker-added, not in the manifest) get a
+    // fresh slug key minted from their env-wide name.
+    const previous = readPreviousPageKeys(path.join(outDir, 'app-spec.json'), appUnique);
+    if (previous.problem) {
+      process.stderr.write(`WARNING: the app-spec.json in ${outDir} could not be read (${previous.problem}), so the page keys of an earlier download were not kept: a page that the page manifest does not bind is given a fresh key, which can differ from the one a copy of that spec already deployed to another environment was built with.\n`);
+    }
+    const idToKey = assignPageKeys(pages, manifest, keyToId, previous.keys);
+    // A key that is not the earlier one was given by the manifest (it outranks the file, and it holds a key for a page, or a page for a key,
+    // that the file says otherwise of). Say so: a copy of the earlier spec deployed to another environment binds the earlier keys there.
+    const moved = pages.filter((p) => previous.keys.has(String(p.pageId).toLowerCase()) && previous.keys.get(String(p.pageId).toLowerCase()) !== p.key);
+    if (moved.length) {
+      process.stderr.write(`WARNING: ${moved.length} page(s) have a different key than in the app-spec.json this download replaces (${moved.map((p) => `${JSON.stringify(p.name)} (${previous.keys.get(String(p.pageId).toLowerCase())} -> ${p.key})`).join(', ')}) because the app's page manifest binds them differently. A key is a page's identity in a rebuild: another environment that holds a copy of the earlier spec has the earlier keys bound to its pages, so deploying this spec there would update a different page than the earlier one did. Check each key against that environment before you deploy this spec there, or give each page its earlier key again (in app-spec.json, in navigatesTo and in the PAGEREF_ tokens of the page source).\n`);
+    }
 
     // Reverse-resolve nav pageId literals → symbolic PAGEREF_<key> tokens (structural, oracle-safe). Only a double-quoted literal before any
     // place the lexer reads by guess is turned back, and only if the build would take the page written that way (see
@@ -2721,4 +2807,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

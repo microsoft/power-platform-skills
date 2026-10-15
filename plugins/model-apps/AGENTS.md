@@ -1113,14 +1113,28 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   and a directory listing is in the file system's order (name order on NTFS, hash order on ext4), so
   nothing is written in the order it arrived: `pages[]` (and the page folders' reports) by page name, then
   id — the name first, because ids differ between environments; the id only splits two pages that share a
-  name, and decides which of them is minted the plain `<slug>` key and which gets `-2`;
-  `descriptionInventory`'s classes by table, then name, then id (global choices by name); the tables the app
-  holds beyond its navigation by name, after the navigation's own tables (which keep the navigation's
+  name; `descriptionInventory`'s classes by table, then name, then id (global choices by name); the tables
+  the app holds beyond its navigation by name, after the navigation's own tables (which keep the navigation's
   order); `notRoundTripped.appMembership` by kind, table, id, name and reason; the names in
-  `app.mainForms[table]`. Every one of those sorts through `compareText` (`lib/compare-text.js`) — UTF-16
-  code units after lower-casing — and never `localeCompare`, whose order follows the host's ICU locale and
-  version, so the order is a function of the strings alone (`download-order.test.js` serves one app in
-  three orders and compares the bytes).
+  `app.mainForms[table]` and in the note about a Main form that cannot be named. Every one of those sorts
+  through `compareText` (`lib/compare-text.js`) — UTF-16 code units after lower-casing — and never
+  `localeCompare`, whose order follows the host's ICU locale and version, so the order is a function of the
+  strings alone (`download-order.test.js` serves one app in three orders and compares the bytes).
+  **A page's key never depends on that order.** The key is the page's identity in a rebuild: a spec deployed
+  to another environment holds no page ids, so that environment binds each key to the page it built (its
+  page manifest), and a key that moved between two downloads of an unchanged app makes the next deployment
+  swap what two pages hold there — the build succeeds and the verifier passes, since both pages still
+  exist. A page's key therefore comes from, in this order: the app's page manifest (`key → id`, the
+  authority); the key an earlier download of the same app gave the page, read from the `app-spec.json`
+  already in `--out` and matched by the page's **id** (`readPreviousPageKeys` — so an edit session downloads
+  into the same working folder every time; the spec of another app, or one that cannot be trusted, is not
+  used, and a file that cannot be read is said on stderr); and only for a page with neither, a fresh slug of
+  its name, minted after every key above is taken and **in the order of the page ids** (`comparePageIds`),
+  not of the names: two names that make one slug (`Work_Order`, `Work Order`) give the plain slug to the
+  lower id and `-2` to the other — the order earlier releases minted in on a file system that lists names in
+  order (NTFS, HFS+), so a spec they wrote keeps its keys. A key the manifest took from the earlier
+  download's is reported on stderr with both keys. `download-page-keys.test.js` pins each rule and
+  `download-rebuild-teardown.test.js` the redeploy of a copy to another environment after a re-download.
   **Table membership also comes from type-1 components**, in addition to the sitemap and the app's
   VIEW / CHART / FORM owners. Hidden type-1 members emit sorted `app.tables`; custom hidden tables
   hydrate into `entities[]` only when `IsCustomEntity === true`. A non-custom or unclassified hidden
