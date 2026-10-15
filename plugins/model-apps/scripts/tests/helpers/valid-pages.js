@@ -142,16 +142,19 @@ const KEYWORD_PARAMETER_MEMBERS = [
   'new <public U>(x: U): T;', 'new <>(x: T): T;', '<in U, out V>(x: U): V;', '<public U = string>(x: U): T;', '<in U extends X>(x: U): T;',
   'delete<U>(x: U): T;', 'typeof<U>(x: U): T;', 'void<U>(x: U): T;', 'instanceof<U>(x: U): T;', 'delete<U>(url: string): Promise<U>;', 'readonly delete<U>(x: U): T;',
   '<in U>(x: U);', '<public U>(x: U);', '<>(x: U);', 'new <in U>(x: U);', 'new <>(x: U);', 'delete<U>(x: U);', 'void<U>(x: U);', '<in U>(x: U);\n  a: T;', '<>(x: U); a: { b: T };', '<in U>(x: U)\n  a: T;', '<in U>(x: U), a: T;',
+  // A `const` before another modifier, in either order, and a `static` before a name on the next line: more modifiers of one type parameter.
+  '<const in U>(x: U): T;', '<in const U>(x: U): T;', '<const in out U>(x: U): T;', 'new <const in U>(x: U): T;', '<const public U>(x: U);', 'delete<const in U>(x: U): T;', '<static\nU>(x: U): T;',
 ];
 // The same, where the member holds the closing tag of its head in a string, a template or a comment: an element has the same text up to that closing tag, so the reading is a guess.
-const KEYWORD_HIDDEN_MEMBERS = ["<in U>(x: U); a: '</in>';", '<public U>(x: U); /* </public> */', '<>(x: U);\n  // </>\n  a: T;', '<out U>(x: U): T; a: `</out>`;', "delete<U>(x: U): T; a: '</U>';", "void<U>(x: U); a: '</U>';"];
+const KEYWORD_HIDDEN_MEMBERS = ["<in U>(x: U); a: '</in>';", '<public U>(x: U); /* </public> */', '<>(x: U);\n  // </>\n  a: T;', '<out U>(x: U): T; a: `</out>`;', "delete<U>(x: U): T; a: '</U>';", "void<U>(x: U); a: '</U>';", "<const in U>(x: U); a: '</const>';"];
 // Elements that have such a head: JSX text that starts with a parenthesis, with a modifier or a keyword in the tag, or none, and the text of a deletion, a `typeof`, a `void` and an `instanceof` of an element.
 const KEYWORD_HEAD_ELEMENTS = [
   '<in U>(a); see https://x.y</in>', '<out U>(a), text</out>', '<public U>(a)\n  text\n</public>', '<readonly U>(a)</readonly>', '<>(a); see https://x.y</>', '<>(a), text</>', '<in out U>(a); text</in>',
   'delete <U>(a) text</U>', 'typeof <U>(a); see https://x.y</U>', 'void <U>(a), text</U>', 'a instanceof <U>(a)\n  text\n</U>', 'delete <in U>(a) text</in>', 'void <>(a), text</>',
+  '<const in U>(a); see https://x.y</const>', '<in const U>(a), text</in>', 'delete <const in U>(a) text</const>',
 ];
 // ... and where the closing tag could be in a comment of the text: a type has the same text for its members, so the page is a guess where a member of a type may begin at the head.
-const KEYWORD_HIDING_ELEMENTS = ['<in U>(a); // c </in>', '<public U>(a); /* c </public>', '<>(a), x // c </>', '<out U>(a);\n  // c\n  x // d </out>'];
+const KEYWORD_HIDING_ELEMENTS = ['<in U>(a); // c </in>', '<public U>(a); /* c </public>', '<>(a), x // c </>', '<out U>(a);\n  // c\n  x // d </out>', '<const in U>(a); // c </const>'];
 
 // Members an interface or a type literal can have.
 const MEMBERS = [

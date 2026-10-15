@@ -3192,14 +3192,14 @@ test('opensTypeParameters: a modifier before the name, and an empty list, are ty
       assert.deepStrictEqual(opensTypeParameters(code, 0, null, true), ELEMENT, `in an expression: ${JSON.stringify(code)}`);
     }
   }
-  // A head that no element has — a comma between two parameters, a default, a constraint that holds a brace — is the type parameters of a signature, whatever follows it, where a member of a type may begin. Where none begins (after an
-  // `=`, a `(`, a `[`, a `:`) or an expression is known to start, the rule's answer stands, as it always was.
+  // A head that no element has — a comma between two parameters, a default, a constraint that holds a brace — is the type parameters of a signature, whatever follows it, where a member of a type may begin, and the type parameters of a function
+  // type where none begins (after an `=`, a `(`, a `[`, a `:`, an `=>`): the tag reading is the element's own, and an element it rejects is no element, so a page that parses has a type there. Where an expression is known to start the rule's answer stands.
   for (const code of FAILING_HEAD_ROWS) {
     assert.deepStrictEqual(opensTypeParameters(code, 0), TYPE, JSON.stringify(code));
-    assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), ELEMENT, `where no member begins: ${JSON.stringify(code)}`);
+    assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), TYPE, `where no member begins: ${JSON.stringify(code)}`);
     assert.deepStrictEqual(opensTypeParameters(code, 0, null, true), ELEMENT, `in an expression: ${JSON.stringify(code)}`);
   }
-  // Where no member begins, a fragment or a tag with a modifier whose text starts with a parenthesis is an element whatever follows the `)`, even a list that nothing reads (`f(<> ([*/</>)`): the verdict of the rule.
+  // Where no member begins, a fragment or a tag with a modifier whose text starts with a parenthesis is an element unless an arrow follows the list (a function type), and a list that the reading cannot read to its end (`f(<> ([*/</>)`) shows none.
   for (const code of ['<> ([*/</>)', '<in U>([*/</in>)', '<public U>(a = f(/)/)</public>', '<>(a,\n[/</>']) assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), ELEMENT, JSON.stringify(code));
   // A word that TypeScript takes for no modifier of a type parameter, a modifier with no name after it, a name on the next line, and a self-closing tag are an element's head: the type has no such list.
   for (const code of ['<export U>(y) }', '<default U>(y) }', '<get U>(y) }', '<set U>(y) }', '<type U>(y) }', '<in>(y) }', '<in extends X>(y) }', '<in\nU>(y) }', '<public\nU>(y) }', '<in U/>', '<>/']) {

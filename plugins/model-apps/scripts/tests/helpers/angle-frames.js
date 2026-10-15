@@ -491,14 +491,14 @@ const PROSE_TYPE_ENDINGS = [';\n  https: // c\n  string', ',\n  see: // c\n  T',
 // and an empty list, and only the checker objects. So are the lists of a method named `delete`, `typeof`, `void` or `instanceof`, which are operators that take an element anywhere else. The words are written out here, apart from the
 // lexer's own list (source-literals.js, TYPE_PARAMETER_MODIFIERS), which a test measures against TypeScript's parser.
 const PARAMETER_MODIFIERS = ['in', 'out', 'public', 'private', 'protected', 'readonly', 'static', 'abstract', 'async', 'declare', 'override', 'accessor'];
-const MODIFIER_HEADS = [...PARAMETER_MODIFIERS.map((word) => `<${word} U>(y)`), '<in out U>(y)', '<public in U>(y)', '<>(y)', '<>()'];
+const MODIFIER_HEADS = [...PARAMETER_MODIFIERS.map((word) => `<${word} U>(y)`), '<in out U>(y)', '<public in U>(y)', '<const in U>(y)', '<const in out U>(y)', '<in const U>(y)', '<const static U>(y)', '<>(y)', '<>()'];
 // The signatures of these heads, and the construct signature of each, and the methods named like an operator.
 const KEYWORD_SIGNATURE_HEADS = [...MODIFIER_HEADS, ...MODIFIER_HEADS.map((head) => `new ${head}`), 'delete<U>(y)', 'typeof<U>(y)', 'void<U>(y)', 'instanceof<U>(y)'];
 // The elements of the same heads: the text of an element that starts with a parenthesis, which the closing tag ends. Each has no text that could hold the closing tag, so each is read exactly wherever it stands.
 const KEYWORD_HEAD_ELEMENTS = PARAMETER_MODIFIERS.flatMap((word) => [`<${word} U>(a); see https://x.y</${word}>`, `<${word} U>(a), text</${word}>`, `<${word} U>(a)\n  text\n</${word}>`, `<${word} U>(a)</${word}>`])
-  .concat(['<>(a); see https://x.y</>', '<>(a), text</>', '<>(a)\n  text\n</>', '<>(a)</>', '<in out U>(a); text</in>', '<public in U>(a), text</public>']);
+  .concat(['<>(a); see https://x.y</>', '<>(a), text</>', '<>(a)\n  text\n</>', '<>(a)</>', '<in out U>(a); text</in>', '<public in U>(a), text</public>', '<const in U>(a); see https://x.y</const>', '<in const U>(a), text</in>', '<const public U>(a)\n  text\n</const>']);
 // ... and where the closing tag could be in a comment of the text, which a type with the same text holds it in: a guess where a member of a type may begin at the head, an element for certain where none can.
-const KEYWORD_HIDING_ELEMENTS = [...PARAMETER_MODIFIERS.map((word) => `<${word} U>(a); // c </${word}>`), '<>(a); // c </>', '<in out U>(a), x // c </in>'];
+const KEYWORD_HIDING_ELEMENTS = [...PARAMETER_MODIFIERS.map((word) => `<${word} U>(a); // c </${word}>`), '<>(a); // c </>', '<in out U>(a), x // c </in>', '<const in U>(a); // c </const>'];
 
 module.exports = {
   REGEX_BODY, AFTER, AFTER_WITH_CALL, CONTINUATIONS, SEPARATORS, TRIVIA_SEPARATORS, FRAMES, PRODUCER_FRAMES, tokenVocabulary, programsFor, cleanSourceFile, readingAt, isElement,

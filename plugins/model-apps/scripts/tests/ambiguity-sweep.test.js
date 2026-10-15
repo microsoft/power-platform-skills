@@ -30,6 +30,7 @@ const { extractNavTargets, resolvePageRefs, strayPageRefs, navMalformedRefs, rev
 const { LONG_KEY, MISREAD_PAGES, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 const { ANY_SPACE } = require('./helpers/jsx-element-fuzz.js');
 const { numberedMemberPages, nestedTextPages, expressionLinePages, literalTagPages, nestedSoupPages, nestedCodePages, nestedTagPages, nestedPairPages, taggedStringPages, importTypePages, accessorNamePages } = require('./helpers/hidden-closing-pages.js');
+const { typeHeadPages, newlinePages } = require('./helpers/type-head-pages.js');
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const CALL = 'navigateTo({pageType:"generative", pageId:"PAGEREF_detail"});';
@@ -1162,6 +1163,59 @@ test('sweep (type parameters that start with a modifier, an empty list or a meth
     const source = cleanSourceFile(ts, page.code);
     if (source) assert.ok(isElement(readingAt(ts, source, page.at)), `TypeScript reads an element: ${page.label}`);
   }
+});
+
+// ─── The places a head of type parameters may stand, drawn from a grammar ─────────────────────────────────────────────────────────────────────────────────
+
+// helpers/type-head-pages.js draws, from a seeded grammar, a head that starts like an element's (a run of modifiers, `const`, an empty list, a constraint, a default, a string with an escaped quote, a regex for a constraint, a self-closing end) and a place for
+// it — a member of a type or a class after a prefix, a decorator or a line break, a function type after a `:`, an `=>`, a `(` or a `[`, an element after an operator — and puts after it a decoy that holds the closing tag of the head's name and the text
+// of a call, and the one real call. TypeScript says which pages parse and which call is real; a page whose head is read for an element where TypeScript reads type parameters takes the decoy for the end of the element's text and its call for code.
+const GRAMMAR_PAGES = 30000;
+test('sweep (a grammar of heads in members, function types, elements and after line breaks, TypeScript parser): every token is read where TypeScript reads it, and a page that the base resolves is not refused', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const families = new Map();
+  for (const page of typeHeadPages(0x7e57, GRAMMAR_PAGES)) {
+    if (!families.has(page.family)) families.set(page.family, []);
+    families.get(page.family).push(page);
+  }
+  const total = { generated: 0, valid: 0, exact: 0, guessed: 0, baseMisread: 0, lost: 0 };
+  const problems = [];
+  const lost = [];
+  const small = [];
+  for (const [family, pages] of [...families].sort()) {
+    const reading = readTokens(ts, pages, base);
+    for (const key of Object.keys(total)) total[key] += reading.stats[key];
+    problems.push(...reading.problems);
+    lost.push(...reading.lostPrograms.map((program) => program.label));
+    if (reading.stats.valid < 30) small.push(`${family}: ${reading.stats.valid}`);
+    t.diagnostic(`${family}: ${describeReading(reading)}`);
+  }
+  t.diagnostic(`${families.size} families, ${total.generated} pages, ${total.valid} valid, ${total.exact} read exactly, ${total.guessed} refused after a guess; the base misreads ${total.baseMisread}, ${total.lost} that it reads exactly are refused here`);
+  assert.deepStrictEqual(problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.deepStrictEqual(lost.slice(0, 3), [], 'a page that the base resolves is refused');
+  assert.deepStrictEqual(small, [], 'every family has pages that TypeScript parses');
+  assert.ok(families.size >= 16, `only ${families.size} families were drawn`);
+  assert.ok(total.valid >= 9000, `only ${total.valid} pages were valid, so the sweep proves little`);
+  assert.ok(total.exact >= 7000, `only ${total.exact} pages were read exactly`);
+  if (base) assert.ok(total.baseMisread >= 1500, `the base misreads only ${total.baseMisread} of the pages, so the sweep does not show the misread`);
+});
+
+// The same, with a line break before the word of a member: after the tokens that end a member a word that no operator may stand before starts one, and after every other it is an operator — so the element after `void`, `typeof` or `delete` is read for
+// certain wherever an expression is wanted, with every kind of line break or comment before the word (an element cannot be a member there).
+test('sweep (an element after `void`, `typeof` or `delete` where an expression is wanted, with a line break or a comment before the word, TypeScript parser): the element is read exactly, with no guess, as on one line', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...newlinePages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.strictEqual(reading.stats.valid, pages.length, 'every page is valid to TypeScript');
+  assert.strictEqual(reading.stats.guessed, 0, `an element after a unary word was guessed at: ${JSON.stringify(reading.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(reading.stats.exact, reading.stats.valid, 'every page is read exactly');
+  assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
 });
 
 // The same text as an element, where it stays certain: JSX text that starts with a parenthesis in every place an element stands, with white space of every kind after the `)`, nested elements with

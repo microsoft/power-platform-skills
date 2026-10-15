@@ -164,8 +164,11 @@ function prevSignificant(src, i) {
 //                       signature), or the text read as an element's children reaches its closing tag; a signature, for certain, where that reading fails (a `}` in the text
 //                       that ends the type, a `</*` that starts the next signature's type parameters); a guess only where the closing tag could be inside a string, a template,
 //                       a comment or a regex that the text opens, or the text cannot be read, or the pass's budget of readings is spent; the same for a head that starts like an
-//                       element's — a modifier before the name (`<in U>(y)`, `<public U>(y)`), an empty list (`<>(y)`), a method named `delete`, `typeof`, `void` or `instanceof`
-//                       (`delete<U>(y)`) — where a type has them as a signature's type parameters (signatureHeadFollows), and there a `:` or a `{` after the list is read through too;
+//                       element's — a modifier before the name, alone or in a run with `const` (`<in U>(y)`, `<public U>(y)`, `<const in U>(y)`), an empty list (`<>(y)`), a method named
+//                       `delete`, `typeof`, `void` or `instanceof` (`delete<U>(y)`) — where a type has them as a signature's type parameters, or as a generic function type's where no
+//                       member begins (`cb: <in U>(y: U) => void`: the `=>` after the list tells it), and a guess where the two readings may end the head in different places (a string with an
+//                       escaped quote, a regex for a constraint, a comment in the head) (signatureHeadFollows); there a `:` or a `{` after the list is read through too, and a body is
+//                       read from its end (PROSE_BODY);
 //                       and TypeScript's rule
 //                       for a `<` (see below) decides everything else
 //                         interface Callable { <T>(x: T): T }          <span>(required): Name</span>          const f: <T>(x: { 'a'?(y: T): T }) => T = g;
@@ -749,6 +752,8 @@ const RESERVED_WORDS = new Set(['break', 'case', 'catch', 'class', 'continue', '
 // TypeScript 5.8 over every keyword in a call signature, a construct signature, a method, a function type and a class: these twelve and `const`, and no other (`export`, `default`, `get`
 // and `set` fail), each only where the name follows on the same line (`<public` LF `U>` is an error).
 const TYPE_PARAMETER_MODIFIERS = new Set(['in', 'out', 'public', 'private', 'protected', 'readonly', 'static', 'abstract', 'async', 'declare', 'override', 'accessor']);
+// `const` stands before the name of a type parameter as well, with any of the others after it (`<const in U>`): the rule reads it apart, as a word that is skipped, and the parser reads it as one more modifier.
+const isTypeParameterModifier = (word) => word === 'const' || TYPE_PARAMETER_MODIFIERS.has(word);
 // The words after which a `<` is an element to the table below (`delete <U>(y)</U>` is the deletion of an element) and that name a member of a type, a class or an object literal as well:
 // `delete<U>(y): void` is a method named `delete` with type parameters. The other words of that table are operators that no member is named by.
 const MEMBER_NAME_OPERATORS = new Set(['delete', 'typeof', 'void', 'instanceof']);
@@ -825,8 +830,9 @@ function readRuleToken(src, j) {
 // Whether the `<` at `i`, where an assignment expression may start, opens a generic arrow's type parameters (`generic`) or an element, and the kind of
 // guess the answer rests on, or null where the rule decides: { generic, ambiguity }. See above. `inExpression` says the `<` is known to start an expression (a default value after an `=`): a name and a
 // `>` is then an element, as the rule says, and no function type's `<T>` is read there (genericFunctionTypeFollows), which a `<` in a type may be. `noMember` says that no member of a type begins at the `<` (NO_MEMBER_BEFORE),
-// which settles a parameter list with neither `=>` nor `:` after it.
-function opensTypeParameters(src, i, budget = null, inExpression = false, noMember = false) {
+// which settles a parameter list with neither `=>` nor `:` after it: a call or construct signature needs a member's place, a function type does not. `afterName` says that a word or a `?` stands right before the `<`, which a method that has
+// a body may be named by (`new <U>(y) { return y; }`, `m?<U>(y) {}`): the text after a `{` that follows the list is then read, and no longer taken for an element.
+function opensTypeParameters(src, i, budget = null, inExpression = false, noMember = false, afterName = false) {
   let escaped = false;
   const read = (j) => {
     const token = readRuleToken(src, skipSpaceAndComments(src, j));
@@ -834,32 +840,32 @@ function opensTypeParameters(src, i, budget = null, inExpression = false, noMemb
     return token;
   };
   const verdict = (generic, ambiguity = null) => ({ generic, ambiguity: escaped ? 'identifier' : ambiguity });
-  // The rule reads an element where an expression starts; where a type holds members the same text may be the type parameters of a signature (signatureHeadFollows), which only the text after the head tells. Where no member of a type
-  // begins (`noMember`: after an `=`, a `(`, a `[`, a `:`, an `=>`) or the `<` is known to start an expression, only an element can stand there and the rule's answer stands, as it always was: a fragment or a tag with a modifier in an expression
-  // whose text starts with a parenthesis is not asked what a parameter list it cannot read would be.
-  const typeMayStart = !inExpression && !noMember;
+  // The rule reads an element where an expression starts; in a type the same text may be the type parameters of a call or construct signature or of a method, where a member begins, or those of a function type, where a type does
+  // (signatureHeadFollows), which only the text after the head tells. After an `=`, a `(`, a `[`, a `:` or an `=>` no member begins (`noMember`) but a function type may — `onPick: <in U>(y: U) => void` — and the `=>` that follows its
+  // parameter list is what says so; a text with none is an element there, as it always was. Only where the `<` is known to start an expression (`inExpression`, a default value) is the rule's answer the only one.
   const signature = () => {
-    const type = signatureHeadFollows(src, i, budget);
+    const type = signatureHeadFollows(src, i, budget, noMember);
     return verdict(type.generic, type.ambiguity);
   };
-  // A modifier and the name it stands before, on one line: `<in U>`, `<out U>`, `<public U>` (parseTypeParameter takes the modifiers of a parameter, TYPE_PARAMETER_MODIFIERS). A line break between them makes the
-  // modifier the name, and the next word the start of nothing a type parameter list has.
+  // A modifier and the name it stands before, on one line: `<in U>`, `<out U>`, `<public U>`, `<const U>` (parseTypeParameter takes the modifiers of a parameter, TYPE_PARAMETER_MODIFIERS and `const`). Any number of
+  // them may stand there, `<const in U>`, and the word after a modifier is another or the name. A line break between them makes the modifier the name, and the next word the start of nothing a type parameter list has —
+  // except after `static`, which takes the next token whatever line it is on (nextTokenCanFollowModifier, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts, with `get` and `set`, which no type parameter takes).
   const modifierThenName = (word) => {
-    if (word.kind !== 'word' || !TYPE_PARAMETER_MODIFIERS.has(word.text)) return false;
+    if (word.kind !== 'word' || !isTypeParameterModifier(word.text)) return false;
     const next = read(word.end);
-    return next.kind === 'word' && next.text !== 'extends' && !lineBreakBetween(src, word.end, skipSpaceAndComments(src, word.end));
+    return next.kind === 'word' && next.text !== 'extends' && (word.text === 'static' || !lineBreakBetween(src, word.end, skipSpaceAndComments(src, word.end)));
   };
   const first = read(i + 1);
   let identifier = first;
   if (first.kind === 'word' && first.text === 'const') {
-    // TypeScript steps over `const` and then reads one more token, whatever it is, as the name.
+    // TypeScript steps over `const` and then reads one more token, whatever it is, as the name. (A modifier after the `const` is no name to the parser: `<const in U>` is the list of a signature, which the end of this function reads.)
     identifier = read(first.end);
   } else if (first.kind === 'gt') {
     // `<>` is a fragment to the rule, and the empty list of type parameters of a signature in a type (`interface I { <>(y): void }`): the parser accepts the empty list and only the checker objects (TS1098).
-    return typeMayStart ? signature() : verdict(false);
+    return inExpression ? verdict(false) : signature();
   } else if (first.kind !== 'word' || RESERVED_WORDS.has(first.text)) {
     // `<1`, `<this`: no identifier, so an element — and `<in U>`, whose first word is a reserved word that is also a modifier.
-    return typeMayStart && modifierThenName(first) ? signature() : verdict(false);
+    return !inExpression && modifierThenName(first) ? signature() : verdict(false);
   } else if (first.text === 'await' || first.text === 'yield') {
     // `isIdentifier()` is false for `await` inside an async function (or a module's top level) and for `yield` inside a generator, and the first name is the
     // one token the rule asks it of (the name after `const` is not): the same words are an element there and a generic arrow elsewhere, and which this is
@@ -879,29 +885,51 @@ function opensTypeParameters(src, i, budget = null, inExpression = false, noMemb
   if (third.kind === 'comma' || third.kind === 'equals') return verdict(true);
   if (third.kind === 'gt' && identifier.kind === 'word') {
     if (inExpression) return verdict(false);
-    const type = genericFunctionTypeFollows(src, third.end, i, budget, noMember);
+    const type = genericFunctionTypeFollows(src, third.end, i, budget, noMember, false, afterName);
     return verdict(type.generic, type.ambiguity);
   }
-  // A modifier before the name (`<public U>(y)`) is no arrow to the rule, and the head is an element where an expression starts; in a type it is the type parameters of a signature.
-  if (typeMayStart && modifierThenName(first)) return signature();
+  // A modifier before the name (`<public U>(y)`, `<const in U>(y)`) is no arrow to the rule, and the head is an element where an expression starts; in a type it is the type parameters of a signature or a function type. After the `const`
+  // that the rule steps over, the next word is a modifier too or the head is no list (`<const T == y`): `identifier` is that word, and the first when there was no `const`.
+  if (!inExpression && modifierThenName(identifier)) return signature();
   return verdict(false);
 }
 
-// What a head that TypeScript's rule for a `<` calls an element — `<>`, a modifier before the name (`<in U>`, `<public U>`), or any head after `delete`, `typeof`, `void` or `instanceof` — opens where a type may hold
-// members, as opensTypeParameters answers it: { generic, ambiguity }. In a type these are the type parameters of a call or construct signature, or of a method (`interface I { <in U>(y): void; delete<U>(y): void }`):
-// the parser reads them whatever the words are, and only the checker objects. The two programs share their text up to the list, and what tells them apart is what follows it — which genericFunctionTypeFollows
-// reads for any head: an element where nothing follows that a signature could, code where the text read as an element's children fails (the `}` that ends the type), a guess where the closing tag could be inside a
-// string, a template, a comment or a regex of the type. It reads a `:` or a `{` after the list as well (`precise`): a member of this kind may have a return type or a body, and without the reading `delete<U>(y): R` would
-// be a guess wherever it stands, and a method with a body an element. Asked only where a member of a type may begin (opensTypeParameters, angleOpens).
-function signatureHeadFollows(src, i, budget) {
+// What a head that TypeScript's rule for a `<` calls an element — `<>`, a modifier before the name (`<in U>`, `<public U>`, `<const in U>`), or any head after `delete`, `typeof`, `void` or `instanceof` — opens where a type may hold
+// members, or may be a function type (`noMember`: after a `:`, where no member begins), as opensTypeParameters answers it: { generic, ambiguity }. In a type these are the type parameters of a call or construct signature, of a method
+// (`interface I { <in U>(y): void; delete<U>(y): void }`) or of a function type (`onPick: <in U>(y: U) => void`): the parser reads them whatever the words are, and only the checker objects. The two programs share their text up to the list,
+// and what tells them apart is what follows it — which genericFunctionTypeFollows reads for any head: an element where nothing follows that a signature or a function type could, code where the text read as an element's children fails (the `}`
+// that ends the type, the `>` of the arrow), a guess where the closing tag could be inside a string, a template, a comment or a regex of the type. It reads a `:` or a `{` after the list as well (`precise`): a member of this kind may have a
+// return type or a body, and without the reading `delete<U>(y): R` would be a guess wherever it stands, and a method with a body an element. Asked where a member or a function type may begin (opensTypeParameters, angleOpens).
+function signatureHeadFollows(src, i, budget, noMember = false) {
   const tag = readTag(src, i + 1, Math.min(src.length, i + LOOKAHEAD));
   // A head this reading cannot read — a comment in it, a character beyond ASCII — may be either program's.
   if (tag === null) return { generic: false, ambiguity: 'generic' };
-  // What no element has for a head is type parameters: `<in U, out V>`, `<public U = string>`, `<in U extends { a: T }>`.
+  // What no element has for a head is type parameters: `<in U, out V>`, `<public U = string>`, `<in U extends { a: T }>`. This holds whatever the string in it is: the tag reading is the element's own, and an element it rejects is no element.
   if (tag.fails !== undefined) return { generic: true, ambiguity: null };
-  // A self-closing tag has no text for a parameter list to start: `<in U/>` is an element.
-  if (tag.selfClosing) return { generic: false, ambiguity: null };
-  return genericFunctionTypeFollows(src, tag.resume, i, budget, false, true);
+  // Every other answer rests on where the head ENDS, and the two readings of it end in different places where a quote is escaped: a JSX attribute string has no escapes and ends at the next quote, so `<T extends string="\">">(): void` is an
+  // attribute `"\"` and a tag that ends at the `>` after it, where TypeScript's string default is `"\">"` and the list ends at the last `>`, with a parameter list after it. Read from the wrong end, the text after the head is not the
+  // text after the list, and an element would be read for the method it is not (headWithoutParameterList documents the same hazard). Only a quote that an odd number of backslashes precedes moves an end (`"\\"` and `"\x3e"` end
+  // where the tag reading ends them): a head with one is not decided here, and is the guess.
+  for (let k = i; k < tag.resume; k += 1) {
+    if (src[k] !== '"' && src[k] !== "'") continue;
+    let escapes = 0;
+    while (src[k - 1 - escapes] === '\\') escapes += 1;
+    if (escapes % 2 === 1) return { generic: false, ambiguity: 'generic' };
+  }
+  // A self-closing tag has no text for a parameter list to start: `<in U/>` is an element. After an `extends` its `/` is the start of a regex to the parser — a constraint that starts no type is read as an expression (parseTypeParameter),
+  // and `<in U extends />;…/>(y): void` is a signature whose constraint is the regex `/>;…/` — so the head ends at the `>` after the regex and not at the tag's: a guess, as for `<T extends />` (opensTypeParameters), unless the
+  // regex does not close on its line, which is an error (TS1161), no type has the text and the element is certain.
+  if (tag.selfClosing) {
+    let wordEnd = tag.slash;
+    while (wordEnd > i && isTagSpace(src[wordEnd - 1])) wordEnd -= 1;
+    let wordStart = wordEnd;
+    while (wordStart > i && isTagNamePart(src[wordStart - 1])) wordStart -= 1;
+    return { generic: false, ambiguity: src.slice(wordStart, wordEnd) === 'extends' && regexEnd(src, tag.slash) !== -1 ? 'generic' : null };
+  }
+  const type = genericFunctionTypeFollows(src, tag.resume, i, budget, noMember, true);
+  // Where no member begins only an arrow makes the head a type, a function type's, and the reading says so where it finds one after the list. A list it cannot read to its end — an unclosed parenthesis, a default that holds a regex, a
+  // template or an element — shows no arrow, and the head stays the element it always was there: `f(<> ([*/</>) > …` is a fragment whose text starts with a parenthesis.
+  return noMember && !type.generic ? { generic: false, ambiguity: null } : type;
 }
 
 // Whether a line terminator stands in src between `from` and `to` — in a comment too, which is a line break to the grammar when it holds one.
@@ -1080,13 +1108,13 @@ function angleBefore(src, i) {
 //     null), and the first `>` that no list of tag type arguments holds ends the head for both readings.
 //   - a character beyond ASCII or a line terminator outside a string: readTag reads ASCII white space and names only, and answers null for the rest — but after the `/` of a self-closing head, where
 //     trivia of every kind stands before the `>`, and which no type parameter list has.
-function headWithoutParameterList(src, i, budget = null) {
+function headWithoutParameterList(src, i, budget = null, body = false) {
   if (!isTagNameStart(src[i + 1])) return false;
   const tag = readTag(src, i + 1, Math.min(src.length, i + LOOKAHEAD));
   if (tag === null || tag.fails !== undefined) return false;
   // Bounded by the head, which readTag read within LOOKAHEAD: a search of the whole source for each `<` would be quadratic.
   for (let k = i; k < tag.resume; k += 1) if (src[k] === '\\') return false;
-  const type = genericFunctionTypeFollows(src, tag.resume, i, budget);
+  const type = genericFunctionTypeFollows(src, tag.resume, i, budget, false, false, body);
   return !type.generic && type.ambiguity === null;
 }
 
@@ -1104,19 +1132,73 @@ function asyncBeforeAngle(out, i) {
   return !prevSignificant(out, i).newline && wordBefore(out, i).word === 'async';
 }
 
-// The tokens after which a member of a type, a class or an object literal may begin: the start of a body, a separator, the end of a member that has a body, a modifier, and a generator's `*` — and a line break
-// (below), which ends a member that needs no separator.
-const MEMBER_START_BEFORE = new Set(['', '{', '}', ';', ',', '*', 'public', 'private', 'protected', 'static', 'readonly', 'async', 'abstract', 'override', 'declare', 'accessor']);
+// The tokens after which a member of a type, a class or an object literal begins, whatever stands between them and the member: the start of a body, a separator, the end of a member that has a body, and the start of the source.
+const MEMBER_START_BEFORE = new Set(['', '{', '}', ';', ',']);
 
-// Whether a member may begin at the word that ends right before the `<` at `i`, read from the token that stands before the word. Where it cannot — after an `=`, an operator, `return`, a `(` — the word is an
-// operator, and the `<` after it an element.
+// The words that TypeScript's parser takes before the name of a member on its line: a modifier (parseModifiers) or the word of an accessor — `static async delete<U>(y) {}`, `in delete<U>(y): void`, `get delete<U>(): void`. Measured against
+// TypeScript 5.8 over every keyword it has, in an interface, a type literal, a class (declared, abstract and an expression) and an object literal, each place taking its own part of the list (`const` is a modifier in a class only, `export` in all
+// of them): the union of the four, since the lexer cannot tell which place a `<` is in. A word on none of these is a name, and a second name on its line is an error (TS1005); `default` is a modifier on a line of its own only. The tests
+// derive the list from the parser, so a TypeScript that takes another word fails one rather than leaving a method with a body or a return type to be read as the text of an element.
+const MEMBER_PREFIX_WORDS = new Set(['abstract', 'accessor', 'async', 'const', 'declare', 'export', 'get', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'set', 'static']);
+// How many tokens are read back from a member's name — the modifiers of a chain, a generator's `*`, a `?` — before the member is taken to begin there (a chain that long is none a page has).
+const MEMBER_LOOKBACK = 8;
+
+// Whether a member of a type, a class or an object literal may begin at the word that ends right before the `<` at `i`, read from the tokens that stand before the word. Where it cannot — after an `=`, an operator, `return`, a `(`, on this line
+// or after a line break — the word is an operator, and the `<` after it an element.
 function memberMayBeginAtWord(out, i) {
-  const before = tokenBeforeAngle(out, wordBefore(out, i).start + 1);
-  return before.newline || MEMBER_START_BEFORE.has(before.token);
+  return memberMayBeginAt(out, wordBefore(out, i).start + 1, 0);
+}
+
+// Whether a member may begin at `at`, where a word or a `*` starts. After a separator it does; after a modifier on the same line it does if a member may begin at the modifier (`a in delete <U>(y)</U>` has an operator, not a modifier,
+// and `x = in …` no program); after a generator's `*` if one may begin at the `*`; after a decorator (decoratorBefore); on a later line after any token that may end a member (memberMayEndBefore) — a name, a keyword, a closing bracket —
+// and not after one that wants its operand, the `=`, `=>`, `:`, `(`, `[` or operator of an expression that goes on (`const e =` and a line break, then `void <span>…</span>`).
+function memberMayBeginAt(out, at, depth) {
+  const before = tokenBeforeAngle(out, at);
+  const { token, newline, index } = before;
+  if (MEMBER_START_BEFORE.has(token) || depth >= MEMBER_LOOKBACK) return true;
+  if (token === '*') return memberMayBeginAt(out, index, depth + 1);
+  const word = /^[\w$]+$/.test(token);
+  if (newline) return word || memberMayEndBefore(out, before, depth);
+  if (word && MEMBER_PREFIX_WORDS.has(token)) return memberMayBeginAt(out, index - token.length + 1, depth + 1);
+  return decoratorBefore(out, index);
+}
+
+// Whether a decorator ends at `index`, the last character of the token before a member's name. A class member may have any number of them before its name and its modifiers (parseModifiers allows decorators in a class, and in no other
+// place a member stands: `@dec`, `@a.b`, `@dec(1)`, `@(x)`, `@dec<T>()`), and no program has an `@` in code anywhere else, so one earlier on the statement says that what stands before the name is a decorator's. The statement is the
+// text back to a `;` or a line break, within the window.
+function decoratorBefore(out, index) {
+  for (let k = index; k >= 0 && index - k <= LOOKAHEAD; k -= 1) {
+    if (out[k] === '@') return true;
+    if (out[k] === ';' || isLineTerminator(out[k])) return false;
+  }
+  return false;
+}
+
+// Whether the token that ends a line, which is no word and no separator, may end a member: a closing bracket (`m()`, `[k: string]: T`, `a: A<B>`), a string or template (`a: 'x'`, a literal name), a postfix `++` or `--`, a `/` that ends a regex
+// (a class property's initializer), a character beyond ASCII, which may be part of a name, a postfix `!` (the non-null assertion that ends an initializer, a definite property `m!`) and a `?` that marks a name optional (`m?`, a property
+// with no type). The tokens that want an operand are none of these, and a line break after one does not end the expression: an `=`, an `=>`, a `:`, a `(`, a `[`, a `.`, a prefix `!`, `+` or `&&`, a conditional's `?` and the rest.
+function memberMayEndBefore(out, { token, index }, depth) {
+  if (token === ')' || token === ']' || token === '>' || token === '++' || token === '--' || token === '/' || token === '"' || token === "'" || token === '`' || token === '\\' || token.charCodeAt(0) > 0x7f) return true;
+  if (token === '!') return operandEndsAt(out, index);
+  if (token !== '?') return false;
+  // After a name that a member starts with, `?` marks it optional; after any other operand it is a conditional's and wants its consequent: `const e = x ?` and a line break, then `void <span>…</span>` is no member. (A type's `?` in JSDoc
+  // style, `a: A?`, is read as a conditional's: TypeScript parses it and its checker rejects it, TS8020.)
+  const name = tokenBeforeAngle(out, index);
+  if (/^[\w$]+$/.test(name.token)) return memberMayBeginAt(out, name.index - name.token.length + 1, depth + 1);
+  return name.token === ']' || name.token === '"' || name.token === "'" || name.token === '`';
+}
+
+// Whether an operand ends at `index`, the last character of the token before a `!`: a name, a number, a closing bracket or a literal, which makes the `!` the postfix operator of a non-null assertion. After an operator, a separator, an
+// opening bracket or a keyword that takes an operand (`return`, `typeof`, …) it is the prefix operator, which wants its operand on the next line.
+function operandEndsAt(out, index) {
+  const before = tokenBeforeAngle(out, index);
+  if (/^[\w$]+$/.test(before.token)) return !EXPR_START_WORDS.has(before.token);
+  if (before.token === '!') return operandEndsAt(out, before.index);
+  return before.token === ')' || before.token === ']' || before.token === '}' || before.token === '>' || before.token === '"' || before.token === "'" || before.token === '`';
 }
 
 // Whether the head that starts at the `<` at `i` may be a list of type parameters, read as parseTypeParameters reads one: `<>`, a name that a `>`, a `,`, a `=` or `extends` follows (`<U>`, `<U extends X>`), or modifiers
-// and a name (`<in U>`, `<const U>`), the name on the line of the modifier. A head of any other shape — two words and no modifier, a word with an escape — is no type's (`<a b>`).
+// and a name (`<in U>`, `<const U>`), the name on the line of the modifier (or any line after `static`). A head of any other shape — two words and no modifier, a word with an escape — is no type's (`<a b>`).
 function mayBeTypeParameters(src, i) {
   const at = (j) => readRuleToken(src, skipSpaceAndComments(src, j));
   const first = at(i + 1);
@@ -1124,8 +1206,8 @@ function mayBeTypeParameters(src, i) {
   if (first.kind !== 'word' || first.escaped) return false;
   const second = at(first.end);
   if (second.escaped) return false;
-  const modifier = first.text === 'const' || TYPE_PARAMETER_MODIFIERS.has(first.text);
-  if (modifier && second.kind === 'word' && second.text !== 'extends') return !lineBreakBetween(src, first.end, skipSpaceAndComments(src, first.end));
+  const modifier = isTypeParameterModifier(first.text);
+  if (modifier && second.kind === 'word' && second.text !== 'extends') return first.text === 'static' || !lineBreakBetween(src, first.end, skipSpaceAndComments(src, first.end));
   // A reserved word is no name.
   if (RESERVED_WORDS.has(first.text)) return false;
   return second.kind === 'gt' || second.kind === 'comma' || second.kind === 'equals' || (second.kind === 'word' && second.text === 'extends');
@@ -1149,12 +1231,14 @@ function angleOpens(src, out, i, budget = null, certainOperator = false) {
   // Directly after the head of a type alias a `<` is a function type's whatever follows it (afterTypeAliasHead). The head ends in a lone `=`, so no token of
   // another class can precede it.
   if (afterTypeAliasHead(out, i)) return { generic: true, ambiguity: null };
-  // After one of these tokens no member of a type begins, so a head with a parameter list that neither `=>` nor `:` follows is no call signature (NO_MEMBER_BEFORE).
-  const rule = opensTypeParameters(src, i, budget, false, before.read === 'rule' && NO_MEMBER_BEFORE.has(before.token));
+  // After one of these tokens no member of a type begins, so a head with a parameter list that neither `=>` nor `:` follows is no call signature (NO_MEMBER_BEFORE). A word or a `?` right before the `<` may be the name of a method that
+  // has a body (`new <U>(y) { return y; }`, `m?<U>(y) {}`, `in<U>(y) {}`), which a `{` after the list then begins.
+  const afterName = (before.read === 'rule' || before.read === 'guess') && typeof before.token === 'string' && (before.token === '?' || /^[A-Za-z_$][\w$]*$/.test(before.token));
+  const rule = opensTypeParameters(src, i, budget, false, before.read === 'rule' && NO_MEMBER_BEFORE.has(before.token), afterName);
   // After a guess token, a head with a constraint and no parameter list is an element in every program that parses (headWithoutParameterList). That holds after the cut `>=`, `>>=`
   // and `>>>=` too: where the first `>` ends type arguments, `>=` compares and the head is an element; where the run is one operator, an assignment, the rule reads the head as
   // type parameters, TypeScript attempts the arrow it then must be, and with no parameter list that is an error (`v >>= <T extends X>text</T>`).
-  if (before.read === 'guess' && rule.generic && rule.ambiguity === null && headWithoutParameterList(src, i, budget)) return { generic: false, ambiguity: null };
+  if (before.read === 'guess' && rule.generic && rule.ambiguity === null && headWithoutParameterList(src, i, budget, afterName)) return { generic: false, ambiguity: null };
   const verdict = before.read === 'guess' && rule.generic ? { generic: false, ambiguity: before.kind } : rule;
   return before.report && verdict.ambiguity === null ? { ...verdict, ambiguity: before.report } : verdict;
 }
@@ -1523,6 +1607,7 @@ const PROSE_SIGNATURE = 10; // the `)` of the signature that the text follows: a
 const PROSE_LINE_TYPE = 11; // a member begins, or the type before it goes on: after a line break that follows a type
 const PROSE_QUALIFIED = 12; // a `.` in a type was read, or `typeof` or `infer`: a name follows, and any word is one there (`A.new`, `A.keyof`, `typeof new`, `infer keyof`)
 const PROSE_OPERATOR = 13;  // `keyof`, `readonly` or `unique` was read: a type follows, which may be another of them, and any other word is a name (`keyof new`)
+const PROSE_BODY = 14;      // the `}` of a method's body was read (a class's or an object literal's): the next member begins after it, and of the text there only a `/` that starts no comment is known to be no member's start
 
 // Every keyword TypeScript has (ts.SyntaxKind.FirstKeyword to LastKeyword in 5.8): the words that may stand beside another operand in an expression. No other word may — `a b` is an error, whatever they are — so two
 // side by side that are not on this list are TS1005.
@@ -1734,6 +1819,10 @@ function typeMembersFail(src, prose, to, opener) {
         for (let m = k; m < end; m += 1) if (isLineTerminator(src[m])) state = afterLineBreak();
         k = end;
       }
+    } else if (state === PROSE_BODY) {
+      // Whatever else follows a method's body may begin a member of a class (a property with an initializer, a name that is a string or computed) or is the next property of an object literal, whose value is any expression: the
+      // reading of a type's members does not follow it.
+      state = PROSE_OTHER;
     } else if (state === PROSE_TPARAMS && c !== '(') {
       return true;
     } else if (c === '#' && !isPrivateNameStart(src[k + 1])) {
@@ -2042,8 +2131,8 @@ function tagNameEnd(src, at) {
   }
 }
 
-// A tag whose name starts at `at` (the character after its `<`), read up to the `>` that ends it: { resume } is where the text goes on, { fails } the offset of what TypeScript
-// rejects, and null where this reading cannot say. `arrow` is the `=` of the arrow whose element reading is being asked after: a tag that reaches it has the arrow inside.
+// A tag whose name starts at `at` (the character after its `<`), read up to the `>` that ends it: { resume } is where the text goes on (and `selfClosing` and `slash`, the offset of the `/`, for a tag that closes itself), { fails } the offset
+// of what TypeScript rejects, and null where this reading cannot say. `arrow` is the `=` of the arrow whose element reading is being asked after: a tag that reaches it has the arrow inside.
 // `closing` says that the text is read to a closing tag (readChildren) and not to an arrow: an expression container that is an attribute's value or a spread is then skipped, as one in the text is
 // (containerFailsAt), where an arrow reading leaves the tag unread.
 //   <b>   <b/>   <b / >   <A.B x y-z a="1" b='2' c = "3" d="\">   — a JSX attribute string has no escapes, so the last one is `"\"` and ends at the second quote
@@ -2064,7 +2153,7 @@ function readTag(src, at, arrow, closing = false) {
       if (src[k + 1] === '/' || src[k + 1] === '*') return null;
       const close = skipSpaceAndComments(src, k + 1);
       if (close >= arrow) return null;
-      return src[close] === '>' ? { resume: close + 1, selfClosing: true } : { fails: close };
+      return src[close] === '>' ? { resume: close + 1, selfClosing: true, slash: k } : { fails: close };
     }
     if (c === '{') {
       // A `{` where an attribute may start begins a spread, `{...props}`, and parseJsxSpreadAttribute wants the `...` right after it, so anything else there is an error at that
@@ -2291,8 +2380,9 @@ function scanChildren(src, from, last, arrow, closing, keep) {
   let realDepth = 0;
   let certainUntil = 0;
   // What the type that the text would be the members of can be, read as far as the text is plain prose (typeMembersFail): each thing that could hide the closing tag is asked whether that type can be valid up to
-  // it, until the answer is no (`typeDead`), which is the end of the question: no type holds the closing tag in anything, nothing that follows can hide it, and the text is an element.
-  const prose = closing !== null && closing.typeFrom >= 0 ? { at: closing.typeFrom, state: PROSE_SIGNATURE, last } : null;
+  // it, until the answer is no (`typeDead`), which is the end of the question: no type holds the closing tag in anything, nothing that follows can hide it, and the text is an element. Where a method's body follows the
+  // parameter list (`closing.bodyAt`), the type is not read until the body ends: the body is code that these members do not have.
+  let prose = closing !== null && closing.typeFrom >= 0 ? { at: closing.typeFrom, state: PROSE_SIGNATURE, last } : null;
   let typeDead = false;
   // The comments that the text opened, as a run: `//` to the end of its line and `/* */`, with nothing but white space and further comments between them, and the depth at which the run began. A comment is trivia to the
   // type, so what follows the run is judged by what stands before it (slashFollowsAnOperand). Where the text of a nested element is the element's, the run that began in it is no comment, and ends with the element: the
@@ -2307,6 +2397,7 @@ function scanChildren(src, from, last, arrow, closing, keep) {
       const container = containerFailsAt(src, j, last, closing !== null);
       if (container === null) return null;
       if (container.fails !== undefined) return { fails: container.fails };
+      if (closing !== null && j === closing.bodyAt) prose = { at: container.resume, state: PROSE_BODY, last };
       j = container.resume;
       continue;
     }
@@ -2446,17 +2537,18 @@ function elementFailsAt(src, from, arrow) {
 
 // The children of the element `<name>` read from `from`, just past its opening tag, to its closing tag, within LOOKAHEAD characters: { fails }, { closes, hideable } or null (readChildren). `name` is
 // null where the tag's name is not known (headTagName), and a closing tag with no open element inside it is then not told from another. `typeFrom` is where the members of the type that the text
-// would be start — just past the `)` of the parameter list — or -1 where there is no such type (typeMembersFail).
+// would be start — just past the `)` of the parameter list — or -1 where there is no such type (typeMembersFail). `bodyAt` is the `{` right after the list where a method's body may stand, or -1: the members are then read from
+// the end of that body (PROSE_BODY).
 //
 // A call signature's text is read to the `}` that ends its type, and the next signature in that type is read again to the same `}`: a type of k signatures costs k times its length, up to the window.
 // So a pass over a source has a budget of characters to read, a share of its length and a base for short ones (lexInto), which each reading spends; where it is spent a reading says nothing, which
 // is the guess, and the pass stays linear however the source is built.
 const READING_BUDGET_PER_CHAR = 8;
 const READING_BUDGET_BASE = 100000;
-function elementChildren(src, from, name, budget = null, typeFrom = -1) {
+function elementChildren(src, from, name, budget = null, typeFrom = -1, bodyAt = -1) {
   if (budget !== null && budget.left <= 0) return null;
   const last = Math.min(src.length - 1, from + LOOKAHEAD);
-  const read = readChildren(src, from, last, -1, { name, typeFrom });
+  const read = readChildren(src, from, last, -1, { name, typeFrom, bodyAt });
   if (budget !== null) budget.left -= (read === null ? last : read.fails !== undefined ? read.fails : read.closes) - from + 1;
   return read;
 }
@@ -2483,7 +2575,8 @@ function elementChildren(src, from, name, budget = null, typeFrom = -1) {
 // A list whose parameters fail before any of that has no type reading either (parameterSyntaxFails), and neither does one whose first default is `</`: no expression and no type starts with it.
 // Parentheses followed by neither `=>` nor `:` are JSX text (`<b>(optional)</b>`) or a call signature with no return type: callSignatureOrElement says which, where it can. `precise` reads the text after a `:` or a
 // `{` the same way, for the heads that are an element to TypeScript's rule and may be the type parameters of a member that has a return type or a body (signatureHeadFollows); for the other heads a `:` is the guess above.
-function genericFunctionTypeFollows(src, after, head, budget = null, noMember = false, precise = false) {
+// `body` reads the text after a `{` alone, for a head that stands right after a word or a `?` that may be the name of a method with a body: `new <U>(y) { return y; }` in a class (opensTypeParameters, afterName).
+function genericFunctionTypeFollows(src, after, head, budget = null, noMember = false, precise = false, body = false) {
   const open = skipSpaceAndComments(src, after);
   if (src[open] !== '(') return { generic: false, ambiguity: null };
   // A list that can hold no parameters, or whose parameters fail before a type, a default, a pattern or a decorator, belongs to no signature and no function type: the text is an element,
@@ -2535,7 +2628,7 @@ function genericFunctionTypeFollows(src, after, head, budget = null, noMember = 
   const next = skipSpaceAndComments(src, k + 1);
   if (src[next] === '=' && src[next + 1] === '>') return { generic: true, ambiguity: elementFailsAt(src, after, next) === -1 ? 'generic' : null };
   if (unsafe || (src[next] === ':' && !precise)) return { generic: false, ambiguity: 'generic' };
-  return callSignatureOrElement(src, after, head, k, next, budget, noMember, precise);
+  return callSignatureOrElement(src, after, head, k, next, budget, noMember, precise, body);
 }
 
 // The index of the `/` that closes the regex literal whose opening `/` is at `i`, as TypeScript's scanner finds it (scanner.ts, reScanSlashToken, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/scanner.ts):
@@ -2887,18 +2980,23 @@ function headTagName(src, head) {
 //      the decision is the same: the guess
 //      (`generic`), the element read.
 // `precise` (signatureHeadFollows) is for a head that may be the type parameters of a member with a return type or a body — `<in U>(y): void`, `delete<U>(y) { … }` — whose `)` a `:` or a `{` may follow: the
-// text is read as the children of an element there too (1 does not apply), where without it either would be a guess or, for the `{`, an element.
-function callSignatureOrElement(src, after, head, close, next, budget, noMember = false, precise = false) {
+// text is read as the children of an element there too (1 does not apply), where without it either would be a guess or, for the `{`, an element. `body` is the same for the `{` alone, where a name stands before the head that
+// a method with a body may have (`new <U>(y) { return y; }` and `m?<U>(y) {}` in a class or an object literal): the `{` after the list is no signature's, and a type that has the text for a method's body is read, not taken for an element.
+function callSignatureOrElement(src, after, head, close, next, budget, noMember = false, precise = false, body = false) {
   const token = src[next];
   // Text that ends here is a page that was cut off; no reading of it is complete.
   if (token === undefined) return { generic: false, ambiguity: null };
   if (noMember) return { generic: false, ambiguity: null };
   const lineBreak = lineBreakBetween(src, close + 1, next);
   const closingTag = token === '<' && src[next + 1] === '/' && src[next + 2] !== '*';
-  const goesOn = precise && (token === ':' || token === '{');
+  const goesOn = (precise && token === ':') || ((precise || body) && token === '{');
   if (closingTag || (!goesOn && !lineBreak && token !== ',' && token !== ';' && token !== '}')) return { generic: false, ambiguity: null };
+  // A `{` after the list begins a method's body: code, which the model of a type's members (typeMembersFail) does not have — a `{` where a member begins is an error to it, and it would take the comment, string or template that comes after
+  // the body for one that no type can hold, when a class or an object literal with the method holds it: `class C { delete<U>(y) {} // note </U> …` is a comment to the end of its line, and an element's text up to a closing tag in it.
+  // The body is read as the container it would be in the element (scanChildren), and the members are read from the end of it, which only a `/` that begins no comment (TS1131, in a class and an object literal alike) rules out.
+  const bodyAt = goesOn && token === '{' ? next : -1;
   // A fragment's closing tag has no name (`</>`).
-  const read = elementChildren(src, after, src[head + 1] === '>' ? '' : headTagName(src, head), budget, close + 1);
+  const read = elementChildren(src, after, src[head + 1] === '>' ? '' : headTagName(src, head), budget, bodyAt === -1 ? close + 1 : -1, bodyAt);
   if (read === null) return { generic: false, ambiguity: 'generic' };
   if (read.fails !== undefined) return { generic: true, ambiguity: null };
   return { generic: false, ambiguity: read.hideable ? 'generic' : null };
@@ -4006,4 +4104,4 @@ function ellipsisFollowedByStatement(mask, k) {
   return STATEMENT_WORDS.has(word) || word === 'import' || word === 'export';
 }
 
-module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS };
+module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS };
