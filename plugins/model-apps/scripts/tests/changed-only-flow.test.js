@@ -132,7 +132,7 @@ test('decide: ineligible (debt-carrying) snapshot -> full even for a page edit',
   assert.match(d.reason, /not eligible|debt/);
 });
 
-test('decide: eligible snapshot but app DELETED (live appId null) -> full, not a false noop (C1)', () => {
+test('decide: eligible snapshot but app DELETED (live appId null) -> full, not a false noop', () => {
   const prior = annotate(baseSpec(), 'v1');
   const env = seedFromPrior(prior); // records appId app-1
   // Same spec (would be noop) but the live app is gone -> identity fails -> full build, never noop.
@@ -323,7 +323,7 @@ test('run: FULL baseline against a PRE-EXISTING app is recorded INELIGIBLE (cann
   try {
     const record = [];
     // The app ALREADY exists at flow start (appId non-null) -> a full build may have additive-skipped a
-    // diverged artifact -> uncertified-baseline debt -> ineligible (Sol #7 / Opus H2).
+    // diverged artifact -> uncertified-baseline debt -> ineligible.
     const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), resolveLiveIdentity: async () => LIVE, readContent: readFor('v1') }) });
     assert.strictEqual(r.changedOnly.decision, 'full');
     const disk = store.readSnapshot(dir);
@@ -952,7 +952,7 @@ test('run: FULL fallback for an unsupported edit records the sticky debt (inelig
   } finally { rm(dir); }
 });
 
-test('run: --sample-data requested but baseline did not seed rows -> forced FULL, not noop (Sol #11)', async () => {
+test('run: --sample-data requested but baseline did not seed rows -> forced FULL, not noop', async () => {
   const dir = ws();
   try {
     // Baseline recorded sampleDataApplied:false (built without --sample-data).

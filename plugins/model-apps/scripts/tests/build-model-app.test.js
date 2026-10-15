@@ -127,7 +127,7 @@ test('apply threads through to the SDK engine (solution + tables created)', asyn
   assert.ok(calls.some((c) => c[0] === 'createSolution'));  assert.ok(calls.filter((c) => c[0] === 'createTable').length >= 1);
 });
 
-// R3 — auto-verify after a successful --apply (opt-in; deps.verify injected)
+// Auto-verify after a successful --apply (opt-in; deps.verify injected)
 test('data-model languageCode defaults to the org base language and reaches table/column labels', async () => {
   const { sdk, calls } = mockSdk();
   sdk.queryRecords = async (set) => {
@@ -186,7 +186,7 @@ test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verif
   assert.strictEqual(received, desk, 'the injected verifier received the spec');
   assert.deepStrictEqual(r.verify, { ok: true, present: 2, total: 2, missing: [] });
 
-  // The CALL SITE, which nothing covered until a reviewer pointed it out. Dropping the second
+  // The CALL SITE, which nothing covered at first. Dropping the second
   // argument here leaves every other test green while verify goes back to reporting an
   // environment-gated business rule as `not deployed` — which drives verify.ok false, which withholds
   // the exit code, `.last-applied.json` and the `--changed-only` snapshot. The whole fix would be
@@ -1410,18 +1410,18 @@ test('I1: apply refuses ANY partial phase range except the full build or exactly
 
 test('I1 exception: a changed-only pages-only fast apply is NOT refused (fastApply seam); other partials still are', async () => {
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }], appShell: { areas: [] } };
-  // pages-only WITH the changed-only fastApply seam is the ONE sanctioned partial range — the I1 gate must
+  // pages-only WITH the changed-only fastApply seam is the ONE sanctioned partial range — the partial-apply guard must
   // let it through (a stub runBuild proves it reached the build, not the gate rejection).
   const okDeps = { log: () => {}, runBuild: async () => ({ ok: true, dryRun: false, created: { app: 'app-1' } }) };
   const rOk = await buildModelApp(spec, { apply: true, phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: 'app-1', skipSitemapFinalize: true } }, okDeps);
-  assert.strictEqual(rOk.ok, true, 'the changed-only pages-only fast apply must pass the I1 gate');
+  assert.strictEqual(rOk.ok, true, 'the changed-only pages-only fast apply must pass the partial-apply guard');
   // The SAME seam does NOT whitelist an arbitrary partial range (only exactly ['pages']).
   const rBad = await buildModelApp(spec, { apply: true, phases: ['views', 'pages'], changedOnly: { fastApply: true } }, { log: () => {} });
   assert.strictEqual(rBad.ok, false, 'the fastApply seam must not whitelist a non-pages partial range');
 });
 
 // ---------------------------------------------------------------------------
-// Task 10: mandatory fail-closed page verify gate + RECONCILIATION 1/2
+// Mandatory fail-closed page verify gate
 // ---------------------------------------------------------------------------
 
 const { PHASES, STAGES } = require('../lib/stages.js');
@@ -1438,7 +1438,7 @@ function pageBearingSpec() {
   };
 }
 
-test('page verify is MANDATORY even without --verify: a failing page verify exits non-zero (C6)', async () => {
+test('page verify is MANDATORY even without --verify: a failing page verify exits non-zero', async () => {
   // The build is apply:true, phases:PHASES (full build) with a page-bearing spec. Even without
   // opts.verify:true, the gate must run because the pages phase is applied.
   const deps = {
@@ -1450,7 +1450,7 @@ test('page verify is MANDATORY even without --verify: a failing page verify exit
   assert.strictEqual(r.verify.ok, false, 'page verify ran and failed despite --verify not being set');
 });
 
-test('page verify is FAIL-CLOSED: a verify that throws is fatal for a page-bearing spec (C6 unableToRun)', async () => {
+test('page verify is FAIL-CLOSED: a verify that throws is fatal for a page-bearing spec (unableToRun)', async () => {
   // An enumeration/download failure in the verifier MUST produce r.verify={ok:false,unableToRun:true}
   // — not a warning that leaves r.verify undefined.
   const deps = {
@@ -1463,7 +1463,7 @@ test('page verify is FAIL-CLOSED: a verify that throws is fatal for a page-beari
   assert.ok(r.verify.unableToRun, 'an unrunnable verify is fatal for pages');
 });
 
-test('page verify is FAIL-CLOSED: a page-bearing spec with NO verifier wired is unable-to-run (C6)', async () => {
+test('page verify is FAIL-CLOSED: a page-bearing spec with NO verifier wired is unable-to-run', async () => {
   // No deps.verify at all — the gate must not silently skip for a page-bearing spec.
   const deps = {
     log: () => {},
@@ -1474,7 +1474,7 @@ test('page verify is FAIL-CLOSED: a page-bearing spec with NO verifier wired is 
   assert.ok(r.verify.unableToRun);
 });
 
-test('RECONCILIATION 2: --stage data apply of a page-bearing spec does NOT trigger mandatory page verify', async () => {
+test('--stage data apply of a page-bearing spec does NOT trigger mandatory page verify', async () => {
   // pages phase is NOT included in STAGES.data → mandatory verify must NOT be triggered.
   // A build that fails verify with r.verify.ok===false would mean the gate fired; we assert it did not.
   const deps = {
@@ -1487,7 +1487,7 @@ test('RECONCILIATION 2: --stage data apply of a page-bearing spec does NOT trigg
   assert.strictEqual(r.ok, true, 'the build itself succeeded');
 });
 
-test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)', async () => {
+test('unableToRun is propagated from verifySpec into r.verify', async () => {
   // verifySpec can itself return unableToRun:true (reader-incapacity). The build gate must
   // propagate that flag into r.verify so callers can distinguish reader-incapacity from a
   // normal failed check.
@@ -2154,7 +2154,7 @@ test('--language-code only warns "no effect" for phases that genuinely create no
 
 test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // The previous assertion was `'phases' in receivedOpts`, which any value satisfies — including a
-  // hardcoded constant or an explicit undefined. A reviewer showed the --changed-only fast path
+  // hardcoded constant or an explicit undefined. So the --changed-only fast path
   // could be broken again with the suite green by replacing `opts.phases` with a literal.
   //
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
@@ -2220,7 +2220,7 @@ test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated on
 // eligible snapshot surviving a full apply lets that run certify pre-apply state and skip work this
 // apply just made necessary. Halting costs a retry; continuing costs a silently incomplete deploy.
 //
-// The first version of this test was SOURCE-LEVEL, and an adversarial review proved it worthless:
+// The first version of this test was SOURCE-LEVEL, and proved worthless:
 // both `if (false && …)` and a catch manufacturing `{ ok: true }` left all 74 tests green. The
 // guard is now an exported function, so it is tested by BEHAVIOUR instead.
 test('#587 the snapshot guard refuses every outcome that is not a definite success', () => {

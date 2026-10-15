@@ -611,7 +611,7 @@ test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existi
   assert.ok(/GlobalOptionSetDefinitions/i.test(created[0].url), 'the create POSTs to GlobalOptionSetDefinitions');
 });
 
-// --- Security authoring surface (Group N P1) -----------------------------------------------
+// --- Security authoring surface -----------------------------------------------
 
 test('CONTRACT: the vendored facade exposes the security-authoring methods the engine calls', async () => {
   const sdk = await freshSdk();

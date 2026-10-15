@@ -1,5 +1,5 @@
 'use strict';
-// Coverage for the App Spec -> genpage-plan.md adapter (H4: /app-builder Phase 1.5 had no
+// Coverage for the App Spec -> genpage-plan.md adapter (/app-builder Phase 1.5 had no
 // executable page-worker contract). The worker's contract is references/plan-schema.md, so these
 // tests assert the projection is schema-faithful — every required section, in order, and every
 // required per-page field — plus the identity convergence that keeps PAGEREF resolution consistent.

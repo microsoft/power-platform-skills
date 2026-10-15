@@ -115,8 +115,8 @@ const { TIMELINE_CONTROL_ID, FULL_BUILD, timelineInSection, controlIdTaken, time
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, findGridSection: findSubgridSection } = require('./form-subgrid-placement.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
-// fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
-// shared, since a genpage has no appmodulecomponent row (Imp5 — grounded live probe).
+// fail-closed & discriminated; fetchAppsForPages is the only way to prove a generative page is not
+// shared, since a genpage has no appmodulecomponent row (grounded live probe).
 const { fetchSitemap, navigationProof, fetchAppsForPages } = require('./sitemap-pages.js');
 // Structural nav oracle — used in the §9 PAGEREF_ scan/parity/resolve pipeline. `extractNavTargets`
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
@@ -141,7 +141,7 @@ const SDK_COLUMN_TYPE = _SDK_COLUMN_TYPE;
 // Dataverse control class ids. The vendored bundle does NOT export the SDK's ControlClassId enum, so
 // these stable platform GUIDs are pinned here (matching the SDK's
 // @maker-studio/cds-designer-models ControlClassIds) and passed as intent to the generic addElement
-// surface — the SDK adapter derives a BOUND FIELD's classId from its attribute type (T4), but a
+// surface — the SDK adapter derives a BOUND FIELD's classId from its attribute type, but a
 // notes/subgrid/quick-view control's classId IS the intent, so the caller supplies it.
 const NOTES_CLASS_ID = '06375649-C143-495E-A496-C962E5B4488E'; // ControlClassId.TimelineControl
 const SUBGRID_CLASS_ID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B'; // ControlClassId.SubgridControl
@@ -990,7 +990,7 @@ function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
 // tabs[].columns[].sections[]). The engine imports them at the top of this file.
 
 // Build a Main-form definition -> moved to ./artifact-intent.js `compileFormIntent`
-// (new SDK topology tabs[].columns[].sections[]; the adapter derives classId/label per T4).
+// (new SDK topology tabs[].columns[].sections[]; the adapter derives classId/label).
 
 
 // The ordered field logical names a form places -> moved to ./artifact-intent.js `formFieldLogicals`
@@ -1054,7 +1054,7 @@ async function ensureAppIcon(spec, created, deps) {
 
 // Read the durable page manifest (`<appUnique>_pagemanifest`). Looked up by NAME via queryRecords
 // (getWebResource needs the GUID we don't have yet). content is base64; `text` is the decoded serialized
-// content, used by persist's content-dedup. Returns a DISCRIMINATED shape (Imp11 / addenda new-2):
+// content, used by persist's content-dedup. Returns a DISCRIMINATED shape:
 //   present:false — the web resource is ABSENT (a fresh app, or never authored pages). manifest is null;
 //                   the caller reconciles as "no identity" and creates pages. NOT a corrupt state.
 //   present:true  — the web resource EXISTS with non-empty content. manifest is the parsed payload, OR
@@ -1075,7 +1075,7 @@ async function readPageManifest(provision, appUnique) {
 
 // Create or UPDATE the durable page manifest and (idempotently) re-assert its solution membership EVERY
 // run (design §7.3). CONTENT-DEDUP: the write is SKIPPED when the manifest already holds exactly `content`
-// (== lastContent). Called immediately after EVERY page create (crash-safety, C5) AND once at the end;
+// (== lastContent). Called immediately after EVERY page create (crash-safety) AND once at the end;
 // dedup means a single-page first build issues one create + zero updates, an N-new-page first build one
 // create + (N-1) updates, and a no-op final persist. Stored as type 'js' (webresourcetype 3): there is no
 // 'json' web-resource kind and 'js' round-trips arbitrary text unchanged. Returns { id, content } for the
@@ -1189,7 +1189,7 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
   if ((verdict.outcome === 'unknown' || verdict.outcome === 'warn') && typeof warn === 'function') warn(`app "${spec.app.name}": ${verdict.message}`);
 }
 
-// SINGLE-MACHINE advisory lockfile over the pages protocol (design §9 / review R2 Critical 3, DESCOPED).
+// SINGLE-MACHINE advisory lockfile over the pages protocol (design §9, DESCOPED from a cross-machine guarantee).
 // A courtesy to stop two LOCAL builds of the same app racing to CREATE duplicate pages; correctness does
 // NOT depend on it — the convergence spine (fail-closed enumeration + create-absent-first + persist-after-
 // each-create) makes any re-run idempotent. Atomic exclusive create picks one winner; if the lock already
@@ -5375,7 +5375,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // Tracks whether the app-shell phase REUSED an already-deployed app (edit flow / retry) vs created a
   // fresh one. The pages phase needs this for two reasons: (1) the destructive-removal gate must run for
   // an EXISTING app even when the new spec has zero pages (an existing app may still reference live pages
-  // the spec dropped — Imp6); (2) for an existing app the sitemap write is DEFERRED entirely to the pages
+  // the spec dropped); (2) for an existing app the sitemap write is DEFERRED entirely to the pages
   // finalizer (below), so the finalizer must run for an existing app regardless of page subareas.
   let appWasExisting = false;
   let mainFormsP;
@@ -5447,21 +5447,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is NOT re-pinned as an
         // explicit app component (rebuild the app fresh, or add the chart via a dashboard/sitemap, if
         // it must be an explicit component). See docs/app-builder-capabilities.md.
-        // Imp6 (removal-gate safety) + C2 (page-backed deferral): write the existing app's sitemap here
+        // Removal-gate safety and page-backed deferral: write the existing app's sitemap here
         // ONLY when the pages phase will NOT run (so there is no removal gate to bypass) AND the spec has
         // no page subareas (a page-backed sitemap is always resolved in the finalizer). When has('pages')
         // is true, DEFER entirely: writing the omitUnbuiltPages sitemap now would strip every live GenPage
         // SubArea BEFORE the pages phase's destructive-removal gate can inspect it, silently orphaning
         // pages the spec dropped. The finalizer then becomes the sole existing-app sitemap writer and runs
         // AFTER the removal + shared-page gates. For an app-shell-only run (pages excluded) of a page-less
-        // app, keep today's behavior so a nav/subarea edit still lands (design §7 / Plan-3 C2).
+        // app, keep today's behavior so a nav/subarea edit still lands (design §7).
         if (!has('pages') && !appHasPageSubareas(spec)) {
-          // Defense-in-depth (whole-branch review): when the pages phase is EXCLUDED and the spec is
+          // Defense-in-depth: when the pages phase is EXCLUDED and the spec is
           // page-less, there is no pages-phase removal gate. If the LIVE existing app still has generative
           // pages, writing this omitUnbuiltPages sitemap would DETACH them (orphan records, broken nav) —
-          // the exact destructive action Imp6 gates. Enforce the gate here too, fail-closed, unless
+          // the exact destructive action the removal gate guards. Enforce the gate here too, fail-closed, unless
           // --allow-destructive. (A page-less app with NO live genpages writes normally. The CLI --apply
-          // path is already blocked from partial phase ranges by the I1 guard, but runSdkBuild must be safe
+          // path is already blocked from partial phase ranges by the partial-apply guard, but runSdkBuild must be safe
           // on its own.)
           const liveSm = await fetchSitemap(provision, appUniqueName(spec));
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
@@ -5516,10 +5516,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // 7b. Pages (generative pages). The app now exists; implement the full §9 protocol: structural scan/parity
   //     BEFORE any write (fail-closed) → create-absent-first for nav targets (persist manifest after EVERY
   //     create, crash-safety) → resolve nav pagerefs into run-scoped staging (never mutate canonical source)
-  //     → upload-once with UPDATE-identity guard (I7) → sitemap finalize. All under a single-machine advisory
+  //     → upload-once with UPDATE-identity guard → sitemap finalize. All under a single-machine advisory
   //     lockfile (courtesy, not a correctness guarantee — convergence spine is the safety guarantee).
   // Run the pages phase when the phase is enabled AND there is page work to do: the spec declares pages,
-  // OR the app already existed (Imp6 — an existing app may still reference live pages the new spec dropped;
+  // OR the app already existed (an existing app may still reference live pages the new spec dropped;
   // the destructive-removal gate below must run even when spec.pages is now empty). A FRESH app with no
   // spec pages has nothing to build and no pre-existing pages to remove, so it is correctly skipped (this
   // also avoids spinning up genpage enumeration for every page-less app build).
@@ -5529,7 +5529,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const ownGenpage = !opts.genpage;
     const genpage = opts.genpage || makeGenpageSdk(opts.env);
     const appUnique = appUniqueName(spec);
-    // I1 recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
+    // Recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun.
     if (!result.created.app) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false });
     const wsDir = opts.workspaceDir || path.join(path.resolve(opts.appDir || '.'), '.maker-workspace');
@@ -5541,11 +5541,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // EXISTENCE (the environment-wide page list, drafts included) drives create-vs-reuse. Fail-closed: a failed
       // listing must NOT look like "no pages" (that would recreate everything). This is NOT the sitemap —
       // a page created + manifested but not yet finalized into the sitemap is still in EXISTENCE, so a
-      // crash-after-create converges to REUSE, not a duplicate (C1).
+      // crash-after-create converges to REUSE, not a duplicate.
       const enumd = await genpage.enumerateEnv();
       if (!enumd.ok) throw new BuildHalt(`generative-page existence enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error}`, { phase: 'pages', code: 'pages-existence-failed', recoverable: true });
 
-      // MEMBERSHIP (this app's live sitemap, Task 1) — fail-closed & discriminated (C4). Fetched BEFORE
+      // MEMBERSHIP (this app's live sitemap) — fail-closed & discriminated. Fetched BEFORE
       // reconcile because reconcile's provenance guard needs the sitemap id set (a spec pageId may bind
       // only when it is a proven member of THIS app). A page-bearing build has just created or is editing
       // the app, so the sitemap MUST be readable; ok:false is a real failure, never "empty". A fresh app's
@@ -5562,7 +5562,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       let manifestId = readId;
       let lastManifestContent = text;
 
-      // Reconcile by EXISTENCE (create-vs-reuse) + MEMBERSHIP (spec-pageId provenance, C3). Conflicts (a
+      // Reconcile by EXISTENCE (create-vs-reuse) + MEMBERSHIP (spec-pageId provenance). Conflicts (a
       // spec pageId that is not a GUID, a spec/manifest disagreement where both ids are live, or two keys
       // → one live id) HALT — refusing to overwrite/misbind an arbitrary page.
       const live = new Set(enumd.ids.map((id) => String(id).toLowerCase()));
@@ -5746,7 +5746,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
       }
 
-      // ── Imp6: DESTRUCTIVE-REMOVAL GATE. Runs even when spec.pages is empty, and BEFORE any sitemap write
+      // ── DESTRUCTIVE-REMOVAL GATE. Runs even when spec.pages is empty, and BEFORE any sitemap write
       // (the app-shell existing-app write is now deferred to the finalizer below, so nothing has stripped
       // the live pages yet). The app's CONFIRMED live page set is MEMBERSHIP ∩ EXISTENCE — sitemap ids that
       // still exist env-wide (a stale SubArea whose page was deleted in Maker is dropped, so it is never
@@ -5761,7 +5761,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const removedIds = liveAppIds.filter((id) => !keptIds.has(String(id).toLowerCase()));
       if (removedIds.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to orphan ${removedIds.length} generative page(s) the spec removed but the app still references: ${removedIds.join(', ')}. Re-run with --allow-destructive to detach them (the page records are LEFT deployed; only the app's nav SubAreas are removed), or restore them to the spec.`, { phase: 'pages', code: 'pages-removed', recoverable: false });
 
-      // ── Imp5: SHARED-PAGE DETECTION (report-only, FAIL-CLOSED). A page we are about to UPDATE (a reused
+      // ── SHARED-PAGE DETECTION (report-only, FAIL-CLOSED). A page we are about to UPDATE (a reused
       // id in keyToId) that ALSO belongs to ANOTHER app's sitemap is shared (added to a second app in Maker) — updating
       // its content would mutate a page another app uses. GROUNDED (live probe): a genpage has NO
       // appmodulecomponent row, so the ONLY membership signal is the sitemap XML; there is no direct
@@ -5886,7 +5886,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           }
         }
       }
-      // (1) STRUCTURAL SCAN of every implemented canonical source BEFORE any write (C1/C4), via the single
+      // (1) STRUCTURAL SCAN of every implemented canonical source BEFORE any write, via the single
       //     nav oracle (extractNavTargets). Reject a malformed (non-canonical) nav PAGEREF and enforce EXACT
       //     parity between declared navigatesTo targetKeys and the keys the source references at REAL nav
       //     call sites — a decoy "PAGEREF_" string or a stray GUID in a comment can never pass.
@@ -6056,7 +6056,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
       // (2+3) Inside ONE "resolve cross-page navigation" step: create-absent-first for ABSENT nav TARGETS
       //       (upload symbolic source to mint an id; persist the manifest IMMEDIATELY after EVERY create for
-      //       crash-safety, C5), then RESOLVE the graph once every referenced target has an id (fail-closed
+      //       crash-safety), then RESOLVE the graph once every referenced target has an id (fail-closed
       //       on a dangling target).
       if (appHasCrossPageNav(spec)) {
         await runner.run('pages', 'resolve cross-page navigation', async () => {
@@ -6091,12 +6091,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
 
       // (4) UPLOAD-ONCE — exactly one runner.run/skip per page. A non-nav page already minted in step 2 is
-      //     final (skip). Every UPDATE asserts the returned id matches the requested id (I7). Persist the
-      //     manifest immediately after each create (C5).
+      //     final (skip). Every UPDATE asserts the returned id matches the requested id. Persist the
+      //     manifest immediately after each create.
       //
       // #changed-only selectedKeysOnly: on a pages-only fast apply, upload ONLY the changed page keys — the
       // whole-app scan/reconcile/removal/shared checks above still run over ALL pages (safety), but
-      // re-uploading an UNCHANGED page would clobber an out-of-band Maker edit to it (Sol #1 / data loss).
+      // re-uploading an UNCHANGED page would clobber an out-of-band Maker edit to it (data loss).
       // keyToId already holds every existing page's live id (reconciled from the manifest/enumerate), so a
       // changed page that navigates to an unchanged page still resolves its target without re-uploading it.
       // (`selectedKeys` is the one read above, ahead of the scan.)
@@ -6165,7 +6165,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // a page that already holds this very content, and was not touched from elsewhere since, is not published again.
             const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
-            // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
+            // An UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
             if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
             if (requestedId && writesInPlace.has(key)) updatedInPlace.set(String(requestedId).toLowerCase(), p.name);
@@ -6176,7 +6176,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             result.created.pageDeployedShas[key] = sha256(deployedBytes);
             // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
             result.created.pageSourceShas[key] = scannedSha.get(key);
-            await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
+            await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9)
             await afterWrite(p, requestedId ? 'updated' : 'created', up);
             return up.pageId;
           });

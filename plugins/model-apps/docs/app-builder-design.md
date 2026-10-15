@@ -175,7 +175,7 @@ stage/phase selectors are **rejected** (today `resolvePhases` silently ignores u
 ## 7. Author redesign & App Spec schema
 
 Author stops emitting `.tsx`. It produces a **design-only** spec and freezes it via consent gates
-(two shape-level design checkpoints + the single plan-mode build approval, R2 unchanged).
+(two shape-level design checkpoints + the single plan-mode build approval, which is unchanged).
 
 ### 7.1 Validation profiles
 
@@ -400,7 +400,7 @@ working dir when autopilot. The user approves the whole app shape at once.
 
 ## 13. Verify & evals
 
-### 13.1 Verify extended to pages (I4)
+### 13.1 Verify extended to pages
 
 `verifySpec` has no `sa.page` branch and never checks page content or unresolved `PAGEREF_`
 (`verify-spec.js:39-67`); a verify that can't run is only a warning (`build-model-app.js:161-175`).
@@ -410,7 +410,7 @@ text remains" (a stale/wrong GUID has no placeholder yet is still broken). This 
 reader to list/download page content (`verify-model-app.js:40-46` lacks it today). Make the
 **`verify` stage mandatory and fail-closed** — it fails if verification cannot run.
 
-### 13.2 Structural eval oracles — not `.tsx` snapshots (I3)
+### 13.2 Structural eval oracles — not `.tsx` snapshots
 
 LLM page output is non-deterministic, so exact snapshots are the wrong oracle (genpage evals
 already grade structurally: `EVAL_GUIDE.md:43-103`). Per-stage offline oracles:
@@ -449,8 +449,8 @@ prerequisite enforcement: "run 2 refuses to start unless every page is implement
 remains **idempotent recomputation**, not journal replay. Commit the `intent→tsx` transition only
 after all pages validate (§8).
 
-**No cross-run DAG (R2).** `generate-pages` (main loop) must fully complete **before** the single
-full run 2; running `ui` concurrently would require splitting/pausing run 2 and revives C1. For v1
+**No cross-run DAG.** `generate-pages` (main loop) must fully complete **before** the single
+full run 2; running `ui` concurrently would require splitting/pausing run 2 and revives the lost-ids hazard of §5. For v1
 the only parallelism is **within** a stage (page-builders run in parallel; the engine already
 parallelizes independent artifacts).
 
@@ -468,7 +468,7 @@ Run 1 **omits `--sample-data`** so sample rows are created **once** in run 2 (de
 conditional — `matchOn` can be absent, `entity-provision.js` — so running sample-data twice is not
 safe).
 
-**Retry idempotency fix (R2/R3).** Because full-build re-run is the recovery mechanism, commands and
+**Retry idempotency fix.** Because full-build re-run is the recovery mechanism, commands and
 dashboards — today **re-created without discovery** (`sdk-build.js:951-975`) — must become
 **discover-reconcile** (`findArtifact`/`fetchArtifact` + generic mutations by a **stable child
 identity** — commands need an explicit stable `key`, since the command schema today has `label`, not
@@ -482,7 +482,7 @@ explicit-form field pruning. This is a tightly-coupled correctness fix, in scope
 
 **Unchanged:** the 13 phase names + order + idempotency, the App Spec **core** contract,
 `--only/--skip`, `create == edit`, the parity oracle, the generic SDK mutation surface (no new
-artifact-specific SDK mutator — SDK **T2/T7 pass**).
+artifact-specific SDK mutator — the SDK's generic-mutation tenet holds).
 
 **New/changed:** `stages.js`, `pageref-resolver.js`, `op-diff.js`, `schema-facts.js`,
 `preview-app.js`; validation profiles + `schemaVersion`/discriminated page source + stable keys in
@@ -493,11 +493,11 @@ artifact-specific SDK mutator — SDK **T2/T7 pass**).
 
 ## 18. SDK-alignment (target after rework)
 
-- **T1 canonical desired state** — restored: `sitemapSlot` dropped (single source = `appShell`);
+- **Canonical desired state** — restored: `sitemapSlot` dropped (single source = `appShell`);
   canonical page source stays symbolic (no env-specific GUIDs).
-- **T2/T7 generic mutation** — pass (no new artifact-specific SDK mutator).
-- **T5 opaque identity** — restored: GUID substitution confined to a deployment derivative.
-- **T6 serializer boundary** — sitemap finalize stays `updateElement('/siteMap')`; no raw XML side
+- **Generic mutation** — pass (no new artifact-specific SDK mutator).
+- **Opaque identity** — restored: GUID substitution confined to a deployment derivative.
+- **Serializer boundary** — sitemap finalize stays `updateElement('/siteMap')`; no raw XML side
   channel.
 - **App Spec / idempotency / create==edit** — restored via §5 full-rebuild execution + preserved
   design/navigation metadata (§7.3).
@@ -579,12 +579,12 @@ atomic isolation and before removal; a late record keeps the isolated folder for
 
 ## Why this is hard
 `/app-builder`'s build engine is **ADDITIVE, not convergent**: existing chart/command/dashboard defs and
-web-resource CONTENT are *skipped* on rebuild (`sdk-build.js:685-695,985-996,1114-1153`), and the I1 gate
+web-resource CONTENT are *skipped* on rebuild (`sdk-build.js:685-695,985-996,1114-1153`), and the partial-apply guard
 (`build-model-app.js:149-158`) forbids partial `--apply` because `result.created` (the artifact-id map)
 is per-invocation and phases read each other's ids from it. So a naive "run only changed phases" would
 silently **bless edits that never deployed**. The whole design is therefore **fail-closed**.
 
-## Core invariant (replaces I1)
+## Core invariant (replaces the blanket partial-apply refusal)
 A partial `--apply` is allowed ONLY via `--changed-only`, and ONLY when: an identity-validated snapshot
 exists with `eligible:true` and **empty debt**; every consumed id re-resolves live by semantic identity;
 the diff is a subset of the four PROVEN-CONVERGENT shapes; no sitemap drift; and — after the apply — an
@@ -700,9 +700,9 @@ keys) + measured `pageDeployedShas`. (view/sitemap/form submodes deferred — se
 5. ✅ Classifier (`classify-changes.js`) + the `build-model-app.js --changed-only` FLOW
 (`changed-only-flow.js`): `--changed-only` flag, live identity (WhoAmI orgId + app discovery),
 snapshot read→eligibility gate→classify→pages-only fast apply via the seams (or full fallback),
-invalidate-before-write + fresh-create-only baseline + verify-gated re-bless + generation fencing, I1-gate
-exception. 6. ✅ Full offline tests (919 green). 7. ✅ Implementation review — adversarial, max effort;
-all Critical/High findings fixed with tests (see the fix commit + this doc's v1
+invalidate-before-write + fresh-create-only baseline + verify-gated re-bless + generation fencing, the partial-apply guard's
+exception. 6. ✅ Full offline tests (919 green). 7. ✅ Implementation review — adversarial;
+all Critical/High findings fixed with tests (see this doc's v1
 contract/deferred sections). 8. ✅ **Live regression PASSED** (a scratch environment, 2026-07-27): (1) fresh
 `--apply --changed-only` → full build, verify 9/9, **eligible** snapshot (orgId/appId bound, debt 0);
 (2) `.tsx` byte edit → `--apply --changed-only` → **FAST pages-only** (2 steps not 12, same pageId =
@@ -711,7 +711,7 @@ UPDATE, new measured deployedSha, verify 9/9, snapshot **re-blessed eligible**);
 `chart-edit-not-convergent` + `uncertified-baseline` debt; (4) `teardown --apply` → app cascade removed,
 snapshot **tombstoned then deleted** (0 leftovers). 9. ✅ Docs — design + capabilities + CHANGELOG + AGENTS.md.
 
-## Build-time notes (from the final Sol pass)
+## Build-time notes
 - Live-absence verification covers the UNION of prior-snapshot identities, current spec, generated
   artifacts, and all debt entries — not merely the current spec.
 - Debt-clearing verifiers must match the specific debt reason (placement verify can't clear

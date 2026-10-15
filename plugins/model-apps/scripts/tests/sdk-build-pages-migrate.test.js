@@ -1,5 +1,5 @@
 'use strict';
-// Regression test for Critical #1: after migrateAppSpec moves the top-level `codeFile` into
+// Regression test: after migrateAppSpec moves the top-level `codeFile` into
 // `source.codeFile`, the sdk-build pages phase must read from `source` (via normalizePageSource),
 // not the now-missing top-level `p.codeFile`. Without the fix, path.resolve(appDir, undefined)
 // throws a TypeError and the build halts on any spec with pages[].
@@ -12,7 +12,7 @@ const { migrateAppSpec } = require('../lib/app-spec.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
-// Real GUIDs for the three-authority sitemap mock (Imp9). These migrate specs have no page subareas, so
+// Real GUIDs for the three-authority sitemap mock. These migrate specs have no page subareas, so
 // membership resolves to a page-less EMPTY sitemap; the pages phase reconciles by env-wide EXISTENCE.
 const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';

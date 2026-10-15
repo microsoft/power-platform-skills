@@ -385,7 +385,7 @@ test('planTeardown SKIPS an external:true web resource (a re-declared shared/ref
   assert.ok(!wrNames.includes('new_navicon.svg'), 'an external:true web resource is NOT deleted (fail-safe against a shared resource)');
 });
 
-test('planTeardown does NOT schedule the derived generated-app-icon delete when its name collides with an external declared WR (Sol: derived cleanup must honor the external skip)', () => {
+test('planTeardown does NOT schedule the derived generated-app-icon delete when its name collides with an external declared WR (derived cleanup must honor the external skip)', () => {
   const spec = {
     solution: { uniqueName: 'IconSln4', publisherPrefix: 'new' },
     app: { name: 'IconApp4' }, // no app.icon → the generated-icon branch runs
@@ -1327,7 +1327,7 @@ test('odataStr doubles single quotes (OData literal escaping)', () => {
   assert.strictEqual(odataStr(null), '');
 });
 
-test('the page manifest web resource is ALWAYS torn down (even when the spec no longer declares pages, I5)', () => {
+test('the page manifest web resource is ALWAYS torn down (even when the spec no longer declares pages)', () => {
   const base = { solution: { uniqueName: 'PgSln', publisherPrefix: 'new' }, app: { name: 'Pages App' },
     entities: [{ schemaName: 'new_widget', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
     appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_widget' }] }] }] } };
@@ -1348,7 +1348,7 @@ test('deleteStep tolerates a not-found error for non-tolerateNotFound kinds', as
   assert.deepStrictEqual(deletedIds, ['wr-1']);
 });
 
-// --- Task 22: aiSummary teardown --------------------------------------------------------
+// --- aiSummary teardown --------------------------------------------------------
 
 test('teardown plans an ai-summaries step (before tables) for each candidate and calls removeRowSummary', async () => {
   // Spec with one content entity (has a Memo col) + spec.ai.summaries = { default:'auto' }
@@ -1474,7 +1474,7 @@ test('teardown still deletes a real (non-restricted) solution — regression', a
   assert.ok(res.deleted.solution && res.deleted.solution.includes('sol-real'));
 });
 
-// --- Security persona roles (Group N P1) ---------------------------------------------------
+// --- Security persona roles ---------------------------------------------------
 
 test('planTeardown orders persona roles AFTER forms and before the data model', () => {
   const spec = Object.assign(fullSpec(), { personas: [

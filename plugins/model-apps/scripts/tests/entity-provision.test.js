@@ -768,9 +768,9 @@ test('#544 an unknown $parent.lookup names the valid ones', () => {
   );
 });
 
-// --- provisionSampleData: F9 keyless-seeding warning ------------------------------------------
+// --- provisionSampleData: keyless-seeding warning ------------------------------------------
 function runSample(spec) {
-  // The F9 warning goes to stderr (non-fatal), so capture stderr for the duration of the run.
+  // The keyless-seeding warning goes to stderr (non-fatal), so capture stderr for the duration of the run.
   const origWrite = process.stderr.write.bind(process.stderr);
   const warnings = [];
   process.stderr.write = (s) => { warnings.push(String(s)); return true; };
@@ -782,7 +782,7 @@ function runSample(spec) {
     .finally(() => { process.stderr.write = origWrite; });
 }
 
-test('provisionSampleData WARNS in the op label when a group has no idempotency key — a re-run would duplicate (F9)', async () => {
+test('provisionSampleData WARNS in the op label when a group has no idempotency key — a re-run would duplicate', async () => {
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     entities: [{ schemaName: 'new_log', displayName: 'Log', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
@@ -793,7 +793,7 @@ test('provisionSampleData WARNS in the op label when a group has no idempotency 
   assert.ok(labels.some((l) => /no idempotency key/.test(l)), `expected a keyless-seeding warning; got ${JSON.stringify(labels)}`);
 });
 
-test('provisionSampleData does NOT warn when the primary name gives a stable key (F9)', async () => {
+test('provisionSampleData does NOT warn when the primary name gives a stable key', async () => {
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     entities: [{ schemaName: 'new_log', displayName: 'Log', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
@@ -804,7 +804,7 @@ test('provisionSampleData does NOT warn when the primary name gives a stable key
   assert.ok(!labels.some((l) => /no idempotency key/.test(l)), 'a keyed spec must not warn');
 });
 
-test('provisionSolution ESCAPES the solution uniquename in the OData filter (F12 — no injection/break)', async () => {
+test('provisionSolution ESCAPES the solution uniquename in the OData filter (no injection/break)', async () => {
   const calls = [];
   const provision = { queryRecords: async (set, opts) => { calls.push({ set, filter: opts.filter }); return set === 'solution' ? [{ solutionid: 's' }] : []; } };
   const runner = makeRunner({ emit: () => {}, total: 1 });

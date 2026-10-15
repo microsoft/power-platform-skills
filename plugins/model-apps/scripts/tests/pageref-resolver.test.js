@@ -1,7 +1,7 @@
 'use strict';
 // Tests for the single structural nav oracle (pageref-resolver.js).
 // All tests must pass for every nav-related change — this module is the correctness spine
-// of forward resolution (Task 8), reverse-normalization (Task 11), and verification (Task 10).
+// of forward resolution, reverse-normalization, and verification.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');

@@ -97,7 +97,7 @@ function equalColumnWidths(n) {
 
 // Minimal push-ready bound-field cell.
 //
-// SDK T4 tenet: mutations express intent; the adapter applies defaults. The SDK
+// SDK tenet: mutations express intent; the adapter applies defaults. The SDK
 // adapter derives classId from the Dataverse attribute type and label from the
 // attribute's display name. Precomputing classId or label here would drift from the
 // adapter's metadata-derived values and mis-render on foreign or renamed attributes.
@@ -274,7 +274,7 @@ function notesSectionIntent(notesClassId) {
   };
 }
 
-// #5 (2026-07-15 review): a full-width (1-column) SectionIntent that hosts ONLY a sub-grid control.
+// A full-width (1-column) SectionIntent that hosts ONLY a sub-grid control.
 // Each authored/auto sub-grid gets its own section so it SPANS the form, instead of being spliced as
 // a single cell into an existing 2-column field section (which rendered the grid half-width with an
 // empty column beside it). `label` is the grid's title — the engine passes the child's plural/display
@@ -500,7 +500,7 @@ function compileFormIntent(spec, formSpec, opts) {
   // Compute per-field required flag. isRequired is explicit authored intent (the primary
   // field and required===true columns are required regardless of Dataverse defaults).
   // classId and label are NOT computed here — the SDK adapter derives them from Dataverse
-  // attribute metadata (SDK T4). Computing them here would drift from adapter-derived values.
+  // attribute metadata. Computing them here would drift from adapter-derived values.
   const requiredFor = function (logical) {
     if (entity && logical === entity.primaryAttribute.schemaName.toLowerCase()) return true;
     const c = entity && (entity.columns || []).find(function (x) { return x.schemaName.toLowerCase() === logical; });

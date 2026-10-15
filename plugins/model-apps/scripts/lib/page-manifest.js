@@ -20,7 +20,7 @@ const MANIFEST_SCHEMA_VERSION = 1;
 const KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 // 36-char GUID pattern used to validate spec-supplied pageIds before treating them as live-page
-// identity. Matches upper- and lower-case hex. See provenance guard (C3) in reconcilePageIds.
+// identity. Matches upper- and lower-case hex. See provenance guard in reconcilePageIds.
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function manifestResourceName(appUnique) {
@@ -70,7 +70,7 @@ function isValidSource(src) {
   return false; // unknown kind
 }
 
-// Parse a manifest string FAIL-CLOSED with FULL per-page schema validation (addendum I5):
+// Parse a manifest string FAIL-CLOSED with FULL per-page schema validation:
 // bad JSON, unknown schemaVersion, non-array pages, a page missing a string key/name, a key that
 // violates grammar, a DUPLICATE key, or any malformed optional field all yield null so the caller
 // reconstructs from live enumeration rather than trusting a corrupt/incompatible payload.
@@ -99,7 +99,7 @@ function parseManifest(text) {
   }
 
   const seen = new Set();       // duplicate key check
-  const seenPageIds = new Set(); // duplicate pageId check: two keys → same id is a 1:1 violation (Imp11)
+  const seenPageIds = new Set(); // duplicate pageId check: two keys → same id is a 1:1 violation
   for (const p of m.pages) {
     if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
 
@@ -118,7 +118,7 @@ function parseManifest(text) {
     if (p.pageId !== undefined && (typeof p.pageId !== 'string' || !p.pageId)) return null;
 
     // pageId uniqueness — a manifest where two keys share the same pageId is a 1:1 identity
-    // violation (Imp11). Case-insensitive: 'ABC' and 'abc' are the same live page id.
+    // violation. Case-insensitive: 'ABC' and 'abc' are the same live page id.
     if (p.pageId !== undefined) {
       const pidLow = p.pageId.toLowerCase();
       if (seenPageIds.has(pidLow)) return null;
@@ -181,9 +181,9 @@ function parseManifestBase64(b64) {
 }
 
 // Reconcile the spec's declared pages against the durable manifest, the env-wide EXISTENCE set,
-// and the app's own sitemap (MEMBERSHIP). Three-authority + provenance model (C3):
+// and the app's own sitemap (MEMBERSHIP). Three-authority + provenance model:
 //
-//   1. Spec page's own `pageId` — PROVENANCE-GATED (C3, SAFETY-critical):
+//   1. Spec page's own `pageId` — PROVENANCE-GATED (SAFETY-critical):
 //      A spec pageId may ONLY bind when its ownership is proven. Binding an unprovenanced GUID
 //      that merely exists env-wide would silently overwrite an UNRELATED live page.
 //      Binding is allowed ONLY when EITHER: (i) ∈ sitemapIds (proven this app's page via
@@ -203,7 +203,7 @@ function parseManifestBase64(b64) {
 // Conflicts (caller HALTs `pages-identity-conflict` when conflicts.length > 0):
 //   { key, reason:'invalid-pageid', pageId }          — p.pageId is not a valid 36-char GUID.
 //   { key, reason:'spec-manifest-disagree', pageId, manifestId }
-//                                                     — both ids live and differ (C3).
+//                                                     — both ids live and differ.
 //   { key, reason:'unproven-manifest-id', manifestId, storedName, requestedName }
 //                                                     — no membership or corroborated local receipt.
 //   { pageId, keys:[…] }                              — ≥2 distinct keys → same live id (1:1 violation).
@@ -256,7 +256,7 @@ function reconcilePageIds(pages, manifest, existenceIds, sitemapIds, storedNames
       // Evaluate manInExistence only when manId is present; avoids false-positive disagreements.
       const manInExistence = manId !== null && existSet.has(manId);
 
-      // Disagreement HALT (C3): both the spec id and the manifest id are live and differ — binding
+      // Disagreement HALT: both the spec id and the manifest id are live and differ — binding
       // either would silently clobber the other's live page content. Caller must resolve.
       if (manId !== null && manId !== specIdLow && specInExistence && manInExistence) {
         conflicts.push({ key, reason: 'spec-manifest-disagree', pageId: specId, manifestId: mp.pageId });

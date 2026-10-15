@@ -776,8 +776,8 @@ async function changedOnlyFacts(spec, fixture) {
   }
 }
 
-// page: PAGEREF_ resolution facts (Plan 3). Returns null when pageref-resolver isn't loaded →
-// the assertion layer emits SKIP (loose Plan-3 coupling). When present, each declared nav edge
+// page: PAGEREF_ resolution facts. Returns null when pageref-resolver isn't loaded →
+// the assertion layer emits SKIP (loose coupling). When present, each declared nav edge
 // is represented as a canonical navigateTo call site so resolvePageRefs can parse and resolve it.
 // A missing keyToId entry → unresolved entry (tests prove the assertion can FAIL).
 function pageFacts(spec) {

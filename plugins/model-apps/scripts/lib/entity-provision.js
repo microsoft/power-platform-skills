@@ -1323,7 +1323,7 @@ function pushFailed(result) {
 // in Maker since our last fetch — and on an ARTIFACT_ALREADY_EXISTS collision. The engine previously
 // ignored push results, so a conflict silently reported success while DROPPING the edit. Halt loudly
 // and require a fresh download instead of auto refetch-and-overlay (which would clobber a concurrent
-// Maker edit and violates the SDK's rebuild-from-model tenet, architecture-spec T6). Those two are
+// Maker edit and violates the SDK's rebuild-from-model tenet). Those two are
 // the failures signalled by return value; every other failure still throws.
 //
 // The SDK renamed `PushResult.success` to `saved`, DELIBERATELY, to force every call site to be
@@ -2585,7 +2585,7 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
     if (!records.length) continue;
     await runner.run('sample-data', `${records.length} record(s) -> ${e.schemaName}`, async () => {
       const group = buildSeedGroup({ spec, e, records, statusReasonValues });
-      // F9: seeding is idempotent ONLY when a matchOn key is chosen (chooseMatchOn). Without one the SDK
+      // Seeding is idempotent ONLY when a matchOn key is chosen (chooseMatchOn). Without one the SDK
       // inserts every row, so a re-run — or a POST retried after a commit — DUPLICATES the sample data,
       // violating the build's "full rerun is safe" contract. A fresh build is fine; warn (non-fatal, to
       // stderr — same pattern as download-model-app) so the maker can add a single-column alternate key or

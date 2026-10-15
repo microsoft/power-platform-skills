@@ -599,7 +599,7 @@ test('findElisionMarker treats any bare ellipsis line as elision, even parser-va
   assert.equal(findElisionMarker('const rows = [...items];\nexport default rows;'), null, 'same-line array spread remains ordinary code');
 });
 
-test('TypeScript parser oracle documents lexer review snippets and adversarial neighbours', (t) => {
+test('TypeScript parser oracle documents tricky lexer snippets and adversarial neighbours', (t) => {
   const oracle = loadTypescriptOracle();
   if (!oracle) {
     t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');

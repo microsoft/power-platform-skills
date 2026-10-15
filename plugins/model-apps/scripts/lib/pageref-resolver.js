@@ -3,7 +3,7 @@ const { blankNonCodePreservingTemplateExpressions, isTrivia, isLineTerminator } 
 
 // Pure STRUCTURAL resolver for generative-page cross-page navigation. Authors emit a link as a stable
 // symbolic token — pageId: "PAGEREF_<key>" — because the real GenPageId is minted by the server at
-// deploy time and differs per environment (SDK opaque-identity rule T5: never bake a resolved GUID into
+// deploy time and differs per environment (SDK opaque-identity rule: never bake a resolved GUID into
 // canonical source, or a cross-env recreate ships a dead link). See references/rules.md "Generative Page
 // Navigation" and docs/app-builder-design.md §9. The ENGINE reads/writes files; this module
 // only shapes/parses strings (pure, offline).

@@ -125,7 +125,7 @@ test('iconWebResources reports an own-prefix icon read FAILURE as unresolved (no
 test('iconWebResources with an UNVERIFIED prefix (publisher read failed) surfaces a genuine own custom icon as unresolved instead of silently dropping it; a managed/OOB ref stays silent', async () => {
   // prefixResolved=false + a fallback prefix ('new') that does NOT match the app's real 'crba3' icons.
   // Without the guard, crba3_nav.svg fails startsWith('new_') and is silently skipped with no warning
-  // (Opus/Sol finding). It must instead be surfaced as unresolved; the OOB CDSEntity ref must stay silent.
+  // — it must instead be surfaced as unresolved; the OOB CDSEntity ref must stay silent.
   const sdk = { queryRecords: async (e, o) => {
     const name = (o.filter.match(/name eq '([^']*)'/) || [])[1];
     if (name === 'crba3_nav.svg') return [{ name, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false }]; // genuine own custom svg
@@ -139,7 +139,7 @@ test('iconWebResources with an UNVERIFIED prefix (publisher read failed) surface
 });
 
 test('iconWebResources: a WR referenced BOTH by a bare name AND a platform path inherits external:true (overlap keeps teardown protection)', async () => {
-  // Sol finding: if the bare pass emitted the WR without external and `seen` then suppressed the path
+  // If the bare pass emitted the WR without external and `seen` then suppressed the path
   // classification, teardown would delete a shared nav icon. The path pass runs first / the bare entry
   // inherits external when it is also a customRef.
   const sdk = { queryRecords: async (e, o) => {
@@ -1090,7 +1090,7 @@ test('readDashboards withholds a dashboard whose name cannot be read, instead of
   assert.deepStrictEqual(named.map((d) => d.name), ['Ops Board']);
 });
 
-// ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
+// ── assignPageKeys + missingDownloads + full round-trip ──────────────
 const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, appComponentEntities } = require('../download-model-app.js');
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
@@ -1132,7 +1132,7 @@ test('runDownload still propagates a genuinely unexpected error (no blanket swal
   );
 });
 
-test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (I3/§7.3)', () => {
+test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (§7.3)', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_X = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';
   const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O, purpose: 'Home', navigatesTo: [{ targetKey: 'detail' }], pageInput: { data: {} } }] };
@@ -1157,7 +1157,7 @@ test('assignPageKeys: mints unique keys (no manifest) with -N de-dup on slug col
   assert.deepStrictEqual(downloaded.map((p) => p.key), ['work-order', 'work-order-2']);
 });
 
-test('missingDownloads flags a gap in EITHER direction (I3 exact enumerated<->downloaded equality)', () => {
+test('missingDownloads flags a gap in EITHER direction (exact enumerated<->downloaded equality)', () => {
   const enumPages = [{ pageId: 'gp-o', name: 'Overview' }, { pageId: 'gp-d', name: 'Detail' }];
   const downloaded = [{ pageId: 'gp-o', name: 'Overview' }];
   assert.deepStrictEqual(missingDownloads(enumPages, downloaded).map((p) => p.pageId), ['gp-d'], 'enumerated-but-not-downloaded');
@@ -1165,7 +1165,7 @@ test('missingDownloads flags a gap in EITHER direction (I3 exact enumerated<->do
   assert.deepStrictEqual(missingDownloads(enumPages, enumPages), []);
 });
 
-test('ROUND-TRIP: manifest → download → reverse → hydrate → validate → resolve reproduces the deployed ids (Critical 2/I3)', async () => {
+test('ROUND-TRIP: manifest → download → reverse → hydrate → validate → resolve reproduces the deployed ids', async () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_D = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   const manifest = buildManifest({ pages: [{ key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }] }, { key: 'detail', name: 'Detail' }] }, new Map([['overview', GP_O], ['detail', GP_D]]));
@@ -1195,7 +1195,7 @@ test('ROUND-TRIP: manifest → download → reverse → hydrate → validate →
   assert.ok(resolved.includes(`pageId: "${GP_D}"`) && !/PAGEREF_/.test(resolved), 'reverse∘resolve returns the deployed id — the loop is closed');
 });
 
-// ── Task 6: sitemap-membership + download-by-id + keep pageId + env-wide names + injectable seam ─
+// ── sitemap-membership + download-by-id + keep pageId + env-wide names + injectable seam ─
 
 test('lexical navigation variants survive deploy-download-rebuild', async () => {
   const overviewId = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -1457,7 +1457,7 @@ test('download is silent about page ids when every one is turned back into a tok
   } finally { run.cleanup(); }
 });
 
-test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId (C3)', () => {
+test('Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_MAKER = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';
   // manifest knows only GP_O; GP_MAKER was added in Maker and is only in the sitemap
@@ -1472,16 +1472,16 @@ test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, kee
   const idToKey = assignPageKeys(pages, manifest, keyToId);
   // Manifest-bound page reuses its key
   assert.strictEqual(pages[0].key, 'overview', 'manifest-bound page reuses its key');
-  assert.strictEqual(pages[0].pageId, GP_O, 'pageId preserved (C3)');
+  assert.strictEqual(pages[0].pageId, GP_O, 'pageId preserved');
   // Maker-added page gets a fresh key and keeps its pageId
   assert.ok(pages[1].key, 'Maker-added page has a minted key');
-  assert.strictEqual(pages[1].pageId, GP_MAKER, 'Maker-added page pageId preserved for edit-snapshot adoption (C3)');
+  assert.strictEqual(pages[1].pageId, GP_MAKER, 'Maker-added page pageId preserved for edit-snapshot adoption');
   // Both ids are in idToKey so nav reverse-resolve covers all pages
   assert.strictEqual(idToKey.get(GP_O), 'overview');
   assert.ok(idToKey.has(GP_MAKER), 'Maker-added page id is in idToKey (nav reverse-resolve works)');
 });
 
-test('Task-6: sitemap id not downloaded → missingDownloads catches it → download aborts (I3)', () => {
+test('sitemap id not downloaded → missingDownloads catches it → download aborts', () => {
   const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   // Both GP_A and GP_B are in the sitemap, but only GP_A was downloaded
@@ -1494,7 +1494,7 @@ test('Task-6: sitemap id not downloaded → missingDownloads catches it → down
   assert.deepStrictEqual(missingDownloads(downloaded, smPages), []);
 });
 
-test('Task-6: env-wide id→name used as the page name; sitemap title is fallback only', () => {
+test('env-wide id→name used as the page name; sitemap title is fallback only', () => {
   const GP = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-nm-'));
   try {
@@ -1650,7 +1650,7 @@ test('runDownload: the ids are folder names only after the backend has read them
   }
 });
 
-test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpec ok, pages carry pageId (injectable seam)', async () => {
+test('full round-trip via runDownload → hydrateSpec → validateAppSpec ok, pages carry pageId (injectable seam)', async () => {
   const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   const APP_ID   = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -1682,7 +1682,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
         if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
         if (logical === 'webresource') return []; // no manifest → fresh keys
         // The app belongs to a real unmanaged solution — recoverAppSolution returns its uniquename, but the
-        // publisher PREFIX must still come from the app uniquename ('test'), NOT this solution (Sol F2).
+        // publisher PREFIX must still come from the app uniquename ('test'), NOT this solution.
         if (logical === 'solutioncomponent') return [{ _solutionid_value: 'sol-x' }];
         if (logical === 'solution') return [{ solutionid: 'sol-x', uniquename: 'ContosoSln', ismanaged: false, description: 'The Contoso field-operations solution.' }];
         return [];
@@ -2920,7 +2920,7 @@ test('#564 an attribute whose IsLogical could not be read is KEPT, not dropped',
   assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['pp_real']);
 });
 // ---------------------------------------------------------------------------
-// Review round: findings from the adversarial review of the #564 work.
+// Findings from the adversarial review of the #564 work.
 // ---------------------------------------------------------------------------
 
 // Builds the `/Attributes?$select=...` row the label/shape read returns.
@@ -2945,7 +2945,7 @@ function sdkFull({ attributes, attrRows = [], picklist = [], multiSelect = [], p
   };
 }
 
-test('REVIEW-A a cross-language AMBIGUOUS option set leaves the column untyped instead of aborting the whole download', async () => {
+test('a cross-language AMBIGUOUS option set leaves the column untyped instead of aborting the whole download', async () => {
   // Reported by adversarial review, proven reachable. Option labels need not be unique across
   // options OR languages in Dataverse, so this set is legal:
   //   options[0] = "Open"                       (English only)
@@ -2975,7 +2975,7 @@ test('REVIEW-A a cross-language AMBIGUOUS option set leaves the column untyped i
   assert.deepStrictEqual(res.errors, [], res.errors.join(' | '));
 });
 
-test('REVIEW-A duplicate PLAIN labels are still typed (they are a warning, not an error)', async () => {
+test('duplicate PLAIN labels are still typed (they are a warning, not an error)', async () => {
   // Only the localized/hidden collision is an error. Two identical plain strings provisioned fine
   // before this rule existed, so refusing to type them would reject specs that still work.
   const sdk = sdkFull({
@@ -2987,7 +2987,7 @@ test('REVIEW-A duplicate PLAIN labels are still typed (they are a warning, not a
   assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_status').type, 'Choice');
 });
 
-test('REVIEW-B a MultiChoice survives an unusable option label - untyped and NAMED, never dropped', async () => {
+test('a MultiChoice survives an unusable option label - untyped and NAMED, never dropped', async () => {
   // Reported by adversarial review. A MultiSelectPicklist is `Virtual`, so before this the ONLY
   // thing keeping it in columns[] was a successfully PARSED option set. An unusable label made
   // optionSetFromRow return null, the cast membership was discarded, and the column vanished from
@@ -3003,7 +3003,7 @@ test('REVIEW-B a MultiChoice survives an unusable option label - untyped and NAM
   assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_tags'], 'and it must be NAMED, so the loss is never silent');
 });
 
-test('REVIEW-B/D a MultiChoice survives a FAILED or EMPTY option-set read, identified by AttributeTypeName', async () => {
+test('a MultiChoice survives a FAILED or EMPTY option-set read, identified by AttributeTypeName', async () => {
   // Two shapes, same requirement. The cast can fail (503) or answer 200 with an empty value[] — the
   // second does not even throw, so nothing was recorded and the column disappeared with ZERO
   // operator signal. `AttributeTypeName` identifies a multi-select INDEPENDENTLY of the cast, so
@@ -3021,7 +3021,7 @@ test('REVIEW-B/D a MultiChoice survives a FAILED or EMPTY option-set read, ident
   }
 });
 
-test('REVIEW-C a LOGICAL choice column is not dropped when the option-set read fails', async () => {
+test('a LOGICAL choice column is not dropped when the option-set read fails', async () => {
   // The isLogical shadow filter keyed off `optionSet === undefined`, so a genuine logical Choice
   // whose option read failed was DROPPED rather than left untyped — and the warning then promised a
   // Text column that a rebuild would never create. Positive type evidence (AttributeTypeName) now
@@ -3044,7 +3044,7 @@ test('REVIEW-C a LOGICAL choice column is not dropped when the option-set read f
   assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_logchoice']);
 });
 
-test('REVIEW-B a failing SECOND cast does not discard the successful first one', async () => {
+test('a failing SECOND cast does not discard the successful first one', async () => {
   // readOptionSets threw on the first non-2xx, so a 503 on the multi-select cast threw away an
   // already-valid Picklist map and every Choice on the table lost its type.
   const sdk = sdkFull({
@@ -3059,7 +3059,7 @@ test('REVIEW-B a failing SECOND cast does not discard the successful first one',
   assert.ok(meta.optionSetReadFailed, 'the partial failure is still recorded');
 });
 
-test('REVIEW-C globalChoices declares only sets an EMITTED column actually references', async () => {
+test('globalChoices declares only sets an EMITTED column actually references', async () => {
   // collectGlobalChoices scanned raw metadata, so a set bound only by a SYSTEM attribute (filtered
   // out of columns[]) or by a table later dropped for having no primary name still produced a
   // declaration — and the build then creates or reuses every declaration in the target environment.
@@ -3081,7 +3081,7 @@ test('REVIEW-C globalChoices declares only sets an EMITTED column actually refer
   assert.deepStrictEqual(decls.map((g) => g.name), ['bound_set'], 'the orphan set must not be declared');
 });
 
-test('REVIEW-D a global-choice reference is canonicalized to the declaration casing', async () => {
+test('a global-choice reference is canonicalized to the declaration casing', async () => {
   // Declarations dedupe case-insensitively but each column kept its own raw casing, and
   // entity-provision looks up `globalChoiceIds[c.globalChoice]` CASE-SENSITIVELY — so a second
   // casing left that column unbound and it fell back to an empty inline option list.
@@ -3097,7 +3097,7 @@ test('REVIEW-D a global-choice reference is canonicalized to the declaration cas
   assert.deepStrictEqual(decls.map((g) => g.name), ['Shared_Set']);
   assert.deepStrictEqual(e.columns.map((c) => c.globalChoice), ['Shared_Set', 'Shared_Set'], 'every reference must match the declaration exactly');
 });
-test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real wiring, not the helper)', async () => {
+test('runDownload emits ONLY referenced globalChoices (drives the real wiring, not the helper)', async () => {
   // Deliberately driven through runDownload. An earlier version of this test called
   // finalizeGlobalChoices directly, and a mutation that reverted the ACCESSOR to
   // `[...globalChoiceDecls.values()]` survived it — the helper was right while the wiring was not.
@@ -3187,7 +3187,7 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
   }
 });
 
-test('REVIEW-B cast membership still keeps a column when the ATTRIBUTE read also failed', async () => {
+test('cast membership still keeps a column when the ATTRIBUTE read also failed', async () => {
   // The combination neither guard covers alone: no AttributeTypeName (attribute read 403) AND an
   // unparseable option label. Cast MEMBERSHIP is then the only evidence the column exists, so the
   // entry must be recorded even when its options cannot be parsed.

@@ -128,7 +128,7 @@ test('readerFor.pageCode(id) reads the page by id, caches per id, throws on read
   await assert.rejects(failing.pageCode(GP_OVERVIEW), /page read failed/i);
 });
 
-test('readerFor WITHOUT a page backend has no sitemapPageIds/existenceIds/manifest/pageCode — verifySpec fails closed (Imp7/C6)', () => {
+test('readerFor WITHOUT a page backend has no sitemapPageIds/existenceIds/manifest/pageCode — verifySpec fails closed', () => {
   const reader = readerFor(stubSdk(), 'contoso_app', {});
   // No page backend → page-authority methods absent → verifySpec detects reader-incapacity → unableToRun.
   assert.strictEqual(typeof reader.sitemapPageIds, 'undefined', 'no sitemapPageIds when no page backend');

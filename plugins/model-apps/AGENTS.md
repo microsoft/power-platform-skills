@@ -80,6 +80,10 @@ A corollary for **error messages**: an error must stand alone. `operator 'X' is 
 *"This Repo Is PUBLIC"*. The docs here have already had to be scrubbed once for internal repo paths,
 a real Dataverse environment name, review provenance, and indexes into documents an outside reader
 cannot open. Record that kind of context in the PR conversation instead.
+`scripts/tests/review-references-hygiene.test.js` enforces the review-provenance part for this plugin
+and `evals/model-apps`: it fails on finding ids, reviewer, round and plan pointers. Its header lists the
+patterns and what is kept on purpose (generic provenance such as "found in review", and pointers a
+reader can follow such as "design §13.1").
 
 ## app-builder — intent → model-driven app
 
@@ -1247,7 +1251,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   degrading to the unsound compare). Note the per-app settings are DISTINCT from the org readiness gates —
   `nlSearch`'s gate is the boolean `EnableNLGridSearch` but its per-app setting is the numeric
   `NLGridSearchSetting`; conflating them is what let NL grid search report "applied" while writing
-  nothing. This is the F5 "convergence" mitigation: the build is additive (edits to existing artifacts
+  nothing. This is the "convergence" mitigation: the build is additive (edits to existing artifacts
   aren't re-applied in place — teardown + rebuild to converge), and verify makes any resulting
   divergence **loud**.
 - **`scripts/ai-preflight.js`** — standalone preflight report: prints each AI feature's on/off status
@@ -3030,7 +3034,7 @@ fails here. Update `SKILL_SDK_SURFACE` **and** migrate the call sites together.
 bundle: it drives `artifact-intent.js` + the generic surface exactly as the engine does and asserts
 the real wire output — **parity** with a pre-swap golden (`fixtures/parity-golden.json`, via the pure
 `wire-facts.js` normalizer), multi-tab/section create, **metadata-derived control classIds** (a Lookup
-and a String field get DIFFERENT classids — the adapter defaults them from attribute type, T4, so the
+and a String field get DIFFERENT classids — the adapter defaults them from attribute type, so the
 plugin must NOT precompute classId), sub-grid relationship/target/view serialization, `/bag/c` events
 **merge** (exactly one `<events>` root on a rebuild), field removal, and the **412 → failed
 `PushResult`** signal `requireSuccessfulPush` halts on. The mock-based `sdk-build.test.js` covers the

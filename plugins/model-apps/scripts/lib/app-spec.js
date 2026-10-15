@@ -3290,9 +3290,9 @@ function validateAppSpec(spec, opts = {}) {
   // A spec page carrying this field is an EDIT-SNAPSHOT (env-specific, downloaded from a live app);
   // a portable fresh-authored spec omits it. When present it must be exactly this shape so
   // reconcilePageIds can use it as the highest identity authority without silently accepting garbage
-  // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
+  // (e.g. a cross-env GUID that happens to match an unrelated page).
   const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
+  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
@@ -3300,7 +3300,7 @@ function validateAppSpec(spec, opts = {}) {
     // (see "page-name uniqueness" below) so it can distinguish a NEW page from a PRE-EXISTING one.
     // A page MAY carry its own deployed `pageId` (edit-snapshot marker). A portable fresh-authored spec
     // omits it — absence is never an error. When present it MUST be a valid 36-char GUID: the
-    // reconcilePageIds authority logic (addenda Task 4 / C3) consumes it as the HIGHEST identity source,
+    // reconcilePageIds authority logic consumes it as the HIGHEST identity source,
     // so silently accepting a malformed / empty value would cause reconcile to bind the wrong page.
     if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
       errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
@@ -3332,10 +3332,10 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
       }
     }
-    // codeFile confinement + path-uniqueness (Critical 4). Only checked for implemented tsx pages
+    // codeFile confinement + path-uniqueness. Only checked for implemented tsx pages
     // (intent pages have no codeFile; the codeFile presence was already validated above). Normalize
     // the path before checking so that 'pages/./x.tsx' and 'pages/../pages/x.tsx' are detected as
-    // duplicates of 'pages/x.tsx' (addendum Crit 4). Replace backslashes with forward slashes before
+    // duplicates of 'pages/x.tsx'. Replace backslashes with forward slashes before
     // lowercasing for cross-platform-safe comparison in the set.
     if (src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile) {
       if (!isAppSourcePath(src.codeFile)) {
@@ -3533,7 +3533,7 @@ function validateAppSpec(spec, opts = {}) {
         checkPortableIconRef(sa.icon, `sitemap subArea "${sa.title || ''}"`);
         checkPortableIconRef(sa.vectorIcon, `sitemap subArea "${sa.title || ''}"`);
         validateIconDescription(sa.iconDescription, `sitemap subArea "${sa.title || ''}"`, errors);
-        // Ask 3: don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
+        // Don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
         // (emitted by the build); a BARE token can't be emitted on an entity subarea (it breaks the
         // modern app-designer), so surface it as a warning at author time rather than a silent drop.
         if (sa.entity && sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
@@ -3555,7 +3555,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
-  // MEMBERSHIP invariant (Plan 5 v2 / Task 3): every generative page MUST appear as a sitemap subarea.
+  // MEMBERSHIP invariant: every generative page MUST appear as a sitemap subarea.
   // A model-driven app's membership IS sitemap presence — there is no hidden-but-navigable subarea.
   // A page that is only a navigatesTo target (no subarea) is NOT owned by the app's navigation: build
   // will create it, but download enumeration (membership = sitemap) and verify (membership check) will

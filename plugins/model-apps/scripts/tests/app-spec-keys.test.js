@@ -33,7 +33,7 @@ test('navigatesTo.targetKey must resolve to a known page key', () => {
     // undefined context on a path a user can reach by clicking the nav entry.
     { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string' } }, directEntry: { behavior: 'selector' } },
   ];
-  // Place every page in the sitemap so the every-page-placed rule (Task 3) does not fail this spec.
+  // Place every page in the sitemap so the every-page-placed rule does not fail this spec.
   s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' }, { page: 'detail', title: 'Detail' });
   assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
 
@@ -850,7 +850,7 @@ test('minimumPluginVersion refuses a spec that needs a newer plugin than the one
   const bad = gateErrors(spec('next'));
   assert.strictEqual(bad.length, 1);
   assert.match(bad[0], /dotted version string/);
-  // The grammar is ANCHORED, and the anchoring is the point. The reviewer caught a prefix-only
+  // The grammar is ANCHORED, and the anchoring is the point. A prefix-only
   // pattern: `2..9` matched on its leading `2` alone, and compareVersions' `parseInt(n, 10) || 0`
   // then turned the empty component into 0 and enforced **2.0.9** — a DIFFERENT floor than the
   // author wrote, with no error at all. The evident intent `2.9` IS refused by this plugin, so the

@@ -504,7 +504,7 @@ test('#9d a form wireframe renders localized field labels in the spec language',
   assert.match(w, /Nombre/);
   assert.match(w, /Nota/);
 });
-// --- Second review round: prototype keys, and the two label gates that still disagreed -----------
+// --- Further review findings: prototype keys, and the two label gates that still disagreed -----------
 
 test('an option label of "__proto__" resolves to its own value, not Object.prototype', () => {
   // `choiceValueMap` is a dictionary keyed by an AUTHOR-CONTROLLED string. On a plain {} the READ

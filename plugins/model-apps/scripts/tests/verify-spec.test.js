@@ -379,9 +379,9 @@ test('sitemapXmlFor returns empty when the app is not found', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Page branch tests — Task 7: three-authority (IDENTITY+EXISTENCE+MEMBERSHIP)
+// Page branch tests — three-authority (IDENTITY+EXISTENCE+MEMBERSHIP)
 // ---------------------------------------------------------------------------
-// Plan 5 GUIDs (Imp9): real 36-char GUIDs in every mock.
+// Real 36-char GUIDs in every mock.
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
 const GP_EXTRA    = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';
@@ -434,7 +434,7 @@ test('verifySpec pages: present + GenPageId-bound + nav edge resolves to the act
   assert.ok(r.checks.filter((c) => c.kind.startsWith('page')).every((c) => c.present), 'all page checks present');
 });
 
-test('verifySpec pages: a WRONG deployed GUID in the nav literal FAILS the nav check (C1 wrong-GUID)', async () => {
+test('verifySpec pages: a WRONG deployed GUID in the nav literal FAILS the nav check (wrong-GUID)', async () => {
   const read = pageRead({
     sitemapIds: [GP_OVERVIEW, GP_DETAIL],
     existenceIds: [GP_OVERVIEW, GP_DETAIL],
@@ -447,7 +447,7 @@ test('verifySpec pages: a WRONG deployed GUID in the nav literal FAILS the nav c
   assert.strictEqual(r.ok, false);
 });
 
-test('verifySpec pages: the correct target id only in a COMMENT (not a nav call site) FAILS the edge (C1 structural oracle)', async () => {
+test('verifySpec pages: the correct target id only in a COMMENT (not a nav call site) FAILS the edge (structural oracle)', async () => {
   const read = pageRead({
     sitemapIds: [GP_OVERVIEW, GP_DETAIL],
     existenceIds: [GP_OVERVIEW, GP_DETAIL],
@@ -619,7 +619,7 @@ test('verifySpec pages: the sitemap subarea check matches the GenPageId attribut
   assert.ok(r.checks.some((c) => c.kind === 'page-subarea' && c.name === 'Overview' && !c.present), 'only a GenPageId="…" binding counts');
 });
 
-test('verifySpec pages: FAIL-CLOSED + unableToRun when the reader lacks page-authority methods (C6/Imp7)', async () => {
+test('verifySpec pages: FAIL-CLOSED + unableToRun when the reader lacks page-authority methods', async () => {
   // A reader without sitemapPageIds/existenceIds/manifest means the verifier is unable to run — this
   // must yield r.unableToRun===true (distinct from a reader that has authorities but finds a page missing).
   const read = {
@@ -650,8 +650,8 @@ test('verifySpec pages: ordinary miss (reader has authorities but page absent fr
 });
 
 // ---------------------------------------------------------------------------
-// NEW Task 7 tests: name≠title match, page-not-in-existence, page-not-in-sitemap,
-// empty manifest → unableToRun, page-extra set-equality, caching (Imp7).
+// Name≠title match, page-not-in-existence, page-not-in-sitemap,
+// empty manifest → unableToRun, page-extra set-equality, caching.
 // ---------------------------------------------------------------------------
 
 test('verifySpec pages: name≠title page matched by id (spec name does not need to match sitemap title)', async () => {
@@ -705,7 +705,7 @@ test('verifySpec pages: a page not in the sitemap → missing (placement check, 
   assert.strictEqual(r.ok, false);
 });
 
-test('verifySpec pages: empty/absent manifest on a page-bearing spec → unableToRun (Imp7, NOT all-missing)', async () => {
+test('verifySpec pages: empty/absent manifest on a page-bearing spec → unableToRun (NOT all-missing)', async () => {
   // Absent manifest (null) → cannot correlate any spec page to a deployed id → unableToRun.
   const readNull = pageRead({
     sitemapIds: [GP_OVERVIEW, GP_DETAIL],
@@ -730,7 +730,7 @@ test('verifySpec pages: empty/absent manifest on a page-bearing spec → unableT
   assert.strictEqual(r2.unableToRun, true, 'empty manifest → unableToRun (page-identity)');
 });
 
-test('verifySpec pages: an extra live sitemap page not in the spec → page-extra (set-equality, Imp7)', async () => {
+test('verifySpec pages: an extra live sitemap page not in the spec → page-extra (set-equality)', async () => {
   // sitemapIds includes GP_EXTRA which is not referenced by any spec page → page-extra.
   const read = pageRead({
     sitemapIds: [GP_OVERVIEW, GP_DETAIL, GP_EXTRA],
@@ -745,7 +745,7 @@ test('verifySpec pages: an extra live sitemap page not in the spec → page-extr
   assert.strictEqual(r.ok, false);
 });
 
-test('verifySpec pages: each reader method called exactly once (caching, Imp7)', async () => {
+test('verifySpec pages: each reader method called exactly once (caching)', async () => {
   let sitemapCalls = 0;
   let existenceCalls = 0;
   let manifestCalls = 0;
@@ -766,11 +766,11 @@ test('verifySpec pages: each reader method called exactly once (caching, Imp7)',
   assert.strictEqual(manifestCalls, 1, 'manifest called exactly once');
 });
 
-// ── Content-level verify (F5 scoped): catch a build that reports success while the deployed artifact
+// ── Content-level verify (scoped): catch a build that reports success while the deployed artifact
 // DIFFERS from the spec (edits silently not applied). All best-effort + ADDITIVE — a check only fires
 // when the reader supplies the data, so existing existence-only readers are unaffected. ────────────
 
-test('verifySpec: view-columns — a spec view column missing from the deployed layoutxml FAILS (F5)', async () => {
+test('verifySpec: view-columns — a spec view column missing from the deployed layoutxml FAILS', async () => {
   const spec = { entities: [], charts: [], forms: [],
     views: [{ entity: 'new_o', name: 'V', columns: ['new_name', 'new_status'] }], appShell: { areas: [] } };
   const read = {
@@ -1082,7 +1082,7 @@ test('verifySpec: app-role association read failures fail closed', async () => {
   assert.strictEqual(r.ok, false);
 });
 
-test('verifySpec: relationship existence — a declared relationship absent from the child metadata FAILS (F5)', async () => {
+test('verifySpec: relationship existence — a declared relationship absent from the child metadata FAILS', async () => {
   const spec = { entities: [{ schemaName: 'new_o' }], views: [], charts: [], forms: [], appShell: { areas: [] },
     relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_o', lookup: { schemaName: 'new_CustomerId' } }] };
   const read = {
@@ -1104,7 +1104,7 @@ test('verifySpec: relationship check is SKIPPED when the reader cannot list rela
   assert.ok(!r.checks.some((c) => c.kind === 'relationship'), 'no entityRelationships reader -> no relationship check');
 });
 
-test('verifySpec: command existence — a declared command bar with no deployed appaction FAILS (F5)', async () => {
+test('verifySpec: command existence — a declared command bar with no deployed appaction FAILS', async () => {
   const spec = { entities: [{ schemaName: 'new_o' }], views: [], charts: [], forms: [], appShell: { areas: [] },
     commands: [{ entity: 'new_o', label: 'Escalate', library: 'new_o.js', function: 'X.y' }] };
   const read = {
@@ -1125,7 +1125,7 @@ test('verifySpec: command check is SKIPPED when the reader cannot resolve a comm
   assert.ok(!r.checks.some((c) => c.kind === 'command'), 'no commandBar reader -> no command check');
 });
 
-// --- Security persona roles (Group N P1) ---------------------------------------------------
+// --- Security persona roles ---------------------------------------------------
 
 test('verifySpec: an SDK-authored persona role present -> ok', async () => {
   const spec = { entities: [{ schemaName: 'new_o', columns: [] }], personas: [{ persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_o', access: ['read'] }] }] }] };
@@ -1804,7 +1804,7 @@ test('verify: the label pass skips a section another authored section owns by na
   const ok = await topoCheck(built, twoTabs);
   assert.strictEqual(ok.present, true, `got ${ok.detail}`);
 });
-// --- #N3: the verifier must match containers the way the BUILD does ------------------------------
+// --- the verifier must match containers the way the BUILD does ------------------------------
 // LIVE-REPRODUCED: reshaping an auto-built form to an explicit layout succeeds — the build reuses
 // the existing containers and deliberately does NOT rename them, because form scripts and business
 // rules reference a section by name — and then verify failed the very build it had just done,
@@ -1841,7 +1841,7 @@ test('verify still FAILS a wrong placement when containers matched by position',
 
 
 
-// --- N3 label/exclusion tests, built so the LABEL pass is the only route to the right answer ------
+// --- Label/exclusion tests, built so the LABEL pass is the only route to the right answer ------
 // A fixture whose authored name matches a deployed name is resolved by the NAME pass and proves
 // nothing about labels, exclusions or defaults. In each test below the authored name matches
 // NOTHING and the positional slot points at the WRONG container, so only the behaviour under test
@@ -2137,7 +2137,7 @@ test('verify skips the occupancy check when the deployed section declares no wid
   assert.strictEqual(chk.present, true, `unknown width must not invent an overflow; got ${chk && chk.detail}`);
 });
 
-// --- F1: a span the COMPILER clamps must verify against its effective value --------------------
+// --- a span the COMPILER clamps must verify against its effective value --------------------
 // The schema documents that a span wider than its section is clamped, so `colspan: 4` in a
 // one-column section deploys as 1. Comparing the RAW authored value failed a layout that had been
 // built exactly as documented. Live-reproduced:
@@ -2171,7 +2171,7 @@ test('verify STILL fails a span that is wrong after clamping', async () => {
   assert.match(chk.detail, /clamped to 2/, `the message must explain the clamp; got ${chk.detail}`);
 });
 
-// --- F4: a same-named section in ANOTHER tab must not satisfy the placement --------------------
+// --- a same-named section in ANOTHER tab must not satisfy the placement --------------------
 // The builder can produce two sections called `sec_fields` in different tabs — one holding the
 // fields, one empty in the tab that was requested. Keying placement by section NAME found the
 // empty one equal to the real one and reported PASS while the relocation had not happened.

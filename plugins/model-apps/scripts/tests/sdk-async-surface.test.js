@@ -27,8 +27,8 @@
 // matched against the RAW source and only dismissed when two INDEPENDENT signals agree, so a flaw
 // in its lexer produces a false positive (loud, waivable) rather than a hidden call.
 //
-// It is not sound, and cannot be made sound with regular expressions. Four rounds of adversarial
-// review each found new constructs, and the residual known limits are:
+// It is not sound, and cannot be made sound with regular expressions. Repeated adversarial
+// review kept finding new constructs, and the residual known limits are:
 //   * PARAMETER destructuring — `function use({ getArtifact }) { getArtifact(id); }`. No textual
 //     anchor distinguishes an ObjectPattern from an ObjectExpression, so trying to catch it flagged
 //     every mock object literal in the suite. An AST distinguishes them; a regex cannot.
@@ -441,7 +441,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /['\"]/.test(v);\nconst a = provision.getArtifact('f', id);",
     'a call after an apostrophe that cannot be a string (unterminated on its line)':
       "const n = 5; // it's fine\nconst a = provision.getArtifact('f', id);",
-    // Sol round 3: SAME-LINE ambiguity, where the newline fallback cannot help. These are the
+    // SAME-LINE ambiguity, where the newline fallback cannot help. These are the
     // cases that motivated inverting the scan to dismiss-only-when-provably-inert.
     'SAME LINE: a regex after a control paren whose quote could close before the call':
       "if (c) /['\"]/.test(v) && provision.getArtifact('form', id);",
@@ -449,12 +449,12 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "const n = x++ / provision.getArtifact('form', id) / divisor;",
     'SAME LINE: a regex containing a backtick, with a real template later on the line':
       "if (c) /`/.test(v) && provision.getArtifact('f', id); const s = `ok`;",
-    // Sol round 3: binding forms a narrow character class silently missed.
+    // Binding forms a narrow character class silently missed.
     'destructured with a DEFAULT': "const { getArtifact = fallback } = provision;",
     'destructured with a rename AND a default': "const { getArtifact: read = fallback } = provision;",
     'destructured with a REST element': "const { getArtifact, ...rest } = provision;",
     'destructured with a COMPUTED key': "const { ['getArtifact']: read } = provision;",
-    // Sol round 4: constructs where NO raw candidate was produced, or both dismissal signals
+    // Constructs where NO raw candidate was produced, or both dismissal signals
     // agreed wrongly.
     'a comment between receiver and method (comments are whitespace in JS)':
       "provision /* note */ .getArtifact('form', id);",
@@ -466,7 +466,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /`/.test(v);\n /* legacy */ provision.getArtifact('f', id);\nconst s = `ok`;",
     'a default that is a CALL in a destructuring pattern':
       "const { getArtifact = fallback() } = provision;",
-    // Sol round 5 (non-blocking, fixed anyway): a LINE comment is whitespace too, and a composed
+    // A LINE comment is whitespace too, and a composed
     // desync could satisfy the block-comment-continuation exception on a multiplication line.
     'a LINE comment between receiver and method':
       "provision // note\n  .getArtifact('form', id);",
@@ -528,7 +528,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
   const waiverCase = (line) => isWaiverLine(line);
   assert.strictEqual(waiverCase('  // sdk-async-ok: handed to Promise.all'), true, 'a whole-line comment waives');
   assert.strictEqual(waiverCase("  console.log('sdk-async-ok');"), false, 'a marker inside a STRING must not waive');
-  // Sol round 3: inference-from-absence also mistook regex and template text for a comment.
+  // Inference-from-absence also mistook regex and template text for a comment.
   assert.strictEqual(waiverCase('  const marker = /sdk-async-ok/;'), false, 'a marker inside a REGEX must not waive');
   assert.strictEqual(waiverCase('  const marker = `${v}sdk-async-ok`;'), false, 'a marker inside a TEMPLATE must not waive');
   assert.strictEqual(waiverCase('  x(); // sdk-async-ok'), false,

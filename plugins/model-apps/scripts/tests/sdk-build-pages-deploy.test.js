@@ -24,7 +24,7 @@ const { readPageOwnership, readPendingCreations, recordPagePending, recordPageCr
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
-// Real GUIDs for the three-authority sitemap mock (Imp9). SELF_* resolve THIS app's appmodule + sitemap so
+// Real GUIDs for the three-authority sitemap mock. SELF_* resolve THIS app's appmodule + sitemap so
 // fetchSitemap(appUnique) returns opts.liveSitemapXml; a page-less EMPTY sitemap is the default membership.
 const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
@@ -186,7 +186,7 @@ test('deploy: nav page uploads RESOLVED content (target id, no PAGEREF_); canoni
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('deploy: a MALFORMED (single-quoted) nav PAGEREF_ HALTS before any upload (C4 grammar, structural)', async () => {
+test('deploy: a MALFORMED (single-quoted) nav PAGEREF_ HALTS before any upload (grammar, structural)', async () => {
   const { appDir, spec } = makeTwoPageApp({ malformed: true });
   try {
     const { sdk } = mockSdk();
@@ -199,7 +199,7 @@ test('deploy: a MALFORMED (single-quoted) nav PAGEREF_ HALTS before any upload (
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('deploy: a real nav ref with NO declaration HALTS on parity before any upload (C4 parity, structural)', async () => {
+test('deploy: a real nav ref with NO declaration HALTS on parity before any upload (parity, structural)', async () => {
   const { appDir, spec } = makeTwoPageApp({ undeclaredRef: true });
   try {
     const { sdk } = mockSdk();
@@ -212,7 +212,7 @@ test('deploy: a real nav ref with NO declaration HALTS on parity before any uplo
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('deploy: a DECOY "PAGEREF_" string (not a nav call site) does NOT satisfy a declared edge — parity HALTs (C1)', async () => {
+test('deploy: a DECOY "PAGEREF_" string (not a nav call site) does NOT satisfy a declared edge — parity HALTs', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-decoy-'));
   try {
     // Overview DECLARES nav to detail, but the only "PAGEREF_detail" is a decoy string; the REAL nav
@@ -744,7 +744,7 @@ test('deploy: DYNAMIC nav pageId (variable expression) HALTS before any write �
 });
 
 // OVERRIDE 2 (new-Important-1): a LITERAL GUID nav pageId (hardcoded env-specific id — breaks cross-env
-// recreate, design §9 T5) must be rejected BEFORE any write. Even with navigatesTo:[] (parity passes),
+// recreate, design §9) must be rejected BEFORE any write. Even with navigatesTo:[] (parity passes),
 // extractNavTargets (kind:'literal') catches it. Error code: pages-nav-parity.
 test('deploy: LITERAL GUID nav pageId (hardcoded) HALTS before any write — new-Important-1 override-2', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-litguid-'));

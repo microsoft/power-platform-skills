@@ -160,7 +160,7 @@ function sitemapGenPageIds(xml) {
   return Array.from(new Set(sitemapGenPages(xml).map((r) => r.pageId.toLowerCase()))).sort();
 }
 
-// Structural validation for a PRESENT sitemapxml string (C4 addenda). Returns true if the XML is
+// Structural validation for a PRESENT sitemapxml string. Returns true if the XML is
 // malformed/truncated and must NOT be accepted as a valid (even page-less) sitemap.
 //
 // Three malformed conditions (any one is sufficient):
@@ -184,7 +184,7 @@ function isMalformed(xml) {
   return false;
 }
 
-// Fetch the app's LIVE sitemap, FAIL-CLOSED and DISCRIMINATED (C4). appmodule (by unique name) →
+// Fetch the app's LIVE sitemap, FAIL-CLOSED and DISCRIMINATED. appmodule (by unique name) →
 // appmodulecomponent (componenttype 62 — the sitemap) → sitemap.sitemapxml. The three not-found cases are
 // DISTINCT reasons (the old sitemapXmlFor in verify-model-app.js collapsed them all to '' — indistinguishable
 // from a valid page-less sitemap — which let reconcile/verify read "no live pages" and recreate-all).
@@ -193,7 +193,7 @@ function isMalformed(xml) {
 //   { ok:false, reason:'app-not-found' }               — appmodule not found for this uniquename
 //   { ok:false, reason:'sitemap-component-not-found' }  — no appmodulecomponent type 62
 //   { ok:false, reason:'sitemap-xml-unreadable' }       — sitemapxml is falsy/empty
-//   { ok:false, reason:'malformed' }                    — present XML fails structural validation (C4)
+//   { ok:false, reason:'malformed' }                    — present XML fails structural validation
 //   { ok:false, reason:'*-query-failed', detail }       — transport error (still propagates as fail-closed)
 //   { ok:true,  xml, ids:[] }                          — valid, page-less sitemap (NOT "missing")
 //   { ok:true,  xml, ids:[...] }                        — valid sitemap with genpage subareas
@@ -258,7 +258,7 @@ async function fetchSitemap(sdk, appUnique, { currentLayer, includeSitemapId } =
   // A deployed app ALWAYS has non-empty sitemapxml; falsy/empty is anomalous → fail-closed (NOT "valid, empty").
   if (!xml) return { ok: false, reason: 'sitemap-xml-unreadable' };
 
-  // C4 (addenda): a PRESENT but structurally invalid / truncated XML must also be rejected. A malformed
+  // A PRESENT but structurally invalid / truncated XML must also be rejected. A malformed
   // sitemap accepted as { ok:true, ids:[] } would cause the build to treat all pages as absent and recreate them.
   if (isMalformed(String(xml))) return { ok: false, reason: 'malformed' };
 
@@ -280,7 +280,7 @@ function currentSitemapRows(rows) {
   return current;
 }
 
-// Env-wide MEMBERSHIP scan (Imp5): which apps' sitemaps reference each id in `pageIds`. GROUNDED by a live
+// Env-wide MEMBERSHIP scan: which apps' sitemaps reference each id in `pageIds`. GROUNDED by a live
 // Dataverse probe (test environment): a generative page has NO `appmodulecomponent` row —
 // `appmodulecomponents?$filter=objectid eq <genPageId>` returns 0 rows. So a genpage's app membership lives
 // ONLY inside the sitemap XML (`GenPageId="…"`), with NO direct genpage→apps join. The ONLY way to find a

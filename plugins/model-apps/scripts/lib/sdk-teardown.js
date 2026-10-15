@@ -1193,7 +1193,7 @@ function planTeardown(spec) {
   for (const f of spec.forms || []) for (const qv of f.quickViews || []) if (qv && qv.form && qv.targetEntity) referencedQv.add(`${String(qv.targetEntity).toLowerCase()}|${qv.form}`);
   // A form is a "referenced quick-view" only if it is a QuickView whose (entity, name) a host embeds —
   // NOT merely a same NAME as some referenced QV (a same-named Main host must stay in the hosts-first
-  // group, else it'd be ordered after its own QV and the QV delete would 400 on the host reference; Sol).
+  // group, else it'd be ordered after its own QV and the QV delete would 400 on the host reference).
   const isReferencedQv = (f) => (f.formType || 'Main') === 'QuickView' && referencedQv.has(`${String(f.entity).toLowerCase()}|${f.name}`);
   const namedForms = (spec.forms || []).filter((f) => f.name);
   const orderedForms = [
@@ -1378,7 +1378,7 @@ function planTeardown(spec) {
   // those currently declaring pages). Always emit its teardown step so a spec that dropped its pages
   // still cleans up the derived manifest. The manifest is referenced only by the (already-deleted) app
   // module, so leaving it behind would orphan it in the solution. A not-found delete is idempotent —
-  // an app that never had pages adds a harmless no-op step. NOT gated on spec.pages (I5). Same
+  // an app that never had pages adds a harmless no-op step. NOT gated on spec.pages. Same
   // declared-name guard as the generated icon (protect an `external` collision; avoid a duplicate).
   if (spec.app && spec.solution) {
     const manifestName = manifestResourceName(appUniqueName(spec));

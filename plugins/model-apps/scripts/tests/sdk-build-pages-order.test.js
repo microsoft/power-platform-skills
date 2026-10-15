@@ -1,7 +1,7 @@
 'use strict';
-// Failure-ordering + restart-convergence for the §9 pages protocol (I6/C5): the sitemap is committed ONLY
+// Failure-ordering + restart-convergence for the §9 pages protocol: the sitemap is committed ONLY
 // after every resolved upload; a halt directly after the FIRST create converges on re-run without
-// duplicate creates; and the descoped advisory lease refuses a fresh concurrent build (I4).
+// duplicate creates; and the descoped advisory lease refuses a fresh concurrent build.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -10,7 +10,7 @@ const path = require('node:path');
 const { runSdkBuild, appUniqueName, acquireAppPagesLease } = require('../lib/sdk-build.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
-// Real GUIDs for the three-authority sitemap mock (Imp9). fetchSitemap(self) resolves via SELF_* to a
+// Real GUIDs for the three-authority sitemap mock. fetchSitemap(self) resolves via SELF_* to a
 // page-less EMPTY sitemap — these ordering/restart tests converge on EXISTENCE (env list), not membership.
 const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
@@ -102,7 +102,7 @@ function twoPageApp() {
 }
 const PHASES = ['solution', 'data-model', 'app-shell', 'pages'];
 
-test('SEQUENCE: uploads → per-create manifest persist → sitemap finalize; no manifest write after finalize (I6)', async () => {
+test('SEQUENCE: uploads → per-create manifest persist → sitemap finalize; no manifest write after finalize', async () => {
   const { appDir, spec } = twoPageApp();
   try {
     const h = harness();
@@ -118,7 +118,7 @@ test('SEQUENCE: uploads → per-create manifest persist → sitemap finalize; no
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('RESTART-CONVERGENCE: a halt directly after the FIRST page CREATE re-runs with NO duplicate create (C5)', async () => {
+test('RESTART-CONVERGENCE: a halt directly after the FIRST page CREATE re-runs with NO duplicate create', async () => {
   const { appDir, spec } = twoPageApp();
   const workspaceDir = path.join(appDir, '.maker-workspace');
   try {
@@ -152,7 +152,7 @@ test('FAILURE-ORDER: an upload failure before the finalize leaves the sitemap un
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('CONCURRENCY: a second build HALTs (pages-locked) while a FRESH app-scoped lock is held (I4)', async () => {
+test('CONCURRENCY: a second build HALTs (pages-locked) while a FRESH app-scoped lock is held', async () => {
   const { appDir, spec } = twoPageApp();
   try {
     const wsDir = path.join(appDir, '.maker-workspace');
@@ -167,7 +167,7 @@ test('CONCURRENCY: a second build HALTs (pages-locked) while a FRESH app-scoped 
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// Direct unit tests of the DESCOPED advisory lease (review R2 Critical 3): the DESCOPED advisory lease
+// Direct unit tests of the DESCOPED advisory lease: the DESCOPED advisory lease
 // NEVER steals and NEVER age-reclaims — a held lock HALTs a second acquire (manual delete required);
 // release is owner-checked. Correctness rests on the convergence spine, not the lock.
 test('LEASE: a FRESH lock HALTs a second acquire (never steals); release then allows re-acquire', () => {

@@ -25,7 +25,7 @@ function pageBackend(double) {
 }
 const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofDelayMs: 0, ...opts, ...(opts.genpageCli ? { genpage: pageBackend(opts.genpageCli) } : {}) });
 
-// Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
+// Real GUIDs for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
 // through the GenPageId/GUID extractors in a test MUST be real 36-char GUIDs.
 const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -38,7 +38,7 @@ const draftSitemapId = (j) => `5111e0f2-0000-4000-8000-0000000000d${j}`;
 // does not seed opts.liveSitemapXml.
 const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
 
-// Stage a fresh temp appDir with a minimal valid .tsx for each IMPLEMENTED page. Task 8's pages-phase
+// Stage a fresh temp appDir with a minimal valid .tsx for each IMPLEMENTED page. The pages-phase
 // scan READS canonical source from disk, so any pages-phase test must have real files (not a bare
 // 'o.tsx' string). Optional `bodyByCodeFile` overrides a page's source (e.g. to inject navigation).
 function stagePages(pages, bodyByCodeFile = {}) {
@@ -55,7 +55,7 @@ function stagePages(pages, bodyByCodeFile = {}) {
 
 test('appUniqueName prefers spec.app.uniqueName (real immutable identity) over the display-name derivation', () => {
   // A DOWNLOADED spec carries the real uniquename → used verbatim so a rebuild resolves the EXISTING app
-  // even after a display-name rename (deriving from the mutable name would miss it and duplicate — Sol F1).
+  // even after a display-name rename (deriving from the mutable name would miss it and duplicate).
   assert.strictEqual(
     appUniqueName({ solution: { publisherPrefix: 'crba3' }, app: { name: 'Zava App 2', uniqueName: 'crba3_zavaapp' } }),
     'crba3_zavaapp', 'the real uniquename is used, NOT the derived crba3_zavaapp2');
@@ -139,7 +139,7 @@ function mockSdk(opts = {}) {
         return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
       }
       if (e === 'uxagentproject') return (opts.pageRows || []).filter((r) => filter.includes(r.uxagentprojectid.toLowerCase()));
-      // appmodule / appmodulecomponent / sitemap answer the fetchSitemap + fetchAppsForPages reads (Imp9).
+      // appmodule / appmodulecomponent / sitemap answer the fetchSitemap + fetchAppsForPages reads.
       // FILTERED appmodule (fetchSitemap for one app) echoes a resolvable row for ANY uniquename — self
       // resolves to SELF_SITEMAP_ID (→ opts.liveSitemapXml); a named otherApp resolves to its own sitemap.
       // UNFILTERED appmodule (fetchAppsForPages) lists self + otherApps; self is skipped by excludeAppUnique
@@ -4232,7 +4232,7 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
   assert.ok(pubs.includes('form') || pubs.includes('view'), 'entity customizations published');
 });
 
-// --- Security personas / roles (Group N P1) ------------------------------------------------
+// --- Security personas / roles ------------------------------------------------
 const personaSpec = () => makeSpec({
   personas: [
     { persona: 'Ticket Agent', jobs: [
@@ -5564,12 +5564,12 @@ test('pages phase persists the manifest on a SINGLE-page first build (one create
     const created = find(calls, 'createWebResource').map((c) => c.args[0]).find((o) => /_pagemanifest$/.test(o.name));
     assert.strictEqual(created.type, 'js');
     assert.deepStrictEqual(JSON.parse(created.content).pages[0], { key: 'Overview', name: 'Overview', pageId: 'gp-1' });
-    assert.strictEqual(find(calls, 'updateWebResource').length, 0, 'one create writes the final content; the final persist is deduped → ZERO updates (I6)');
+    assert.strictEqual(find(calls, 'updateWebResource').length, 0, 'one create writes the final content; the final persist is deduped → ZERO updates');
     assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 61), 'manifest added to the solution');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages phase persists the manifest per-create on a MULTI-page first build (one create + one update, I6)', async () => {
+test('pages phase persists the manifest per-create on a MULTI-page first build (one create + one update)', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
   const appDir = stagePages(spec.pages);
@@ -5643,7 +5643,7 @@ test('pages phase HALTS fail-closed when EXISTENCE enumeration fails — never t
   try {
     const { sdk } = mockSdk();
     let uploaded = 0;
-    // enumerateEnv is env-wide EXISTENCE (Task 2). A failed listing must HALT — never collapse to "no pages".
+    // enumerateEnv is env-wide EXISTENCE. A failed listing must HALT — never collapse to "no pages".
     const genpageCli = { enumerateEnv: async () => ({ ok: false, ids: [], error: 'auth expired' }), upload: async () => { uploaded += 1; return { pageId: 'gp-1' }; } };
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
@@ -5653,7 +5653,7 @@ test('pages phase HALTS fail-closed when EXISTENCE enumeration fails — never t
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages phase HALTS when the app id is absent (I1 recovery guard — do NOT resume from --from pages)', async () => {
+test('pages phase HALTS when the app id is absent (recovery guard — do NOT resume from --from pages)', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
   const appDir = stagePages(spec.pages);
@@ -5721,8 +5721,8 @@ test('C2: an EXISTING app with NO page subareas still pushes its sitemap in app-
   assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'a no-page existing app keeps pushing its sitemap in app-shell');
 });
 
-// ── Plan 5 three-authority safety gates: existence-driven crash-safety (C1), discriminated reads,
-//    destructive-removal (Imp6) and cross-app shared-page (Imp5) HALTs. Real GUIDs (Imp9). ─────────────
+// ── Three-authority safety gates: existence-driven crash-safety, discriminated reads,
+//    destructive-removal and cross-app shared-page HALTs. Real GUIDs. ─────────────
 const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_D = '5c0a4889-45fd-46ea-91a8-ff876914d644';
 const overviewSpec = () => {
@@ -5733,7 +5733,7 @@ const overviewSpec = () => {
   return spec;
 };
 
-test('pages: crash-after-create convergence — a manifest id in EXISTENCE but NOT in the sitemap is UPDATED, never re-created (C1)', async () => {
+test('pages: crash-after-create convergence — a manifest id in EXISTENCE but NOT in the sitemap is UPDATED, never re-created', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
@@ -5863,7 +5863,7 @@ test('pages: spec.pages=[] with --allow-destructive DETACHES all live pages (pag
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live genpages via a page-less sitemap (whole-branch review)', async () => {
+test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live genpages via a page-less sitemap', async () => {
   const spec = makeSpec(); spec.schemaVersion = 2; // page-less spec, no page subareas
   const appUnique = appUniqueName(spec);
   const appDir = stagePages([]);
@@ -5883,7 +5883,7 @@ test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live g
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-apps (Imp5) — --allow-destructive does NOT bypass', async () => {
+test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-apps — --allow-destructive does NOT bypass', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
@@ -7184,7 +7184,7 @@ test('form topology: a span already at the authored value is not rewritten', asy
     'an absent colspan already MEANS 1, so declaring 1 must not produce a write');
 });
 
-// --- #N2: widening a field on a DEPLOYED form must re-pack its row -------------------------------
+// --- widening a field on a DEPLOYED form must re-pack its row -------------------------------
 // LIVE-REPRODUCED: widening an existing field left three columns of content in a two-column row.
 // The span was patched in place, but the packing that the create path applies (`rowsFromCells`)
 // never re-ran, so the row kept both its original cells and the newly widened one.
@@ -7412,7 +7412,7 @@ test('form topology: after a narrowing move, a second apply of the same spec cha
   assert.deepStrictEqual(warnings.filter((w) => /spanned/.test(w)), []);
 });
 
-// --- F2: a span CLAMPED to 1 is still an explicit claim -----------------------------------------
+// --- a span CLAMPED to 1 is still an explicit claim -----------------------------------------
 // The clamp branch dropped the attribute when it reduced a span to 1, on the reasoning that "1 is
 // the default". That recreates exactly the omission/value ambiguity the explicit-1 fix removed one
 // layer up: reconcile reads the missing value as "no opinion" and LEAVES AN EXISTING WIDE CELL
@@ -7440,7 +7440,7 @@ test('form topology: a clamped span is an EXPLICIT 1 and shrinks an existing wid
     'a colspan of 4 in a 1-column section clamps to 1, and that 1 must REACH the deployed cell');
 });
 
-// --- F3: shrinking the GRID must repack the rows it now overflows -------------------------------
+// --- shrinking the GRID must repack the rows it now overflows -------------------------------
 // The repack fires when a CELL span changes. A section whose width shrinks overflows without any
 // cell changing: three unit-width cells sit legally in a 4-column row and illegally in a 1-column
 // one. Live-reproduced: occupancy 3 in width 1, on both applies.

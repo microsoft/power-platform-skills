@@ -173,7 +173,7 @@ function readerFor(sdk, appUnique, opts) {
   const { fetchSitemap: _fetchSitemap, sitemapGenPageIds: _sitemapGenPageIds } = require('./lib/sitemap-pages.js');
   const { manifestResourceName: _manifestResourceName, parseManifestBase64: _parseManifestBase64 } = require('./lib/page-manifest.js');
 
-  // Memoize fetchSitemap: both sitemapXml and sitemapPageIds share one live query (Imp7 — one snapshot).
+  // Memoize fetchSitemap: both sitemapXml and sitemapPageIds share one live query (one snapshot).
   let sitemapP;
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
   // Memoized app TABLE components — one live read per verify run, keyed by the wanted-table set.
@@ -458,7 +458,7 @@ function readerFor(sdk, appUnique, opts) {
   };
 
   // Only expose page-authority readers when a page backend is wired — absent it, verifySpec fails closed
-  // for a page-bearing spec (Imp7/C6: missing methods → unableToRun).
+  // for a page-bearing spec (missing methods → unableToRun).
   if (genpage) {
     let existenceP;
     let existenceRunning = false;
@@ -488,13 +488,13 @@ function readerFor(sdk, appUnique, opts) {
     })()));
 
     // IDENTITY: the durable page manifest web resource. Returns null when absent OR corrupt — verifySpec
-    // treats null as unableToRun (page-identity) on a page-bearing spec (Imp7). Memoized (one read).
+    // treats null as unableToRun (page-identity) on a page-bearing spec. Memoized (one read).
     base.manifest = () => (manifestP || (manifestP = (async () => {
       const name = _manifestResourceName(appUnique);
       const rows = await sdk.queryRecords('webresource', { select: ['content'], filter: `name eq '${odataLit(name)}'`, top: 1 });
       const b64 = rows && rows[0] && rows[0].content;
       // parseManifestBase64 returns null on bad base64, bad JSON, wrong schemaVersion, corrupt entries, or
-      // duplicate keys/pageIds (Imp11). A null manifest on a page-bearing spec → unableToRun in verifySpec.
+      // duplicate keys/pageIds. A null manifest on a page-bearing spec → unableToRun in verifySpec.
       return b64 ? _parseManifestBase64(b64) : null;
     })()));
 

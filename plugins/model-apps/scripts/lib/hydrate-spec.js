@@ -227,7 +227,7 @@ async function hydrateSpec(read) {
     webResources,
     views: [],
     // NOT reconstructed (documented limitation): views, charts, forms, and commands. VIEWS were
-    // tried (F3) but reverted — the deployed savedquery set can't reliably distinguish app-builder-
+    // tried but reverted — the deployed savedquery set can't reliably distinguish app-builder-
     // authored views from Dataverse's auto-generated Active/Inactive/QuickFind/Lookup/AdvancedFind
     // system views (LIVE-verified: `isdefault` marks the AUTHORED primary "Active" view TRUE and the
     // SYSTEM "Inactive" view FALSE, so no `isdefault`/`querytype` filter isolates author views — it
@@ -264,7 +264,7 @@ async function hydrateSpec(read) {
       ? {
           key: p.key,
           name: p.name,
-          // Carry the deployed GenPageId so the downloaded spec is a self-describing EDIT-SNAPSHOT (C3):
+          // Carry the deployed GenPageId so the downloaded spec is a self-describing EDIT-SNAPSHOT:
           // a rebuild reuses this id (reconcilePageIds authority #1) instead of minting a new one, even for
           // a page the user added in Maker that our manifest never knew about. A portable fresh-authored
           // spec has no pageIds; a downloaded edit-snapshot does — that is the intended distinction.

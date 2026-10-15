@@ -185,7 +185,7 @@ function classifyAdditive(cur, prior, phase, type, arrKey, opts = {}) {
 // form records a debt-candidate: a pure field-ADD converges (engine appends to the first section) but a
 // placement/subgrid/event/quickView edit does NOT — which is which can only be proven at build time
 // against the deployed form projection, so the classifier records the debt and the build-time verifier
-// clears it iff convergence is proven (design §"Eligibility state machine", Sol build-time note).
+// clears it iff convergence is proven (design §"Eligibility state machine").
 function classifyForms(cur, prior) {
   const out = { fast: [], full: [], debt: [] };
   const { added, removed, common } = alignByIdentity(cur.forms, prior.forms, identityOf.form);

@@ -37,7 +37,7 @@ const { navigationHolds } = require('./lib/app-navigation.js');
 // on what "unattended" means. Re-exported from here because callers and tests already import it
 // from this file.
 const { envTruthy } = require('./lib/interaction-mode.js');
-// R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
+// Auto-verify: after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
@@ -460,7 +460,7 @@ async function buildModelApp(spec, opts, deps) {
   const runsRemovalPhases = (opts.phases || PHASES).includes('forms') && (opts.phases || PHASES).includes('app-shell')
     && !(opts.changedOnly && opts.changedOnly.fastApply);
 
-  // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
+  // Partial-apply guard: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
   // (solution+data-model+sample-data). Every other partial range (--from/--to/--only/--skip, or any other
   // --stage) is dry-run-only (design §14): its range is not dependency-closed and the app id is not carried
   // across runs, so applying it would run phases against an incomplete result map. Recovery from a halt is
@@ -468,10 +468,10 @@ async function buildModelApp(spec, opts, deps) {
   if (opts.apply) {
     const active = opts.phases || PHASES;
     const sameSet = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
-    // I1 exception: a `--changed-only` pages-only FAST apply is the ONE sanctioned partial range. It is
+    // Exception: a `--changed-only` pages-only FAST apply is the ONE sanctioned partial range. It is
     // pre-gated by the changed-only flow (snapshot eligibility + identity match + classify proved every
     // change is a pure page-content re-upload) and self-hydrates the app id via
-    // opts.changedOnly.resolvedAppId (the sdk-build seam), so it does NOT hit the cross-phase-id hazard I1
+    // opts.changedOnly.resolvedAppId (the sdk-build seam), so it does NOT hit the cross-phase-id hazard this guard
     // guards against. Any other partial range on --apply is still refused.
     const isChangedOnlyPages = !!(opts.changedOnly && opts.changedOnly.fastApply) && sameSet(active, ['pages']);
     if (!isChangedOnlyPages && !sameSet(active, PHASES) && !sameSet(active, STAGES.data)) {
@@ -491,7 +491,7 @@ async function buildModelApp(spec, opts, deps) {
   // #changed-only EXEMPTION: a pages-only fast apply is pre-gated by the changed-only flow (snapshot
   // eligibility + live identity match + classify proved every change is a pure page-content re-upload) and
   // touches NO data model, so the collision/destructive preflight does not apply. Running it would (a) HARD-
-  // STOP the fast path in --non-interactive because the app always exists (Opus H3), and (b) do slow full
+  // STOP the fast path in --non-interactive because the app always exists, and (b) do slow full
   // form/sitemap reads for nothing. The pages phase keeps its own removal/shared/membership safety gates.
   const isFastApply = !!(opts.changedOnly && opts.changedOnly.fastApply);
   if (opts.apply && !isFastApply && (deps.discoverOpDiffState || (deps.provisionSdk && opts.checkCollisions !== false))) {
@@ -666,7 +666,7 @@ async function buildModelApp(spec, opts, deps) {
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         authorizedFormRemovals,
         authorizedSitemapRemovals,
-        allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
+        allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
         // rewrite keep a nav change made in the designer since then instead of reverting it.
@@ -722,16 +722,16 @@ async function buildModelApp(spec, opts, deps) {
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
-    // R3 — auto-verify: reconcile the spec against what actually deployed so a silent partial build
+    // Auto-verify: reconcile the spec against what actually deployed so a silent partial build
     // (an artifact created but not wired, or a phase that quietly produced nothing) surfaces now
     // instead of only when the user opens the app. Read-only; injected (deps.verify) so tests drive it.
     // A verify failure does NOT undo the build (it already ran) — it is reported and returned in
     // r.verify so the CLI can exit non-zero.
     //
-    // MANDATORY + FAIL-CLOSED for page-bearing specs (design §13.1, C6):
+    // MANDATORY + FAIL-CLOSED for page-bearing specs (design §13.1):
     //   - Page verify runs even without --verify when the spec has implemented pages AND the pages
     //     phase was applied (appliedPagesPhase). A --stage data apply (pages NOT selected) must NOT
-    //     trigger mandatory verify (RECONCILIATION 2).
+    //     trigger mandatory verify.
     //   - A verify that CANNOT run (no verifier wired, or verifySpec throws) yields
     //     r.verify={ok:false,unableToRun:true} → non-zero exit. An unverifiable page set never passes
     //     silently — distinguish reader-incapacity (unableToRun) from ordinary miss (ok:false only).
@@ -777,7 +777,7 @@ async function buildModelApp(spec, opts, deps) {
           // Include `detail` on a failure so a READ that failed (throttling, auth expiry, a 5xx) is
           // not reported identically to an artifact that is genuinely absent.
           if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
-          // Propagate unableToRun from verifySpec (RECONCILIATION 1): verifySpec itself sets
+          // Propagate unableToRun from verifySpec: verifySpec itself sets
           // unableToRun when the reader lacks pages/pageCode methods. Only include the property
           // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
           r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}) };
@@ -908,7 +908,7 @@ function parseLanguageCode(value) {
 // Refuse to mutate unless the changed-only snapshot was demonstrably invalidated (#587 item 3).
 //
 // Extracted from main() so it can be tested by BEHAVIOUR. The first version of this guard was
-// covered only by a source-level test, and an adversarial review proved that test worthless: both
+// covered only by a source-level test, which proved worthless: both
 // `if (false && …)` and a catch that manufactures `{ ok: true }` passed the whole file. A guard
 // whose test survives its own removal is not a guard.
 //
@@ -939,7 +939,7 @@ function assertSnapshotInvalidated(store, workspaceDir) {
 // state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
 // re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
 // the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
-// found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort:
+// found a silent partial must NOT record its spec as the deployed baseline. Best-effort:
 // returns whether the baseline was written, and never throws.
 //
 // The spec is persisted ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
@@ -1159,7 +1159,7 @@ async function main() {
   }
   let r;
   try {
-    // deps.verify (R3): the real reconcile, wired to the live provision SDK. Only invoked when
+    // deps.verify: the real reconcile, wired to the live provision SDK. Only invoked when
     // opts.verify AND the build applied successfully. Constructed here (not in buildModelApp) so the
     // core stays free of SDK-reader wiring and fully injectable for tests.
     const deps = {
@@ -1228,7 +1228,7 @@ async function main() {
   }
   persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity });
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
-  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists
+  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal auto-verify exists
   // to raise), while r still carries the full build + verify detail.
   const ok = r.ok && (!r.verify || r.verify.ok);
   emitResult(ok, r);

@@ -71,10 +71,10 @@ function makeSimpleMockSdk() {
     // build encodes flags to setting values first, so no feature arrives here as a falsy boolean.
     setAppAiFeatures: async (appUnique, flags, opts) => { calls.push(['setAppAiFeatures', appUnique, flags, opts]); return { applied: Object.keys(flags), skipped: [] }; },
     configureRowSummary: async (promptSpec, opts) => { calls.push(['configureRowSummary', promptSpec, opts]); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
-    // Task 15: teardown SDK methods
+    // Teardown SDK methods
     resolveArtifact: async (kind, identity) => { calls.push(['resolveArtifact', kind, identity]); return []; },
     deleteAppCascade: async (appModuleId, appModuleIdUnique) => { calls.push(['deleteAppCascade', appModuleId, appModuleIdUnique]); },
-    // Task 17: build idempotency SDK method
+    // Build idempotency SDK method
     findArtifact: async (kind, identity) => { calls.push(['findArtifact', kind, identity]); return null; },
   };
   return { sdk, calls };

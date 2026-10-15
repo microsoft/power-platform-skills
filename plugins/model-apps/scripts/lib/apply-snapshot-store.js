@@ -263,8 +263,8 @@ function casWriteSnapshot(workspaceDir, envelope, expectedGeneration, deps = {})
 }
 
 // INVALIDATE-before-write: force eligible:false and persist, under the lease, ROTATING the generation so a
-// concurrent reader that captured the pre-invalidate generation can no longer win the re-bless CAS (Sol #6
-// fencing — invalidate/apply/re-bless without a long-held lease). Returns { ok, generation } where
+// concurrent reader that captured the pre-invalidate generation can no longer win the re-bless CAS —
+// fencing: invalidate/apply/re-bless without a long-held lease. Returns { ok, generation } where
 // `generation` is the new post-invalidate token the caller must pass as the CAS `expected` on its re-bless.
 // Fail-closed callers (the fast-path apply) MUST abort if this returns { ok:false }. A missing snapshot is
 // already-safe (nothing can fast-path) ⇒ ok:true with generation:null.

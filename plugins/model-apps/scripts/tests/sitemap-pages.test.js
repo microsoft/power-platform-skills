@@ -203,9 +203,9 @@ test('fetchSitemap is FAIL-CLOSED & DISCRIMINATED: missing app / component / xml
     { ok: false, reason: 'sitemap-xml-unreadable' });
 });
 
-// C4 (addenda): MALFORMED detection — a truncated or structurally invalid XML that is PRESENT must NOT be
+// MALFORMED detection — a truncated or structurally invalid XML that is PRESENT must NOT be
 // treated as { ok:true, ids:[] }. Truncation is the most common form: the string ends mid-attribute.
-test('fetchSitemap: truncated / malformed XML → { ok:false, reason:"malformed" } (C4 addenda)', async () => {
+test('fetchSitemap: truncated / malformed XML → { ok:false, reason:"malformed" }', async () => {
   // Truncated in the middle of the Title attribute — no closing > on the SubArea
   const truncated = `<SiteMap><Area><Group><SubArea GenPageId="${GP_OVERVIEW}" Title="Ove`;
   const sdk = sdkWith({
@@ -240,7 +240,7 @@ test('fetchSitemap: XML with a GenPageId whose value is not a valid 36-char GUID
   assert.deepStrictEqual(r, { ok: false, reason: 'malformed' });
 });
 
-test('fetchAppsForPages: an id in TWO apps sitemaps is reported under both (Imp5 shared detection)', async () => {
+test('fetchAppsForPages: an id in TWO apps sitemaps is reported under both (shared detection)', async () => {
   // app-a (unique 'app-a') → sitemap SITEMAP_ID = XML (has GP_OVERVIEW); app-b (unique 'app-b') → sitemap 'sm-2'
   // (also has GP_OVERVIEW). Both apps appear in the unfiltered appmodule list.
   const smXmlById = {

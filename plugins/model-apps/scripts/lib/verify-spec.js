@@ -1332,7 +1332,7 @@ async function verifySpec(spec, read, opts = {}) {
 
   // Pages (design §13.1). Match BY ID against three authorities — IDENTITY (manifest), EXISTENCE
   // (env-wide id set), MEMBERSHIP (app sitemap ids). Reader must supply sitemapPageIds(),
-  // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed (Imp7):
+  // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed:
   // reader-incapacity OR an absent/uncorrelatable manifest on a page-bearing spec → unableToRun
   // (NOT "every page missing" — without an id correlation we cannot tell what is there vs. absent).
   const implementedPages = (spec.pages || []).filter((p) => { const s = normalizePageSource(p); return s && s.kind === 'tsx' && s.codeFile; });
@@ -1343,15 +1343,15 @@ async function verifySpec(spec, read, opts = {}) {
     typeof read.existenceIds !== 'function' ||
     typeof read.manifest !== 'function'
   )) || !!(hasNavPages && typeof read.pageCode !== 'function');
-  // Build key→id from the manifest (IDENTITY authority). A spec page's own pageId (edit-snapshot,
-  // C3) OUTRANKS the manifest entry for the same key — use idOf() consistently.
+  // Build key→id from the manifest (IDENTITY authority). A spec page's own pageId (edit-snapshot)
+  // OUTRANKS the manifest entry for the same key — use idOf() consistently.
   const pageIdOf = (man) => {
     const idByKey = new Map(
       ((man && man.pages) || [])
         .filter((p) => p && p.key && p.pageId)
         .map((p) => [p.key, p.pageId]),
     );
-    // idOf: spec pageId first (highest authority), then manifest key→id (C3 outranks C1).
+    // idOf: spec pageId first (highest authority), then manifest key→id.
     return (p) => p.pageId || idByKey.get(p.key || p.name);
   };
   // The page checks' slow reads, made in the order the checks have always made them: the three authorities
@@ -1397,7 +1397,7 @@ async function verifySpec(spec, read, opts = {}) {
       // Reader is missing required page-authority methods — add a sentinel check and skip the loop.
       add('page-verify', 'pages', false, 'the verify reader cannot read existence / membership / manifest (unable to run)');
     } else {
-      // ONE cached snapshot of each authority (Imp7 — never re-query per page). Throws from
+      // ONE cached snapshot of each authority (never re-query per page). Throws from
       // sitemapPageIds/existenceIds propagate out of verifySpec; the build gate's try/catch converts them
       // to a non-zero exit (design §13.1). The caller that constructed the reader bears fail-closed responsibility.
       // The pass stops waiting for these reads once a check listed before this one has failed (see makeCheckPlan's
@@ -1415,7 +1415,7 @@ async function verifySpec(spec, read, opts = {}) {
         if ('error' in got) throw got.error;
         return got.code;
       };
-      // Imp7: if NO implemented page can be given an id (manifest empty/absent AND no spec pageIds),
+      // If NO implemented page can be given an id (manifest empty/absent AND no spec pageIds),
       // the verifier cannot correlate spec pages to live ids → unableToRun (page-identity), NOT N misses.
       const resolvable = implementedPages.filter((p) => !!idOf(p));
       if (resolvable.length === 0) {
@@ -1453,7 +1453,7 @@ async function verifySpec(spec, read, opts = {}) {
             continue;
           }
           // THE SINGLE STRUCTURAL ORACLE: parse the deployed page's real navigateTo call sites.
-          // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL (C1).
+          // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL.
           const targets = extractNavTargets(code);
           // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page. A token that no call accounts for
           // is read as well (strayPageRefs): the lexer can hide a call — and so its token — behind a misread, which the targets alone miss.
@@ -1469,7 +1469,7 @@ async function verifySpec(spec, read, opts = {}) {
             add('page-nav', `${p.name} -> ${edge.targetKey}`, !!targetId && navLiteralIds.has(String(targetId).toLowerCase()));
           }
         }
-        // Set-equality (Imp7): a live sitemap page not mapped by any spec page's id → page-extra.
+        // Set-equality: a live sitemap page not mapped by any spec page's id → page-extra.
         // The deployed app has a page the spec doesn't declare — surface it rather than silently ignore.
         for (const liveId of sitemapIds) {
           if (!specIds.has(liveId)) add('page-extra', liveId, false, 'a sitemap page not declared in the spec');
