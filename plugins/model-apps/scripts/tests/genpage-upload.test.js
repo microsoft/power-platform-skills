@@ -1505,6 +1505,37 @@ test('an UPDATE is judged key by key: a key removed from one place and set to th
   assert.deepStrictEqual(aboutGriffel(fixed), [], 'and says nothing about Griffel');
 });
 
+// The same place is the same call and the same branch: a key moved to another hook's slot of the same name — `root` is in every hook — or into the other arm of a condition is a new key there, which
+// the upload refuses as it refuses any new key; what stays where it was, and what is only reordered, is still the deployed page's.
+test('an UPDATE that moves a key to another hook\'s slot of the same name, or into the other arm of a condition, is refused — and one that moves nothing, or only reorders the hooks, goes ahead', async () => {
+  const hooks = (a, b, order = 'pc') => {
+    const panel = `const usePanel = makeStyles({\n  root: { ${a} },\n});\n`;
+    const card = `const useCard = makeStyles({\n  root: { ${b} },\n});\n`;
+    return `${GRIFFEL_IMPORT}${order === 'pc' ? panel + card : card + panel}export default function P() { return null; }\n`;
+  };
+  const arms = (a, b) => `${GRIFFEL_IMPORT}const dark = true;\nconst useStyles = makeStyles(dark ? {\n  root: { ${a} },\n} : {\n  root: { ${b} },\n});\nexport default function P() { return null; }\n`;
+  for (const [what, build, owner, branch] of [['two hooks', hooks, 'useCard#0', 0], ['the arms of a condition', arms, 'useStyles#0', 1]]) {
+    const deployed = build("borderColor: 'red'", "padding: '1px'");
+    const moved = build("padding: '1px'", "borderColor: 'red'");
+    const { file, genpage, r } = await griffelUpdate(moved, deployed);
+    assert.strictEqual(r.ok, false, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(r.payload.code, 'griffel-shorthand', what);
+    assert.strictEqual(genpage.of('update').length, 0, `${what}: nothing is written`);
+    assert.deepStrictEqual(r.payload.problems.map((p) => [p.property, p.owner, p.branch, p.within]), [['borderColor', owner, branch, ['root']]], `${what}: the key where it is set now`);
+    assert.ok(r.payload.error.includes(`${file}:${placeOf(moved, "borderColor: 'red'")}: \`borderColor\``), `${what}: named where it is`);
+    // What stayed where it was, with the other place edited, is the deployed page's, and the page goes ahead with the warning an inherited key gets.
+    const kept = await griffelUpdate(build("borderColor: 'red'", "padding: '2px'"), deployed);
+    assert.strictEqual(kept.r.ok, true, `${what}: ${JSON.stringify(kept.r.payload)}`);
+    assert.strictEqual(kept.genpage.of('update').length, 1, what);
+    assert.strictEqual((kept.r.payload.warnings || []).filter((w) => /Griffel/.test(w)).length, 1, what);
+  }
+  // Two hooks that swap places in the file and keep their names have each key where it was: the call is told by its name.
+  const deployed = hooks("borderColor: 'red'", "borderStyle: 'solid'");
+  const reordered = await griffelUpdate(hooks("borderColor: 'red'", "borderStyle: 'solid'", 'cp'), deployed);
+  assert.strictEqual(reordered.r.ok, true, JSON.stringify(reordered.r.payload));
+  assert.strictEqual(reordered.genpage.of('update').length, 1);
+});
+
 // A key the deployed page already has is not what the check holds back — but a key given ANOTHER value is a change the maker meant to see, and Griffel drops the new value just as it
 // dropped the old one: the upload would ship it as a silent no-op, which is the defect this check exists to stop. The value is compared as written (nothing is evaluated), so a
 // reformat is not a change.

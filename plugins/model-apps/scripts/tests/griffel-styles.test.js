@@ -1009,6 +1009,57 @@ test('griffel-styles: a call the checker cannot read is never "already there", w
 
 const valuesOf = (source) => griffelStyleProblems(source).problems.map((p) => [p.property, p.value]);
 
+// ─── The same place is the same call and the same branch ──────────────────────────────────────────────────────────────────────────
+// A key is "already there" only when it sits in the place the deployed page had it: the slot, selectors and at-rules (`within`) — AND the makeStyles call that owns them AND the branch of its style object, when a
+// condition chooses between two. Each call starts a fresh trail, so two hooks both have a `root`, and `dark ? { root: … } : { root: … }` has two: without the call and the branch, a key removed from one and set to the same
+// value in the other was counted as the one the page already had, and a key Griffel drops went up under a warning that said the deployed page held it.
+const placed = (source) => griffelStyleProblems(source).problems.map((p) => [p.property, p.owner, p.branch, p.within.join('/')]);
+const splitFor = (local, deployed) => {
+  const { added, inherited } = griffelProblemsNotIn(griffelStyleProblems(local).problems, griffelStyleProblems(deployed).problems);
+  return { added: added.map((p) => `${p.property}@${p.line}`), inherited: inherited.map((p) => `${p.property}@${p.line}`) };
+};
+
+test('griffel-styles: each key reports the makeStyles call it belongs to — by the name its result is bound to — and the branch of its style object', () => {
+  const two = `${IMPORT}export const usePanel = makeStyles({ root: { borderColor: 'red' } });\nconst useCard = makeStyles<'root'>({ root: { all: 'unset' } });\nconst Namespaced = Fluent.makeStyles({ root: { borderStyle: 'solid' } });\n`;
+  assert.deepEqual(placed(two.replace(IMPORT, `${IMPORT}import * as Fluent from '@fluentui/react-components';\n`)), [
+    ['borderColor', 'usePanel#0', 0, 'root'], ['all', 'useCard#0', 0, 'root'], ['borderStyle', 'Namespaced#0', 0, 'root'],
+  ]);
+  // A condition chooses between style objects: the first is branch 0, the second branch 1 — also through a nested condition and a cast.
+  assert.deepEqual(placed(styles("(dark ? { root: { borderColor: 'red' } } : { root: { borderStyle: 'solid' } }) as const")), [['borderColor', 'useStyles#0', 0, 'root'], ['borderStyle', 'useStyles#0', 1, 'root']]);
+  assert.deepEqual(placed(styles("a ? { root: { all: 1 } } : b ? { root: { all: 2 } } : { root: { all: 3 } }")), [['all', 'useStyles#0', 0, 'root'], ['all', 'useStyles#0', 1, 'root'], ['all', 'useStyles#0', 2, 'root']]);
+  // Two calls that share a name — in two functions — are told apart by their order among those that share it; a call bound to no name is counted among the unnamed.
+  const same = `${styles("{ root: { all: 1 } }")}${styles("{ root: { all: 2 } }", '')}`;
+  assert.deepEqual(placed(same).map((p) => p[1]), ['useStyles#0', 'useStyles#1']);
+  assert.deepEqual(placed(`${IMPORT}foo(makeStyles({ root: { all: 1 } }));\nbar(makeStyles({ root: { all: 2 } }));\n${styles("{ root: { all: 3 } }", '')}`).map((p) => p[1]), ['(anonymous)#0', '(anonymous)#1', 'useStyles#0']);
+});
+
+test('griffel-styles: a key moved to another hook\'s slot of the same name, or to the other arm of a condition, is new — and so is one whose call or arm cannot be matched', () => {
+  const hooks = (a, b) => `${IMPORT}const usePanel = makeStyles({\n  root: { ${a} },\n});\nconst useCard = makeStyles({\n  root: { ${b} },\n});\n`;
+  const arms = (a, b) => `${IMPORT}const useStyles = makeStyles(dark ? {\n  root: { ${a} },\n} : {\n  root: { ${b} },\n});\n`;
+  for (const [what, build, second] of [['two hooks', hooks, 6], ['the arms of a condition', arms, 5]]) {
+    const deployed = build("borderColor: 'red'", "padding: 1");
+    // The key leaves the first place and is set to the same value in the second: the deployed page had it in the first only.
+    assert.deepEqual(splitFor(build("padding: 1", "borderColor: 'red'"), deployed), { added: [`borderColor@${second}`], inherited: [] }, what);
+    // The key kept where it was, with the other place edited: still the one the deployed page had.
+    assert.deepEqual(splitFor(build("borderColor: 'red'", "padding: 2"), deployed), { added: [], inherited: ['borderColor@3'] }, what);
+    // The same key set in both places: the one that was there is inherited, the other is new.
+    assert.deepEqual(splitFor(build("borderColor: 'red'", "borderColor: 'red'"), deployed), { added: [`borderColor@${second}`], inherited: ['borderColor@3'] }, what);
+    // Nothing moved: nothing is new.
+    assert.deepEqual(splitFor(deployed, deployed), { added: [], inherited: ['borderColor@3'] }, what);
+  }
+  // The hooks swap places in the file and keep their names: each key is still where it was — the call is told by its name, not by its position.
+  const panel = "const usePanel = makeStyles({ root: { borderColor: 'red' } });\n";
+  const card = "const useCard = makeStyles({ root: { borderStyle: 'solid' } });\n";
+  assert.deepEqual(splitFor(`${IMPORT}${card}${panel}`, `${IMPORT}${panel}${card}`), { added: [], inherited: ['borderStyle@2', 'borderColor@3'] });
+  // A hook inserted before them leaves their keys alone, and a hook given another name takes its keys with it as new ones.
+  assert.deepEqual(splitFor(`${IMPORT}const useNew = makeStyles({ root: { padding: 1 } });\n${panel}${card}`, `${IMPORT}${panel}${card}`), { added: [], inherited: ['borderColor@3', 'borderStyle@4'] });
+  assert.deepEqual(splitFor(`${IMPORT}${panel.replace('usePanel', 'useBox')}${card}`, `${IMPORT}${panel}${card}`), { added: ['borderColor@2'], inherited: ['borderStyle@3'] });
+  // A call bound to no name can only be matched by its place among the unnamed: with another unnamed call before it, it is not the call the deployed page had.
+  const unnamed = (before) => `${IMPORT}${before}foo(makeStyles({ root: { borderColor: 'red' } }));\n`;
+  assert.deepEqual(splitFor(unnamed(''), unnamed('')), { added: [], inherited: ['borderColor@2'] });
+  assert.deepEqual(splitFor(unnamed('bar(makeStyles({ root: { padding: 1 } }));\n'), unnamed('')), { added: ['borderColor@3'], inherited: [] });
+});
+
 test('griffel-styles: each key reports the value it is set to as written — a quoted string by its text, whichever quotes; anything else as its source text with the white space collapsed', () => {
   // Plain strings: the quotes do not matter, and nor do the comments around the value.
   assert.deepEqual(valuesOf(styles("{ a: { borderColor: 'red', borderStyle: \"red\", borderWidth: /* c */ 'red' /* d */, all: 'x' } }")), [

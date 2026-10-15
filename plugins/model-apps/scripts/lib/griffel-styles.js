@@ -394,6 +394,21 @@ function styleFunctionCalls(mask, src, match, angles) {
   return calls;
 }
 
+// The name a makeStyles call's result is bound to, or null when it is bound to none the check can read: `usePanel` in `const usePanel = makeStyles({ … })`, `export const usePanel = …` and
+// `usePanel = makeStyles(…)`, with parentheses around the call allowed. What stands before the `=` has to be the bare name of a variable: a type annotation (`const useStyles: Hook = …`), a
+// property (`ns.styles = …`) or a destructuring is not read, and the call is then one of the unnamed. `callee` is where the call starts (`Fluent.makeStyles(` starts at `Fluent`).
+// This is how a key is told to belong to a call when a page is compared with an earlier version of itself (griffelProblemsNotIn): two hooks both have a slot called `root`.
+function bindingNameOf(mask, callee) {
+  let k = previousSignificant(mask, callee);
+  while (k >= 0 && mask[k] === '(') k = previousSignificant(mask, k);
+  // `=` alone: not `==`, `===`, `!=`, `<=`, `>=` or `=>`, and not a compound assignment (`+=`, `||=`).
+  if (k < 0 || mask[k] !== '=' || mask[k + 1] === '=' || mask[k + 1] === '>' || (k > 0 && '=!<>+-*/%&|^?'.includes(mask[k - 1]))) return null;
+  const word = identifierEndingAt(mask, previousSignificant(mask, k) + 1);
+  if (!word) return null;
+  const before = previousSignificant(mask, word.start);
+  return before >= 0 && mask[before] === '.' ? null : word.name;
+}
+
 // The `,` that ends the expression starting at `from` inside a bracket group that closes at `close` — a member of an object, an argument of a call — or `close`. A
 // bracket group is jumped through the match table and a string through its closing quote. The type of an `as` or `satisfies` is jumped whole (typeEnd), so its own
 // commas (`{ … } as Record<string, T>`) do not end the expression; where the text after one does not read as a type, nothing is jumped, and the next comma ends it.
@@ -1129,7 +1144,9 @@ function unreadMessage(kind, name, value) {
  *   `calls` is how many makeStyles calls with an inline object were read. A problem is
  *     `unsupported-shorthand` — a key Griffel drops, with the line and column of the key, the longhands to write, `within`: the slot, selectors and at-rules the key sits under
  *                               (`["root", ":hover"]`), and `value`: what the key is set to, as written (`"red"` for either quoting of the string red, `tokens.colorBrandStroke1` for an
- *                               expression — nothing is evaluated). Together they tell the same key, still there and set to the same, from a new or a changed one when a page is compared
+ *                               expression — nothing is evaluated), `owner`: the makeStyles call the key is in (`usePanel#0`: the name its result is bound to, and its order among the calls that share the name —
+ *                               `(anonymous)#0` for a call bound to no name) and `branch`: which of that call's style objects, where a condition chooses between two (`dark ? { … } : { … }`; 0 for the first,
+ *                               and for a call with one). Together they tell the same key, still there and set to the same, from a new or a changed one when a page is compared
  *                               with an earlier version of itself;
  *     `unread-style-object`     — a style object the checker cannot see, so it cannot say what keys it holds: the call's own (`makeStyles(styles)`), a slot's or a selector's that is
  *                               not written inline (a getter's included), or a spread of anything but an inline object or a trusted Griffel helper; a getter that runs, whatever
@@ -1155,6 +1172,16 @@ function griffelStyleProblems(source) {
   const problems = [];
   let read = 0;
   const calls = styleFunctionCalls(mask, src, match, angles);
+  // Each call is told by the name its result is bound to and its order among the calls that share the name (`usePanel#0`): every call starts its own slots, so two hooks both have a `root`, and a page
+  // compared with an earlier version of itself (griffelProblemsNotIn) must know a key's call to say it is the one the page had. Every call is counted, the ones that are not read as well, so a call that cannot be
+  // read does not shift the ones after it. A call bound to no name is `(anonymous)#<order among those>`.
+  const taken = new Map();
+  for (const call of calls) {
+    const base = bindingNameOf(mask, call.callee) || '(anonymous)';
+    const order = taken.get(base) || 0;
+    taken.set(base, order + 1);
+    call.owner = `${base}#${order}`;
+  }
   for (const call of calls) {
     const at = locate(starts, call.callee);
     const unbalanced = call.close === -1 || (call.objectOpen !== -1 && call.objectClose === -1);
@@ -1183,13 +1210,19 @@ function griffelStyleProblems(source) {
     }
     read += 1;
     const findings = [];
-    for (const open of slots) scanStyleObject(ctx, open, findings, call.spec.slots);
+    // `branch` is which of the call's style objects a key is in: a condition chooses between them (`dark ? { … } : { … }`), and styleObjectsOf lists them in the order they are written, arms of a nested
+    // condition in place. A call with one object has branch 0.
+    slots.forEach((open, branch) => {
+      const first = findings.length;
+      scanStyleObject(ctx, open, findings, call.spec.slots);
+      for (let i = first; i < findings.length; i += 1) Object.assign(findings[i], { owner: call.owner, branch });
+    });
     for (const f of findings) {
       if (f.unread) {
         problems.push({ code: 'unread-style-object', ...locate(starts, f.at), within: f.within, value: f.value,
           message: unreadMessage(f.unread, f.key ?? f.within[f.within.length - 1], f.value) });
       } else {
-        problems.push({ code: 'unsupported-shorthand', property: f.name, ...locate(starts, f.at), longhands: f.longhands, within: f.within, value: f.value, message: shorthandMessage(f.name, f.longhands) });
+        problems.push({ code: 'unsupported-shorthand', property: f.name, ...locate(starts, f.at), longhands: f.longhands, within: f.within, value: f.value, owner: f.owner, branch: f.branch, message: shorthandMessage(f.name, f.longhands) });
       }
     }
   }
@@ -1224,7 +1257,11 @@ const isShorthandProblem = (problem) => problem.code === 'unsupported-shorthand'
 
 /**
  * Which of `problems` the page's deployed version already had. `deployed` is that version's problems (griffelStyleProblems of the source that was deployed). A key counts as already
- * there only when the deployed page has the same key set to the same value in the same place (`within`: the slot, selectors and at-rules it sits under). A key set in another place is a
+ * there only when the deployed page has the same key set to the same value in the same place: the slot, selectors and at-rules it sits under (`within`), of the same makeStyles call (`owner`)
+ * and the same branch of its style object (`branch`). Every call has a `root` slot, and a condition can choose between two objects that both have one, so a place told by `within` alone would take a key
+ * removed from one call or arm and set to the same value in another for the one the page already had; the call and the branch say it is a new one. The call is told by the name its result is bound
+ * to, so hooks that swap places in the file keep their keys; a call bound to no name is told by its order among the unnamed, and one that cannot be matched — another name, another order, another
+ * arm — is a place the deployed page did not have: when the correspondence cannot be shown, the key is new, never inherited. A key set in another place is a
  * new one even when the deployed page held the same value somewhere else — an edit that removes a key in one place and sets it to the same value in another has added a key where there was
  * none: Griffel drops it just the same, so the page would show none of what the edit meant, which is what this check exists to stop. (A slot that was renamed, or a rule that was moved under
  * another selector, is that too: the source cannot say a rename from a removal and an addition, and the cost of the wrong guess is a key that ships without its style. The way on is the same
@@ -1234,7 +1271,7 @@ const isShorthandProblem = (problem) => problem.code === 'unsupported-shorthand'
  * @returns {{ added: object[], inherited: object[] }} the problems the deployed page did not have, and those it did, each in source order
  */
 function griffelProblemsNotIn(problems, deployed) {
-  const placeOf = (p) => `${(p.within || []).join('\u0000')}\u0001${p.property}\u0001${p.value}`;
+  const placeOf = (p) => `${p.owner ?? ''}\u0002${p.branch ?? ''}\u0001${(p.within || []).join('\u0000')}\u0001${p.property}\u0001${p.value}`;
   const held = new Map();
   for (const d of deployed || []) {
     if (isShorthandProblem(d)) held.set(placeOf(d), (held.get(placeOf(d)) || 0) + 1);
