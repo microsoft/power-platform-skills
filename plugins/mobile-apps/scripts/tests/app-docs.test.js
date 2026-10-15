@@ -450,6 +450,25 @@ test('coarse progress follows the top-level phase when rows are omitted', (t) =>
   assert.match(html, /1 of 5 operations complete/);
 });
 
+test('failed fallback progress marks the failed phase and skips later phases', (t) => {
+  const root = project('docs-coarse-failed');
+  t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
+
+  const progress = writeEditProgress(root, {
+    phase: 'verification',
+    status: 'failed',
+    note: 'Verification failed.',
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /class="item done" data-item-id="inspect"/);
+  assert.match(html, /class="item done" data-item-id="plan"/);
+  assert.match(html, /class="item done" data-item-id="apply"/);
+  assert.match(html, /class="item failed" data-item-id="verify"/);
+  assert.match(html, /class="item skipped" data-item-id="preview"/);
+  assert.doesNotMatch(html, /class="item active" data-item-id="inspect"/);
+});
+
 test('explicit coarse progress preserves skipped operations', (t) => {
   const root = project('docs-explicit-coarse');
   t.after(() => fs.rmSync(editTempDir(root), { recursive: true, force: true }));
@@ -616,6 +635,24 @@ test('screen diagram labels keep Expo dynamic route segments', () => {
   assert.match(html, /\/inspections\/#91;id#93;/);
   assert.match(html, /select #123;row#125;/);
   assert.doesNotMatch(html, /\/inspections\/ id/);
+});
+
+test('data-model diagrams do not invent columns when schema details are unknown', () => {
+  const root = project('docs-data-model-unknown-columns');
+  const progress = writeEditProgress(root, {
+    changes: [{
+      kind: 'data-model',
+      title: 'Reuse account data',
+      rationale: 'Use the existing account table.',
+      dataModel: {
+        tables: [{ logicalName: 'account' }],
+      },
+    }],
+  });
+  const html = fs.readFileSync(progress, 'utf8');
+
+  assert.match(html, /account \{\n\n  \}/);
+  assert.doesNotMatch(html, /string id PK/);
 });
 
 test('diagram node IDs remain distinct when normalized names collide', () => {
@@ -1538,6 +1575,13 @@ test('the device rail moves through building, screens and QR', () => {
 
   const root = project('docs-rail');
   const state = initState(root, { appName: 'App' });
+  const progress = writeEditProgress(root, { phase: 'preview', status: 'active' });
+  const html = fs.readFileSync(progress, 'utf8');
+  assert.match(html, /\.device-rail\{[^}]*justify-content:safe center;[^}]*overflow-y:auto;/);
+  assert.match(html, /\.device\{flex:0 1 620px;min-height:360px;max-height:620px;/);
+  assert.match(html, /\.device-screen\{[^}]*container-type:size;/);
+  assert.match(html, /\.device-qr img\{flex:0 1 196px;min-height:84px;max-height:196px;/);
+  assert.match(html, /@container \(max-height:520px\)\{\.device-qr/);
   assert.equal(state.phone.stage, 'building', 'a new plan starts on the animation');
 
   setPhone(state, { stage: 'screens', screens: [{ name: 'Home', html: '<div>Home</div>' }] });

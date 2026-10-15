@@ -546,13 +546,21 @@ function reconcileCoarseEditItems(items, phase, status, waiting, supplied) {
     ['sync', 'preview'],
     ['sync-plan', 'preview'],
   ]);
+  const currentId = phaseToItem.get(String(phase).toLowerCase());
   if (status === 'done') {
     return items.map((item) => ({ ...item, status: 'done' }));
   }
-  const currentId = phaseToItem.get(String(phase).toLowerCase());
-  if (!currentId || status === 'done' || status === 'failed') return items;
+  if (!currentId) return items;
 
   const currentIndex = coarseIds.indexOf(currentId);
+  if (status === 'failed') {
+    return items.map((item, index) => ({
+      ...item,
+      status: index < currentIndex ? 'done'
+        : index === currentIndex ? 'failed'
+          : 'skipped',
+    }));
+  }
   return items.map((item, index) => ({
     ...item,
     status: index < currentIndex ? 'done'
@@ -682,18 +690,16 @@ function buildDataModelDiagram(change, index) {
     [name, table.logicalName, table.id].filter(Boolean).forEach((key) => ids.set(String(key), id));
     const columns = Array.isArray(table.columns) ? table.columns
       : Array.isArray(table.fields) ? table.fields : [];
-    const columnLines = columns.length
-      ? columns.map((column, columnIndex) => {
-        const value = column && typeof column === 'object' ? column : { name: column };
-        const columnName = safeMermaidName(
-          value.name || value.logicalName,
-          `field${columnIndex + 1}`,
-        );
-        const type = safeMermaidName(value.type || value.dataType || 'string', 'string');
-        const key = value.primaryKey ? ' PK' : value.foreignKey ? ' FK' : '';
-        return `    ${type} ${columnName}${key}`;
-      })
-      : ['    string id PK'];
+    const columnLines = columns.map((column, columnIndex) => {
+      const value = column && typeof column === 'object' ? column : { name: column };
+      const columnName = safeMermaidName(
+        value.name || value.logicalName,
+        `field${columnIndex + 1}`,
+      );
+      const type = safeMermaidName(value.type || value.dataType || 'string', 'string');
+      const key = value.primaryKey ? ' PK' : value.foreignKey ? ' FK' : '';
+      return `    ${type} ${columnName}${key}`;
+    });
     return `  ${id} {\n${columnLines.join('\n')}\n  }`;
   });
   const relationships = Array.isArray(model.relationships) ? model.relationships : [];
@@ -997,7 +1003,7 @@ function writeEditProgress(projectRoot, options = {}) {
     .pill-done{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
     .pill-failed{background:var(--fail-bg);color:var(--fail);border-color:var(--fail-border);}
     .shell{display:flex;align-items:flex-start;}
-    .layout{display:flex;min-height:calc(100vh - 65px - var(--footer-h));flex:1;min-width:0;}
+    .layout{display:flex;min-height:calc(100vh - var(--topbar-h, 65px) - var(--footer-h));flex:1;min-width:0;}
     .sidebar{width:240px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;}
     .nav-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
     .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:0;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;text-align:left;}
@@ -1059,14 +1065,13 @@ function writeEditProgress(projectRoot, options = {}) {
     .item.done .item-copy>span:first-child{color:var(--pass);}
     .item.skipped{opacity:.6;}
     @keyframes spin{to{transform:rotate(360deg);}}
-    .device-rail{width:420px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
+    .device-rail{width:420px;flex-shrink:0;position:sticky;top:var(--topbar-h, 65px);height:calc(100vh - var(--topbar-h, 65px) - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:14px;padding:24px 20px;overflow-y:auto;border-left:1px solid var(--border);background:var(--surface);}
     .device-rail-label{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
-    /* Size the phone from the rail height, not a fixed width: the sticky rail is only
-       100vh minus the topbar and footer tall, so a fixed 620px phone overflows it on laptop-height
-       windows and the centred flex column pushes the label, notch, and caption out of view. */
-    .device{height:min(620px,calc(100vh - 65px - var(--footer-h) - 150px));width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow),0 18px 46px rgba(0,0,0,.22);position:relative;overflow:hidden;flex-shrink:0;}
+    /* The phone gives up height before the other rail items. Below 360px the rail scrolls instead,
+       because a smaller frame cannot keep the QR handoff readable. */
+    .device{flex:0 1 620px;min-height:360px;max-height:620px;width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow),0 18px 46px rgba(0,0,0,.22);position:relative;overflow:hidden;}
     .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:2;}
-    .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
+    .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;container-type:size;}
     .device-building,.device-qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 26px;}
     .device-carousel,.device-carousel-frame{position:absolute;inset:0;overflow:hidden;background:#fff;}
     .device-carousel-frame iframe{position:absolute;width:375px;height:812px;border:0;transform-origin:top left;}
@@ -1090,8 +1095,8 @@ function writeEditProgress(projectRoot, options = {}) {
     .device-copy{font-size:12.5px;color:var(--text-dim);line-height:1.55;}
     .device-progress{width:100%;height:4px;border-radius:4px;background:#eceaea;overflow:hidden;}
     .device-progress span{display:block;height:100%;background:var(--accent);}
-    .device-qr{gap:16px;background:#fff;}
-    .device-qr img{width:min(196px,100%);height:auto;}
+    .device-qr{justify-content:safe center;gap:16px;background:#fff;padding:30px 22px 18px;}
+    .device-qr img{flex:0 1 196px;min-height:84px;max-height:196px;width:auto;max-width:100%;aspect-ratio:1/1;object-fit:contain;}
     .device-url{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:var(--accent);word-break:break-all;}
     .device-caption{font-size:12px;color:var(--text-dim);text-align:center;max-width:320px;min-height:38px;}
     .rail-actions{display:flex;flex-direction:column;align-items:center;gap:6px;max-width:100%;}
@@ -1102,12 +1107,12 @@ function writeEditProgress(projectRoot, options = {}) {
     .store-btn:hover{background:#141414;}
     .store-kicker{font-size:8.5px;letter-spacing:.03em;opacity:.9;}
     .store-btn strong{font-size:14px;font-weight:600;}
-    .device-rail.has-actions .device{height:min(620px,calc(100vh - 65px - var(--footer-h) - 245px));}
+    @container (max-height:520px){.device-qr{gap:8px;padding:28px 12px 14px;}.device-qr .device-title{font-size:14px;}.device-qr .device-copy{font-size:11px;line-height:1.4;}.device-url{font-size:10px;}}
     .ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:10;}
     @media(max-width:1180px){
       .shell{flex-direction:column;}
       .device-rail{width:100%;position:static;height:auto;border-left:0;border-top:1px solid var(--border);padding-bottom:72px;}
-      .device,.device-rail.has-actions .device{height:auto;width:min(300px,calc(100vw - 44px));}
+      .device{flex:none;height:auto;min-height:0;width:min(300px,calc(100vw - 44px));}
     }
     @media(max-width:720px){
       .topbar{padding:12px 16px;}

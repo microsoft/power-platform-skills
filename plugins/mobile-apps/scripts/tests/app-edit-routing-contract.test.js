@@ -229,7 +229,9 @@ test('fresh starters do not enter the existing-app edit workflow', () => {
   assert.match(state, /standalone prerequisites and approval gates/);
   assert.match(state, /Do not\s+silently widen it to full app creation/);
   assert.match(state, /missing\s+plan does not make the app fresh/);
-  assert.match(state, /ask to restore the plan or approve bounded/);
+  assert.match(state, /After full-integration consent, invoke\s+`edit-app`/);
+  assert.match(state, /read-only inspection infers the current-state baseline/);
+  assert.match(state, /impact and mutation approval gates/);
   assert.match(state, /Unclear state or intent[\s\S]*ask before choosing/);
   const direct = section(routing, '## Direct requests', '## Orchestrated calls');
   assert.match(direct, /confirmed fresh starter stays with `\/add-native`/);
