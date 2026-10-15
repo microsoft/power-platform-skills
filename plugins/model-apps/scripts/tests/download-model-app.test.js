@@ -905,10 +905,12 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
 
   assert.deepStrictEqual(inv.views[0], { id: VIEW_ID, name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
   assert.strictEqual('description' in inv.charts[0], false, 'null chart descriptions are omitted');
-  assert.deepStrictEqual(inv.forms[0], { id: FORM_ID, name: 'Main', entity: 'new_order', description: 'Primary form.' });
+  // By table, then name, then id — not the order Dataverse answered in (the Main form came first there).
+  assert.deepStrictEqual(inv.forms.map((f) => f.name), ['Dispatcher', 'Main']);
+  assert.deepStrictEqual(inv.forms.find((f) => f.id === FORM_ID), { id: FORM_ID, name: 'Main', entity: 'new_order', description: 'Primary form.' });
   // The role-restriction flag must NOT ride on the form entries: sanitizeDescriptionInventory spreads
   // those into `app-spec.json`, and a diagnostic has no business in the user-facing spec.
-  assert.strictEqual('roleRestricted' in inv.forms[1], false,
+  assert.ok(inv.forms.every((f) => !('roleRestricted' in f)),
     'the flag belongs on the sibling key, not on each form entry');
   // BEHAVIOURAL: only the restricted form is recorded, and it is recorded by (entity, name) so the
   // warning can name it. A source regex could not catch dropping `formxml` from the $select —
@@ -2535,11 +2537,11 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   assert.ok(res.notRoundTripped, 'the summary must ride on the runDownload result, not only on stderr');
   assert.strictEqual(res.notRoundTripped.total, 2, JSON.stringify(res.notRoundTripped));
   // SORTED, not in the order the mock returned them. `notRoundTripped` is compared between runs, so
-  // it sorts at every level; `descriptionInventory` below is the raw read and keeps Dataverse's
-  // order, which is why the two lists differ here.
+  // it sorts at every level, and `descriptionInventory` below is ordered the same way (table, then
+  // name, then id): the two lists carry the same forms in the same order.
   assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [], businessRules: [] }]);
   // The spec on disk still carries them under descriptionInventory — the note's claim must be true.
-  assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Everyone Form', 'Dispatcher Form']);
+  assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Dispatcher Form', 'Everyone Form']);
 });
 
 test('runDownload stays SILENT when no form is role-restricted', async () => {

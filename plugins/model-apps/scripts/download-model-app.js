@@ -31,6 +31,44 @@ const { mapLimit } = require('./lib/entity-provision.js');
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
 
+// How a download orders every list it writes. Dataverse promises no order for a query that has no `$orderby`, and a directory
+// listing (`fs.readdirSync`) is in the file system's order — name order on NTFS, hash order on ext4 — so a list written in the
+// order it arrived made two downloads of one app differ only in order (and a page key minted from a name two pages share went
+// to whichever page came first). Text is compared by UTF-16 code units after lower-casing, with the raw text breaking a tie
+// between texts that differ only in case, so the order is a function of the strings alone and is the same on every machine.
+// `localeCompare` is not: it follows the host's ICU locale (Swedish puts "ä" after "z"; the root locale puts "_" before a
+// digit, code units after it). `toLowerCase`, unlike `toLocaleLowerCase`, is not locale-sensitive. A missing value reads as
+// the empty text.
+function compareText(a, b) {
+  const x = a === undefined || a === null ? '' : String(a);
+  const y = b === undefined || b === null ? '' : String(b);
+  const lx = x.toLowerCase();
+  const ly = y.toLowerCase();
+  if (lx !== ly) return lx < ly ? -1 : 1;
+  return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+// Pages: by name, then by id. The name is the page's own — what the maker called it, which a second download of the app reads
+// the same — so the order does not hang on ids, which differ between environments. Two pages that share a name are told apart
+// by id, the only thing that does, and an id is stable for the app in the environment it is downloaded from.
+function comparePages(a, b) {
+  return compareText(a && a.name, b && b.name) || compareText(a && a.pageId, b && b.pageId);
+}
+
+// A deployed artifact the download inventories ({ id, name, entity }): by table, then name, then id.
+function compareArtifacts(a, b) {
+  return compareText(a && a.entity, b && b.entity) || compareText(a && a.name, b && b.name) || compareText(a && a.id, b && b.id);
+}
+
+// An app-membership note ({ kind, table?, id?, name?, reason }): by what it is about, then by what it says.
+function compareNotes(a, b) {
+  for (const key of ['kind', 'table', 'id', 'name', 'reason']) {
+    const order = compareText(a && a[key], b && b[key]);
+    if (order) return order;
+  }
+  return 0;
+}
+
 // Reconstruct the app's dashboards (declared as DashBoard sitemap subareas) into app-spec
 // dashboards[] entries. Each tile is reconstructed with ID PASSTHROUGH — it carries the deployed
 // view/chart ids (+ target entity) directly, so a rebuild recreates the dashboard against the
@@ -392,8 +430,8 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
   // Deterministic order: the metadata endpoints carry no ordering guarantee, and this block is
   // written to a file that operators diff between runs, so an unstable order reads as a change that
   // did not happen.
-  relationships.sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)));
-  skipped.sort((x, y) => (x.entity + x.name).localeCompare(y.entity + y.name));
+  relationships.sort((x, y) => compareText(JSON.stringify(x), JSON.stringify(y)));
+  skipped.sort((x, y) => compareText(x.entity + x.name, y.entity + y.name) || compareText(x.reason, y.reason));
   return { relationships, skipped };
 }
 
@@ -782,6 +820,12 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
     fail('globalChoices', err);
   }
 
+  // Ordered here, once, for everything that reads the inventory — the spec's `descriptionInventory`, the not-round-tripped report
+  // and the role-restriction warning. The rows are in the order Dataverse answered, which differs between two reads of one app; by
+  // table, then name, then id (compareArtifacts) they do not.
+  for (const key of ['views', 'charts', 'forms', 'businessRules', 'roleRestrictedForms']) inventory[key].sort(compareArtifacts);
+  inventory.globalChoices.sort((a, b) => compareText(a.name, b.name));
+  inventory.incomplete.sort((a, b) => compareText(a.kind, b.kind) || compareText(a.reason, b.reason));
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
 }
 
@@ -800,7 +844,15 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels) {
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
-  for (const entry of fs.readdirSync(pagesRoot)) {
+  // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
+  // not the same on every machine, and this loop decides the order of `pages[]` in the spec, of the unreadable-config and
+  // unkept-model reports, and — through assignPageKeys — which of two pages that share a name is minted the plain key.
+  const nameOf = (entry) => (nameById && nameById.get(String(entry).toLowerCase())) || entry;
+  const entries = fs.readdirSync(pagesRoot)
+    .map((entry) => ({ pageId: entry, name: nameOf(entry) }))
+    .sort(comparePages)
+    .map((page) => page.pageId);
+  for (const entry of entries) {
     const dir = path.join(pagesRoot, entry);
     if (!fs.statSync(dir).isDirectory()) continue;
     const tsx = path.join(dir, 'page.tsx');
@@ -852,7 +904,7 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     if (recordedModel && !model && Array.isArray(unkeptModels)) unkeptModels.push({ pageId: entry, model: recordedModel });
     pages.push({
       pageId: entry,
-      name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,
+      name: nameOf(entry),
       dataSources: Object.prototype.hasOwnProperty.call(config, 'dataSources') ? config.dataSources : [],
       ...(model ? { model } : {}),
       prompt,
@@ -899,12 +951,12 @@ function assignPageKeys(pages, manifest, keyToId) {
       if (m.dataSources && !(p.dataSources || []).length) p.dataSources = m.dataSources;
     }
   }
-  // Second pass: pages that had no binding get a fresh unique slug key.
-  for (const p of pages) {
-    if (!p.key) {
-      p.key = mint(p.name);
-      idToKey.set(String(p.pageId).toLowerCase(), p.key);
-    }
+  // Second pass: pages that had no binding get a fresh unique slug key. Minted in the pages' own order (comparePages), whatever
+  // order `pages` arrives in: when two names make one slug, the plain key is the same page's every time and the other gets `-2`.
+  // Minted in arrival order, a second download of the same app could swap them.
+  for (const p of pages.filter((q) => !q.key).sort(comparePages)) {
+    p.key = mint(p.name);
+    idToKey.set(String(p.pageId).toLowerCase(), p.key);
   }
   return idToKey;
 }
@@ -1187,7 +1239,7 @@ function notRoundTrippedSummary(inventory) {
     if (!rows.length) continue;
     classes.push({ kind: key, count: rows.length, label });
     if (!entityScoped) {
-      orgScoped.push({ kind: key, label, names: rows.map((r) => String(r.name)).sort((a, b) => a.localeCompare(b)) });
+      orgScoped.push({ kind: key, label, names: rows.map((r) => String(r.name)).sort(compareText) });
       continue;
     }
     for (const r of rows) {
@@ -1203,23 +1255,24 @@ function notRoundTrippedSummary(inventory) {
   const incomplete = (inventory && Array.isArray(inventory.incomplete) ? inventory.incomplete : [])
     .filter((i) => i && i.kind)
     .map((i) => ({ kind: i.kind, reason: i.reason || 'read failed' }))
-    .sort((a, b) => a.kind.localeCompare(b.kind));
+    .sort((a, b) => compareText(a.kind, b.kind) || compareText(a.reason, b.reason));
   if (!classes.length && !incomplete.length) return null;
   // Sorted at EVERY level, not just the table one. The rows arrive from `queryRecords`, i.e. in
   // whatever order Dataverse returned them, which carries no ordering guarantee — so two downloads
   // of an unchanged app could emit the same artifacts in a different order. This block is written
   // into the operator's output and compared between runs, so an unstable order reads as a change
   // that did not happen, which is the opposite of the point: the report exists to make a real
-  // difference visible. `classes` is already deterministic (built from the fixed CLASSES list).
+  // difference visible. `classes` is already deterministic (built from the fixed CLASSES list). The order is compareText's — by
+  // code units, not the host's collation — so the report reads the same on every machine.
   const entityKeys = CLASSES.filter((c) => c.entityScoped).map((c) => c.key);
   return {
     classes,
     total: classes.reduce((n, c) => n + c.count, 0),
     entities: [...byEntity.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => compareText(a, b))
       .map(([entity, v]) => ({
         entity,
-        ...Object.fromEntries(entityKeys.map((k) => [k, [...(v[k] || [])].sort((a, b) => String(a).localeCompare(String(b)))])),
+        ...Object.fromEntries(entityKeys.map((k) => [k, [...(v[k] || [])].sort(compareText)])),
       })),
     ...(orgScoped.length ? { orgScoped } : {}),
     ...(incomplete.length ? { incomplete } : {}),
@@ -1878,7 +1931,7 @@ async function recoverAppSolution(sdk, appId) {
     // Sorted so the candidates — and everything derived from them — are order-independent.
     real = sols
       .filter((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename))
-      .sort((a, b) => String(a.uniquename).localeCompare(String(b.uniquename)));
+      .sort((a, b) => compareText(a.uniquename, b.uniquename));
   } catch (e) {
     return { unreadable: (e && e.message) ? String(e.message).slice(0, 200) : 'read failed' };
   }
@@ -2181,7 +2234,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     if (table && !sitemapSet.has(logical)) return table.isCustomEntity === true;
     return assetTables.has(logical) || (table && table.isCustomEntity === true);
   });
-  const allLogicals = [...new Set([...entityLogicals, ...schemaComponents])];
+  // The navigation's tables keep the navigation's order, which is the app's own. The ones the app holds beyond it arrive in the
+  // order of its component rows, which Dataverse does not fix, so they follow by name.
+  const allLogicals = [...new Set([...entityLogicals, ...schemaComponents.sort(compareText)])];
   for (const logical of appTables) {
     if (typeof componentInventory.tables.get(logical).isCustomEntity !== 'boolean') {
       componentInventory.notes.push({ kind: 'tables', table: logical,
@@ -2257,7 +2312,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // degrading there is the same shape as the bug this feature fixes, so say so. Not a gate: an
   // English-only spec is still a usable spec, and failing a read-only command over it would be worse.
   if (labelReadFailures.size) {
-    const detail = [...labelReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
+    const detail = [...labelReadFailures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
     process.stderr.write(`WARNING: a label read failed for ${labelReadFailures.size} table(s) (${detail}). The table AND COLUMN labels for those tables fall back to ONE language, so anything labelled in several languages downloads as single-language and a rebuild would recreate it that way. That read also carries the flags that identify a lookup's synthetic '<lookup>name' column, so those tables may additionally have captured one as a real Text column — delete any you see before a cross-environment rebuild. Re-run the download to recover both.\n`);
   }
   // #564: the option-set read is the ONLY source of a Choice/MultiChoice column's type. When it
@@ -2266,7 +2321,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // with the reason, and separately from the untyped list below, because "we could not look" is a
   // different fact from "this column has no substantiated type", and only the first is re-runnable.
   if (optionSetReadFailures.size) {
-    const detail = [...optionSetReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
+    const detail = [...optionSetReadFailures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
     process.stderr.write(`WARNING: the Choice/MultiChoice option-set read failed for ${optionSetReadFailures.size} table(s) (${detail}). Any choice column on those tables is captured WITHOUT its type or options, so rebuilding into a FRESH environment would create it as single-line Text. Re-run the download to recover them before a cross-environment rebuild.\n`);
   }
   // A column whose App Spec type could not be substantiated: a Choice/MultiChoice whose option set
@@ -2465,7 +2520,8 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // report whose job is naming them.
   const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
   let notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
-  const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes];
+  // The notes come in the order the component rows were read, which Dataverse does not fix (compareNotes).
+  const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes].sort(compareNotes);
   if (membershipNotes.length) {
     notRoundTripped = { ...(notRoundTripped || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
   }
@@ -2675,4 +2731,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, main };
+module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

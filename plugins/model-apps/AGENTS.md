@@ -1104,6 +1104,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   has forms and views, so failing the download would break every download, and the omission is not
   destructive in the environment the app came from. Do not "fix" this by reconstructing `forms[]`
   without also solving the lossy-layout problem above.
+  **A download is written in a fixed order, so two downloads of one app match byte for byte** and a diff
+  between them shows only what changed. Dataverse promises no row order for a query without `$orderby`,
+  and a directory listing is in the file system's order (name order on NTFS, hash order on ext4), so
+  nothing is written in the order it arrived: `pages[]` (and the page folders' reports) by page name, then
+  id — the name first, because ids differ between environments; the id only splits two pages that share a
+  name, and decides which of them is minted the plain `<slug>` key and which gets `-2`;
+  `descriptionInventory`'s classes by table, then name, then id (global choices by name); the tables the app
+  holds beyond its navigation by name, after the navigation's own tables (which keep the navigation's
+  order); `notRoundTripped.appMembership` by kind, table, id, name and reason. Every one of those sorts
+  through `compareText` — UTF-16 code units after lower-casing — and never `localeCompare`, whose order
+  follows the host's ICU locale and version, so the order is a function of the strings alone
+  (`download-order.test.js` serves one app in three orders and compares the bytes).
   **Table membership also comes from type-1 components**, in addition to the sitemap and the app's
   VIEW / CHART / FORM owners. Hidden type-1 members emit sorted `app.tables`; custom hidden tables
   hydrate into `entities[]` only when `IsCustomEntity === true`. A non-custom or unclassified hidden

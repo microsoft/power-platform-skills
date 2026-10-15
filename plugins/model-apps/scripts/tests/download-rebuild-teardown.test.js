@@ -339,7 +339,8 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     const deletes = calls.filter((c) => c.method.startsWith('delete'));
     assert.deepStrictEqual(deletes.map((c) => c.method), ['deleteAppCascade', 'deleteRemoteArtifact', 'deleteRemoteArtifact', 'deleteWebResource']);
     assert.deepStrictEqual(deletes[0].args, [APP_ID, APP_LOOKUP], 'atomic delete uses the resolved app and its unique lookup');
-    assert.deepStrictEqual(deletes.filter((c) => c.method === 'deleteRemoteArtifact').map((c) => c.args), [['genPage', OVERVIEW_ID], ['genPage', DETAIL_ID]]);
+    // In the spec's page order, which a download gives by name (Detail, Overview), then id.
+    assert.deepStrictEqual(deletes.filter((c) => c.method === 'deleteRemoteArtifact').map((c) => c.args), [['genPage', DETAIL_ID], ['genPage', OVERVIEW_ID]]);
     assert.deepStrictEqual(events.filter((e) => e.status === 'start').map((e) => e.label), plan.map((s) => s.label), 'execution preserves the dependency-safe plan order');
     assertReusedRetained(fixture);
     assert.strictEqual(state.resources.has(OWNED_ICON), false, 'owned-icon positive control is deleted');
