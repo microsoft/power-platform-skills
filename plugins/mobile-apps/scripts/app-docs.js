@@ -876,7 +876,7 @@ function writeEditProgress(projectRoot, options = {}) {
     .status-line{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-dim);margin-top:16px;}
     .progress-track{height:6px;overflow:hidden;border-radius:999px;background:var(--surface2);border:1px solid var(--border);margin-top:9px;}
     .progress-bar{display:block;height:100%;background:var(--accent);width:${percent}%;}
-    .input-banner{display:flex;align-items:flex-start;gap:10px;margin-bottom:18px;padding:12px 14px;background:#fff8f2;border:1px solid var(--warn-border);border-radius:var(--radius);color:var(--warn);}
+    .input-banner{display:flex;align-items:flex-start;gap:10px;margin:18px 28px 0;padding:12px 14px;background:#fff8f2;border:1px solid var(--warn-border);border-radius:var(--radius);color:var(--warn);}
     .input-banner strong,.input-banner span{display:block;}
     .input-banner span{font-size:12px;color:var(--text-dim);}
     .banner-dot{width:8px;height:8px;margin-top:7px;border-radius:50%;background:var(--warn);flex-shrink:0;}
@@ -977,6 +977,7 @@ function writeEditProgress(projectRoot, options = {}) {
       <span class="pill">${completed} of ${items.length} complete</span>
     </div>
   </header>
+  ${waitingBanner}
   <div class="shell">
     <div class="layout">
       <nav class="sidebar" aria-label="Edit plan">
@@ -988,7 +989,6 @@ function writeEditProgress(projectRoot, options = {}) {
         <section class="section active" id="tab-changes" role="tabpanel">
           <h1>Changes</h1>
           <div class="section-desc">The requested app updates and the activity currently in progress.</div>
-          ${waitingBanner}
           <div class="summary">
             <div class="note">${escapeHtml(note)}</div>
             <div class="status-line">
