@@ -129,11 +129,12 @@ const ACTION_TIMEOUT_MS = 60 * 60 * 1000;
 const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
 
 // The ONE exception to "sent exactly once" (solutionHttpClient): an ImportSolution that the platform REFUSED TO START is sent again, under a new import job id. The refusal is HTTP 429 with one of
-// these Dataverse error codes — matched as the code the Web API gives, never as English text:
+// these Dataverse error codes — matched as the code the Web API gives, never as English text. The answer has the Web API's error shape, with the words the platform reported for an import sent during a publish:
 //   { "error": { "code": "0x80071151", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details.
 //                                                  -- The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later." } }
 // The platform's error reference names them (https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes):
-//   0x80071151  SolutionConcurrencyFailure — the code the whole two-part message above carries (measured on a live environment, for an uninstall and for an import)
+//   0x80071151  SolutionConcurrencyFailure — the code the whole two-part message above carries on the live answers it was captured from (a solution uninstall refused while a table delete's customization was
+//               still running; a delete in a change set). An ImportSolution refused during a publish gets the same words, and its code is taken to be the same: one that is not listed is sent once, as every answer was.
 //   0x8004F061  CustomizationLockEx_BothUnknown, 0x8004F062 _BlockedUnknown, 0x8004F063 _BothKnownSame ("Cannot start another [{0}] because there is a previous [{1}] running at this moment"),
 //   0x8004F064  _BothKnownDifferent ("Cannot start the requested operation [{0}] because there is another [{1}] running at this moment"), 0x8004F067 _BlockingUnknown — the lock's own refusals
 // Left out on purpose: 0x80071154 ConcurrentOperationFailure ("The current {0} operation FAILED due to another concurrent operation": an operation that failed had started), the customization lock of

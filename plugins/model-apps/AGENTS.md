@@ -3775,7 +3775,8 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     by the script, so that an import whose answer is lost can be looked up (on the SDK path: `pac` mints its own
     job and is not given this one). A failed import's output has `error`, `code`, `status` (the HTTP status of the
     answer that failed it, when there is one), `importJobId` (SDK path), `fallback` (when `pac` was asked) and
-    `warnings` (what the SDK could not clean up, such as the staged copy). When the request was SENT and failed,
+    `warnings` (what the SDK could not clean up, such as the staged copy — also when it refused and `pac` did the
+    work — and a folder the `pac` fallback made and could not remove). When the request was SENT and failed,
     the job's own log is read once (`importjobs(<id>)?$select=data`: the first `<result result="failure"
     errortext="…"/>`, else the status of the log's root) and its reason is appended to the message — the platform's
     own answer is often only "An unexpected error occurred" — and a log that cannot be read leaves the message as it
@@ -3868,8 +3869,10 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   - **The one exception: an import the platform refused to start** (`sendImport` in `solution-settings.js`; the
     client itself stays absolute). While a publish, or another import, holds the environment's customization lock the
     platform answers `ImportSolution` with HTTP 429 and a Dataverse error code of the lock family — `0x80071151`
-    (`SolutionConcurrencyFailure`, the code the live answer "Cannot start the requested operation [Import] because
-    there is another [Publish] running at this moment" carries) and the `CustomizationLockEx_*` codes `0x8004F061`,
+    (`SolutionConcurrencyFailure`, the code that live answers of the same two-part message — "Cannot start the requested
+    operation [Uninstall] because there is another [EntityCustomization] running at this moment" — carry; an import refused
+    during a publish gets the same words, and its code is taken to be the same: one outside this list is sent once and fails
+    as it always did) and the `CustomizationLockEx_*` codes `0x8004F061`,
     `0x8004F062`, `0x8004F063`, `0x8004F064` and `0x8004F067`. Matched on the code, never on the words. Such an answer
     is the one that says the
     import did not start, and it is the one send that may be repeated — with two conditions, both shown before the
