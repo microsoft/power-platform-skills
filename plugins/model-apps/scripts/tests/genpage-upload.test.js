@@ -614,7 +614,7 @@ test('main forwards every option to the backend, by value: the checked bytes, th
     source: TEXT, name: 'NamedPage', prompt: 'the approved prompt', agentMessage: 'msg', dataSources: 'account,contact', model: 'MODEL-9',
     connectorBindings: connectors, actionBindings: actions,
   });
-  assert.deepStrictEqual(only(genpage, 'placeInApp'), [APP, { pages: [{ pageId: NEW_ID, title: 'NamedPage' }], dataSources: 'account,contact' }]);
+  assert.deepStrictEqual(only(genpage, 'placeInApp'), [APP, { pages: [{ pageId: NEW_ID, title: 'NamedPage' }], dataSources: 'account,contact', languageCode: 1033 }]);
   assert.deepStrictEqual(r.payload, { ok: true, pageId: NEW_ID, appId: APP, updated: false, addedToSitemap: true });
   const marker = readMarker(file);
   assert.deepStrictEqual([marker.pageId, marker.appId, marker.source], [NEW_ID, APP, 'upload']);
@@ -1005,6 +1005,64 @@ test('completing a placement asks the backend to FINISH it — and the marker st
   assert.strictEqual(readMarker(file).unfinished, undefined, 'finished once the app was published with the page');
   assert.deepStrictEqual(genpage.of('placeInApp').map((c) => c.args[1].finish), [undefined, true, true], 'the two completions asked for a finish; the first placement did not');
   assert.strictEqual(genpage.of('create').length, 1, 'and no second page was created');
+});
+
+// ── The title of the page's entry is written in the environment's base language ──────────────────────────────────────────────────────────
+// A title in a language the environment has not provisioned does not show, and the SDK writes its entries in 1033 when it is told nothing. `genpage.js add-to-app` reads the base
+// language and says it to the placement; an upload that places a page — first, and when it completes a placement an earlier run began — is that placement too. (The German-only
+// environment, against the real SDK and the published sitemap, is genpage-upload-language-real-bundle.test.js.)
+test('--add-to-sitemap asks for the environment\'s base language once, before the placement — and tells the placement, in whatever language it is', async () => {
+  for (const language of [1031, 1033]) {
+    const genpage = environment({ language });
+    const r = await run(createArgs(codeFile(), [...NAMED, '--add-to-sitemap', '--data-sources', 'account']), genpage);
+    assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+    assert.deepStrictEqual(only(genpage, 'placeInApp'), [APP, { pages: [{ pageId: NEW_ID, title: 'N' }], dataSources: 'account', languageCode: language }]);
+    const order = genpage.calls.map((c) => c.method);
+    assert.strictEqual(order.filter((method) => method === 'baseLanguage').length, 1, 'asked once');
+    assert.ok(order.indexOf('create') < order.indexOf('baseLanguage') && order.indexOf('baseLanguage') < order.indexOf('placeInApp'), `the page is written, then the language read, then the placement: ${order.join(', ')}`);
+  }
+});
+
+test('an upload that places no page — it only pins the views of its tables — does not ask for the language: no title is written', async () => {
+  const genpage = environment({ language: 1031 });
+  const r = await run(createArgs(codeFile(), [...NAMED, '--data-sources', 'account']), genpage);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(genpage.of('baseLanguage').length, 0);
+  assert.deepStrictEqual(only(genpage, 'placeInApp'), [APP, { pages: [], dataSources: 'account' }]);
+  // Nor does an upload that names no app at all.
+  const appless = environment({ language: 1031 });
+  assert.strictEqual((await run(['--env', ENV, '--code-file', codeFile(), ...NAMED], appless)).ok, true);
+  assert.deepStrictEqual(appless.of('baseLanguage'), []);
+});
+
+test('a language that cannot be read fails the placement — nothing is guessed in its place: the page is written and the marker says it is not placed, as for any placement that fails', async () => {
+  const file = codeFile();
+  const unreadable = Object.assign(new Error(`HTTP 503 from ${ENV}/api/data/v9.0/organizations?$select=languagecode: the service is busy`), { code: 'CONNECTION_ERROR' });
+  const genpage = environment({ languageError: unreadable });
+  const r = await run(createArgs(file, [...NAMED, '--add-to-sitemap']), genpage);
+  assert.strictEqual(r.ok, false, 'an unplaced page is not a successful deployment');
+  assert.strictEqual(r.payload.pageId, NEW_ID, 'the id is reported, so the page can be completed');
+  assert.match(r.payload.error, new RegExp(`page ${NEW_ID} was created and published, but NOT added to app ${APP}'s navigation: the environment's base language, which the entry's title is written in, could not be read \\(HTTP 503 from .*languagecode: the service is busy\\); no other language is assumed in its place\\.`));
+  assert.match(r.payload.error, new RegExp(`Add the page to the app navigation with node scripts/genpage\\.js add-to-app --env \\S+ --app-id ${APP} --page-id ${NEW_ID}, or run the same command again with --page-id `));
+  assert.strictEqual(genpage.of('placeInApp').length, 0, 'the app was not edited with a guess');
+  assert.strictEqual(readMarker(file).unfinished, 'place');
+  assert.strictEqual(genpage.disposed, 1);
+});
+
+test('the run that completes a placement asks for the language and tells the placement too — the first run did not get as far as placing the page, and neither did it read the language', async () => {
+  const file = codeFile();
+  let publishFails = true;
+  const genpage = environment({ pages: [], language: 1031, onCreate: () => (publishFails ? { publish: { kind: 'failed', detail: 'the publish timed out' } } : {}) });
+  const args = createArgs(file, [...NAMED, '--add-to-sitemap']);
+  const first = await run(args, genpage);
+  assert.strictEqual(first.ok, false);
+  assert.strictEqual(genpage.of('baseLanguage').length, 0, 'a page that is not published is not placed, so no language is asked for');
+  publishFails = false;
+  const second = await run([...args, ...adviceFor(first)], genpage);
+  assert.strictEqual(second.ok, true, JSON.stringify(second.payload));
+  assert.strictEqual(second.payload.addedToSitemap, true);
+  assert.deepStrictEqual(genpage.of('placeInApp').map((c) => [c.args[1].languageCode, c.args[1].finish]), [[1031, true]]);
+  assert.strictEqual(genpage.of('baseLanguage').length, 1);
 });
 
 // A completion that is not a placement — the create asked for none and only its publish failed — has no app to publish: it pins views and never asks for a finish.

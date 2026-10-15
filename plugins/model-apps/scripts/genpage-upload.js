@@ -34,6 +34,11 @@
 //   navigation that every other update makes is replaced by that marker, for that page only. The failure that leaves a page
 //   unfinished says to run the same command again with `--page-id <id>` added.
 //
+//   `--add-to-sitemap` writes the page's entry in the app's navigation with a title in the environment's BASE language (read with the
+//   backend's `baseLanguage()`, as `genpage.js add-to-app` does; also when this completes a placement an earlier run began): a title in a
+//   language the environment has not provisioned does not show. A language that cannot be read fails the placement, and the page — written
+//   by then — is completed by the same command with `--page-id` added.
+//
 //   `--prompt` / `--agent-message` are accepted for short, shell-safe text, but `--prompt-file` is
 //   the documented path precisely because it cannot be mangled by a shell. `--compiled-code-file` is
 //   refused (see main): the page is compiled from the checked `--code-file` itself.
@@ -617,9 +622,24 @@ async function deploy(context) {
     const finishingPlacement = !!(completing && completing.unfinished === 'place' && addToSitemap && flags['app-id']);
     if (pageId && flags['app-id'] && (addToSitemap || (dataSourcesOf(tables) || []).length)) {
       try {
+        // The title of the page's entry in the navigation is written in the environment's BASE language: a title in a language the environment has not provisioned does not show, and the SDK
+        // writes one in its own default, 1033, when it is told nothing — an English entry in a German-only environment, reported as a success. `genpage.js add-to-app` reads the language for the
+        // same reason, with the same operation, and so does the run that completes a placement an earlier one began: it is this placement again. An unreadable language fails the placement,
+        // nothing guessed in its place — as it fails `add-to-app`: the page is written and the marker says what is left. A pin has no title to write, so an upload that places no page asks the
+        // environment nothing.
+        let languageCode;
+        if (addToSitemap) {
+          try {
+            languageCode = await genpage.baseLanguage();
+          } catch (e) {
+            // What the read says is the platform's own words (`HTTP 503 from …/organizations?$select=languagecode: …`), which do not say what was being read or why it matters here.
+            throw new Error(`the environment's base language, which the entry's title is written in, could not be read (${(e && e.message) || e}); no other language is assumed in its place`, { cause: e });
+          }
+        }
         placement = await genpage.placeInApp(flags['app-id'], {
           pages: addToSitemap ? [{ pageId, title: (written && written.name) || pageName.value || (deployed && deployed.name) }] : [],
           dataSources: tables,
+          ...(languageCode === undefined ? {} : { languageCode }),
           ...(finishingPlacement ? { finish: true } : {}),
         });
         for (const w of placement.warnings || []) warnings.push(w);

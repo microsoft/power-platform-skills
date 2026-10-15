@@ -6231,6 +6231,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // for all of them: the backend's placeInApp with no page to place and only the tables, the call the standalone upload makes (the logic is that call's, not a
       // second copy). It runs once the pages are written and recorded, and the sitemap is final: it reads the app's CURRENT layer and writes nothing when every
       // view is already pinned, so a rebuild that changed no page's tables costs one read. A page works without its views, so a failure to pin is a warning, not a halt.
+      // It adds those views and NOTHING else of the app's components. The SDK's app push, which carries the pin, would also add every active Main form, public view and chart of each table the
+      // navigation opens — undoing this build's own `app.mainForms` list, and putting back what the app's maker took out of the app — so the backend limits it to the views it pins
+      // (lib/app-component-scope.js). The sitemap push above is the build's own — it owns the whole app, and carries `mainFormsByTable` — and is not limited.
       // `result.created.pages` holds the pages this run wrote (a page it left alone — changed-only — is not in it).
       const writtenTables = [...new Set(implemented.filter((p) => result.created.pages[keyOf(p)] !== undefined).flatMap((p) => p.dataSources || []))];
       if (writtenTables.length && typeof genpage.placeInApp === 'function') {

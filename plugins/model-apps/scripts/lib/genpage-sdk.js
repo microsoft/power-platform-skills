@@ -7,8 +7,8 @@
 //   genpage.read(pageId)                    one page as the SDK projects it                  -> { id, name, source, dataSources, model, … }
 //   genpage.create(args)                    mint an id (or take one), write, publish, prove  -> { pageId, name, publish, fingerprint, warnings }
 //   genpage.update(pageId, args)            write only what differs, publish, prove          -> { pageId, unchanged?, publish, fingerprint, warnings }
-//   genpage.placeInApp(appId, options)      pages into an app's navigation + their tables' default views into its components
-//   genpage.removeFromApp(appId, pageId, options)  a page's sub-area out of an app's navigation (the page itself stays)
+//   genpage.placeInApp(appId, options)      pages into an app's navigation + their tables' default views into its components (and nothing else of the app's components)
+//   genpage.removeFromApp(appId, pageId, options)  a page's sub-area out of an app's navigation (the page itself stays; no component of the app is added)
 //   genpage.describe(pageId)                one page's identity and size, without needing a source -> { pageId, name, editable, dataSources, fileRows, conversationMessages }
 //   genpage.delete(pageId)                  delete a page and its conversation history — refused while any app's navigation names it
 //   genpage.runtimeTypes(dataSources, options)  the RuntimeTypes text a page is authored against   -> a string
@@ -39,6 +39,7 @@ const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 const { genPageSubArea, genPageSubAreaId } = require('./genpage-subarea.js');
 const { guardWorkspaceStorage } = require('./workspace-storage-guard.js');
+const { makeAppComponentScope } = require('./app-component-scope.js');
 const { sha256 } = require('./hash.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -333,8 +334,10 @@ async function publishedPagesOf(sdk, appId) {
 }
 
 // One app push, which the SDK may REPORT as not saved instead of throwing it. Its notes go to `warnings`.
-async function pushApp(sdk, appId, warnings) {
-  const pushed = await sdk.pushArtifact('app', appId);
+// The push is limited to the components the edit owns — the views it pins, `owned.views` — and to the sitemap: the SDK (the bundle's `appApi.update`) follows its sitemap write with an AddAppComponents of
+// everything it derives from the app's Entity sub-areas (every active Main form, public view and chart of each table), which puts back what the app's maker took out of it. See lib/app-component-scope.js.
+async function pushApp(sdk, appId, warnings, scope, owned) {
+  const pushed = await scope.limit(appId, owned, () => sdk.pushArtifact('app', appId));
   if (!pushed || pushed.saved !== true) {
     throw genpageError(`app ${appId} was not changed: ${messageOf((pushed && pushed.error) || 'the push was not saved')}`, { code: pushed && pushed.error && pushed.error.code, cause: pushed && pushed.error });
   }
@@ -413,6 +416,8 @@ function makeGenpageSdk(env, deps = {}) {
   // The workspace folders made here, each with the guard its SDK works through (workspace-storage-guard.js), removed by release().
   const made = [];
   const byLanguage = new Map();
+  // What a page edit of an app may add to the app's components, held at the transport of every SDK this backend makes (lib/app-component-scope.js).
+  const appScope = makeAppComponentScope();
   // Set by dispose(): no operation starts after it.
   let closed = false;
   // The operations in flight. An SDK that was lent to this backend (deps.sdk, or one a test makes) keeps its workspace somewhere this
@@ -440,7 +445,8 @@ function makeGenpageSdk(env, deps = {}) {
           const sdk = createMakerSdk({
             workspaceStorage: guard.storage,
             instanceUrl: env,
-            httpClient: deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env),
+            // The SDK's transport, limited for a page edit of an app: see appScope above and `pushApp`.
+            httpClient: appScope.wrap(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env)),
             // A page's file downloads overlap (four at a time): a read of a page is its rows' bytes, one request each.
             readConcurrency: 4,
             ...(options.languageCode ? { languageCode: options.languageCode } : {}),
@@ -862,6 +868,10 @@ function makeGenpageSdk(env, deps = {}) {
     //   options: { pages: [{ pageId, title }], dataSources: [table…], languageCode, finish, finishIfUnpublished }
     // One app edit at most: the app is read, the navigation and the components are edited, then it is pushed and published. A page the
     // navigation already names, and a view the app already holds, are left alone; when nothing is missing nothing is written.
+    // The push changes the sitemap and adds the views pinned here — NOTHING else of the app's components. The SDK's own push would also add every
+    // active Main form, public view and chart of each table the navigation opens (and each dashboard it names), which puts back what the app's
+    // maker took out of the app and publishes it; the transport it is given limits its AddAppComponents to the views this edit owns (`appScope`,
+    // lib/app-component-scope.js). It is the same for the build's pin of its pages' tables, which is this call with no page.
     // The sub-area goes in the first group that already holds a page, else the first group of the first area (an app has at least
     // one: the SDK refuses a navigation without an area that holds a group). Sitemap titles are written in the SDK's language
     // (`languageCode`, default the SDK's own).
@@ -937,7 +947,7 @@ function makeGenpageSdk(env, deps = {}) {
       }
       if (!edited && !finishing) return { added: [], alreadyPlaced, pinnedViews: [], warnings, appEdited: false };
 
-      if (edited) await pushApp(sdk, appId, warnings);
+      if (edited) await pushApp(sdk, appId, warnings, appScope, { views: pin });
       const published = await publish(sdk, 'app', appId, undefined);
       // The failures below name the app and the page(s) the caller asked for, as `removeFromApp`'s do, so a caller that prints one can go on from it.
       const asked = wantedPages.map((p) => String(p.pageId));
@@ -978,7 +988,9 @@ function makeGenpageSdk(env, deps = {}) {
     // An EXISTING app accepts a navigation with no entry at all when it is updated (measured; the platform refuses one only when a sitemap is CREATED), so nothing but this check stops it, and it is a
     // judgement and not a rule of the platform: an app whose last entry is taken out opens on nothing, which is rarely what "remove this page" meant. So it is refused before anything is written
     // (`GENPAGE_NAVIGATION_WOULD_BE_EMPTY`) unless the caller says `allowEmpty`, a deliberate choice of the same kind as the build's `--allow-destructive` for a spec that empties a navigation.
-    // One app edit at most, as for `placeInApp`: the app is read, the entries are taken out, it is pushed and published, and the PUBLISHED navigation is read back. The publish is not optional. The app's users see the page
+    // One app edit at most, as for `placeInApp`: the app is read, the entries are taken out, it is pushed and published, and the PUBLISHED navigation is read back. Nothing is ADDED to the app's components: the SDK's push
+    // would add every active Main form, public view and chart of each table the remaining navigation opens, which puts back what the app's maker took out of it, so the push is limited to the sitemap (`appScope`,
+    // lib/app-component-scope.js). The publish is not optional. The app's users see the page
     // until the app is published, so a removal that was saved and not published is not one — and the platform keeps an app's reference to a page until a sitemap without it is published (sdk-teardown.js records the
     // measurement), so the page cannot be deleted before that, which is what a removal is usually for. That holds for an app that was NEVER published as well: nothing runs from it, but the removal publishes it all the same —
     // everything the app has saved goes live — and a warning says so.
@@ -1043,7 +1055,7 @@ function makeGenpageSdk(env, deps = {}) {
         } catch { /* the removal goes on without the note */ }
       }
       for (const { a, g, kept } of edits) await sdk.updateElement('app', app, `/siteMap/areas/${a}/groups/${g}/subAreas`, kept);
-      if (edits.length) await pushApp(sdk, app, warnings);
+      if (edits.length) await pushApp(sdk, app, warnings, appScope, { views: [] });
       const published = await publish(sdk, 'app', app, undefined);
       if (published.kind === 'failed') {
         const saved = edits.length ? `taken out of the saved navigation of app ${app}` : `already out of the saved navigation of app ${app}`;
