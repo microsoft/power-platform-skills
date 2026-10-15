@@ -984,10 +984,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   error that keeps every page, as an unreadable published sitemap does (the message says the app was never published, and what failed to
   read), and the app stays for a re-run. **A page is in a navigation when one of its ENTRIES names it**: the pages are read from the
   sitemap's elements (a `SubArea` directly under `SiteMap/Area/Group`, its `GenPageId` in either quote style and with any XML character
-  reference, a GUID — or a braced one — as the SDK reads it: `navigationGenPageIds`), in every layer, never from the text of its XML. A
-  `GenPageId="…"` inside a comment, a CDATA section or another attribute's value is no entry and proves nothing; a single-quoted one is
-  an entry; markup that cannot be read that way, or a page id that is no GUID, is an unreadable navigation (`malformed`) that keeps every
-  page, as a published sitemap that fails `fetchSitemap`'s own check does. The text readers (`sitemapGenPages`, `sitemapGenPageIds`, the
+  reference, a GUID — or a braced one — as the SDK reads it: `navigationGenPageIds`), in every layer, never from the text of its XML. ONE
+  strict XML reader reads the document in one pass, one lexical context at a time (`scripts/lib/strict-xml.js`), so a `GenPageId="…"`
+  inside a comment, a CDATA section, a processing instruction or another attribute's value is no entry and proves nothing, whatever
+  delimiters those hold (three passes that each took one kind of construct out of the text read `<?p <!-- ?>` then `<![CDATA[ --> ?> <SubArea
+  …/> ]]>` as an entry); a single-quoted one is an entry. Names are exact — XML is case-sensitive, and so are the platform's `SiteMap`,
+  `Area`, `Group`, `SubArea` and `GenPageId` and the SDK's reader of them: `genpageid=` or `<subarea>` names no page. A document that is
+  not exactly ONE well-formed XML document (two roots, text outside the root, an unclosed or mismatched tag, a duplicate or unquoted
+  attribute, a `<` in a value, an undeclared entity, a document type declaration, a character XML does not allow), or a page id that is no
+  GUID (on any `SubArea`: the SDK's app delete refuses one wherever it is), is an unreadable navigation (`malformed`) that keeps every page
+  and **records nothing** — the teardown records outlive the app, so a record made from a document that does not read would delete on a
+  retry — as a published sitemap that fails `fetchSitemap`'s own check does; the reader answers no element of such a document, not even those
+  before the fault. It is stricter than XML 1.0 only where the SDK's own parser (xmldom) reads a document differently or warns about it —
+  a name beyond what that parser and every edition of XML accept, end tags of one name written both `</SubArea>` and `</SubArea >`, an
+  XHTML `script` — so that a document it accepts is one that parser accepts too, with the same ids (`tests/strict-xml-oracle.test.js`
+  holds the two to each other over a generated corpus, with the bundle's own xmldom as the oracle). The text readers (`sitemapGenPages`, `sitemapGenPageIds`, the
   `ids` of `fetchSitemap`) serve what deletes nothing — the scan of the other apps (which only refuses), the build's membership check, verify,
   download, the listings — and no page is deleted on them. A page another app's navigation still references is refused by the platform and kept, as for any
   app. The BUILD binds a page by its published navigation or a receipt only; a page only in the saved layer halts with advice to
@@ -1031,7 +1042,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   navigation — a page named only in a comment or a CDATA section is not proven, a single-quoted `GenPageId` is, for a published app and for an
   app that was never published, found by its sitemap component or by name — and the rule that the current row of a sitemap found by name carries the
   app's own unique name (both row orders, nothing recorded or deleted) are pinned against the real bundle in
-  `scripts/tests/teardown-navigation-proof-real-bundle.test.js`, where the pages deleted are checked against the pages the SDK's own reader of the sitemap retains.
+  `scripts/tests/teardown-navigation-proof-real-bundle.test.js`, where the pages deleted are checked against the pages the SDK's own reader of the sitemap retains;
+  so are the markers of one construct inside another (a processing instruction that holds `<!--`, a CDATA section that holds `-->`), a sitemap that is not one
+  well-formed document (nothing written, nothing recorded, and a retry in the same workspace after the repair deletes only what the repaired navigation names),
+  and the exact requests of a published app's teardown (`scripts/tests/golden/teardown-published-requests.txt`).
   The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
@@ -1733,7 +1747,8 @@ scripts/
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
-    sitemap-pages.js           ← pure GenPageId extractors (the TEXT readers `sitemapGenPages` / `sitemapGenPageIds`, which only refuse or report; `navigationGenPageIds`, which reads the navigation ELEMENTS and is what a page is deleted by) + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof, read as navigation, from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries)
+    sitemap-pages.js           ← pure GenPageId extractors (the TEXT readers `sitemapGenPages` / `sitemapGenPageIds`, which only refuse or report; `navigationGenPageIds`, which reads the navigation ELEMENTS through `strict-xml.js` and is what a page is deleted by) + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof, read as navigation, from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries)
+    strict-xml.js              ← `readXmlElements(xml, wanted)`: ONE strict reader of ONE XML document, in one pass, no dependency — comments, CDATA sections, processing instructions and attribute values are data, never elements; anything that is not exactly one well-formed document (or that the SDK's own xmldom would read differently) is `{ ok:false, detail }` with no element at all. `tests/strict-xml-oracle.test.js` holds it to xmldom over a generated corpus
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
     deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there, each page with the hash of the source the pages phase read and sent (what the build's Griffel check compares a later source with)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode

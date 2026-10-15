@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { sitemapGenPages, sitemapGenPageIds, navigationGenPageIds, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
+const { sitemapGenPages, sitemapGenPageIds, navigationGenPageIds, liveNavEntries, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -1134,6 +1134,142 @@ test('navigationGenPageIds: markup it cannot account for is { ok:false, reason:"
   }
 });
 
+// ── ONE strict reader for the navigation (strict-xml.js) ─────────────────────────────────────────────────────────────────────────────
+// The elements of a sitemap are read in ONE pass by a strict XML reader, never by passes that each take one kind of construct out of the text (a delimiter of one kind inside another kind then changed what was left),
+// and a document that is not exactly one well-formed XML document is read as nothing at all — so that no page is ever proven, or recorded as the app's, by a part of a document that does not read.
+const entryA = subArea(pageAttr(GP_OVERVIEW));
+const entryB = subArea(pageAttr(GP_DETAIL));
+// A processing instruction that holds "<!--", then a CDATA section that holds "-->" and "?>" and an entry for B: B is text.
+const DATA_B = navXml(entryA, `<?p <!-- ?><![CDATA[ --> ?> ${entryB} ]]>`);
+// Two processing instructions that hold the "<![CDATA[" and the "]]>" of a CDATA section, with an entry between them and one after: both are entries.
+const ENTRIES_BETWEEN_PI_MARKERS = navXml('<?note <![CDATA[ ?>', entryA, '<?note ]]> ?>', entryB);
+// Two CDATA sections that hold the "<!--" and the "-->" of a comment, with an entry between them and one after: both are entries.
+const ENTRIES_BETWEEN_CDATA_MARKERS = navXml('<![CDATA[ <!-- ]]>', entryA, '<![CDATA[ --> ]]>', entryB);
+
+test('navigationGenPageIds: a delimiter of one kind of construct inside another kind is data — the pages of the entries are those the elements name, however the delimiters of comments, CDATA sections and processing instructions interleave', () => {
+  const only = (ids) => ({ ok: true, ids });
+  for (const [what, xml, ids] of [
+    ['a PI that holds "<!--" and a CDATA section that holds "-->" and "?>": the entry inside the CDATA section is text', DATA_B, [GP_OVERVIEW]],
+    ['PIs that hold the markers of a CDATA section: the entry between them is an entry', ENTRIES_BETWEEN_PI_MARKERS, BOTH_PAGES],
+    ['CDATA sections that hold the markers of a comment: the entry between them is an entry', ENTRIES_BETWEEN_CDATA_MARKERS, BOTH_PAGES],
+    ['a comment that holds "<![CDATA[", "<?" and "]]>"', navXml(entryA, `<!-- <![CDATA[ <? ]]> ${entryB} -->`), [GP_OVERVIEW]],
+    ['a PI that holds "-->" and "]]>"', navXml(entryA, `<?p --> ]]> ${entryB} ?>`), [GP_OVERVIEW]],
+    ['a CDATA section that holds "<?" and "<!--" and no end of either', navXml(entryA, `<![CDATA[ <? <!-- ${entryB} ]]>`), [GP_OVERVIEW]],
+    ['a CDATA section, then a comment, then a PI, each holding an entry', navXml(entryA, `<![CDATA[${entryB}]]><!-- ${entryB} --><?p ${entryB}?>`), [GP_OVERVIEW]],
+    ['an attribute value that holds the delimiters of every construct (">" and "]]>" are legal there; "<" is escaped)', navXml(`<SubArea Id="s" Title="--> ?> ]]> &lt;!-- &lt;![CDATA[ &lt;?" ${pageAttr(GP_OVERVIEW)}/>`, entryB), BOTH_PAGES],
+    ['an attribute value in single quotes that holds a double-quoted GenPageId, and the other way round', navXml(`<SubArea Id="s" Title='GenPageId="${GP_DETAIL}"' ${pageAttr(GP_OVERVIEW)}/>`, `<SubArea Id="t" Title="GenPageId='${GP_DETAIL}'" ${pageAttr(GP_OVERVIEW, "'")}/>`), [GP_OVERVIEW]],
+    ['markers around the root element: a PI that holds "<!--" before it, a comment and a PI that holds "-->" after it', `<?p <!-- ?>${navXml(entryA, entryB)}<!-- a --><?q --> ?>`, BOTH_PAGES],
+  ]) {
+    assert.deepStrictEqual(navigationGenPageIds(xml), only(ids), what);
+  }
+});
+
+test('navigationGenPageIds: a document that is not exactly one well-formed XML document is unreadable — no page, not even the ones that read before the fault', () => {
+  const root = navXml(entryA, entryB);
+  for (const [what, xml, detail] of [
+    ['two document roots', navXml(entryA) + navXml(entryB), /second root element/],
+    ['two document roots with a comment between them', `${navXml(entryA)}<!-- between -->${navXml(entryB)}`, /second root element/],
+    ['text after the root element', `${root} trailing`, /text after the root element/],
+    ['text before the root element', `leading ${root}`, /text before the root element/],
+    ['a CDATA section outside the root element', `<![CDATA[x]]>${root}`, /CDATA section outside the root element/],
+    ['a closing tag with no element open', `${root}</SiteMap>`, /closing tag/],
+    ['a closing tag out of order', `<SiteMap><Area Id="a"><Group Id="g">${entryA}</Area></Group></SiteMap>`, /closing tag <\/Area> where <\/Group> is expected/],
+    ['a closing tag that differs in case only', `<SiteMap><Area Id="a"><Group Id="g">${entryA}</group></Area></SiteMap>`, /closing tag <\/group> where <\/Group> is expected/],
+    ['a closing tag with attributes', `<SiteMap><Area Id="a"><Group Id="g">${entryA}</Group bad="yes"></Area></SiteMap>`, /closing tag that holds more than the element name/],
+    ['an element that is never closed', `<SiteMap><Area Id="a"><Group Id="g">${entryA}`, /element <Group> is never closed/],
+    ['a start tag that is never closed', `<SiteMap><Area Id="a"><Group Id="g"><SubArea Id="s" ${pageAttr(GP_OVERVIEW)}`, /tag that is never closed/],
+    ['an attribute value that is never closed', `<SiteMap><Area Id="a"><Group Id="g"><SubArea Id="s" GenPageId="${GP_OVERVIEW}`, /attribute value that is never closed/],
+    ['an unquoted attribute value', navXml(`<SubArea Id=s ${pageAttr(GP_OVERVIEW)}/>`, entryB), /not in quotes/],
+    ['an attribute with no value', navXml(`<SubArea Id ${pageAttr(GP_OVERVIEW)}/>`, entryB), /no value/],
+    ['attributes with no white space between them', navXml(`<SubArea Id="s"${pageAttr(GP_OVERVIEW)}/>`, entryB), /not separated by white space/],
+    ['an attribute named twice (an entry)', navXml(`<SubArea Id="s" ${pageAttr(GP_OVERVIEW)} ${pageAttr(GP_DETAIL, "'")}/>`), /GenPageId twice/],
+    ['an attribute named twice (an element that is no entry)', `<SiteMap><Area Id="a" Id="b"><Group Id="g">${entryA}${entryB}</Group></Area></SiteMap>`, /Id twice/],
+    ['a "<" in an attribute value', navXml(`<SubArea Id="s" Title="a < b" ${pageAttr(GP_OVERVIEW)}/>`, entryB), /"<" inside an attribute value/],
+    ['an entity that is not declared', navXml(`<SubArea Id="s" Title="&unknown;" ${pageAttr(GP_OVERVIEW)}/>`, entryB), /predefined entities or a character reference/],
+    ['an HTML entity, which XML does not declare', navXml(`<SubArea Id="s" Title="&nbsp;" ${pageAttr(GP_OVERVIEW)}/>`, entryB), /predefined entities or a character reference/],
+    ['a bare "&" in text', navXml(entryA, 'a & b'), /predefined entities or a character reference/],
+    ['a character reference to a character XML does not allow', navXml(`<SubArea Id="s" Title="&#0;" ${pageAttr(GP_OVERVIEW)}/>`), /reference to a character that XML does not allow/],
+    ['"]]>" in character data', navXml(entryA, 'a ]]> b'), /\]\]> in character data/],
+    ['"--" inside a comment', navXml(entryA, '<!-- a -- b -->'), /'--' inside a comment/],
+    ['a comment that never ends', navXml(entryA, '<!-- a'), /comment that is never closed/],
+    ['a CDATA section that never ends', navXml(entryA, '<![CDATA[ a'), /CDATA section that is never closed/],
+    ['a processing instruction that never ends', navXml(entryA, '<?p a'), /processing instruction that is never closed/],
+    ['a document type declaration', `<!DOCTYPE SiteMap>${root}`, /document type declaration/],
+    ['a document type declaration with entities', `<!DOCTYPE SiteMap [<!ENTITY p "x">]>${root}`, /document type declaration/],
+    ['an XML declaration that is not at the start', ` <?xml version="1.0"?>${root}`, /named "xml"/],
+    ['a character XML does not allow', navXml(entryA, 'a \u0001 b'), /character that XML does not allow/],
+    ['no text at all', '', /no XML text|no root element/],
+    ['only a comment', '<!-- x -->', /no root element/],
+  ]) {
+    const r = navigationGenPageIds(xml);
+    assert.deepStrictEqual([r.ok, r.reason], [false, 'malformed'], what);
+    assert.match(r.detail, /not well-formed/, what);
+    assert.match(r.detail, detail, what);
+    assert.match(r.detail, /line \d+, column \d+|no (root element|XML text)/, `${what}: it says where`);
+    assert.strictEqual(r.ids, undefined, what);
+  }
+});
+
+test('navigationGenPageIds: an entry nested anywhere else, with a GenPageId that is no GUID, is unreadable too — the SDK\u2019s own reader takes a SubArea at any depth and refuses one, so the proof and the delete agree on what the document says', () => {
+  const nested = `<SiteMap><Area Id="a"><Group Id="g">${entryA}</Group><SubArea Id="s" GenPageId='not-a-guid'/></Area></SiteMap>`;
+  const r = navigationGenPageIds(nested);
+  assert.deepStrictEqual([r.ok, r.reason], [false, 'malformed']);
+  assert.match(r.detail, /not a GUID/);
+  // A nested entry with a page id that IS a GUID names no page here (it is not navigation), and does not stop the reading.
+  assert.deepStrictEqual(navigationGenPageIds(`<SiteMap><Area Id="a"><Group Id="g">${entryA}</Group><SubArea Id="s" ${pageAttr(GP_DETAIL)}/></Area></SiteMap>`), { ok: true, ids: [GP_OVERVIEW] });
+});
+
+test('navigationGenPageIds: element and attribute names are exact, as XML and the platform write them — a differently-cased element or attribute is another one, and names no page', () => {
+  for (const [what, xml] of [
+    ['an attribute spelled genpageid', navXml(`<SubArea Id="s" genpageid="${GP_DETAIL}"/>`)],
+    ['an element spelled subarea', navXml(`<subarea Id="s" ${pageAttr(GP_DETAIL)}/>`)],
+    ['an area spelled in lower case', `<SiteMap><area Id="a"><Group Id="g">${entryB}</Group></area></SiteMap>`],
+    ['a prefixed SubArea', navXml(`<m:SubArea Id="s" ${pageAttr(GP_DETAIL)}/>`)],
+    ['a prefixed SiteMap', `<m:SiteMap xmlns:m="urn:contoso:sitemap"><m:Area Id="a"><m:Group Id="g">${entryB}</m:Group></m:Area></m:SiteMap>`],
+  ]) {
+    assert.deepStrictEqual(navigationGenPageIds(xml), { ok: true, ids: [] }, what);
+  }
+  // A default namespace does not prefix anything: the elements are still SiteMap, Area, Group and SubArea.
+  assert.deepStrictEqual(navigationGenPageIds(navXml(entryA, entryB).replace('<SiteMap>', '<SiteMap xmlns="urn:contoso:sitemap">')), { ok: true, ids: BOTH_PAGES });
+});
+
+const XML_PIN = [
+  '<SiteMap>',
+  '  <Area Id="Sales" Title="Sales">',
+  '    <Group Id="Work" Title="Work">',
+  `      <SubArea Id="s1" GenPageId="${GP_OVERVIEW}" Title="Orders &amp; Overview" />`,
+  '      <SubArea Id="s2" Entity="new_liveorder" Title="Orders" Icon="$webresource:new_icon.png" />',
+  `      <SubArea Id="s3" GenPageId="${GP_DETAIL.toUpperCase()}" Title="Order Detail" />`,
+  '      <SubArea Id="s4" Url="https://x/00000000-0000-0000-0000-000000000000" Title="Decoy" VectorIcon="$webresource:new_v.svg" />',
+  '      <SubArea Id="s5" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-0000-4000-8000-000000000001}" />',
+  '      <SubArea Id="s6" Page="contoso_details" />',
+  '    </Group>',
+  '  </Area>',
+  '</SiteMap>',
+].join('\n');
+
+test('liveNavEntries: the entries of an ordinary sitemap are read as they always were — one per target, in document order, with the icon, vector icon and Url of each', () => {
+  assert.strictEqual(JSON.stringify([...liveNavEntries(XML_PIN)]), JSON.stringify([
+    [`GenPage:${GP_OVERVIEW}`, [{}]],
+    ['Entity:new_liveorder', [{ icon: '$webresource:new_icon.png' }]],
+    [`GenPage:${GP_DETAIL}`, [{}]],
+    ['URL:https://x/00000000-0000-0000-0000-000000000000', [{ vectorIcon: '$webresource:new_v.svg', url: 'https://x/00000000-0000-0000-0000-000000000000' }]],
+    ['DashBoard:280948ec-0000-4000-8000-000000000001', [{ url: '/workplace/home_dashboards.aspx' }]],
+    ['CustomPage:contoso_details', [{}]],
+  ]));
+});
+
+test('liveNavEntries: it is the same reader — the markers of one construct inside another hide no entry from it, and add none, and a document that is not one well-formed document is null', () => {
+  const keys = (xml) => [...liveNavEntries(xml).keys()];
+  assert.deepStrictEqual(keys(DATA_B), [`GenPage:${GP_OVERVIEW}`]);
+  assert.deepStrictEqual(keys(ENTRIES_BETWEEN_PI_MARKERS), [`GenPage:${GP_OVERVIEW}`, `GenPage:${GP_DETAIL}`]);
+  assert.deepStrictEqual(keys(ENTRIES_BETWEEN_CDATA_MARKERS), [`GenPage:${GP_OVERVIEW}`, `GenPage:${GP_DETAIL}`]);
+  for (const xml of [navXml(entryA) + navXml(entryB), `${navXml(entryA)} trailing`, navXml(`<SubArea Id=s ${pageAttr(GP_OVERVIEW)}/>`), `<!DOCTYPE SiteMap>${navXml(entryA)}`, `<SiteMap><Area><Group>${entryA}`, '', undefined, null]) {
+    assert.strictEqual(liveNavEntries(xml), null, String(xml));
+  }
+  assert.strictEqual(liveNavEntries('<SiteMap />').size, 0, 'a sitemap with no entry is a readable one');
+});
+
 // ── navigationProof reads the pages of a navigation as navigation, in whichever layer it reads ──────────────────────────────────
 
 test('navigationProof: a published app is proven by the navigation elements of its published sitemap — a page that only a comment or a CDATA section names is not proven, and the saved layer is asked about it', async () => {
@@ -1254,6 +1390,61 @@ test('navigationProof: every row of a sitemap found by name that carries the app
       const { sdk } = proofEnv({ components: [], saved: { status: 200, body: { value: listed } } });
       const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_DETAIL]);
       assert.deepStrictEqual(r, { ok: true, neverPublished: true, ids: [GP_DETAIL], currentNavigation: { ok: true, ids: [GP_DETAIL] } }, JSON.stringify(names));
+    }
+  }
+});
+
+test('navigationProof: the markers of one construct inside another make a page of no navigation, and hide none — in the published layer, the saved layer of a published app, and the saved layer of an app that was never published', async () => {
+  const documents = [
+    ['a PI that holds "<!--" and a CDATA section that holds "-->" and "?>" around an entry for B', DATA_B, [GP_OVERVIEW]],
+    ['PIs that hold the markers of a CDATA section around an entry', ENTRIES_BETWEEN_PI_MARKERS, BOTH_PAGES],
+    ['CDATA sections that hold the markers of a comment around an entry', ENTRIES_BETWEEN_CDATA_MARKERS, BOTH_PAGES],
+  ];
+  for (const [what, xml, ids] of documents) {
+    // The published layer, which the teardown reads first: the answer of fetchSitemap carries the ids of its text reader (all of them here), and the proof is the elements'.
+    const published = publishedOf(xml);
+    const { sdk } = proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }], sitemap: { status: 200, body: { value: [{ sitemapxml: navXml(entryA), componentstate: 1 }] } } });
+    assert.deepStrictEqual((await navigationProof(sdk, 'contoso_app', published, [GP_OVERVIEW, GP_DETAIL])).ids, ids, `published: ${what}`);
+    // The saved layer of a published app, which names more than the published layer does.
+    const supplement = proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }], sitemap: { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } } });
+    const added = await navigationProof(supplement.sdk, 'contoso_app', publishedOf(navXml(entryA)), [GP_OVERVIEW, GP_DETAIL]);
+    assert.deepStrictEqual(added.ids, ids, `saved layer of a published app: ${what}`);
+    assert.deepStrictEqual(added.currentNavigation, { ok: true, ids }, `saved layer of a published app: ${what}`);
+    // The saved layer of an app that was never published, by its sitemap component and by its unique name.
+    for (const [route, components] of NEVER_PUBLISHED_ROUTES) {
+      const { sdk: draft } = proofEnv({ components, ...savedSitemapOf(xml) });
+      assert.deepStrictEqual(await navigationProof(draft, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW, GP_DETAIL]), { ok: true, neverPublished: true, ids, currentNavigation: { ok: true, ids } }, `${route}: ${what}`);
+    }
+  }
+});
+
+test('navigationProof: a sitemap that is not one well-formed document is unreadable in every layer — nothing is proven by it, and a published one is not followed by a single further read', async () => {
+  for (const [what, xml] of [
+    ['two document roots', navXml(entryA) + navXml(entryB)],
+    ['text after the root element', `${navXml(entryA, entryB)} trailing <!-- end -->`],
+    ['an unquoted attribute value', navXml(`<SubArea Id=s ${pageAttr(GP_OVERVIEW)}/>`, entryB)],
+    ['an entity that is not declared', navXml(`<SubArea Id="s" Title="&nope;" ${pageAttr(GP_OVERVIEW)}/>`, entryB)],
+    ['a closing tag with attributes', `<SiteMap><Area Id="a"><Group Id="g">${entryA}${entryB}</Group bad="yes"></Area></SiteMap>`],
+  ]) {
+    const published = proofEnv();
+    const unread = await navigationProof(published.sdk, 'contoso_app', publishedOf(xml), [GP_OVERVIEW, GP_DETAIL]);
+    assert.deepStrictEqual([unread.ok, unread.reason], [false, 'malformed'], `published: ${what}`);
+    assert.match(unread.detail, /not well-formed/, what);
+    assert.strictEqual(unread.ids, undefined, what);
+    assert.deepStrictEqual(published.calls, { resolved: [], queries: [], gets: [] }, `published: ${what}: no read follows`);
+
+    const supplement = proofEnv({ publishedApps: [{ appmoduleid: PROOF_APP }], sitemap: { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } } });
+    const added = await navigationProof(supplement.sdk, 'contoso_app', publishedOf(navXml(entryA)), [GP_OVERVIEW, GP_DETAIL]);
+    assert.deepStrictEqual(added.ids, [GP_OVERVIEW], `saved layer of a published app: ${what}: the published proof stands, and nothing is added`);
+    assert.strictEqual(added.currentNavigation.ok, false, what);
+    assert.match(added.currentNavigation.reason, /malformed: .*not well-formed/, what);
+
+    for (const [route, components] of NEVER_PUBLISHED_ROUTES) {
+      const { sdk } = proofEnv({ components, ...savedSitemapOf(xml) });
+      const r = await navigationProof(sdk, 'contoso_app', NOT_PUBLISHED, [GP_OVERVIEW, GP_DETAIL]);
+      assert.deepStrictEqual([r.ok, r.neverPublished, r.reason], [false, true, 'malformed'], `${route}: ${what}`);
+      assert.match(r.detail, /not well-formed/, `${route}: ${what}`);
+      assert.strictEqual(r.ids, undefined, `${route}: ${what}`);
     }
   }
 });

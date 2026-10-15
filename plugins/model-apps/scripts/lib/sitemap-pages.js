@@ -8,11 +8,13 @@
 //
 // TWO WAYS TO READ THAT XML, by what a wrong answer costs. sitemapGenPages / sitemapGenPageIds read its TEXT for a `GenPageId="…"`: a match inside a comment or a CDATA section counts, and a single-quoted attribute does not.
 // That is good enough where a page found only REFUSES something (the scan of the other apps) or is reported or checked (verify, download, a listing, the build's membership check). navigationGenPageIds reads the navigation
-// ELEMENTS instead, and is the only reader a page is DELETED by: the teardown's proof of membership (navigationProof) rests on nothing else.
+// ELEMENTS instead, with ONE strict XML reader (strict-xml.js): it is the only reader a page is DELETED by — the teardown's proof of membership (navigationProof) rests on nothing else — and it reads nothing at all from a
+// document that is not exactly one well-formed XML document, so no page is proven, or recorded as the app's, by part of a document that does not read.
 
 const { odataLit } = require('./odata.js');
 const { appComponentRows, currentAppLayer, collectionRows, currentLayerRows } = require('./app-components.js');
 const { subAreaTargetKey } = require('./sitemap-merge.js');
+const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
 
 // Match a <SubArea …> START TAG carrying a GenPageId, capturing the id and (optionally) the Title.
 // Attributes are order-independent, so scan each start tag and pull GenPageId + Title separately.
@@ -30,7 +32,6 @@ const GUID_36 = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 // a name — and a serializer may write any character as a numeric reference (`&#38;`, `&#x26;`), not only
 // through the five predefined entities. ONE pass, so a double-encoded "a &amp;lt; b" decodes to "a &lt; b",
 // never "a < b". A reference to no character (out of range, or a surrogate) is left as written.
-const XML_PREDEFINED = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
 function decodeXmlEntities(s) {
   return String(s).replace(/&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(lt|gt|amp|quot|apos));/g, (ref, hex, dec, name) => {
     if (name) return XML_PREDEFINED[name];
@@ -44,83 +45,73 @@ function decodeXmlEntities(s) {
 //   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" VectorIcon="$webresource:new_ops.svg">
 // becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg', url: '/workplace/home_dashboards.aspx' }].
 // An entry's type is read the way the SDK reads it — GenPageId, Entity, Page, DefaultDashboard, URL.
-// Only ELEMENTS count: a SubArea (not SubArea-Archived or SubAreaÜ) directly under SiteMap/Area/Group.
-// Other locations are opaque XML. Comments, CDATA and processing instructions are text, so remove
-// them first and walk whole element names (including Unicode) with a stack. A value can contain '>',
-// so match tags quote by quote. Fully decode attributes in either quote style, including &#38;.
-// Return null for markup this walk cannot account for completely: an unmatched '<' (including a
-// document type declaration whose entities could expand into elements), or a mismatched closing tag.
-// That gives neither verify a kept-icon exemption nor download a smaller authoritative target set.
-const NAV_PATH = ['SiteMap', 'Area', 'Group'];
+// Only ELEMENTS count, and only a SubArea directly under SiteMap/Area/Group (not SubArea-Archived or SubAreaÜ): the others are opaque XML. Return null for a document that is not exactly one well-formed XML
+// document (navigationEntries says what is wrong with it) — that gives neither verify a kept-icon exemption nor download a smaller authoritative target set.
+const NAV_PATH = 'SiteMap/Area/Group';
+// The tag and attribute grammar of the FORM identity scan in verify-spec.js (a read-only check of a form's cell and control ids, never the proof of a delete). The navigation is not read with them: strict-xml.js is.
 const XML_TAG = /<(\/?)([^\s/>"'=!?]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
 const XML_ATTR = /\s([^\s/>"'=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-// The walk, once, for every reader of the navigation: `visit(attrs, repeated)` is called for each navigation entry in document order, with the decoded attributes of its SubArea and whether its start tag names an
-// attribute twice (the last value stands in `attrs`). false for the markup described above.
-function walkNavigation(xml, visit) {
-  const markup = String(xml || '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
-    .replace(/<\?[\s\S]*?\?>/g, '');
-  const tags = [...markup.matchAll(XML_TAG)];
-  // In well-formed XML every remaining '<' starts a tag; text and attributes escape it.
-  if (tags.length !== (markup.match(/</g) || []).length) return false;
-  const open = [];
-  for (const [, closing, name, body, selfClosing] of tags) {
-    if (closing) {
-      if (open[open.length - 1] !== name) return false;
-      open.pop();
-      continue;
-    }
-    if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
-      const attrs = Object.create(null);
-      let repeated = false;
-      for (const m of body.matchAll(XML_ATTR)) {
-        repeated = repeated || m[1] in attrs;
-        attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
-      }
-      visit(attrs, repeated);
-    }
-    if (!selfClosing) open.push(name);
-  }
-  return open.length === 0;
+
+// The SubArea elements of a sitemap, each as its decoded attributes, in document order: the ENTRIES of its navigation (a SubArea directly under SiteMap/Area/Group) and every `elsewhere` (a SubArea anywhere else).
+// ONE strict reader reads the document (strict-xml.js), in one pass and one lexical context at a time, so a comment, a CDATA section, a processing instruction or an attribute value is data and never an element, and a
+// document that is not exactly one well-formed XML document is not read at all: no element of it is answered, not even those before the fault.
+// Names are exact. XML is case-sensitive, the platform writes SiteMap, Area, Group, SubArea and the attribute GenPageId in exactly that spelling, and the SDK's own reader of an app's sitemap (the one its app delete takes
+// the pages to retain from) matches `nodeName === 'SubArea'` and `getAttribute('GenPageId')`, which are exact too. An element or an attribute spelled differently is another one and names no page — the page stays
+// unproven, which keeps it, and the SDK would not retain it either. A prefix is part of a name (`m:SubArea` is no SubArea, in the SDK's reader either); a default namespace prefixes nothing.
+//   { ok:true, entries: [attrs], elsewhere: [attrs] } | { ok:false, detail }
+function navigationEntries(xml) {
+  const read = readXmlElements(xml, (name) => name === 'SubArea');
+  if (!read.ok) return read;
+  const entries = [];
+  const elsewhere = [];
+  for (const { path, attrs } of read.elements) (path === NAV_PATH ? entries : elsewhere).push(attrs);
+  return { ok: true, entries, elsewhere };
 }
 
 function liveNavEntries(xml) {
+  const read = navigationEntries(xml);
+  if (!read.ok) return null;
   const byKey = new Map();
-  const readable = walkNavigation(xml, (attrs) => {
+  for (const attrs of read.entries) {
     const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
     const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
     if (key) {
       if (!byKey.has(key)) byKey.set(key, []);
       byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
     }
-  });
-  return readable ? byKey : null;
+  }
+  return byKey;
 }
 
-// The pages the NAVIGATION of a sitemap holds: the GenPageId of every entry the walk above finds, so a page named in a comment, a CDATA section, a processing instruction or the value of another attribute is not held,
+// The pages the NAVIGATION of a sitemap holds: the GenPageId of every entry navigationEntries finds, so a page named in a comment, a CDATA section, a processing instruction or the value of another attribute is not held,
 // and either quote style and any character reference counts. This is what a page is DELETED by (navigationProof). sitemapGenPageIds reads the TEXT, which is enough to REFUSE — the scan of the other apps says "another
 // app has this page" — and to report, and is not enough to prove that a page is the app's: it takes the page of a commented-out entry for a member, and misses a single-quoted one.
 //   { ok:true, ids }                          sorted, unique and lower-cased, as sitemapGenPageIds answers
-//   { ok:false, reason:'malformed', detail }  markup the walk cannot account for, an entry whose start tag names an attribute twice, or a page id that is no GUID. FAIL-CLOSED: no id comes with it, not even those read
+//   { ok:false, reason:'malformed', detail }  the text is not exactly one well-formed XML document (the detail says what is wrong and where), or a page id is no GUID. FAIL-CLOSED: no id comes with it, not even those read
 //                                             before the failure — which pages the navigation holds is not known, and "none" is not an answer.
 // A page id is read as the SDK reads one (normalizeGuid, in the reader its app delete takes the pages to retain from): a GUID, or a GUID in braces, and nothing else — no stray space, no other length. An entry with no
-// GenPageId, or an empty one, names no page. Only entries under SiteMap/Area/Group count, which is narrower than the SDK's reader (it takes a SubArea at any depth): a page that only such an entry names stays unproven,
-// which keeps it. A start tag may not name an attribute twice (the well-formedness constraint "Unique Att Spec", https://www.w3.org/TR/xml/#uniqattspec): which of two values is the page's cannot be told.
+// GenPageId, or an empty one, names no page. Only entries under SiteMap/Area/Group name a page here, which is narrower than the SDK's reader (it takes a SubArea at any depth): a page that only such an element names stays
+// unproven, which keeps it. But the SDK's reader also REFUSES a GenPageId that is no GUID wherever its SubArea is, and a document it refuses is one whose app it will not delete, so such a value is unreadable here too: the
+// proof and the delete agree on what the document says.
 function navigationGenPageIds(xml) {
-  const ids = new Set();
-  let notGuid;
-  let repeated = false;
-  const readable = typeof xml === 'string' && xml.trim() !== '' && walkNavigation(xml, (attrs, twice) => {
-    repeated = repeated || twice;
-    const raw = attrs.GenPageId;
-    if (!raw || notGuid !== undefined) return;
+  const read = navigationEntries(xml);
+  if (!read.ok) return { ok: false, reason: 'malformed', detail: `the sitemap XML is not well-formed (${read.detail}), so which pages its navigation holds cannot be told` };
+  // A page id as normalizeGuid reads it, lower-cased; null for any other text.
+  const guidOf = (raw) => {
     const id = raw.length === 38 && raw.startsWith('{') && raw.endsWith('}') ? raw.slice(1, -1) : raw;
-    if (GUID_36.test(id)) ids.add(id.toLowerCase());
-    else notGuid = raw;
-  });
-  if (!readable || repeated) return { ok: false, reason: 'malformed', detail: 'the sitemap XML is not well-formed, so which pages its navigation holds cannot be told' };
-  if (notGuid !== undefined) return { ok: false, reason: 'malformed', detail: `a page id in the sitemap's navigation is not a GUID (${JSON.stringify(notGuid.slice(0, 80))}), so which pages it holds cannot be told` };
+    return GUID_36.test(id) ? id.toLowerCase() : null;
+  };
+  const notGuid = (raw) => ({ ok: false, reason: 'malformed', detail: `a page id in the sitemap is not a GUID (${JSON.stringify(raw.slice(0, 80))}), so which pages its navigation holds cannot be told` });
+  const ids = new Set();
+  for (const attrs of read.entries) {
+    if (!attrs.GenPageId) continue;
+    const id = guidOf(attrs.GenPageId);
+    if (id === null) return notGuid(attrs.GenPageId);
+    ids.add(id);
+  }
+  for (const attrs of read.elsewhere) {
+    if (attrs.GenPageId && guidOf(attrs.GenPageId) === null) return notGuid(attrs.GenPageId);
+  }
   return { ok: true, ids: [...ids].sort() };
 }
 
