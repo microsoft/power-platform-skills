@@ -293,3 +293,19 @@ test('REAL BUNDLE: a client without postRaw and patchRaw stays without them — 
   assert.strictEqual(sdk.dataverse.supportsAtomicBatch, false);
   assert.strictEqual(sdk.dataverse.supportsBinaryPatch, false);
 });
+
+// The transport sends the path `new URL(address)` makes of an address, which resolves dot segments and their `%2e` spellings and reads `\` as `/`: an address that spells the batch endpoint or
+// an app module's row that way reaches the same endpoint, so it is read the same way and refused the same way — and the canonical spelling of a healthy request still goes out.
+test('REAL BUNDLE + REAL CLIENT: an address that reaches the batch endpoint or an app module row through dot segments, %2e or a backslash is refused like the canonical one', async () => {
+  const { client, sent, tokens } = transport();
+  const sdk = makeSdk(client);
+  const header = { name: { 1033: 'Probe', 1036: 'Sonde' }, description: 'Tickets' };
+  const options = { headers: { 'Content-Type': 'multipart/mixed;boundary=batch_hand' } };
+  for (const suffix of ['/.', '/%2e', '/child/..', '/%2E/', '\\']) {
+    await assert.rejects(sdk.dataverse.post(`/$batch${suffix}`, handWritten('appmodules', header), options), (error) => assertRefusal(error, `$batch${suffix}`));
+    await assert.rejects(sdk.dataverse.patch(`/appmodules(${APP})${suffix}`, header, { headers: { 'If-Match': 'W/"1"' } }), (error) => assertRefusal(error, `appmodules(…)${suffix}`));
+  }
+  assert.deepStrictEqual([sent.length, tokens()], [0, 0], 'nothing reached the wire, and the token was never asked for');
+  await sdk.dataverse.patch(`/appmodules(${APP})/.`, { name: 'Probe', description: 'Tickets' }, { headers: { 'If-Match': 'W/"1"' } });
+  assert.strictEqual(sent.length, 1, 'a plain header through the same spelling goes out');
+});

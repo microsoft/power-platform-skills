@@ -73,7 +73,27 @@ const decodeEscapes = (text) => text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
   }
 });
 // `undefined` for an address that cannot be turned into text (an object whose `toString` throws): the client refuses such a request itself.
+// The transport sends the path `new URL(address)` makes of it (lib/dataverse-auth.js), and that resolves dot segments — `/$batch/.`, `/x/..`, and their `%2e` spellings — and reads `\` as `/` in an https
+// address. So the address is read the same way here, or a spelling the service takes for the batch endpoint or an app module's row would be classified as something else and go out unread. A
+// relative address (a part of a batch writes one) is resolved against a service root that only serves to resolve it; one `new URL` cannot read is read as it is written.
+// See: https://url.spec.whatwg.org/#concept-basic-url-parser (single-dot and double-dot path segments, and `\` in a special scheme's path)
+const RESOLVE_AGAINST = 'https://service-root.invalid/api/data/v9.0/';
 function pathOf(address) {
+  let text;
+  try {
+    text = String(address);
+  } catch {
+    return undefined;
+  }
+  try {
+    return decodeEscapes(new URL(text, RESOLVE_AGAINST).pathname);
+  } catch {
+    return literalPathOf(text);
+  }
+}
+// The address as it is written — escapes decoded, query and fragment off, nothing resolved — for what only the written form says: a part of a change set that addresses the row an earlier part
+// created by its Content-ID (`$1`), which no base may be resolved against.
+function literalPathOf(address) {
   try {
     return decodeEscapes(String(address).split(/[?#]/, 1)[0]);
   } catch {
@@ -209,7 +229,8 @@ function judgeBatch(url, body, options) {
     const targetPath = pathOf(operation.target);
     if (verb === 'POST' && targetPath !== undefined && APP_MODULE_COLLECTION.test(targetPath) && operation.contentId !== undefined) created.add(operation.contentId);
     if (verb !== 'PATCH') continue;
-    const reference = targetPath === undefined ? null : /^\$([^/?#]+)\/?$/.exec(targetPath);
+    const literal = literalPathOf(operation.target);
+    const reference = literal === undefined ? null : /^\$([^/?#]+)\/?$/.exec(literal);
     const appId = appModuleRowId(operation.target) || (reference && created.has(reference[1]) ? `$${reference[1]}` : undefined);
     if (appId === undefined) continue;
     const read = readRawHeaderBody(operation.body);
