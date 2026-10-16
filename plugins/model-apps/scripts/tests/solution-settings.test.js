@@ -1208,7 +1208,7 @@ test('for a package on disk pac is given that file', async () => {
   assert.strictEqual(result.fallback.code, 'SOLUTION_STAGING_UNREADABLE');
 });
 
-test('the scratch folder pac writes in is LENT to it: while pac runs the record names its process, so that a run killed meanwhile does not have the folder removed from under pac', async () => {
+test('the scratch folder pac writes in is made LENT, once, when it is made: its record says so before pac starts, is not written again while pac runs, and names no process', async () => {
   const dir = tempDir();
   const { pkg, out } = files(dir);
   const { sdk } = sdkStub();
@@ -1217,19 +1217,26 @@ test('the scratch folder pac writes in is LENT to it: while pac runs the record 
   const pac = {
     spawn: (name, args, options) => {
       const file = flagValue(args, '--settings-file');
-      const lent = () => JSON.parse(fs.readFileSync(path.join(path.dirname(file), '.owner.json'), 'utf8')).lent;
-      seen.beforeStart = lent();
-      assert.strictEqual(typeof options.onSpawn, 'function', 'the runner is asked to say which process pac is');
-      options.onSpawn(424242); // what the process runner does the moment pac exists
-      seen.running = lent();
+      const marker = path.join(path.dirname(file), '.owner.json');
+      seen.before = fs.readFileSync(marker, 'utf8');
+      seen.beforeId = fs.statSync(marker).ino;
+      assert.ok(!('onSpawn' in options), 'pac is not followed: nothing is recorded about its process');
       fs.writeFileSync(file, JSON.stringify(PAC_TEMPLATE, null, 2));
+      seen.after = fs.readFileSync(marker, 'utf8');
+      seen.afterId = fs.statSync(marker).ino;
+      seen.entries = fs.readdirSync(path.dirname(file)).sort();
       return { status: 0, stdout: '', stderr: '' };
     },
   };
   const result = await ss.runTemplate(templateRequest({ packagePath: pkg, outPath: out }), { sdkFirst: stubSdkFirst(sdk), pac });
   assert.strictEqual(result.source, 'pac');
-  assert.deepStrictEqual([seen.beforeStart.pending, seen.beforeStart.pids], [1, []], 'before pac is started the record says that a program is about to be given the folder');
-  assert.deepStrictEqual([seen.running.pending, seen.running.pids.map((p) => p.pid)], [0, [424242]], 'once it runs, which one');
+  const record = JSON.parse(seen.before);
+  assert.strictEqual(record.lent, true, 'the folder pac is given was made lent');
+  assert.strictEqual(record.pid, process.pid);
+  assert.deepStrictEqual(Object.keys(record).sort(), ['at', 'host', 'lent', 'pid', 'platform', 'v', ...(record.ns ? ['ns'] : []), ...(record.start ? ['start'] : [])].sort(), 'the maker\'s record and the one word, nothing about pac');
+  assert.strictEqual(seen.after, seen.before, 'the record was not written again while pac ran');
+  assert.strictEqual(seen.afterId, seen.beforeId, 'nor replaced by another file');
+  assert.deepStrictEqual(seen.entries, ['.owner.json', 'settings.json'], 'and no temporary copy of it is left in the folder');
 });
 
 test('without --env there is nothing to stage a package in: pac reads the zip, offline, and the SDK is never made — no fallback to report', async () => {

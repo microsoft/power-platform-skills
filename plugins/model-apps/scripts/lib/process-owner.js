@@ -13,7 +13,7 @@
 //     "ns": "pid:[4026531836]", "start": "11111111-2222-3333-4444-555555555555:5382613" }
 //   pid       the process that made it
 //   at        when (ms since the epoch). For a message only: an age never decides anything here, because a live process can be paused for as
-//             long as a laptop sleeps — the one exception is what a launch that never reported its program keeps (`lent`, below)
+//             long as a laptop sleeps
 //   host      os.hostname(). A workspace folder on a network share, or a temp folder on a shared drive, can hold another machine's stamp, and
 //             a pid means nothing on a machine that did not make it
 //   platform  process.platform. Windows and WSL show one folder under one host name and have two pid spaces
@@ -23,9 +23,9 @@
 //
 // WHEN THE MAKER IS "GONE" (ownerState → 'gone'): the stamp is well formed, it was made on this machine, by this kind of system, in this pid
 // namespace, and then either no process has the pid (ESRCH), or — on Linux, where the start time is cheap to read — a process has it that is a
-// zombie or started at another time (the pid was handed out again); and, if the stamp says the maker lent its work to other programs (`lent`, below),
-// every one of those is gone too. Everything else is 'alive' (a process runs under the pid and nothing says it is another one) or 'unknown' (not this
-// machine's, not readable, not understood): both mean keep.
+// zombie or started at another time (the pid was handed out again). Everything else is 'alive' (a process runs under the pid and nothing says it is
+// another one) or 'unknown' (not this machine's, not readable, not understood): both mean keep. This is a fact about the MAKER, and only that: a maker that
+// handed what it made to another program (a workspace given to pac — lib/temp-workspace.js `lent`) is not the program, and its death proves nothing about it.
 //
 // WHAT "IN THIS PID NAMESPACE" NEEDS. On Linux a pid means something only inside the pid namespace it was given in: two containers can share a host
 // name and a volume and have two pid spaces, so a pid that is "not found" here may be running in the other. The proof therefore needs the namespace
@@ -37,16 +37,6 @@
 // record that is still valid JSON — is not a start, so the record is not believed at all (isOwnerStamp), and a start that is read from /proc but is not
 // well formed is not compared. Only two well-formed starts that differ show that a pid was handed out again.
 //
-// WHAT ELSE A MAKER MAY HAVE LENT IT TO. A maker that gives what it made — a lock, a workspace folder — to a program of another make (pac, handed a
-// path inside the workspace) adds `lent` to its stamp:
-//   "lent": { "at": 1760483934512, "pending": 0, "pids": [ { "pid": 5000, "start": "<boot id>:<ticks>" } ] }
-//   pids     every such program the maker started, as it was told its process id (lib/temp-workspace.js lendWorkspace). On POSIX such a program
-//            outlives a maker that is killed, so the maker being gone is not the work being over: ownerState needs every one of them gone too
-//   pending  how many launches have begun and not yet reported a process id. A maker killed between starting a program and writing its pid leaves
-//            this above zero, and nothing then says whether a program has the folder: it is kept until `at` — when the latest launch began — is
-//            LENT_PENDING_MS old. That is the one place a time decides anything, and it is a lower bound on how long a program of ours can run
-//            (pac is given an hour at most, lib/pac-fallback.js), never a reason to take a lock from a process that may be paused
-//
 // WHAT THIS CANNOT PROVE, and why it errs toward keeping instead. Where there is no cheap start time (Windows, macOS) a dead maker's pid that has
 // been given to another process looks alive, so its lock or folder stays until that process ends or someone deletes it — the state of things before
 // this module existed. Reading a start time there costs a process of its own (`ps`, PowerShell) per check. A changed host name (a laptop that
@@ -55,12 +45,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 
 const STAMP_VERSION = 1;
-// How long a launch that never reported its process id keeps what it was given. pac gets an hour for an import (lib/pac-fallback.js PAC_IMPORT_TIMEOUT_MS), so a day is
-// far past any program of ours; a program that has been running longer than that is not one a person would still be waiting for.
-const LENT_PENDING_MS = 24 * 60 * 60 * 1000;
-// The most programs a record names at once: a record is a few hundred bytes (lib/temp-workspace.js reads no more than 4 KB of one), and a maker that has lent to
-// more than this many programs that are all still running is not one this is meant for.
-const MAX_LENT_PIDS = 16;
 
 // process.kill(pid, 0) sends no signal: it only reports whether `pid` can be signalled. ESRCH is "no such process"; EPERM is "it exists, and it is
 // not ours to signal" — alive, for a process that belongs to another user, or one Windows will not let this one open. On Windows Node maps the
@@ -169,19 +153,10 @@ function ownerStamp(deps = {}) {
   return stamp;
 }
 
-// The `lent` of a stamp: see the top of this file. Read as strictly as the rest of it — one field that is not what it should be and the whole record is not believed.
-function isLent(value) {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-    && typeof value.at === 'number' && Number.isFinite(value.at)
-    && Number.isInteger(value.pending) && value.pending >= 0 && value.pending <= MAX_LENT_PIDS
-    && Array.isArray(value.pids) && value.pids.length <= MAX_LENT_PIDS
-    && value.pids.every((program) => !!program && typeof program === 'object' && Number.isInteger(program.pid) && program.pid > 0
-      && (program.start === undefined || isStartToken(program.start)));
-}
-
 // Is `value` a stamp this module wrote? Anything else — a lock a release of the plugin before this one took ({ pid, at } alone), a file that is not
 // JSON, an object of another shape, a stamp of a later version, a stamp one of whose fields is damaged (a start that is not a start, a namespace
-// that is not one) — is not one, and is never treated as proof of anything.
+// that is not one) — is not one, and is never treated as proof of anything. A field the module does not define is not read: the pages lock's token adds a random part, and
+// a workspace's record may say it was lent (lib/temp-workspace.js, which reads that field itself and as strictly).
 function isOwnerStamp(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value) && value.v === STAMP_VERSION
     && Number.isInteger(value.pid) && value.pid > 0
@@ -189,8 +164,7 @@ function isOwnerStamp(value) {
     && typeof value.host === 'string' && value.host !== ''
     && typeof value.platform === 'string' && value.platform !== ''
     && (value.ns === undefined || isNamespace(value.ns))
-    && (value.start === undefined || isStartToken(value.start))
-    && (value.lent === undefined || isLent(value.lent));
+    && (value.start === undefined || isStartToken(value.start));
 }
 
 // A zombie has exited and only waits to be reaped (a container whose first process does not reap leaves them); X and x are the kernel's "dead".
@@ -200,8 +174,15 @@ const NOT_RUNNING = new Set(['Z', 'X', 'x']);
 // (a damaged /proc, a seam) shows nothing, and neither does a recorded one that is not (isOwnerStamp does not let one through, and this does not rely on that alone).
 const startsDiffer = (read, recorded) => !!read && isStartToken(read.token) && isStartToken(recorded) && read.token !== recorded;
 
-// The verdict on the process that is `stamp.pid` — the maker, or a program it lent to (which has the maker's host, system and namespace, and a pid and start of its own).
-function holderState(stamp, deps) {
+/**
+ * Whether the process that made `stamp` is gone, judged on this machine and by this process.
+ * @returns {{ state: 'gone' | 'alive' | 'unknown', reason: string }}
+ *   gone     provably not running: the pid is free, or Linux shows another process (or a zombie) in it
+ *   alive    a process runs under the pid and nothing says it is not the maker — including this process itself
+ *   unknown  not decidable here (another machine or platform, a pid namespace that is not the same or that either side cannot name; a stamp that is missing, damaged or
+ *            not understood)
+ */
+function ownerState(stamp, deps = {}) {
   if (!isOwnerStamp(stamp)) return { state: 'unknown', reason: 'no readable owner record' };
   const platform = deps.platform || process.platform;
   if (stamp.host !== hostNameOf(deps) || stamp.platform !== platform) {
@@ -237,37 +218,6 @@ function holderState(stamp, deps) {
   return { state: 'alive', reason: `process ${stamp.pid} is running` };
 }
 
-// The maker is gone: is what it lent its work to? Every program it recorded must be gone as well, and a launch that never reported its program keeps the work for a day.
-function lentState(stamp, makerGone, deps) {
-  const { lent, ...maker } = stamp;
-  for (const program of lent.pids) {
-    const verdict = holderState({ ...maker, pid: program.pid, start: program.start }, deps);
-    if (verdict.state !== 'gone') {
-      return { state: verdict.state === 'alive' ? 'alive' : 'unknown', reason: `its maker is gone, but a program it lent this to (pid ${program.pid}) is not shown to be: ${verdict.reason}` };
-    }
-  }
-  const waited = (deps.now || Date.now)() - lent.at;
-  // `!(waited >= …)`, so that a time that cannot be compared (a clock set back, a damaged `at`) keeps it too.
-  if (lent.pending > 0 && !(waited >= LENT_PENDING_MS)) {
-    return { state: 'unknown', reason: 'its maker is gone, but a program may have been started with this and its process id was never recorded: kept until a day has passed since' };
-  }
-  return makerGone;
-}
-
-/**
- * Whether the process that made `stamp` is gone — and every program it lent its work to — judged on this machine and by this process.
- * @returns {{ state: 'gone' | 'alive' | 'unknown', reason: string }}
- *   gone     provably not running: the pid is free, or Linux shows another process (or a zombie) in it; and so is every program the stamp says it was lent to
- *   alive    a process runs under the pid and nothing says it is not the maker — including this process itself — or a program it lent this to runs
- *   unknown  not decidable here (another machine or platform, a pid namespace that is not the same or that either side cannot name; a stamp that is missing, damaged or
- *            not understood; a program that was lent this and cannot be checked, or may have been started and not recorded)
- */
-function ownerState(stamp, deps = {}) {
-  const maker = holderState(stamp, deps);
-  if (maker.state !== 'gone' || !stamp.lent) return maker;
-  return lentState(stamp, maker, deps);
-}
-
 // "pid 4242 on build-box, since 2026-10-14T23:38:54.512Z" — for a message about a stamp that has passed ownerState (its host is this machine's).
 function describeOwner(stamp) {
   let since = '';
@@ -275,4 +225,4 @@ function describeOwner(stamp) {
   return `pid ${stamp.pid} on ${stamp.host}${since}`;
 }
 
-module.exports = { STAMP_VERSION, LENT_PENDING_MS, MAX_LENT_PIDS, processAlive, probeProcess, parseProcStat, ownerStamp, isOwnerStamp, ownerState, describeOwner };
+module.exports = { STAMP_VERSION, processAlive, probeProcess, parseProcStat, ownerStamp, isOwnerStamp, ownerState, describeOwner };

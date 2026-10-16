@@ -1886,9 +1886,9 @@ async function storedPage(server, id) {
 
 test('REAL SDK: hostile text — a prompt, an agent message, a quoted name — is stored exactly as written; no process is started, and the workspace is gone before the report', async (t) => {
   const server = serverWithAccount();
-  // The backend's workspace is made in the plugin's own folder of the temp folder, and where another run has made that folder (every test file of the suite runs at once, in one
-  // temp folder) it is checked before it is used — on Windows by the programs of the system itself, icacls and whoami. This test is about what the text starts, so it runs in a
-  // temp folder of its own, where the folder is made by this run and nothing is started to check it.
+  // The backend's workspace is made in the plugin's own folder of the temp folder. On Windows a folder that this run makes there is given its access list by the programs of the system itself,
+  // icacls and whoami (lib/windows-folder-acl.js), and one that another run has made is judged by them — and, for its owner, by PowerShell: the plugin's own, which never see text of the
+  // page. This test is about what the text starts, so it runs in a temp folder of its own, where the folder is made by this run (icacls and whoami are let through and not counted).
   const privateTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-upload-temp-'));
   const savedTemp = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
   for (const name of Object.keys(savedTemp)) process.env[name] = privateTemp;
@@ -1900,8 +1900,14 @@ test('REAL SDK: hostile text — a prompt, an agent message, a quoted name — i
   });
   const childProcess = require('node:child_process');
   const started = [];
+  const aclTool = /[\\/](?:icacls|whoami)\.exe$/i;
   for (const fn of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
-    t.mock.method(childProcess, fn, (...args) => { started.push(`${fn} ${String(args[0])}`); throw new Error(`${fn} must not be called`); });
+    const real = childProcess[fn];
+    t.mock.method(childProcess, fn, (...args) => {
+      if (process.platform === 'win32' && aclTool.test(String(args[0]))) return real.apply(childProcess, args);
+      started.push(`${fn} ${String(args[0])}`);
+      throw new Error(`${fn} must not be called`);
+    });
   }
   const d = tmp();
   const pf = path.join(d, 'prompt.txt');

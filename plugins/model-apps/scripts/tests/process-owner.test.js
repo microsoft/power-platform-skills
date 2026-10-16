@@ -211,52 +211,16 @@ test('ownerState: a start the machine reports that is not a start (a malformed r
   assert.strictEqual(ownerStamp({ ...LINUX, startOf: () => ({ token: `${BOOT}:5`, state: 'S' }) }).start, `${BOOT}:5`);
 });
 
-// What a maker adds to its record when it lends what it made to a program of another make (lib/temp-workspace.js lendWorkspace).
-const LENT_DAY = 24 * 60 * 60 * 1000;
-const lentOf = (overrides = {}) => ({ at: 1000000, pending: 0, pids: [{ pid: 300 }], ...overrides });
-
-test('a record may say what its maker lent it to: isOwnerStamp reads that field strictly, and a damaged one makes the whole record untrusted', () => {
-  assert.strictEqual(LENT_DAY, require('../lib/process-owner.js').LENT_PENDING_MS, 'a spawn that was never recorded keeps what it was for 24 hours');
-  const good = stampOf({ lent: lentOf({ pids: [{ pid: 300 }, { pid: 301, start: `${BOOT}:5` }], pending: 1 }) });
-  assert.ok(isOwnerStamp(good));
-  assert.ok(isOwnerStamp(stampOf({ lent: lentOf({ pids: [] }) })), 'none lent yet');
-  const { MAX_LENT_PIDS } = require('../lib/process-owner.js');
-  assert.ok(isOwnerStamp(stampOf({ lent: lentOf({ pids: Array.from({ length: MAX_LENT_PIDS }, (_, i) => ({ pid: 1000 + i })) }) })));
-  for (const [what, lent] of [
-    ['not an object', 5], ['a list', []], ['null', null], ['no time', lentOf({ at: undefined })], ['a time that is not finite', lentOf({ at: Infinity })], ['a time that is text', lentOf({ at: '1' })],
-    ['a pending count that is not an integer', lentOf({ pending: 1.5 })], ['a negative pending count', lentOf({ pending: -1 })], ['no pending count', lentOf({ pending: undefined })], ['too many pending', lentOf({ pending: MAX_LENT_PIDS + 1 })],
-    ['no list of pids', lentOf({ pids: undefined })], ['a list that is not one', lentOf({ pids: { pid: 3 } })], ['more pids than are ever recorded', lentOf({ pids: Array.from({ length: MAX_LENT_PIDS + 1 }, (_, i) => ({ pid: 1000 + i })) })],
-    ['a pid that is text', lentOf({ pids: [{ pid: '300' }] })], ['pid 0', lentOf({ pids: [{ pid: 0 }] })], ['a pid that is not a record', lentOf({ pids: [300] })],
-    ['a start that is empty', lentOf({ pids: [{ pid: 300, start: '' }] })], ['a start that is malformed', lentOf({ pids: [{ pid: 300, start: 'truncated' }] })],
-  ]) {
-    assert.strictEqual(isOwnerStamp(stampOf({ lent })), false, what);
-    assert.strictEqual(verdict(stampOf({ lent }), { probe: () => 'gone' }).state, 'unknown', `${what}: kept`);
+// A workspace's record may say it was LENT to another program (lib/temp-workspace.js `makeTempWorkspace(prefix, { lent: true })`). That is the workspace maker's word, read by the workspace maker
+// and as strictly as it likes: this module is about the maker PROCESS, so the verdict on a stamp is the same with it or without it — the maker's death is a fact about the maker, and what it
+// means for a folder that was handed to a program that outlives it is not decided here.
+test('a `lent` in a record is not this module\'s to read: the record is as believable with it as without it, and the verdict on the maker is the same', () => {
+  const owner = { probe: () => 'gone', startOf: () => null };
+  for (const lent of [true, false, 'yes', { at: 1, pending: 0, pids: [] }]) {
+    assert.ok(isOwnerStamp(stampOf({ lent })), JSON.stringify(lent));
+    assert.strictEqual(verdict(stampOf({ lent }), owner).state, 'gone', `${JSON.stringify(lent)}: the maker is gone, and that is all this says`);
   }
-});
-
-test('ownerState: a maker that is gone has not proven that what it lent its work to is — every program it recorded must be gone, and a spawn it never recorded keeps the work for a day', () => {
-  const owner = (alive = []) => ({ probe: (pid) => (alive.includes(pid) ? 'alive' : 'gone'), startOf: () => null, now: () => 1000000 + 5000 });
-  const verdictOf = (lent, deps) => verdict(stampOf({ pid: 200, lent }), deps);
-  assert.strictEqual(verdictOf(undefined, owner()).state, 'gone', 'control: nothing lent, the maker is gone');
-  assert.strictEqual(verdictOf(lentOf(), owner()).state, 'gone', 'the program it lent to is gone too');
-  assert.strictEqual(verdictOf(lentOf(), owner([300])).state, 'alive', 'the maker is gone and the program it lent to RUNS');
-  assert.match(verdictOf(lentOf(), owner([300])).reason, /300/);
-  assert.strictEqual(verdictOf(lentOf({ pids: [{ pid: 300 }, { pid: 301 }, { pid: 302 }] }), owner([302])).state, 'alive', 'one of several is enough');
-  assert.strictEqual(verdictOf(lentOf(), { ...owner(), probe: (pid) => (pid === 300 ? 'unknown' : 'gone') }).state, 'unknown', 'a program that cannot be checked is not shown to be gone');
-  assert.strictEqual(verdict(stampOf({ pid: 200, lent: lentOf() }), { ...owner([200]) }).state, 'alive', 'a maker that runs is alive, whatever it lent');
-  // A spawn whose process id was never recorded (the launcher died between starting the program and writing its pid): the program may be running, and is not known by id.
-  const pending = { pending: 1, pids: [] };
-  assert.strictEqual(verdictOf(lentOf(pending), owner()).state, 'unknown', 'just now');
-  assert.match(verdictOf(lentOf(pending), owner()).reason, /never recorded|not recorded/);
-  assert.strictEqual(verdictOf(lentOf(pending), { ...owner(), now: () => 1000000 + LENT_DAY - 1 }).state, 'unknown', 'a millisecond short of a day');
-  assert.strictEqual(verdictOf(lentOf(pending), { ...owner(), now: () => 1000000 + LENT_DAY }).state, 'gone', 'a day: no program of ours runs that long');
-  assert.strictEqual(verdictOf(lentOf(pending), { ...owner(), now: () => 1000000 - 1 }).state, 'unknown', 'a clock set back keeps it as well');
-  assert.strictEqual(verdictOf(lentOf({ pending: 1, pids: [{ pid: 300 }] }), { ...owner([300]), now: () => 1000000 + 2 * LENT_DAY }).state, 'alive', 'a day passed, but a recorded program that runs still keeps it');
-  // On Linux a recorded program is known by its start as well: the same pid with another start is another process.
-  const child = { pid: 300, start: `${BOOT}:42` };
-  const onLinux = (token, alive = true) => ({ probe: (pid) => (pid === 300 && alive ? 'alive' : 'gone'), startOf: (pid) => (pid === 300 ? { token, state: 'S' } : null), now: () => 1000000 });
-  assert.strictEqual(verdictOf(lentOf({ pids: [child] }), onLinux(`${BOOT}:42`)).state, 'alive', 'the same start');
-  assert.strictEqual(verdictOf(lentOf({ pids: [child] }), onLinux(`${BOOT}:43`)).state, 'gone', 'another start: the pid was handed out again');
+  assert.strictEqual(verdict(stampOf({ lent: true }), { probe: () => 'alive', startOf: () => null }).state, 'alive');
 });
 
 test('REAL PROCESSES: a process that runs is alive, and the same process after it is killed is gone — on every platform, with no seam', async (t) => {

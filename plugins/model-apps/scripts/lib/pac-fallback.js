@@ -105,18 +105,15 @@ const LEFTOVER_ADVICE = ' End any leftover pac process (`Get-Process pac` on Win
  * @param {'read'|'import'} [options.kind='read'] - which budget applies
  * @param {(text: string) => string} [options.redact] - applied to pac's own text before it is put in a message
  * @param {Function} [options.spawn] - test seam: the process runner's `spawnResultTree` (a function that returns spawnSync's result, or a promise of it)
- * @param {(pid: number) => void} [options.onSpawn] - told pac's process id the moment pac is started (the runner's option of that name): for a caller that gave pac a path it must not lose
- *   — a workspace made for pac, lib/temp-workspace.js lendWorkspace — and has to record who has it
  * @returns {Promise<{ ok: true, stdout: string, stderr: string } | { ok: false, failure: 'missing'|'timeout'|'failed'|'refused', message: string }>}
  */
-async function runPac(args, { label, kind = 'read', redact = (text) => text, spawn = spawnResultTree, onSpawn } = {}) {
+async function runPac(args, { label, kind = 'read', redact = (text) => text, spawn = spawnResultTree } = {}) {
   const budget = pacBudgetMs(kind);
   const result = await spawn('pac', args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: budget,
     maxBuffer: MAX_OUTPUT_BYTES,
-    ...(typeof onSpawn === 'function' ? { onSpawn } : {}),
   });
   // The result has spawnSync's shape. A failure to LAUNCH the process (pac not on PATH: ENOENT) or to finish in time (ETIMEDOUT) is reported through `error`, with
   // `status` null; a process that ran and exited non-zero has a numeric `status`. A call that ran out of time has had its whole process tree ended before it got

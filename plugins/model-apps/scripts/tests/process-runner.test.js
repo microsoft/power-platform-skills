@@ -713,44 +713,6 @@ test('spawnResultTree reports a call that finished on its own the way spawnResul
   assert.deepStrictEqual([refused.status, refused.error.code], [null, 'EARGUMENT']);
 });
 
-// A caller that lends a path to the program it starts — a workspace made for pac — has to know the program's process id as soon as it exists: a run killed after that leaves the
-// program running (POSIX), and the record of who has the workspace (lib/temp-workspace.js lendWorkspace) must name it by then.
-test('spawnResultTree tells `onSpawn` the process id of the program it started, as soon as it is started — before the call settles — and never for a program that could not be started', async () => {
-  const env = nodeEnv();
-  const heard = [];
-  let settled = false;
-  const running = runner.spawnResultTree(NODE_NAME, ['-e', "process.stdout.write(String(process.pid))"], { timeout: 30000, onSpawn: (pid) => heard.push([pid, settled]) }, { env });
-  const result = await running;
-  settled = true;
-  assert.strictEqual(heard.length, 1, 'once');
-  assert.strictEqual(heard[0][1], false, 'before the call settled');
-  assert.strictEqual(String(heard[0][0]), result.stdout, 'the process id the program printed is the one it was told: the program itself, not a launcher');
-  // A program that cannot be started has no process id: nothing is reported, and the failure comes as it always did.
-  const none = [];
-  const missing = await runner.spawnResultTree('no-such-program-anywhere', [], { onSpawn: (pid) => none.push(pid) }, { env });
-  assert.deepStrictEqual([none, missing.error.code], [[], 'ENOENT']);
-  const refused = await runner.spawnResultTree('pac', ['100%'], { onSpawn: (pid) => none.push(pid) }, { platform: 'win32', env: winEnv('C:\\Pac'), exists: (p) => p === 'C:\\Pac\\pac.cmd', readFile: () => '@echo off\r\nset PAC_X=1\r\n' });
-  assert.deepStrictEqual([none, refused.error.code], [[], 'EARGUMENT']);
-  // A listener that throws changes nothing about the call; options without one are as they were.
-  const quiet = await runner.spawnResultTree(NODE_NAME, ['-e', "process.stdout.write('out')"], { onSpawn: () => { throw new Error('a listener that fails'); } }, { env });
-  assert.deepStrictEqual({ ...quiet }, { status: 0, signal: null, stdout: 'out', stderr: '' });
-  assert.deepStrictEqual(await runner.spawnResultTree(NODE_NAME, ['-e', "process.stdout.write('out')"], { onSpawn: 'not a function' }, { env }), { status: 0, signal: null, stdout: 'out', stderr: '' });
-});
-
-test('spawnResultTree does not hand `onSpawn` on to the program it starts as an option of the spawn', async () => {
-  const seen = [];
-  const childProcess = require('node:child_process');
-  const spawnReal = childProcess.spawn;
-  childProcess.spawn = (file, args, options) => { seen.push(options); return spawnReal(file, args, options); };
-  try {
-    await runner.spawnResultTree(NODE_NAME, ['-e', ''], { onSpawn: () => {} }, { env: nodeEnv() });
-  } finally {
-    childProcess.spawn = spawnReal;
-  }
-  assert.strictEqual(seen.length, 1);
-  assert.ok(!('onSpawn' in seen[0]), Object.keys(seen[0]).join(', '));
-});
-
 test('spawnResultTree ends a call that outlasts its timeout: the process is gone when it settles, what it wrote before is kept, and the error is ETIMEDOUT', async () => {
   const dir = scratch('process-runner-deadline-');
   const running = path.join(dir, 'running.txt');

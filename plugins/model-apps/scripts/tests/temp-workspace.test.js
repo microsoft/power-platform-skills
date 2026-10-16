@@ -4,26 +4,27 @@
 // Real processes decide what a kill leaves, and race the sweep; the rest is driven through the module's seams, in folders of the test's own.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  PARENT_NAME, OWNER_FILE, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, lendWorkspace,
+  PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, LENT_KEEP_MS, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning,
 } = require('../lib/temp-workspace.js');
-const { ownerStamp, isOwnerStamp, LENT_PENDING_MS } = require('../lib/process-owner.js');
-const { privateTempRoot, tempEnv, startTarget, deadPid, pause, isRunning, waitUntil } = require('./helpers/kill-target-client.js');
+const { ownerStamp, isOwnerStamp } = require('../lib/process-owner.js');
+const { privateTempRoot, tempEnv, startTarget, deadPid, pause, waitUntil } = require('./helpers/kill-target-client.js');
 
 const POSIX = process.platform !== 'win32';
 const onlyPosix = { skip: !POSIX && 'POSIX modes, owners and links' };
 
 // A temp folder of the test's own, and the `os` that names it, so that nothing the plugin makes is outside it. On Windows an existing plugin's folder is judged by its access list (lib/windows-folder-acl.js), which
-// in a folder made in the machine's own temp folder is whatever that machine gives it: the tests of what the maker and the sweep do with a folder of their own are not about that machine, so the reader is
-// stood in for (`folderPrivacy`, a seam that POSIX ignores) — `realReader` takes the stand-in away, for the few tests that are about the reader.
+// in a folder made in the machine's own temp folder is whatever that machine gives it, and a folder the plugin makes is given a list of its own: the tests of what the maker and the sweep do with a folder of their
+// own are not about that machine, so the reader and the maker of that list are stood in for (`folderPrivacy` and `folderProtect`, seams that POSIX ignores) — `realReader` takes the stand-ins away, for the
+// few tests that are about the Windows tools.
 function tempRoot(t, { realReader = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temp-ws-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { root, deps: { os: { tmpdir: () => root }, ...(realReader ? {} : { folderPrivacy: () => ({ ok: true, reason: 'stood in for' }) }) } };
+  return { root, deps: { os: { tmpdir: () => root }, ...(realReader ? {} : { folderPrivacy: () => ({ ok: true, reason: 'stood in for' }), folderProtect: () => ({ ok: true, reason: 'stood in for' }) }) } };
 }
 const entriesOf = (dir) => fs.readdirSync(dir).sort();
 
@@ -350,7 +351,7 @@ test('a folder entry that is really a link — one a platform reports as a plain
   // The listing says it is a folder, as an older Node on Windows says of a junction: only where it really is can tell.
   const liar = { ...fs, readdirSync: (dir, options) => {
     const listing = fs.readdirSync(dir, options);
-    return options && options.withFileTypes ? listing.map((entry) => (entry.name === name ? { name: entry.name, isDirectory: () => true } : entry)) : listing;
+    return options && options.withFileTypes ? listing.map((entry) => (entry.name === name ? { name: entry.name, isDirectory: () => true, isFile: () => false } : entry)) : listing;
   } };
   const result = sweepDeadWorkspaces({ ...deps, fs: liar });
   assert.deepStrictEqual(result.removed, []);
@@ -449,7 +450,7 @@ function listedWorkspaces(deps, count, system) {
   const served = {
     ...fs,
     readdirSync: (dir, options) => {
-      if (dir === parent) return names.map((name) => ({ name, isDirectory: () => true }));
+      if (dir === parent) return names.map((name) => ({ name, isDirectory: () => true, isFile: () => false }));
       return folderOf(dir) ? [OWNER_FILE] : fs.readdirSync(dir, options);
     },
     realpathSync: Object.assign((p) => fs.realpathSync(p), { native: (p) => (folderOf(p) ? path.join(realParent, folderOf(p)) : fs.realpathSync.native(p)) }),
@@ -953,8 +954,170 @@ test('the answer about a folder is the answer about THAT folder: one that is rem
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
+// A folder this process makes on Windows takes the access list of the temp folder it is in, and `mode` means nothing there — so it is given a list of its own before anything is put in it
+// ---------------------------------------------------------------------------------------------------------------------
+
+test('(Windows) a folder this process makes is given an access list of its own — on the empty folder, before a workspace is made in it — and one that is already there is judged, never rewritten', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  const log = [];
+  const own = {
+    ...deps,
+    uid: null,
+    folderPrivacy: () => { log.push(['privacy']); return { ok: true }; },
+    folderProtect: (folder) => { log.push(['protect', folder, fs.readdirSync(folder)]); return { ok: true, reason: 'set, and read back' }; },
+    mkdtempSync: (start) => { log.push(['mkdtemp', path.dirname(start)]); return fs.mkdtempSync(start); },
+  };
+  const made = makeTempWorkspace('genpage-', own);
+  assert.strictEqual(path.dirname(made), parent);
+  assert.deepStrictEqual(log, [['protect', parent, []], ['mkdtemp', parent]], 'set on the empty folder, and only then a workspace in it; the reader is not asked about what was just set');
+  makeTempWorkspace('genpage-', own);
+  assert.deepStrictEqual(log.map(([what]) => what), ['protect', 'mkdtemp', 'mkdtemp'], 'the next workspace of this process neither sets it again nor asks');
+
+  const existing = tempRoot(t);
+  fs.mkdirSync(workspaceParent({ ...existing.deps, uid: null }));
+  const seen = [];
+  const viaExisting = makeTempWorkspace('genpage-', { ...existing.deps, uid: null, folderPrivacy: () => { seen.push('privacy'); return { ok: true }; }, folderProtect: () => { seen.push('protect'); return { ok: true }; } });
+  assert.strictEqual(path.dirname(viaExisting), workspaceParent({ ...existing.deps, uid: null }));
+  assert.deepStrictEqual(seen, ['privacy'], 'a folder that was there is read: someone else\'s list is not this process\'s to set');
+});
+
+test('POSIX: no access list is set on a folder this process makes — the mode is — and the Windows maker is never asked', onlyPosix, (t) => {
+  const { deps } = tempRoot(t);
+  const asked = [];
+  const dir = makeTempWorkspace('genpage-', { ...deps, folderProtect: () => { asked.push('protect'); return { ok: false }; }, folderPrivacy: () => { asked.push('privacy'); return { ok: false }; } });
+  assert.strictEqual(path.dirname(dir), workspaceParent(deps));
+  assert.deepStrictEqual(asked, []);
+  assert.strictEqual(fs.statSync(workspaceParent(deps)).mode & 0o777, 0o700);
+});
+
+test('where the system has owners (a user id is given) no access list is set on a folder this process makes, and no program is started to read one — whatever the folder is then judged to be', (t) => {
+  const { deps } = tempRoot(t);
+  const asked = [];
+  makeTempWorkspace('genpage-', { ...deps, uid: 12345, folderProtect: () => { asked.push('protect'); return { ok: false }; }, folderPrivacy: () => { asked.push('privacy'); return { ok: false }; } });
+  assert.deepStrictEqual(asked, [], 'the mode is what protects a folder there: neither the Windows maker nor the Windows reader is asked, for a folder this process made');
+});
+
+test('(Windows) a folder that cannot be made private is not used and not left: it is removed, the workspace is made in the temp folder as before — unrecorded, never swept — and this process does not try again', (t) => {
+  const { root, deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  const asked = [];
+  const refused = { ...deps, uid: null, folderProtect: (folder) => { asked.push(folder); return { ok: false, reason: 'its access list is not what was set: it has an entry for S-1-1-0' }; } };
+  const first = makeTempWorkspace('genpage-', refused);
+  assert.strictEqual(path.dirname(first), root, 'made in the temp folder');
+  assert.deepStrictEqual(fs.readdirSync(first), [], 'unrecorded: never swept');
+  assert.ok(!fs.existsSync(parent), 'the folder that could not be made private is not left behind');
+  assert.deepStrictEqual(asked, [parent]);
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', refused)), root);
+  assert.deepStrictEqual(asked, [parent], 'a folder that was refused is not made, and set, again by this process: it costs programs, and the answer will not change');
+});
+
+test('(Windows) an access list that cannot be set for a moment — icacls cannot open a folder that Windows is removing — is asked again after a short wait, and the folder made again; one that keeps failing ends as a refusal', (t) => {
+  const unreadable = { ok: false, unreadable: true, reason: 'its access list could not be set (icacls /inheritance:r /grant:r)' };
+  const a = tempRoot(t);
+  const parentA = workspaceParent({ ...a.deps, uid: null });
+  const slept = [];
+  let tries = 0;
+  let mkdirs = 0;
+  const counting = { ...fs, mkdirSync: (target, ...rest) => { if (target === parentA) mkdirs += 1; return fs.mkdirSync(target, ...rest); } };
+  const made = makeTempWorkspace('genpage-', { ...a.deps, uid: null, fs: counting, pause: (ms) => slept.push(ms), folderProtect: () => { tries += 1; return tries <= 2 ? unreadable : { ok: true, reason: 'set' }; } });
+  assert.strictEqual(path.dirname(made), parentA, 'once it could be set, the folder is used');
+  assert.deepStrictEqual([tries, mkdirs, slept], [3, 3, [25, 50]], 'each try was on a folder that was made for it: the one before was removed');
+  assert.ok(recordOfFolder(made));
+
+  const b = tempRoot(t);
+  const sleptB = [];
+  let triesB = 0;
+  const stuck = { ...b.deps, uid: null, pause: (ms) => sleptB.push(ms), folderProtect: () => { triesB += 1; return unreadable; } };
+  const fallback = makeTempWorkspace('genpage-', stuck);
+  assert.strictEqual(path.dirname(fallback), b.root);
+  assert.deepStrictEqual([triesB, sleptB], [6, [25, 50, 100, 200, 400]]);
+  assert.ok(!fs.existsSync(workspaceParent({ ...b.deps, uid: null })), 'and nothing is left of the folder');
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', stuck)), b.root);
+  assert.strictEqual(triesB, 6, 'not asked again by this process');
+});
+
+test('(Windows) a folder that is replaced between its making and the setting of its list is not the folder that was made: what was said about it counts for nothing, and the folder that is there now is judged like any that was already there', (t) => {
+  for (const [what, private_] of [['private', true], ['not private', false]]) {
+    const { root, deps } = tempRoot(t);
+    const parent = workspaceParent({ ...deps, uid: null });
+    let identity = 1;
+    const identified = { ...fs, lstatSync: (target, ...rest) => {
+      const st = fs.lstatSync(target, ...rest);
+      return target === parent ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { ino: identity }) : st;
+    } };
+    const asked = [];
+    const made = makeTempWorkspace('genpage-', {
+      ...deps,
+      uid: null,
+      fs: identified,
+      folderProtect: () => { asked.push('protect'); identity = 2; return { ok: true, reason: 'set' }; },
+      folderPrivacy: () => { asked.push('privacy'); return { ok: private_, reason: 'judged' }; },
+    });
+    assert.deepStrictEqual(asked, ['protect', 'privacy'], `${what}: the answer about the folder that was made is dropped, and the folder that is there is read`);
+    assert.strictEqual(path.dirname(made), private_ ? parent : root, `${what}: used only if the reader says it is private`);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The same, with the programs of Windows itself
+// ---------------------------------------------------------------------------------------------------------------------
+
+// The access list of a file or folder as `icacls /save` writes it — SDDL, which names Everyone `WD` whatever the language of the machine — without the module's reader.
+const savedList = (target) => {
+  const file = path.join(os.tmpdir(), `temp-ws-acl-${process.pid}-${Math.random().toString(36).slice(2)}.txt`);
+  try {
+    runWindows('icacls', [target, '/save', file]);
+    return fs.readFileSync(file).toString('utf16le').split(/\r?\n/).find((line) => line.startsWith('D:'));
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+};
+
+test('Windows: a folder this process makes in a temp folder that EVERYONE can write to is given a list of its own — the workspace and its record take nothing from Everyone — and that list is judged private by the reader', onlyWindows, (t) => {
+  const { root, deps } = tempRoot(t, { realReader: true });
+  runWindows('icacls', [root, '/grant', '*S-1-1-0:(OI)(CI)M']); // Everyone: modify, inherited by whatever is made in this temp folder
+  const handmade = fs.mkdtempSync(path.join(root, 'handmade-'));
+  assert.match(savedList(handmade), /;;;WD\)/, 'control: a folder made here the ordinary way takes Everyone\'s grant');
+
+  const dir = makeTempWorkspace('genpage-', deps);
+  const parent = workspaceParent(deps);
+  assert.strictEqual(path.dirname(dir), parent, 'the plugin\'s folder is used: it was made private, and read back');
+  const sid = currentSid();
+  const list = savedList(parent);
+  assert.match(list, /^D:P/, `protected: it takes nothing from the folder above: ${list}`);
+  assert.doesNotMatch(list, /;;;WD\)/, `no entry for Everyone: ${list}`);
+  assert.ok(list.includes(`;;;${sid})`) && list.includes(';;;SY)') && list.includes(';;;BA)'), `this user, the system and the administrators: ${list}`);
+  assert.doesNotMatch(savedList(dir), /;;;WD\)/, 'the workspace made inside it inherits nothing for Everyone');
+  assert.doesNotMatch(savedList(path.join(dir, OWNER_FILE)), /;;;WD\)/, 'nor does its record, which a sweep believes');
+  const { windowsFolderIsPrivate } = require('../lib/windows-folder-acl.js');
+  const verdict = windowsFolderIsPrivate(parent);
+  assert.strictEqual(verdict.ok, true, verdict.reason);
+  assert.strictEqual(sweepDeadWorkspaces(deps).removed.length, 0, 'and a sweep of it (by this process, which made it) works');
+});
+
+test('Windows: an existing plugin\'s folder that grants Everyone modify ONLY to what is made inside it (an inherit-only entry) is not used, and what is in it is not believed — its records would be Everyone\'s', onlyWindows, (t) => {
+  const { root, deps } = tempRoot(t, { realReader: true });
+  const parent = workspaceParent(deps);
+  fs.mkdirSync(parent);
+  runWindows('icacls', [parent, '/inheritance:r', '/grant:r', `*${currentSid()}:(OI)(CI)F`]);
+  runWindows('icacls', [parent, '/grant', '*S-1-1-0:(OI)(CI)(IO)M']); // applies to what is inside, not to the folder itself
+  assert.match(savedList(parent), /\(A;OICIIO;[^)]*;;;WD\)/, 'control: the grant is there, and inherit-only');
+  const dir = makeTempWorkspace('genpage-', deps);
+  assert.strictEqual(path.dirname(dir), root, 'not used: the workspace is made in the temp folder');
+  assert.deepStrictEqual(fs.readdirSync(parent), [], 'and nothing was made in it');
+  const planted = plant(deps, goneRecord());
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed, [], 'a workspace of a dead run in it is not believed');
+  assert.ok(fs.existsSync(planted));
+  // The control: without that one entry the same folder is used.
+  runWindows('icacls', [parent, '/remove:g', '*S-1-1-0']);
+  const { windowsFolderIsPrivate } = require('../lib/windows-folder-acl.js');
+  assert.strictEqual(windowsFolderIsPrivate(parent).ok, true);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
 // A workspace lent to a program of another make. The program is not the run: pac, given a path inside the workspace, outlives a run that is killed on POSIX, and the workspace is its
-// until it ends. The record names every such program; a sweep needs all of them gone, and a spawn that was never recorded keeps the workspace for a day.
+// until it ends. The run says so when it MAKES the folder (`{ lent: true }`), the record is written once, and a sweep takes a lent folder only when its maker is gone AND it is old.
 // ---------------------------------------------------------------------------------------------------------------------
 
 const recordOfFolder = (dir) => {
@@ -965,173 +1128,344 @@ const recordOfFolder = (dir) => {
     return null;
   }
 };
-const lentOf = (dir) => { const stamp = recordOfFolder(dir); return stamp ? stamp.lent : undefined; };
-// A program that runs until it is killed.
-const runningProgram = (t) => {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
-  const exited = new Promise((resolve) => child.once('exit', resolve));
-  t.after(() => child.kill('SIGKILL'));
-  return { pid: child.pid, kill: () => { child.kill('SIGKILL'); return exited; } };
+// Sets the times a folder and its record have, last write first: writing to a folder changes its own time, so the folder is dated after what is in it.
+const dated = (dir, when) => {
+  const date = new Date(when);
+  fs.utimesSync(path.join(dir, OWNER_FILE), date, date);
+  fs.utimesSync(dir, date, date);
 };
 
-test('lendWorkspace: the record says a program is about to be given the workspace, then which one — what the launch answers is what comes back — and with the program gone it is the plain record again', async (t) => {
+test('a workspace made LENT says so once, in the one record it is made with — the record is written whole to a file of its own and renamed into place, and is never written again', (t) => {
   const { deps } = tempRoot(t);
-  const dir = makeTempWorkspace('genpage-', deps);
-  const before = fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8');
-  assert.strictEqual(recordOfFolder(dir).lent, undefined);
-  const gone = deadPid();
-  const seen = {};
-  const answer = await lendWorkspace(dir, async (onSpawn) => {
-    seen.starting = lentOf(dir);
-    onSpawn(gone);
-    seen.started = lentOf(dir);
-    return { ok: true };
-  }, deps);
-  assert.deepStrictEqual(answer, { ok: true });
-  assert.deepStrictEqual([seen.starting.pending, seen.starting.pids], [1, []], 'before the program is started the record says one is about to be');
-  assert.ok(Number.isFinite(seen.starting.at));
-  assert.deepStrictEqual([seen.started.pending, seen.started.pids.map((p) => p.pid)], [0, [gone]], 'once it exists the record names it, and no longer says one is about to be');
-  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before, 'the program is gone and the launch is over: the record is byte for byte the one the maker wrote');
-  assert.deepStrictEqual(fs.readdirSync(dir), [OWNER_FILE], 'no temp copy of the record is left');
-});
-
-test('lendWorkspace: a program that still runs when the launch is over stays recorded; on Linux it is recorded with its start, as the maker is', async (t) => {
-  const { deps } = tempRoot(t);
-  const dir = makeTempWorkspace('genpage-', deps);
-  const program = runningProgram(t);
-  await lendWorkspace(dir, async (onSpawn) => { onSpawn(program.pid); }, deps);
-  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid), [program.pid]);
-  assert.strictEqual(lentOf(dir).pending, 0);
-  await program.kill();
-  await lendWorkspace(dir, async () => undefined, deps);
-  assert.strictEqual(lentOf(dir), undefined, 'the next lend finds it gone, and drops it');
-  // Linux: the start the machine gives for the program's pid, so that a pid handed out again is not taken for it.
-  const linux = makeTempWorkspace('genpage-', tempRoot(t).deps);
-  const owner = linuxSide(LINUX_NS, { startOf: (pid) => ({ token: `${LINUX_BOOT}:${pid}`, state: 'S' }) });
-  await lendWorkspace(linux, async (onSpawn) => { onSpawn(program.pid); }, { owner });
-  assert.deepStrictEqual(lentOf(linux).pids, [{ pid: program.pid, start: `${LINUX_BOOT}:${program.pid}` }]);
-});
-
-test('a workspace lent to a program is kept by a sweep for as long as the program runs after its maker is gone — the sweep needs EVERY recorded process gone', async (t) => {
-  const { deps } = tempRoot(t);
-  const dir = plant(deps, goneRecord());
-  const a = runningProgram(t);
-  const b = runningProgram(t);
-  await lendWorkspace(dir, async (onSpawn) => { onSpawn(a.pid); }, deps);
-  await lendWorkspace(dir, async (onSpawn) => { onSpawn(b.pid); }, deps);
-  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid).sort(), [a.pid, b.pid].sort());
-  const during = sweepDeadWorkspaces(deps);
-  assert.deepStrictEqual([during.removed, during.failed], [[], []], 'its maker is gone and two programs it lent it to run');
-  assert.ok(fs.existsSync(path.join(dir, 'apps', 'page.json')), 'the source is whole');
-  await a.kill();
-  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed, [], 'one of the two is gone: still kept');
-  assert.ok(fs.existsSync(dir));
-  await b.kill();
-  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(dir)], 'both gone: removed');
-});
-
-test('a launch that never reports the program it started — the run died between starting it and writing its pid — keeps the workspace for a day by the record\'s own time, and then releases it', async (t) => {
-  const { deps } = tempRoot(t);
-  const dir = plant(deps, goneRecord());
-  const never = lendWorkspace(dir, () => new Promise(() => {}), deps);
-  never.catch(() => {});
-  assert.strictEqual(lentOf(dir).pending, 1);
-  const { at } = lentOf(dir);
-  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed, [], 'a program may have been started with it, and nothing says which');
-  assert.deepStrictEqual(sweepDeadWorkspaces({ ...deps, owner: { now: () => at + LENT_PENDING_MS - 1 } }).removed, [], 'a millisecond short of a day');
-  assert.strictEqual(LENT_PENDING_MS, 24 * 60 * 60 * 1000);
-  assert.deepStrictEqual(sweepDeadWorkspaces({ ...deps, owner: { now: () => at + LENT_PENDING_MS } }).removed.map((r) => r.name), [path.basename(dir)], 'a day: no program of ours runs that long');
-});
-
-test('lendWorkspace: a launch that throws, or that never started a program, leaves no spawn pending — and the error is the launch\'s own', async (t) => {
-  const { deps } = tempRoot(t);
-  const dir = makeTempWorkspace('genpage-', deps);
-  const before = fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8');
-  await assert.rejects(lendWorkspace(dir, async () => { throw new Error('pac could not be started'); }, deps), /pac could not be started/);
-  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
-  await assert.rejects(lendWorkspace(dir, () => { throw new Error('thrown at once'); }, deps), /thrown at once/);
-  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
-  assert.strictEqual(await lendWorkspace(dir, async () => 'no program was started', deps), 'no program was started');
-  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
-  // Reports that are not a process id are not recorded.
-  await lendWorkspace(dir, async (onSpawn) => { for (const odd of [undefined, null, 'x', -3, 0, 1.5, NaN]) onSpawn(odd); }, deps);
-  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before);
-});
-
-test('lendWorkspace: two programs lent at once are both recorded, whichever ends first', async (t) => {
-  const { deps } = tempRoot(t);
-  const dir = makeTempWorkspace('genpage-', deps);
-  const a = runningProgram(t);
-  const b = runningProgram(t);
-  let end;
-  const first = lendWorkspace(dir, (onSpawn) => new Promise((resolve) => { onSpawn(a.pid); end = resolve; }), deps);
-  const second = lendWorkspace(dir, async (onSpawn) => { onSpawn(b.pid); }, deps);
-  await second;
-  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid).sort(), [a.pid, b.pid].sort());
-  assert.strictEqual(lentOf(dir).pending, 0);
-  end();
-  await first;
-  assert.deepStrictEqual(lentOf(dir).pids.map((p) => p.pid).sort(), [a.pid, b.pid].sort(), 'both run still');
-});
-
-test('lendWorkspace on a folder nothing records — the plain temp folder\'s, one whose record could not be written or is damaged — just runs the launch: such a folder is never swept', async (t) => {
-  const { root, deps } = tempRoot(t);
-  const plain = fs.mkdtempSync(path.join(root, 'genpage-'));
-  const damaged = plant(deps, 'not json {', { pid: deadPid() });
-  let ran = 0;
-  assert.strictEqual(await lendWorkspace(plain, async (onSpawn) => { ran += 1; onSpawn(deadPid()); return 'answer'; }, deps), 'answer');
-  assert.strictEqual(await lendWorkspace(damaged, async () => { ran += 1; return 'answer'; }, deps), 'answer');
-  assert.strictEqual(ran, 2);
-  assert.deepStrictEqual(fs.readdirSync(plain), [], 'nothing was written in the plain folder');
-  assert.strictEqual(fs.readFileSync(path.join(damaged, OWNER_FILE), 'utf8'), 'not json {', 'and the damaged record is as it was');
-});
-
-test('lendWorkspace never starts a program while its record cannot say so: it takes the record away — an unrecorded folder is never swept — or does not start the program', async (t) => {
-  const { deps } = tempRoot(t);
-  const full = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
-  // The rewrite fails, the record can be removed: the program is started, and the folder is no longer one a sweep may remove.
-  const dir = makeTempWorkspace('genpage-', deps);
-  const noRewrite = { ...fs, writeFileSync: (file, ...rest) => { if (path.basename(file) !== OWNER_FILE && path.basename(file).startsWith(OWNER_FILE)) throw full; return fs.writeFileSync(file, ...rest); } };
-  let started = 0;
-  await lendWorkspace(dir, async () => { started += 1; }, { ...deps, fs: noRewrite });
-  assert.strictEqual(started, 1);
-  assert.deepStrictEqual(fs.readdirSync(dir), [], 'unrecorded now: no sweep can take it from under the program, and no half-written copy is left');
-  // Neither can be done: the program is not started, and the record is as it was.
-  const stuck = makeTempWorkspace('genpage-', deps);
-  const before = fs.readFileSync(path.join(stuck, OWNER_FILE), 'utf8');
-  const denied = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
-  const unremovable = { ...noRewrite, rmSync: (file, ...rest) => { if (path.basename(file) === OWNER_FILE) throw denied(); return fs.rmSync(file, ...rest); }, unlinkSync: (file) => { if (path.basename(file) === OWNER_FILE) throw denied(); return fs.unlinkSync(file); } };
-  await assert.rejects(lendWorkspace(stuck, async () => { started += 1; }, { ...deps, fs: unremovable }), (e) => e === full);
-  assert.strictEqual(started, 1, 'the program was not started');
-  assert.strictEqual(fs.readFileSync(path.join(stuck, OWNER_FILE), 'utf8'), before);
-  assert.deepStrictEqual(fs.readdirSync(stuck), [OWNER_FILE]);
-});
-
-test('the record is rewritten whole — a temp file beside it, renamed over it — so a sweep or a kill sees the old record or the new, never half; a rewrite that fails leaves the old one and no temp file', async (t) => {
-  const { deps } = tempRoot(t);
-  const dir = makeTempWorkspace('genpage-', deps);
   const log = [];
   const watched = {
     ...fs,
     writeFileSync: (file, data, options) => { log.push(['write', path.basename(file), options && options.flag]); return fs.writeFileSync(file, data, options); },
     renameSync: (from, to) => { log.push(['rename', path.basename(from), path.basename(to)]); return fs.renameSync(from, to); },
+    rmSync: (target, ...rest) => { log.push(['remove', path.basename(target)]); return fs.rmSync(target, ...rest); },
   };
-  await lendWorkspace(dir, async (onSpawn) => { onSpawn(deadPid()); }, { ...deps, fs: watched });
-  const writes = log.filter((entry) => entry[0] === 'write');
-  assert.ok(writes.length >= 3, JSON.stringify(log));
-  for (const [, name, flag] of writes) assert.ok(name.startsWith(`${OWNER_FILE}.`) && name.endsWith('.tmp') && flag === 'wx', `written to a new temp file, never in place: ${name}`);
-  for (const [, from, to] of log.filter((entry) => entry[0] === 'rename')) assert.ok(from.startsWith(`${OWNER_FILE}.`) && to === OWNER_FILE, `${from} → ${to}`);
-  assert.deepStrictEqual(fs.readdirSync(dir), [OWNER_FILE]);
+  const lent = makeTempWorkspace('solution-settings-', { ...deps, fs: watched, lent: true });
+  const record = recordOfFolder(lent);
+  assert.strictEqual(record.lent, true, 'it says so');
+  assert.deepStrictEqual([record.pid, record.host, record.platform], [process.pid, os.hostname(), process.platform], 'and is the maker\'s record, as for any workspace');
+  assert.strictEqual(path.dirname(lent), workspaceParent(deps));
+  assert.deepStrictEqual(log.map(([what, ...rest]) => [what, ...rest.map((name) => name.replace(/\.\d+\.[a-z0-9]+\.tmp$/, '.<pid>.<random>.tmp'))]), [
+    ['write', `${OWNER_FILE}.<pid>.<random>.tmp`, 'wx'],
+    ['rename', `${OWNER_FILE}.<pid>.<random>.tmp`, OWNER_FILE],
+  ], 'one write — to a file that did not exist, whose name is not the record\'s — and one rename over to the record: a sweep or a kill sees no record or all of it');
+  assert.deepStrictEqual(fs.readdirSync(lent), [OWNER_FILE], 'no temporary copy is left');
+  const plain = makeTempWorkspace('genpage-', deps);
+  assert.strictEqual(recordOfFolder(plain).lent, undefined, 'a workspace nothing is lent from has no such word');
+  for (const asked of [false, undefined, 'yes', 1, {}]) {
+    assert.strictEqual(recordOfFolder(makeTempWorkspace('genpage-', { ...deps, lent: asked })).lent, undefined, `${JSON.stringify(asked)} is not a request to lend`);
+  }
+});
 
-  // The report of the program's pid cannot be written: the record keeps saying one is about to be (more than is needed, never less), whole, with no temp file left.
-  const other = makeTempWorkspace('genpage-', deps);
-  let renames = 0;
-  const flaky = { ...fs, renameSync: (from, to) => { renames += 1; if (renames === 2) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); return fs.renameSync(from, to); } };
-  let during;
-  await lendWorkspace(other, async (onSpawn) => { onSpawn(deadPid()); during = lentOf(other); }, { ...deps, fs: flaky });
-  assert.deepStrictEqual([during.pending, during.pids], [1, []], 'the old record stood while the new one could not be written');
-  assert.deepStrictEqual(fs.readdirSync(other), [OWNER_FILE], 'no temp file is left');
-  assert.ok(lentOf(other).pending >= 1, 'and what was recorded is not less than what was known');
+test('a record that cannot be written whole leaves the folder unrecorded — never half a record, never a failure of the run — lent or not', (t) => {
+  const { deps } = tempRoot(t);
+  const full = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  const failing = (what) => ({ ...fs, [what]: (...args) => { if (path.basename(args[0]).startsWith(OWNER_FILE)) throw full; return fs[what](...args); } });
+  for (const what of ['writeFileSync', 'renameSync']) {
+    for (const lent of [true, undefined]) {
+      const dir = makeTempWorkspace('genpage-', { ...deps, fs: failing(what), lent, pause: () => {} });
+      assert.strictEqual(path.dirname(dir), workspaceParent(deps), `${what}: the workspace works, in the plugin's folder`);
+      assert.deepStrictEqual(fs.readdirSync(dir), [], `${what}: unrecorded — never swept — and no half of a record or temporary copy of it is left`);
+    }
+  }
+});
+
+test('on Windows a record that a scanner holds for a moment is renamed into place after a short wait — and one that is held for longer is no record, and no failure', (t) => {
+  const { deps } = tempRoot(t);
+  const busy = (code) => Object.assign(new Error(`${code}: the file is in use`), { code });
+  let refusals = 0;
+  const slept = [];
+  const flaky = { ...fs, renameSync: (from, to) => { if (path.basename(to) === OWNER_FILE && (refusals += 1) <= 2) throw busy('EBUSY'); return fs.renameSync(from, to); } };
+  const dir = makeTempWorkspace('genpage-', { ...deps, uid: null, fs: flaky, pause: (ms) => slept.push(ms) });
+  assert.ok(recordOfFolder(dir), 'recorded after the waits');
+  assert.deepStrictEqual([refusals, slept], [3, [25, 50]]);
+  const never = { ...fs, renameSync: (from, to) => { if (path.basename(to) === OWNER_FILE) throw busy('EPERM'); return fs.renameSync(from, to); } };
+  const sleptNever = [];
+  const unrecorded = makeTempWorkspace('genpage-', { ...deps, uid: null, fs: never, pause: (ms) => sleptNever.push(ms) });
+  assert.deepStrictEqual(sleptNever, [25, 50, 100, 200, 400]);
+  assert.deepStrictEqual(fs.readdirSync(unrecorded), [], 'unrecorded, with no temporary copy');
+  // Elsewhere EPERM is the answer it sounds like.
+  const posix = [];
+  const refusedPosix = makeTempWorkspace('genpage-', { ...deps, uid: 4242, fs: { ...never, lstatSync: (target, ...rest) => (path.basename(target).startsWith(PARENT_NAME) ? { isDirectory: () => true, uid: 4242, mode: 0o40700 } : fs.lstatSync(target, ...rest)) }, pause: (ms) => posix.push(ms) });
+  assert.ok(refusedPosix);
+  assert.deepStrictEqual(posix, [], 'no waiting where the system has owners');
+});
+
+test('the sweep takes a LENT workspace only when its maker is gone AND it is old — a week, in the time of the folder and of its record alike — and a workspace that nothing lent is taken as soon as its maker is gone', (t) => {
+  const T = Date.parse('2026-10-15T12:00:00Z');
+  const aged = (record, { folder = 0, marker = 0 } = {}) => {
+    const { deps } = tempRoot(t);
+    const dir = plant(deps, record);
+    const date = (ago) => new Date(T - ago);
+    fs.utimesSync(path.join(dir, OWNER_FILE), date(marker), date(marker));
+    fs.utimesSync(dir, date(folder), date(folder));
+    return { deps: { ...deps, owner: { now: () => T } }, dir };
+  };
+  const swept = ({ deps }) => sweepDeadWorkspaces(deps);
+  const lentGone = () => ({ ...goneRecord(), lent: true });
+  assert.strictEqual(LENT_KEEP_MS, 7 * 24 * 60 * 60 * 1000, 'a week');
+  const old = LENT_KEEP_MS + 1000;
+
+  const young = aged(lentGone());
+  assert.deepStrictEqual(swept(young).removed, [], 'lent, its maker gone, just made: kept — the program it was lent to may be writing in it');
+  assert.ok(fs.existsSync(young.dir));
+  const dayOld = aged(lentGone(), { folder: 24 * 3600 * 1000, marker: 24 * 3600 * 1000 });
+  assert.deepStrictEqual(swept(dayOld).removed, [], 'a day old: kept');
+  const almost = aged(lentGone(), { folder: LENT_KEEP_MS - 1000, marker: LENT_KEEP_MS - 1000 });
+  assert.deepStrictEqual(swept(almost).removed, [], 'a second short of a week: kept');
+  const week = aged(lentGone(), { folder: old, marker: old });
+  assert.deepStrictEqual(swept(week).removed.map((r) => r.name), [path.basename(week.dir)], 'a week and a second, folder and record: taken');
+  assert.ok(!fs.existsSync(week.dir));
+  const writtenInto = aged(lentGone(), { folder: 3600 * 1000, marker: old });
+  assert.deepStrictEqual(swept(writtenInto).removed, [], 'the record is old but something was put into the folder (or taken out) an hour ago: kept');
+  const recordNew = aged(lentGone(), { folder: old, marker: 3600 * 1000 });
+  assert.deepStrictEqual(swept(recordNew).removed, [], 'the folder is old but its record was written an hour ago: kept');
+  // A time that cannot be compared keeps the folder.
+  const future = aged(lentGone(), { folder: -old, marker: -old });
+  assert.deepStrictEqual(swept(future).removed, [], 'a folder dated in the future (a clock that was set back): kept');
+  const backwards = aged(lentGone(), { folder: old, marker: old });
+  assert.deepStrictEqual(sweepDeadWorkspaces({ ...backwards.deps, owner: { now: () => T - 2 * old } }).removed, [], 'a clock set back now: kept');
+  const unknownClock = aged(lentGone(), { folder: old, marker: old });
+  assert.deepStrictEqual(sweepDeadWorkspaces({ ...unknownClock.deps, owner: { now: () => NaN } }).removed, [], 'a clock that is not a time: kept');
+
+  // Old is not enough: the maker must be gone as well.
+  const alive = aged({ ...ownerStamp(), lent: true }, { folder: old, marker: old });
+  assert.deepStrictEqual(swept(alive).removed, [], 'lent, a week old, its maker is this process: kept');
+  const foreign = aged({ ...ownerStamp({ hostname: () => 'another-machine' }), pid: deadPid(), lent: true }, { folder: old, marker: old });
+  assert.deepStrictEqual(swept(foreign).removed, [], 'lent, a week old, made on another machine: kept');
+  // A `lent` that is not the word that was written is not a record at all.
+  for (const lent of [false, 'true', 1, null, { at: 1, pending: 0, pids: [] }]) {
+    const odd = aged({ ...goneRecord(), lent }, { folder: old, marker: old });
+    assert.deepStrictEqual(swept(odd).removed, [], `lent: ${JSON.stringify(lent)} is no record: kept even when old`);
+    assert.ok(fs.existsSync(path.join(odd.dir, OWNER_FILE)));
+  }
+  // The control: nothing lent — taken the moment its maker is gone, whatever its age.
+  const plain = aged(goneRecord());
+  assert.deepStrictEqual(swept(plain).removed.map((r) => r.name), [path.basename(plain.dir)], 'a workspace that was not lent is taken as soon as its maker is gone');
+});
+
+test('a lent workspace whose record is unreadable for a moment — and then readable — is kept both times, and the age it must reach is that of the record it had all along', (t) => {
+  const T = Date.parse('2026-10-15T12:00:00Z');
+  const { deps } = tempRoot(t);
+  const dir = plant(deps, { ...goneRecord(), lent: true });
+  dated(dir, T - 1000);
+  let unreadable = true;
+  const reading = { ...fs, readFileSync: (file, ...rest) => {
+    if (unreadable && path.basename(file) === OWNER_FILE) throw Object.assign(new Error('EBUSY: resource busy or locked, open'), { code: 'EBUSY' });
+    return fs.readFileSync(file, ...rest);
+  } };
+  const sweep = (extra = {}) => sweepDeadWorkspaces({ ...deps, fs: reading, owner: { now: () => T, ...extra } });
+  assert.deepStrictEqual([sweep().removed, fs.existsSync(dir)], [[], true], 'unreadable: nothing is shown to be dead');
+  unreadable = false;
+  assert.deepStrictEqual([sweep().removed, fs.existsSync(dir)], [[], true], 'readable: it says lent, and it is young');
+  unreadable = true;
+  assert.deepStrictEqual(sweep({ now: () => T + 2 * LENT_KEEP_MS }).removed, [], 'even a week on, an unreadable record is no proof');
+  unreadable = false;
+  assert.deepStrictEqual(sweep({ now: () => T + 2 * LENT_KEEP_MS }).removed.map((r) => r.name), [path.basename(dir)], 'readable and old: taken');
+});
+
+test('a workspace that is lent keeps the record it was made with, for as long as it lives: nothing in the plugin writes a record again', () => {
+  const { SCRIPTS_DIR, productionScripts, withoutComments } = require('./helpers/production-scripts.js');
+  const code = productionScripts().map((file) => ({ name: path.relative(SCRIPTS_DIR, file).split(path.sep).join('/'), text: withoutComments(fs.readFileSync(file, 'utf8')) }));
+  const mentioning = (pattern) => code.filter(({ text }) => pattern.test(text)).map(({ name }) => name).sort();
+  // Nothing changes a record after the folder is made — no step that lends a folder later, no hook that tells the plugin when a program has started — so none of the names such a thing would have is in the plugin.
+  assert.deepStrictEqual(mentioning(/\b(?:lendWorkspace|changeRecord|rewriteRecord|stillRunning|onSpawn)\b/), []);
+  // The one script that names the record's file is the one that makes it, sweeps it and removes it.
+  assert.deepStrictEqual(mentioning(/\.owner\.json|\bOWNER_FILE\b/), ['lib/temp-workspace.js']);
+  // And of what it does with it, only the maker writes it: `mark`, once, and the removal that puts a record BACK, word for word, when a folder will not go.
+  const source = fs.readFileSync(path.join(SCRIPTS_DIR, 'lib', 'temp-workspace.js'), 'utf8');
+  const writers = source.split('\n').filter((line) => /writeFileSync\(/.test(line) && !/^\s*\/\//.test(line));
+  assert.strictEqual(writers.length, 2, writers.join('\n'));
+  assert.ok(writers.some((line) => /temp, JSON\.stringify\(stamp\)/.test(line)), 'the maker\'s write: a temp file, then renamed');
+  assert.ok(writers.some((line) => /file, record,/.test(line)), 'and the put-back of the record that was judged');
+});
+
+// A record that was moved out of its folder by a removal that was killed — `<folder>.removing` — is finished by the next sweep, when everything agrees.
+
+// The state a sweep that was killed between moving the record aside and removing the empty folder leaves: the folder, empty, and the record of the dead run beside it.
+function interrupted(deps, { record = goneRecord(), contents = [], name = null, pid = record && typeof record === 'object' ? record.pid : process.pid, prefix = 'genpage-' } = {}) {
+  const parent = workspaceParent(deps);
+  fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const dir = name === null ? fs.mkdtempSync(path.join(parent, `${prefix}${pid}-`)) : path.join(parent, name);
+  if (name !== null) fs.mkdirSync(dir);
+  for (const file of contents) fs.writeFileSync(path.join(dir, file), 'something');
+  const sidecar = `${dir}${REMOVING_SUFFIX}`;
+  fs.writeFileSync(sidecar, typeof record === 'string' ? record : JSON.stringify(record));
+  return { dir, sidecar, record };
+}
+
+test('a removal that was killed after the record was moved out of the folder is finished by the next sweep: the empty folder goes, then the record beside it — and the sweep that does says so', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const left = interrupted(deps);
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), [path.basename(left.dir), path.basename(left.sidecar)].sort());
+  const first = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual([first.removed.map((r) => [r.name, r.stamp.pid]), first.failed], [[[path.basename(left.dir), left.record.pid]], []]);
+  assert.deepStrictEqual(fs.readdirSync(parent), [], 'the folder is gone, and so is the record');
+  assert.match(sweepWarning(first), /removed 1 temporary workspace/);
+  const second = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual([second.removed, second.failed], [[], []], 'and there is nothing left for the next');
+});
+
+test('a record whose folder is already gone — the removal was killed after the folder went — is removed, quietly: nothing was left to remove', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const left = interrupted(deps);
+  fs.rmdirSync(left.dir);
+  const result = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual([result.removed, result.failed], [[], []]);
+  assert.deepStrictEqual(fs.readdirSync(parent), [], 'the record beside the folder that is gone is removed');
+  assert.strictEqual(sweepWarning(result), '', 'and nothing is said');
+});
+
+test('a removal that was killed is finished whichever of the two the sweep meets first — and for a lent workspace too, whatever its age: what its age keeps is its content, and none is left', (t) => {
+  for (const name of ['first-the-folder', 'first-the-record']) {
+    const { deps } = tempRoot(t);
+    const left = interrupted(deps, { record: { ...goneRecord(), lent: true }, prefix: `${name}-` });
+    // The listing is in the order the file system gives; a sweep that meets the record first, or the empty folder first, ends the same way.
+    const order = name === 'first-the-folder' ? [left.dir, left.sidecar] : [left.sidecar, left.dir];
+    const listed = { ...fs, readdirSync: (target, options) => { const entries = fs.readdirSync(target, options); return target === workspaceParent(deps) && options && options.withFileTypes ? entries.sort((a, b) => order.indexOf(path.join(target, a.name)) - order.indexOf(path.join(target, b.name))) : entries; } };
+    const result = sweepDeadWorkspaces({ ...deps, fs: listed });
+    assert.deepStrictEqual(result.removed.map((r) => r.name), [path.basename(left.dir)], name);
+    assert.deepStrictEqual(fs.readdirSync(workspaceParent(deps)), [], name);
+  }
+});
+
+test('a removal that was killed is NOT finished when anything about it does not agree: it is left exactly as it is', (t) => {
+  const gone = goneRecord();
+  const cases = [
+    ['a folder with something in it', (deps) => interrupted(deps, { record: gone, contents: ['page.tsx'] })],
+    ['a record that is not JSON', (deps) => interrupted(deps, { record: 'not json {', pid: deadPid() })],
+    ['an empty record', (deps) => interrupted(deps, { record: '', pid: deadPid() })],
+    ['a record that is far too large', (deps) => interrupted(deps, { record: JSON.stringify({ ...gone, pad: 'x'.repeat(6000) }) })],
+    ['JSON that is not a record', (deps) => interrupted(deps, { record: '{"pid":1}', pid: deadPid() })],
+    ['a record of a later version', (deps) => interrupted(deps, { record: { ...gone, v: 2 } })],
+    ['a record that names another pid than the folder\'s name', (deps) => interrupted(deps, { record: gone, pid: gone.pid + 1000000 })],
+    ['the record of a run that is going (this process)', (deps) => interrupted(deps, { record: ownerStamp() })],
+    ['the record of another machine', (deps) => interrupted(deps, { record: { ...gone, host: 'another-machine' } })],
+    ['the record of another kind of system', (deps) => interrupted(deps, { record: { ...gone, platform: gone.platform === 'win32' ? 'linux' : 'win32' } })],
+    ['a record whose `lent` is not the word that is written', (deps) => interrupted(deps, { record: { ...gone, lent: 'yes' } })],
+    ['a name that is not a workspace\'s (no pid)', (deps) => interrupted(deps, { name: 'not-a-workspace', record: gone })],
+    ['a name with a pid and no random part', (deps) => interrupted(deps, { name: `genpage-${gone.pid}`, record: gone })],
+  ];
+  for (const [what, make] of cases) {
+    const { deps } = tempRoot(t);
+    const left = make(deps);
+    const before = fs.readdirSync(workspaceParent(deps)).sort();
+    const sidecarText = fs.readFileSync(left.sidecar, 'utf8');
+    const result = sweepDeadWorkspaces(deps);
+    assert.deepStrictEqual([result.removed, result.failed], [[], []], what);
+    assert.deepStrictEqual(fs.readdirSync(workspaceParent(deps)).sort(), before, `${what}: nothing was removed`);
+    assert.strictEqual(fs.readFileSync(left.sidecar, 'utf8'), sidecarText, `${what}: the record is as it was`);
+    assert.ok(fs.existsSync(left.dir), `${what}: and the folder is where it was`);
+  }
+});
+
+test('a record of a run that is going is never opened by a sweep that looks for the removals a kill left — nothing in its name is read', (t) => {
+  const { deps } = tempRoot(t);
+  const left = interrupted(deps, { record: ownerStamp(), pid: process.pid });
+  const opened = [];
+  const spying = { ...fs, readFileSync: (file, ...rest) => { opened.push(file); return fs.readFileSync(file, ...rest); }, lstatSync: (file, ...rest) => { opened.push(file); return fs.lstatSync(file, ...rest); } };
+  const result = sweepDeadWorkspaces({ ...deps, fs: spying });
+  assert.deepStrictEqual([result.removed, result.failed], [[], []]);
+  assert.deepStrictEqual(opened.filter((file) => file.includes(path.basename(left.dir))), [], 'neither the record nor the folder was looked at');
+});
+
+test('POSIX: a record beside a folder that is really a link, or that is a file, or a record that is itself a link or a folder, is left alone — nothing is followed', onlyPosix, (t) => {
+  const { root, deps } = tempRoot(t);
+  const elsewhere = fs.mkdtempSync(path.join(root, 'elsewhere-'));
+  const gone = goneRecord();
+  const parent = workspaceParent(deps);
+  fs.mkdirSync(parent, { mode: 0o700 });
+  const named = (n) => `genpage-${gone.pid}-${n}`;
+  fs.symlinkSync(elsewhere, path.join(parent, named('LinkFo')));
+  fs.writeFileSync(path.join(parent, `${named('LinkFo')}${REMOVING_SUFFIX}`), JSON.stringify(gone));
+  fs.writeFileSync(path.join(parent, named('AFile0')), 'a file where a folder should be');
+  fs.writeFileSync(path.join(parent, `${named('AFile0')}${REMOVING_SUFFIX}`), JSON.stringify(gone));
+  fs.mkdirSync(path.join(parent, named('LinkRe')));
+  fs.writeFileSync(path.join(elsewhere, 'record.json'), JSON.stringify(gone));
+  fs.symlinkSync(path.join(elsewhere, 'record.json'), path.join(parent, `${named('LinkRe')}${REMOVING_SUFFIX}`));
+  fs.mkdirSync(path.join(parent, named('DirRec')));
+  fs.mkdirSync(path.join(parent, `${named('DirRec')}${REMOVING_SUFFIX}`));
+  const before = fs.readdirSync(parent).sort();
+  const result = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual([result.removed, result.failed], [[], []]);
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, 'nothing was removed, and nothing that a link points at either');
+  assert.deepStrictEqual(fs.readdirSync(elsewhere), ['record.json']);
+});
+
+test('a record beside a folder that is really a link — one a platform reports as a plain folder — is not finished: the link is not removed, and what it points at is untouched', (t) => {
+  const { root, deps } = tempRoot(t);
+  const gone = goneRecord();
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(outside);
+  const parent = workspaceParent(deps);
+  fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const name = `genpage-${gone.pid}-AbC123`;
+  const link = path.join(parent, name);
+  // A junction on Windows (no privilege needed), a symbolic link elsewhere. What it points at is EMPTY: it is a folder that would go if the link were followed.
+  fs.symlinkSync(outside, link, 'junction');
+  fs.writeFileSync(`${link}${REMOVING_SUFFIX}`, JSON.stringify(gone));
+  // `lstat` says it is a plain folder, as an older Node on Windows says of a junction: only where it really is can tell.
+  const liar = { ...fs, lstatSync: (target, ...rest) => {
+    const st = fs.lstatSync(target, ...rest);
+    return target === link ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { isDirectory: () => true, isSymbolicLink: () => false }) : st;
+  } };
+  const result = sweepDeadWorkspaces({ ...deps, fs: liar });
+  assert.deepStrictEqual([result.removed, result.failed], [[], []]);
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), [name, `${name}${REMOVING_SUFFIX}`].sort(), 'the link and the record beside it are as they were');
+  assert.ok(fs.existsSync(outside), 'and what the link points at is whole');
+});
+
+test('a folder that will not go — Windows holds a handle on it — leaves the record beside it, reports the failure, and is finished by a later sweep', (t) => {
+  const { deps } = tempRoot(t);
+  const left = interrupted(deps);
+  let held = true;
+  const busy = { ...fs, rmdirSync: (target, ...rest) => { if (held && target === left.dir) throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' }); return fs.rmdirSync(target, ...rest); } };
+  const first = sweepDeadWorkspaces({ ...deps, fs: busy });
+  assert.deepStrictEqual([first.removed, first.failed.map((f) => [f.name, f.error])], [[], [[path.basename(left.dir), 'EBUSY']]]);
+  assert.ok(fs.existsSync(left.sidecar), 'the record is still there');
+  assert.match(sweepWarning(first), /could not remove 1 such workspace/);
+  held = false;
+  assert.deepStrictEqual(sweepDeadWorkspaces({ ...deps, fs: busy }).removed.map((r) => r.name), [path.basename(left.dir)]);
+  assert.deepStrictEqual(fs.readdirSync(workspaceParent(deps)), []);
+});
+
+test('the removals a sweep finishes count against its caps like the others, so that a folder that has collected many is worked off over several runs', (t) => {
+  const { deps } = tempRoot(t);
+  for (let i = 0; i < 3; i += 1) interrupted(deps);
+  const first = sweepDeadWorkspaces({ ...deps, limits: { maxRemoved: 2 } });
+  assert.strictEqual(first.removed.length, 2, 'two at most');
+  assert.strictEqual(sweepDeadWorkspaces(deps).removed.length, 1, 'and the next takes the third');
+  assert.deepStrictEqual(fs.readdirSync(workspaceParent(deps)), []);
+  // A sweep looks at no more entries than it is made to: with two, what is past them is left for the next.
+  for (let i = 0; i < 3; i += 1) interrupted(deps);
+  const narrow = sweepDeadWorkspaces({ ...deps, limits: { maxExamined: 2 } });
+  assert.ok(narrow.removed.length <= 2, `two entries looked at: ${narrow.removed.length} removed`);
+  assert.ok(fs.readdirSync(workspaceParent(deps)).length >= 2, 'what was past its look is still there');
+});
+
+test('the record is moved beside the folder under a name that is the folder\'s own, so that what a kill leaves is found — and a failed removal leaves nothing beside the folder', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const dir = plant(deps, goneRecord());
+  const moved = [];
+  let stuck = true;
+  const watched = {
+    ...fs,
+    renameSync: (from, to) => { if (path.basename(from) === OWNER_FILE) moved.push(path.relative(parent, to)); return fs.renameSync(from, to); },
+    rmdirSync: (target, ...rest) => { if (stuck && target === dir) throw Object.assign(new Error('EPERM: operation not permitted, rmdir'), { code: 'EPERM' }); return fs.rmdirSync(target, ...rest); },
+  };
+  assert.strictEqual(sweepDeadWorkspaces({ ...deps, fs: watched }).failed.length, 1);
+  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(dir)], 'the folder will not go, and the record is back in it: nothing is left beside it');
+  assert.ok(recordOfFolder(dir));
+  stuck = false;
+  assert.strictEqual(sweepDeadWorkspaces({ ...deps, fs: watched }).removed.length, 1);
+  assert.deepStrictEqual(moved, [`${path.basename(dir)}${REMOVING_SUFFIX}`, `${path.basename(dir)}${REMOVING_SUFFIX}`], `moved out to <folder>${REMOVING_SUFFIX}, each time`);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

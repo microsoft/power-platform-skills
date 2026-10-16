@@ -101,4 +101,43 @@ async function waitUntil(check, what, ms = 60000) {
 // The JSON a process of helpers/kill-target.js writes to `file`: waits for it, and for the whole of it.
 const readJsonWhenWritten = (file, ms) => waitUntil(() => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }, file, ms);
 
-module.exports = { privateTempRoot, tempEnv, startTarget, pause, deadPid, isRunning, waitUntil, readJsonWhenWritten };
+// Opens `file` so that nobody else can read it — FileShare.None, which a backup, a virus scanner or an editor does to a file for a moment, and which Node cannot do: it always opens a file shared.
+// A PowerShell process holds it, until `release()`. Windows only (the system's own PowerShell, by its place in System32). Resolves once the file is held.
+const HOLD_SCRIPT = [
+  '$handle = [System.IO.File]::Open($env:HOLD_FILE, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)',
+  'try {',
+  "  [System.IO.File]::WriteAllText($env:HOLD_READY, 'ready')",
+  '  $end = [DateTime]::UtcNow.AddSeconds(120)',
+  '  while (-not [System.IO.File]::Exists($env:HOLD_RELEASE)) {',
+  "    if ([DateTime]::UtcNow -gt $end) { throw 'the hold ran out of time' }",
+  '    Start-Sleep -Milliseconds 25',
+  '  }',
+  '} finally { $handle.Dispose() }',
+].join('\n');
+async function holdExclusively(t, file) {
+  const signals = fs.mkdtempSync(path.join(os.tmpdir(), 'hold-exclusive-'));
+  const ready = path.join(signals, 'ready');
+  const release = path.join(signals, 'release');
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const child = spawn(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(HOLD_SCRIPT, 'utf16le').toString('base64')], {
+    env: { ...process.env, HOLD_FILE: file, HOLD_READY: ready, HOLD_RELEASE: release },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let err = '';
+  child.stderr.on('data', (chunk) => { err += chunk; });
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  t.after(async () => {
+    try { fs.writeFileSync(release, ''); } catch { /* the folder is gone */ }
+    child.kill('SIGKILL');
+    await exited;
+    fs.rmSync(signals, { recursive: true, force: true });
+  });
+  await waitUntil(() => {
+    if (child.exitCode !== null) throw new Error(`the hold on ${file} ended: ${err}`);
+    return fs.existsSync(ready);
+  }, `the hold on ${file}`, 60000);
+  return { release: async () => { fs.writeFileSync(release, ''); await exited; } };
+}
+
+module.exports = { privateTempRoot, tempEnv, startTarget, pause, deadPid, isRunning, waitUntil, readJsonWhenWritten, holdExclusively };

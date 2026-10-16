@@ -86,7 +86,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
-const { makeTempWorkspace, lendWorkspace } = require('./lib/temp-workspace.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 const USAGE = [
   'Usage:',
@@ -692,7 +692,10 @@ function pacError(code, message, refusal) {
 // read back and checked before it goes anywhere, so a failed or odd run cannot leave a half-made file at --out. `packageBytes` is the package when
 // only its bytes are at hand (it was exported by the SDK); pac needs a file.
 async function templateThroughPac({ packagePath, packageBytes }, refusal, deps = {}) {
-  const dir = makeTempWorkspace('solution-settings-');
+  // pac is another process and is given paths in this folder (the zip it reads, the file it writes). On POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that takes the
+  // folder because this run is gone would remove it from under pac. So the folder is made LENT — recorded as such once, when it is made — and a sweep keeps it for as long as it is young, whether
+  // or not this run is still going (lib/temp-workspace.js). Nothing is recorded about pac itself, and nothing about the folder is changed after pac has started.
+  const dir = makeTempWorkspace('solution-settings-', { lent: true });
   try {
     let zip = packagePath;
     if (!zip) {
@@ -701,9 +704,7 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
     }
     const file = path.join(dir, 'settings.json');
     const label = 'pac solution create-settings';
-    // pac is another process, and it is given paths in this folder (the zip it reads, the file it writes): a run that is killed while it works leaves pac running on POSIX, and the
-    // sweep that finds this run gone must not remove the folder from under it. The folder is lent to pac for the call: its process id is recorded as soon as it exists.
-    const run = await lendWorkspace(dir, (onSpawn) => runPac(['solution', 'create-settings', '--solution-zip', zip, '--settings-file', file], { label, onSpawn, ...(deps.pac || {}) }));
+    const run = await runPac(['solution', 'create-settings', '--solution-zip', zip, '--settings-file', file], { label, ...(deps.pac || {}) });
     if (!run.ok) throw pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
     let text;
     try {

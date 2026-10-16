@@ -22,15 +22,18 @@
 //   node kill-target.js hold <file>
 //        opens <file> and keeps it open — a program that reads a file, or a scanner — says `ready`, and waits to be killed.
 //   node kill-target.js pac-template <workDir> [detached]
-//        runs the deployment-settings template through pac (solution-settings.js runTemplate: the scratch folder it makes for pac is a workspace, LENT to pac) over a fake pac that
+//        runs the deployment-settings template through pac (solution-settings.js runTemplate: the scratch folder it makes for pac is a workspace made LENT) over a fake pac that
 //        starts a real program, this file's `pac-worker`, with the folder it was given. Says `workspace <folder>` when the fake pac is handed its folder and `done` when the
 //        template is written. `detached` starts the program detached, so that it outlives a hard kill of this process on Windows too (on POSIX every child does).
 //   node kill-target.js pac-worker <settingsFile> <workDir>
 //        the fake pac's program: writes the first half of <settingsFile>, writes its pid to <workDir>/worker.json, waits for <workDir>/resume, writes the rest and
 //        <workDir>/worker-result.json (what its write said), and ends.
-//   node kill-target.js pac-pending <workDir>
-//        as pac-template, but the fake pac never starts anything: it says `pending <folder>` and waits to be killed — a run that dies between "about to start pac"
-//        and "pac started".
+//   node kill-target.js lent-worker <workDir>
+//        makes a workspace LENT (`makeTempWorkspace(prefix, { lent: true })`, as solution-settings.js does for pac), says `workspace <folder>`, waits for <workDir>/go — a test that wants
+//        to do something to the record meanwhile (hold it exclusively) does it then — and starts the `pac-worker` program, detached, in the folder: `worker <pid>`. Then waits to be killed.
+//   node kill-target.js sweep-pause <tempRoot>
+//        sweeps the plugin's folder of the temp folder <tempRoot> and pauses for two minutes at the one moment a sweep that is killed can leave a removal half done: after the record
+//        has been moved out of the dead run's folder and before the empty folder is removed. Says `before-rmdir <folder>` there.
 //
 // The test sets TMPDIR, TEMP and TMP to a folder of its own for these, so everything the process makes is in a place the test removes.
 const fs = require('node:fs');
@@ -141,7 +144,7 @@ async function main() {
     let error = null;
     try { fs.writeFileSync(settingsFile, '{"EnvironmentVariables":[],"ConnectionReferences":[]}'); } catch (e) { error = (e && e.code) || String(e); }
     fs.writeFileSync(path.join(workDir, 'worker-result.json'), JSON.stringify({ error, fileExists: fs.existsSync(settingsFile) }));
-  } else if (mode === 'pac-template' || mode === 'pac-pending') {
+  } else if (mode === 'pac-template') {
     const [workDir, detached] = args;
     const { runTemplate } = require('../../solution-settings.js');
     const { spawnResultTree, withPathFirst } = require('../../lib/process-runner.js');
@@ -152,7 +155,6 @@ async function main() {
     fs.writeFileSync(packagePath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x01]));
     const spawn = (_name, pacArgs, options) => {
       const folder = path.dirname(pacArgs[pacArgs.indexOf('--settings-file') + 1]);
-      if (mode === 'pac-pending') { say(`pending ${folder}`); return new Promise(() => {}); }
       say(`workspace ${folder}`);
       return spawnResultTree(nodeName, [__filename, 'pac-worker', pacArgs[pacArgs.indexOf('--settings-file') + 1], workDir], { ...options, env, ...(detached === 'detached' ? { detached: true } : {}) }, { env });
     };
@@ -160,6 +162,26 @@ async function main() {
     await runTemplate({ command: 'template', packagePath, outPath: path.join(workDir, 'settings-out.json'), force: false }, { pac: { spawn } });
     say('done');
     process.exit(0);
+  } else if (mode === 'lent-worker') {
+    const [workDir] = args;
+    const { makeTempWorkspace } = require('../../lib/temp-workspace.js');
+    const { spawn: start } = require('node:child_process');
+    // What solution-settings.js does for pac, and nothing more: the workspace is made lent, once; then a program is given a path in it.
+    const folder = makeTempWorkspace('solution-settings-', { lent: true });
+    say(`workspace ${folder}`);
+    while (!fs.existsSync(path.join(workDir, 'go'))) pause(10);
+    const worker = start(process.execPath, [__filename, 'pac-worker', path.join(folder, 'settings.json'), workDir], { detached: true, stdio: 'ignore', windowsHide: true });
+    worker.unref();
+    say(`worker ${worker.pid}`);
+    wait();
+  } else if (mode === 'sweep-pause') {
+    const { sweepDeadWorkspaces } = require('../../lib/temp-workspace.js');
+    const [root] = args;
+    sweepDeadWorkspaces({
+      os: { tmpdir: () => root },
+      fs: { ...fs, rmdirSync: (dir, ...rest) => { say(`before-rmdir ${dir}`); pause(120000); return fs.rmdirSync(dir, ...rest); } },
+    });
+    say('swept');
   } else {
     process.stderr.write(`unknown mode ${mode}\n`);
     process.exit(2);

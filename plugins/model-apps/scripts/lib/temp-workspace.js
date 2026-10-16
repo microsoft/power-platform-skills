@@ -23,16 +23,18 @@
 // Folders made by an earlier release are loose in the temp folder with no record, and stay where they are.
 //
 // WHO IS TRUSTED TO HAVE MADE THE FOLDER. On POSIX the plugin's folder must be a plain folder this user owns and nobody else can write to (uid and mode). Windows gives Node
-// no owner and no permissions, so an EXISTING folder is judged by its access list (lib/windows-folder-acl.js): only this user, the system and the administrators may be
-// able to change it. A folder this process makes itself is not asked about: it is as exposed as the temp folder it is made in, which is where the workspace was before there
-// was a folder of the plugin's own. The answer is asked once per folder and process. A folder that Windows is still removing — the last handle on it has not closed — refuses a new
+// no owner and no permissions, so an access list stands in (lib/windows-folder-acl.js): a folder this process MAKES is given an explicit, protected one before anything is put in it — only this
+// user, the system and the administrators, full control, inherited by every workspace and record made inside — and read back, and a folder that cannot be made so is removed and not used;
+// an EXISTING folder is used only if it is this user's (or the administrators') and NO entry of its list, an inherit-only one too, lets anyone else add to it, write to it, delete it
+// or take it over. The answer is asked once per folder and process. A folder that Windows is still removing — the last handle on it has not closed — refuses a new
 // entry and cannot be read for a moment: the attempt is made again after short pauses, and one that is still refusing after the last is not used (WAITS_MS).
 //
-// A WORKSPACE LENT TO ANOTHER PROGRAM (lendWorkspace). A path inside a workspace is sometimes given to a program of another make — pac, writing its settings file into the
-// scratch folder of solution-settings.js. That program is not the run: on POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that took the folder
-// because the run is gone would remove it from under a program that is still writing in it. So a run records every program it lends the folder to, in the folder's own record, and
-// a sweep needs ALL of them gone; a spawn that was begun and never recorded — the run died between starting the program and writing its pid — keeps the folder for a day.
-// A workspace that nothing lends is exactly as before.
+// A WORKSPACE LENT TO ANOTHER PROGRAM (`makeTempWorkspace(prefix, { lent: true })`). A path inside a workspace is sometimes given to a program of another make — pac, writing its settings file into the
+// scratch folder of solution-settings.js. That program is not the run: on POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that takes the folder because
+// the run is gone would remove it from under a program that is still writing in it. Nothing here follows such a program — a record that is changed after the program has started can be
+// unreadable at that moment, and a program that no record names is a folder that is taken — so the run says so ONCE, when it makes the folder, and the record is written ONCE, whole, with
+// the word `lent` in it. A lent workspace is never taken because its maker is gone, however surely that is shown: it is taken only when it is OLD — neither the folder nor its record has
+// been written to for LENT_KEEP_MS, seven days, far past any program of ours (pac gets an hour at most) — and its maker is gone as well. A workspace that nothing lends is exactly as before.
 //
 // WHY THE SWEEP CANNOT REMOVE A LIVE RUN'S WORKSPACE
 //   * It lists the plugin's folder once, and judges each entry on its own record; a workspace made after the listing is not in it. A name is never
@@ -49,19 +51,28 @@
 //     one that nothing can prove is dead. (Windows keeps a file that is deleted while another process holds it open, and lists it, until the holder lets go — Node 20 does; Node 22
 //     deletes it at once — and the folder cannot be removed meanwhile. A removal that consumed the record with the rest left an empty folder that no later sweep could ever
 //     tell from a stranger's. If the record itself is the file that is held open, it is renamed out of the folder, which Windows allows, rather than deleted.)
+//   * The record is moved out of the folder to `<folder>.removing`, beside it, and the folder removed. A sweep that is killed between those two steps leaves an empty folder and that
+//     file, and the next sweep FINISHES the removal — when the file is a record of the folder's own (its name, a record that names the pid in it, an owner that is gone) and the folder
+//     is empty or already gone. Anything that does not agree is left exactly as it is.
 //   * It never removes the plugin's folder itself: another run may be making a workspace in it that moment.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ownerStamp, ownerState, isOwnerStamp, probeProcess, MAX_LENT_PIDS } = require('./process-owner.js');
-const { windowsFolderIsPrivate } = require('./windows-folder-acl.js');
+const { ownerStamp, ownerState, isOwnerStamp, probeProcess } = require('./process-owner.js');
+const { windowsFolderIsPrivate, makeWindowsFolderPrivate } = require('./windows-folder-acl.js');
 
 const PARENT_NAME = 'power-platform-skills-model-apps';
 const OWNER_FILE = '.owner.json';
+// What a removal in progress leaves beside the folder (see removeWorkspace): the folder's record, moved out of it.
+const REMOVING_SUFFIX = '.removing';
 // What a prefix may be: a name, never a path. A prefix that is not one would put the folder outside the plugin's own.
 const SAFE_PREFIX = /^[A-Za-z0-9._-]+$/;
-// A record is a few hundred bytes — two kilobytes at the most, with sixteen programs lent to (process-owner.js MAX_LENT_PIDS). One that is much larger is not a record.
+// A record is a few hundred bytes. One that is much larger is not a record.
 const OWNER_FILE_MAX_BYTES = 4096;
+// How old a LENT workspace must be before a sweep takes it (and only then, and only if its maker is gone): seven days without anything written in the folder or to its record. pac is given an
+// hour for an import (lib/pac-fallback.js PAC_IMPORT_TIMEOUT_MS) and three minutes for a read, so this is two orders of magnitude past the longest program of ours — the one place a time
+// decides anything here, and it errs long on purpose: a folder that stays costs a few kilobytes, a folder taken from a program that still writes in it costs its work.
+const LENT_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 // The most one sweep looks at, and removes: a plugin's folder that has somehow collected thousands of entries is worked off over several runs, not in
 // the time of one.
 const MAX_EXAMINED = 500;
@@ -76,12 +87,15 @@ const uidOf = (deps) => (deps.uid !== undefined ? deps.uid : (typeof process.get
 
 // Windows removes a folder in two steps: the folder is marked for deletion, and it goes when the last handle on it is closed. In between it refuses a new entry — `mkdir` answers
 // EPERM, measured with four runs starting and ending at once, each ending run removing the plugin's folder if it was the last to leave it — and cannot be opened to say who may change it.
-// A run that meets a folder in that state used to make its workspace in the temp folder instead, unrecorded, so that a kill would leave it for good (and, before the plugin's folder
-// was optional, failed). It asks again after a short pause, as lib/safe-fs.js does for a rename that a scanner holds (the same codes, the same kind of waits), and a folder that is
-// still refusing then is not used. Only where there are no owners to compare (Windows): elsewhere EPERM and EACCES are the answers they sound like.
+// A run that meets a folder in that state would otherwise make its workspace in the temp folder, unrecorded, so that a kill would leave it for good. It asks again after a short pause, as
+// lib/safe-fs.js does for a rename that a scanner holds (the same codes, the same kind of waits), and a folder that is
+// still refusing then is not used. Only where there are no owners to compare (Windows): elsewhere EPERM and EACCES are the answers they sound like. The same three codes are what a scanner that is
+// holding a file that was just made gives for its rename (mark).
 const TRANSIENT_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-const refusalOfFolderBeingRemoved = (e, deps) => uidOf(deps) === null && !!e && TRANSIENT_CODES.has(e.code);
+const windowsRefusesForAMoment = (e, deps) => uidOf(deps) === null && !!e && TRANSIENT_CODES.has(e.code);
+// The code of the failure of a folder that this process made and could not make private (Windows): the folder is not used, and not tried again by this process (`refusing`, below).
+const NOT_PRIVATE = 'ENOTPRIVATE';
 
 // The folder the plugin keeps its workspaces in, for the temp folder `deps.os` (the real one) names. Windows gives each user a temp folder of their
 // own (GetTempPath reads TMP, TEMP, then the profile: https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-gettemppatha), and so does
@@ -93,13 +107,12 @@ function workspaceParent(deps = {}) {
 }
 
 // The plugin's folder is trusted only when it is a plain folder — not a link someone put there to point the plugin's removals elsewhere — and, where
-// the system has owners, ours alone: nobody else can add or rename an entry in it. On Windows, which has none to compare, its access list says who can change it
+// the system has owners, ours alone: nobody else can add or rename an entry in it. On Windows, which has none to compare, its access list says who can change it and who owns it
 // (lib/windows-folder-acl.js). Throws when it is not.
 //
-// That is read once per folder and process, whatever the answer (the cache below): a run that makes a workspace for each of forty dashboards would otherwise start two programs
+// That is read once per folder and process, whatever the answer (the cache below): a run that makes a workspace for each of forty dashboards would otherwise start three programs
 // forty times. The key names the folder itself — its place, device, file id and creation time — so a folder that is removed and made again by someone else is judged again.
-// `created`: this call made the folder. It is then as exposed as the temp folder it is in, which is where the workspace was made before the plugin had a folder of its own,
-// and it is not asked about: that keeps the common run, which finds no folder and makes one, free of the two process starts.
+// `created`: this call made the folder, gave it an access list of its own and read it back (ensureParent): it is not asked about again.
 // `deps.folderPrivacy` is a test seam for the Windows reader.
 const privacyVerdicts = new Map();
 const identityOf = (parent, st) => `${parent}|${st.dev}|${st.ino}|${st.birthtimeMs}`;
@@ -132,23 +145,63 @@ function checkParent(parent, deps, { created = false } = {}) {
 }
 
 function ensureParent(parent, deps) {
+  const fsx = deps.fs || fs;
   // Not `recursive`: a temp folder that is not there is the failure it always was (ENOENT, from the plain call this falls back to), not a folder this makes.
   let created = false;
   try {
-    (deps.fs || fs).mkdirSync(parent, { mode: 0o700 });
+    fsx.mkdirSync(parent, { mode: 0o700 });
     created = true;
   } catch (e) {
     if (!(e && e.code === 'EEXIST')) throw e;
   }
+  // `mode` means nothing on Windows: a folder made there takes the access list of the temp folder it is in — in one that is shared (`TEMP=C:\Temp`) that can be a grant to everyone, and every
+  // workspace and every owner record the sweep will believe is then made inside it and inherits that grant. So before anything is put in it the folder is given an access list of its own — only
+  // this user, the system and the administrators, protected from the folder above — and the list is read back (lib/windows-folder-acl.js).
+  if (created && uidOf(deps) === null) protectNewParent(parent, deps);
   checkParent(parent, deps, { created });
 }
 
-// The owner record of a folder this process made: the same stamp whose pid is in the folder's name. A record that cannot be written leaves the folder as
-// it would have been before records existed — it works, and nothing ever sweeps it — so it is never a reason to fail.
+// A folder this process made that cannot be made private is not used: it is removed — it is empty, and this process made it — and the workspace goes in the plain temp folder, where it always
+// went. The answer is about the folder that is at the path now; a folder swapped for another between the mkdir and the icacls is not the one that was made, and nothing that was said about it counts.
+function protectNewParent(parent, deps) {
+  const fsx = deps.fs || fs;
+  const before = identityOf(parent, fsx.lstatSync(parent));
+  const answer = (deps.folderProtect || makeWindowsFolderPrivate)(parent);
+  let same = false;
+  try { same = identityOf(parent, fsx.lstatSync(parent)) === before; } catch { /* gone: another process that ended with nothing in it removed it */ }
+  if (answer.ok && same) return;
+  if (same) {
+    try { fsx.rmdirSync(parent); } catch { /* something is in it already, and it is not this call's to remove */ }
+  }
+  // Gone, or replaced: ask again at once. A folder that icacls could not even open — Windows is removing it — asks again after a pause. Anything else is final for this process.
+  if (!same) throw Object.assign(new Error(`${parent} was replaced while it was being made private`), { code: 'ENOENT' });
+  throw Object.assign(new Error(`${parent} could not be made private: ${answer.reason}`), { code: answer.unreadable ? 'EBUSY' : NOT_PRIVATE });
+}
+
+// The owner record of a folder this process made: the same stamp whose pid is in the folder's name — with `lent: true` for a workspace that is to be handed to another program (see the top of
+// this file). It is written ONCE, and whole: to a file of its own name, then renamed to `.owner.json`, which is atomic, so that a sweep (which reads the record of a live run's folder on
+// Linux) or a kill finds no record at all or all of it, never half; and it is never written again, because a record that is changed later can be unreadable at that moment — a scanner, a
+// backup, an editor holds it — and what the folder says then is not what the run decided. A record that cannot be written leaves the folder as it would have been before records existed —
+// it works, and nothing ever sweeps it — so it is never a reason to fail.
 function mark(dir, stamp, deps) {
+  const fsx = deps.fs || fs;
+  const file = path.join(dir, OWNER_FILE);
+  const temp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
-    (deps.fs || fs).writeFileSync(path.join(dir, OWNER_FILE), JSON.stringify(stamp), { flag: 'wx', mode: 0o600 });
-  } catch { /* an unrecorded folder is a plain one */ }
+    fsx.writeFileSync(temp, JSON.stringify(stamp), { flag: 'wx', mode: 0o600 });
+    // On Windows a scanner that has just seen the new file can hold it for a moment, and the rename is refused (EPERM, EACCES or EBUSY): the same short waits as for the folder.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        fsx.renameSync(temp, file);
+        return;
+      } catch (e) {
+        if (!windowsRefusesForAMoment(e, deps) || attempt >= WAITS_MS.length) throw e;
+        (deps.pause || pauseSync)(WAITS_MS[attempt]);
+      }
+    }
+  } catch {
+    try { fsx.rmSync(temp, { force: true }); } catch { /* the temp file is not the record */ }
+  }
 }
 
 // The pid a workspace's name names — `genpage-4242-AbC123` is 4242's — or null: a name this maker did not give. mkdtemp's six random characters are
@@ -173,30 +226,32 @@ function prune(parent, deps) {
   pruneAtExit.set(parent, deps.fs || fs);
 }
 
-// A folder's owner record, as text and as the record it holds — or null when there is none that can be believed: no record, a file that is not a
-// regular file, a very large one, text that is not JSON, JSON that is not a record.
-function readMarker(dir, deps) {
+// A record file's text and the record it holds, and when it was last written — or null when there is none that can be believed: no file, one that is not a regular file, a very large one, text that
+// is not JSON, JSON that is not a record, a `lent` that is anything but `true` (it is written as that and as nothing else). Not being able to read it — another program holds it exclusively for
+// a moment — is null as well, and every caller takes "no record I can believe" as "not shown to be dead": the folder is kept.
+function readRecord(file, deps) {
   const fsx = deps.fs || fs;
   try {
-    const file = path.join(dir, OWNER_FILE);
     const st = fsx.lstatSync(file);
     if (!st.isFile() || st.size > OWNER_FILE_MAX_BYTES) return null;
     const raw = fsx.readFileSync(file, 'utf8');
     const stamp = JSON.parse(raw);
-    return isOwnerStamp(stamp) ? { raw, stamp } : null;
+    return isOwnerStamp(stamp) && (stamp.lent === undefined || stamp.lent === true) ? { raw, stamp, mtimeMs: st.mtimeMs } : null;
   } catch {
     return null;
   }
 }
+const readMarker = (dir, deps) => readRecord(path.join(dir, OWNER_FILE), deps);
 
 // A workspace removed with its owner record LAST, and kept recorded until the folder is really gone. `record` is the text of the record the sweep judged.
 //   1. What is inside, except the record, is removed. A removal that fails part way (Windows holds a file a scanner is reading) throws here, with the record still in place.
 //   2. Windows lists a file that was deleted while another process had it open (Node 20: the deletion stays pending until the holder lets go) — and the folder cannot go meanwhile —
 //      so anything but the record that is still listed ends the removal here, again with the record in place: the next sweep tries again.
-//   3. The record is RENAMED out of the folder — to a file beside it in the plugin's folder, which a sweep never reads as a workspace — and the empty folder removed. A rename, not a
+//   3. The record is RENAMED out of the folder — to `<folder>.removing`, a file beside it in the plugin's folder, which a sweep never reads as a workspace — and the empty folder removed. A rename, not a
 //      delete: a delete of a file another process has open leaves it pending in the folder (the very thing that keeps the folder from going, and a name that cannot be made again),
 //      while Windows lets such a file be renamed away. If the folder will not go, the record is moved back — or, should even that fail, written again from `record` — so
-//      that what is left is still known to be a dead run's.
+//      that what is left is still known to be a dead run's. A sweep that is KILLED between the move and the removal leaves the empty folder and `<folder>.removing`: the next sweep
+//      finishes it (finishInterruptedRemoval), which is why the file is named for the folder and holds its record whole.
 // False when there was nothing left to remove: another run's sweep, started at the same moment (two builds starting after a kill), took the folder first — that is neither this
 // sweep's removal nor its failure, and it says nothing of it.
 function removeWorkspace(dir, record, deps) {
@@ -224,7 +279,7 @@ function removeWorkspace(dir, record, deps) {
     throw Object.assign(new Error(`ENOTEMPTY: ${listed.length} deleted ${listed.length === 1 ? 'entry is' : 'entries are'} still listed in ${dir} (${listed.slice(0, 3).join(', ')}) — another process holds ${listed.length === 1 ? 'it' : 'them'} open`), { code: 'ENOTEMPTY' });
   }
   const file = path.join(dir, OWNER_FILE);
-  const aside = path.join(path.dirname(dir), `.${path.basename(dir)}.${process.pid}.${Math.random().toString(36).slice(2)}.removing`);
+  const aside = path.join(path.dirname(dir), `${path.basename(dir)}${REMOVING_SUFFIX}`);
   try {
     fsx.renameSync(file, aside);
   } catch (e) {
@@ -252,9 +307,25 @@ function removeWorkspace(dir, record, deps) {
   return true;
 }
 
+const clockOf = (deps) => (deps.owner && deps.owner.now) || Date.now;
+
+// Whether a LENT workspace is old enough to be taken: neither the folder nor its record has been written to for LENT_KEEP_MS. The folder's own time moves whenever an entry is added to it or
+// removed from it, so a folder that something is still working in is never old, and the record is written once, when the folder is made, so its time is the folder's age. Both must be past the limit —
+// and a time that cannot be compared (a clock set back, a file dated in the future, a time that is not a number) keeps the folder: `>` is false for all of those.
+function lentIsOld(dir, found, deps) {
+  const now = clockOf(deps)();
+  try {
+    const folder = (deps.fs || fs).lstatSync(dir).mtimeMs;
+    return now - folder > LENT_KEEP_MS && now - found.mtimeMs > LENT_KEEP_MS;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Removes the workspaces in the plugin's folder whose owner is provably gone. Never throws; never touches anything it cannot prove dead.
- * @param {object} [deps] test seams: fs, os, uid, owner (the process-owner.js seams: hostname, platform, pid, probe, …), limits ({ maxExamined, maxRemoved })
+ * Removes the workspaces in the plugin's folder whose owner is provably gone — and, for one that was lent to another program, only when it is old as well (LENT_KEEP_MS) — and finishes the
+ * removals that an earlier sweep began and was killed in. Never throws; never touches anything it cannot prove dead.
+ * @param {object} [deps] test seams: fs, os, uid, owner (the process-owner.js seams: hostname, platform, pid, probe, now, …), limits ({ maxExamined, maxRemoved })
  * @returns {{ parent: string, removed: Array<{ name: string, stamp: object }>, failed: Array<{ name: string, stamp: object, error: string }>, kept: number }}
  */
 function sweepDeadWorkspaces(deps = {}) {
@@ -275,27 +346,74 @@ function sweepDeadWorkspaces(deps = {}) {
   } catch {
     return result;
   }
+  const full = () => result.removed.length + result.failed.length >= maxRemoved;
+  // A folder is looked into only if its name names a pid that no process has — or, on Linux, one that runs (the record's start time can show that the pid
+  // was handed out again). A run that is going is never opened (see the top of this file); neither is a name this maker did not give.
+  const mayLookInto = (named) => {
+    const probed = named === null ? null : probe(named);
+    return probed === 'gone' || (probed === 'alive' && platform === 'linux');
+  };
+  // …and a folder that is not where its name says it is is somewhere else's: removing it would follow the link and remove what it points at.
+  const isHere = (dir, name) => {
+    try { return realPath(dir) === path.join(realParent, name); } catch { return false; /* gone meanwhile */ }
+  };
+  // The record must agree with the name, and say the owner is gone — and, for a workspace that was lent to another program, the workspace must be old (lentIsOld).
+  const removable = (dir, named, found) => !!found && found.stamp.pid === named && ownerState(found.stamp, deps.owner).state === 'gone'
+    && (found.stamp.lent !== true || lentIsOld(dir, found, deps));
+
+  // A removal that a sweep began and was killed in leaves the empty folder and `<folder>.removing`, the folder's own record moved out of it (removeWorkspace). It is finished when everything about
+  // it agrees: the name is a workspace's and may be looked into, the file is a record that is believed, names the pid the name does and has an owner that is gone, and the folder is where its name
+  // says, with nothing in it — or no longer there. The folder goes with `rmdir`, which removes a folder that is empty and nothing else, and then the file. What a lent workspace's age protects is its
+  // CONTENT, and none is left. Anything that does not agree is kept exactly as it is: false.
+  const finishInterruptedRemoval = (sidecar) => {
+    const name = sidecar.slice(0, -REMOVING_SUFFIX.length);
+    const named = pidOfName(name);
+    if (!mayLookInto(named)) return false;
+    const file = path.join(parent, sidecar);
+    const found = readRecord(file, deps);
+    if (!found || found.stamp.pid !== named || ownerState(found.stamp, deps.owner).state !== 'gone') return false;
+    const dir = path.join(parent, name);
+    let present = true;
+    try {
+      if (!fsx.lstatSync(dir).isDirectory() || !isHere(dir, name) || fsx.readdirSync(dir).length > 0) return false;
+    } catch (e) {
+      if (!(e && e.code === 'ENOENT')) return false;
+      present = false;
+    }
+    if (present) {
+      if (full()) return false;
+      try {
+        fsx.rmdirSync(dir);
+        result.removed.push({ name, stamp: found.stamp });
+      } catch (e) {
+        if (!(e && e.code === 'ENOENT')) {
+          // The folder will not go (Windows: a handle on it): the record stays beside it, and the next sweep tries again.
+          result.failed.push({ name, stamp: found.stamp, error: String((e && e.code) || (e && e.message) || e) });
+          return true;
+        }
+      }
+    }
+    try { fsx.rmSync(file, { force: true }); } catch { /* a few hundred bytes: the next sweep tries again */ }
+    return true;
+  };
+
   for (const entry of entries.slice(0, maxExamined)) {
+    if (entry.isFile() && entry.name.endsWith(REMOVING_SUFFIX)) {
+      if (!finishInterruptedRemoval(entry.name)) result.kept += 1;
+      continue;
+    }
     // A link, a file, anything that is not a folder was not made by a workspace maker.
     if (!entry.isDirectory()) continue;
-    // A folder is looked into only if its name names a pid that no process has — or, on Linux, one that runs (the record's start time can show that the pid
-    // was handed out again). A run that is going is never opened (see the top of this file); neither is a name this maker did not give.
     const named = pidOfName(entry.name);
-    const probed = named === null ? null : probe(named);
-    if (probed !== 'gone' && !(probed === 'alive' && platform === 'linux')) { result.kept += 1; continue; }
+    if (!mayLookInto(named)) { result.kept += 1; continue; }
     const dir = path.join(parent, entry.name);
-    // …and a folder that is not where it says it is is somewhere else's: removing it would follow the link and remove what it points at.
-    let place = null;
-    try { place = realPath(dir); } catch { /* gone meanwhile */ }
-    if (place !== path.join(realParent, entry.name)) { result.kept += 1; continue; }
-    // The record must agree with the name, and say the owner is gone.
-    const gone = (found) => !!found && found.stamp.pid === named && ownerState(found.stamp, deps.owner).state === 'gone';
+    if (!isHere(dir, entry.name)) { result.kept += 1; continue; }
     const marker = readMarker(dir, deps);
-    if (!gone(marker)) { result.kept += 1; continue; }
-    if (result.removed.length + result.failed.length >= maxRemoved) { result.kept += 1; continue; }
+    if (!removable(dir, named, marker)) { result.kept += 1; continue; }
+    if (full()) { result.kept += 1; continue; }
     // Read again, just before the removal: only an entry that is still what was judged is removed.
     const again = readMarker(dir, deps);
-    if (!gone(again) || again.raw !== marker.raw) { result.kept += 1; continue; }
+    if (!removable(dir, named, again) || again.raw !== marker.raw) { result.kept += 1; continue; }
     try {
       if (removeWorkspace(dir, marker.raw, deps)) result.removed.push({ name: entry.name, stamp: marker.stamp });
       else result.kept += 1;
@@ -342,8 +460,11 @@ const refusing = new Set();
 
 /**
  * A new, empty, private workspace folder, to be used and removed as `fs.mkdtempSync(path.join(os.tmpdir(), prefix))` is.
+ *
+ * `lent: true` is for a folder one of whose paths is to be GIVEN to another program — pac, writing its settings file in it: say so here, when the folder is made, and not later (see the top of
+ * this file). The record is then written once with that word in it, and a sweep never takes the folder because this run is gone: only when it is old as well (LENT_KEEP_MS).
  * @param {string} prefix what the folder's name starts with (a name, not a path), so a folder left behind says whose it was
- * @param {object} [deps] test seams: fs, os, uid, mkdtempSync (what makes the folder, given the path to start its name with), warn, owner, pause (sleeps, given milliseconds), folderPrivacy (the Windows access-list reader)
+ * @param {object} [deps] `lent` (see above), and test seams: fs, os, uid, mkdtempSync (what makes the folder, given the path to start its name with), warn, owner, pause (sleeps, given milliseconds), folderPrivacy (the Windows access-list reader), folderProtect (the Windows maker of an access list)
  * @returns {string} the folder
  */
 function makeTempWorkspace(prefix, deps = {}) {
@@ -354,13 +475,15 @@ function makeTempWorkspace(prefix, deps = {}) {
     // What this process is, as it will be recorded — and named: the folder is `<prefix><pid>-<random>` (see the top of this file).
     let stamp = null;
     try { parent = workspaceParent(deps); stamp = ownerStamp(deps.owner); } catch { parent = null; /* no temp folder to name: the plain call below says so */ }
+    if (stamp !== null && deps.lent === true) stamp = { ...stamp, lent: true };
     for (let attempt = 1; parent !== null && attempt <= MAKE_ATTEMPTS && !refusing.has(parent); attempt += 1) {
       // The plugin's folder is removed by a process that ends with nothing left in it (see prune), and that can land between the steps below: ENOENT anywhere is that, and the
       // attempt is made again at once. On Windows a folder that is being removed refuses for a moment instead (mkdir, mkdtemp and the reading of its access list, above), and the
       // attempt is made again after a pause; one that is still refusing after the last is not used, and not asked again by this process. Any other failure means the plugin's folder
       // cannot be used — it is not ours alone, it exists and will not take a new folder (permissions on it are not those of the temp folder it is in: mode 0500, an access list that
-      // denies this user), the disk is full there — and the workspace is made in the plain temp folder, below, as it always was. The plugin's folder is a courtesy to the next run, so a
-      // refusal of it is never this run's failure; an error is reported only if the plain call fails too, and then it is that call's, with that call's path.
+      // denies this user), the disk is full there, or (Windows) a folder this process made could not be made private — and the workspace is made in the plain temp folder, below, as it
+      // always was. The plugin's folder is a courtesy to the next run, so a refusal of it is never this run's failure; an error is reported only if the plain call fails too, and then it
+      // is that call's, with that call's path.
       let dir;
       try {
         ensureParent(parent, deps);
@@ -368,11 +491,14 @@ function makeTempWorkspace(prefix, deps = {}) {
         dir = mkdtemp(path.join(parent, `${prefix}${stamp.pid}-`));
       } catch (e) {
         if (e && e.code === 'ENOENT') continue;
-        if (refusalOfFolderBeingRemoved(e, deps)) {
+        if (windowsRefusesForAMoment(e, deps)) {
           if (attempt < MAKE_ATTEMPTS) {
             (deps.pause || pauseSync)(WAITS_MS[attempt - 1]);
             continue;
           }
+          refusing.add(parent);
+        } else if (e && e.code === NOT_PRIVATE) {
+          // Each try costs three programs and the answer will not change: this process does not make the folder again.
           refusing.add(parent);
         }
         break;
@@ -385,117 +511,4 @@ function makeTempWorkspace(prefix, deps = {}) {
   return mkdtemp(path.join((deps.os || os).tmpdir(), prefix));
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// A workspace lent to a program of another make
-// ---------------------------------------------------------------------------------------------------------------------
-
-const clockOf = (deps) => (deps.owner && deps.owner.now) || Date.now;
-
-// The record, written again whole: a temp file in the folder, complete, renamed over it — so that a sweep, or a kill, finds the old record or the new one and never half of
-// either. (A sweep of a live run's folder happens on Linux only, and reads, never writes; this process is the only writer.) The temp file's name starts with the record's own, so
-// that if this process is killed between the two steps what is left is removed with the folder's other contents.
-function rewriteRecord(dir, stamp, deps) {
-  const fsx = deps.fs || fs;
-  const file = path.join(dir, OWNER_FILE);
-  const temp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  try {
-    fsx.writeFileSync(temp, JSON.stringify(stamp), { flag: 'wx', mode: 0o600 });
-    fsx.renameSync(temp, file);
-  } catch (e) {
-    try { fsx.rmSync(temp, { force: true }); } catch { /* the temp file is not the record */ }
-    throw e;
-  }
-}
-
-// Reads the folder's record, lets `edit(lent, maker)` change its `lent` part — `maker` is the rest of the record — and writes it again. A `lent` with nothing in it is left out
-// (the record the maker wrote). Throws what the rewrite throws; null when no record is believed (there is nothing to change).
-function changeRecord(dir, deps, edit) {
-  const found = readMarker(dir, deps);
-  if (found === null) return null;
-  const { lent, ...maker } = found.stamp;
-  const next = edit(lent || { at: clockOf(deps)(), pending: 0, pids: [] }, maker);
-  const stamp = next.pending === 0 && next.pids.length === 0 ? maker : { ...maker, lent: next };
-  rewriteRecord(dir, stamp, deps);
-  return stamp;
-}
-
-// The programs of `programs` that are not shown to be gone. One that has ended is not one the folder is lent to any more, and a record that kept every pid it ever named would grow —
-// and, where a pid cannot be told from the one it is handed out to next (Windows, macOS), keep a folder that nothing uses.
-const stillRunning = (maker, programs, deps) => programs.filter((program) => ownerState({ ...maker, pid: program.pid, start: program.start }, deps.owner).state !== 'gone');
-
-/**
- * Lends a workspace to the program `launch` starts: for the whole of the call, a sweep that finds this run gone does not remove the folder while the program may still run in it.
- *
- * USE IT for every launch of a program — pac, or any other — that is given a path inside a folder `makeTempWorkspace` made. One program per call:
- *
- *     const dir = makeTempWorkspace('solution-settings-');
- *     try {
- *       ...write what the program is to read into dir...
- *       const run = await lendWorkspace(dir, (onSpawn) => runPac(args, { label, onSpawn, ...(deps.pac || {}) }));
- *       ...read what it wrote...
- *     } finally {
- *       fs.rmSync(dir, { recursive: true, force: true });
- *     }
- *
- * `launch(onSpawn)` starts the program and answers (or returns a promise of) whatever it likes, and that is what comes back. It must hand `onSpawn` to whatever starts the program
- * (`runPac` and the process runner's `spawnResultTree` take it as the option `onSpawn`), which calls it with the program's process id the moment the program exists; a launch that
- * starts the program itself calls `onSpawn(child.pid)` right after `spawn` returns. Anything that is not a process id is ignored.
- *
- * WHAT IT RECORDS (see lib/process-owner.js, `lent`): before `launch` is called, that a program is about to be given the folder; when `onSpawn` is called, which program; when the
- * call is over, that no program is about to be — and a program that has ended is dropped. A run killed after the pid is recorded leaves a folder that a sweep keeps for as long as
- * that program runs (on POSIX a program outlives the run that started it); a run killed before it is — between "about to start" and "started" — leaves one that is kept for a
- * day, since nothing says whether a program has it.
- *
- * It starts nothing while the record cannot say so: if the record cannot be rewritten it is taken away instead (an unrecorded folder is never swept) and the program is started
- * all the same, and if that cannot be done either the error is thrown and `launch` is not called. A folder nothing records — one made in the plain temp folder, or whose record was
- * not written — has nothing to keep it for: `launch` is just called. Call it in the process that made the folder.
- * @param {string} dir a folder made by makeTempWorkspace
- * @param {(onSpawn: (pid: number) => void) => any} launch
- * @param {object} [deps] test seams: fs, owner (the process-owner.js seams: now, probe, …)
- */
-async function lendWorkspace(dir, launch, deps = {}) {
-  const fsx = deps.fs || fs;
-  if (readMarker(dir, deps) === null) return launch(() => {});
-  // Everything up to the first `await` runs before the caller's next statement, so the record says "about to" before anything can be started.
-  try {
-    changeRecord(dir, deps, (lent, maker) => {
-      const pids = stillRunning(maker, lent.pids, deps);
-      if (pids.length + lent.pending + 1 > MAX_LENT_PIDS) throw new RangeError(`${dir} is lent to more than ${MAX_LENT_PIDS} programs at once`);
-      return { at: clockOf(deps)(), pending: lent.pending + 1, pids };
-    });
-  } catch (error) {
-    // The record cannot say that a program is about to be given this folder, and a sweep that believed it would remove the folder from under the program if this process were killed
-    // now. An unrecorded folder is never swept: take the record away. If even that cannot be done, the program must not be started.
-    try { fsx.rmSync(path.join(dir, OWNER_FILE), { force: true }); } catch { throw error; }
-    return launch(() => {});
-  }
-  let reported = false;
-  const onSpawn = (pid) => {
-    if (!Number.isInteger(pid) || pid <= 0) return;
-    const first = !reported;
-    reported = true;
-    try {
-      // On Linux the program's start, read now, is what tells it from the process that has its pid next.
-      const { start } = ownerStamp({ ...deps.owner, pid });
-      changeRecord(dir, deps, (lent) => {
-        const pids = [...lent.pids.filter((program) => program.pid !== pid), { pid, ...(start ? { start } : {}) }];
-        if (pids.length > MAX_LENT_PIDS) throw new RangeError(`${dir} is lent to more than ${MAX_LENT_PIDS} programs at once`);
-        return { at: lent.at, pending: first ? Math.max(0, lent.pending - 1) : lent.pending, pids };
-      });
-    } catch { /* the record still says that a program is about to be given the folder: more than is needed, never less */ }
-  };
-  try {
-    return await launch(onSpawn);
-  } finally {
-    try {
-      changeRecord(dir, deps, (lent, maker) => ({
-        at: lent.at,
-        // A launch that reported its program has had that counted already (if the record could not take it, it still says "about to", which keeps the folder, and is left so).
-        pending: reported ? lent.pending : Math.max(0, lent.pending - 1),
-        pids: stillRunning(maker, lent.pids, deps),
-      }));
-    } catch { /* the same: the record says more than is needed */ }
-  }
-}
-
-module.exports = { PARENT_NAME, OWNER_FILE, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, lendWorkspace, sweepDeadWorkspaces, sweepWarning };
+module.exports = { PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, LENT_KEEP_MS, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning };
