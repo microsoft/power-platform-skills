@@ -105,6 +105,25 @@ test('order-only write on a role-restricted form preserves both roles and Fallba
   assert.strictEqual(withoutDisplayConditions(xml), withoutDisplayConditions(original));
 });
 
+test('a DisplayConditions with no Order — what a form the SDK creates carries — reads as order undefined, and an order-only write adds the attribute and keeps Everyone and FallbackForm', async () => {
+  // The forms phase writes Order 0..n-1 onto the Main forms it was asked to order (writeFormOrder), and a form it just created now starts
+  // with none: the first form is written too, where it used to be found already at 0.
+  const original = '<form><tabs><tab name="general" /></tabs><DisplayConditions FallbackForm="true"><Everyone /></DisplayConditions></form>';
+  const { sdk, calls } = await freshSdk(original);
+  const stored = await sdk.getFormSecurityRoles(FORM_ID);
+  assert.strictEqual(stored.order, undefined);
+  assert.strictEqual(stored.everyone, true);
+  assert.strictEqual(stored.fallbackForm, true);
+
+  await sdk.setFormSecurityRoles(FORM_ID, { order: 0 });
+
+  const xml = patchCall(calls).body.formxml;
+  assert.match(xml, /<DisplayConditions\b[^>]*Order="0"[^>]*>/);
+  assert.match(xml, /FallbackForm="true"/);
+  assert.match(xml, /<Everyone\s*\/>/);
+  assert.strictEqual(withoutDisplayConditions(xml), withoutDisplayConditions(original), 'the rest of the form is unchanged');
+});
+
 test('forms without DisplayConditions refuse order-only writes, while everyone+fallback+order adds the element', async () => {
   const original = '<form><tabs><tab name="general" /></tabs></form>';
   const { sdk, calls } = await freshSdk(original);
@@ -149,9 +168,11 @@ test('a row whose type cannot be read is refused too, never taken for a Main for
 
 // The build places a Main form it creates on a table whose order it does not set IN ITS CREATE
 // (createInPlace, sdk-build.js): it finds the <DisplayConditions> the SDK gives the new form in its root
-// bag and replaces that node before the first push. This pins the SDK side of that: if the node moved or
-// were rebuilt at push time, forms would silently be created at Order 0 again.
-test('a new form carries <DisplayConditions Order="0"> in its root bag, and an edit to it before the first push is what the create writes', async () => {
+// bag and writes the form's order into it before the first push. The SDK gives it no Order (a form with
+// none takes no slot in the maker's form order: GetFormsOrderInfo says -1 for it), so the build ADDS the
+// attribute, first, as the maker's own file has it. This pins the SDK side of that: if the node moved or
+// were rebuilt at push time, forms would silently be created with no order again.
+test('a new form carries <DisplayConditions FallbackForm="true"> with no Order in its root bag, and the Order the build adds to it before the first push is what the create writes', async () => {
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'form-order-create-'));
   tempDirs.push(dir);
@@ -173,11 +194,12 @@ test('a new form carries <DisplayConditions Order="0"> in its root bag, and an e
   const local = await sdk.getArtifact('form', art.id);
   const at = local.bag.c.findIndex((e) => e && e.node && e.node.n === 'DisplayConditions');
   assert.ok(at >= 0, `no DisplayConditions in the new form's root bag: ${JSON.stringify(local.bag.c.map((e) => e.node && e.node.n))}`);
-  assert.deepStrictEqual(local.bag.c[at].node.a, [['Order', '0'], ['FallbackForm', 'true']]);
+  assert.deepStrictEqual(local.bag.c[at].node.a, [['FallbackForm', 'true']], 'access is unchanged (everyone, fallback) and the form takes no slot in the form order');
   assert.deepStrictEqual(local.bag.c[at].node.c.map((c) => c.n), ['Everyone']);
 
+  // What createInPlace writes: the order goes first, the attributes the SDK gave the node stay.
   const entry = JSON.parse(JSON.stringify(local.bag.c[at]));
-  entry.node.a = entry.node.a.map(([n, v]) => (n === 'Order' ? [n, '7'] : [n, v]));
+  entry.node.a = [['Order', '7'], ...entry.node.a];
   await sdk.updateElement('form', art.id, `/bag/c/${at}`, entry);
   await sdk.pushArtifact('form', art.id);
 

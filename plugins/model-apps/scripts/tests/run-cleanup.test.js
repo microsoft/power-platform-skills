@@ -11,6 +11,7 @@ const OLDEST = '11111111-1111-4111-8111-111111111111';
 const PREEXISTING = '22222222-2222-4222-8222-222222222222';
 const CREATED = '33333333-3333-4333-8333-333333333333';
 const EXTRA = '44444444-4444-4444-8444-444444444444';
+const TEMPLATE = '55555555-5555-4555-8555-555555555555';
 const RULE = 'Contoso close rule';
 const MODEL = 'contoso_ticket row summary';
 
@@ -191,7 +192,10 @@ test('the real SDK rolls back only its new model id while plugin cleanup keeps s
     instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
       get: async (url) => {
-        if (url.includes('/aiskillconfigs?') || url.includes('/msdyn_aitemplates?')) return response({ value: [] });
+        if (url.includes('/aiskillconfigs?')) return response({ value: [] });
+        // The SDK reads the row-summary template before it writes anything and refuses an org that has none
+        // (ROW_SUMMARY_TEMPLATE_NOT_FOUND), so the org of this test has it: the model is published, which is what is rolled back.
+        if (url.includes('/msdyn_aitemplates?')) return response({ value: [{ msdyn_aitemplateid: TEMPLATE }] });
         if (url.includes("/EntityDefinitions(LogicalName='contoso_ticket')")) return response({ MetadataId: OLDEST });
         throw new Error(`unexpected offline GET ${url}`);
       },
