@@ -271,6 +271,98 @@ test('a process whose bookkeeping cannot be done never fails the program\'s own 
   assert.deepStrictEqual(ran, ['cleanup']);
 });
 
+// Putting the cleanup back in front is two calls on the process — one takes its listener off, the other puts it on — and each is ANNOUNCED: the process emits `removeListener` as the listener goes, `newListener` as it
+// is about to be added (before it is on the list). A program may watch those (to count listeners, to log them) and may do anything there, the cleanup's release included. A cleanup that was released meanwhile must STAY
+// released: the release took its listeners off the process and the wrapper off the method, and a listener put back afterwards belongs to a registry that is gone, with nothing to keep it first — a one-shot handler the
+// program prepends later goes in front of it, is taken off the list before it is called, and leaves it counting no handler but its own: it would end the process under the handler's shutdown.
+// What the program does there, and what is left: a stand-in for the process, both platforms (the signal is delivered by `proc.emit`, as in the tests above).
+function releasedFromNotification(platform, event, { registeringAgain = false } = {}) {
+  const proc = standIn(platform);
+  const ran = [];
+  const trace = [];
+  const addedAfterRelease = [];
+  let released = false;
+  const release = onProcessEnd(() => ran.push('cleanup'), { process: proc });
+  const trigger = () => {};
+  const observer = (type, listener) => {
+    // `removeListener`: the cleanup's own listener is the first to come off a list of SIGINT. `newListener`: the program's trigger is the first to go on it (nothing to do yet), and the cleanup's listener the second.
+    if (type !== 'SIGINT' || listener === trigger) return;
+    proc.removeListener(event, observer);
+    release();
+    released = true;
+    if (registeringAgain) onProcessEnd(() => ran.push('again'), { process: proc });
+  };
+  proc.on(event, observer);
+  proc.on('newListener', (type, listener) => { if (type === 'SIGINT' && released) addedAfterRelease.push(listener); });
+  proc.prependListener('SIGINT', trigger);
+  proc.removeListener('SIGINT', trigger);
+  release();
+  // What was put on the list since the release, before the program prepends a handler of its own: the cleanup's listener, should it have been put back.
+  const putBack = [...addedAfterRelease];
+  const afterRelease = listenerCounts(proc);
+  const ownsPrepend = Object.prototype.hasOwnProperty.call(proc, 'prependListener');
+  proc.prependOnceListener('SIGINT', () => trace.push('the program\'s handler began its shutdown'));
+  proc.emit('SIGINT', 'SIGINT');
+  return { proc, ran, trace, afterRelease, ownsPrepend, putBack };
+}
+for (const platform of ['linux', 'win32']) {
+  const where = platform === 'win32' ? 'Windows' : 'POSIX';
+  for (const event of ['removeListener', 'newListener']) {
+    test(`${where}: a cleanup released from a ${event} notification of the process stays released — no listener of it is left, and a one-shot handler the program prepends afterwards keeps the decision how the process ends`, () => {
+      const { proc, ran, trace, afterRelease, ownsPrepend, putBack } = releasedFromNotification(platform, event);
+      // From `newListener` the release is made while the listener is on its way onto the list, which is announced before it is on it: that one is taken off again; from `removeListener` nothing is put back at all.
+      if (event === 'removeListener') assert.strictEqual(putBack.length, 0, 'a cleanup that was released is not put back, not even for a moment');
+      assert.deepStrictEqual(afterRelease, NONE, 'the release took every listener of the cleanup off, and the wrapper was not put back after it');
+      assert.strictEqual(ownsPrepend, false, 'and the process has its own prependListener again');
+      assert.deepStrictEqual(trace, ['the program\'s handler began its shutdown'], 'the program\'s handler was told of the signal');
+      assert.deepStrictEqual(ran, [], 'a cleanup that was released does not run');
+      assert.deepStrictEqual(proc.killed, [], 'the signal is not raised again');
+      assert.deepStrictEqual(proc.exited, [], 'the process is not ended: that is the handler\'s to do, when and how it chooses');
+      assert.deepStrictEqual(listenerCounts(proc), NONE, 'and nothing is left on the process');
+    });
+  }
+}
+
+test('a cleanup released from the notification and registered AGAIN there belongs to the new registry alone — the one that was released does not put its listener back beside it', () => {
+  const { proc, ran, trace, afterRelease } = releasedFromNotification('linux', 'removeListener', { registeringAgain: true });
+  assert.deepStrictEqual(afterRelease, { exit: 1, SIGINT: 1, SIGTERM: 1, SIGHUP: 1, SIGBREAK: 1 }, 'one listener each: the new registry\'s, and none of the one that was released');
+  assert.deepStrictEqual(trace, ['the program\'s handler began its shutdown']);
+  assert.deepStrictEqual(ran, ['again'], 'the signal reached the new registry once, and its cleanup ran');
+  assert.deepStrictEqual(proc.killed, [], 'the handler, not the cleanup, decides how the process ends');
+  assert.deepStrictEqual(proc.exited, []);
+  assert.deepStrictEqual(listenerCounts(proc), NONE, 'and the new registry took its listeners off, as a signal makes it');
+});
+
+test('a notification that FAILS while the cleanup is put back in front does not cost it its place — it is put back all the same, and the program\'s own call does not fail', () => {
+  const proc = standIn();
+  const ran = [];
+  onProcessEnd(() => ran.push('cleanup'), { process: proc });
+  proc.on('removeListener', function failing(type) {
+    if (type !== 'SIGINT') return;
+    proc.removeListener('removeListener', failing);
+    throw new Error('an observer that fails');
+  });
+  const handler = () => {};
+  assert.doesNotThrow(() => proc.prependListener('SIGINT', handler));
+  assert.deepStrictEqual(proc.rawListeners('SIGINT').slice(1), [handler], 'the program\'s handler is registered, behind the cleanup');
+  assert.strictEqual(proc.listenerCount('SIGINT'), 2);
+  proc.emit('SIGINT', 'SIGINT');
+  assert.deepStrictEqual(ran, ['cleanup'], 'and the cleanup runs on the signal');
+});
+
+test('a program that only WATCHES the notifications sees the cleanup taken off and put back in front of its handler, and the order is the one there would be without the watching', () => {
+  const proc = standIn();
+  onProcessEnd(() => {}, { process: proc });
+  const [ours] = proc.rawListeners('SIGINT');
+  const seen = [];
+  proc.on('newListener', (type, listener) => { if (type === 'SIGINT') seen.push(['added', listener === ours ? 'cleanup' : 'handler']); });
+  proc.on('removeListener', (type, listener) => { if (type === 'SIGINT') seen.push(['removed', listener === ours ? 'cleanup' : 'handler']); });
+  const handler = () => {};
+  proc.prependListener('SIGINT', handler);
+  assert.deepStrictEqual(seen, [['added', 'handler'], ['removed', 'cleanup'], ['added', 'cleanup']], 'the handler goes on, then the cleanup comes off and goes on in front of it');
+  assert.deepStrictEqual(proc.rawListeners('SIGINT'), [ours, handler]);
+});
+
 test('a handler for ANOTHER signal does not take the decision: SIGINT, which only the cleanup listens for, still ends the process', () => {
   const proc = standIn();
   proc.on('SIGTERM', () => {});
@@ -339,14 +431,15 @@ const dirs = [];
 test.after(() => { for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); });
 
 // Starts helpers/exit-cleanup-child.js — it registers a cleanup that writes `marker` — and waits until it has. `ending` says how it ends: exit | throw | release | wait (for a signal) | emit:<SIGNAL> (the child raises
-// it in itself, on a later turn) | emit-now:<SIGNAL> (in the very turn that an owner with `when: 'now'` is put in place); `owner` gives it a handler of its own, as the helper's header says.
-async function child(t, ending, { owner } = {}) {
+// it in itself, on a later turn) | emit-now:<SIGNAL> (in the very turn that an owner with `when: 'now'` is put in place); `owner` gives it a handler of its own, and `releaseFrom` has it release the cleanup from a notification
+// of the process (`removeListener` | `newListener`), as the helper's header says. `ready` is what the child said when it was ready.
+async function child(t, ending, { owner, releaseFrom } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exit-cleanup-'));
   dirs.push(dir);
   const marker = path.join(dir, 'cleaned.txt');
   const handled = path.join(dir, 'handled.txt');
   const config = path.join(dir, 'config.json');
-  fs.writeFileSync(config, JSON.stringify({ marker, ending, owner: owner && { handled, ...owner } }));
+  fs.writeFileSync(config, JSON.stringify({ marker, ending, owner: owner && { handled, ...owner }, releaseFrom }));
   const proc = fork(CHILD, [config], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let stderr = '';
   proc.stderr.on('data', (data) => { stderr += data; });
@@ -365,7 +458,7 @@ async function child(t, ending, { owner } = {}) {
   const message = await ready;
   assert.strictEqual(message.kind, 'ready');
   assert.strictEqual(message.cleanedYet, false, 'nothing has been cleaned while the process runs');
-  return { proc, exited, marker, handled, stderr: () => stderr };
+  return { proc, exited, marker, handled, ready: message, stderr: () => stderr };
 }
 
 test('real process: process.exit runs the cleanup, and the exit status is the one asked for', async (t) => {
@@ -424,6 +517,20 @@ for (const how of ['prepend-once', 'prepend-self-removing']) {
     assert.deepStrictEqual(await run.exited, [23, null]);
     assert.strictEqual(fs.readFileSync(run.marker, 'utf8'), 'cleaned');
     assert.strictEqual(fs.readFileSync(run.handled, 'utf8'), 'handled');
+  });
+}
+
+// A program that watches the notifications the process makes about its own listeners can release the cleanup from one of them — the one the cleanup itself causes, when it is taken off the list and put back in front of
+// a handler the program prepends — and a cleanup that was released stays released: nothing of it is on the list afterwards, and the one-shot handler the program prepends next, in the very turn that it raises the
+// signal, keeps the decision how the process ends. (A stale listener of the released cleanup would find no handler but its own once the one-shot handler was taken off the list, and end the process under the handler's
+// shutdown: STATUS_CONTROL_C_EXIT on Windows, the signal itself elsewhere.)
+for (const releaseFrom of ['removeListener', 'newListener']) {
+  test(`real process: a cleanup released from a ${releaseFrom} notification stays released — no listener of it is left, and a one-shot SIGINT handler the program prepends afterwards, in the very turn that it raises the signal, ends the process with its own status`, async (t) => {
+    const run = await child(t, 'emit-now:SIGINT', { owner: { signal: 'SIGINT', how: 'prepend-once', when: 'now', status: 23, delayMs: 50 }, releaseFrom });
+    assert.deepStrictEqual(await run.exited, [23, null], 'the program\'s own shutdown ended the process, with its own status — not a released cleanup, with the status of a cancellation');
+    assert.strictEqual(run.ready.sigint, 0, 'the process had no SIGINT listener left once the cleanup was released: none of the cleanup\'s was put back');
+    assert.strictEqual(fs.readFileSync(run.handled, 'utf8'), 'handled');
+    assert.strictEqual(fs.existsSync(run.marker), false, 'a cleanup that was released does not run');
   });
 }
 

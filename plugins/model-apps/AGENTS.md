@@ -1926,7 +1926,7 @@ scripts/
     sdk-first.js               ← the rule `list-connections.js`, `connector.js` and `solution-settings.js` share: read through the SDK, and through `pac` for the SDK's typed refusals (`sdkFirst`, `CONNECTIVITY_REFUSALS`) — an error counts only when it IS the bundle's `SdkError` (an HTTP body that carries a refusal's code does not); any other failure is thrown with the SDK's own code. An environment outside the Public cloud is judged from its host first (`connectivityCloudOf`, pinned to the bundle by a table of hosts) and answered by `pac` at once, with the code the SDK would give. What the SDK could not clean up before it refused (`readCleanupWarnings`: a staged copy of the package it could not delete, with its upload id) is carried across the fallback — as `warnings` on the answer, or attached to the error `pac` throws when it fails — so `solution-settings.js` shows it for `template` and `import` alike (an import's, sanitized once)
     pac-fallback.js            ← runs a `pac` fallback command through `process-runner.js` (`spawnResultTree`) within a fixed time limit (`PAC_READ_TIMEOUT_MS`, 3 minutes; `PAC_IMPORT_TIMEOUT_MS`, 60) — a call that runs out has its whole process tree ended before it is reported, and the message says what the runner confirmed — "`pac` and every process that held its output were stopped" — and, when the pipes did not close, that a process `pac` started may still be running — reads the JSON `pac` prints after its header, and keeps pac's sign-in banner and version lines out of every failure text (`pacErrorText`)
     private-folder.js          ← a folder, and a file in it, that only the current user can use — the copy of a settings file that `pac solution import` is given: POSIX modes 0700 and 0600, set and read back; Windows an access list with the current user's SID as its ONE entry (`icacls /reset`, `/inheritance:r`, `/grant:r *<SID>:(OI)(CI)F`, read back as SDDL through `icacls /save`, the file's too before a byte is written; the SDDL aliases of the system accounts are compared as the SIDs they stand for, and `LA`/`LG` — the machine's own Administrator and Guest — only when the machine itself writes the user's SID that way, `spellingOf`), `whoami` and `icacls` looked up in the Windows folder's System32 alone through `process-runner.js`; whatever cannot be set or read back is an error with a `reason` (a tool, a step, a number — never a path or a value) and nothing is written
-    exit-cleanup.js            ← a synchronous cleanup that runs if the process ends while a run's work is going — `process.exit`, an uncaught error, SIGINT, SIGTERM, SIGHUP, SIGBREAK — after which the process ends as it would have: BY the signal on POSIX (raised again once our listeners are off), with STATUS_CONTROL_C_EXIT (0xC000013A, 3221225786) on Windows, where a Ctrl+C is a console event and `process.kill` would end it with the status 1 of a failure; a program that has a handler of its own for the signal — one-shot and self-removing ones included, however they were put on the list — keeps the decision (ours is first in line, so that it sees them all, and stays first: a handler the program PREPENDS later is put behind it again before the call returns, `keepFirst`); a KILLED process runs nothing, which is its stated limit
+    exit-cleanup.js            ← a synchronous cleanup that runs if the process ends while a run's work is going — `process.exit`, an uncaught error, SIGINT, SIGTERM, SIGHUP, SIGBREAK — after which the process ends as it would have: BY the signal on POSIX (raised again once our listeners are off), with STATUS_CONTROL_C_EXIT (0xC000013A, 3221225786) on Windows, where a Ctrl+C is a console event and `process.kill` would end it with the status 1 of a failure; a program that has a handler of its own for the signal — one-shot and self-removing ones included, however they were put on the list — keeps the decision (ours is first in line, so that it sees them all, and stays first: a handler the program PREPENDS later is put behind it again before the call returns, `keepFirst`, which never puts back a cleanup that was released while it was being moved); a KILLED process runs nothing, which is its stated limit
     typescript-compiler.js     ← loads the vendored TypeScript 5.8.3 compiler (vendor/typescript/) for the SDK's page compile: lazily, once, only after its bytes match PROVENANCE.json
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
     lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
@@ -3984,8 +3984,11 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     on other systems a lock code is not waited out). A folder that STILL stays is a warning with its path and what is in
     it — in `warnings` of a run that succeeded, and beside the failure of one that did not (`leftoverWarnings`, which
     `describeFailure` prints with the SDK's cleanup warnings and no sanitizer looks at: it is the plugin's own sentence, a
-    path and a code) — never left unsaid. The copy of the settings is EMPTIED first, so that what stays holds no value, and
-    the warning says whether that worked. It is removed, too, when the PROCESS ends while the work goes on, in every way
+    path and a code) — never left unsaid. The files that hold values are EMPTIED first, so that what stays holds none: the
+    copy of the settings, `pac`'s template (its defaults can be values) and the package the SDK exported (it carries the
+    same defaults, and can carry current values); the warning says whether that worked. `inWorkFolder` requires its caller
+    to say which files those are (`empty`, an empty list when none holds a value), so that a file is not left whole by a
+    caller that did not think of it. It is removed, too, when the PROCESS ends while the work goes on, in every way
     JavaScript can see (`lib/exit-cleanup.js`): `process.exit`, an error nothing catches (both through the `exit` event),
     and SIGINT, SIGTERM, SIGHUP and SIGBREAK where the platform delivers them — the cleanup runs synchronously, the
     listeners come off (only ours: the program's own are never removed or replaced) and the process ends as it would
@@ -3998,7 +4001,11 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     prepends a handler of its own later (`prependListener`, `prependOnceListener`, which calls it): the process's own
     `prependListener` is wrapped for as long as a cleanup is registered, and ours is put back in front before the
     program's call returns, because a signal can be raised in the very turn that the handler is put in place and a
-    one-shot handler that is ahead of ours is gone from the list by the time ours counts (`keepFirst`). A process that is
+    one-shot handler that is ahead of ours is gone from the list by the time ours counts (`keepFirst`). Moving ours is two
+    calls on the process, and the process announces each (`removeListener`, and `newListener` before the listener is on
+    the list), so a program that watches them can release the cleanup from one: a cleanup that was released meanwhile
+    stays released — the registry is looked at again before ours is put back and after, and a listener of a registry that
+    is gone is taken off — and ours is put back even when a notification throws. A process that is
     KILLED (SIGKILL, TerminateProcess)
     runs nothing, and the folder it made stays —
     named `solution-settings-<random>` so that a sweep of the temp folder can find it; the plugin does not sweep for it
@@ -4063,7 +4070,9 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     and Guest (resolved by .NET's SDDL reader, not by the RID);
     `exit-cleanup.test.js` the signal handling over a stand-in for `process` (both platforms), and real children for the
     rest — a signal the child raises in itself (on a later turn, as a delivered one arrives, and in the very turn that
-    the program put a handler in place, which is where the handler's place on the list matters), so that the status
+    the program put a handler in place, which is where the handler's place on the list matters; and a cleanup that the
+    program releases from the process's own `removeListener` or `newListener` notification, which must stay released),
+    so that the status
     logic runs on every platform, and on Windows real console events. A console event reaches EVERY process on the
     console it is sent on, so `helpers/console-event.js` starts each child in a console of its own and sends nothing
     until that console has been listed and holds the child and the sender alone (`console-event.test.js` pins the
@@ -4076,7 +4085,10 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     reads what the file does. `solution-settings-tokens.test.js` runs the real script over the fake platform with the
     platform configured to quote the access token in each place a text of another party can reach an output (a staging
     that failed with HTTP 200, the reason `pac` was asked, `pac`'s own words, a template's default values, a library's
-    `console.error`), reads both streams and every file, and scans the script for any other place that writes. The two big
+    `console.error`), reads both streams and every file, and scans the script for any other place that writes; with the
+    removal of the work folder held (`helpers/fake-held-work-folder-preload.js`) it also reads what a folder that cannot
+    be removed keeps on disk — `pac`'s template and the package the SDK exported, both holding the token as a default,
+    emptied — on success, after a `pac` that failed, with no package, and when the process ends while `pac` runs. The two big
     files above make the copy the plain way (`helpers/plain-private-file.js`: the real one starts `whoami` and `icacls`,
     about half a second a copy, and is pinned in the two files just named), in-process and, through the preload, in a
     child process — unless its configuration says `realPrivateFolder`.

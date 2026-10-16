@@ -15,12 +15,15 @@
 //              (`owner.how`), or — `prepend`, `prepend-once` — with `process.prependListener` / `process.prependOnceListener`, which put it AHEAD of every listener that is there, the cleanup's included. A handler that
 //              is `self-removing` or `prepend-self-removing` takes itself off the list as soon as it is called.
 //     plain    registers no cleanup at all: the control, the process as it is when nothing of ours listens
+//     releaseFrom  `removeListener` | `newListener`: the program watches that notification of the process and releases the cleanup from it — the notification the cleanup causes when it is taken off the list and put back in
+//              front of a handler the program prepends (lib/exit-cleanup.js `keepFirst`) — and has it released by the time that prepend returns. The ready message says how many SIGINT listeners the process has then (`sigint`):
+//              a released cleanup leaves none of its own
 //     ready    where the child says it is ready: a file, written whole by a rename. A child that has no IPC channel — one started in a console of its own — has no other way; with none given the
 //              message goes over the channel.
 const fs = require('node:fs');
 const { onProcessEnd } = require('../../lib/exit-cleanup.js');
 
-const { marker, ending, owner, ready, plain } = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const { marker, ending, owner, ready, plain, releaseFrom } = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 
 function registerOwner() {
   const handler = () => {
@@ -38,10 +41,26 @@ function registerOwner() {
 if (owner && owner.when === 'before') registerOwner();
 const release = plain ? () => {} : onProcessEnd(() => fs.writeFileSync(marker, 'cleaned'));
 if (owner && owner.when === 'after') registerOwner();
+
+// The program releases the cleanup from the process's own notification of a listener coming off the list or going on it, which is where the cleanup is taken off and put back when the program prepends a handler.
+function releaseFromNotification(event) {
+  const trigger = () => {};
+  const observer = (type, listener) => {
+    // `removeListener`: the cleanup's own listener is the first to come off a list of SIGINT. `newListener`: the trigger is the first to go on it (nothing to do yet), and the cleanup's listener the second.
+    if (type !== 'SIGINT' || listener === trigger) return;
+    process.removeListener(event, observer);
+    release();
+  };
+  process.on(event, observer);
+  process.prependListener('SIGINT', trigger);
+  process.removeListener('SIGINT', trigger);
+  release();
+}
+if (releaseFrom) releaseFromNotification(releaseFrom);
 const hold = setInterval(() => {}, 1000);
 
 function announce(then) {
-  const message = { kind: 'ready', cleanedYet: fs.existsSync(marker), pid: process.pid };
+  const message = { kind: 'ready', cleanedYet: fs.existsSync(marker), pid: process.pid, sigint: process.listenerCount('SIGINT') };
   if (!ready) return process.send(message, then);
   fs.writeFileSync(`${ready}.new`, JSON.stringify(message));
   fs.renameSync(`${ready}.new`, ready);

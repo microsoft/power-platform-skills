@@ -96,7 +96,7 @@
 //   "warnings": [...] when something the run made could not be cleaned up: the SDK could not delete the staged copy of the package it made, or `template` could not remove the temporary name its
 //   file was written under (the file is complete; until that name is removed the file has two names, and writing it again is refused as a hard link), or the folder a pac fallback worked in
 //   could not be removed (after the bounded retry a Windows lock needs; the warning names its path and what is in it — the package the SDK exported, pac's template, the copy of the settings file pac
-//   was given, which is emptied first so that it keeps no value — to delete). For pac `applied` lists the entries the file filled (pac does not report what it applied).
+//   was given, each emptied first so that what stays keeps no value, and the warning says whether that worked — to delete). For pac `applied` lists the entries the file filled (pac does not report what it applied).
 //
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
 //   { "ok": false, "error": "<message>", "code": "<the SDK's or the PAC step's code>" [, "status": <HTTP status of the answer>] [, "fallback": { … }, "importJobId": "<guid>"]
@@ -868,7 +868,7 @@ function removeWorkFolder(dir, holds, empty) {
       return false;
     }
   });
-  const kept = empty.length === 0 ? '' : emptied.every(Boolean) ? ' (emptied, so it keeps no value)' : " (it could not be emptied either, so it may still hold the settings file's values)";
+  const kept = empty.length === 0 ? '' : emptied.every(Boolean) ? ' (emptied, so it keeps no value)' : ' (it could not be emptied either, so it may still hold values)';
   return `The folder ${dir} could not be removed (${stopped}); it holds ${holds}${kept}. Delete it.`;
 }
 
@@ -894,13 +894,15 @@ function writeNote(note, leaving) {
 // It is removed too when the process ends while the work is still going — `process.exit`, an error nothing catches, Ctrl+C, a terminated terminal or job (lib/exit-cleanup.js): the cleanup runs, synchronously, and
 // the process ends as it would have. A process that is KILLED runs nothing, and what it made stays: that limit is lib/exit-cleanup.js's to state, and the leftover is for a later run's sweep (lib/temp-workspace.js),
 // which removes a folder lent to pac once it is old.
-// `empty` names the files (relative to the folder) that hold values: when the folder cannot be removed they are EMPTIED, so that what stays on disk is at least not the values, and the note says whether that worked.
+// `empty` names the files (relative to the folder) that hold values: when the folder cannot be removed they are EMPTIED, so that what stays on disk is at least not the values, and the note says whether that worked. It is
+// required, so that a file that holds a value cannot be left out of the list by a caller that did not think of it: every file this script or pac writes in a folder is either named there or known to hold none.
 // `prepare(dir)` makes the folder ready for the work — for the settings copy, restricts it to its owner and writes the file. Making the folder and preparing it are ONE guarded step: a failure of either — the
 // folder could not be made, or could not be made private, or the file could not be written — is `prepareFailure(error)`, the error the caller throws instead, and the work is not started. A folder that was made
 // is removed first, as after any failure. `leaving(text)` is the one function everything the script writes goes through (the note of a folder that stays, when the process ends, is written with it: writeNote); it is
 // required, so that a caller that forgets it fails at once instead of writing a note nothing cleaned. `proc` is the test seam of lib/exit-cleanup.js: a stand-in for the process the cleanup is registered on.
-async function inWorkFolder(holds, work, { empty = [], prepare = null, prepareFailure = (error) => error, leaving, proc } = {}) {
+async function inWorkFolder(holds, work, { empty, prepare = null, prepareFailure = (error) => error, leaving, proc } = {}) {
   if (typeof leaving !== 'function') throw new TypeError('inWorkFolder needs `leaving`, the function everything the script writes goes through');
+  if (!Array.isArray(empty)) throw new TypeError('inWorkFolder needs `empty`, the files of the folder that hold values (an empty list when none does)');
   let dir;
   try {
     dir = makeTempWorkspace(WORK_FOLDER_PREFIX, { lent: true });
@@ -944,14 +946,20 @@ function withLeftover(error, text) {
 // `pac solution create-settings` reads the zip offline and writes the settings file; here it writes into a throwaway folder, and what it wrote is
 // read back and checked before it goes anywhere, so a failed or odd run cannot leave a half-made file at --out. `packageBytes` is the package when
 // only its bytes are at hand (it was exported by the SDK); pac needs a file. Answers `{ text, settings }`, and `warnings` when the folder stayed.
+// What the folder holds can hold values: an environment variable's default — typed by a maker, a token among them — is in the package the SDK exported and in the template pac made of it, and the package can carry current
+// values too (https://learn.microsoft.com/power-apps/maker/data-platform/environmentvariables: "the values are also separated into separate JSON files within the exported solution.zip file"). So when the folder cannot be
+// removed, both files are EMPTIED (inWorkFolder's `empty`) and the warning says whether that worked. A package the caller named (`packagePath`) is the caller's own file, outside the folder, and is never touched.
 async function templateThroughPac({ packagePath, packageBytes }, refusal, deps = {}) {
+  // The names of the two files this folder can hold, said once: the list of files to empty below has to name what the work writes.
+  const exportedPackage = 'solution.zip';
+  const template = 'settings.json';
   const { value, leftover } = await inWorkFolder(`${packageBytes ? 'the solution package this run exported and ' : ''}the settings template pac wrote`, async (dir) => {
     let zip = packagePath;
     if (!zip) {
-      zip = path.join(dir, 'solution.zip');
+      zip = path.join(dir, exportedPackage);
       fs.writeFileSync(zip, packageBytes);
     }
-    const file = path.join(dir, 'settings.json');
+    const file = path.join(dir, template);
     const label = 'pac solution create-settings';
     const run = await runPac(['solution', 'create-settings', '--solution-zip', zip, '--settings-file', file], { label, ...(deps.pac || {}) });
     if (!run.ok) throw pacError(`PAC_${run.failure.toUpperCase()}`, run.message, refusal);
@@ -966,7 +974,7 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
     } catch (err) {
       throw pacError('PAC_OUTPUT_UNREADABLE', err.message, refusal);
     }
-  }, { leaving: deps.leaving, proc: deps.process });
+  }, { empty: [template, ...(packageBytes ? [exportedPackage] : [])], leaving: deps.leaving, proc: deps.process });
   return leftover ? { ...value, warnings: [leftover] } : value;
 }
 

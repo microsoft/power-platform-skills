@@ -61,6 +61,12 @@ function uninstall(proc, registry) {
 // The wrapper is the process's property while the registry lasts and is taken off with it; if the program has put a wrapper of its own over ours by then, that one stays, and ours — in its chain — does nothing once the
 // registry is gone. The program's own call never fails for this bookkeeping. What is not seen: a listener put on by a call that goes round the process's own method —
 // `EventEmitter.prototype.prependListener.call(process, …)`, or a reference to `process.prependListener` kept from before the cleanup was registered — which is not what `process.prependOnceListener` or a call on `process` is.
+// Taking ours off and putting it back are each ANNOUNCED — the process emits `removeListener` as ours goes, and `newListener` before ours is on the list — and whatever listens may do anything there, the cleanup's release
+// included: it takes ours and this wrapper off the process (`uninstall`), and a registry of a later `onProcessEnd` may already be in their place. A cleanup that was released meanwhile stays released: its listener put back
+// would belong to a registry that is gone, with nothing to keep it first — a one-shot handler the program prepends next goes in front of it, is taken off the list before it is called, and leaves it counting no handler
+// but its own, so that it ends the process under that handler's shutdown, a cleanup nobody is waiting for.
+// So what is on the process is settled once both calls are made, whatever they did: ours is on it if its registry is still the process's, and is not if it is not — also when a notification threw, unless `newListener` keeps
+// throwing, which keeps ours off the list (the event is emitted before the listener is added) and cannot be helped from here.
 function keepFirst(proc, registry) {
   const previous = Object.getOwnPropertyDescriptor(proc, 'prependListener');
   const original = proc.prependListener;
@@ -70,8 +76,14 @@ function keepFirst(proc, registry) {
       const [type, listener] = args;
       const ours = this === proc && registries.get(proc) === registry ? registry.onSignal.get(type) : undefined;
       if (ours && listener !== ours && proc.rawListeners(type).indexOf(ours) > 0) {
-        proc.removeListener(type, ours);
-        original.call(proc, type, ours);
+        const released = () => registries.get(proc) !== registry || registry.onSignal.get(type) !== ours;
+        try {
+          proc.removeListener(type, ours);
+          if (!released()) original.call(proc, type, ours);
+        } finally {
+          if (released()) proc.removeListener(type, ours);
+          else if (!proc.rawListeners(type).includes(ours)) original.call(proc, type, ours);
+        }
       }
     } catch {
       // The order could not be kept — the cleanup may then find fewer handlers than there are, as it did before this wrapper — but the program's own call has been made and must not fail for it.

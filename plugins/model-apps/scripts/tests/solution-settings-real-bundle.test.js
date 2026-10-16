@@ -156,7 +156,8 @@ test('REAL BUNDLE: a staging copy that cannot be deleted is a warning on the out
 
 // --- the folder a pac fallback works in ----------------------------------------------------------------------------------------------------
 // A template that pac makes is written into a folder of the run's own under the temp directory (`solution-settings-<random>`), which holds the package the SDK exported and pac's template — whose defaults can be
-// values. It is removed however the run ends, with the bounded retry a Windows lock needs; a folder that stays is SAID, with its path, on the output of a run that succeeded and beside the failure of one that did not.
+// values. It is removed however the run ends, with the bounded retry a Windows lock needs; a folder that stays is SAID, with its path, on the output of a run that succeeded and beside the failure of one that did not,
+// and its files are EMPTIED first, so that what stays holds no value.
 const WORK_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
 // Holds the work folders as a scanner does: every removal of one answers `code` for its first `times` calls (all of them when Infinity), and what is left is removed when the test ends. `dirs` are the
 // folders the script tried to remove. The test's own folders (`solution-settings-real-…`) have a longer name and are never held.
@@ -197,7 +198,8 @@ test('REAL BUNDLE: a pac template folder that cannot be removed is said — its 
   assert.strictEqual(held.dirs.size, 1);
   const [left] = held.dirs;
   assert.deepStrictEqual(fs.readdirSync(left).sort(), ['settings.json', 'solution.zip'], 'the exported package and pac\'s template are what stayed');
-  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote. Delete it.`]);
+  assert.deepStrictEqual(fs.readdirSync(left).sort().map((name) => fs.readFileSync(path.join(left, name), 'utf8')), ['', ''], 'both are EMPTIED: what a template\'s defaults and a package\'s definitions hold is not left on disk');
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
   assert.strictEqual(JSON.parse(fs.readFileSync(f.out, 'utf8')).EnvironmentVariables[0].SchemaName, 'new_Url');
 });
 
@@ -211,7 +213,8 @@ test('REAL BUNDLE: and beside the failure of a run that did not — pac refuses 
     assert.strictEqual(err.code, 'PAC_FAILED');
     assert.strictEqual(err.fallback.code, 'SOLUTION_STAGING_FAILED');
     const described = ss.describeFailure(err, readCleanupWarnings);
-    assert.deepStrictEqual(described.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote. Delete it.`]);
+    assert.deepStrictEqual(fs.readdirSync(left).sort().map((name) => fs.readFileSync(path.join(left, name), 'utf8')), ['', ''], 'a template that pac wrote before it failed is emptied too');
+    assert.deepStrictEqual(described.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
     assert.match(described.error, /pac refused the package/);
     return true;
   });
@@ -241,7 +244,31 @@ test('REAL BUNDLE: without --env the zip is read by pac alone, and its folder is
   assert.strictEqual(result.source, 'pac');
   const [left] = held.dirs;
   assert.deepStrictEqual(fs.readdirSync(left), ['settings.json']);
-  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote. Delete it.`]);
+  assert.strictEqual(fs.readFileSync(path.join(left, 'settings.json'), 'utf8'), '', 'pac\'s template is emptied');
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
+});
+
+test('REAL BUNDLE: a template folder whose files cannot be emptied either says so — the package and the template may still hold values — and the run reports what it reported', async (t) => {
+  const stays = holdingWorkFolders(t);
+  const realWrite = fs.writeFileSync;
+  let blocked = 0;
+  fs.writeFileSync = (file, data, options) => {
+    // What the run writes is allowed; emptying a file of the work folder afterwards (a write of nothing) is what a scanner holding the file blocks.
+    if (WORK_FOLDER.test(path.basename(path.dirname(String(file)))) && data === '') {
+      blocked += 1;
+      throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    }
+    return realWrite(file, data, options);
+  };
+  t.after(() => { fs.writeFileSync = realWrite; });
+  const { http } = world(MISSING_BASE);
+  const f = files();
+  const result = await ss.runTemplate(templateRequest(f, { solution: 'ContosoDemo' }), { http, pac: pacWritesTemplate() });
+  const [left] = stays.dirs;
+  assert.strictEqual(result.source, 'pac');
+  assert.strictEqual(blocked, 2, 'both files were tried');
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (it could not be emptied either, so it may still hold values). Delete it.`]);
+  assert.strictEqual(JSON.parse(fs.readFileSync(f.out, 'utf8')).EnvironmentVariables[0].SchemaName, 'new_Url', 'the template at --out is complete');
 });
 
 // --- what the SDK could not clean up survives the pac fallback ---------------------------------------------------------------------------------
@@ -751,7 +778,8 @@ test('REAL BUNDLE: a template made by pac whose work folder cannot be removed, a
   assert.strictEqual(failure.code, 'OUT_EXISTS');
   const [left] = held.dirs;
   assert.ok(left && fs.existsSync(left), 'the folder stayed');
-  assert.deepStrictEqual(failure.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote. Delete it.`]);
+  assert.deepStrictEqual(failure.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
+  assert.strictEqual(fs.readFileSync(path.join(left, 'settings.json'), 'utf8'), '', 'pac\'s template is emptied');
 });
 
 // --- a folder for pac's copy that cannot be made --------------------------------------------------------------------------------------------------
@@ -1463,7 +1491,7 @@ test('REAL BUNDLE: the same sentences hold when the file cannot be emptied eithe
   const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
   const [left] = stays.dirs;
   assert.ok(blocked);
-  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the copy of the settings file that pac was given, which can hold secrets (it could not be emptied either, so it may still hold the settings file's values). Delete it.`]);
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the copy of the settings file that pac was given, which can hold secrets (it could not be emptied either, so it may still hold values). Delete it.`]);
 });
 
 // --- the access token is not in what a failure prints -----------------------------------------------------------------------------------------------

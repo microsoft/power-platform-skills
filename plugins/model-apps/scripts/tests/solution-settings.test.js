@@ -1171,7 +1171,7 @@ test('a failure to install the file keeps every warning the run already knew —
   try {
     await assert.rejects(ss.runTemplate({ command: 'template', env: ENV, packagePath: pkg, outPath: out3, force: false }, { sdkFirst: carrying, pac }), (err) => {
       assert.strictEqual(err.code, 'OUT_EXISTS');
-      const note = `The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote. Delete it.`;
+      const note = `The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote (emptied, so it keeps no value). Delete it.`;
       assert.deepStrictEqual(ss.describeFailure(err, () => { throw new Error('they are carried, not read again'); }).warnings, [sdkWarning, note]);
       return true;
     });

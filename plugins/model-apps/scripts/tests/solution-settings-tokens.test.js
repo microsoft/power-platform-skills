@@ -3,7 +3,8 @@
 // out of every answer that is not a success (lib/sdk-http-client.js), and a success is the caller's data. But an answer of HTTP 200 can be a FAILURE all the same: StageSolution answers 200 with
 // `StageSolutionStatus: "Failed"` and the SDK turns that into SOLUTION_STAGING_FAILED, quoting the dependencies and validation results it was given — words of the platform, in a message the script prints.
 // So what the script prints is cleaned where it leaves: the text of another party that an import shows is taken out of every token the run sent as it is sanitized, and everything written to stdout or
-// stderr — and the file `template` writes, and the note a process that is ending leaves — goes through the one function that takes the recorded tokens out (guardOutput, leaving).
+// stderr — and the file `template` writes, and the note a process that is ending leaves — goes through the one function that takes the recorded tokens out (guardOutput, leaving). What the script leaves on disk is
+// kept clean the other way: a folder it made that cannot be removed keeps its files EMPTIED (the last section).
 //
 // Real processes over the fake platform: the real script, the real vendored SDK and the real az-token client (helpers/run-with-fakes.js), with the platform configured to REQUIRE a recognisable token on
 // every Dataverse request, and then to quote it in the one place a case is about.
@@ -246,6 +247,9 @@ test('every place solution-settings.js writes a file or a descriptor is accounte
   // Whatever is written to a stream is cleaned by the guard main installs before it reads its arguments, and every call that works for the run is given the function it needs.
   assert.match(code, /async function main\(\) \{\s*(\/\/[^\n]*\s*)*const tokens = new Set\(\);\s*guardOutput\(tokens\);/);
   assert.strictEqual(calls(/\binWorkFolder\(/g).length - 1, calls(/\bleaving: deps\.leaving\b/g).length, 'every caller of inWorkFolder gives it `leaving` (the first match is its definition)');
+  // A leftover is output too, in its way: what a folder that cannot be removed keeps on disk. Whoever adds a caller says which of its files hold values (an empty list when none does), so that none is left whole by a caller that
+  // did not think of it — pac's template was (see the tests of the folder that stays, below).
+  assert.strictEqual(calls(/\binWorkFolder\(/g).length - 1, calls(/\bempty: \[/g).length, 'every caller of inWorkFolder says which files of its folder hold values (`empty`)');
 });
 
 // --- the pieces ---------------------------------------------------------------------------------------------------------------------------------
@@ -374,4 +378,166 @@ test('the note a process that is ending leaves about a folder that stayed goes t
   assert.strictEqual(notes.length, 1, notes.join('\n'));
   assert.match(notes[0], /^The folder .*<token>.* could not be removed \(EBUSY\)/, 'the note is there, and says where the folder is');
   assert.ok(!notes[0].includes(NOTE_TOKEN), `the note repeats the token: ${notes[0]}`);
+});
+
+// --- what stays when the folder pac worked in cannot be removed -------------------------------------------------------------------------------------
+
+// pac writes its template into a folder of the run's own under the temp directory (`solution-settings-<random>`), beside the package the SDK exported when the run exported one, and the run removes the folder when it ends.
+// When the folder cannot be removed (a scanner or a sync client holds a file: EBUSY) what stays on disk must hold no value — a template's defaults, and the defaults of the package it was made from, can be values, a token
+// among them — so both files are EMPTIED, and the warning says so. These are real processes with the removal of the work folder held (helpers/fake-held-work-folder-preload.js), run with a temporary folder of their own,
+// which is where the test reads what stayed.
+const HELD_WORK_FOLDER = path.resolve(__dirname, 'helpers', 'fake-held-work-folder-preload.js');
+const WORK_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
+// The package the SDK exported, with the token in it in the clear — where a leftover could be read — as a default value, and the template pac wrote from it with the same default.
+const PACKAGE_WITH_DEFAULT = Buffer.concat([ZIP, Buffer.from(` new_Url ${TOKEN}`)]);
+const TEMPLATE_WITH_DEFAULT = JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: '', DefaultValue: TOKEN }], ConnectionReferences: [] }, null, 2);
+const FAILED_STAGING = { status: 'Failed', missingDependencies: [{ Message: 'the component new_x depends on new_y' }] };
+
+function temporaryFolder(t) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'tokens-held-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+  return temp;
+}
+// What a run needs to take `temp` for its temporary folder and — `held` — to be unable to remove its work folder.
+const environmentOf = (temp, held) => ({ TEMP: temp, TMP: temp, TMPDIR: temp, ...(held ? { NODE_OPTIONS: `--require=${JSON.stringify(HELD_WORK_FOLDER)}` } : {}) });
+const workFoldersIn = (temp) => fs.readdirSync(temp).filter((name) => WORK_FOLDER.test(name)).map((name) => path.join(temp, name));
+const sizesIn = (folder) => Object.fromEntries(fs.readdirSync(folder).sort().map((name) => [name, fs.statSync(path.join(folder, name)).size]));
+// No file under `temp`, whatever its name, holds any of `pieces`: the bytes of every one are read.
+function assertNoneOnDisk(temp, pieces, what) {
+  const filesIn = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? filesIn(path.join(dir, entry.name)) : [path.join(dir, entry.name)]));
+  for (const file of filesIn(temp)) {
+    const bytes = fs.readFileSync(file);
+    for (const piece of pieces) assert.ok(!bytes.includes(piece), `${what}: ${path.relative(temp, file)} still holds ${piece === TOKEN ? 'the token' : `"${piece}"`}`);
+  }
+}
+// What a run reported, but for where it wrote (another folder every run) and what it said of a folder that stayed.
+const reported = (run) => {
+  const result = JSON.parse(run.lines[0]);
+  delete result.out;
+  delete result.warnings;
+  return result;
+};
+
+// A `template --solution` run whose StageSolution fails, so that pac makes the template from the package the SDK exported — the package and the template both holding the token as a default.
+function pacTemplateRun(t, { held, pac = pacWritesTemplate(TEMPLATE_WITH_DEFAULT) }) {
+  const temp = temporaryFolder(t);
+  const run = templating({ solution: { packageBase64: PACKAGE_WITH_DEFAULT.toString('base64'), stage: FAILED_STAGING }, pac, env: environmentOf(temp, held) });
+  return { run, temp };
+}
+
+test('template: pac\'s template and the package it was made from, both holding the token, are EMPTIED when their folder cannot be removed — no token stays on disk, the warning says so, and the run reports what it reported', (t) => {
+  const { run: held, temp } = pacTemplateRun(t, { held: true });
+  assert.strictEqual(held.status, 0, held.stderr);
+  assertNoneOnDisk(temp, PIECES, 'a work folder that could not be removed');
+  const [folder, ...more] = workFoldersIn(temp);
+  assert.ok(folder && more.length === 0, 'the work folder is what stayed, and only it');
+  assert.deepStrictEqual(sizesIn(folder), { 'settings.json': 0, 'solution.zip': 0 }, 'pac\'s template and the exported package are there, with nothing in them');
+  assert.deepStrictEqual(JSON.parse(held.lines[0]).warnings, [`The folder ${folder} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
+  assertNoToken(held, 'a run whose work folder stayed');
+
+  const { run: control } = pacTemplateRun(t, { held: false });
+  assert.strictEqual(held.status, control.status);
+  assert.deepStrictEqual(reported(held), reported(control), 'the result is the one of a run that could remove its folder, but for the warning');
+  assert.strictEqual(held.stderr, control.stderr);
+  assert.strictEqual(held.outputs['settings.json'], control.outputs['settings.json'], 'and so is the template written at --out: cleaned of the token, whole otherwise');
+  assert.strictEqual(JSON.parse(held.outputs['settings.json']).EnvironmentVariables[0].DefaultValue, '<token>');
+});
+
+test('template: the control — the same run, its folder removed — leaves nothing, says nothing of a folder, and holds no token anywhere', (t) => {
+  const { run, temp } = pacTemplateRun(t, { held: false });
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.deepStrictEqual(fs.readdirSync(temp), [], 'nothing is left in the temporary folder');
+  assert.ok(!('warnings' in JSON.parse(run.lines[0])), 'and nothing is said of a folder');
+  assertNoToken(run, 'the control');
+});
+
+test('template: a pac that fails after it wrote its template leaves that template emptied too — the failure is the one it was, and the folder is said beside it', (t) => {
+  const failing = { responses: [{ match: ['solution', 'create-settings'], writeFlag: '--settings-file', writeContent: TEMPLATE_WITH_DEFAULT, status: 1, stderr: 'Error: pac refused the package.\n' }] };
+  const { run: held, temp } = pacTemplateRun(t, { held: true, pac: failing });
+  assert.strictEqual(held.status, 1);
+  assertNoneOnDisk(temp, PIECES, 'a work folder that could not be removed, after a failure');
+  const [folder, ...more] = workFoldersIn(temp);
+  assert.ok(folder && more.length === 0);
+  assert.deepStrictEqual(sizesIn(folder), { 'settings.json': 0, 'solution.zip': 0 });
+  const out = JSON.parse(held.lines[0]);
+  assert.deepStrictEqual([out.ok, out.code], [false, 'PAC_FAILED']);
+  assert.deepStrictEqual(out.warnings, [`The folder ${folder} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
+  assertNoToken(held, 'a failed run whose work folder stayed');
+
+  const { run: control, temp: clean } = pacTemplateRun(t, { held: false, pac: failing });
+  assert.strictEqual(control.status, 1);
+  assert.deepStrictEqual(reported(held), reported(control), 'the failure is the one a run that could remove its folder reports, but for the warning');
+  assert.strictEqual(held.stderr, control.stderr);
+  assert.deepStrictEqual(fs.readdirSync(clean), [], 'and that run leaves nothing');
+});
+
+test('template --package without --env: the folder holds pac\'s template alone — it is emptied, and no package file is made in the folder for the purpose', (t) => {
+  const temp = temporaryFolder(t);
+  const value = 'https://default.contoso.example/?code=0123456789';
+  const template = JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: '', DefaultValue: value }], ConnectionReferences: [] });
+  const run = runScript('solution-settings.js', ['template', '--package', inRunDir('solution.zip'), '--out', inRunDir('settings.json')], {
+    platform: {}, files: { 'solution.zip': ZIP }, pac: pacWritesTemplate(template), read: ['settings.json'], env: environmentOf(temp, true),
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  assertNoneOnDisk(temp, [value], 'a work folder that could not be removed');
+  const [folder, ...more] = workFoldersIn(temp);
+  assert.ok(folder && more.length === 0);
+  assert.deepStrictEqual(sizesIn(folder), { 'settings.json': 0 }, 'only pac\'s template is there: there was no package to export, and none was made');
+  const out = JSON.parse(run.lines[0]);
+  assert.deepStrictEqual([out.ok, out.source], [true, 'pac']);
+  assert.deepStrictEqual(out.warnings, [`The folder ${folder} could not be removed (EBUSY); it holds the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
+  assert.strictEqual(JSON.parse(run.outputs['settings.json']).EnvironmentVariables[0].DefaultValue, value, 'the template at --out is what pac wrote');
+});
+
+// The note of a process that ends while pac runs is written by the cleanup (lib/exit-cleanup.js), which has the same files to empty — here with a stand-in for the process (its own seam, `deps.process`), as the test of
+// the note above has.
+test('template: when the process ends while pac runs, the cleanup EMPTIES pac\'s template and the exported package in a folder that cannot be removed, and the note it leaves says so', async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'tokens-ending-'));
+  const temp = path.join(base, 'tmp');
+  fs.mkdirSync(temp);
+  const old = Object.fromEntries(['TEMP', 'TMP', 'TMPDIR'].map((name) => [name, process.env[name]]));
+  const realRemove = fs.rmSync;
+  const realWrite = fs.writeSync;
+  const notes = [];
+  t.after(() => {
+    fs.rmSync = realRemove;
+    fs.writeSync = realWrite;
+    for (const [name, value] of Object.entries(old)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    realRemove(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  });
+  for (const name of Object.keys(old)) process.env[name] = temp;
+  fs.rmSync = (target, options) => {
+    if (WORK_FOLDER.test(path.basename(String(target)))) throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${target}'`), { code: 'EBUSY' });
+    return realRemove(target, options);
+  };
+  fs.writeSync = (...args) => (args[0] === 2 ? notes.push(args[1]) : realWrite(...args));
+
+  const proc = new EventEmitter();
+  const cloud = createCloud({ tokens: { dataverse: TOKEN }, solution: { packageBase64: PACKAGE_WITH_DEFAULT.toString('base64'), stage: FAILED_STAGING } });
+  const request = { command: 'template', env: ORG, solution: 'ContosoDemo', outPath: path.join(base, 'settings.json'), force: false };
+  let folder;
+  let atTheEnd;
+  await assert.rejects(ss.runTemplate(request, {
+    process: proc,
+    http: { getToken: () => cloud.tokens.dataverse, request: cloud.request, sleep: async () => {} },
+    pac: {
+      spawn: (name, args) => {
+        const file = args[args.indexOf('--settings-file') + 1];
+        folder = path.dirname(file);
+        fs.writeFileSync(file, TEMPLATE_WITH_DEFAULT);
+        // The process ends while pac runs: the cleanup tries to remove the folder, which a lock holds, and says so on stderr.
+        proc.emit('exit', 0);
+        atTheEnd = sizesIn(folder);
+        return { status: 1, stdout: '', stderr: 'Error: pac was ended.' };
+      },
+    },
+  }), (error) => error.code === 'PAC_FAILED');
+
+  assert.deepStrictEqual(atTheEnd, { 'settings.json': 0, 'solution.zip': 0 }, 'what the folder held when the cleanup had run: nothing');
+  assert.strictEqual(notes.length, 1, notes.join('\n'));
+  assert.strictEqual(notes[0], `The folder ${folder} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.\n`);
+  assertNoneOnDisk(temp, PIECES, 'the folder a process that was ending left');
 });
