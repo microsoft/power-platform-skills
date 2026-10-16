@@ -524,8 +524,10 @@ choices** — a download sets it on every one it recovers, so tearing down a dow
 a lookup column from a retained table or deletes a shared option set. Dashboards are found by name, so
 teardown deletes only those the app's solution holds, never another app's namesake — and none when the spec
 has no real solution to ask (the `Default` a download may leave); it keeps the solution itself while any step
-failed, so a re-run can still tell, and keeps the page manifest while the generative-pages step failed, so a
-re-run still finds the pages the app authored. **Dry-run by default**; add `--apply
+failed, so a re-run can still tell, keeps the page manifest while the generative-pages step failed, so a
+re-run still finds the pages the app authored, and keeps a table while a business rule on it could not be
+deleted (the rule's activated copy can never be deleted once its table is gone), so a re-run deletes the rule
+first, then the table. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.

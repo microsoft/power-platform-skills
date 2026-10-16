@@ -1320,6 +1320,355 @@ test('business-rule teardown reports a failure when the activated copy still can
   assert.ok(res.errors.some((e) => /business rule "Gate"/.test(e.step) && /not supported/.test(e.message)), 'the failure names the business-rule step and platform reason');
 });
 
+// --- a business rule that could not be deleted keeps its table ------------------------------------
+//
+// LIVE-MEASURED: a rule definition's delete answered HTTP 500 "There is no active transaction.". Teardown
+// recorded the failure and went on — it dropped the rule's table and everything else, and kept only the
+// solution. The rule's activated copy (type 2) was then undeletable for good: once its table is gone the
+// platform cannot resolve the entity the copy points at (400 0x80041102 "... ObjectTypeCode = N was not found
+// in the MetadataCache"), and the re-run reported success because that answer reads as "not found". So a
+// table whose rule step failed is KEPT, and the re-run deletes the rule first, then the table.
+//
+// The environment below is ONE state, so the assertions can be about what is LEFT when the run ends (no
+// activated copy without its table), not only about which calls were made. It models just the platform facts
+// the business-rule handler's own comments cite:
+//   * the activated copy cannot be deleted while its definition exists (405, workflow_active_workflow);
+//   * deleting the definition leaves the copy behind, unreferenced;
+//   * a copy whose table is gone can never be deleted (400 0x80041102) — it is "stranded".
+// `failNextDelete` lists the workflow ids whose next delete answers 500 and leaves the row as it was (a 500 does
+// not prove the delete did not run; the engine must not depend on which, which is why it never sends one twice);
+// `failQueryFor` lists the rule names whose rows cannot even be read.
+function ruleEnvironment({ rules, failNextDelete = [], failQueryFor = [], ...state }) {
+  const sdk = mockSdk({ solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } }, ...state });
+  const rows = new Map(rules.map((r) => [r.workflowid, { category: 2, ...r }]));
+  const failing = new Set(failNextDelete);
+  const httpError = (statusCode, message) => Object.assign(new Error(`HTTP ${statusCode}: ${message}`), { statusCode });
+  const readOtherTables = sdk.queryRecords;
+  sdk.queryRecords = async (entitySet, opts = {}) => {
+    if (entitySet !== 'workflow') return readOtherTables(entitySet, opts);
+    const filter = String(opts.filter || '');
+    sdk.calls.push({ method: 'queryRecords', entitySet, filter });
+    if (failQueryFor.some((name) => filter.includes(`name eq '${name}'`))) throw httpError(500, 'There is no active transaction.');
+    return [...rows.values()]
+      .filter((r) => filter.includes(`category eq ${r.category} `) && filter.includes(`type eq ${r.type}`)
+        && filter.includes(`name eq '${r.name}'`) && filter.includes(`primaryentity eq '${r.primaryentity}'`))
+      .map((r) => ({ ...r }));
+  };
+  sdk.updateRecord = async (entitySet, id, data) => {
+    sdk.calls.push({ method: 'updateRecord', entitySet, id, data });
+    const row = rows.get(String(id));
+    if (!row) throw httpError(404, `workflow ${id} not found`);
+    Object.assign(row, data);
+    // Deactivating a definition flips its activated copy to Draft with it (live-measured).
+    for (const copy of rows.values()) if (copy._parentworkflowid_value === row.workflowid) Object.assign(copy, data);
+  };
+  sdk.deleteRecord = async (entitySet, id) => {
+    sdk.calls.push({ method: 'deleteRecord', entitySet, id });
+    const row = rows.get(String(id));
+    if (failing.delete(String(id))) throw httpError(500, 'There is no active transaction.');
+    if (!row) throw httpError(404, `workflow ${id} not found`);
+    if (row.type === 2 && !sdk.db.tables.has(row.primaryentity)) {
+      throw httpError(400, '0x80041102 The entity with ObjectTypeCode = 10001 was not found in the MetadataCache.');
+    }
+    if (row.type === 2 && rows.has(row._parentworkflowid_value)) {
+      throw httpError(405, 'Cascade Delete failed due to cascade restrict relation. Restricting entity Workflow is collected by Relationship with name: workflow_active_workflow.');
+    }
+    rows.delete(String(id));
+  };
+  sdk.workflowIds = () => [...rows.keys()];
+  // An activated copy whose table is gone: undeletable, so it is what a teardown must never leave behind.
+  sdk.stranded = () => [...rows.values()].filter((r) => r.type === 2 && !sdk.db.tables.has(r.primaryentity)).map((r) => r.workflowid);
+  return sdk;
+}
+
+const ruleRows = (name, entity, id) => [
+  { workflowid: `${id}-def`, name, primaryentity: entity, type: 1, statecode: 1 },
+  { workflowid: `${id}-copy`, name, primaryentity: entity, type: 2, statecode: 1, _parentworkflowid_value: `${id}-def` },
+];
+const ruleSpec = (over = {}) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [
+    { schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } },
+    { schemaName: 'new_customer', primaryAttribute: { schemaName: 'new_name' } },
+  ],
+  views: [{ entity: 'new_ticket', name: 'Open tickets' }],
+  webResources: [{ name: 'new_ticket.js', type: 'js', content: '' }],
+  businessRules: [{ entity: 'new_ticket', name: 'Gate' }, { entity: 'new_customer', name: 'Lock' }],
+  ...over,
+});
+const ruleWorld = (over = {}) => ruleEnvironment({
+  tables: ['new_ticket', 'new_customer'],
+  views: { 'new_ticket:Open tickets': { savedqueryid: 'view-1', name: 'Open tickets' } },
+  webresources: { 'new_ticket.js': { webresourceid: 'wr-1', name: 'new_ticket.js' } },
+  rules: [...ruleRows('Gate', 'new_ticket', 'gate'), ...ruleRows('Lock', 'new_customer', 'lock')],
+  ...over,
+});
+const keptTableLabel = (table, ruleNames) => `table ${table} (kept — business rule(s) on it could not be deleted (${ruleNames.map((n) => JSON.stringify(n)).join(', ')}), and once the table is gone a rule's activated copy can never be deleted; a re-run deletes the rule(s) first, then the table)`;
+// Every SDK call of a run as one line each, in order — the request sequence the assertions compare.
+const ruleRequests = (sdk, from = 0) => sdk.calls.slice(from).map((c) => [c.method, c.entitySet, c.kind, c.type, c.query, c.logical, c.id, c.data && JSON.stringify(c.data)].filter(Boolean).join(' '));
+const ruleWrites = (sdk, from = 0) => ruleRequests(sdk, from).filter((line) => /^(updateRecord|deleteRecord|deleteTable|deleteSolution|deleteRemoteArtifact|deleteWebResource) /.test(line));
+
+test('a business rule whose definition cannot be deleted keeps ITS table (and the solution); everything else is deleted as before', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
+  const events = [];
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: (e) => events.push(e) });
+
+  // The failure is reported as it always was: one failed step, named, with the platform's own words.
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  assert.match(res.errors[0].message, /There is no active transaction/);
+
+  // The table is kept, on purpose and said so — as a skip the summary counts as "kept", not as "not found".
+  const label = keptTableLabel('new_ticket', ['Gate']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [label]);
+  assert.ok(events.some((e) => e.phase === 'tables' && e.status === 'skip' && e.skip === 'kept' && e.label === label), JSON.stringify(events.filter((e) => e.phase === 'tables')));
+  assert.ok(!events.some((e) => e.status === 'ok' && /^table new_ticket/.test(e.label)), 'the kept table is never reported as deleted');
+  assert.deepStrictEqual(res.deleted.table, ['new_customer']);
+
+  // What the environment holds afterwards: the rule and its table, together, so a re-run can still finish.
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket'], 'the other table goes as before; this one stays');
+  assert.deepStrictEqual(sdk.workflowIds(), ['gate-def', 'gate-copy'], 'the failed delete changed nothing, and the other rule is gone');
+  assert.deepStrictEqual(sdk.stranded(), [], 'no activated copy outlives its table');
+  assert.deepStrictEqual(Object.keys(sdk.db.views), [], 'the table\'s view is deleted as before');
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), [], 'the web resource is deleted as before');
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S'], 'the solution is kept, as for any earlier failure');
+  assert.ok(res.skipped.some((s) => /^solution S \(kept — 1 earlier step\(s\) failed/.test(s)), JSON.stringify(res.skipped));
+
+  // The failed delete was sent ONCE. A 500 does not prove it did not run, and nothing here re-sends it.
+  assert.strictEqual(sdk.calls.filter((c) => c.method === 'deleteRecord' && c.id === 'gate-def').length, 1);
+  assert.deepStrictEqual(ruleRequests(sdk), [
+    'queryRecords workflow',
+    'updateRecord workflow gate-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow gate-def',
+    'queryRecords workflow',
+    'updateRecord workflow lock-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow lock-def',
+    'deleteRecord workflow lock-copy',
+    'resolveArtifact view',
+    'deleteRemoteArtifact view view-1',
+    'findTables new_customer',
+    'deleteTable new_customer',
+    'findTables new_ticket',
+    'resolveArtifact webResource',
+    'deleteWebResource wr-1',
+  ]);
+});
+
+test('the re-run after a failed rule delete removes the definition, then the copy, then the table, then the solution', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
+  const failed = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(failed.ok, false);
+
+  const from = sdk.calls.length;
+  const again = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(again.ok, true, JSON.stringify(again.errors));
+  assert.deepStrictEqual(again.skipped.filter((s) => /kept/.test(s)), [], 'nothing is kept once the rule is deletable');
+  assert.deepStrictEqual(ruleWrites(sdk, from), [
+    'deleteRecord workflow gate-def',
+    'deleteRecord workflow gate-copy',
+    'deleteTable new_customer', // gone already: the table delete's tolerated not-found
+    'deleteTable new_ticket',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), []);
+});
+
+test('an activated copy that cannot be deleted (its definition already is) keeps the table too, and the re-run finishes the copy', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-copy'] });
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_ticket', ['Gate'])]);
+  assert.deepStrictEqual(sdk.workflowIds(), ['gate-copy'], 'the definition went; the copy is what is left');
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S']);
+
+  const from = sdk.calls.length;
+  const again = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(again.ok, true, JSON.stringify(again.errors));
+  assert.deepStrictEqual(ruleWrites(sdk, from), [
+    'deleteRecord workflow gate-copy',
+    'deleteTable new_customer',
+    'deleteTable new_ticket',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+});
+
+test('a failed business rule keeps only ITS OWN table — a rule on another table does not hold this one', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['lock-def'] });
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Lock" (new_customer)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_customer', ['Lock'])]);
+  assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+  assert.deepStrictEqual([...sdk.db.tables], ['new_customer']);
+  assert.deepStrictEqual(sdk.workflowIds(), ['lock-def', 'lock-copy'], 'the other table\'s rule was deleted whole');
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('the kept label names every rule that failed on the table, and only those', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: [...ruleRows('Gate', 'new_ticket', 'gate'), ...ruleRows('Notify', 'new_ticket', 'notify'), ...ruleRows('Audit', 'new_ticket', 'audit')],
+    failNextDelete: ['gate-def', 'notify-copy'],
+  });
+  const spec = ruleSpec({
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    views: [],
+    webResources: [],
+    businessRules: ['Gate', 'Notify', 'Audit'].map((name) => ({ entity: 'new_ticket', name })),
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)', 'business rule "Notify" (new_ticket)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_ticket', ['Gate', 'Notify'])]);
+  assert.deepStrictEqual(sdk.workflowIds().sort(), ['gate-copy', 'gate-def', 'notify-copy'], 'the rule that went cleanly is gone');
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('the table is matched to its failed rule by logical name, in any letter case', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: ruleRows('Gate', 'new_ticket', 'gate'),
+    failNextDelete: ['gate-def'],
+  });
+  const spec = ruleSpec({
+    entities: [{ schemaName: 'new_TICKET', primaryAttribute: { schemaName: 'new_name' } }],
+    views: [],
+    webResources: [],
+    businessRules: [{ entity: 'New_Ticket', name: 'Gate' }],
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_TICKET', ['Gate'])]);
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('a rule whose rows cannot even be read keeps its table too (whether it has an activated copy is not known)', async () => {
+  const sdk = ruleWorld({ failQueryFor: ['Gate'] });
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  assert.match(res.errors[0].message, /There is no active transaction/);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_ticket', ['Gate'])]);
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('a reused or system table keeps its OWN skip reason when a rule on it failed — it was never going to be deleted', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_shared'],
+    systemTables: ['account'],
+    rules: [...ruleRows('Gate', 'new_shared', 'gate'), ...ruleRows('Lock', 'account', 'lock')],
+    failNextDelete: ['gate-def', 'lock-def'],
+  });
+  const spec = ruleSpec({
+    entities: [
+      { schemaName: 'new_shared', existing: true, primaryAttribute: { schemaName: 'new_name' } },
+      { schemaName: 'account', primaryAttribute: { schemaName: 'name' } },
+    ],
+    views: [],
+    webResources: [],
+    businessRules: [{ entity: 'new_shared', name: 'Gate' }, { entity: 'account', name: 'Lock' }],
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_shared)', 'business rule "Lock" (account)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [
+    'table account (system table — not created by this build)',
+    'table new_shared (reused table (existing: true) — not created by this build)',
+  ]);
+  assert.ok(!sdk.calls.some((c) => c.method === 'deleteTable'), 'neither table is deleted, with or without the failed rule');
+});
+
+// The control for all of the above: with no failed rule the request sequence is exactly what it was before
+// the keep existed — every read and write, in order.
+test('with no failed rule the whole run is unchanged: the same requests in the same order, nothing kept', async () => {
+  const sdk = ruleWorld();
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.deepStrictEqual(res.skipped, []);
+  assert.deepStrictEqual(res.deleted.table, ['new_customer', 'new_ticket']);
+  assert.deepStrictEqual(ruleRequests(sdk), [
+    'queryRecords workflow',
+    'updateRecord workflow gate-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow gate-def',
+    'deleteRecord workflow gate-copy',
+    'queryRecords workflow',
+    'updateRecord workflow lock-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow lock-def',
+    'deleteRecord workflow lock-copy',
+    'resolveArtifact view',
+    'deleteRemoteArtifact view view-1',
+    'findTables new_customer',
+    'deleteTable new_customer',
+    'findTables new_ticket',
+    'deleteTable new_ticket',
+    'resolveArtifact webResource',
+    'deleteWebResource wr-1',
+    'resolveArtifact solution',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('a failure in a step that is NOT a business rule keeps no table — only the solution, as before', async () => {
+  const sdk = ruleWorld();
+  sdk.deleteRemoteArtifact = async () => { throw new Error('HTTP 500 view delete failed'); };
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['view "Open tickets" (new_ticket)']);
+  assert.deepStrictEqual([...sdk.db.tables], [], 'the rules went cleanly, so nothing needs a table kept');
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S']);
+  assert.ok(res.skipped.some((s) => /^solution S \(kept — 1 earlier step\(s\) failed/.test(s)), JSON.stringify(res.skipped));
+});
+
+// The keep is scoped to business rules, deliberately. A business process flow is a `workflow` row too, but its
+// handler's own notes say the platform removes the flow's activated copy WITH the flow, and nothing measured
+// says a flow becomes undeletable when its table is dropped — so a failed flow delete behaves as it always did.
+test('a failed business PROCESS FLOW keeps no table — the keep is scoped to business rules', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: [{ workflowid: 'flow-def', name: 'Flow', primaryentity: 'new_ticket', category: 4, type: 1, statecode: 0 }],
+    failNextDelete: ['flow-def'],
+  });
+  const spec = ruleSpec({
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    views: [],
+    webResources: [],
+    businessRules: [],
+    businessProcessFlows: [{ entity: 'new_ticket', name: 'Flow' }],
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business process flow "Flow" (new_ticket)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), []);
+  assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+});
+
+test('a dry run is unchanged: the same plan, nothing read or written, nothing kept', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
+  const res = await runTeardown(ruleSpec(), { apply: false }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res, {
+    ok: true,
+    dryRun: true,
+    plan: [
+      'business rule "Gate" (new_ticket)',
+      'business rule "Lock" (new_customer)',
+      'view "Open tickets" (new_ticket)',
+      'table new_customer',
+      'table new_ticket',
+      'web resource new_ticket.js',
+      'solution S',
+    ],
+  });
+  assert.deepStrictEqual(sdk.calls, []);
+});
+
 // --- helpers ----------------------------------------------------------------------------
 
 test('odataStr doubles single quotes (OData literal escaping)', () => {

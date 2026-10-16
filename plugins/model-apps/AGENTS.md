@@ -1086,7 +1086,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   are deleted **explicitly before tables** (a table delete does not reliably cascade cross-references; it
   does remove the table's own columns). A business rule and a business process flow are `workflows` rows
   bound to the entity, so they too are deleted before their table — and each is **deactivated first**,
-  because Dataverse refuses to delete an activated process. Deleting an activated BPF is also what
+  because Dataverse refuses to delete an activated process. A business rule is TWO rows (the definition and
+  the activated copy the platform makes of it), deleted in that order, and the copy can no longer be deleted
+  once its table is gone (400 `0x80041102`), so **a table whose business-rule step failed is kept** (see the
+  solution, below). Deleting an activated BPF is also what
   removes the org-owned **backing table** the platform creates on activation. **Web resources are deleted after tables**: a table's vector/raster
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
@@ -1187,7 +1190,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   holds every dashboard, so with no real solution teardown deletes none), which makes the solution the
   only proof a re-run has — deleted after a failure, the retry kept the app's dashboards for good. A
   membership read that fails is itself a failed step, never a skip or a not-found (as either, the
-  solution was deleted right after it). Command teardown
+  solution was deleted right after it). The same goes for a **table** while a business-rule step on it
+  failed (its rows could not be read, or its definition's or its activated copy's delete failed — an HTTP 500
+  included): the copy is deletable only while its table exists, so dropping the table anyway turns a failure
+  a re-run could finish into a leftover nothing can remove (live: a definition delete answered 500 "There is
+  no active transaction.", the table was dropped, and the re-run reported success with the copy still there —
+  an answer that says "not found" reads as "already gone"). The table is reported as `table <name> (kept —
+  business rule(s) on it could not be deleted ("<rule>"), …)` (`skip: 'kept'`, counted in the summary's
+  "kept"); the rule is matched to it by logical name in any letter case, and a re-run deletes the rule, then
+  the table, then the solution.
+  Only a table the run would have deleted is kept this way — a reused (`existing: true`) or system table
+  keeps its own skip reason. Nothing re-sends the failed delete (a 500 does not prove it did not run), and the
+  run's `ok`, errors and exit status are those of the failed step alone; a dry run is unchanged. A failed
+  **business process flow** keeps no table: its handler's notes say the platform removes the flow's
+  activated copy with the flow, and nothing measured says a flow becomes undeletable once its table is gone.
+  Command teardown
   removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
   per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
   exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`

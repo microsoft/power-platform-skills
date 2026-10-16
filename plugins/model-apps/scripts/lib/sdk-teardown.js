@@ -20,6 +20,10 @@
 //   3. commands      — appactions per entity (they reference the web-resource JS; delete first).
 //                      The SDK's command delete is ENTITY-keyed (removes every appaction on that
 //                      entity's bar in one call), so this passes the entity logical name, not an id.
+//   3b. business rules — `workflow` rows (category 2): the definition first, then the activated copy the
+//                      platform makes of it — both BEFORE the tables phase, because once a rule's table is
+//                      gone its activated copy can never be deleted (400 0x80041102). When this step fails,
+//                      runTeardown keeps that rule's table (step 8) for a re-run, so the copy stays deletable.
 //   4. forms         — systemform rows per entity (forms reference views/web-resources; deleted before tables)
 //   4b. roles        — persona security roles. Deleted AFTER the forms and BEFORE the data model, and
 //                      both halves of that are load-bearing:
@@ -40,7 +44,8 @@
 //                      its parent, so children/referencing tables delete first). Deleting a table
 //                      does NOT cascade forms/views/charts/relationships when cross-references exist
 //                      (e.g. a form subgrid references another table's view), so teardown deletes
-//                      them explicitly first.
+//                      them explicitly first. A table whose business rule could not be deleted (step 3b)
+//                      is KEPT — reported as a `(kept — …)` skip — until a re-run deletes the rule.
 //   9. web-resources — webresourceset rows (form/command JS, table-icon SVG/raster images, and the
 //                      build's generated default app icon) — deleted AFTER tables: a table's icon
 //                      web resource is referenced by the TABLE itself, so it can't be removed until
@@ -756,6 +761,10 @@ const KIND_HANDLERS = {
       //     the table is dropped it is undeletable forever (400 0x80041102).
       //
       // So: definition first, activated copy second, and both strictly before the tables phase.
+      //
+      // runTeardown holds that line when a step FAILS, too: a table whose business-rule step failed is
+      // kept (`failedRulesByTable` there), so a failed delete leaves a rule a re-run can still finish —
+      // never an activated copy that nobody can.
       return [
         ...items.filter((r) => r.type !== 2),
         ...items.filter((r) => r.type === 2),
@@ -775,7 +784,8 @@ const KIND_HANDLERS = {
         // silently no-ops `updateRecord` on a missing row — a contract the real SDK does not have.
         // A genuine 405 here is a real leftover that becomes PERMANENTLY undeletable once the table
         // is dropped, so it must surface as a reported failure rather than be papered over by a
-        // retry that can only ever fail the same way. See issue #493.
+        // retry that can only ever fail the same way. See issue #493. The same goes for ANY failure of this
+        // delete (an HTTP 500 included): it fails the rule's step, and runTeardown then keeps the rule's table.
         return sdk.deleteRecord('workflow', item.id);
       }
       // Deactivate before delete. Dataverse refuses to delete an activated process, and the error it
@@ -1561,6 +1571,24 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   // resource with the manifest's name is kept as well.
   const pageManifests = new Set(plan.filter((p) => p.kind === 'genpage').map((p) => String(p.target.manifestName).toLowerCase()));
   let pagesFailed = false;
+  // A table whose business rule could not be deleted is KEPT for a re-run. A rule is two `workflow` rows —
+  // the definition and the activated copy the platform makes of it (KIND_HANDLERS.businessRules) — and the
+  // copy can be deleted only while its table exists: once the table is gone the platform cannot resolve the
+  // entity the copy points at (400 0x80041102 "... ObjectTypeCode = N was not found in the MetadataCache")
+  // and nothing removes the copy again. Live: a definition delete answered HTTP 500 "There is no active
+  // transaction."; the run went on, dropped the table, and the re-run reported success with the copy still
+  // there for good, because an answer that says "not found" reads as "already gone" (to the read of the
+  // rule's rows and to the copy's delete alike). Of every step that follows a failed rule, dropping its
+  // table is the only one that turns a failure a re-run could finish into a permanent leftover, so it alone
+  // waits. The solution is already kept after any failure; a table icon's web resource or a global choice
+  // that the kept table still references is refused by the platform's own dependency check, as it is for
+  // any retained table, and that is one more reported failure, not a leftover.
+  //
+  // Keyed by the table's lower-cased logical name, as the rule step's target names it; the value is the
+  // names of the rules that failed on it. ANY failure of the rule step counts — an unreadable rule, the
+  // definition's delete or the copy's — because each can leave a copy behind. Nothing re-sends the failed
+  // delete: a 500 does not prove the delete did not run, and this plugin sends a delete once.
+  const failedRulesByTable = new Map();
   let n = 0;
   for (const step of plan) {
     const myN = (n += 1);
@@ -1625,6 +1653,17 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         emit({ phase: step.phase, status: 'skip', skip: skipReason ? 'kept' : 'not-found', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
         continue;
       }
+      // The table of a failed business rule waits for a re-run (see failedRulesByTable). Asked AFTER the
+      // resolve, so a table this teardown would never have deleted — a reused (`existing: true`) or a
+      // system one, which the table handler has just skipped above with its own, exact reason — is not
+      // reported as kept for a rule's sake.
+      const failedRules = step.kind === 'table' ? failedRulesByTable.get(String(step.target.logical).toLowerCase()) : undefined;
+      if (failedRules) {
+        const why = `${step.label} (kept — business rule(s) on it could not be deleted (${failedRules.map((name) => JSON.stringify(String(name))).join(', ')}), and once the table is gone a rule's activated copy can never be deleted; a re-run deletes the rule(s) first, then the table)`;
+        result.skipped.push(why);
+        emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
+        continue;
+      }
       const { deletedIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' ? deferredResetPublishes : undefined);
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
       if (step.kind === 'genpage') {
@@ -1656,6 +1695,12 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       result.errors.push({ step: step.label, message });
       emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
       if (step.kind === 'genpage') pagesFailed = true;
+      if (step.kind === 'businessRules') {
+        // Whichever read or delete failed, the rule may still have an activated copy, and that copy
+        // must outlive this run's table delete (see failedRulesByTable).
+        const table = String(step.target.entity).toLowerCase();
+        failedRulesByTable.set(table, [...(failedRulesByTable.get(table) || []), step.target.name]);
+      }
       // Best-effort continue-on-error is right for the steps AFTER the dependency root is gone — one
       // undeletable view should not strand the rest. It is WRONG for the root itself (#587 item 5):
       // tables, forms, views and charts are COMPONENTS of the app module, so continuing past a failed
