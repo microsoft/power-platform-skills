@@ -666,3 +666,43 @@ for (const id of ['once-before', 'prepend-once-after']) {
     assert.strictEqual(fs.readFileSync(answer.run.files.handled, 'utf8'), 'handled');
   });
 }
+
+// A notification that throws makes the wrapper put the cleanup's listener back in a recovery step, and that add is announced too (`newListener`, before
+// the listener is on the list). A program that releases the cleanup there must find it released: a listener put back for a registry that is gone would
+// stay first for nobody, count no handler of the program's one-shot owner, and end the process under that owner's own shutdown.
+for (const kind of ['remove-throws', 'new-throws']) {
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    test(`${platform}: a cleanup released while its listener is put back after a notification that threw (${kind}) stays released, and the program's one-shot owner keeps its shutdown`, () => {
+      const { EventEmitter } = require('node:events');
+      const proc = new EventEmitter();
+      const trace = [];
+      Object.assign(proc, { platform, pid: 736, exit: (status) => trace.push(['exit', status]), kill: (_, signal) => trace.push(['kill', signal]) });
+      const release = onProcessEnd(() => trace.push(['cleanup']), { process: proc });
+      const [ours] = proc.rawListeners('SIGINT');
+      let attempts = 0;
+      if (kind === 'remove-throws') {
+        proc.on('removeListener', function failing(type, listener) {
+          if (type !== 'SIGINT' || listener !== ours) return;
+          proc.removeListener('removeListener', failing);
+          throw new Error('synthetic observer failure');
+        });
+      }
+      proc.on('newListener', function observed(type, listener) {
+        if (type !== 'SIGINT' || listener !== ours) return;
+        attempts += 1;
+        if (kind === 'new-throws' && attempts === 1) throw new Error('synthetic observer failure');
+        proc.removeListener('newListener', observed);
+        release();
+      });
+      const trigger = () => {};
+      proc.prependListener('SIGINT', trigger);
+      proc.removeListener('SIGINT', trigger);
+      release();
+      assert.strictEqual(proc.listenerCount('SIGINT'), 0, 'no listener of the released cleanup is left on the process');
+      assert.ok(!Object.hasOwn(proc, 'prependListener'), 'and the wrapper is off the process');
+      proc.prependOnceListener('SIGINT', () => trace.push(['owner-starts-shutdown']));
+      proc.emit('SIGINT', 'SIGINT');
+      assert.deepStrictEqual(trace, [['owner-starts-shutdown']], 'the owner is told, and nothing ends the process under it');
+    });
+  }
+}

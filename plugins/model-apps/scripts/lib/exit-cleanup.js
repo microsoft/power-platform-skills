@@ -82,7 +82,11 @@ function keepFirst(proc, registry) {
           if (!released()) original.call(proc, type, ours);
         } finally {
           if (released()) proc.removeListener(type, ours);
-          else if (!proc.rawListeners(type).includes(ours)) original.call(proc, type, ours);
+          else if (!proc.rawListeners(type).includes(ours)) {
+            // The recovery add is announced too (`newListener`, before ours is on the list), and a release made there must hold as well.
+            original.call(proc, type, ours);
+            if (released()) proc.removeListener(type, ours);
+          }
         }
       }
     } catch {
