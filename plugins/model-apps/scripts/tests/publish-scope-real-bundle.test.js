@@ -12,7 +12,8 @@
 // saved it, so naming one would release a maker's unfinished work there.
 //
 // The request is made before the FIRST write of the app, whichever writer that is (the last section): a changed-only re-upload of a page that has to pin a
-// default view the app lost writes and publishes the app without the app step, and is protected the same way.
+// default view the app lost writes and publishes the app without the app step, and is protected the same way. What a push adds forms of is the navigation IT sends
+// (the section on the navigation a writer pushes): the placement of a default view pushes the app as the server holds it, so it is the server's, not the spec's.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -864,6 +865,200 @@ test('the fast route when the app\u2019s form components cannot be read publishe
   assert.ok(p.unfinished().includes('Form the app holds, label saved and not published'), 'a table that cannot be proven is left alone');
 });
 
+// --- The navigation a writer pushes is the one it sends, not the spec's -------------------------------------------------------
+//
+// The placement of a default view does not push the spec's navigation: it fetches the app as the server holds it, adds the view it came to pin and pushes THAT, so
+// the Main forms its push adds are those of the tables the SERVER's navigation names, and the Main-form list it carries is the fetched app's (none). A maker may have
+// changed that navigation since the last build, and a changed-only re-upload of a page rewrites none (`skipSitemapFinalize`). The request names the tables of the
+// navigation the push sends, and never the spec's; and it asks nothing of the spec's Main-form list, which this push does not apply.
+
+// A maker saves a change to the app's navigation in the designer: `edit` turns the sitemap XML the server holds into the XML it holds from then on.
+async function makerEditsNavigation(p, edit) {
+  const base = `${p.org.origin}/api/data/v9.0`;
+  const sitemapId = p.org.calls.find((c) => c.method === 'POST' && /^\/sitemaps(\?|$)/.test(c.path)).body.sitemapid;
+  const held = await p.org.httpClient.get(`${base}/sitemaps(${sitemapId})`);
+  const next = edit(held.body.sitemapxml);
+  assert.notStrictEqual(next, held.body.sitemapxml, 'the edit changed the navigation');
+  const saved = await p.org.httpClient.patch(`${base}/sitemaps(${sitemapId})`, { sitemapxml: next });
+  assert.ok(saved.status < 300, `the fake accepted the navigation: ${saved.status}`);
+}
+// The navigation the SDK writes: <SubArea Id="sub_0_0_0" Entity="contoso_item" …><Titles>…</Titles></SubArea>
+const withoutEntry = (table) => (xml) => xml.replace(new RegExp(`<SubArea\\b(?=[^>]*\\bEntity="${table}")[^>]*>[\\s\\S]*?</SubArea>`), '');
+const retargeted = (from, to) => (xml) => xml.replace(`Entity="${from}"`, `Entity="${to}"`);
+const withEntry = (table) => (xml) => xml.replace('</Group>', `<SubArea Id="maker_${table}" Entity="${table}"><Titles><Title LCID="1033" Title="${table}" /></Titles></SubArea></Group>`);
+// A maker who takes a table out of the app takes its forms out of the app's components too.
+function formsOutOfTheApp(p, table) {
+  const forms = new Set(p.org.fake.rows('systemforms').filter((r) => r.data.objecttypecode === table).map((r) => r.data.formid));
+  for (let i = p.org.components.length - 1; i >= 0; i -= 1) {
+    if (p.org.components[i].componenttype === 60 && forms.has(p.org.components[i].objectid)) p.org.components.splice(i, 1);
+  }
+  assert.ok(![...forms].some((id) => p.org.components.some((c) => c.objectid === id)), `the app holds no form of ${table}`);
+}
+// The read of the Main forms of one table that resolves the spec's `app.mainForms` names:
+//   GET /systemforms?$select=formid,name,formactivationstate&$filter=objecttypecode eq 'contoso_item' and type eq 2
+const readsMainFormCatalog = (c) => c.method === 'GET' && /^\/systemforms\?\$select=formid,name,formactivationstate&\$filter=objecttypecode eq '[a-z_]+' and type eq 2$/.test(c.path);
+
+test('the fast route over a navigation a maker took a table out of does not publish that table: its push adds no form of it, and the app holds none', async (t) => {
+  const p = pageScenario(t);
+  assert.strictEqual((await p.build(p.spec)).outcome.ok, true, 'the first build');
+  const maker = await afterTheMaker(p);
+  // Item is out of the app: no navigation entry and no form of it, and a form of it is saved and not published. The spec still names Item in its navigation, and a rebuild would put it back.
+  await makerEditsNavigation(p, withoutEntry('contoso_item'));
+  formsOutOfTheApp(p, 'contoso_item');
+  await p.makerEditsForm('contoso_item', 'Unfinished form on the table the navigation no longer names');
+  const { prior, classification } = editByBomOnly(p);
+  assert.deepStrictEqual([classification.verdict, classification.changedPhases], ['fast', ['pages']]);
+  const run = await fastRun(p, prior);
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_nav, contoso_retained, contoso_stats', 'app'], 'what the app holds forms and charts of (Retained, Stats) and what the push adds forms of (Nav, the one table the server\u2019s navigation still names): not Item, which the spec names');
+  const requests = p.org.calls.slice(run.mark);
+  assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the request is still the first write of the run');
+  assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'the default view the run came to repair is back in the app');
+  assert.ok(p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'the push added the Main form of the table the navigation still names');
+  assert.deepStrictEqual(p.unfinished().sort(), ['Draft on the page-only table', 'Unfinished form on the table the navigation no longer names'], 'the table the navigation no longer names keeps what a maker left on it, as a table only a page reads does');
+  assert.deepStrictEqual(run.warnings.filter((w) => /could not (publish|tell|read)|default views/.test(w)), []);
+});
+
+test('the same fast route without --publish is what it was: the placement\u2019s own publish of the app, whatever the navigation holds', async (t) => {
+  const p = pageScenario(t);
+  await p.build(p.spec);
+  await afterTheMaker(p);
+  await makerEditsNavigation(p, withoutEntry('contoso_item'));
+  formsOutOfTheApp(p, 'contoso_item');
+  const { prior } = editByBomOnly(p);
+  const run = await fastRun(p, prior, { publish: false });
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['app']);
+});
+
+test('the fast route over a navigation a maker pointed at another table publishes the table whose Main form its push adds, before the app', async (t) => {
+  const p = pageScenario(t);
+  assert.strictEqual((await p.build(p.spec)).outcome.ok, true, 'the first build');
+  const maker = await afterTheMaker(p);
+  // The server's navigation names Lookup where the spec names Item, and Lookup has an active Main form with a label saved and not published that the app does not hold yet.
+  await makerEditsNavigation(p, retargeted('contoso_item', 'contoso_lookup'));
+  const added = await p.makerEditsForm('contoso_lookup', 'Main form of the table the navigation now names');
+  assert.ok(!p.org.components.some((c) => c.objectid === added), 'the app does not hold it yet: no component list can prove it');
+  const { prior } = editByBomOnly(p);
+  const run = await fastRun(p, prior);
+  assert.strictEqual(run.outcome.ok, true);
+  const requests = p.org.calls.slice(run.mark);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_item, contoso_lookup, contoso_nav, contoso_retained, contoso_stats', 'app'], 'Item: the app still holds its form; Lookup and Nav: the push adds their Main forms; Retained and Stats: held');
+  assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the request is the first write of the run');
+  const pinned = requests.findIndex(pinsForm(added));
+  assert.ok(pinned > requests.findIndex(isTablesPublish) && pinned < requests.findIndex(isAppPublish), 'the form the push adds is pinned after its table was published, and before the app is');
+  assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'the default view is back in the app');
+  assert.deepStrictEqual(p.unfinished(), ['Draft on the page-only table'], 'the form the push added is live, as are the form the app holds and the one on Nav; the page-only table keeps its draft');
+});
+
+// An app whose spec lists the Main forms it offers. The list is applied where the build writes the app from the spec (the create, the app step's push, the pages finalizer);
+// the placement of a default view pushes the app as the server holds it and applies none, so what a form is called now is nothing it needs to know.
+for (const publish of [true, false]) {
+  test(`the fast route ${publish ? '' : 'without --publish '}repairs the default view although a Main form the spec lists was renamed on the server: the placement does not apply that list, so it does not look the name up`, async (t) => {
+    const p = pageScenario(t);
+    p.spec.minimumPluginVersion = '2.13.0';
+    p.spec.app.mainForms = { contoso_item: ['Item'] };
+    assert.strictEqual(validateAppSpec(p.spec).ok, true);
+    assert.strictEqual((await p.build(p.spec)).outcome.ok, true, 'the first build resolves the list: Item is there');
+    const maker = await afterTheMaker(p);
+    const base = `${p.org.origin}/api/data/v9.0`;
+    const item = p.org.fake.rows('systemforms').find((r) => r.data.objecttypecode === 'contoso_item' && r.data.name === 'Item').data.formid;
+    assert.ok((await p.org.fake.httpClient.patch(`${base}/systemforms(${item})`, { name: 'Renamed Item' })).status < 300);
+    assert.ok((await p.org.fake.httpClient.post(`${base}/PublishXml`, { ParameterXml: '<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>' })).status < 300, 'the rename is live');
+    assert.ok(p.org.components.some((c) => c.objectid === item), 'the form is still a component of the app: nothing is missing, only its name differs');
+    const { prior, classification } = editByBomOnly(p);
+    assert.deepStrictEqual([classification.verdict, classification.changedPhases], ['fast', ['pages']]);
+    const run = await fastRun(p, prior, { publish });
+    assert.strictEqual(run.outcome.ok, true);
+    assert.deepStrictEqual(run.warnings.filter((w) => /default views|could not (publish|tell|read)/.test(w)), [], 'the placement is not refused over a name it does not use');
+    assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'the default view is back in the app');
+    assert.deepStrictEqual(p.org.calls.slice(run.mark).filter(readsMainFormCatalog), [], 'no Main-form catalog is read for it, with or without --publish');
+    assert.deepStrictEqual(p.org.publishLog(run.mark), publish ? [HELD_AND_ADDED, 'app'] : ['app']);
+  });
+}
+
+test('the app step, which applies the spec\u2019s Main-form list, still looks the names up and stops before it writes or publishes anything when one is stale, with or without --publish', async (t) => {
+  const p = pageScenario(t);
+  p.spec.minimumPluginVersion = '2.13.0';
+  p.spec.app.mainForms = { contoso_item: ['Item'] };
+  assert.strictEqual((await p.build(p.spec)).outcome.ok, true);
+  const item = p.org.fake.rows('systemforms').find((r) => r.data.objecttypecode === 'contoso_item' && r.data.name === 'Item').data.formid;
+  await p.org.fake.httpClient.patch(`${p.org.origin}/api/data/v9.0/systemforms(${item})`, { name: 'Renamed Item' });
+  for (const publish of [true, false]) {
+    const mark = p.org.calls.length;
+    await assert.rejects(p.build(p.spec, { phases: ['app-shell'], publish }), /Main form 'Item' of contoso_item not found/, `publish: ${publish}`);
+    const requests = p.org.calls.slice(mark);
+    assert.ok(requests.some(readsMainFormCatalog), 'the list is applied to the app, so its names are looked up');
+    assert.deepStrictEqual(requests.filter((c) => c.method !== 'GET'), [], 'and nothing is written or published once one does not resolve');
+  }
+});
+
+test('the publish phase, in a run with no app step, does not look the spec\u2019s Main-form list up: it applies none, so a form renamed on the server does not stop it', async (t) => {
+  const p = pageScenario(t);
+  p.spec.minimumPluginVersion = '2.13.0';
+  p.spec.app.mainForms = { contoso_item: ['Item'] };
+  assert.strictEqual((await p.build(p.spec)).outcome.ok, true);
+  await afterTheMaker(p, { removeView: false });
+  const item = p.org.fake.rows('systemforms').find((r) => r.data.objecttypecode === 'contoso_item' && r.data.name === 'Item').data.formid;
+  await p.org.fake.httpClient.patch(`${p.org.origin}/api/data/v9.0/systemforms(${item})`, { name: 'Renamed Item' });
+  const run = await p.build(p.spec, { phases: ['publish'], extra: { changedOnly: { resolvedAppId: p.org.appId() } } });
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_item, contoso_retained, contoso_stats', 'app'], 'the request a publish alone sends: the tables the app holds forms and charts of');
+  assert.deepStrictEqual(p.org.calls.slice(run.mark).filter(readsMainFormCatalog), []);
+});
+
+// The writers that DO write the spec's navigation are unchanged: a full rebuild pushes the spec's navigation over the server's, whatever a maker added to it, so it names the spec's tables.
+test('a full rebuild over a navigation a maker added a table to sends the spec\u2019s navigation: it names the spec\u2019s tables, and not the table its push takes out of the navigation', async (t) => {
+  const p = pageScenario(t);
+  assert.strictEqual((await p.build(p.spec)).outcome.ok, true, 'the first build');
+  const maker = await afterTheMaker(p, { removeView: false });
+  await makerEditsNavigation(p, withEntry('contoso_lookup'));
+  const lookupForm = await p.makerEditsForm('contoso_lookup', 'Form on the table a maker added to the navigation');
+  const run = await p.build(p.spec);
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD_AND_ADDED, 'app', 'tables contoso_item + app'], 'three publishes, as an unchanged rebuild always sent: the spec\u2019s navigation is what the finalizer pushes');
+  assert.ok(p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'the push added the Main form of a table the spec names');
+  assert.ok(!p.org.components.some((c) => c.objectid === lookupForm), 'and none of the table it took out of the navigation');
+  assert.deepStrictEqual(p.unfinished(), ['Draft on the page-only table', 'Form on the table a maker added to the navigation']);
+});
+
+// The push that only carries the routing description re-sends the workspace copy's navigation, which is the server's (the app step does not write the spec's navigation there).
+for (const [direction, spec2, edit, named] of [
+  ['a table a maker took out of it is not named, though the spec names it', true, withoutEntry('contoso_lookup'), 'tables contoso_nav'],
+  ['a table a maker added to it is named, though the spec does not', false, withEntry('contoso_lookup'), 'tables contoso_lookup, contoso_nav'],
+]) {
+  test(`the push that only carries the routing description re-sends the server\u2019s navigation, so the tables it adds forms of are that navigation\u2019s: ${direction}`, async () => {
+    const s = scenario();
+    const twoTables = (spec) => {
+      if (spec2) {
+        spec.entities = [table('contoso_nav'), table('contoso_lookup')];
+        spec.appShell.areas[0].groups[0].subAreas.splice(0, 0, { entity: 'contoso_lookup', title: 'Lookup' });
+      }
+      return spec;
+    };
+    const first = twoTables(navOnlySpec());
+    const routed = twoTables(pageSpec());
+    routed.entities = first.entities;
+    routed.views = [];
+    routed.forms = [];
+    routed.charts = [];
+    routed.relationships = [];
+    routed.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [...first.appShell.areas[0].groups[0].subAreas, { page: 'overview', title: 'Overview' }] }] }] };
+    routed.app.aiDescription = 'Route navigation questions to this application.';
+    assert.strictEqual(validateAppSpec(routed).ok, true, JSON.stringify(validateAppSpec(routed).errors));
+    await s.build(first);
+    // The maker changes the navigation, saves a form on Lookup that the app does not hold, and keeps a label saved and not published on a form it holds.
+    await makerEditsNavigation(s, edit);
+    const lookupForm = await s.makerEditsForm('contoso_lookup', 'Form on the table the server\u2019s navigation may or may not name');
+    await s.makerEditsForm('contoso_retained', 'Form the app holds, label saved and not published', { inApp: true });
+    const pushed = await s.build(routed, { phases: NO_PAGES });
+    assert.strictEqual(pushed.outcome.ok, true, pushed.warnings.join('\n'));
+    assert.deepStrictEqual(s.org.publishLog(pushed.mark), ['tables contoso_retained', named, 'app', 'app'], 'the app step names what the app holds; the push asks for the tables of the navigation it sends');
+    assert.strictEqual(s.org.components.some((c) => c.componenttype === 60 && c.objectid === lookupForm), !spec2, 'the push added the form of a table its navigation names, and no other');
+    assert.strictEqual(s.unfinished().includes('Form on the table the server\u2019s navigation may or may not name'), spec2, 'and what a maker left on a table the navigation does not name is not released');
+  });
+}
+
 test('the pages finalizer, in a run with no app step, sends the request before it pushes and publishes the app', async (t) => {
   const p = pageScenario(t);
   await p.build(p.spec);
@@ -992,11 +1187,19 @@ test('sdk-build.js reaches the SDK for the app only through appWriters, and each
       const asks = method.indexOf('await publishTablesBeforeApp(');
       assert.ok(asks >= 0 && asks < method.search(call), `${name} awaits the request before its first write of the app`);
     } else {
-      assert.ok(/beforeAppWrite: async \(\) => publishTablesBeforeApp\(/.test(method), `${name} hands the backend the request to send right before it writes: a placement that writes nothing asks for nothing`);
+      assert.ok(/beforeAppWrite: async \(\w*\) => publishTablesBeforeApp\(/.test(method), `${name} hands the backend the request to send right before it writes: a placement that writes nothing asks for nothing`);
     }
   }
   // The SDK's own push of an app is the create's, or the one inside pushAppHeader (which only a writer calls): no other line pushes an app.
   assert.ok(/\.pushArtifact\(\s*'app'/.test(methodOf('create')) && !/\.pushArtifact\(\s*'app'/.test(outside), 'the SDK\u2019s push of an app is made nowhere else');
-  // The publish phase publishes the app in the envelope of the tables the build has artifacts of, and asks for the request too: a run can reach it without the app step.
-  assert.ok(/await publishTablesBeforeApp\([^)]*\)[\s\S]{0,400}publishTargets\(provision, runner, concurrency, perEntity, appTarget/.test(code), 'the publish phase sends the request before it publishes the app');
+  // The publish phase publishes the app in the envelope of the tables the build has artifacts of, and asks for the request too: a run can reach it without the app step. It adds no form, and applies no Main-form list.
+  assert.ok(/await publishTablesBeforeApp\(result\.created\.app\);\s*const publishedTargets = await publishTargets\(provision, runner, concurrency, perEntity, appTarget/.test(code), 'the publish phase sends the request before it publishes the app');
+  // Only the writers that APPLY the spec's Main-form list — the create and the push, which write the spec's app — look its names up. The others (a publish, the placement, the publish phase) apply none, so a name that
+  // went stale on the server is no reason for them to fail, and the placement sends the Main forms of the navigation it pushes, which it reads from the app it fetched.
+  for (const name of ['publish', 'publishPinned', 'placeViews']) assert.ok(!/resolvedMainForms/.test(methodOf(name)), `${name} resolves no Main-form list`);
+  assert.ok(!/publishTablesBeforeApp\(result\.created\.app[^;]*resolvedMainForms/.test(code), 'and neither does the publish phase');
+  // The request is gated by --publish before it prepares anything: what the write adds is asked for only once the request is going to be made.
+  const request = /const publishTablesBeforeApp = [\s\S]*?\n  };\n/.exec(code);
+  assert.ok(request, 'the request is one function');
+  assert.ok(request[0].indexOf('if (!publish') >= 0 && request[0].indexOf('if (!publish') < request[0].indexOf('addedTables()'), 'the flag is checked before the tables the write adds are worked out');
 });

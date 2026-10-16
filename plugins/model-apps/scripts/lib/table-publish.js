@@ -2,8 +2,8 @@
 // The tables a spec names, the tables the build publishes before the app, the one PublishXml that publishes tables, and the read of which forms, views and
 // charts of the spec's tables are saved but not published. The build (sdk-build.js) uses them twice:
 //   * before it writes or publishes the app, it publishes the tables it changed and the ones whose forms or charts the app holds once the build has written it:
-//     those its saved component list PROVES it holds (readAppFormChartTables) and those whose Main forms its own write adds to it (appWriteTables);
-//     publishTablesBeforeApp sends them, and preAppTables says which;
+//     those its saved component list PROVES it holds (readAppFormChartTables) and those whose Main forms its own write adds to it (appWriteTables for a write of the
+//     spec's navigation, appPushTables for a write of another: the navigation that write sends decides, not the spec's); publishTablesBeforeApp sends them, and preAppTables says which;
 //   * a build that stops before its publish phase says what ALL the spec's tables still hold saved and not published (settleOwedPublishes; specTables
 //     is the list it reads). That read changes nothing, so it can be as wide as the spec; the publish above cannot.
 // A table's publish ships everything saved on that table, whoever saved it, so the two lists are deliberately not the same list: a table the spec only
@@ -60,20 +60,24 @@ function specTables(spec) {
   return collected.list();
 }
 
-// The tables whose active Main forms the build's own write of the app adds to the app, from the spec alone: the tables of the navigation's Entity entries. The
-// SDK's write of an app (the create, and every push of an existing one) enumerates, for the tables of the sitemap's Entity subareas and for those alone, their
-// active Main forms (`type eq 2 and formactivationstate eq 1`), and adds each to the app as a component; an `app.mainForms` list restricts a table to the forms it
-// names and nothing else of it is added. A table only `app.tables` pins is not one of them: the plugin pins it as a table component (app-components.js pinAppTables)
-// and the SDK expands no form of it. publish-scope-real-bundle.test.js runs the real SDK to pin both facts.
-// These are the tables whose forms the app's saved component list CANNOT prove before the write, because the forms are not in it yet; and a form that is live with
-// a label saved and not published, pinned by this very write, would be published with the app before its table was: the strand publishReconciledTables measured.
-// So they are published first, on the spec and on how the SDK writes the app rather than on a read, which could only find what the write is about to add.
-// A table counts only if at least one of its forms will be in the app: a table whose Main-form list is empty adds none, and is left out. `mainFormsByTable` is the
-// resolved list ({ <lower-case table>: [form id, ...] }, resolveMainForms), or undefined when the spec has none. In the order the navigation gives them.
-function appWriteTables(spec, mainFormsByTable) {
+// The tables whose active Main forms a PUSH of the app adds to it, from the navigation that push sends. The SDK's write of an app (the create, and every push of an existing one)
+// enumerates, for the tables of the sitemap's Entity subareas and for those alone, their active Main forms (`type eq 2 and formactivationstate eq 1`), and adds each to the app as a
+// component; the Main-form list the pushed app carries (`components.mainFormsByTable`) restricts a table to the forms it names and nothing else of it is added. A table only `app.tables`
+// pins is not one of them: the plugin pins it as a table component (app-components.js pinAppTables) and the SDK expands no form of it. publish-scope-real-bundle.test.js runs the real SDK
+// to pin both facts.
+// These are the tables whose forms the app's saved component list CANNOT prove before the write, because the forms are not in it yet; and a form that is live with a label saved and not
+// published, pinned by this very write, would be published with the app before its table was: the strand publishReconciledTables measured. So they are published first, on how the SDK
+// writes the app rather than on a read, which could only find what the write is about to add.
+// WHICH navigation is the writer's to say, because it is the one that writer SENDS and the spec's is not always it: the writers that write the spec's app (the create, the app step's push and
+// the pages finalizer's) send the spec's navigation (appWriteTables); the placement of a default view pushes the app it fetched, whose navigation is the server's, a maker's changes in the
+// designer included; the push that only carries the routing description re-sends the workspace copy's, which is the server's too. Naming a table the pushed navigation does not hold would
+// release a maker's unfinished work on a table the app no longer has, and leaving out one it holds would strand the form its push adds. `entityTables` is the tables of the Entity entries of
+// that navigation, and `mainFormsByTable` the Main-form list that push carries ({ <lower-case table>: [form id, ...] }), or undefined when it carries none.
+// A table counts only if at least one of its forms will be in the app: a table whose Main-form list is empty adds none, and is left out. In the order the navigation gives them.
+function appPushTables(entityTables, mainFormsByTable) {
   const restricted = mainFormsByTable && typeof mainFormsByTable === 'object' ? mainFormsByTable : {};
   const names = namesCollector();
-  for (const table of navigationTables(specObject(spec))) {
+  for (const table of Array.isArray(entityTables) ? entityTables : []) {
     const allowed = restricted[String(table).toLowerCase()];
     if (Array.isArray(allowed) && !allowed.length) continue;
     names.add(table);
@@ -81,10 +85,16 @@ function appWriteTables(spec, mainFormsByTable) {
   return names.list();
 }
 
+// appPushTables for a writer that sends the SPEC's navigation: the tables of its Entity entries, from the spec alone. `mainFormsByTable` is the resolved list of the spec's `app.mainForms`
+// (resolveMainForms), or undefined when the spec has none.
+function appWriteTables(spec, mainFormsByTable) {
+  return appPushTables(navigationTables(specObject(spec)), mainFormsByTable);
+}
+
 // The tables the build publishes before the app:
 //   reconciled  the tables whose existing views and forms the build reconciled (the tables the SDK's own publish of them covered before)
 //   charted     the tables of the charts the build wrote: a created chart, or a description it PATCHed
-//   added       the tables whose Main forms the build's own write of the app adds to it (appWriteTables)
+//   added       the tables whose Main forms the build's own write of the app adds to it (appWriteTables, appPushTables)
 //   held        the tables whose forms or charts the app holds on the server (readAppFormChartTables), when that read was complete; omit it otherwise
 // Without `held` this is what the build changed and what its write of the app adds, which is also what it publishes when the app is new (it holds nothing on the
 // server yet) or when what it holds could not be proven. The spec decides only what the build itself writes: what the app already holds is what its component
@@ -300,7 +310,7 @@ const LABEL_RISK = 'a label someone saved on a form there and did not publish ma
 //   saved    Map<table, names[]> of what THIS build saved on a table (`view Open Tickets`, `chart By Area`): what it created, or a chart whose description it wrote
 //   described  Map<table, Set<chart name>> of the charts whose DESCRIPTION this build wrote, which a name in `saved` reads the same as a created chart
 //   forms    Set<table> of the tables the app is PROVEN to hold a form of (readAppFormChartTables), when that was read
-//   added    the tables whose Main forms the build's own write of the app adds (appWriteTables): the app may not hold them yet, so they are worded "or adds"
+//   added    the tables whose Main forms the build's own write of the app adds (appWriteTables, appPushTables): the app may not hold them yet, so they are worded "or adds"
 // The concerns are independent and a table can carry both: what this build saved goes out with the build's final publish, after the app's own (nothing is
 // claimed for a chart's description: whether the app's publish holds it back has not been measured), and a form the app holds on the table, or this build adds
 // to it, may have a label somebody else saved and never published, which carries the measured risk. A table is not "this build's" or "somebody else's": the
@@ -347,6 +357,6 @@ function describeUnreadAppComponents({ reason, added } = {}) {
 }
 
 module.exports = {
-  specTables, appWriteTables, preAppTables, tableList, publishTablesXml, readSavedNotPublished, describeSavedNotPublished,
+  specTables, appWriteTables, appPushTables, preAppTables, tableList, publishTablesXml, readSavedNotPublished, describeSavedNotPublished,
   readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents,
 };

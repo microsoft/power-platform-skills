@@ -2984,8 +2984,30 @@ test('deploy: the pin carries the request to send before the app is written — 
     assert.strictEqual(genpageCli.hooks.length, 1);
     assert.strictEqual(typeof genpageCli.hooks[0], 'function');
     const before = calls.length;
+    // The backend tells the hook what the push it is about to make sends (lib/genpage-sdk.js placeInApp); without --publish none of it is looked at, and a backend that tells nothing is no reason to fail.
+    await genpageCli.hooks[0]({ pushes: true, entityTables: ['contoso_item', 'contoso_other'], mainFormsByTable: undefined });
     await genpageCli.hooks[0]();
     assert.deepStrictEqual(calls.slice(before), [], 'without --publish the placement is not preceded by a read or a publish of anything');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: with --publish the request the placement is handed names the tables of the navigation the placement says it pushes — not the spec\'s — and none when it says it only publishes', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    withTables(spec, { detail: ['contoso_item'] });
+    const genpageCli = mockGenpageCli();
+    const { sdk, calls } = mockSdk();
+    sdk.dataverse.post = async (url, body) => { calls.push({ name: 'dataverse.post', args: [url, body] }); return { status: 204, body: null }; };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES, publish: true });
+    const requested = () => calls.filter((c) => c.name === 'dataverse.post' && c.args[0] === '/PublishXml').map((c) => [...c.args[1].ParameterXml.matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1]));
+    const before = requested().length;
+    assert.deepStrictEqual(requested(), [['contoso_item']], 'the build\'s own request, made when it created the app: the spec\'s navigation, which that write sends');
+    await genpageCli.hooks[0]({ pushes: false, entityTables: ['contoso_other'], mainFormsByTable: undefined });
+    assert.deepStrictEqual(requested().slice(before), [], 'a placement that only publishes the app adds no Main form: nothing to name');
+    await genpageCli.hooks[0]({ pushes: true, entityTables: ['contoso_item', 'contoso_live'], mainFormsByTable: { contoso_other: [] } });
+    assert.deepStrictEqual(requested().slice(before), [['contoso_live']], 'what its push adds forms of, less what an earlier request named: the spec\'s own table was published already');
+    await genpageCli.hooks[0]({ pushes: true, entityTables: ['contoso_live', 'contoso_empty'], mainFormsByTable: { contoso_empty: [] } });
+    assert.deepStrictEqual(requested().slice(before), [['contoso_live']], 'and a table the push adds no form of, or one already named, is not named again');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 

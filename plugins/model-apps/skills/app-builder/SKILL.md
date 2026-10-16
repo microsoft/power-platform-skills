@@ -472,7 +472,8 @@ request before the build writes or publishes the app: the tables whose existing 
 charts it wrote, the navigation's tables whenever the build pushes the app (the SDK adds their active Main forms to it on every push, so a form that
 is live with a label saved and not published would otherwise be pinned and published with the app before its table was: the first
 build and the build that pins a form are covered the same way, and so is a changed-only re-upload of a page that has to pin a default view
-the app lost, which pushes and publishes the app by itself), and — for an app that already exists — the tables of the form and
+the app lost, which pushes and publishes the app by itself — for that one the navigation is the one the app holds on the server, which
+the push sends, so a table a maker took out of it in the designer is not published and one it was pointed at is), and — for an app that already exists — the tables of the form and
 chart components its saved component list names, whether or not the spec names the table (a form a maker added to it, say, one never
 published included). A label someone saved and did not publish on a form of one of them would otherwise stay unpublished once the app
 is published. A table the app is not known to hold a form or chart of is not published by it, so what a maker left unfinished there
@@ -733,7 +734,7 @@ child view id. Each step emits `[n/total]`.
   app (the SDK adds their active Main forms to it, and a form that is live with a label saved and not published
   would otherwise be pinned and published with the app before its table was; a table whose `app.mainForms` list
   keeps no form adds none; a changed-only re-upload of a page that has to pin a default view the app lost is
-  covered too, and one that has nothing to pin publishes nothing), and — for an app that already exists — the tables of the form and chart components
+  covered too, with the tables of the navigation the app holds on the server (that push sends it, not the spec's), and one that has nothing to pin publishes nothing), and — for an app that already exists — the tables of the form and chart components
   its saved component list names, a form a maker added to it and never published included, so a label saved and
   not published there is not held back by the app's publish. A table the app is not known to hold a form or chart
   of is not named (declared only, a lookup column's target, read only by a page, or only pinned in `app.tables`):

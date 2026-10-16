@@ -3,7 +3,7 @@
 // app — against the in-memory stand-in for the SDK (helpers/fake-genpage-sdk.js). The write paths are in genpage-sdk.test.js.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+const { makeGenpageSdk, entityTablesOfSiteMap } = require('../lib/genpage-sdk.js');
 const { genPageSubArea, genPageSubAreaId } = require('../lib/genpage-subarea.js');
 const { FakeSdk, sdkError } = require('./helpers/fake-genpage-sdk.js');
 
@@ -472,6 +472,65 @@ test('placeInApp: without beforeAppWrite the placement is what it was, and a val
     assert.deepStrictEqual(out.added, [P1]);
     assert.deepStrictEqual([sdk.count('pushArtifact'), sdk.count('publishArtifact')], [1, 1]);
   }
+});
+
+// ── placeInApp: what the caller is told about the write (`beforeAppWrite`'s argument) ───────────────────────────────────────────────────────────────
+// The build decides from it which tables to publish before the app. The placement is the one that knows what it sends: the app as the server holds it, plus the page entries and the views
+// this call adds. The SDK expands the Entity entries of the navigation it pushes into their active Main forms (and only those: a page entry, a link or a dashboard adds none), and applies the
+// Main-form list the pushed app carries, so these are the Entity entries of the FETCHED navigation and the fetched app's list — never the spec's, which this push does not send.
+const holds = (...subAreas) => {
+  const app = appArtifact();
+  app.siteMap.areas[0].groups[0].subAreas.push(...subAreas);
+  return app;
+};
+const toldBy = async (sdk, options) => {
+  const told = [];
+  await backend(sdk).placeInApp(APP, { ...options, beforeAppWrite: async (write) => { told.push(write); } });
+  return told;
+};
+
+test('placeInApp: beforeAppWrite is told what the push sends — the tables of the Entity entries of the navigation the server holds, lower-cased and once each, and that it pushes', async () => {
+  const sdk = placing(holds(
+    { id: 'sub_2', type: 'Entity', entity: 'Contact', title: 'Contacts' },
+    { id: 'sub_3', type: 'Entity', entity: 'ACCOUNT', title: 'Accounts again' },
+    { id: 'sub_4', type: 'GenPage', genPageId: P2, title: 'A page' },
+    { id: 'sub_5', type: 'URL', url: 'https://contoso.example', title: 'Documentation' },
+    { id: 'sub_6', type: 'DashBoard', dashboardId: V_HELD, title: 'Dashboard' },
+    { id: 'sub_7', type: 'Entity', title: 'An entry with no table' },
+  ));
+  assert.deepStrictEqual(await toldBy(sdk, { pages: [{ pageId: P1, title: 'One' }] }), [{ pushes: true, entityTables: ['account', 'contact'], mainFormsByTable: undefined }]);
+});
+
+test('placeInApp: beforeAppWrite is told the Main-form list the pushed app carries, when it carries one', async () => {
+  const lists = { account: ['33333333-0000-4000-8000-000000000001'] };
+  const sdk = placing(appArtifact({ components: { views: [], mainFormsByTable: lists } }));
+  assert.deepStrictEqual(await toldBy(sdk, { pages: [{ pageId: P1, title: 'One' }] }), [{ pushes: true, entityTables: ['account'], mainFormsByTable: lists }]);
+});
+
+test('placeInApp: the pages and views this call adds change neither the tables it reports nor the list: they are page entries and view components, which the SDK does not expand', async () => {
+  const sdk = placing(appArtifact(), viewRecords());
+  const told = await toldBy(sdk, { pages: [{ pageId: P1, title: 'One' }, { pageId: P2, title: 'Two' }], dataSources: ['account', 'contact'] });
+  assert.deepStrictEqual(told, [{ pushes: true, entityTables: ['account'], mainFormsByTable: undefined }]);
+  assert.strictEqual(sdk.count('pushArtifact'), 1);
+});
+
+test('placeInApp finish: a completion that only publishes the app says it pushes nothing, so it adds no Main form whatever the navigation holds', async () => {
+  const { sdk } = savedButUnpublished();
+  assert.deepStrictEqual(await toldBy(sdk, { pages: [{ pageId: P1, title: 'Overview' }], finish: true }), [{ pushes: false, entityTables: ['account'], mainFormsByTable: undefined }]);
+  assert.strictEqual(sdk.count('pushArtifact'), 0);
+});
+
+test('placeInApp: an app with no navigation of its own reports no table', async () => {
+  assert.deepStrictEqual(await toldBy(placing({ id: APP, name: 'App' }), { pages: [{ pageId: P1, title: 'One' }] }), [{ pushes: true, entityTables: [], mainFormsByTable: undefined }]);
+});
+
+test('entityTablesOfSiteMap: the tables of the Entity entries of a navigation of any shape — a type and a table name, as the SDK reads them — lower-cased, once each, in navigation order', () => {
+  const siteMap = { areas: [
+    { id: 'a', groups: [{ id: 'g', subAreas: [{ type: 'Entity', entity: 'Contact' }, { type: 'GenPage', genPageId: P1, entity: 'ignored' }, { type: 'Entity', entity: 'account' }] }, { id: 'h', subAreas: [{ type: 'Entity', entity: 'CONTACT' }] }] },
+    { id: 'b', groups: [{ id: 'i', subAreas: [{ type: 'Entity', entity: 'lead' }, null, { type: 'Entity', entity: '' }, { type: 'Entity', entity: 5 }, { entity: 'untyped' }] }] },
+  ] };
+  assert.deepStrictEqual(entityTablesOfSiteMap(siteMap), ['contact', 'account', 'lead']);
+  for (const shape of [undefined, null, {}, { areas: null }, { areas: [null, {}, { groups: null }, { groups: [null, {}, { subAreas: 'nope' }] }] }, 'x']) assert.deepStrictEqual(entityTablesOfSiteMap(shape), [], JSON.stringify(shape));
 });
 
 test('dispose: an SDK that is lent (or injected) leaves nothing for dispose() to remove, and dispose() may be called any number of times', () => {

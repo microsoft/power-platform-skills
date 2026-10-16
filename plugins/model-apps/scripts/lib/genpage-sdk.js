@@ -300,6 +300,28 @@ function genPagesOfSiteMap(siteMap) {
   return pages;
 }
 
+// The tables of the Entity entries of a navigation (`siteMap`, the SDK's App artifact) — the tables the SDK expands, whenever it writes the app, into their active Main forms, public views and
+// charts (and only those: a page, a link or a dashboard entry adds none) — as lower-case logical names, each once, in navigation order. An entry is
+//   { id: 'sub_0_0_0', type: 'Entity', entity: 'contoso_item', title: 'Items' }
+// and the SDK reads it as `type === 'Entity'` with a truthy `entity`, so an entry of that type with no table names none.
+function entityTablesOfSiteMap(siteMap) {
+  const seen = new Set();
+  const tables = [];
+  const listOf = (value) => (Array.isArray(value) ? value : []);
+  for (const area of listOf(siteMap && siteMap.areas)) {
+    for (const group of listOf(area && area.groups)) {
+      for (const sub of listOf(group && group.subAreas)) {
+        if (!sub || sub.type !== 'Entity' || typeof sub.entity !== 'string' || !sub.entity) continue;
+        const table = sub.entity.toLowerCase();
+        if (seen.has(table)) continue;
+        seen.add(table);
+        tables.push(table);
+      }
+    }
+  }
+  return tables;
+}
+
 // The unique name of an app's PUBLISHED form (its appmodule row), or null when it has none — never published, or not there. It throws what the SDK's read throws.
 async function publishedFormOf(sdk, appId) {
   const rows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${String(appId).toLowerCase()}`, top: 1 });
@@ -886,8 +908,12 @@ function makeGenpageSdk(env, deps = {}) {
     // it does not show every page asked for (an app that was never published, or whose published navigation cannot be read, does not show them). Pages both layers name are left exactly as they are.
     // `beforeAppWrite` is an async function the caller wants run, and awaited, once, right before this call first writes the app — its push, or its publish when there is nothing to push — and not at all
     // for a placement that writes and publishes nothing. The build uses it to publish the tables whose forms the app's publish would otherwise leave their saved labels out of (lib/sdk-build.js
-    // publishTablesBeforeApp): this call pushes and publishes the app by itself, so only it knows when that is about to happen. The edits are by then made in this operation's workspace copy only, so a
-    // hook that throws leaves the app as it was, and the call throws what the hook threw.
+    // publishTablesBeforeApp): this call pushes and publishes the app by itself, so only it knows when that is about to happen, and what it is about to send. The edits are by then made in this
+    // operation's workspace copy only, so a hook that throws leaves the app as it was, and the call throws what the hook threw.
+    // The hook is told what the write is: `{ pushes, entityTables, mainFormsByTable }`. `pushes` says whether the app is pushed (false: it is only published, so nothing is added to it); `entityTables` are the
+    // tables of the Entity entries of the navigation the push sends, which is the one the server holds — this call fetches the app, adds the page entries and the views it was asked for, and pushes that — and
+    // `mainFormsByTable` is the Main-form list the pushed app carries (a fetched app carries none, and the SDK then adds every active Main form of each of those tables), or undefined. The SDK expands
+    // the Entity entries of the navigation it pushes into their active Main forms, so these are the tables whose Main forms THIS push adds; the page entries and views this call adds are not among them.
     // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? }. It throws, with
     // the page unplaced, when the app cannot be read, the edit is refused, `beforeAppWrite` throws, or the app's publish fails — and with `finish`, when the published
     // navigation does not show the page after the app was published.
@@ -951,8 +977,10 @@ function makeGenpageSdk(env, deps = {}) {
       }
       if (!edited && !finishing) return { added: [], alreadyPlaced, pinnedViews: [], warnings, appEdited: false };
 
-      // The first thing sent to the app is below: the caller's word comes before it (see `beforeAppWrite`, above).
-      if (typeof options.beforeAppWrite === 'function') await options.beforeAppWrite();
+      // The first thing sent to the app is below: the caller's word comes before it (see `beforeAppWrite`, above), and it is told what the write is.
+      if (typeof options.beforeAppWrite === 'function') {
+        await options.beforeAppWrite({ pushes: edited, entityTables: entityTablesOfSiteMap(app.siteMap), mainFormsByTable: app.components && app.components.mainFormsByTable });
+      }
       if (edited) await pushApp(sdk, appId, warnings, appScope, { views: pin });
       const published = await publish(sdk, 'app', appId, undefined);
       // The failures below name the app and the page(s) the caller asked for, as `removeFromApp`'s do, so a caller that prints one can go on from it.
@@ -1392,5 +1420,5 @@ async function appsNaming(sdk, pageId) {
 
 module.exports = {
   makeGenpageSdk, unescapePacName, suppliedButBlank, sourceText, dataSourcesOf, promptTranscript, configJson, pageFolderFiles,
-  genPagesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, GUID_RE,
+  genPagesOfSiteMap, entityTablesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, GUID_RE,
 };

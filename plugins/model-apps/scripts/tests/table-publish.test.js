@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  specTables, appWriteTables, preAppTables, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents,
+  specTables, appWriteTables, appPushTables, preAppTables, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents,
   tableList, publishTablesXml, readSavedNotPublished, describeSavedNotPublished,
 } = require('../lib/table-publish.js');
 
@@ -94,6 +94,31 @@ test('appWriteTables: a spec of any shape names none, and a name that cannot be 
     assert.deepStrictEqual(appWriteTables(spec, undefined), [], JSON.stringify(spec));
   }
   assert.deepStrictEqual(appWriteTables({ appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'x</entity><entity>y' }, { entity: 'two words' }, { entity: '' }, { entity: 'new_ok' }] }] }] } }, 'nope'), ['new_ok']);
+});
+
+// --- appPushTables -----------------------------------------------------------------------------------------------------------
+//
+// The same rule for a push that does not send the spec's navigation: a placement pushes the app as the server holds it, and the routing-description push re-sends the
+// workspace copy's. The writer says which navigation it sends (the tables of its Entity entries) and which Main-form list that push carries, and these are the tables
+// whose Main forms the push adds. appWriteTables is this over the spec's own navigation, for the writers that send the spec's.
+
+test('appPushTables: the tables of the Entity entries it is given, lower-cased, once each, in the order given; a table whose Main-form list keeps no form adds none', () => {
+  assert.deepStrictEqual(appPushTables(['New_Ticket', 'new_task', 'new_ticket', 'new_note'], undefined), ['new_ticket', 'new_task', 'new_note']);
+  assert.deepStrictEqual(appPushTables(['new_a', 'new_b', 'new_c'], { new_a: ['33333333-0000-4000-8000-000000000001'], new_b: [] }), ['new_a', 'new_c'], 'a list that names a form keeps the table, an empty one drops it, no list adds the active Main forms');
+  assert.deepStrictEqual(appPushTables(['new_a'], {}), ['new_a']);
+  assert.deepStrictEqual(appPushTables(['new_a'], { NEW_A: [] }), ['new_a'], 'the list is keyed by lower-case names, as resolveMainForms and the SDK\u2019s validation make it');
+});
+
+test('appPushTables: no navigation, or one of any other shape, names no table, and a name that cannot be a table\u2019s is left out', () => {
+  for (const tables of [undefined, null, [], 'new_a', 5, {}, new Set(['new_a'])]) assert.deepStrictEqual(appPushTables(tables, undefined), [], String(tables));
+  assert.deepStrictEqual(appPushTables(['x</entity><entity>y', 'two words', '', 5, null, 'new_ok'], 'nope'), ['new_ok']);
+});
+
+test('appWriteTables is appPushTables over the navigation of the spec', () => {
+  const spec = { appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'New_A' }, { page: 'p' }, { entity: 'new_b' }, { entity: 'new_empty' }] }] }] } };
+  for (const lists of [undefined, {}, { new_empty: [] }, { new_a: ['33333333-0000-4000-8000-000000000001'] }]) {
+    assert.deepStrictEqual(appWriteTables(spec, lists), appPushTables(['new_a', 'new_b', 'new_empty'], lists), JSON.stringify(lists));
+  }
 });
 
 // --- preAppTables ------------------------------------------------------------------------------------------------------------
