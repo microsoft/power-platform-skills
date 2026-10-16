@@ -546,14 +546,15 @@ test('a workspace whose record changes between the judgement and the removal —
   assert.ok(fs.existsSync(path.join(dir, 'apps', 'page.json')), 'the workspace is whole');
 });
 
-test('no script of the plugin makes a workspace folder by hand: every one goes through makeTempWorkspace — but the two developer tools', () => {
+test('no script of the plugin makes a workspace folder by hand: every one goes through makeTempWorkspace — but the three developer tools', () => {
   const { SCRIPTS_DIR, productionScripts, withoutComments } = require('./helpers/production-scripts.js');
   // The scripts' code, comments left out, read once: each of the two scans below is over all of it.
   const code = productionScripts().map((file) => ({ name: path.relative(SCRIPTS_DIR, file).split(path.sep).join('/'), text: withoutComments(fs.readFileSync(file, 'utf8')) }));
   const scriptsMatching = (pattern) => code.filter(({ text }) => text.search(pattern) !== -1).map(({ name }) => name).sort();
   // smoke-eval.js builds a whole app folder (its spec and its own `.maker-workspace`) for a live smoke run against a scratch environment, and
-  // regenerate-verified-icons.js runs `npm install` in a scratch folder: a maintainer runs each by hand, and neither is a step of a skill.
-  assert.deepStrictEqual(scriptsMatching(/\btmpdir\s*\(/), ['lib/temp-workspace.js', 'regenerate-verified-icons.js', 'smoke-eval.js']);
+  // regenerate-verified-icons.js runs `npm install` in a scratch folder: a maintainer runs each by hand, and neither is a step of a skill. run-tests.js makes the folder the
+  // test suite runs in (its TEMP), which is not a workspace: a sweep a test makes must not take it for one, and the runner removes it itself when the suite ends.
+  assert.deepStrictEqual(scriptsMatching(/\btmpdir\s*\(/), ['lib/temp-workspace.js', 'regenerate-verified-icons.js', 'run-tests.js', 'smoke-eval.js']);
   const makers = scriptsMatching(/\bmakeTempWorkspace\(/);
   for (const script of ['ai-preflight.js', 'build-model-app.js', 'download-model-app.js', 'provision-entities.js', 'provision-solution.js', 'solution-settings.js', 'teardown-model-app.js', 'verify-model-app.js',
     'lib/genpage-sdk.js', 'lib/sdk-first.js', 'lib/throwaway-sdk.js']) {
