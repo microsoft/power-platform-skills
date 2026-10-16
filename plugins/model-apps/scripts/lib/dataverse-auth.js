@@ -855,6 +855,20 @@ function readAliasedFlag(flags, kebab, camel) {
   return a !== undefined ? a : b;
 }
 
+/**
+ * The `--language-code` / `--languageCode` flag as an LCID: `undefined` when neither is given, otherwise a positive integer up to 65535.
+ * Reads the pair the way the build does (a conflicting pair is refused, not resolved by guessing) and holds the value to the same
+ * rule as the App Spec's `languageCode` (`normalizeLanguageCode`), so the flag means the same thing to every script that takes it. Throws,
+ * naming the flag, for a value that is not an LCID.
+ */
+function readLanguageCodeFlag(flags) {
+  const raw = readAliasedFlag(flags, 'language-code', 'languageCode');
+  if (raw === undefined) return undefined;
+  const lcid = normalizeLanguageCode(raw);
+  if (lcid === null) throw new Error(`--language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${raw}')`);
+  return lcid;
+}
+
 /** Reads a JSON value either inline or from a file via @path syntax. */
 function readJsonArg(raw) {
   if (raw == null) return null;
@@ -944,6 +958,7 @@ module.exports = {
   parseArgs,
   validateFlags,
   readAliasedFlag,
+  readLanguageCodeFlag,
   readJsonArg,
   emitResult,
 };

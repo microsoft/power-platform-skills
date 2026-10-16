@@ -8,11 +8,21 @@
 // <spec-dir>/.maker-workspace) names only where the build's baseline, `last-applied.json`, is READ from.
 // Exit non-zero if anything declared is missing — catches silent partial builds.
 //
-// Usage: node verify-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--workspace <dir>]
+// Usage: node verify-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--language-code|--languageCode <lcid>] [--workspace <dir>]
+//
+// `--language-code <lcid>` (or `--languageCode`) is the flag the build takes (build-model-app.js), and is read the same way: pass it when the build was
+// run with it. A form's tab and section labels are written in the build's authoring language — that flag, else the spec's `languageCode`, else the
+// organization's base language — and verify holds the labels the spec writes as strings to the same one, so a build run with the flag in an organization
+// whose base language is another one is verified only when verify is given the flag too (or the spec pins `languageCode`). Without either, verify
+// uses the organization's base language. When it can establish no language at all — the organization cannot be read — those labels are neither passed
+// nor failed: they are listed under `unverified`, in the output and in the result JSON, with the reason and the flag that settles it.
+//
+// Result JSON: { ok, present, total, missing, errors } and, only when a check could not be decided, `unverified: [ "<kind>:<name> (<reason>)" ]`.
+// `unverified` does not change `ok` or the exit status.
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, validateFlags, readJsonArg, emitResult, dataverseOrigin } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readLanguageCodeFlag, readJsonArg, emitResult, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readBaseline } = require('./lib/deployed-baseline.js');
@@ -555,11 +565,14 @@ function readerFor(sdk, appUnique, opts) {
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]';
+  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--language-code|--languageCode <lcid>] [--workspace <dir>]';
   // Reject an unknown or value-less flag before any network work: an unrecognised flag is dropped
   // by parseArgs AND swallows the token after it, so `--workspce x` would silently verify against
   // the default workspace and report drift the caller cannot explain.
-  const flagError = validateFlags(argv, { known: ['env', 'spec', 'workspace'], needValue: ['env', 'spec', 'workspace'] });
+  const flagError = validateFlags(argv, {
+    known: ['env', 'spec', 'workspace', 'language-code', 'languageCode'],
+    needValue: ['env', 'spec', 'workspace', 'language-code', 'languageCode'],
+  });
   if (flagError) {
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
@@ -571,6 +584,15 @@ async function main() {
   const workspaceArg = flags.workspace;
   if (!env || !specArg) {
     process.stderr.write(USAGE + '\n');
+    process.exit(1);
+  }
+  // The language the build was run with, read exactly as the build reads it. A value that is no LCID, or a pair that disagrees, is refused here,
+  // before anything is opened: verifying in a language the caller did not mean would report a correct form as wrong.
+  let languageCode;
+  try {
+    languageCode = readLanguageCodeFlag(flags);
+  } catch (err) {
+    process.stderr.write(`✗ ${err.message}\n${USAGE}\n`);
     process.exit(1);
   }
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
@@ -610,7 +632,7 @@ async function main() {
     // kept because it was changed in the designer since then is not a failure (AB#6726727). It is keyed by
     // environment, so a folder built against another one yields none.
     const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
-    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec });
+    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode });
   } finally {
     // Before the result is printed: emitResult ends the process, so a cleanup placed after it never ran.
     // The backend first, and awaited: a page read the pass gave up on can still be running, and its workspace is closed and removed once the storage
@@ -630,9 +652,16 @@ async function main() {
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
   for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}${!c.present && c.detail ? ` — ${c.detail}` : ''}\n`);
   process.stderr.write(`\n${r.ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
+  // What verify could not DECIDE is neither a pass nor a failure: listed beside the verdict, with its reason, so a green run never reads as
+  // "everything the spec declares is deployed" while a label was not compared. It changes neither `ok` nor the exit status.
+  const unverified = r.unverified || [];
+  if (unverified.length) {
+    process.stderr.write(`⊘ ${unverified.length} check${unverified.length === 1 ? '' : 's'} could not be verified — ${unverified.length === 1 ? 'it is' : 'they are'} neither passed nor failed:\n`);
+    for (const u of unverified) process.stderr.write(`  ⊘ ${u}\n`);
+  }
   // Include `errors` (alias of missing) so emitResult's failure note reports an accurate count.
   const missing = r.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`);
-  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing });
+  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing, ...(unverified.length ? { unverified } : {}) });
 }
 
 if (require.main === module) {

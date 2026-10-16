@@ -84,7 +84,10 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   is put back to the spec's. Two cases leave the text as it is, and **warn that it was not applied** while the rest of
   the build goes ahead: an app that was **never published** (Dataverse takes no write to its name or description until
   it is — publish it in Power Apps and re-run), and a name or description that is **localized** (held as one text per
-  language), which a rebuild never replaces with one text: change it in Power Apps.
+  language), which a rebuild never replaces with one text: change it in Power Apps. The SDK writes the name and the
+  description in one request, so while either is localized (or is any other value that is not plain text) the app's
+  header is **not edited at all**: a changed plain text beside it, and an `app.aiDescription`, are reported as not
+  applied too, with the reason — a warning, never a halt; the navigation is written as ever.
 - **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
   Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
   **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
@@ -190,6 +193,9 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   whenever the spec sets one. Changing it on an app that has an **unpublished** change to its name,
   description or routing description (saved in Maker but not published) halts the build: Dataverse
   refuses the write until that change is published, so publish the app (or discard the change) first.
+  While the app's name or description is **localized** (or otherwise not plain text) this is **not applied**
+  and the build warns — it is written in the same request as those two texts, which a rebuild never sends
+  in that state; it does not halt.
   **Rules:** a non-empty string of at most 1,048,576 characters, the column's maximum.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
   stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
@@ -200,7 +206,13 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Normally omit it**: the build reads the organization's base language
   (`organization.languagecode`) and uses that, which is always a language the org has provisioned.
   Set it only to deliberately author labels in a *different* provisioned language than the org
-  default; `--language-code <lcid>` overrides it for a single run.
+  default; `--language-code <lcid>` overrides it for a single run. **`verify-model-app.js` takes the same
+  flag, and a build run with it needs it there**: the build writes a form's tab and section captions in that
+  language, and `--verify` holds them to the language it is told (the flag, else this field, else the
+  organization's base language) — so without the flag, or this field pinned in the spec, such a form is held to
+  the organization's language and fails. (The build's own `--verify` is told the language the build used.)
+  When no language can be established at all — the organization cannot be read — those captions are listed
+  as **unverified**, neither passed nor failed.
   If the organization has **not** provisioned the LCID you pin, the build stops at the start of the
   data-model phase and lists the ones it does have — Dataverse would otherwise accept the table and
   Choice labels (silently storing them under the org's base language) and then reject the first
@@ -1232,9 +1244,12 @@ planned layout, preserving existing cell/control identities.
 `--verify` checks tab/section order, the tab and section **labels** a layout authors, row occupancy and
 **cell/control ID uniqueness across each whole form**, including headers, footers and unbound controls.
 A label is compared in the language the build wrote it — a string label in the build's authoring language (the
-spec's `languageCode`, else the organization's base language), a label map at each language it declares, with no
+`--language-code` the build was given, which `verify-model-app.js` takes too; else the spec's `languageCode`; else the
+organization's base language), a label map at each language it declares, with no
 word about a translation it leaves out — so a relabel that never reached the published form fails even when
 ANOTHER language carries the wanted text, and a caption or language the published form lacks is a mismatch, never a pass.
+Where the build's language cannot be established (the organization cannot be read, and nothing else says it), a string label is
+reported **unverified** — neither passed nor failed — with the reason, and every other check still runs.
 A label the spec does not write is not compared. Auto forms also require readable
 FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
 It does **not** check field order or `after` adjacency.

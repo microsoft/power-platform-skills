@@ -434,6 +434,13 @@ The App Spec field `languageCode` pins the same value across runs. It now covers
 data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
 1033 take the authoring language as an option.
 
+**Verify with the same flag.** A build run with `--language-code <lcid>` writes a form's tab and section
+captions in that language, so run the standalone verifier with the **same** `--language-code <lcid>` (or pin
+`languageCode` in the spec): without it, `--verify` holds the captions to the organization's base language and
+reports a correctly published form as missing its captions. The build's own `--verify` is told the language
+automatically. If verify cannot establish the language at all (the organization cannot be read), it lists those
+captions as **unverified** — neither passed nor failed — with the reason: re-run it with the flag.
+
 Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout, a SQL
 deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
 retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
@@ -501,8 +508,12 @@ Maker change, without rebuilding — run the standalone read-only verifier (enti
 forms and sitemap subareas + icons; exits non-zero and lists anything missing):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
+node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json [--language-code <lcid>]
 ```
+
+Pass `--language-code` only if the build was run with it. A line starting `⊘` under the verdict is a check verify
+could **not decide** (it is in the JSON result's `unverified` list): it is neither a pass nor a failure, so say what it
+was and what settles it — never report the run as "everything deployed" while one is listed.
 
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
@@ -758,8 +769,9 @@ child view id. Each step emits `[n/total]`.
   column removed from the spec, or a new column order, does **not** apply, and neither do its filters
   or sort. A changed column type, and an edited command or dashboard, are not re-applied at all; an
   existing chart takes only a changed description, an existing app takes a changed name and description
-  (an app that was never published, or one whose name or description is localized, keeps its text and the build
-  warns it was not applied; the icon is set when the app is created: a different `app.icon` is reported as not
+  (an app that was never published keeps its text and the build warns it was not applied, and so does one whose name or
+  description is localized — the SDK writes the two together, so while either is localized the header is not edited at
+  all, a routing description included; the icon is set when the app is created: a different `app.icon` is reported as not
   applied), and an existing
   business process flow takes the stage and step edits that cannot move a record — a stage added or renamed,
   a step added, renamed, rebound or moved — and refuses, saying why, one that would remove a stage or a step

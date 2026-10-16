@@ -1659,11 +1659,15 @@ const topoXml = (placement) => `<form><tabs><tab name="tab_overview">${labelsOf(
   + `</columns></tab></tabs></form>`;
 
 const topoRead = (xml, over) => Object.assign({
-  // Enough of the reader surface for verifySpec to run end to end; only the form checks matter here.
+  // Enough of the reader surface for verifySpec to run end to end; only the form checks matter here. An organization always reports its base
+  // language, which `--verify` asks for when a layout authors a string label and nothing else says which language the build wrote it in.
   findTable: async () => ({ logicalName: 'new_ticket' }),
   findColumns: async () => [],
   sitemapXml: async () => '',
-  queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'f1', name: 'Ticket Main', objecttypecode: 'new_ticket', type: 2, isdefault: true }] : []),
+  queryRecords: async (set) => {
+    if (set === 'organization') return [{ languagecode: 1033 }];
+    return set === 'systemform' ? [{ formid: 'f1', name: 'Ticket Main', objecttypecode: 'new_ticket', type: 2, isdefault: true }] : [];
+  },
   formTopology: async () => xml,
 }, over || {});
 
@@ -2544,11 +2548,7 @@ test('verify holds a string label to the ORGANIZATION\'s base language when the 
   const chk = await topoCheckIn(xml, authoredTab('Overview'), inOrg(1036));
   assert.strictEqual(chk.present, false, 'the English caption is not the one written in the French organization\'s language');
   assert.match(chk.detail, /tab 'tab_overview' is deployed with label "Apercu" in language 1036, the spec declares label: "Overview" in language 1036/);
-  // No answer from the organization is 1033, as the build falls back to it — and so does one that cannot be read.
-  const english = layoutXml([overview()]);
-  assert.strictEqual((await topoCheckIn(english, undefined, inOrg(undefined))).present, true);
-  const failing = { queryRecords: async (set) => { if (set === 'organization') throw new Error('503'); return set === 'systemform' ? FORM_ROW : []; } };
-  assert.strictEqual((await topoCheckIn(english, undefined, failing)).present, true);
+  // An organization that answers no language is NOT taken for an English one — see the unverified tests below.
 });
 
 test('verify reads the organization only when a form authors a STRING label and the spec pins no language', async () => {
@@ -2559,6 +2559,158 @@ test('verify reads the organization only when a form authors a STRING label and 
   await topoCheckIn(layoutXml([overview()]), onlyMaps, inOrg(1036, seen));
   await topoCheckIn(layoutXml([overview()]), unlabelled, inOrg(1036, seen));
   assert.strictEqual(seen.length, 0, 'no read for a pinned language, for localized labels alone, or for a layout with no labels');
+});
+
+// --- The language a string label is held to is the one the BUILD wrote it in — which verify has to be TOLD, or establish ---------------------------
+//
+// The build resolves its authoring language from the `--language-code` flag, else the spec's `languageCode`, else the organization's base
+// language; its SDK is made for the result, and every label it writes is in it. A build run with the flag in an organization whose base
+// language is another one published its captions in the flag's language, so verify, holding them to the organization's, called the correct
+// caption missing. `--verify` takes the same options the build does (verifySpec's `languageCode`, and `preResolvedLanguageCode` — what the
+// build's SDK was made for) and uses them first. And when the language cannot be established at all — the organization does not answer —
+// it says so: a language it had to guess would pass a stale caption as readily as it would fail a correct one.
+const checkWith = async (xml, mutate, over, opts) => {
+  const spec = TOPO_SPEC();
+  mutate(spec);
+  const res = await verifySpec(spec, topoRead(xml, over), opts);
+  return { res, chk: res.checks.find((c) => c.kind === 'form-topology') };
+};
+// TOPO_SPEC's three captions, written in French by the spec (the tab, and the section on each side).
+const inFrench = (spec) => {
+  authoredTab('Apercu')(spec);
+  spec.forms[0].tabs[0].columns[0].sections[0].label = 'Gauche';
+  spec.forms[0].tabs[0].columns[1].sections[0].label = 'Droite';
+};
+const publishedInFrench = () => layoutXml([overview({ tabLabel: { text: 'Apercu', lcid: 1036 }, leftLabel: { text: 'Gauche', lcid: 1036 }, rightLabel: { text: 'Droite', lcid: 1036 } })]);
+
+test('verify holds a string label to the language the BUILD was run in — the options carry it, and it outranks the spec and the organization', async () => {
+  const seen = [];
+  for (const [what, opts, mutate] of [
+    ['the --language-code the build was given', { languageCode: 1036 }, inFrench],
+    ['the language the build resolved, which its SDK was made for', { preResolvedLanguageCode: 1036 }, inFrench],
+    ['both, as the build hands them over', { languageCode: 1036, preResolvedLanguageCode: 1036 }, inFrench],
+    ['the flag, as the build\'s override of the spec\'s own languageCode', { languageCode: 1036 }, (spec) => { inFrench(spec); spec.languageCode = 1033; }],
+    ['the resolved language, above the flag it came from', { languageCode: 1033, preResolvedLanguageCode: 1036 }, inFrench],
+    ['a numeric string, as a CLI hands it over', { languageCode: '1036' }, inFrench],
+  ]) {
+    const { chk } = await checkWith(publishedInFrench(), mutate, inOrg(1033, seen), opts);
+    assert.strictEqual(chk.present, true, `${what}: ${chk.detail}`);
+  }
+  assert.strictEqual(seen.length, 0, 'the organization is not read when the build\'s own language is known');
+});
+
+test('verify keeps the language strict when the build\'s language is known — a caption in another language never stands in for it', async () => {
+  // The published form carries the English captions only; the build was run in French: they are not the French ones.
+  const english = layoutXml([overview()]);
+  const { chk } = await checkWith(english, inFrench, inOrg(1033), { languageCode: 1036 });
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /tab 'tab_overview' is deployed with no label in language 1036 \(it has "Overview" in 1033\), the spec declares label: "Apercu" in language 1036/);
+  assert.doesNotMatch(chk.detail, /compared in the organization's base language/, 'the language was given, not guessed from the organization: no hint to give it');
+  // …and a wrong text in the given language is a mismatch like any other.
+  const stale = layoutXml([overview({ tabLabel: [{ text: 'Overview', lcid: 1033 }, { text: 'Ancien', lcid: 1036 }] })]);
+  const wrong = await checkWith(stale, inFrench, inOrg(1033), { languageCode: 1036 });
+  assert.strictEqual(wrong.chk.present, false);
+  assert.match(wrong.chk.detail, /tab 'tab_overview' is deployed with label "Ancien" in language 1036, the spec declares label: "Apercu" in language 1036/);
+});
+
+test('verify tells a maker what to do when the labels were compared in the ORGANIZATION\'s language and that is not the language they are in', async () => {
+  // Nothing says the build used another language, so the organization's is the build's — and a build that did leaves captions this cannot match.
+  const { chk } = await checkWith(publishedInFrench(), inFrench, inOrg(1033));
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /tab 'tab_overview' is deployed with no label in language 1033 \(it has "Apercu" in 1036\), the spec declares label: "Apercu" in language 1033/);
+  assert.match(chk.detail, /the labels were compared in the organization's base language \(1033\), because verify was told no other: if the build was run with --language-code, give verify the same flag \(or pin "languageCode" in the spec\)/);
+  // A spec that pins the language is verified in it, with no such advice.
+  const pinned = await checkWith(publishedInFrench(), (spec) => { inFrench(spec); spec.languageCode = 1036; }, inOrg(1033));
+  assert.strictEqual(pinned.chk.present, true, pinned.chk.detail);
+});
+
+test('verify ignores an option that is no LCID, as the build does: the spec\'s language, then the organization\'s, decide', async () => {
+  for (const bad of ['de-DE', true, 0, 65536, [1036], '1e3']) {
+    const { chk } = await checkWith(publishedInFrench(), inFrench, inOrg(1036), { languageCode: bad });
+    assert.strictEqual(chk.present, true, `${JSON.stringify(bad)} is not a language: the organization's 1036 decides — ${chk.detail}`);
+  }
+});
+
+test('verify reports the labels UNVERIFIED — neither passed nor failed — when the language the build wrote them in cannot be established', async () => {
+  const failures = [
+    ['the organization read fails', { queryRecords: async (set) => { if (set === 'organization') throw new Error('HTTP 503 reading organization'); return set === 'systemform' ? FORM_ROW : []; } }, /\(the organization read failed: HTTP 503 reading organization\)/],
+    ['the organization answers no row', inOrg(undefined), /\(organization\.languagecode was missing or not a valid LCID\)/],
+    ['the organization answers a language that is no LCID', inOrg('not-a-language'), /\(organization\.languagecode was missing or not a valid LCID\)/],
+  ];
+  const baseline = await checkWith(layoutXml([overview()]), () => {}, inOrg(1033));
+  for (const [what, over, reason] of failures) {
+    const { res, chk } = await checkWith(layoutXml([overview()]), () => {}, over);
+    assert.strictEqual(chk.present, true, `${what}: the rest of the layout is right and nothing says the labels are wrong: ${chk.detail}`);
+    // The fixture has one unrelated failure of its own (it publishes no form order): unverified neither adds to the failures nor takes one away.
+    assert.deepStrictEqual(res.missing, baseline.res.missing, `${what}: unverified is not a failure`);
+    assert.strictEqual(res.ok, baseline.res.ok, what);
+    assert.ok(Array.isArray(res.unverified) && res.unverified.length === 1, `${what}: ${JSON.stringify(res.unverified)}`);
+    const [entry] = res.unverified;
+    assert.match(entry, /^form-labels:new_ticket\.Ticket Main \(the labels of tab 'tab_overview', section 'sec_left', section 'sec_right' were not compared: the language the build wrote them in could not be established /, what);
+    assert.match(entry, reason, `${what}: the reason is given`);
+    assert.match(entry, /\. Pass --language-code <lcid> \(the one the build was run with\) or set "languageCode" in the spec to compare them\)$/, `${what}: and what to do`);
+    assert.ok(!res.checks.some((c) => /label/i.test(c.kind)), `${what}: no label check was recorded as passed or failed`);
+  }
+});
+
+test('verify no longer passes a STALE caption when the organization cannot be read — and no longer fails a CORRECT one', async () => {
+  // The form holds the right text in 1033 and a stale one in 1036: held to French (the organization's language, once known) it fails; with
+  // the language unknown it is not judged — it used to PASS on a guessed 1033.
+  const tabOnly = (label) => (spec) => { unlabelled(spec); spec.forms[0].tabs[0].label = label; };
+  const stale = layoutXml([overview({ tabLabel: [{ text: 'Apercu', lcid: 1033 }, { text: 'Ancien', lcid: 1036 }], leftLabel: null, rightLabel: null })]);
+  const known = await checkWith(stale, tabOnly('Apercu'), inOrg(1036));
+  assert.strictEqual(known.chk.present, false, 'held to 1036, the stale caption fails');
+  const unreadable = { queryRecords: async (set) => { if (set === 'organization') throw new Error('503'); return set === 'systemform' ? FORM_ROW : []; } };
+  const unknown = await checkWith(stale, tabOnly('Apercu'), unreadable);
+  assert.strictEqual(unknown.res.unverified.length, 1, 'neither a pass nor a fail of that caption: it is reported unverified');
+  assert.match(unknown.res.unverified[0], /\(the label of tab 'tab_overview' was not compared: the language the build wrote it in could not be established \(the organization read failed: 503\)\. Pass --language-code/);
+  // A correct French caption fails on a guessed English language no more: it is unverified, and verifies once the language is given.
+  const french = publishedInFrench();
+  const correct = await checkWith(french, inFrench, unreadable);
+  assert.strictEqual(correct.chk.present, true, correct.chk.detail);
+  assert.strictEqual(correct.res.unverified.length, 1);
+  const given = await checkWith(french, inFrench, unreadable, { languageCode: 1036 });
+  assert.strictEqual(given.chk.present, true, given.chk.detail);
+  assert.strictEqual(given.res.unverified, undefined, 'told the language, verify has nothing left it cannot tell');
+  const pinned = await checkWith(french, (spec) => { inFrench(spec); spec.languageCode = 1036; }, unreadable);
+  assert.strictEqual(pinned.chk.present, true, pinned.chk.detail);
+  assert.strictEqual(pinned.res.unverified, undefined, 'a language the spec pins needs no organization read');
+});
+
+test('verify still holds every other part of the layout — and every label map — while the language of the string labels is unknown', async () => {
+  const unreadable = { queryRecords: async (set) => { if (set === 'organization') throw new Error('503'); return set === 'systemform' ? FORM_ROW : []; } };
+  // A form-column at the wrong width fails, whatever the labels' language.
+  const wide = await checkWith(layoutXml([overview({ leftWidth: '10%', rightWidth: '90%' })]), () => {}, unreadable);
+  assert.strictEqual(wide.chk.present, false);
+  assert.match(wide.chk.detail, /form-column 1 is deployed 10% wide, the spec declares 60%/);
+  assert.strictEqual(wide.res.unverified.length, 1, 'and the labels are still reported unverified');
+  // A label map is compared at the LCIDs it declares, which need no organization: a wrong entry fails, a right one passes, and neither is "unverified".
+  const declared = (spec) => { unlabelled(spec); spec.forms[0].tabs[0].label = { 1033: 'Overview', 1036: 'Apercu' }; };
+  const right = await checkWith(layoutXml([overview({ tabLabel: [{ text: 'Overview', lcid: 1033 }, { text: 'Apercu', lcid: 1036 }] })]), declared, unreadable);
+  assert.strictEqual(right.chk.present, true, right.chk.detail);
+  assert.strictEqual(right.res.unverified, undefined, 'no string label, nothing it cannot tell');
+  const wrong = await checkWith(layoutXml([overview({ tabLabel: [{ text: 'Overview', lcid: 1033 }, { text: 'Old', lcid: 1036 }] })]), declared, unreadable);
+  assert.strictEqual(wrong.chk.present, false);
+  assert.match(wrong.chk.detail, /tab 'tab_overview' is deployed with label "Old" in language 1036, the spec declares label: "Apercu" in language 1036/);
+  // A map beside a string label: the map is compared, the string is unverified.
+  const mixed = (spec) => { unlabelled(spec); spec.forms[0].tabs[0].label = { 1033: 'Overview' }; spec.forms[0].tabs[0].columns[0].sections[0].label = 'Left'; };
+  const both = await checkWith(layoutXml([overview({ leftLabel: 'Left' })]), mixed, unreadable);
+  assert.strictEqual(both.chk.present, true, both.chk.detail);
+  assert.strictEqual(both.res.unverified.length, 1);
+  assert.match(both.res.unverified[0], /\(the label of section 'sec_left' was not compared: the language the build wrote it in could not be established/);
+  assert.doesNotMatch(both.res.unverified[0], /tab 'tab_overview'/, 'only the string label is unverified: the tab\'s is a map');
+});
+
+test('verify reports nothing unverified on the normal path — a known language, or no string label — so its result keeps its shape', async () => {
+  for (const [what, mutate, over, opts] of [
+    ['an organization that answers', () => {}, inOrg(1033), undefined],
+    ['a language pinned by the spec', (spec) => { spec.languageCode = 1033; }, inOrg(undefined), undefined],
+    ['a language the build handed over', () => {}, inOrg(undefined), { languageCode: 1033 }],
+    ['a layout that authors no label', unlabelled, inOrg(undefined), undefined],
+  ]) {
+    const { res } = await checkWith(layoutXml([overview()]), mutate, over, opts);
+    assert.ok(!('unverified' in res), `${what}: ${JSON.stringify(res.unverified)}`);
+  }
 });
 
 test('verify holds a LOCALIZED label to every language it declares — and only those', async () => {

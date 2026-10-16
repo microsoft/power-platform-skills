@@ -176,6 +176,36 @@ test('language resolution warns when org-language discovery fails but still fall
   assert.ok(warnings.some((w) => /base language/i.test(w) && /boom/.test(w)));
 });
 
+// A caller that has to KNOW the language rather than choose one — `--verify`, holding an existing deployment to the language its labels were
+// written in — must not be handed the build's fallback: a 1033 picked because the organization could not be read is an assumption about what
+// was built, not evidence of it. `undetermined` takes the place of the fallback: it is told why, and what it answers is what comes back.
+test('language resolution lets a caller that must not guess take the failure, with the reason, in place of the 1033 fallback', async () => {
+  const asked = [];
+  const unknown = (reason) => { asked.push(reason); return null; };
+  const warnings = [];
+  const reads = (queryRecords) => resolveLanguageCode({ provision: queryRecords && { queryRecords }, spec: {}, warn: (m) => warnings.push(m), undetermined: unknown });
+  assert.strictEqual(await reads(async () => { throw new Error('HTTP 503'); }), null);
+  assert.strictEqual(await reads(async () => []), null);
+  assert.strictEqual(await reads(async () => [{ languagecode: 'x' }]), null);
+  assert.strictEqual(await reads(undefined), null);
+  assert.deepStrictEqual(asked, [
+    'the organization read failed: HTTP 503',
+    'organization.languagecode was missing or not a valid LCID',
+    'organization.languagecode was missing or not a valid LCID',
+    'no Dataverse reader was supplied',
+  ]);
+  assert.deepStrictEqual(warnings, [], 'the hook replaces the build\'s warning: the caller says what it makes of the answer');
+  // Only a failure reaches it: every language the build is TOLD, and the organization's own, are returned as they always were.
+  asked.length = 0;
+  assert.strictEqual(await resolveLanguageCode({ provision: {}, spec: { languageCode: 1031 }, undetermined: unknown }), 1031);
+  assert.strictEqual(await resolveLanguageCode({ provision: {}, spec: { languageCode: 1031 }, languageCode: 3082, undetermined: unknown }), 3082);
+  assert.strictEqual(await resolveLanguageCode({ provision: { queryRecords: async () => [{ languagecode: 1036 }] }, spec: {}, undetermined: unknown }), 1036);
+  assert.deepStrictEqual(asked, []);
+  // And a build that passes no hook keeps its fallback and its warning, exactly as before.
+  assert.strictEqual(await resolveLanguageCode({ provision: { queryRecords: async () => { throw new Error('boom'); } }, spec: {}, warn: (m) => warnings.push(m) }), 1033);
+  assert.strictEqual(warnings.length, 1);
+});
+
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
   const { sdk } = mockSdk();
   let received = null;
@@ -1619,6 +1649,27 @@ test('parseLanguageCode (CLI) rejects the same coercible values', () => {
   assert.strictEqual(parseLanguageCode(undefined), undefined);
 });
 
+// The standalone verifier takes the build's flag (verify-model-app.js) and must mean what the build means by it: the same spellings, the same
+// refusal of a pair that disagrees, the same notion of a valid LCID and the same message. Asserted against the build's own parser so the two
+// cannot drift.
+test('readLanguageCodeFlag reads --language-code / --languageCode exactly as the build does', () => {
+  const { readLanguageCodeFlag } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  assert.strictEqual(readLanguageCodeFlag({}), undefined, 'no flag, no language');
+  assert.strictEqual(readLanguageCodeFlag({ 'language-code': '1036' }), 1036);
+  assert.strictEqual(readLanguageCodeFlag({ languageCode: '1036' }), 1036);
+  assert.strictEqual(readLanguageCodeFlag({ 'language-code': ' 1036 ', languageCode: '1036' }), 1036, 'a pair that agrees (as the build compares them) is one value');
+  assert.throws(() => readLanguageCodeFlag({ 'language-code': '1031', languageCode: '1036' }), /--language-code '1031' and --languageCode '1036' disagree — pass only one/);
+  for (const v of ['abc', '0', '-1', '1e3', '12.5', '65536', '', 'de-DE']) {
+    assert.throws(() => readLanguageCodeFlag({ 'language-code': v }), /--language-code \/ --languageCode must be digits only, a positive integer LCID up to 65535/, `${JSON.stringify(v)}`);
+    // …with the build's own message, word for word.
+    let build; let verify;
+    try { parseLanguageCode(v); } catch (e) { build = e.message; }
+    try { readLanguageCodeFlag({ 'language-code': v }); } catch (e) { verify = e.message; }
+    assert.strictEqual(verify, build, `the same refusal for ${JSON.stringify(v)}`);
+  }
+  for (const v of ['1', '1031', '65535', ' 1033 ']) assert.strictEqual(readLanguageCodeFlag({ languageCode: v }), parseLanguageCode(v), `${JSON.stringify(v)} is the same LCID to both`);
+});
+
 // #447 follow-up: 1033 is the exact value that breaks a non-English org, so EVERY path that falls
 // back to it must say so. Previously only the read-threw path warned; an empty result set or a null
 // languagecode returned 1033 silently and the build then died on a DateTime/Memo column with an
@@ -2160,7 +2211,7 @@ test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)? \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 
@@ -2212,6 +2263,37 @@ test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated on
   assert.doesNotMatch(cap.logs.join('\n'), /not applicable on this environment/,
     'and must NOT blame the environment, which is working fine');
   assert.deepStrictEqual(r.verify.phaseSkipped, ['business-rule:new_ticket.Lock notes']);
+});
+
+// A build run with `--language-code` writes its form labels in that language, which need not be the organization's. The build already knows
+// which — the flag, and what its SDK was made for — so it tells verify, which would otherwise hold a correctly published caption to the
+// organization's language and call it missing: a false `verify FAIL` for the build that had just written it.
+test('the build hands verify the language it wrote its labels in', async () => {
+  const { sdk } = mockSdk();
+  let received = null;
+  const verify = async (s, o) => { received = o; return { ok: true, checks: [], missing: [] }; };
+  await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, languageCode: 1036, preResolvedLanguageCode: 1036 }, { sdk, verify });
+  assert.strictEqual(received.languageCode, 1036, 'the --language-code the build was given');
+  assert.strictEqual(received.preResolvedLanguageCode, 1036, 'and the language its SDK was made for, which is what every label was written in');
+  // A build that resolved its language itself (the organization's, with no flag) hands over what it resolved.
+  await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, preResolvedLanguageCode: 1031 }, { sdk, verify });
+  assert.strictEqual(received.languageCode, undefined);
+  assert.strictEqual(received.preResolvedLanguageCode, 1031);
+  // The rest of the options are exactly what they were.
+  assert.deepStrictEqual(Object.keys(received).sort(), ['baselineSpec', 'environmentSkipped', 'languageCode', 'phases', 'preResolvedLanguageCode']);
+});
+
+test('verify NARRATES what it could not verify beside its PASS — it is neither a pass nor a failure — and the result carries it', async () => {
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  const unverified = ['form-labels:new_ticket.Main (the label of tab \'tab_main\' was not compared: the language the build wrote it in could not be established (503). Pass --language-code <lcid> or set "languageCode" in the spec to compare it)'];
+  const verify = async () => ({ ok: true, checks: [{ kind: 'entity', name: 'a', present: true }], missing: [], unverified });
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify, log: cap.log });
+  assert.match(cap.logs.join('\n'), /✓ verify PASS \(1\/1 present\)/, 'what was checked passed');
+  assert.match(cap.logs.join('\n'), /⊘ 1 check could not be verified — it is neither passed nor failed/, 'the human channel says so');
+  assert.ok(cap.logs.some((l) => l.includes(unverified[0])), 'and names what, with the reason');
+  assert.strictEqual(r.verify.ok, true, 'it is not a failure');
+  assert.deepStrictEqual(r.verify.unverified, unverified, 'the machine channel — this is what emitResult serializes');
 });
 
 // #587 item 3 — a plain `--apply` called invalidateSnapshot but DISCARDED its `{ ok, reason }`

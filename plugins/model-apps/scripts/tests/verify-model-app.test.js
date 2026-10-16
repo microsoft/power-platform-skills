@@ -336,6 +336,8 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
         // Pure, so the real one — the CLI uses it to identify the environment's baseline.
         dataverseOrigin: require('../lib/dataverse-auth.js').dataverseOrigin,
+        // Pure as well: the `--language-code` flag, read the way the build reads it.
+        readLanguageCodeFlag: require('../lib/dataverse-auth.js').readLanguageCodeFlag,
       };
     }
     if (id === './lib/sdk-http-client.js') {
@@ -344,8 +346,8 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     }
     if (!realGates && id === './lib/verify-spec.js') {
       return {
-        verifySpec: async (spec, read) => {
-          events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function' });
+        verifySpec: async (spec, read, opts) => {
+          events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function', opts });
           return verifyResult;
         },
       };
@@ -499,6 +501,65 @@ test('verify CLI prints per-check status and aliases missing checks into emitRes
   const removed = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === sdkRoot);
   assert.ok(removed > -1, 'the throwaway workspace is removed');
   assert.ok(removed < harness.events.findIndex((e) => e.type === 'emitResult'), 'before emitResult ends the process');
+});
+
+// A build run with `--language-code` publishes its tab and section captions in that language, which may not be the organization's, and verify
+// can only hold them to the right one when it is told: it takes the flag the build takes, spelled either way, and hands it to the verification.
+const SPEC_FLAGS = { env: 'https://org.example', spec: '@app-spec.json' };
+const verifyCall = (harness) => harness.events.find((e) => e.type === 'verifySpec');
+
+test('verify CLI takes the build\'s --language-code (or --languageCode) and hands the language to the verification', async () => {
+  for (const flags of [{ 'language-code': '1036' }, { languageCode: '1036' }, { 'language-code': ' 1036 ', languageCode: '1036' }]) {
+    const harness = loadVerifyCli({ parseResult: { positional: [], flags: { ...SPEC_FLAGS, ...flags } } });
+    await harness.main();
+    assert.strictEqual(verifyCall(harness).opts.languageCode, 1036, JSON.stringify(flags));
+    assert.ok('baselineSpec' in verifyCall(harness).opts, 'the baseline is still handed over');
+  }
+  // Without the flag verify is told nothing — the spec's language, then the organization's, decide, as for a build with no flag.
+  const plain = loadVerifyCli({ parseResult: { positional: [], flags: SPEC_FLAGS } });
+  await plain.main();
+  assert.strictEqual(verifyCall(plain).opts.languageCode, undefined);
+});
+
+test('verify CLI refuses a --language-code that is no LCID, a pair that disagrees, and a bare flag, before it opens an SDK', async () => {
+  for (const [what, flags, message] of [
+    ['a language tag', { 'language-code': 'de-DE' }, /--language-code \/ --languageCode must be digits only, a positive integer LCID up to 65535 \(got 'de-DE'\)/],
+    ['zero', { languageCode: '0' }, /must be digits only/],
+    ['too large', { 'language-code': '65536' }, /must be digits only/],
+    ['two flags that disagree', { 'language-code': '1031', languageCode: '1036' }, /--language-code '1031' and --languageCode '1036' disagree — pass only one/],
+    ['a flag with no value', { 'language-code': true }, /--language-code/],
+    ['a flag with an empty value', { languageCode: '' }, /--languageCode/],
+  ]) {
+    const harness = loadVerifyCli({ parseResult: { positional: [], flags: { ...SPEC_FLAGS, ...flags } } });
+    await assert.rejects(harness.main(), (err) => err.exitCode === 1, what);
+    assert.match(harness.stderr.join(''), message, what);
+    assert.match(harness.stderr.join(''), /Usage: node verify-model-app\.js .*\[--language-code\|--languageCode <lcid>\]/, `${what}: the usage names the flag`);
+    assert.ok(!harness.events.some((e) => e.type === 'createMakerSdk' || e.type === 'verifySpec'), `${what}: nothing was opened or read`);
+  }
+});
+
+// A check verify could not decide is neither a pass nor a failure. It is listed — on stderr, and in the JSON result a skill reads — so a green
+// run never reads as "everything the spec declares is deployed" while a label was not compared.
+test('verify CLI lists what it could not verify, beside the PASS, in the output and the result — and says nothing when there is none', async () => {
+  const unverified = ['form-labels:new_ticket.Ticket Main (the label of tab \'tab_overview\' was not compared: the language the build wrote it in could not be established (the organization read failed: 503). Pass --language-code <lcid> (the one the build was run with) or set "languageCode" in the spec to compare them)'];
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: SPEC_FLAGS },
+    verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [], unverified },
+  });
+  await harness.main();
+  const stderr = harness.stderr.join('');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.match(stderr, /✓ verify PASS \(1\/1 present\)/, 'the verdict on what was checked is unchanged');
+  assert.ok(stderr.includes(`⊘ ${unverified[0]}`), `the unverified check is named, with its reason: ${stderr}`);
+  assert.match(stderr, /⊘ 1 check could not be verified — it is neither passed nor failed/);
+  assert.strictEqual(emitted.ok, true, 'it does not fail the run');
+  assert.deepStrictEqual(emitted.payload.unverified, unverified, 'the machine channel carries it');
+  assert.deepStrictEqual(emitted.payload.missing, []);
+
+  const none = loadVerifyCli({ parseResult: { positional: [], flags: SPEC_FLAGS } });
+  await none.main();
+  assert.doesNotMatch(none.stderr.join(''), /⊘/);
+  assert.ok(!('unverified' in none.events.find((e) => e.type === 'emitResult').payload), 'the result keeps its shape when nothing was left unverified');
 });
 
 // The page reads a pass gave up on can still be running when it ends, and only a workspace the backend made itself is one it can close — so it is not

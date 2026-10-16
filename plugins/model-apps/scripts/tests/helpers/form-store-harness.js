@@ -20,7 +20,10 @@ const SUBGRID_CLASS_ID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
 const VIEW_ID = guid(7777);
 const DEFAULT_ATTRIBUTES = { new_name: 'String', new_code: 'String', new_notes: 'Memo', new_area: 'String', new_extra: 'String' };
 
-function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES, languageCode = 1033 } = {}) {
+// `languageCode` is the organization's base language, what a read of the organization answers. `sdkLanguageCode` is the language the SDK is MADE
+// for — the one the build writes its labels in, which `--language-code` can set apart from the organization's — and is the SDK's own default
+// when it is left out.
+function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES, languageCode = 1033, sdkLanguageCode } = {}) {
   const dirs = [];
   const store = { row: { formid: formId, name: formName, objecttypecode: entity, type: 2, isdefault: true } };
   const writes = [];
@@ -70,7 +73,7 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
     const dir = workspaceDir || fs.mkdtempSync(path.join(os.tmpdir(), 'form-layout-rt-'));
     if (!workspaceDir) dirs.push(dir);
     const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir),
-      instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+      instanceUrl: 'https://contoso.crm.dynamics.com', httpClient, ...(sdkLanguageCode ? { languageCode: sdkLanguageCode } : {}) });
     await sdk.initWorkspace();
     const mutations = [];
     // These wrappers record calls and delegate every one to the real bundle.
@@ -103,8 +106,8 @@ async function seedForm(h, tabs, { name = 'Main', entity = h.entity } = {}) {
   return h.formId;
 }
 
-// `--verify` over what the server holds, through the plugin's own reader (the published formxml query).
-async function verifyForms(h, spec) {
+// `--verify` over what the server holds, through the plugin's own reader (the published formxml query). `opts` are verifySpec's own.
+async function verifyForms(h, spec, opts) {
   const fetched = await h.freshSdk();
   const live = readerFor(fetched.sdk, spec.app.uniqueName);
   const read = {
@@ -114,7 +117,7 @@ async function verifyForms(h, spec) {
     queryRecords: live.queryRecords,
     formTopology: live.formTopology,
   };
-  return verifySpec(spec, read);
+  return verifySpec(spec, read, opts);
 }
 
 // The FormXML of the section `name`.

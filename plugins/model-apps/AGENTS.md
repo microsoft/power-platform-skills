@@ -175,11 +175,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   after new-field insertion; remaining unsatisfied requests are warned in `skipped.layout`.
   Existing fields are not list-reordered. Verify checks form-wide cell/control ID uniqueness,
   including auto forms, and the tab and section **labels** a layout authors, each in the language the build wrote
-  it: a string label in the build's authoring language (the spec's `languageCode`, else the organization's base
-  language, read once), a label map at every LCID it declares — a translation the spec leaves out is never
-  required or changed. A caption the published form holds only in ANOTHER language does not stand in for the
-  declared one, and a missing caption or language is a mismatch, not a pass; a label the spec does not write is
-  not compared. Field order and anchor adjacency are not verified. A field's `readOnly`/`hidden` flag goes on
+  it: a string label in the build's authoring language — the language the build was handed (its `--language-code`,
+  which `verify-model-app.js` takes too, and, for the build's own `--verify`, what its SDK was made for), else the
+  spec's `languageCode`, else the organization's base language (read once) — and a label map at every LCID it
+  declares; a translation the spec leaves out is never required or changed. A caption the published form holds only
+  in ANOTHER language does not stand in for the declared one, and a missing caption or language is a mismatch, not
+  a pass; a label the spec does not write is not compared. **A string label is never held to a guessed language.**
+  A build run with `--language-code` in an organization whose base language is another one publishes its captions
+  in the flag's language, so verify it with the same flag (or pin `languageCode` in the spec): told nothing, verify
+  holds them to the organization's language, and the failure says so. When no language can be established at all —
+  the organization cannot be read — the string labels are listed under `unverified` (the output, and the result
+  JSON beside `missing`), neither passed nor failed, with the reason and the flag that settles it: the build's
+  fallback to 1033 is a choice for a build, and for verify it would be a guess that passes a stale caption as
+  readily as it fails a correct one (`resolveLanguageCode`'s `undetermined` hook replaces it). Everything else is
+  still checked, label maps included. Field order and anchor adjacency are not verified. A field's `readOnly`/`hidden` flag goes on
   **every** cell the form holds of the field — in a section, in a maker's tab or section, in the form
   **header and footer**, and in a tab's own header and footer (`tabheader`/`tabfooter`): on a form a maker placed a
   field on twice, the first cell alone left the second editable or visible. `applyFieldControlOptions` visits each
@@ -745,11 +754,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   description have), so a spec that leaves the description out or carries the `""` a download writes never blanks
   one a maker typed; the spec wins over a text changed in Maker, as it does for those. The unique name is the app's
   identity and is never written: a spec that pins `app.uniqueName` (a download does) is renamed, one that does not
-  names a different app. **Only a header that is plain text is written over.** Both columns are localizable, and a plain
-  write of the base-language text has not been measured to keep the translations beside it, so a name or description
-  that comes back as one text per language is never replaced by a scalar — in either direction, the unchanged name
-  of an edited description included: it is left as it is and the build warns that the edit was not applied (change it in
-  Power Apps). The build never sends a map for a String column. A **never-published** app takes no write to its name or
+  names a different app. **The header is written only while both texts are plain text.** Both columns are localizable,
+  and a plain write of the base-language text has not been measured to keep the translations beside it, so a name or
+  description that comes back as one text per language — or as any other value that is not a string — is never sent:
+  not as a map (these are String columns), and not replaced by a scalar. The SDK's one header PATCH carries the
+  artifact's `name` AND `description` whichever of them an edit changed (pinned in
+  `app-header-text-real-bundle.test.js`), so leaving that one field alone is not enough: while either text is not
+  plain **no header edit is made at all** — not the other text's, and not a requested routing description — and each
+  edit the spec asked for is reported as not applied, with the reason (change it in Power Apps). That is a warning,
+  never a halt: the push is the navigation alone, as for a rebuild with no edit. A localized text the spec's own text
+  already equals needs no edit and no word. No PATCH the build makes carries a map, a list or a scalar over a text
+  that is not plain. A **never-published** app takes no write to its name or
   description until it is published, and the SDK refuses the push before it writes anything
   (`APP_DRAFT_HEADER_NOT_WRITABLE`). For a text edit alone that is a warning, not a halt: `pushAppHeader` puts the fetched
   text back, pushes again — the navigation and the rest of the build are then written as they always were for such an
@@ -854,7 +869,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,
   customer columns, global choices, status reasons, alternate keys, relationships); precedence is
-  `--language-code` → App Spec `languageCode` → the org's base language → 1033. Without this, an org
+  `--language-code` → App Spec `languageCode` → the org's base language → 1033 (`--verify` resolves the language its
+  string tab and section labels were written in by the same precedence — it takes the same flag — but never falls to
+  1033: see the form-layout paragraph). Without this, an org
   that has not provisioned 1033 fails the data-model phase with `The language code 1033 is not a valid
   language for this organization`
   (#447) — and confusingly only on
@@ -1939,7 +1956,7 @@ scripts/
   build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
-  verify-model-app.js          ← app-builder: reconcile the spec against the deployed app
+  verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in)
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review
   preview-app.js               ← app-builder: ASCII whole-app design preview (data model + sitemap + forms + page-intents + design)
   write-app-spec-doc.js        ← app-builder: renders the readable model-app-plan.md design doc from app-spec.json
@@ -1958,7 +1975,7 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase — a length a failed attempt left unset is owed to the build's retry (`owedLengths`, paid only to the table that attempt created: proved by its MetadataId, and then written by requests addressed with the ids, which a table made again cannot answer to), and an alternate key over that column is made after it; and `mapLimit`, the bounded fan-out every parallel path reuses
     provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
-    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an answer that is not a success, and a transport failure's text, come back from `dataverseRequest` with every token the call sent taken out — the one `scrub` of `sdk-http-client.js`, a success untouched; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), the Azure CLI token for the Power Apps service (`getPowerAppsToken`: the same read for another resource, memoized apart from the Dataverse token and asked for only by the Power Apps service client and the connectivity preflight), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an answer that is not a success, and a transport failure's text, come back from `dataverseRequest` with every token the call sent taken out — the one `scrub` of `sdk-http-client.js`, a success untouched; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), the Azure CLI token for the Power Apps service (`getPowerAppsToken`: the same read for another resource, memoized apart from the Dataverse token and asked for only by the Power Apps service client and the connectivity preflight), plus the CLI arg contract (parseArgs/validateFlags, and `readLanguageCodeFlag` — the `--language-code` / `--languageCode` flag as an LCID, which `verify-model-app.js` reads exactly as the build does) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked — except a launcher that only forwards to the native program beside it, the Windows MSI's two-line `pac.cmd` (`@echo off` / `"%~dp0pac.launcher.exe" %*`): it is recognised by its exact lines — `@echo off` on a line of its own, then the forwarding line, as `cmd` reads lines, so a one-line `@echo off "%~dp0x.exe" %*`, which is an `echo`, is not one — and the program beside it (`forwardedProgram`) and that program is started directly, so a `%` or a double quote reaches it unchanged; every other batch file keeps the checked route and its refusal of them); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere, each only once `ps -o lstart= -p` shows its pid still has the start time the listing saw — a descendant that exited meanwhile can have its pid given to an unrelated process; best effort, since two processes can share a one-second start time and the moment between that read and the signal is not covered), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws. `spawnResultTree` is `spawnResultSync`'s asynchronous twin (same result shape, never rejects) for a call that may have to be ended: one that outlasts its `timeout`, or writes past `maxBuffer`, has its whole tree ended through `killProcessTree` before the call settles (`ETIMEDOUT`, `ENOBUFS`), after a short wait for the pipes of what was ended; the error says whether they closed (`containment`: `confirmed`, or `unconfirmed` when a process that outlived the ended tree still holds them, with the `pid` the call was started as)
     cli-failure.js             ← how a CLI child failed (timeout / missing / failed), the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out; `commandArg` writes an argument of a command a message tells you (or the agent) to paste so that, run from PowerShell (Windows PowerShell 5.1 or PowerShell 7) or a POSIX shell, the program gets it unchanged as one argument — bare when it is plain, single-quoted otherwise (a path from an untrusted checkout can hold `;`, `$(…)` or backticks) — or not at all when no spelling does that in every one of those shells: a quote or a line break, and the values Windows PowerShell changes on their way to a native program (a `"`, white space with a final `\`, the empty value) or both PowerShells read as the stop-parsing token (`--%`), all measured. `commandArgOrPlaceholder` then writes a placeholder and names the value outside the command
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
@@ -3519,8 +3536,9 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
 - **An app header write is never unconditional** (`scripts/tests/app-ai-description-real-bundle.test.js`,
   `scripts/tests/app-header-text-real-bundle.test.js`). The
   SDK writes the app's name, description and routing description conditioned on the appmodule ROW token a
-  fetch read, even when its own read of the header fails (the header PATCH carries `name`, `description` and,
-  when one is supplied, `aiappdescription`; the icon is written at create only). A header edit made while it
+  fetch read, even when its own read of the header fails (the header PATCH carries `name` and `description` —
+  always both, whichever one an edit changed — and, when one is supplied, `aiappdescription`; the icon is written at
+  create only). A header edit made while it
   holds no token throws `APP_UPDATE_NO_ETAG` before anything is written (it used to send the PATCH plain,
   which overwrote another writer's header). The plugin edits an existing app's header only on a copy it has
   just fetched, and only its text (`name`, `description`: `applyAppHeaderText`) and the routing description
@@ -4311,7 +4329,7 @@ teardown scripts are **dry-run by default**; add `--apply` to write.
 az account set --subscription <sub-id>
 node scripts/check-auth.js --env <envUrl>       # az token + WhoAmI preflight (pac optional; --require-pac for genpage)
 node scripts/build-model-app.js   --env <envUrl> --spec @<dir>/app-spec.json [--sample-data --publish] --apply --verify
-node scripts/verify-model-app.js  --env <envUrl> --spec @<dir>/app-spec.json
+node scripts/verify-model-app.js  --env <envUrl> --spec @<dir>/app-spec.json   # add --language-code <lcid> when the build was run with it
 node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --apply --allow-destructive
 ```
 

@@ -1334,10 +1334,11 @@ async function applyAppAiDescription(provision, spec, appId) {
 // the text each edit REPLACED — `{ description: 'Tickets' }`, `{}` when nothing was edited — which is what a refused push puts back
 // (pushAppHeader), and which says whether the artifact now needs a push.
 //
-// The SDK's header push writes `name`, `description` and the routing description to the appmodule row, whichever of them the
-// artifact holds differently from the row (and none when all three are equal), conditioned on the row's own token — pinned
-// against the real bundle in app-header-text-real-bundle.test.js. So these edits ride the push the app already gets (the sitemap
-// rewrite): never a second push from the same fetch, which would race the first on its If-Match.
+// The SDK's header push writes `name` AND `description` — and the routing description, when the artifact says something new about it —
+// in ONE PATCH, conditioned on the row's own token, whenever the artifact holds any of them differently from the row (and no PATCH when
+// all three are equal). Whichever of them an edit changed, the others ride along as the artifact holds them: it writes the copy, not the
+// edit (pinned against the real bundle in app-header-text-real-bundle.test.js). So these edits ride the push the app already gets (the
+// sitemap rewrite): never a second push from the same fetch, which would race the first on its If-Match.
 //
 //   * Only a non-blank string is written, and only when it differs from the FETCHED artifact (the draft layer the push compares the
 //     header against). The two guards a view's and a chart's description already have: a spec that leaves the text out — or carries
@@ -1348,45 +1349,73 @@ async function applyAppAiDescription(provision, spec, appId) {
 //     app, which the app step creates, rather than renaming this one.
 //   * A fetched app always carries both keys (the adapter reads `description` as '' when the row has none), so updateElement has a
 //     path to write — unlike the routing description, which is added when the row has none.
-//   * Only a header that is PLAIN TEXT is written over. Both columns are localizable, and whether a plain write of the base-language
-//     text keeps a translation beside it has not been measured against an environment; the adapter hands back one string, so a
-//     translation held beside it is invisible here. What this can see is a value that is not a string at all — a text per language,
-//     as an LCID map — and that is never replaced by a scalar, nor is a value of any other shape: it is left as it is and the
-//     build says so. A localized value the spec's text already equals (the unchanged-name, changed-description case) needs no edit
-//     and no word. Nothing here writes a map: these are String columns, and a map-shaped PATCH of one is no write the platform defines.
+//   * The header is written only while BOTH texts are PLAIN TEXT. Both columns are localizable, and whether a plain write of the
+//     base-language text keeps a translation beside it has not been measured against an environment; the adapter hands back one
+//     string, so a translation held beside it is invisible here. What this can see is a value that is not a string at all — a text per
+//     language, as an LCID map, a list, a number — and that is never sent: not as it is (these are String columns, and a map-shaped
+//     PATCH of one is no write the platform defines), and not replaced by a scalar. It is not enough to leave that one field alone:
+//     the push would still send it, as the sibling of an edit of the other text or of the routing description. So while either text
+//     is not plain NO header edit is made at all — the other text's, and the routing description's (applyAppHeader) — and each edit the
+//     spec asked for is reported as not applied, with the reason. A localized value the spec's text already equals (the
+//     unchanged-name, changed-description case) needs no edit of its own and no word.
 // name holds at most 100 characters and description 2,000 (validateDescription).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
 async function applyAppHeaderText(provision, spec, appId, warn) {
+  return (await editAppHeaderText(provision, spec, appId, warn)).replaced;
+}
+
+// applyAppHeaderText's work, which also answers `held` — the header's texts that are not plain, `[{ key, have }]` — for applyAppHeader to
+// hold the routing description back by.
+async function editAppHeaderText(provision, spec, appId, warn) {
   const app = (spec && spec.app) || {};
   const current = (await provision.getArtifact('app', appId)) || {};
+  // Read BEFORE any write: getArtifact can hand back the stored tree itself, which updateElement then changes under `current`.
+  const have = { name: current.name, description: current.description };
+  const held = ['name', 'description'].filter((key) => typeof have[key] !== 'string').map((key) => ({ key, have: have[key] }));
   const replaced = {};
   for (const key of ['name', 'description']) {
     const want = app[key];
-    // Read BEFORE the write: getArtifact can hand back the stored tree itself, which updateElement then changes under `current`.
-    const have = current[key];
-    if (typeof want !== 'string' || !want.trim() || have === want) continue;
-    const kept = whyAppTextIsKept(key, have, want);
+    if (typeof want !== 'string' || !want.trim() || have[key] === want) continue;
+    const kept = whyAppTextIsKept(key, have[key], want, held);
     if (kept !== undefined) {
       if (kept && typeof warn === 'function') warn(`app "${app.name}": its ${key} was not applied: ${kept}`);
       continue;
     }
     await provision.updateElement('app', appId, `/${key}`, want);
-    replaced[key] = have;
+    replaced[key] = have[key];
   }
-  return replaced;
+  return { replaced, held };
+}
+
+// How a header text that is not plain reads in a warning: "localized (2 languages: 1033, 1036)" for a text per language, an LCID map; otherwise
+// what came back, as a kind.
+const isAppTextMap = (have) => have !== null && typeof have === 'object' && !Array.isArray(have);
+const appTextKind = (have) => (have === null ? 'null' : have === undefined ? 'no value' : Array.isArray(have) ? 'a list' : `a ${typeof have}`);
+const localizedAppText = (have) => {
+  const languages = Object.keys(have);
+  return `localized (${languages.length} language${languages.length === 1 ? '' : 's'}: ${languages.join(', ')})`;
+};
+// The header's texts that are not plain, as the start of a sentence: "the app's name is localized (2 languages: 1033, 1036) and its
+// description could not be read as plain text (it came back as a list)".
+function describeHeldAppText(held) {
+  return held.map(({ key, have }, i) => `${i === 0 ? 'the app\'s' : 'its'} ${key} ${isAppTextMap(have) ? `is ${localizedAppText(have)}` : `could not be read as plain text (it came back as ${appTextKind(have)})`}`).join(' and ');
 }
 
 // Why an app's name or description (`have`, as fetched) is NOT written over with the spec's text (`want`) — or `undefined` when it is
-// plain text and is. `''` means the spec asks for nothing the header does not already say, so there is nothing to report.
-function whyAppTextIsKept(key, have, want) {
-  if (typeof have === 'string') return undefined;
-  if (have !== null && typeof have === 'object' && !Array.isArray(have)) {
-    if (Object.values(have).includes(want)) return '';
-    const languages = Object.keys(have);
-    return `it is localized (${languages.length} language${languages.length === 1 ? '' : 's'}: ${languages.join(', ')}), and a rebuild does not replace a localized text — it cannot tell which language the spec's text is for, nor that the other translations would be kept. Change it in Power Apps.`;
+// plain text and nothing else holds it back. `''` means the spec asks for nothing the header does not already say, so there is nothing to
+// report. `held` is what editAppHeaderText found not to be plain text: a plain text is held back too while another text of the header is,
+// because the SDK's one request writes both.
+function whyAppTextIsKept(key, have, want, held) {
+  if (typeof have === 'string') {
+    return held.length
+      ? `${describeHeldAppText(held)}, and the app's name and description are written in one request, so changing its ${key} would send the ${held[0].key} too — a rebuild never sends a text that is not plain. Change it in Power Apps.`
+      : undefined;
   }
-  const kind = have === null ? 'null' : have === undefined ? 'no value' : Array.isArray(have) ? 'a list' : `a ${typeof have}`;
-  return `the app's ${key} could not be read as plain text (it came back as ${kind}), so a rebuild does not replace it. Change it in Power Apps.`;
+  if (isAppTextMap(have)) {
+    if (Object.values(have).includes(want)) return '';
+    return `it is ${localizedAppText(have)}, and a rebuild does not replace a localized text — it cannot tell which language the spec's text is for, nor that the other translations would be kept. Change it in Power Apps.`;
+  }
+  return `the app's ${key} could not be read as plain text (it came back as ${appTextKind(have)}), so a rebuild does not replace it. Change it in Power Apps.`;
 }
 
 // Everything of an existing app's header the spec can change: its text and its routing description, applied to one fetched copy so
@@ -1395,10 +1424,25 @@ function whyAppTextIsKept(key, have, want) {
 //   changed   whether the artifact now holds any header change, and so needs a push;
 //   routing   whether one of them is the routing description — an explicit request that a never-published app's refusal must HALT on;
 //   replaced  the text the name / description edits replaced (applyAppHeaderText), for pushAppHeader to put back.
+// While a text of the header is not plain, no edit is made at all — the routing description's included: it is written by the same request
+// as the two texts, so it would send the one that is not plain (see applyAppHeaderText). That is a warning, not a halt: the navigation is
+// the app step's own work and goes on, and a text left for a maker costs the build nothing it could have kept.
 async function applyAppHeader(provision, spec, appId, { text = true, warn } = {}) {
-  const replaced = text ? await applyAppHeaderText(provision, spec, appId, warn) : {};
-  const routing = await applyAppAiDescription(provision, spec, appId);
+  const { replaced, held } = text ? await editAppHeaderText(provision, spec, appId, warn) : { replaced: {}, held: [] };
+  const routing = held.length ? await holdBackAppRouting(provision, spec, appId, held, warn) : await applyAppAiDescription(provision, spec, appId);
   return { changed: routing || Object.keys(replaced).length > 0, routing, replaced };
+}
+
+// The routing description is never edited while the header holds a text that is not plain. Says so when the spec asks for one the fetched
+// copy does not have; answers false, as applyAppAiDescription does for "nothing to push".
+async function holdBackAppRouting(provision, spec, appId, held, warn) {
+  const want = spec.app && spec.app.aiDescription;
+  if (typeof want !== 'string' || !want.trim() || typeof warn !== 'function') return false;
+  const current = (await provision.getArtifact('app', appId)) || {};
+  if (current.aiDescription !== want) {
+    warn(`app "${spec.app.name}": its routing description (app.aiDescription) was not applied: ${describeHeldAppText(held)}, and the app's name, description and routing description are written in one request, so changing it would send ${held.length === 1 ? `the ${held[0].key}` : 'both'} too — a rebuild never sends a text that is not plain. Change it in Power Apps.`);
+  }
+  return false;
 }
 
 // An app's tile icon is written when the app is created and a rebuild cannot replace it: the appmodule's `webresourceid` is effectively

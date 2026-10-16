@@ -2,7 +2,8 @@
 // Reconcile an App Spec against a DEPLOYED app: for every declared entity/column/view/chart/form and
 // every sitemap subarea (+ icon), check whether it actually exists server-side. Catches silent
 // partial builds. Pure/testable: `read` provides the server lookups; `verifySpec` returns
-// { ok, checks:[{kind,name,present,detail}], missing:[…] }.
+// { ok, checks:[{kind,name,present,detail}], missing:[…] } and, only when a check could not be decided
+// (neither a pass nor a failure), `unverified: ["<kind>:<name> (<reason>)"]`.
 
 const { odataLit } = require('./odata.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
@@ -117,7 +118,7 @@ function makeCheckPlan(concurrency) {
   const early = (fn, consumer) => { if (concurrency > 1) tasks.unshift(async () => { await unlessFailed(fn(), consumer); }); };
   const run = async () => {
     const buffers = await mapLimit(tasks, concurrency, async (task, position) => {
-      const b = { checks: [], environmentSkipped: [], phaseSkipped: [] };
+      const b = { checks: [], environmentSkipped: [], phaseSkipped: [], unverified: [] };
       b.add = (kind, name, present, detail) => b.checks.push({ kind, name, present: !!present, detail: detail || '' });
       try {
         await task(b);
@@ -131,6 +132,7 @@ function makeCheckPlan(concurrency) {
       checks: buffers.flatMap((b) => b.checks),
       environmentSkipped: buffers.flatMap((b) => b.environmentSkipped),
       phaseSkipped: buffers.flatMap((b) => b.phaseSkipped),
+      unverified: buffers.flatMap((b) => b.unverified),
     };
   };
   return { section, each, early, unlessFailed, abandoned, abandonedReads: () => gaveUp, run };
@@ -147,6 +149,11 @@ const once = (read) => { let started; return () => (started || (started = Promis
 // `opts.proofAttempts` / `opts.proofDelayMs` tune the app-scope override retry (see the ai-feature
 // block below). They exist so tests can drive the absent path without paying real backoff; the
 // defaults are the budget the build's own proof after a publish shares (AI_PROOF_BUDGET).
+//
+// `opts.languageCode` / `opts.preResolvedLanguageCode` are the language the BUILD wrote its labels in, as the
+// build holds it: its `--language-code` flag, and the language its SDK was made for (which is what every
+// label was written in). A form's string tab and section labels are held to it, ahead of the spec's
+// `languageCode` and the organization's base language (see `authoringLanguage`).
 async function verifySpec(spec, read, opts = {}) {
   if (read && typeof read.beginVerificationPass === 'function') read.beginVerificationPass();
   // Every check below is a task of this plan and reports into its own buffers (see makeCheckPlan), which
@@ -179,8 +186,11 @@ async function verifySpec(spec, read, opts = {}) {
   // Two DIFFERENT reasons a check was not performed, kept apart because they warrant opposite
   // messages. Reporting a phase that simply did not run as "this environment cannot host it" tells
   // an operator on a perfectly healthy environment that their environment is broken — and on the
-  // normal `--changed-only` fast-apply path that would be wrong every single time. (Each task collects
-  // its own `environmentSkipped` / `phaseSkipped`; the plan joins them in report order.)
+  // normal `--changed-only` fast-apply path that would be wrong every single time. A THIRD thing is
+  // neither: a check verify could not decide (`unverified` — the language a form's labels were written in
+  // could not be established). It is not a pass and it is not a failure, so it is listed apart and never
+  // counted in `checks` or `missing`. (Each task collects its own `environmentSkipped` / `phaseSkipped` /
+  // `unverified`; the plan joins them in report order.)
 
   const selectedDefaultForms = new Map();
   const declaredMainFormsByEntity = new Map();
@@ -691,14 +701,31 @@ async function verifySpec(spec, read, opts = {}) {
   // `typeof read.formTopology === 'function'` let a reader without it skip every layout check, so an
   // explicit form passed verify on identity and default checks alone with no layout proof at all.
   const canReadTopology = useCombinedFormRead || typeof read.formTopology === 'function';
-  // The language the build writes a STRING tab or section label in, which a label is held to (labelProblem): the build's own resolution —
-  // the spec's `languageCode`, else the organization's base language, else 1033 (resolveLanguageCode) — without the `--language-code` flag
-  // a build may have been run with, which verify cannot know: a build run with one needs `languageCode` pinned in the spec to be verified.
+  // The language the build wrote a STRING tab or section label in, which a label is held to (labelProblem). It is the build's own resolution
+  // (resolveLanguageCode), whose first answer is the language the build was HANDED: `opts.preResolvedLanguageCode`, what its SDK was made for
+  // and so what every label was written in, else `opts.languageCode`, its `--language-code` flag (the standalone verify takes the same flag);
+  // then the spec's `languageCode`, then the organization's base language. A build run with the flag in an organization whose base language
+  // is another one publishes its captions in the flag's language, so a verify that held them to the organization's called them missing.
+  //
+  // Known or not: the build falls back to 1033 when it cannot read the organization, but for the build that is a CHOICE of language, and here
+  // it would be evidence about what an existing deployment was written in — a guess that passes a stale caption as readily as it fails a
+  // correct one. So when nothing answers, the string labels are reported `unverified` with the reason (`undetermined`), not held to a language.
+  // `fromOrganization` says the language was inferred, not given, so a mismatch can tell the maker a build run with another one needs the flag.
   // Read once per pass, and only when a form authors a string label.
   let authoringLanguageP;
-  const authoringLanguage = () => authoringLanguageP || (authoringLanguageP = resolveLanguageCode({ provision: read, spec }));
+  const authoringLanguage = () => authoringLanguageP || (authoringLanguageP = (async () => {
+    let fromOrganization = false;
+    let reason;
+    const lcid = await resolveLanguageCode({
+      provision: read && typeof read.queryRecords === 'function' ? { queryRecords: (...args) => { fromOrganization = true; return read.queryRecords(...args); } } : undefined,
+      spec,
+      languageCode: opts.preResolvedLanguageCode || opts.languageCode,
+      undetermined: (why) => { reason = why; return null; },
+    });
+    return lcid ? { lcid, fromOrganization } : { reason };
+  })());
   {
-    plan.each(spec.forms || [], async ({ add }, forms) => {
+    plan.each(spec.forms || [], async ({ add, unverified }, forms) => {
     for (const f of forms) {
       const explicit = Array.isArray(f.tabs) && f.tabs.length > 0;
       const entity = String(f.entity || '').toLowerCase();
@@ -806,15 +833,25 @@ async function verifySpec(spec, read, opts = {}) {
       // like any other: nothing published is no proof of the caption, so it never certifies one. Not compared: a container the spec
       // gives no label (the compiler's `General` / `Details` default is what the build writes on create and fills in on a rebuild, but
       // the spec never asked for it, and a maker's own caption on such a container is not a relabel that failed to land).
+      // `language` is the form's authoring language (authoringLanguage): a string label is held to it, and where it is not known there is nothing
+      // to hold the string to — it is listed in `unverifiedLabels`, neither passed nor failed. A label map names its own languages and is compared
+      // as ever. `comparedInOrganizationLanguage` is set when a string was held to a language inferred from the organization and the container
+      // carries captions only in others, which is what a build run with a language flag leaves: the detail then says what to give verify.
+      const unverifiedLabels = [];
+      let comparedInOrganizationLanguage;
       const labelProblem = (what, container, authored, language) => {
+        const known = language && language.lcid;
+        if (typeof authored === 'string' && authored !== '' && !known) { unverifiedLabels.push(what); return; }
         const have = (container && container.labels) || [];
-        for (const [lcid, text] of declaredLabels(authored, language)) {
+        for (const [lcid, text] of declaredLabels(authored, known)) {
           if (have.some((l) => l.lcid === lcid && l.text === text)) continue;
           const declared = `the spec declares label: ${JSON.stringify(text)} in language ${lcid}`;
           const same = have.filter((l) => l.lcid === lcid);
           if (same.length) problems.push(`${what} is deployed with ${same.length === 1 ? 'label' : 'labels'} ${same.map((l) => JSON.stringify(l.text)).join(', ')} in language ${lcid}, ${declared}`);
-          else if (have.length) problems.push(`${what} is deployed with no label in language ${lcid} (it has ${have.map((l) => `${JSON.stringify(l.text)} in ${l.lcid === undefined ? 'no language' : l.lcid}`).join(', ')}), ${declared}`);
-          else problems.push(`${what} is deployed with no label, ${declared}`);
+          else if (have.length) {
+            problems.push(`${what} is deployed with no label in language ${lcid} (it has ${have.map((l) => `${JSON.stringify(l.text)} in ${l.lcid === undefined ? 'no language' : l.lcid}`).join(', ')}), ${declared}`);
+            if (typeof authored === 'string' && language.fromOrganization) comparedInOrganizationLanguage = known;
+          } else problems.push(`${what} is deployed with no label, ${declared}`);
         }
       };
       // The state the build asserts for a field: only the ENABLED flags are ever written (a rebuild never
@@ -1072,7 +1109,14 @@ async function verifySpec(spec, read, opts = {}) {
       orderProblem(tabOrder, 'the tabs');
 
       add('form-topology', `${entity}.${name}`, problems.length === 0,
-        problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
+        problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}${
+          comparedInOrganizationLanguage === undefined ? '' : ` — the labels were compared in the organization's base language (${comparedInOrganizationLanguage}), because verify was told no other: if the build was run with --language-code, give verify the same flag (or pin "languageCode" in the spec)`}` : '');
+      if (unverifiedLabels.length) {
+        const n = unverifiedLabels.length;
+        unverified.push(`form-labels:${entity}.${name} (${n === 1 ? 'the label' : 'the labels'} of ${unverifiedLabels.slice(0, 6).join(', ')}${n > 6 ? `, +${n - 6} more` : ''} ${n === 1 ? 'was' : 'were'} not compared: `
+          + `the language the build wrote ${n === 1 ? 'it' : 'them'} in could not be established (${labelLanguage.reason}). `
+          + `Pass --language-code <lcid> (the one the build was run with) or set "languageCode" in the spec to compare ${n === 1 ? 'it' : 'them'})`);
+      }
       placedGridChecks({
         tab: (i) => matchedTabs[i],
         section: (secName) => matchedSections.get(secName),
@@ -1957,7 +2001,7 @@ async function verifySpec(spec, read, opts = {}) {
       try { await read.endPageReads(); } catch { /* the pass's own outcome stands */ }
     }
   }
-  const { checks, environmentSkipped, phaseSkipped } = ran;
+  const { checks, environmentSkipped, phaseSkipped, unverified } = ran;
   const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
 
   // JTBD rollup — translates a technical failure into the business impact it caused. Every other
@@ -1994,7 +2038,7 @@ async function verifySpec(spec, read, opts = {}) {
 
   const missing2 = checks.filter((c) => !c.present);
   // Keep unableToRun absent (undefined) on the normal path so existing callers and tests are unaffected.
-  // `environmentSkipped` / `phaseSkipped` are likewise omitted when empty, for the same reason.
+  // `environmentSkipped` / `phaseSkipped` / `unverified` are likewise omitted when empty, for the same reason.
   return {
     ok: missing2.length === 0 && !unableToRun,
     checks,
@@ -2002,6 +2046,7 @@ async function verifySpec(spec, read, opts = {}) {
     unableToRun: unableToRun || undefined,
     ...(environmentSkipped.length ? { environmentSkipped } : {}),
     ...(phaseSkipped.length ? { phaseSkipped } : {}),
+    ...(unverified.length ? { unverified } : {}),
   };
 }
 

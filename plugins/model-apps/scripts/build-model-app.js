@@ -766,7 +766,10 @@ async function buildModelApp(spec, opts, deps) {
           // written and every later run would fall back to a full build. Without the second, the
           // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
           // at all) fails the same way on every run after the first.
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec });
+          // The language the build wrote its labels in goes too: the flag it was given and what its SDK was made for. A build run with
+          // `--language-code` in an organization whose base language is another one publishes its captions in the flag's language, and a
+          // verify that does not know it holds them to the organization's and reports the captions it was just given as missing.
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as
@@ -780,13 +783,19 @@ async function buildModelApp(spec, opts, deps) {
           if (vr.phaseSkipped && vr.phaseSkipped.length) {
             log(`  ⊘ ${vr.phaseSkipped.length} check(s) not verified because their phase did not run in this build: ${vr.phaseSkipped.join(', ')}`);
           }
+          // A check verify could not DECIDE is neither of those and neither a pass nor a failure: named beside the PASS, with its reason, so a
+          // green verify never reads as "everything the spec declares is deployed" while a label was not compared.
+          if (vr.unverified && vr.unverified.length) {
+            log(`  ⊘ ${vr.unverified.length} check${vr.unverified.length === 1 ? '' : 's'} could not be verified — ${vr.unverified.length === 1 ? 'it is' : 'they are'} neither passed nor failed:`);
+            for (const u of vr.unverified) log(`      ⊘ ${u}`);
+          }
           // Include `detail` on a failure so a READ that failed (throttling, auth expiry, a 5xx) is
           // not reported identically to an artifact that is genuinely absent.
           if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
           // Propagate unableToRun from verifySpec: verifySpec itself sets
           // unableToRun when the reader lacks pages/pageCode methods. Only include the property
           // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
-          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}) };
+          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}), ...(vr.unverified && vr.unverified.length ? { unverified: vr.unverified } : {}) };
           if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
         } catch (e) {
           if (mustVerifyPages) {

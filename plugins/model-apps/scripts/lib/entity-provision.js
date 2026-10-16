@@ -163,7 +163,14 @@ async function checkLocalizedLabelLanguages(spec, provisionedLanguages) {
 // CLI override first, then an App Spec override, then the org's base `organization.languagecode`,
 // and only fall back to 1033 if discovery itself fails so an unrelated read error does not block
 // the whole build.
-async function resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages }) {
+//
+// `undetermined(reason)` replaces that fallback for a caller that has to KNOW the language instead of
+// choosing one — `--verify`, which holds an existing deployment to the language its labels were
+// written in. For it a 1033 picked because the organization could not be read is an assumption about
+// what was built, not evidence of it: it would pass a stale caption as readily as it fails a correct
+// one. The hook is told why, and whatever it answers is what comes back; only a failure to determine
+// reaches it, never a language the caller was given or the organization reported.
+async function resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages, undetermined }) {
   // A supplied-but-invalid value is DISCARDED, not honoured — but it must not be discarded in
   // silence. "You gave me nothing" and "you gave me something I could not use" are different facts,
   // and only the second means the caller believes they pinned a language and is wrong. The CLI flags
@@ -190,6 +197,7 @@ async function resolveLanguageCode({ provision, spec, languageCode, warn, provis
   // this organization" and nothing connecting it back to language resolution — which is exactly the
   // confusing failure this change exists to remove.
   const fallback = (reason) => {
+    if (typeof undetermined === 'function') return undetermined(reason);
     if (typeof warn === 'function') {
       warn(`could not determine the organization's base language (${reason}); using ${DEFAULT_LANGUAGE_CODE}. `
         + `If this organization does not have ${DEFAULT_LANGUAGE_CODE} provisioned, pass `
