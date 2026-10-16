@@ -294,10 +294,14 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(isTransientHalt({ message: 'Microsoft.Crm.ObjectModel.CustomizationLockException: ...' }));
   assert.ok(isTransientHalt({ cause: { message: 'SQL timeout expired' } }));
   assert.ok(isTransientHalt({ message: 'More than one concurrent Delete requests detected' }));
-  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live. Said in words alone (an error with no status), it is still read; as the service answers it, a 500 whose
-  // code is the generic SQL error every SQL failure shares, it is final for the build: its SQL number is a message, not a code, and the HTTP client and the SDK send it again, where that is safe, before it ever gets here.
-  assert.ok(isTransientHalt({ message: 'HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' }));
-  assert.ok(!isTransientHalt(Object.assign(new Error('HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205'), { code: 'CONNECTION_ERROR', statusCode: 500, cause: { error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } } })));
+  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live. Said in words alone (an error with no status), it is still read; as the service answers it, a 500, it takes the
+  // generic SQL error code every SQL failure shares AND the platform's signature in the service's own answer (lib/retry-policy.js, isDeadlockVictimAnswer): neither alone is a deadlock victim.
+  const DEADLOCK = ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+  const answered = (words, code) => Object.assign(new Error(`HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1): ${words}`), { code: 'CONNECTION_ERROR', statusCode: 500, url: 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1)', cause: { error: { ...(code ? { code } : {}), message: words } } });
+  assert.ok(isTransientHalt({ message: `HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1): ${DEADLOCK}` }));
+  assert.ok(isTransientHalt(answered(DEADLOCK, '0x80044150')), 'a 500 with the generic SQL error code and the signature');
+  assert.ok(!isTransientHalt(answered(DEADLOCK)), 'the signature in a 500 that names no code');
+  assert.ok(!isTransientHalt(answered(DEADLOCK.replace('1205', '547'), '0x80044150')), 'the code beside another SQL number');
   assert.ok(!isTransientHalt({ message: 'Sql error: Generic SQL error. Sql Number: 547' }), 'another SQL error is not a deadlock');
   assert.ok(!isTransientHalt({ transient: false, message: 'Sql Number: 1205' }), 'an explicit non-transient still wins');
   // recoverable is a re-runnable-phase flag, NOT a transient signal — must not trigger a retry alone.

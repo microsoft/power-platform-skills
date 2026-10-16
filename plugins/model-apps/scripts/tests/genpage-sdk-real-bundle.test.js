@@ -1092,19 +1092,33 @@ test('REAL BUNDLE: an update whose change set is refused with a 429 inside HTTP 
 });
 
 // What the answer does NOT prove stays what it was. `crafted` rewrites the answer the service gave, the way a mix, a cut-off and a collision look on the wire.
-test('REAL BUNDLE: a refused change set that is not a COMPLETE refusal — a mix of statuses, an answer cut off, a part or a change set left incomplete inside a closed envelope, a collision (409, 412) or an internal error (500) — is still an unknown outcome: read for, sent once more, and never "nothing was written"', async () => {
+test('REAL BUNDLE: a refused change set that is not a COMPLETE refusal — a mix of statuses, an answer cut off, a part or a change set left incomplete inside a closed envelope (an operation with no response, a change set declared and absent, a body shorter than its Content-Length), a collision (409, 412) or an internal error (500) — is still an unknown outcome: read for, sent once more, and never "nothing was written"', async () => {
   const { isTransientHalt } = require('../build-model-app.js');
   const mix = (answer) => ({ ...answer, body: batchEnvelope([{ contentId: 1, status: 403 }, { contentId: 2, status: 429, headers: { 'Retry-After': '7' } }]) });
   const cut = (answer) => ({ ...answer, body: answer.body.replace(/--batchresponse_[^\r\n]+--\r\n$/, '') });
   // Closed at the OUTER boundary and still incomplete inside: the one complete refusal in it is not taken for the whole answer.
   const unclosed = (answer) => ({ ...answer, body: answer.body.replace(/--changesetresponse_[^\r\n]+--\r\n/, '') });
   const partCutOff = (answer) => ({ ...answer, body: answer.body.replace(/(--changesetresponse_[^\r\n]+)--\r\n/, '$1\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 20\r\n$1--\r\n') });
+  // Complete at EVERY delimiter, and still not what the delimiters say: an operation part with no response at all, a part that declares a change set the answer never contains, a declared boundary the delimiters do not use, a body not as long as its
+  // response says. Each leaves a neighbouring complete refusal to speak for the whole answer, and none of them is a proof.
+  const emptyPart = (answer) => ({ ...answer, body: answer.body.replace(/(--changesetresponse_[^\r\n]+)--\r\n/, '$1\r\n$1--\r\n') });
+  const declaredAbsent = (answer) => ({ ...answer, body: answer.body.replace(/(--batchresponse_[^\r\n]+)--\r\n$/, '$1\r\nContent-Type: multipart/mixed; boundary=changesetresponse_missing\r\n\r\n$1--\r\n') });
+  const otherBoundary = (answer) => ({ ...answer, body: answer.body.replace(/boundary=changesetresponse_[^\r\n]+/, 'boundary=changesetresponse_missing') });
+  const shortBody = (answer) => ({ ...answer, body: answer.body.replace('OData-Version: 4.0\r\n\r\n', 'OData-Version: 4.0\r\nContent-Length: 200\r\n\r\n{\r\n') });
+  const RETRY_429 = { status: 429, headers: { 'Retry-After': '7' } };
   const CASES = [
     ['a mix of a 403 and a 429', 403, mix],
     ['an answer cut off before its closing boundary', 403, cut],
-    ['an answer closed at its outer boundary whose change set is never closed, beside a 429', { status: 429, headers: { 'Retry-After': '7' } }, unclosed],
-    ['an answer closed at its outer boundary with a part cut off in its status line, beside a 429', { status: 429, headers: { 'Retry-After': '7' } }, partCutOff],
+    ['an answer closed at its outer boundary whose change set is never closed, beside a 429', RETRY_429, unclosed],
+    ['an answer closed at its outer boundary with a part cut off in its status line, beside a 429', RETRY_429, partCutOff],
     ['the same beside a 403', 403, partCutOff],
+    ['an operation part with no response at all, after a complete 429', RETRY_429, emptyPart],
+    ['an operation part with no response at all, after a complete 403', 403, emptyPart],
+    ['a part that declares a change set the answer never contains, beside a complete 429', RETRY_429, declaredAbsent],
+    ['the same beside a 403', 403, declaredAbsent],
+    ['a declared change-set boundary the delimiters do not use, around a complete 429', RETRY_429, otherBoundary],
+    ['a body shorter than the Content-Length its response declares, on a 429', RETRY_429, shortBody],
+    ['a body shorter than the Content-Length its response declares, on a 403', 403, shortBody],
     ['a 409', 409, (answer) => answer],
     ['a 412', 412, (answer) => answer],
     ['a 500', 500, (answer) => answer],

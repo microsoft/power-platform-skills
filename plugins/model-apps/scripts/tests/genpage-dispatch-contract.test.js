@@ -495,6 +495,7 @@ test('AGENTS.md says a page write whose outcome is not known is never sent again
   assert.match(agents, /The production HTTP client keeps its own schedule for the requests it re-sends — a read, a publish, a delete, a column create: at most five re-sends, each waiting 1, 2, 4, 8 and 8 s or the answer's `Retry-After` when that asks for longer, up to a minute — exactly as it did before the budget existed, and none of it is drawn from the budget: charging it would halt a throttled build that succeeds today\./);
   assert.match(agents, /a resumed create that brings an earlier payload up to date hands the same budget — the one it was given, or the one it made for itself — on to the update it makes/);
   assert.match(agents, /which reads an answer only when it is complete and well-formed — its outer boundary closes, every change set in it closes, and every part is a complete response whose first line is a status line — and takes ANYTHING missing or malformed/);
+  assert.match(agents, /takes ANYTHING missing or malformed \(a part with no response in it, a part with no status line or one cut off, a change set that is never closed, one that is declared and never opened, one whose delimiters are not the boundary it declares, a body shorter or longer than the `Content-Length` its response gives\) as proving nothing/);
   assert.doesNotMatch(agents, /all the waiting of the run one budget|the ONE budget a run spends on waiting out a throttled service/, 'AGENTS.md says the budget bounds all the waiting of a run');
   assert.match(agents, /at most six sends in all, and `dispose\(\)` ends a wait that is under way\. \*\*A change set the service refuses as a whole is answered HTTP 200 with the one part that failed\*\*/);
   assert.match(agents, /when every part is one 400, 403 or 404 the change set is a known refusal and is sent \*\*once\*\*, create and update/);
@@ -515,6 +516,18 @@ test('AGENTS.md says a page write whose outcome is not known is never sent again
     assert.doesNotMatch(text, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, `${name} still says a second send of an update is harmless`);
     assert.doesNotMatch(text, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|time-bounded|runPac/, `${name} still describes the pac wrapper's time limits`);
   }
+});
+
+// The build's retry decides from the structure of a failure, and a SQL deadlock victim is the one condition that structure names in two places: the generic SQL error code every SQL failure carries, and the platform's signature in the
+// service's own answer. lib/retry-policy.js has the rule and scripts/tests/retry-policy.test.js and halt-retry-policy.test.js run it, with the real SDK and the real retry loop; this pins that the plugin's guide says it, and no longer says it is not run again.
+test('AGENTS.md says a SQL deadlock victim is run again by the build — the generic SQL error code and the platform\'s signature in the service\'s own answer, never either alone — and no longer says it is final', () => {
+  const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
+  assert.match(agents, /The SQL deadlock victim a service answers with a 500 is run again, narrowly \(`isDeadlockVictimAnswer`\): its code, `0x80044150`, is the generic SQL error every SQL failure carries, so it takes that code — read from the `error\.code` of the answer's body, never from text — AND the platform's deadlock signature \(`Sql Number: 1205`, the HTTP client's `SQL_DEADLOCK_VICTIM`\) in the service's own answer, which is what follows the url in the SDK's message, so a name the maker put in the url is not read\./);
+  assert.match(agents, /The code beside another SQL number \(a constraint, a lock timeout\) and the signature with no such code — a 500 whose words only quote it, a display name that reads as one — stay final, and a deadlock victim is counted as any transient failure is: the build runs the phase again up to three times\./);
+  assert.match(agents, /a SQL deadlock victim \(the generic SQL error code `0x80044150` AND the platform's `Sql Number: 1205` in the service's own answer, `isDeadlockVictimAnswer`\)/);
+  assert.doesNotMatch(agents, /deadlock victim[^.]*is therefore final for the build/, 'AGENTS.md says a deadlock victim is final for the build');
+  const policy = squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'retry-policy.js'), 'utf8'));
+  assert.doesNotMatch(policy, /NOT here, on purpose: the SQL deadlock victim/, 'lib/retry-policy.js still says a deadlock victim is not recovered');
 });
 
 // What the /genpage skill tells the agent to do when a page write cannot say what it did. The page is written through the SDK (lib/genpage-sdk.js), so there is no pac process to stall,

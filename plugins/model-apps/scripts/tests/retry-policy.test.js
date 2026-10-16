@@ -201,7 +201,7 @@ test('judgeFailure: the sentence around a failed publish is never read — a tab
 
 test('judgeFailure: the service\'s words are read only where there is no status — never from where the request went, and never beside a status that says no', () => {
   assert.strictEqual(isTransientHalt(connectionError(500, 'The server is busy', URL_WITH_LABEL)), false, 'SQL Timeout in the url');
-  assert.strictEqual(isTransientHalt(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205', URL_WITH_LABEL)), false, 'a deadlock victim on a 500: its SQL number is in a message, and the HTTP client and the SDK send it again where that is safe');
+  assert.strictEqual(isTransientHalt(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205', URL_WITH_LABEL)), false, 'the deadlock signature in a 500 that carries no code is words, and a status that says no is final: a deadlock victim is the generic SQL error code AND the signature (below)');
   assert.strictEqual(isTransientHalt(connectionError(400, 'the answer says: SQL timeout expired', URL_WITH_LABEL)), false, 'SQL timeout in the answer of a 400');
   assert.strictEqual(isTransientHalt(connectionError(409, 'Another solution install is running', URL_WITH_LABEL)), false, 'a lock named by its words, on a 409');
   const mismatched = Object.assign(new Error(`some other lead: ${LABEL}`), { code: 'CONNECTION_ERROR', statusCode: 500, url: URL_WITH_LABEL });
@@ -369,6 +369,51 @@ test('judgeFailure: a condition the service names by its error code is run again
   for (const body of ['0x80044151', '<html>0x80044151</html>', null, undefined, { error: 'x' }, { error: { code: 0x80044151 } }, { error: { code: ['0x80044151'] } }, { code: '0x80044151' }]) {
     assert.strictEqual(isTransientHalt(new ConnectionError(`${API}/x`, 500, 'x', body)), false, JSON.stringify(body));
   }
+});
+
+// A SQL deadlock victim: SQL chose the request's transaction as the victim of a deadlock and rolled it back, so the idempotent build can run again. Its code is the generic SQL error's, which every SQL failure carries, so what tells it apart
+// is its SQL number — and it takes BOTH: the code in the `error.code` of the body, and the number in the service's own answer (the url the SDK opens its message with, which can carry anything a maker named, is not read).
+//   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
+const DEADLOCK_WORDS = ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+const sqlNumber = (number) => DEADLOCK_WORDS.replace('1205', number);
+
+test('judgeFailure: a SQL deadlock victim — the generic SQL error code and the platform\'s deadlock signature in the service\'s own answer — is run again, and each of them alone, another SQL number, and a url or a name that quotes the signature are final', () => {
+  assert.ok(!TRANSIENT_SERVICE_CODES.has('0x80044150'), 'the generic SQL error code is not a transient condition of its own: it is every SQL failure');
+  const victim = answerOf(500, DEADLOCK_WORDS, '0x80044150');
+  assert.strictEqual(isTransientHalt(victim), true);
+  assert.strictEqual(retryPolicyFor(victim), RETRY.SERVICE);
+  const judged = judgeFailure(victim);
+  assert.deepStrictEqual([judged.transient, judged.transientCode, judged.never], [true, true, false], 'decided by the code and the signature');
+  assert.strictEqual(isTransientHalt({ message: 'views failed', cause: victim }), true, 'behind a halt');
+  assert.strictEqual(isTransientHalt(new BuildHalt('views failed', { phase: 'views', code: 'x', cause: victim, retry: retryPolicyFor(victim) })), true, 'through the halt the runner raises');
+  assert.strictEqual(isTransientHalt(answerOf(500, DEADLOCK_WORDS, '0X80044150')), true, 'the code in either case, as every code is read');
+  // The same answer, one thing short of it.
+  for (const [what, failure] of [
+    ['the signature and no code', answerOf(500, DEADLOCK_WORDS)],
+    ['the signature under the code of a missing privilege', answerOf(500, DEADLOCK_WORDS, '0x80040220')],
+    ['the signature under the code of another deadlock answer the platform words differently', answerOf(500, DEADLOCK_WORDS, '0x80040265')],
+    ['the code and another SQL number: a constraint', answerOf(500, sqlNumber(547), '0x80044150')],
+    ['the code and another SQL number: a lock timeout', answerOf(500, sqlNumber(1222), '0x80044150')],
+    ['the code and a number that only starts with the deadlock\'s', answerOf(500, sqlNumber(12050), '0x80044150')],
+    ['the code and no SQL number at all', answerOf(500, 'Sql error: Generic SQL error.', '0x80044150')],
+    ['the code mentioned in the message, and not in the body', new ConnectionError(`${API}/x`, 500, `0x80044150${DEADLOCK_WORDS}`, { error: { message: `0x80044150${DEADLOCK_WORDS}` } })],
+    ['the code mentioned in the message, under another code in the body', answerOf(500, `0x80044150${DEADLOCK_WORDS}`, '0x80040220')],
+    ['the signature in a body that is not an OData error', new ConnectionError(`${API}/x`, 500, DEADLOCK_WORDS, DEADLOCK_WORDS)],
+    ['the signature in a body whose error is a string', new ConnectionError(`${API}/x`, 500, DEADLOCK_WORDS, { error: DEADLOCK_WORDS })],
+    // What a maker named is in the url the SDK echoes: the answer is what follows it.
+    ['the code and another SQL number, with the signature in the url', new ConnectionError(`${API}/roles?$filter=name eq 'Sql Number: 1205'`, 500, sqlNumber(547), { error: { code: '0x80044150', message: sqlNumber(547) } })],
+    ['the code and no signature, with the signature in the url', new ConnectionError(`${API}/roles?$filter=name eq 'Sql Number: 1205'`, 500, 'Sql error: Generic SQL error.', { error: { code: '0x80044150', message: 'Sql error: Generic SQL error.' } })],
+  ]) {
+    assert.strictEqual(isTransientHalt(failure), false, what);
+    assert.strictEqual(retryPolicyFor(failure), RETRY.NEVER, `${what}: a status that says no, and nothing that says otherwise`);
+    assert.strictEqual(judgeFailure(failure).transientCode, false, what);
+  }
+  // A name in what the plugin words around the failure — a halt's message, a declared text — is not read either.
+  const refused = answerOf(500, sqlNumber(547), '0x80044150');
+  assert.strictEqual(isTransientHalt(new BuildHalt("view 'Sql Number: 1205' could not be saved", { phase: 'views', code: 'x', cause: refused })), false, 'the halt\'s own message');
+  assert.strictEqual(isTransientHalt(Object.assign(new Error("view 'Sql Number: 1205' could not be saved"), { cause: refused })), false, 'a wrapper\'s message');
+  // Only a failure with no status at all is read by its words, as it always was: that is the fallback this rule does not touch.
+  assert.strictEqual(isTransientHalt(new Error(DEADLOCK_WORDS)), true);
 });
 
 test('judgeFailure: a failure that carries no HTTP status at all is still judged by the service\'s own words — the fallback is for what has no structure', () => {

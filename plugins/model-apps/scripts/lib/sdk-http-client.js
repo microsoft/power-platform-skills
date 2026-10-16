@@ -17,7 +17,7 @@ const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = requ
 // it back. Two live captures, both HTTP 500 (a process-flow delete during a teardown, and PublishXml):
 //   HTTP 500 from …/api/data/v9.0/workflows(<id>):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205
 //   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
-// Only the SQL number identifies it; the code and message text are shared with every other SQL error.
+// Only the SQL number identifies it; the code and message text are shared with every other SQL error. (The build's own retry, lib/retry-policy.js, reads this same marker — and only in an answer that also carries that code.)
 // The vendored SDK recognizes the same marker for its own re-send (1 s / 2 s / 4 s) of reads, an app create,
 // PublishXml, a form create, a view create and a publisher create — requests this client has already re-sent by
 // then, because it re-sends every 5xx that is not a record delete or a $batch (TRANSIENT, below). So a deadlock the
@@ -190,8 +190,8 @@ function isColumnCreateBatch(body) {
  *   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. ... Sql Number: 1205"}}
  *   --changesetresponse_<id>--
  *   --batchresponse_<id>--
- * The answer is read part by part (batchResults), and it proves the rollback only when it is a complete, well-formed envelope (its outer boundary closed, every change set in it closed, every part a complete response with a
- * status line), it answers at least one operation, and EVERY operation's own part is a 500 carrying the deadlock marker. Anything
+ * The answer is read part by part (batchResults), and it proves the rollback only when it is a complete, well-formed envelope (its outer boundary closed, every change set in it declared, opened and closed, every part a complete response with a
+ * status line, and no part with no response in it), it answers at least one operation, and EVERY operation's own part is a 500 carrying the deadlock marker. Anything
  * else (one success, another failure, an operation whose part does not name the deadlock itself, a
  * truncated answer, an answer that closes its outer boundary and is incomplete inside) is returned as it came.
  */
@@ -200,43 +200,166 @@ function isBatchDeadlockVictim(res) {
   return !!results && results.length > 0 && results.every((r) => r.status === '500' && SQL_DEADLOCK_VICTIM.test(r.text));
 }
 
-// The characters RFC 2046 allows in a multipart boundary: a line that opens with two dashes and goes on with anything else (an HTML comment's `-->`, `--- end of trace ---`) is TEXT, never a delimiter.
-// A closing delimiter is the boundary followed by two more dashes, and the boundary may itself end in a dash, so the boundary is read lazily and the two dashes belong to the delimiter.
+// The characters RFC 2046 allows in a multipart boundary: a line that opens with two dashes and goes on with anything else (an HTML comment's `-->`, `--- end of trace ---`) is TEXT, never a delimiter. This says only that a line LOOKS
+// like the delimiter of some boundary; whose delimiter it is, is decided by the part that declares the boundary (headersOf, partsOf).
 // See: https://www.rfc-editor.org/rfc/rfc2046#section-5.1.1
-const DELIMITER_LINE = /^--([0-9A-Za-z'()+_,./:=?-]+?)(--)?$/;
+const DELIMITER_LIKE_LINE = /^--[0-9A-Za-z'()+_,./:=?-]+$/;
 // A line of a part's own MIME header block (`Content-Type: application/http`, `Content-ID: 1`), and a header folded onto the line before it (a line that starts with white space). A header name is an RFC 9110 token; a status
 // line (`HTTP/1.1 204 No Content`) is not one — it has a slash before any colon — so it starts the response and ends the headers even when no blank line separates them.
 const MIME_HEADER_LINE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+:/;
 const FOLDED_HEADER_LINE = /^[ \t]+\S/;
 const STATUS_LINE = /^HTTP\/1\.1 (\d{3})\b/;
+// A status line of ANY HTTP version: a second one inside a response is the next response, swallowed into this one's body (readResponse).
+const ANY_STATUS_LINE = /^HTTP\/\d(?:\.\d)? \d{3}\b/;
+const isBlank = (line) => line.trim() === '';
 
 /**
- * Reads what lies between two delimiters (`part`, its lines) of a multipart `$batch` answer, and adds the operation it holds to `results`. `after` says what the delimiter before it was: the outer boundary (`outer`), the
- * boundary of a change set (`nested`) or a closing delimiter (`close`). True when the part is nothing, a change set's header block, or an operation that is a COMPLETE response; false for anything else.
- *   - nothing: no line, or only blank ones — an envelope that has no change-set header block, or no part at all.
- *   - a change set's header block, directly under the outer boundary: nothing but MIME headers, one of them `Content-Type: multipart/mixed; boundary=…`. It holds no operation.
- *   - an operation: `Content-Type: application/http` — or no type at all — and, after its headers and the blank line that ends them, a status line `HTTP/1.1 <3 digits>` as the FIRST line of the response.
- *   - after a closing delimiter nothing may follow but blank lines.
+ * An answer as `{ lines, breaks }`: its lines, and the line break that ENDS each (`\r\n`, `\n`, or nothing after the last line). A `Content-Length` counts the bytes of a body, the line breaks inside it included, so a body is
+ * measured from the breaks the answer really has (textOf) and not from a guess that they are all CRLF. A byte order mark in front of the first line is not part of it.
  */
-function readBatchPart(part, after, results) {
-  const blank = (line) => line.trim() === '';
-  if (part.every(blank)) return true;
-  if (after === 'close') return false;
-  let at = 0;
-  let type = null;
-  while (at < part.length && MIME_HEADER_LINE.test(part[at])) {
-    const declared = /^content-type:\s*([^;\s]+)/i.exec(part[at]);
-    if (declared && type === null) type = declared[1].toLowerCase();
-    at += 1;
-    while (at < part.length && FOLDED_HEADER_LINE.test(part[at])) at += 1;
+function linesOf(text) {
+  // 'a\r\nb\n' splits into ['a', '\r\n', 'b', '\n', '']: a line, the break that ends it, a line, its break, and the empty line after the last break.
+  const pieces = text.replace(/^\uFEFF/, '').split(/(\r?\n)/);
+  const lines = [];
+  const breaks = [];
+  for (let i = 0; i < pieces.length; i += 2) {
+    lines.push(pieces[i]);
+    breaks.push(pieces[i + 1] || '');
   }
-  if (type !== null && type.startsWith('multipart/')) return after === 'outer' && part.slice(at).every(blank);
-  if (type !== null && type !== 'application/http') return false;
-  while (at < part.length && blank(part[at])) at += 1;
-  const status = STATUS_LINE.exec(part[at] || '');
+  return { lines, breaks };
+}
+
+// The text of the lines `from` up to `to`, with the breaks the answer has between them. The break after the last of them is not part of it: in front of a delimiter, that break belongs to the delimiter's line (RFC 2046, 5.1.1).
+function textOf(doc, from, to) {
+  let text = '';
+  for (let i = from; i < to; i += 1) text += i < to - 1 ? doc.lines[i] + doc.breaks[i] : doc.lines[i];
+  return text;
+}
+
+/**
+ * The parts of a multipart body — the lines `from` up to `to` — as `[start, end)` ranges of lines, or null when the body is not what its `boundary` says. A part is what lies between two delimiters:
+ *   <blank lines>
+ *   --<boundary>            opens the first part; nothing but blank lines may come before it
+ *   <part>
+ *   --<boundary>            ends that part and opens the next
+ *   <part>
+ *   --<boundary>--          ends the last part and the body; nothing but blank lines may come after it
+ * A body that is never opened, never closed, closed before it is opened, or has text outside its delimiters is null: a part with a delimiter missing on either side was not delivered whole. A delimiter is its whole line, but for the
+ * white space that may pad it (RFC 2046, 5.1.1). A body whose opening delimiter is followed at once by its closing one holds one part with no line in it — what an operation that nobody answered looks like.
+ */
+function partsOf(doc, from, to, boundary) {
+  const open = `--${boundary}`;
+  const close = `${open}--`;
+  const parts = [];
+  let start = -1;
+  for (let i = from; i < to; i += 1) {
+    const text = doc.lines[i].trimEnd();
+    if (text !== open && text !== close) {
+      if (start < 0 && text !== '') return null;
+      continue;
+    }
+    if (start >= 0) parts.push([start, i]);
+    else if (text === close) return null;
+    if (text === close) return doc.lines.slice(i + 1, to).every(isBlank) ? parts : null;
+    start = i + 1;
+  }
+  return null;
+}
+
+/**
+ * The MIME headers a part starts with, and where the rest of it begins (`bodyFrom`, the line after the last header): the media type of its first `Content-Type`, lowercased, and that header's `boundary` parameter — each null when
+ * the part does not say. A header can be folded onto the lines after it:
+ *   Content-Type: multipart/mixed;
+ *    boundary="changesetresponse_<id>"
+ * A part that has no header starts with a blank line or, directly, with the status line of its response.
+ */
+function headersOf(doc, from, to) {
+  let at = from;
+  let type = null;
+  let boundary = null;
+  while (at < to && MIME_HEADER_LINE.test(doc.lines[at])) {
+    let header = doc.lines[at];
+    at += 1;
+    while (at < to && FOLDED_HEADER_LINE.test(doc.lines[at])) {
+      header += ` ${doc.lines[at].trim()}`;
+      at += 1;
+    }
+    const declared = /^content-type:\s*([^;\s]+)(.*)$/i.exec(header);
+    if (declared && type === null) {
+      type = declared[1].toLowerCase();
+      // `boundary=changesetresponse_1`, or quoted: `boundary="changesetresponse_1"`. The parameter's name is not case-sensitive, its value is.
+      const parameter = /;\s*boundary\s*=\s*(?:"([^"]*)"|([^\s;"]+))/i.exec(declared[2]);
+      boundary = (parameter && (parameter[1] || parameter[2])) || null;
+    }
+  }
+  return { type, boundary, bodyFrom: at };
+}
+
+/**
+ * Reads the response an operation's part holds — the lines `bodyFrom` (after the part's own MIME headers) up to `to` — and adds it to `results`, with `text` the part's lines from `from`. False unless the part holds exactly one
+ * COMPLETE response (abridged, with the part's MIME headers above the blank line):
+ *   Content-Type: application/http
+ *   Content-ID: 1
+ *
+ *   HTTP/1.1 403 Forbidden
+ *   Content-Type: application/json; odata.metadata=minimal
+ *   Content-Length: 27
+ *
+ *   {"error":{"message":"No."}}
+ * A response is complete when:
+ *   - It has a status line, `HTTP/1.1 <3 digits>`, as its first line after the blank ones. A part with none — blank, only headers, or cut off in the status line (`HTTP/1.1 20`) — is an operation that nobody answered; the
+ *     refusal in the part beside it says nothing about that one.
+ *   - It is ONE response. A line that looks like a delimiter (`--changesetresponse_<id>`, or half of one) or a second status line, after the first, is the next part swallowed into this one's body by a delimiter that was damaged: no
+ *     ordinary body has one (it is JSON). Without this a damaged delimiter between two operations left the first part to speak for both.
+ *   - Its body is as long as it says. `Content-Length: <n>` (more than one, only when they agree) counts the bytes after the blank line that ends the headers: fewer bytes are a body cut off, and more than blank ones are
+ *     not the body that was counted. A response with no such blank line (its headers are its last lines) has no body, and a response that does not count its body is not held to a length.
+ * What the response's headers say is otherwise not read: it is the status line that makes a response, and the real service's shape after it (one blank line or two) is not something to turn an answer away for.
+ */
+function readResponse(doc, from, bodyFrom, to, results) {
+  let at = bodyFrom;
+  while (at < to && isBlank(doc.lines[at])) at += 1;
+  const status = at < to ? STATUS_LINE.exec(doc.lines[at]) : null;
   if (!status) return false;
-  results.push({ status: status[1], text: part.join('\n') });
+  let headersEnd = -1;
+  const lengths = [];
+  for (let i = at + 1; i < to; i += 1) {
+    const text = doc.lines[i].trimEnd();
+    if (DELIMITER_LIKE_LINE.test(text) || ANY_STATUS_LINE.test(text)) return false;
+    if (headersEnd >= 0) continue;
+    if (text === '') {
+      headersEnd = i;
+      continue;
+    }
+    const length = /^content-length[ \t]*:[ \t]*(.*)$/i.exec(text);
+    if (length) lengths.push(length[1]);
+  }
+  if (lengths.length > 0) {
+    if (!/^\d+$/.test(lengths[0]) || lengths.some((value) => value !== lengths[0])) return false;
+    const body = Buffer.from(headersEnd < 0 ? '' : textOf(doc, headersEnd + 1, to));
+    const counted = Number(lengths[0]);
+    if (body.length < counted || body.subarray(counted).toString().trim() !== '') return false;
+  }
+  results.push({ status: status[1], text: doc.lines.slice(from, to).join('\n') });
   return true;
+}
+
+/**
+ * Reads one part of an answer — the lines `from` up to `to` — and adds the operation it holds to `results`. True when the part is a change set whose every part reads, or one COMPLETE operation; false for anything else.
+ *   - A change set is a part that declares a multipart body (`Content-Type: multipart/mixed; boundary=<change set>`) and then HAS one: it opens with `--<change set>` and closes with `--<change set>--`, and nothing but blank lines
+ *     lies outside those two delimiters (partsOf). It must say its boundary, or the delimiters inside it cannot be told from text; one that is declared and never opened, opened and never closed, delimited by another boundary, or found
+ *     inside another change set (`depth`) is not one the answer contains.
+ *   - An operation is a part of `Content-Type: application/http` — or of no type — that holds one complete response (readResponse).
+ *   - Nothing else is a part: another type, or no line at all, is not an operation that was answered.
+ */
+function readPart(doc, from, to, depth, results) {
+  const head = headersOf(doc, from, to);
+  if (head.type !== null && head.type.startsWith('multipart/')) {
+    if (depth > 0 || head.boundary === null) return false;
+    const parts = partsOf(doc, head.bodyFrom, to, head.boundary);
+    return parts !== null && parts.every(([start, end]) => readPart(doc, start, end, depth + 1, results));
+  }
+  if (head.type !== null && head.type !== 'application/http') return false;
+  return readResponse(doc, from, head.bodyFrom, to, results);
 }
 
 /**
@@ -256,61 +379,26 @@ function readBatchPart(part, after, results) {
  *   --changesetresponse_<id>--
  *   --batchresponse_<id>--
  * The callers prove something about EVERY operation from this — that a change set was refused, or rolled back as a deadlock victim, as a whole (isBatchThrottled, isBatchDeadlockVictim, completeBatchStatus) — so the answer
- * is read only when ALL of it holds:
- *   - its first line is the outer delimiter `--<boundary>`, its last the closing `--<boundary>--`, and nothing but blank lines follows;
- *   - a change set opened inside it (a delimiter of another boundary) is closed with its own `--<boundary>--` before the outer boundary goes on or closes, and no change set opens inside another;
- *   - every part is a change set's header block or a COMPLETE operation (readBatchPart): a status line, as the first line of a part that is `application/http`.
- * Anything missing or malformed — a change set left open, a part with no status line or one cut off (`HTTP/1.1 20`), a part of another kind, text after a closing delimiter — makes the WHOLE answer null: a part that cannot be
- * read is not one that can be left out, it may be the operation that succeeded. (Parts without a status line used to be dropped, so an answer that closed its OUTER boundary proved the one part in it that happened to read.)
+ * is read only when ALL of it holds, what its parts hold as well as how they are delimited:
+ *   - it is the multipart body of the boundary on its first line (partsOf): that outer delimiter `--<boundary>` opens it, the closing `--<boundary>--` ends it, and nothing but blank lines lies outside them;
+ *   - a part that declares a multipart body is a change set (readPart): it names its boundary, and opens and closes exactly that boundary before the outer boundary goes on or closes. A change set the answer declares and never
+ *     contains, one it opens and never closes, one whose delimiters are another boundary's, and one inside another change set are all out;
+ *   - every other part is ONE COMPLETE operation (readResponse): a response that starts with a status line and whose body is as long as its `Content-Length` says. A part with no response in it is an operation nobody answered.
+ * Anything missing or malformed — a change set left open or declared and absent, a part with no response at all, one with no status line or one cut off (`HTTP/1.1 20`), a body shorter than its `Content-Length`, a part of another kind,
+ * text after a closing delimiter — makes the WHOLE answer null: a part that cannot be read is not one that can be left out, it may be the operation that succeeded. (Parts without a status line used to be dropped, so an answer that
+ * closed its OUTER boundary proved the one part in it that happened to read; and a part with no response in it, or a change set declared and never opened, was let through the same way.)
  * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api (the format is the OData batch's, 11.7 of
  * http://docs.oasis-open.org/odata/odata/v4.0/errata03/os/complete/part1-protocol/odata-v4.0-errata03-os-part1-protocol-complete.html)
  */
 function batchResults(res) {
   if (!res || typeof res.body !== 'string') return null;
-  const lines = res.body.split(/\r?\n/);
-  const start = lines.findIndex((l) => l.trim() !== '');
-  const outer = start < 0 ? null : /^--(\S+)$/.exec(lines[start].trim());
+  const doc = linesOf(res.body);
+  const first = doc.lines.findIndex((line) => !isBlank(line));
+  const outer = first < 0 ? null : /^--(\S+)$/.exec(doc.lines[first].trim());
   if (!outer) return null;
+  const parts = partsOf(doc, 0, doc.lines.length, outer[1]);
   const results = [];
-  let nested = null;
-  let after = 'outer';
-  let closed = false;
-  let part = [];
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const text = lines[i].trimEnd();
-    let kind = null;
-    let boundary = null;
-    if (text === `--${outer[1]}`) kind = 'outer-open';
-    else if (text === `--${outer[1]}--`) kind = 'outer-close';
-    else {
-      const found = DELIMITER_LINE.exec(text);
-      if (found) {
-        kind = found[2] ? 'nested-close' : 'nested-open';
-        boundary = found[1];
-      }
-    }
-    if (kind === null) {
-      part.push(lines[i]);
-      continue;
-    }
-    // A delimiter ends the part before it, and nothing may come after the outer boundary has closed.
-    if (closed || !readBatchPart(part, after, results)) return null;
-    part = [];
-    if (kind === 'outer-open' || kind === 'outer-close') {
-      if (nested !== null) return null;
-      after = kind === 'outer-open' ? 'outer' : 'close';
-      closed = kind === 'outer-close';
-    } else if (kind === 'nested-open') {
-      if (nested !== null && nested !== boundary) return null;
-      nested = boundary;
-      after = 'nested';
-    } else {
-      if (nested !== boundary) return null;
-      nested = null;
-      after = 'close';
-    }
-  }
-  return closed && nested === null && readBatchPart(part, after, results) ? results : null;
+  return parts !== null && parts.every(([start, end]) => readPart(doc, start, end, 0, results)) ? results : null;
 }
 
 /**
@@ -322,7 +410,7 @@ function batchResults(res) {
  *       HTTP 429  {"error":{"code":"0x80072322","message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds."}}
  *   - a complete, well-formed multipart answer (batchResults) in which EVERY operation it answers is a 429 (read part by part, as
  *     isBatchDeadlockVictim reads a deadlock).
- * An answer that starts as a multipart envelope but is cut short, or is incomplete inside (a change set never closed, a part with no status line), proves nothing and is returned as it came.
+ * An answer that starts as a multipart envelope but is cut short, or is incomplete inside (a change set never closed, or declared and never opened; a part with no response in it, or with no status line; a body shorter than its response says), proves nothing and is returned as it came.
  * See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits
  */
 function isBatchThrottled(res) {
@@ -357,7 +445,7 @@ function batchRetryAfterMs(res, now = Date.now(), cap = RETRY_AFTER_CAP_MS) {
 
 /**
  * The one HTTP status a COMPLETE multipart `$batch` answer reports for every operation it answers — 0 when the answer is not a complete, well-formed envelope (read as isBatchThrottled reads one, by batchResults: closed at its outer
- * boundary, every change set in it closed, every part a complete response with a status line), has no operation, or its operations do not all say the same. A change set the service refuses AS A WHOLE is answered HTTP 200 with
+ * boundary, every change set in it declared, opened and closed, every part a complete response with a status line), has no operation, or its operations do not all say the same. A change set the service refuses AS A WHOLE is answered HTTP 200 with
  * the single part that failed (abridged):
  *   --batchresponse_<id>
  *   Content-Type: multipart/mixed; boundary=changesetresponse_<id>

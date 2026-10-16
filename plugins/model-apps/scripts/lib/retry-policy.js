@@ -13,8 +13,8 @@
 //      ConnectionError carries it as `statusCode`, and 0 for a failure of the transport. See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/api-limits
 //      and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors
 //   3. CODE. A condition the service names by the `error.code` of its answer — the OData error the SDK keeps, as the cause of its ConnectionError — is run again on any status: a customization or
-//      solution lock, SQL giving up waiting, a concurrent request on the same record (TRANSIENT_SERVICE_CODES), and the lag of a column the build has only just created (the spec says which are its).
-//      Never the words beside it: see 5.
+//      solution lock, SQL giving up waiting, a concurrent request on the same record (TRANSIENT_SERVICE_CODES), the lag of a column the build has only just created (the spec says which are its), and a SQL
+//      deadlock victim (isDeadlockVictimAnswer: the generic SQL error code AND, in the service's own answer, the platform's deadlock signature). Never the words beside a code on their own: see 5.
 //   4. TRANSPORT. A timeout or a reset of the connection. The HTTP client puts Node's own `code` on the error it throws for a request that failed, and the SDK keeps that error as the cause of its ConnectionError of status 0: when the
 //      failure carries a code, THE CODE DECIDES — one of TRANSPORT_CODES is a blip, and any other (a certificate that does not verify: ERR_TLS_CERT_ALTNAME_INVALID, UNABLE_TO_VERIFY_LEAF_SIGNATURE, …; an unknown host) is not,
 //      whatever words come beside it: a certificate quotes the host and the names it carries, and a name can spell a reset. Only a failure with no code (a transport that reports none; the sentence an SDK error wraps around a
@@ -38,6 +38,8 @@
 //   - an error the build's engine raises itself is made by `refusal(message)` (deterministic: the spec, the environment's state, a local file) or `serviceFailure(message, …)` (the plugin's
 //     words around a failure of the service). tests/halt-retry-policy.test.js enumerates every halt in the sources and holds each to a table, so a halt added without a policy fails there.
 // An error that carries none of this — an SDK or transport error that reaches the build as it is — is read by the rule above, as it always was.
+// The platform's signature of a SQL deadlock victim, the one the HTTP client already sends requests again on (lib/sdk-http-client.js): `Sql Number: 1205`.
+const { SQL_DEADLOCK_VICTIM } = require('./sdk-http-client.js');
 const RETRY = Object.freeze({ NEVER: 'never', SERVICE: 'service' });
 
 // The statuses a run again can ride out. 429 is the service's throttle; 502, 503 and 504 are the answers of a gateway or a service that is down or overloaded, never a verdict on the request.
@@ -194,9 +196,8 @@ function serviceCodeOf(error) {
 // install", "try again later", "SQL timeout", "concurrent Delete") — words the maker's own names can hold. Each is a code the platform documents, with its name there:
 //   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 // The SDK recognises the first (a 429 with this code) to re-send a business process flow write, and the live capture of a refused solution delete in sdk-http-client.test.js carries it. To add a condition, add its
-// documented code here and a row to the list in tests/retry-policy.test.js; a code the platform does not document for it is a guess. NOT here, on purpose: the SQL deadlock victim — it shares the generic SQL error code
-// (`0x80044150`) with every other SQL failure and only its SQL number in the message tells it apart, and a message is not a code. The HTTP client and the SDK already send a deadlock victim again, for the requests where
-// that is safe (sdk-http-client.js).
+// documented code here and a row to the list in tests/retry-policy.test.js; a code the platform does not document for it is a guess. NOT in this table, on purpose: the SQL deadlock victim. It shares the generic SQL error
+// code (`0x80044150`) with every other SQL failure — a constraint, a value too long, a timeout of another kind — so the code alone would run each of them again; only its SQL number tells it apart (isDeadlockVictimAnswer, below).
 const TRANSIENT_SERVICE_CODES = Object.freeze(new Set([
   '0x80071151', // SolutionConcurrencyFailure: the installation or removal of another solution is running — "Please try again later."
   '0x80071154', // ConcurrentOperationFailure: another concurrent operation is running — "Please try again later."
@@ -211,6 +212,18 @@ const TRANSIENT_SERVICE_CODES = Object.freeze(new Set([
   '0x80048105', // CascadeOperationConcurrentRequested: "More than one concurrent {0} requests detected for an Entity {1} and ObjectTypeCode {2}."
   '0x80048116', // POAOperationConcurrentRequested: the same, for a principal's access to the object
 ]));
+
+// A SQL deadlock victim: SQL Server chose the request's transaction as the victim of a deadlock and rolled it back, so the idempotent build can run again — as it did when the build read the words of a failure, and as the HTTP
+// client and the SDK already send a request again where that is safe (lib/sdk-http-client.js). Deadlocks do happen under concurrent metadata work. Live-captured, an HTTP 500 whose body is
+//   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
+// which the SDK words as `HTTP 500 from <url>: Sql error: Generic SQL error. CRM ErrorCode: … Sql Number: 1205`. Two things make it one, and neither does alone:
+//   - the CODE is the generic SQL error's, `0x80044150`, read from the `error.code` of the body (serviceCodeOf), never from text. Every SQL failure carries it, so it says only that SQL failed;
+//   - the service's own ANSWER — what follows the url in the SDK's message (answerOf), so the maker's names in the url are not read — has the platform's deadlock signature (SQL_DEADLOCK_VICTIM, the HTTP client's).
+// The signature without that code is text that can say anything — a display name that reads as one, or a url the SDK echoes — and the code beside another SQL number (547 is a constraint, 1222 a lock timeout) is a failure a run
+// again cannot change. Everything else about this code stays final.
+// See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+const GENERIC_SQL_ERROR_CODE = '0x80044150';
+const isDeadlockVictimAnswer = (error) => serviceCodeOf(error) === GENERIC_SQL_ERROR_CODE && SQL_DEADLOCK_VICTIM.test(answerOf(error));
 
 // The lag of a column the build has only just created. A view pushed moments after the relationship that adds its lookup is refused with a 400 whose answer says the table has no such attribute, and a run again succeeds
 // (live-captured, from a view pushed right after the build created the relationship):
@@ -231,11 +244,13 @@ function missingAttributeOf(error) {
   return named ? [named[1], named[2]] : null;
 }
 
-// Whether the answer this error carries is a condition the service names by its code as one a run again can ride out — see TRANSIENT_SERVICE_CODES — or the lag of a column the spec creates (`declares`).
+// Whether the answer this error carries is a condition the service names by its code as one a run again can ride out — see TRANSIENT_SERVICE_CODES — a SQL deadlock victim (isDeadlockVictimAnswer), or the lag of a column the
+// spec creates (`declares`).
 function isTransientServiceAnswer(error, declares) {
   const code = serviceCodeOf(error);
   if (code === null) return false;
   if (TRANSIENT_SERVICE_CODES.has(code)) return true;
+  if (isDeadlockVictimAnswer(error)) return true;
   const missing = typeof declares === 'function' ? missingAttributeOf(error) : null;
   return Boolean(missing && declares(missing[0], missing[1]));
 }

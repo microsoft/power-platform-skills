@@ -580,7 +580,7 @@ test('update: after a throttle the next send is judged as any first send is — 
 test('watchThrottles: the wait a refused $batch asks for is heard — in the answer\'s headers or in a refused part\'s own — and the answer is passed on as it came', async () => {
   const { watchThrottles } = require('../lib/genpage-sdk.js');
   const NOW = Date.parse('2026-09-30T10:00:00Z');
-  const multipart = (...operations) => ['--batchresponse_1', ...operations.flatMap((operation) => ['--changesetresponse_1', 'Content-Type: application/http', '', operation, '']), '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n');
+  const multipart = (...operations) => ['--batchresponse_1', 'Content-Type: multipart/mixed; boundary=changesetresponse_1', '', ...operations.flatMap((operation) => ['--changesetresponse_1', 'Content-Type: application/http', '', operation, '']), '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n');
   const cases = [
     ['a throttle with its Retry-After in seconds', { status: 429, headers: { 'retry-after': '7' }, body: '{}' }, [7000]],
     ['the header name in any case', { status: 429, headers: { 'Retry-After': '7' }, body: '{}' }, [7000]],
@@ -632,7 +632,7 @@ test('watchThrottles: a COMPLETE refusal inside an HTTP 200 — every part a 400
   const { watchThrottles } = require('../lib/genpage-sdk.js');
   const URL = 'https://contoso.crm.dynamics.com/api/data/v9.0/$batch';
   const NOW = Date.parse('2026-09-30T10:00:00Z');
-  const multipart = (...operations) => ['--batchresponse_1', ...operations.flatMap((operation) => ['--changesetresponse_1', 'Content-Type: application/http', '', operation, '']), '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n');
+  const multipart = (...operations) => ['--batchresponse_1', 'Content-Type: multipart/mixed; boundary=changesetresponse_1', '', ...operations.flatMap((operation) => ['--changesetresponse_1', 'Content-Type: application/http', '', operation, '']), '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n');
   const answered = (body, status = 200) => ({ status, headers: {}, body });
   const cases = [
     ['a 400', answered(multipart('HTTP/1.1 400 Bad Request\r\nContent-Type: application/json')), [{ status: 400, outer: 200, url: URL }], []],
@@ -641,6 +641,7 @@ test('watchThrottles: a COMPLETE refusal inside an HTTP 200 — every part a 400
     ['a 429 with its own Retry-After', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7')), [{ status: 429, outer: 200, url: URL }], [7000]],
     ['a 429 asking for longer than the client\'s own cap, which is the budget\'s to judge', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 600')), [{ status: 429, outer: 200, url: URL }], [600000]],
     ['a 429 asking for nothing', answered(multipart('HTTP/1.1 429 Too Many Requests')), [{ status: 429, outer: 200, url: URL }], []],
+    ['a 429 whose body is exactly as long as its Content-Length says', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nContent-Length: 2\r\n\r\n{}')), [{ status: 429, outer: 200, url: URL }], [7000]],
     ['a mix of a 403 and a 429', answered(multipart('HTTP/1.1 403 Forbidden', 'HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7')), [], []],
     ['a 409, which can be the collision with an earlier send', answered(multipart('HTTP/1.1 409 Conflict')), [], []],
     ['a 412, which is the id of an earlier send', answered(multipart('HTTP/1.1 412 Precondition Failed')), [], []],
@@ -649,7 +650,12 @@ test('watchThrottles: a COMPLETE refusal inside an HTTP 200 — every part a 400
     // Closed at the OUTER boundary and still incomplete inside: the one complete part is not taken for the whole answer.
     ['an answer that closes its outer boundary but not its change set', answered(multipart('HTTP/1.1 403 Forbidden').replace('--changesetresponse_1--\r\n', '')), [], []],
     ['a 429 beside a part that is cut off in its status line', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7', 'HTTP/1.1 20')), [], []],
-    ['a 403 beside a part with no status line at all', answered(['--batchresponse_1', '--changesetresponse_1', 'Content-Type: application/http', '', 'HTTP/1.1 403 Forbidden', '', '--changesetresponse_1', 'Content-Type: application/http', '', '{"error":{}}', '', '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n')), [], []],
+    ['a 403 beside a part with no status line at all', answered(['--batchresponse_1', 'Content-Type: multipart/mixed; boundary=changesetresponse_1', '', '--changesetresponse_1', 'Content-Type: application/http', '', 'HTTP/1.1 403 Forbidden', '', '--changesetresponse_1', 'Content-Type: application/http', '', '{"error":{}}', '', '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n')), [], []],
+    // Complete at every delimiter, and still not what the delimiters say: the one complete refusal is not taken for the whole answer, nor is its Retry-After heard.
+    ['a 429 beside an operation part with no response at all', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7').replace('--changesetresponse_1--', '--changesetresponse_1\r\n--changesetresponse_1--')), [], []],
+    ['a 429 beside a part that declares a change set the answer never contains', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7').replace('--batchresponse_1--', '--batchresponse_1\r\nContent-Type: multipart/mixed; boundary=changesetresponse_missing\r\n\r\n--batchresponse_1--')), [], []],
+    ['a 429 in a change set whose declared boundary is not the one its delimiters use', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7').replace('boundary=changesetresponse_1', 'boundary=changesetresponse_missing')), [], []],
+    ['a 429 whose body is shorter than its Content-Length says', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nContent-Length: 200\r\n\r\n{')), [], []],
     ['a change set that succeeded', answered(multipart('HTTP/1.1 204 No Content', 'HTTP/1.1 204 No Content')), [], []],
     ['a plain error body', answered('{"error":{"message":"nope"}}'), [], []],
   ];

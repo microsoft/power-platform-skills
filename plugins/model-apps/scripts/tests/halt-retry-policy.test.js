@@ -220,6 +220,9 @@ const REFUSALS = [
   // A status that says no is final: the words of its answer are the maker's as much as the service's (lib/retry-policy.js, rule 5), so a lock or a timeout that only the WORDS name, on a status that is not transient, is not run again.
   ['a lock named only by its words, on a 409', () => connectionError(409, 'CustomizationLockException: another solution install is running')],
   ['SQL timeout named only by its words, under the code every SQL failure shares', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, 'SQL timeout expired.', { error: { code: '0x80044150', message: 'SQL timeout expired.' } })],
+  // A SQL deadlock victim is the generic SQL error code AND the platform's signature in the service's own answer: neither alone is, and a url that quotes the signature is the maker's.
+  ['the deadlock signature in a 500 that names no code', () => connectionError(500, 'Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205')],
+  ['the generic SQL error code beside another SQL number (a constraint), on a url that quotes the deadlock signature', () => new ConnectionError(`${ENV}/api/data/v9.2/roles?$filter=name eq 'Sql Number: 1205'`, 500, ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 547', { error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 547' } })],
   ['a 403 whose answer names a privilege derived from a table called like a lock', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 403, 'Principal user is missing prvReadcontoso_customizationlockexception privilege.', { error: { code: '0x80040220', message: 'Principal user is missing prvReadcontoso_customizationlockexception privilege.' } })],
   // A certificate that does not verify is a fact about this machine's trust store: its names quote anything, and no word in them — a reset, a timeout — makes it a blip. Decided by Node's code when the error carries one, and by the certificate's own phrases when it does not.
   ['a certificate that does not name the host, whose alternative name spells a transport code (Node\'s code on the error)', () => transportFailure(ALTNAME_FAILURE, 'ERR_TLS_CERT_ALTNAME_INVALID')],
@@ -236,6 +239,8 @@ const GENUINE = [
   // A condition the service names by the code of its answer is run again on any status.
   ['a customization lock, named by the code of its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 409, 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.', { error: { code: '0x8004F064', message: 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.' } })],
   ['SQL giving up waiting, named by the code of its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, 'SQL timeout expired.', { error: { code: '0x80044151', message: 'SQL timeout expired.' } })],
+  // SQL chose the request as a deadlock victim and rolled it back: the generic SQL error code, and the platform's signature in the service's own answer.
+  ['a SQL deadlock victim, named by the generic SQL error code and the platform\'s signature in its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', { error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } })],
   ['a reset of the connection, with Node\'s code on the error the client raised', () => transportFailure('read ECONNRESET', 'ECONNRESET')],
 ];
 
@@ -395,7 +400,8 @@ test('halt policy: the runner\'s halt follows the failure it wraps — typed ref
   for (const [what, failureOf] of GENUINE) assert.strictEqual(isTransientHalt(await wrap(failureOf())), true, what);
   assert.strictEqual(isTransientHalt(await wrap(new Error('Microsoft.Crm.ObjectModel.CustomizationLockException: try again later'))), true, 'the service\'s words, in an error with no status');
   assert.strictEqual(isTransientHalt(await wrap(new Error('Sql error: Generic SQL error. Sql Number: 1205'))), true, 'a deadlock victim, in an error with no status');
-  assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205'))), false, 'a deadlock victim the service answered with a 500 is final for the build: its SQL number is in a message, not in a code, and the HTTP client and the SDK send it again where that is safe');
+  assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205'))), false, 'the deadlock signature in a 500 that names no code is words, and a status that says no is final: a deadlock victim is the generic SQL error code AND the signature, in the service\'s own answer');
+  assert.strictEqual(isTransientHalt(await wrap(new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', { error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } }))), true, 'a deadlock victim the service answered with a 500 is run again: the generic SQL error code and the signature');
   assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Internal server error', `${ENV}/api/data/v9.2/x?$filter=name eq '${LABEL}'`))), false, 'a url is not the service\'s words');
 });
 
@@ -491,12 +497,17 @@ test('halt policy: the real SDK\'s read of a table called like a lock is run onc
       ['a 400 that names the table', 400, body(`The entity '${table}' does not contain the specified attribute 'contoso_missing'.`), 1],
       ['a 404 that names the segment', 404, body(`Resource not found for the segment '${table}s'.`), 1],
       ['a 500 whose words say SQL timeout, under the code every SQL failure shares', 500, body('SQL timeout expired.', '0x80044150'), 1],
+      ['a 500 under the code every SQL failure shares, beside another SQL number (a constraint)', 500, body(' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 547', '0x80044150'), 1],
+      ['a 500 that carries the deadlock signature and no code', 500, body(' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205'), 1],
+      ['a 500 that carries the deadlock signature under the code of a missing privilege', 500, body(' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', '0x80040220'), 1],
       ['a 403 that holds the words of a lock, under the code of a missing privilege', 403, body(`Principal user is missing prvRead${table} privilege. CustomizationLockException: try again later`, '0x80040220'), 1],
       ['a 429', 429, body('Too many requests.'), 4],
       ['a 502', 502, body('Bad gateway'), 4],
       ['a 503', 503, body('Service Unavailable'), 4],
       ['a 504', 504, body('Gateway timeout'), 4],
       ['a 500 the service names as a SQL timeout by its code', 500, body('SQL timeout expired.', '0x80044151'), 4],
+      // SQL rolled the request back as a deadlock victim: the generic SQL error code, and the platform's signature in the service's own answer. The build runs again, three times, as it did before the retry read the structure of a failure.
+      ['a 500 the service names as a SQL deadlock victim by its code and the platform\'s signature', 500, body(' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', '0x80044150'), 4],
       ['a 409 the service names as a customization lock by its code', 409, body('Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.', '0x8004F064'), 4],
     ];
     for (const [what, status, answerBody, attempts] of CASES) {

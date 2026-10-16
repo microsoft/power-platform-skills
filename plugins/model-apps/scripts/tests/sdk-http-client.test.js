@@ -1085,8 +1085,156 @@ test('the parser is strict: an envelope that closes its outer boundary but is in
   assert.strictEqual(isBatchDeadlockVictim({ body: batchAnswer(DEADLOCK_PART) }), true);
 });
 
-// The parser as it stood before it checked what it dropped, kept here as the reference the strict one is held to. On every well-formed answer the two agree; on every damaged one — a line gone, a line cut in half, a line
-// replaced — the strict parser may prove LESS than the old one did, never more: nothing a caller re-sends a request for, or reads a refusal from, is proven on weaker evidence than before.
+// ── What a delimiter-complete answer can still get wrong: the state of its parts ────────────────────────────────────────────────────────────────────────────
+// An answer can close every boundary it opens and still hold a part that is not what its delimiters say: an operation that holds no response at all, a part that declares a change set the answer never contains (or one whose delimiters are
+// another's), a body that is not as long as its response says, a delimiter damaged so that the next part sits inside this one's body. Each leaves a neighbouring complete 429 to speak for an operation nobody saw, so none may be a proof — and
+// these are asserted OUTRIGHT, not as "no more than the old parser proved": the old parser proved every one of them.
+const OUTER = 'batchresponse_shapes';
+const CHANGE_SET = 'changesetresponse_shapes';
+const CRLF = '\r\n';
+// One response as a part: its MIME headers, the status line, the response's own headers (`Content-Length` counts the body; `null` leaves it out; `headers` adds lines), the blank line that ends them, and the body.
+const responseOf = (status, { id = 1, body = '', length = Buffer.byteLength(body), headers = [] } = {}) => [
+  'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${id}`, '',
+  `HTTP/1.1 ${status} ${status === 204 ? 'No Content' : 'Status'}`, ...(status === 429 ? ['Retry-After: 7'] : []), 'OData-Version: 4.0',
+  ...(length === null ? [] : [`Content-Length: ${length}`]), ...headers, '', body,
+];
+// An answer made of such parts: inside the change set the answer announces (the shape the service uses), or directly under the outer boundary.
+const answerOf = (parts, { changeSet = true } = {}) => {
+  const lines = [`--${OUTER}`];
+  if (changeSet) lines.push(`Content-Type: multipart/mixed; boundary=${CHANGE_SET}`, '');
+  parts.forEach((part, i) => {
+    if (changeSet || i > 0) lines.push(`--${changeSet ? CHANGE_SET : OUTER}`);
+    lines.push(...part);
+  });
+  if (changeSet) lines.push(`--${CHANGE_SET}--`);
+  lines.push(`--${OUTER}--`, '');
+  return lines.join(CRLF);
+};
+const proofOf = (body, now = Date.parse('2026-09-30T10:00:00Z')) => ({
+  status: completeBatchStatus({ body }),
+  throttled: isBatchThrottled({ statusCode: 200, body }),
+  retryAfter: batchRetryAfterMs({ body }, now, Infinity),
+  deadlock: isBatchDeadlockVictim({ body }),
+});
+const UNPROVEN = { status: 0, throttled: false, retryAfter: 0, deadlock: false };
+const DEADLOCK_BODY = JSON.stringify({ error: { code: '0x80044150', message: ' Sql error: Generic SQL error. Sql Number: 1205' } });
+// Each builds an answer that holds a COMPLETE response of `status` (a 429 with a Retry-After, or a 500 that names the deadlock, with `options.body`) and the broken structure beside it — or, where the break is in the response itself, as that response.
+const INCOMPLETE_STRUCTURES = {
+  'an operation part with no response at all, after a complete refusal': (s, o) => answerOf([responseOf(s, o), []]),
+  'an operation part that is only a blank line, after a complete refusal': (s, o) => answerOf([responseOf(s, o), ['']]),
+  'an operation part with no response at all, before a complete refusal': (s, o) => answerOf([[], responseOf(s, o)]),
+  'a part that declares a change set the answer never contains': (s, o) => answerOf([responseOf(s, o)]).replace(`--${OUTER}--`, [`--${OUTER}`, 'Content-Type: multipart/mixed; boundary=changesetresponse_missing', '', `--${OUTER}--`].join(CRLF)),
+  'a part that declares a change set and opens it with no operation in it': (s, o) => answerOf([responseOf(s, o)]).replace(`--${OUTER}--`, [`--${OUTER}`, 'Content-Type: multipart/mixed; boundary=changesetresponse_second', '', '--changesetresponse_second', '--changesetresponse_second--', `--${OUTER}--`].join(CRLF)),
+  'a part that declares a change set that is opened and never closed': (s, o) => answerOf([responseOf(s, o)]).replace(`--${OUTER}--`, [`--${OUTER}`, 'Content-Type: multipart/mixed; boundary=changesetresponse_second', '', '--changesetresponse_second', ...responseOf(s, { ...o, id: 2 }), `--${OUTER}--`].join(CRLF)),
+  'a declared change-set boundary that the delimiters do not use': (s, o) => answerOf([responseOf(s, o)]).replace(`boundary=${CHANGE_SET}`, 'boundary=changesetresponse_missing'),
+  'a part that declares a multipart body and no boundary': (s, o) => answerOf([responseOf(s, o)]).replace(`; boundary=${CHANGE_SET}`, ''),
+  'a part that declares a multipart body and no boundary, beside a complete response': (s, o) => answerOf([responseOf(s, o)]).replace(`--${OUTER}--`, [`--${OUTER}`, 'Content-Type: multipart/mixed', '', `--${OUTER}--`].join(CRLF)),
+  'a change set inside a change set': (s, o) => answerOf([responseOf(s, o), ['Content-Type: multipart/mixed; boundary=changesetresponse_inner', '', '--changesetresponse_inner', ...responseOf(s, { ...o, id: 3 }), '--changesetresponse_inner--']]),
+  'a change set with no announcement (its delimiters follow the outer boundary directly)': (s, o) => [`--${OUTER}`, `--${CHANGE_SET}`, ...responseOf(s, o), `--${CHANGE_SET}--`, `--${OUTER}--`, ''].join(CRLF),
+  'a body shorter than its Content-Length': (s, o) => answerOf([responseOf(s, { ...o, length: Buffer.byteLength(o.body || '{') + 200, body: o.body || '{' })]),
+  'a body longer than its Content-Length': (s, o) => answerOf([responseOf(s, { ...o, length: 1, body: o.body || '{"a":1}' })]),
+  'a Content-Length that is not a length': (s, o) => answerOf([responseOf(s, { ...o, length: 'many' })]),
+  'two different Content-Lengths': (s, o) => answerOf([responseOf(s, { ...o, headers: ['Content-Length: 7'] })]),
+  'a Content-Length where the response ends with its headers': (s) => answerOf([['Content-Type: application/http', '', `HTTP/1.1 ${s} Status`, 'Content-Length: 5']]),
+  'a delimiter between two operations replaced by text, so the second response is in the first\'s body': (s, o) => [`--${OUTER}`, `Content-Type: multipart/mixed; boundary=${CHANGE_SET}`, '', `--${CHANGE_SET}`, ...responseOf(s, { ...o, length: null }), 'x', ...responseOf(s, { ...o, id: 2, length: null }), `--${CHANGE_SET}--`, `--${OUTER}--`, ''].join(CRLF),
+  'a delimiter between two operations cut in half, so it is text in the first\'s body': (s, o) => [`--${OUTER}`, `Content-Type: multipart/mixed; boundary=${CHANGE_SET}`, '', `--${CHANGE_SET}`, ...responseOf(s, { ...o, length: null }), '--changesetrespo', ...responseOf(s, { ...o, id: 2, length: null }), `--${CHANGE_SET}--`, `--${OUTER}--`, ''].join(CRLF),
+  'a delimiter cut in half in front of an operation that has no status line': (s, o) => [`--${OUTER}`, `Content-Type: multipart/mixed; boundary=${CHANGE_SET}`, '', `--${CHANGE_SET}`, ...responseOf(s, { ...o, length: null }), '--changesetrespo', 'Content-Type: application/http', 'Content-ID: 2', '', '{"error":{"message":"x"}}', `--${CHANGE_SET}--`, `--${OUTER}--`, ''].join(CRLF),
+  'a change set that is closed and never opened': (s, o) => answerOf([responseOf(s, o)]).replace(`--${OUTER}--`, [`--${OUTER}`, 'Content-Type: multipart/mixed; boundary=changesetresponse_second', '', '--changesetresponse_second--', `--${OUTER}--`].join(CRLF)),
+  'text in front of the first delimiter of a change set': (s, o) => answerOf([responseOf(s, o)]).replace(`--${CHANGE_SET}${CRLF}`, `stray${CRLF}--${CHANGE_SET}${CRLF}`),
+  'text after the closing delimiter of a change set': (s, o) => answerOf([responseOf(s, o)]).replace(`--${CHANGE_SET}--${CRLF}`, `--${CHANGE_SET}--${CRLF}stray${CRLF}`),
+  'two responses in one part': (s, o) => answerOf([responseOf(s, { ...o, length: null, headers: ['HTTP/1.1 204 No Content'] })]),
+};
+
+test('a delimiter-complete answer whose parts are not what its delimiters say proves nothing — an operation with no response, a change set declared and absent, a body not as long as its response says, a delimiter damaged — and the same parts in a sound answer say what they say', () => {
+  for (const [what, make] of Object.entries(INCOMPLETE_STRUCTURES)) {
+    const refused = make(429, {});
+    assert.deepStrictEqual(proofOf(refused), UNPROVEN, `${what}: a refusal`);
+    assert.strictEqual(isBatchThrottled({ statusCode: 429, body: refused }), false, `${what}: not even under an outer 429`);
+    assert.deepStrictEqual(proofOf(make(403, {})), UNPROVEN, `${what}: a 403`);
+    assert.deepStrictEqual(proofOf(make(500, { body: DEADLOCK_BODY })), UNPROVEN, `${what}: a deadlock victim`);
+  }
+  // The controls: the same responses, in a sound answer, say what they say.
+  assert.deepStrictEqual(proofOf(answerOf([responseOf(429), responseOf(429, { id: 2 })])), { status: 429, throttled: true, retryAfter: 7000, deadlock: false });
+  assert.deepStrictEqual(proofOf(answerOf([responseOf(403)])), { status: 403, throttled: false, retryAfter: 0, deadlock: false });
+  assert.deepStrictEqual(proofOf(answerOf([responseOf(500, { body: DEADLOCK_BODY })])), { status: 500, throttled: false, retryAfter: 0, deadlock: true });
+});
+
+for (const eol of ['CRLF', 'LF']) {
+  test(`the strict parser goes on reading every complete shape the service and the fakes answer with — empty bodies, counted bodies, Content-ID, direct parts, two change sets (${eol})`, () => {
+    const { batchEnvelope } = require('./helpers/fake-genpage-server.js');
+    const twoChangeSets = [
+      `--${OUTER}`, `Content-Type: multipart/mixed; boundary=${CHANGE_SET}`, '', `--${CHANGE_SET}`, ...responseOf(429, { id: 1 }), `--${CHANGE_SET}--`,
+      `--${OUTER}`, 'Content-Type: multipart/mixed; boundary=changesetresponse_second', '', '--changesetresponse_second', ...responseOf(429, { id: 2 }), '--changesetresponse_second--', `--${OUTER}--`, '',
+    ].join(CRLF);
+    const cases = [
+      ['page writes with an empty body and a Content-ID each', batchEnvelope([{ contentId: 1, status: 204 }, { contentId: 2, status: 204 }]), 204, 0],
+      ['a refusal the service words with a Retry-After of its own', batchEnvelope([{ contentId: 1, status: 429, headers: { 'Retry-After': '7' } }]), 429, 7000],
+      ['column creates, each response counting its empty body', answerOf([responseOf(201, { id: 1 }), responseOf(201, { id: 2 })]), 201, 0],
+      ['conditional deletes, each response counting its empty body', answerOf([responseOf(204, { id: 1 }), responseOf(204, { id: 2 })]), 204, 0],
+      ['a refusal with an empty body, counted', answerOf([responseOf(429)]), 429, 7000],
+      ['a refusal with a body, counted exactly', answerOf([responseOf(400, { body: '{"error":{"message":"refused"}}' })]), 400, 0],
+      ['a counted body followed by the blank line before the next delimiter', answerOf([[...responseOf(403, { body: '{}' }), '']]), 403, 0],
+      ['a body that is not counted', answerOf([responseOf(403, { length: null, body: '{"error":{}}' })]), 403, 0],
+      ['a response that is only a status line', answerOf([['Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests']]), 429, 0],
+      ['a response that ends with its headers: no blank line, no body', answerOf([['Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests', 'Retry-After: 7']]), 429, 7000],
+      ['a response with no type of its own', answerOf([['', 'HTTP/1.1 403 Forbidden', '']]), 403, 0],
+      ['an answer with a byte order mark in front of it', `\uFEFF${answerOf([responseOf(429)])}`, 429, 7000],
+      ['a change set whose Content-Type is folded onto the next line', answerOf([responseOf(429)]).replace(`; boundary=${CHANGE_SET}`, `;${CRLF} boundary=${CHANGE_SET}`), 429, 7000],
+      ['a change set whose boundary is quoted', answerOf([responseOf(429)]).replace(`boundary=${CHANGE_SET}`, `BOUNDARY="${CHANGE_SET}"`), 429, 7000],
+      ['a response directly under the outer boundary, no change set', answerOf([responseOf(403)], { changeSet: false }), 403, 0],
+      ['two responses directly under the outer boundary', answerOf([responseOf(429, { id: 1 }), responseOf(429, { id: 2 })], { changeSet: false }), 429, 7000],
+      ['two change sets', twoChangeSets, 429, 7000],
+      ['a success beside a refusal: said once, and not one status', answerOf([responseOf(204, { id: 1 }), responseOf(429, { id: 2 })]), 0, 7000],
+    ];
+    for (const [what, text, status, retryAfter] of cases) {
+      const body = eol === 'LF' ? text.replace(/\r\n/g, '\n') : text;
+      assert.strictEqual(completeBatchStatus({ body }), status, what);
+      assert.strictEqual(isBatchThrottled({ statusCode: 200, body }), status === 429, what);
+      assert.strictEqual(batchRetryAfterMs({ body }, Date.now(), Infinity), retryAfter, what);
+    }
+  });
+}
+
+// The line breaks inside a counted body are the ones the answer has: `Content-Length` counts the bytes, and a CRLF is two of them.
+test('a body is counted by the line breaks the answer really has — four bytes for a CRLF body of two lines, three for an LF one — and is not the body that was counted once its breaks are another kind', () => {
+  const crlf = answerOf([responseOf(400, { body: 'a\r\nb' })]);
+  const lf = answerOf([responseOf(400, { body: 'a\nb' })]);
+  assert.strictEqual(completeBatchStatus({ body: crlf }), 400);
+  assert.strictEqual(completeBatchStatus({ body: lf }), 400);
+  assert.strictEqual(completeBatchStatus({ body: crlf.replace(/\r?\n/g, '\n') }), 0);
+  assert.strictEqual(completeBatchStatus({ body: lf.replace(/\r?\n/g, '\r\n') }), 0);
+});
+
+// The client's own re-sends rest on the same reading: a conditional-delete batch is sent again after a SQL deadlock victim or a 429, and a column-create batch after a 429, only when the answer proves nothing in it ran.
+test('postRaw sends a conditional-delete or column-create batch ONCE for an answer whose parts are not what its delimiters say, whatever its complete parts say — each way an answer can be incomplete inside', async () => {
+  const slept = [];
+  // The shapes of the first strict-parser test, taking the same arguments as the table above: a status and the options of the complete response.
+  const every = {
+    ...Object.fromEntries(Object.entries(MALFORMED_ENVELOPES).map(([what, make]) => [what, (s) => make(s === 500 ? DEADLOCK_PART : REFUSED_429)])),
+    ...INCOMPLETE_STRUCTURES,
+  };
+  for (const [what, make] of Object.entries(every)) {
+    const answers = [
+      ['a 429 on a batch of conditional deletes', APP_DELETE, [429, 200].map((statusCode) => ({ statusCode, headers: {}, body: make(429, {}) }))],
+      ['a SQL deadlock victim on a batch of conditional deletes', APP_DELETE, [{ statusCode: 500, headers: {}, body: make(500, { body: DEADLOCK_BODY }) }]],
+      ['a 429 on a batch of column creates', COLUMNS, [429, 200].map((statusCode) => ({ statusCode, headers: {}, body: make(429, {}) }))],
+    ];
+    for (const [kind, request, list] of answers) {
+      for (const answer of list) {
+        const { request: send, calls } = fakeTransport(answer);
+        const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: send, sleep: async (ms) => { slept.push(ms); }, random: () => 0 });
+        const res = await postBatch(http, request);
+        assert.strictEqual(calls.length, 1, `${what}: ${kind} (HTTP ${answer.statusCode}) — sent once`);
+        assert.strictEqual(res.body, answer.body, `${what}: ${kind} — and the answer reaches the SDK as it came`);
+      }
+    }
+  }
+  assert.deepStrictEqual(slept, [], 'and nothing was waited for');
+});
+
+// The parser as it stood before it checked what it dropped, kept here as the reference the strict one is held to — as a guard IN ADDITION to the absolute tests above, which hold what the strict parser must refuse outright even where
+// the old one proved it. On every well-formed answer the two agree; on every damaged one — a line gone, a line cut in half, a line replaced — the strict parser may prove LESS than the old one did, never more: nothing a caller
+// re-sends a request for, or reads a refusal from, is proven on weaker evidence than before.
 function referenceResults(res) {
   const lines = res.body.split(/\r?\n/);
   const nonEmpty = lines.map((l) => l.trim()).filter(Boolean);
@@ -1138,7 +1286,8 @@ test('the strict parser agrees with the old one on every well-formed answer, and
     'the sample the transport tests send': BATCH_RESPONSE,
     'what the page service answers (a change set that announces its own boundary)': batchEnvelope([{ contentId: 1, status: 429, headers: { 'Retry-After': '7' } }]),
     'the same, a 403': batchEnvelope([{ contentId: 1, status: 403 }]),
-    'an envelope that names no change set (the parts follow the outer boundary directly)': ['--batchresponse_b1', '--changesetresponse_c1', 'Content-Type: application/http', '', 'HTTP/1.1 403 Forbidden', '', '--changesetresponse_c1--', '--batchresponse_b1--', ''].join('\r\n'),
+    'responses that count their bodies — empty, and exactly': answerOf([responseOf(429, { id: 1 }), responseOf(429, { id: 2, body: '{"error":{"message":"throttled"}}' })]),
+    'a response that is only a status line': answerOf([['Content-Type: application/http', '', 'HTTP/1.1 403 Forbidden']]),
     'operations with no change set at all': ['--batchresponse_b1', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', '', 'HTTP/1.1 429 Too Many Requests', 'Retry-After: 3', '', '{}', '--batchresponse_b1--', ''].join('\r\n'),
     'two change sets': ['--batchresponse_b1', 'Content-Type: multipart/mixed; boundary=changesetresponse_c1', '', '--changesetresponse_c1', 'Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests', '', '--changesetresponse_c1--', '--batchresponse_b1', 'Content-Type: multipart/mixed; boundary=changesetresponse_c2', '', '--changesetresponse_c2', 'Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests', 'Retry-After: 11', '', '--changesetresponse_c2--', '--batchresponse_b1--', ''].join('\r\n'),
     'no operation at all': '--batchresponse_b1\r\n--batchresponse_b1--\r\n',

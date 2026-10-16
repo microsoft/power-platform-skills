@@ -858,8 +858,9 @@ async function buildModelApp(spec, opts, deps) {
 // A failure is transient (safe to auto-retry, since the build is idempotent) when the SERVICE said so, by the
 // structure of its answer: the HTTP status it answered (429, 502, 503, 504), a timeout or a reset of the
 // transport, or a condition it names by the `error.code` of its answer (a customization or solution lock, SQL
-// giving up waiting, a concurrent request on the same record, the lag of a column the spec creates). A status
-// that is not one of those — a 403, a 404, a 400, a 500 — is final, whatever the answer says: an answer
+// giving up waiting, a concurrent request on the same record, a SQL deadlock victim — the generic SQL error code
+// with the platform's deadlock signature in the service's own answer — the lag of a column the spec creates). A
+// status that is not one of those — a 403, a 404, a 400, a 500 — is final, whatever the answer says: an answer
 // echoes what the maker named, and "SQL Timeout Reader" is a legal name for a view, a role, a persona, a flow,
 // a page, and — `contoso_customizationlockexception` — a table. Only a failure that carries no HTTP status at
 // all (a plain error, the words a helper reported by value) is read by the service's own words as a fallback:
