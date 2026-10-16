@@ -788,8 +788,11 @@ const fastRun = (p, prior, { publish = true, ...extra } = {}) => p.build(p.spec,
 });
 const firstWriteOf = (requests) => requests.findIndex((c) => c.method !== 'GET');
 const HELD_AND_ADDED = 'tables contoso_item, contoso_nav, contoso_retained, contoso_stats'; // Item and Stats: the forms and the chart the app holds; Retained: a form a maker added; Nav: its Main forms are what the push adds
+// The placement's push goes through the page backend's own transport, which limits its AddAppComponents to the view it pins (lib/app-component-scope.js): it adds no Main form, so the request
+// before it names only the tables of the forms and charts the app holds — not Nav, whose Main form a maker added after the first build and the app does not hold.
+const HELD = 'tables contoso_item, contoso_retained, contoso_stats';
 
-test('the supported fast route — a page edited only by a BOM, which has to pin a default view the app lost — publishes the tables the app holds forms of, and those its push adds forms of, before the placement writes the app', async (t) => {
+test('the supported fast route — a page edited only by a BOM, which has to pin a default view the app lost — publishes the tables the app holds forms of before the placement writes the app, whose push adds the view and no form', async (t) => {
   const p = pageScenario(t);
   assert.strictEqual((await p.build(p.spec)).outcome.ok, true, 'the first build');
   const maker = await afterTheMaker(p);
@@ -799,13 +802,12 @@ test('the supported fast route — a page edited only by a BOM, which has to pin
   assert.strictEqual(run.outcome.ok, true);
   assert.deepStrictEqual([p.updates.at(-1).sent === PAGE_CODE, p.updates.at(-1).result.publish.kind], [true, 'skipped'], 'the page holds what it is sent: its publish is skipped, so no publish of the page stands between the maker\u2019s save and the app\u2019s');
   const requests = p.org.calls.slice(run.mark);
-  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD_AND_ADDED, 'app'], 'two publishes: the one request for the tables, then the placement\u2019s publish of the app (the route used to send the second alone)');
+  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD, 'app'], 'two publishes: the one request for the tables, then the placement\u2019s publish of the app (the route used to send the second alone)');
   assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the request is the first write of the run: nothing writes or publishes the app before it');
-  const pinned = requests.findIndex(pinsForm(maker.added));
-  assert.ok(pinned > requests.findIndex(isTablesPublish) && pinned < requests.findIndex(isAppPublish), 'the form the push pins is pinned after its table was published, and before the app is');
-  assert.ok(p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'this push added it to the app');
-  assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'and pinned the default view it came to repair');
-  assert.deepStrictEqual(p.unfinished(), ['Draft on the page-only table'], 'the form the app holds and the form the push adds are live; what a maker left on the table only the page reads is not released');
+  assert.strictEqual(requests.findIndex(pinsForm(maker.added)), -1, 'the push pins no form: the page backend limits it to the view it came to pin');
+  assert.ok(!p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'so the Main form a maker added to the navigation\u2019s table is not put in the app');
+  assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'and the default view it came to repair is pinned');
+  assert.deepStrictEqual(p.unfinished().sort(), ['Draft on the page-only table', 'Main form added to the navigation table'], 'the form the app holds is live; the push adds no form, so what a maker left on Nav and on the table only the page reads is not released');
   assert.ok(!p.org.publishLog().some((line) => line.includes('contoso_page_only')), 'no request names that table: the placement pins a view of it, which is no form or chart');
   assert.deepStrictEqual(run.warnings.filter((w) => /could not (publish|tell|read)/.test(w)), []);
 });
@@ -843,14 +845,14 @@ test('the fast route\u2019s request refused: the app is still written, once, and
   p.org.refuseNextTablePublish(400);
   const run = await fastRun(p, prior);
   assert.strictEqual(run.outcome.ok, true, 'a refusal does not stop the build');
-  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD_AND_ADDED, 'app'], 'the request was sent once, before the app, and not again by the placement');
+  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD, 'app'], 'the request was sent once, before the app, and not again by the placement');
   const said = run.warnings.filter((w) => /could not publish tables/.test(w));
   assert.strictEqual(said.length, 1, run.warnings.join('\n'));
-  assert.match(said[0], /could not publish tables contoso_item, contoso_nav, contoso_retained, contoso_stats before the app \(PublishXml answered HTTP 400/);
-  assert.match(said[0], /The app holds, or this build's write of it adds, forms of contoso_item, contoso_nav, contoso_retained/);
+  assert.match(said[0], /could not publish tables contoso_item, contoso_retained, contoso_stats before the app \(PublishXml answered HTTP 400/);
+  assert.match(said[0], /The app holds forms of contoso_item, contoso_retained:/, 'the push adds no form, so no table is worded as one the write adds');
 });
 
-test('the fast route when the app\u2019s form components cannot be read publishes what its push adds forms of, and says which read failed', async (t) => {
+test('the fast route when the app\u2019s form components cannot be read publishes no table ahead of the app — its push adds no form, and no held table can be proven — and says which read failed', async (t) => {
   const p = pageScenario(t);
   await p.build(p.spec);
   await afterTheMaker(p);
@@ -858,10 +860,10 @@ test('the fast route when the app\u2019s form components cannot be read publishe
   p.org.intercept(readsComponentsOfType(60), refuses(500, 'simulated read refusal'));
   const run = await fastRun(p, prior);
   assert.strictEqual(run.outcome.ok, true);
-  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_item, contoso_nav', 'app'], 'the navigation\u2019s tables, which no read is needed to know, and nothing it cannot prove');
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['app'], 'nothing it cannot prove: the placement\u2019s push adds no form, and which tables the app holds forms of cannot be read');
   const said = run.warnings.filter((w) => /could not tell which tables/.test(w));
   assert.strictEqual(said.length, 1, run.warnings.join('\n'));
-  assert.match(said[0], /only the tables this build changed and the navigation's tables, whose Main forms its own write of the app adds/);
+  assert.match(said[0], /so before the app's own publish it published only the tables this build changed\. /);
   assert.ok(p.unfinished().includes('Form the app holds, label saved and not published'), 'a table that cannot be proven is left alone');
 });
 
@@ -910,12 +912,12 @@ test('the fast route over a navigation a maker took a table out of does not publ
   assert.deepStrictEqual([classification.verdict, classification.changedPhases], ['fast', ['pages']]);
   const run = await fastRun(p, prior);
   assert.strictEqual(run.outcome.ok, true);
-  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_nav, contoso_retained, contoso_stats', 'app'], 'what the app holds forms and charts of (Retained, Stats) and what the push adds forms of (Nav, the one table the server\u2019s navigation still names): not Item, which the spec names');
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_retained, contoso_stats', 'app'], 'what the app holds forms and charts of (Retained, Stats): not Item, which the spec names and the app no longer holds, nor Nav, whose new Main form the push does not add');
   const requests = p.org.calls.slice(run.mark);
   assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the request is still the first write of the run');
   assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'the default view the run came to repair is back in the app');
-  assert.ok(p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'the push added the Main form of the table the navigation still names');
-  assert.deepStrictEqual(p.unfinished().sort(), ['Draft on the page-only table', 'Unfinished form on the table the navigation no longer names'], 'the table the navigation no longer names keeps what a maker left on it, as a table only a page reads does');
+  assert.ok(!p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'the push adds no form, not even of the table the navigation still names: the page backend limits it to the view it pins');
+  assert.deepStrictEqual(p.unfinished().sort(), ['Draft on the page-only table', 'Main form added to the navigation table', 'Unfinished form on the table the navigation no longer names'], 'the table the navigation no longer names keeps what a maker left on it, as Nav and a table only a page reads do');
   assert.deepStrictEqual(run.warnings.filter((w) => /could not (publish|tell|read)|default views/.test(w)), []);
 });
 
@@ -931,7 +933,7 @@ test('the same fast route without --publish is what it was: the placement\u2019s
   assert.deepStrictEqual(p.org.publishLog(run.mark), ['app']);
 });
 
-test('the fast route over a navigation a maker pointed at another table publishes the table whose Main form its push adds, before the app', async (t) => {
+test('the fast route over a navigation a maker pointed at another table does not publish the table the entry now names: its push adds no form of it, and the app holds none', async (t) => {
   const p = pageScenario(t);
   assert.strictEqual((await p.build(p.spec)).outcome.ok, true, 'the first build');
   const maker = await afterTheMaker(p);
@@ -943,12 +945,12 @@ test('the fast route over a navigation a maker pointed at another table publishe
   const run = await fastRun(p, prior);
   assert.strictEqual(run.outcome.ok, true);
   const requests = p.org.calls.slice(run.mark);
-  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_item, contoso_lookup, contoso_nav, contoso_retained, contoso_stats', 'app'], 'Item: the app still holds its form; Lookup and Nav: the push adds their Main forms; Retained and Stats: held');
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_item, contoso_retained, contoso_stats', 'app'], 'Item: the app still holds its form; Retained and Stats: held; Lookup and Nav: the push adds no form of either');
   assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the request is the first write of the run');
-  const pinned = requests.findIndex(pinsForm(added));
-  assert.ok(pinned > requests.findIndex(isTablesPublish) && pinned < requests.findIndex(isAppPublish), 'the form the push adds is pinned after its table was published, and before the app is');
+  assert.strictEqual(requests.findIndex(pinsForm(added)), -1, 'the push pins no form of the table the entry now names');
+  assert.ok(!p.org.components.some((c) => c.objectid === added), 'and the app does not hold it');
   assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'the default view is back in the app');
-  assert.deepStrictEqual(p.unfinished(), ['Draft on the page-only table'], 'the form the push added is live, as are the form the app holds and the one on Nav; the page-only table keeps its draft');
+  assert.deepStrictEqual(p.unfinished().sort(), ['Draft on the page-only table', 'Main form added to the navigation table', 'Main form of the table the navigation now names'], 'the form the app holds is live; Lookup, Nav and the page-only table keep what a maker left on them');
 });
 
 // An app whose spec lists the Main forms it offers. The list is applied where the build writes the app from the spec (the create, the app step's push, the pages finalizer);
@@ -973,7 +975,7 @@ for (const publish of [true, false]) {
     assert.deepStrictEqual(run.warnings.filter((w) => /default views|could not (publish|tell|read)/.test(w)), [], 'the placement is not refused over a name it does not use');
     assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'the default view is back in the app');
     assert.deepStrictEqual(p.org.calls.slice(run.mark).filter(readsMainFormCatalog), [], 'no Main-form catalog is read for it, with or without --publish');
-    assert.deepStrictEqual(p.org.publishLog(run.mark), publish ? [HELD_AND_ADDED, 'app'] : ['app']);
+    assert.deepStrictEqual(p.org.publishLog(run.mark), publish ? [HELD, 'app'] : ['app']);
   });
 }
 

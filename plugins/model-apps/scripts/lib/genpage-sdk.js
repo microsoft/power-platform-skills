@@ -440,6 +440,8 @@ function makeGenpageSdk(env, deps = {}) {
   const byLanguage = new Map();
   // What a page edit of an app may add to the app's components, held at the transport of every SDK this backend makes (lib/app-component-scope.js).
   const appScope = makeAppComponentScope();
+  // The SDKs whose transport is `appScope`'s: those this backend made. A lent SDK (`deps.sdk`, or one `deps.createSdk` makes) has a transport of its own, so a push through it is not limited.
+  const madeHere = new WeakSet();
   // Set by dispose(): no operation starts after it.
   let closed = false;
   // The operations in flight. An SDK that was lent to this backend (deps.sdk, or one a test makes) keeps its workspace somewhere this
@@ -473,6 +475,7 @@ function makeGenpageSdk(env, deps = {}) {
             readConcurrency: 4,
             ...(options.languageCode ? { languageCode: options.languageCode } : {}),
           });
+          madeHere.add(sdk);
           await sdk.initWorkspace();
           return sdk;
         });
@@ -911,9 +914,10 @@ function makeGenpageSdk(env, deps = {}) {
     // publishTablesBeforeApp): this call pushes and publishes the app by itself, so only it knows when that is about to happen, and what it is about to send. The edits are by then made in this
     // operation's workspace copy only, so a hook that throws leaves the app as it was, and the call throws what the hook threw.
     // The hook is told what the write is: `{ pushes, entityTables, mainFormsByTable }`. `pushes` says whether the app is pushed (false: it is only published, so nothing is added to it); `entityTables` are the
-    // tables of the Entity entries of the navigation the push sends, which is the one the server holds — this call fetches the app, adds the page entries and the views it was asked for, and pushes that — and
-    // `mainFormsByTable` is the Main-form list the pushed app carries (a fetched app carries none, and the SDK then adds every active Main form of each of those tables), or undefined. The SDK expands
-    // the Entity entries of the navigation it pushes into their active Main forms, so these are the tables whose Main forms THIS push adds; the page entries and views this call adds are not among them.
+    // tables whose Main forms THIS push adds, and `mainFormsByTable` is the Main-form list the pushed app carries (a fetched app carries none), or undefined. The SDK expands the Entity entries of the
+    // navigation it pushes — the one the server holds: this call fetches the app, adds the page entries and the views it was asked for, and pushes that — into their active Main forms, public views and
+    // charts; but on the transport of an SDK this backend made, the push's AddAppComponents is cut down to the views this edit pins (`appScope`, `pushApp`), so it adds no Main form and
+    // `entityTables` is empty. Only through a lent SDK, whose transport is its owner's, does the push add them all: then `entityTables` is the tables of those Entity entries (`entityTablesOfSiteMap`).
     // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? }. It throws, with
     // the page unplaced, when the app cannot be read, the edit is refused, `beforeAppWrite` throws, or the app's publish fails — and with `finish`, when the published
     // navigation does not show the page after the app was published.
@@ -979,7 +983,8 @@ function makeGenpageSdk(env, deps = {}) {
 
       // The first thing sent to the app is below: the caller's word comes before it (see `beforeAppWrite`, above), and it is told what the write is.
       if (typeof options.beforeAppWrite === 'function') {
-        await options.beforeAppWrite({ pushes: edited, entityTables: entityTablesOfSiteMap(app.siteMap), mainFormsByTable: app.components && app.components.mainFormsByTable });
+        const limited = madeHere.has(sdk);
+        await options.beforeAppWrite({ pushes: edited, entityTables: limited ? [] : entityTablesOfSiteMap(app.siteMap), mainFormsByTable: app.components && app.components.mainFormsByTable });
       }
       if (edited) await pushApp(sdk, appId, warnings, appScope, { views: pin });
       const published = await publish(sdk, 'app', appId, undefined);

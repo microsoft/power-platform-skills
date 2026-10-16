@@ -2544,8 +2544,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     },
     // The page backend's placement of default views: it reads the app, and pushes and publishes it by itself only when it finds a view to pin, so it is handed the request to await
     // right before its first write, and a placement that finds nothing to pin sends nothing and asks for nothing. It pushes the app as the server holds it, not the spec's navigation,
-    // so it tells the request what it sends (`write`: whether it pushes, the tables of the navigation it pushes and the Main-form list that push carries), and a backend that
-    // tells nothing is taken to add no form.
+    // so it tells the request what it sends (`write`: whether it pushes, the tables whose Main forms that push adds and the Main-form list it carries), and a backend that
+    // tells nothing is taken to add no form. The page backend's own push is limited to the views it pins (lib/app-component-scope.js), so it adds no Main form and names no table.
     placeViews(genpage, appId, options) {
       return genpage.placeInApp(appId, {
         ...options,

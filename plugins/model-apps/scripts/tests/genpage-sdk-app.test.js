@@ -478,6 +478,8 @@ test('placeInApp: without beforeAppWrite the placement is what it was, and a val
 // The build decides from it which tables to publish before the app. The placement is the one that knows what it sends: the app as the server holds it, plus the page entries and the views
 // this call adds. The SDK expands the Entity entries of the navigation it pushes into their active Main forms (and only those: a page entry, a link or a dashboard adds none), and applies the
 // Main-form list the pushed app carries, so these are the Entity entries of the FETCHED navigation and the fetched app's list — never the spec's, which this push does not send.
+// These tests lend the backend an SDK (`backend(sdk)`), whose transport is the lender's, so its push is not limited. An SDK the backend makes itself pushes through `appScope`, which cuts the push
+// down to the views the edit pins: it adds no Main form, and the hook is told no table — publish-scope-real-bundle.test.js runs that through the real SDK.
 const holds = (...subAreas) => {
   const app = appArtifact();
   app.siteMap.areas[0].groups[0].subAreas.push(...subAreas);
