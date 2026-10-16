@@ -127,7 +127,7 @@ const [filters, setFilters] = React.useState({ status: 'all', dateRange: 'all', 
   <XStack flex={1} items="center" bg="$color3" rounded="$3" px="$3" gap="$2">
     <Search size={18} color="$color9" />
     <Input flex={1} placeholder="Search..." value={search}
-      onChange={event => setSearch(event.target?.value ?? event.nativeEvent?.text ?? '')}
+      onChangeText={setSearch}
       bg="transparent" borderWidth={0} px="$0" />
   </XStack>
   <Button size="$3" icon={SlidersHorizontal} chromeless onPress={() => setShowFilters(true)}>
@@ -354,7 +354,7 @@ Used for: field data entry with gloved hands, accessibility.
 ```tsx
 <XStack items="center" gap="$2">
   <Input flex={1} placeholder="Enter notes..." value={value}
-    onChange={event => onChange(event.target?.value ?? event.nativeEvent?.text ?? '')} />
+    onChangeText={onChange} />
   <Button size="$3" circular chromeless
     icon={isListening ? MicOff : Mic}
     color={isListening ? '$red10' : '$color9'}
@@ -731,7 +731,7 @@ function ValidatedInput({ label, value, onChange, validate, successMessage }) {
         borderWidth={result ? 2 : 0}
         borderColor={result?.valid ? '$green8' : result ? '$red8' : 'transparent'}>
         <Input flex={1} value={value}
-          onChange={event => onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+          onChangeText={onChange}
           onBlur={() => setTouched(true)}
           bg="transparent" borderWidth={0} />
         {result?.valid && <CheckCircle2 size={18} color="$green10" />}
