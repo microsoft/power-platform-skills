@@ -28,7 +28,7 @@ const {
 } = require('../lib/sdk-build.js');
 const { BuildHalt, makeRunner, requireSuccessfulPush, findExistingTable, resolveLanguageCode, checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
 const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
-const { SdkError } = require('../lib/maker-sdk.js');
+const { SdkError, ConnectionError, createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 
 const SCRIPTS = path.join(__dirname, '..');
 // What a maker may call anything — a view, a role, a persona, a flow, a folder — and what no halt may be judged by.
@@ -206,6 +206,8 @@ const REFUSALS = [
   ['a 403 from the service whose url carries the label', () => connectionError(403, 'permission denied')],
   ['a local file error that quotes the path', () => Object.assign(new Error(`EACCES: permission denied, open '/work/${LABEL}/page.json'`), { code: 'EACCES', syscall: 'open' })],
   ['an SDK error that wraps a publish the service refused (a 403), on a table called like a timeout', () => wrappedPublish(`HTTP 403 from ${ENV}/api/data/v9.2/PublishXml: permission denied`, 'contoso_sql_timeout')],
+  // A logical name has no space, but it can be a word of the rule: `CustomizationLockException` is one word, and `contoso_customizationlockexception` is a valid name.
+  ['an SDK error that wraps a publish the service refused (a 403), on a table whose logical name holds a word of the retry rule', () => wrappedPublish(`HTTP 403 from ${ENV}/api/data/v9.2/PublishXml: permission denied`, 'contoso_customizationlockexception')],
 ];
 // Failures that ARE the service's to say, whatever anything is called.
 const GENUINE = [
@@ -213,6 +215,8 @@ const GENUINE = [
   ['a 429', () => connectionError(429, 'Too many requests.')],
   ['a reset of the connection', () => connectionError(0, 'Request failed: read ECONNRESET')],
   ['an SDK error that wraps a publish the service could not take (a 503)', () => wrappedPublish(`HTTP 503 from ${ENV}/api/data/v9.2/PublishXml: Service Unavailable`)],
+  ['an SDK error that wraps a publish the service throttled (a 429), on a table whose logical name holds a word of the retry rule', () => wrappedPublish(`HTTP 429 from ${ENV}/api/data/v9.2/PublishXml: Too many requests.`, 'contoso_customizationlockexception')],
+  ['an SDK error that wraps a publish the service refused for a customization lock, in its words', () => wrappedPublish(`HTTP 500 from ${ENV}/api/data/v9.2/PublishXml: CustomizationLockException: another solution install is running`)],
 ];
 
 // The spec every row's retry loop runs on: valid, and not the point.
@@ -381,4 +385,55 @@ test('halt policy: a push refused by value follows the SDK\'s failure — a code
   assert.strictEqual(isTransientHalt(push(connectionError(503, 'The service is unavailable.'))), true);
   assert.strictEqual(isTransientHalt(push(connectionError(400, 'Bad request'))), false);
   assert.strictEqual(push(connectionError(503, 'x')).code, 'CONNECTION_ERROR', 'the halt keeps the code the SDK gave, which a phase\'s skipIf matches on');
+});
+
+// The SDK's own sentence, from the bundle. `enrichDefaultViews` of a build without --publish picks the table's default views, saves each and publishes them, and when that publish fails it throws an SdkError of
+// its own — a sentence that names the table and holds the publish error's message, with no cause. The service's answer is in it and the maker's table is too, and a logical name is any word, with a prefix
+// (`contoso_customizationlockexception`): so what the rule reads out of it is checked on the error the real bundle builds, not on one written to look like it. Only what talks to the service is replaced — the saves of the views and
+// the publish; the choice of the views and the sentence are the bundle's.
+async function bundleWrapper(table, publishError) {
+  const views = [0, 1].map((state) => ({
+    savedqueryid: `33333333-3333-4333-8333-33333333333${state}`, name: `${state ? 'Inactive' : 'Active'} Items`, canbedeleted: { Value: false }, createdon: '2026-01-01T00:00:00Z',
+    fetchxml: `<fetch><entity name="${table}"><filter><condition attribute="statecode" operator="eq" value="${state}"/></filter></entity></fetch>`,
+  }));
+  const sdk = createMakerSdk({
+    instanceUrl: ENV,
+    workspaceStorage: createNodeWorkspaceStorage(tempDir('halt-policy-sdk')),
+    httpClient: { get: async (url) => { assert.match(url, /\/savedqueries\?/); return { status: 200, headers: {}, body: { value: views } }; } },
+  });
+  await sdk.initWorkspace();
+  sdk.fetchArtifact = async () => ({});
+  sdk.updateElement = async () => ({});
+  sdk.pushArtifact = async (type, id) => ({ type, id, saved: true });
+  sdk.publishArtifact = async () => ({ publish: { kind: 'failed', error: publishError } });
+  return sdk;
+}
+const defaultViewsSpec = (table) => ({
+  ...loopSpec(),
+  entities: [{ schemaName: table, primaryAttribute: { schemaName: 'contoso_name' }, columns: [{ schemaName: 'contoso_description', displayName: 'Description', type: 'Text' }] }],
+});
+
+test('halt policy: the real SDK\'s sentence around a failed publish of the default views is read through — a table called like a lock does not make a 403 run again, a throttle, a lock and a reset still do', async () => {
+  const publishUrl = `${ENV}/api/data/v9.2/PublishXml`;
+  const CASES = [
+    ['a 403', new ConnectionError(publishUrl, 403, 'permission denied'), 1],
+    ['a 400', new ConnectionError(publishUrl, 400, 'The request is not valid'), 1],
+    ['a 404', new ConnectionError(publishUrl, 404, 'Not found'), 1],
+    ['a certificate nobody trusts', new ConnectionError(publishUrl, 0, 'Request failed: unable to verify the first certificate'), 1],
+    ['a 429', new ConnectionError(publishUrl, 429, 'Too many requests.'), 4],
+    ['a 503', new ConnectionError(publishUrl, 503, 'Service Unavailable'), 4],
+    ['a lock, in the service\'s words', new ConnectionError(publishUrl, 500, 'CustomizationLockException: another solution install is running'), 4],
+    ['a reset of the connection', new ConnectionError(publishUrl, 0, 'Request failed: read ECONNRESET'), 4],
+  ];
+  for (const table of ['contoso_item', 'contoso_customizationlockexception']) {
+    for (const [what, publishError, attempts] of CASES) {
+      const enriching = await bundleWrapper(table, publishError);
+      const sdk = { enrichDefaultViews: enriching.enrichDefaultViews.bind(enriching) };
+      const halt = await buildHalt(defaultViewsSpec(table), sdk, ['views']);
+      assert.strictEqual(halt.code, 'ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `${what}, ${table}: the halt the runner raises for the SDK's own error`);
+      assert.match(halt.cause.message, new RegExp(`^enrichDefaultViews: 2 view\\(s\\) on '${table}' were saved but the publish FAILED, so none of them is live \\(`), `${what}, ${table}: the sentence is the bundle's`);
+      assert.strictEqual(isTransientHalt(halt), attempts > 1, `${what}, ${table}`);
+      assert.deepStrictEqual(await attemptsFor(halt), { attempts, retried: attempts - 1 }, `${what}, ${table}: how often the real retry loop runs the build`);
+    }
+  }
 });

@@ -110,6 +110,51 @@ test('judgeFailure: an SDK error that wraps a failed publish is read by the answ
   assert.strictEqual(isTransientHalt(new SdkError('VALIDATION_ERROR', `(HTTP 503 from ${publishUrl}: x) ${LABEL}`)), false, 'the exception is for the codes that wrap a failed publish, and no other typed error');
 });
 
+// The SDK's sentence around the answer it embeds names the maker's table, and a table's logical name has no space in it — but it can be a single word the rule looks for: `CustomizationLockException` is one
+// word, matched without word boundaries and ignoring case, and `contoso_customizationlockexception` is a valid logical name. So the sentence is cut away and only the answer inside it is read, as it is
+// where the SDK's own ConnectionError carries it (a status, a url, the service's words).
+test('judgeFailure: the sentence around a failed publish is never read — a table whose logical name holds a word of the rule does not turn a 403 into retries — and the answer it embeds is read as the ConnectionError it came from', () => {
+  const publishUrl = 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml';
+  const wrap = (answer, table = 'contoso_task') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
+  const NAMES = ['contoso_customizationlockexception', 'contoso_CustomizationLockException', 'cr1a2_customizationlockexception_log'];
+  for (const table of NAMES) {
+    // The status decides first, and the service's words are the answer's: "permission denied" has no word of the rule, so no status but the throttle and the gateway's is run again.
+    for (const status of [400, 401, 403, 404, 409, 412, 500, 501]) {
+      const failure = wrap(`HTTP ${status} from ${publishUrl}: permission denied`, table);
+      assert.strictEqual(isTransientHalt(failure), false, `${status} on ${table}`);
+      assert.strictEqual(retryPolicyFor(failure), RETRY.SERVICE, `${status}: it is the service's to say, and what it said is not transient`);
+      assert.strictEqual(judgeFailure(failure).text, 'permission denied', `${status}: the words read are the answer's, and nothing else of the sentence`);
+    }
+    assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: unable to verify the first certificate`, table)), false, `a certificate on ${table}`);
+    assert.strictEqual(isTransientHalt(new BuildHalt(`enrich default views for ${table} failed`, { phase: 'views', code: 'ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', recoverable: true, cause: wrap(`HTTP 403 from ${publishUrl}: permission denied`, table), retry: RETRY.SERVICE })), false, `through the halt the runner raises, on ${table}`);
+    // The controls: what the service really said is run again, for the same name.
+    for (const status of [429, 502, 503, 504]) assert.strictEqual(isTransientHalt(wrap(`HTTP ${status} from ${publishUrl}: Service Unavailable`, table)), true, `${status} on ${table}`);
+    assert.strictEqual(isTransientHalt(wrap(`HTTP 500 from ${publishUrl}: CustomizationLockException: another solution install is running`, table)), true, `a lock, in the answer, on ${table}`);
+    assert.strictEqual(isTransientHalt(wrap(`HTTP 409 from ${publishUrl}: Cannot start the requested operation. Please try again later.`, table)), true, `"try again later", in the answer, on ${table}`);
+    assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: read ECONNRESET`, table)), true, `a reset on ${table}`);
+  }
+  // A phrase that is only in what the sentence says around the answer is not the service's: neither the table, nor the sentence's own words about the saves.
+  assert.strictEqual(isTransientHalt(wrap(`HTTP 403 from ${publishUrl}: permission denied`, 'try_again_later_log')), false);
+  // The url is read no more than the table is: only what follows it is the answer.
+  assert.strictEqual(isTransientHalt(wrap('HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.2/CustomizationLockException: permission denied')), false, 'a word of the rule in the url');
+  assert.strictEqual(judgeFailure(wrap(`HTTP 403 from ${publishUrl}: permission denied: please contact your admin`)).text, 'permission denied: please contact your admin', 'the answer is whatever follows the first ": " after the url — its own colons are its own');
+  assert.strictEqual(judgeFailure(wrap(`HTTP 403 from ${publishUrl}: an answer that quotes (Re-publish the entity). Re-publish the entity to make them visible; the saves themselves are unaffected.`)).text, 'an answer that quotes (Re-publish the entity). Re-publish the entity to make them visible; the saves themselves are unaffected.', 'the sentence ends where the SDK ends it, so an answer that repeats its words is read whole');
+  // The words are read for a status the service answered and for nothing else: a transport failure has no words (a reset is decided from its code), a status of 0 is the transport.
+  assert.strictEqual(judgeFailure(wrap(`Transport failure reaching ${publishUrl}: Request failed: unable to verify the first certificate`)).text, '', 'no words for a transport failure');
+  // FAIL CLOSED: a sentence this code does not recognise — another wording, another shape of the embedded answer — decides nothing it could be wrong about. It is the refusal every typed error is.
+  for (const [what, message] of [
+    ['another wording of the sentence', `publishing the default views of 'contoso_task' failed (HTTP 503 from ${publishUrl}: Service Unavailable)`],
+    ['the sentence without its end', `enrichDefaultViews: 2 view(s) on 'contoso_task' were saved but the publish FAILED, so none of them is live (HTTP 503 from ${publishUrl}: Service Unavailable)`],
+    ['an answer that does not open as the SDK opens one', 'enrichDefaultViews: 2 view(s) on \'contoso_task\' were saved but the publish FAILED, so none of them is live (the service said: try again later). Re-publish the entity to make them visible; the saves themselves are unaffected.'],
+    ['a table name with a space in it, which is no logical name', `enrichDefaultViews: 2 view(s) on 'SQL timeout' were saved but the publish FAILED, so none of them is live (HTTP 503 from ${publishUrl}: Service Unavailable). Re-publish the entity to make them visible; the saves themselves are unaffected.`],
+    ['an url with a space in it, where nothing says where the answer starts', `enrichDefaultViews: 2 view(s) on 'contoso_task' were saved but the publish FAILED, so none of them is live (HTTP 503 from ${publishUrl}?$filter=name eq 'x': Service Unavailable). Re-publish the entity to make them visible; the saves themselves are unaffected.`],
+  ]) {
+    const failure = new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', message);
+    assert.strictEqual(isTransientHalt(failure), false, what);
+    assert.strictEqual(retryPolicyFor(failure), RETRY.NEVER, what);
+  }
+});
+
 test('judgeFailure: the service\'s words are read from the answer, never from where the request went — the url holds what the maker named', () => {
   assert.strictEqual(isTransientHalt(connectionError(500, 'The server is busy', URL_WITH_LABEL)), false, 'SQL Timeout in the url');
   assert.strictEqual(isTransientHalt(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205', URL_WITH_LABEL)), true, 'a deadlock victim, in the answer');

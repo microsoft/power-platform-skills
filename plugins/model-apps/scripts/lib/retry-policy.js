@@ -16,7 +16,8 @@
 //      A transport failure for another reason (a certificate, an unknown host) is not a blip.
 //   4. TYPE. An error the SDK or the plugin types — a string `code` that is not CONNECTION_ERROR and not a transport code: VALIDATION_ERROR, VERSION_CONFLICT, ARTIFACT_NOT_FOUND,
 //      APP_SOURCE_PATH, a file system error (ENOENT, EACCES) — is a refusal, whatever its message quotes, and no text is read from the chain. (A typed error that also carries a
-//      throttle status is still the service's answer: 2 comes first. And an SDK error that only WRAPS a failed publish — WRAPPED_SERVICE_CODES — is not a refusal: see there.)
+//      throttle status is still the service's answer: 2 comes first. And an SDK error that only WRAPS a failed publish — WRAPPED_SERVICE_CODES — is not a refusal: what it embeds is read as the failure it came
+//      from, and nothing of the sentence around it: see there.)
 //   5. WORDS. Only then, the service's own words: what an error DECLARES as such (`retryText`, outermost declaration), or else the message of each error in the chain that is not a
 //      BuildHalt — a halt's message is the plugin's own, and is never read. The SDK's ConnectionError opens with where the request went, which holds what the maker named in its
 //      query (`HTTP 400 from https://<org>/api/data/v9.2/roles?$filter=name eq 'SQL Timeout Reader': <the answer>`), so the lead is cut off and only the answer is read; a transport
@@ -48,13 +49,17 @@ const TRANSPORT_WORDS = /\b(?:ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|
 
 // The SDK errors that are typed and are still the service's to explain: the SDK words a sentence of its own around the error it caught and puts that error's message inside it, without
 // attaching it as a cause. `enrichDefaultViews` does so when the publish of the views it has saved fails (a build without --publish):
-//   enrichDefaultViews: 2 view(s) on 'contoso_task' were saved but the publish FAILED, so none of them is live (HTTP 503 from https://<org>/api/data/v9.2/PublishXml: Service Unavailable). Re-publish the entity to make them visible; …
-// That is not a refusal: the answer inside says whether a run again can help (a 503, a customization lock), as it did when the build read the whole message. So rule 4 leaves these codes alone, and the
-// status, the transport failure and the words of the embedded answer decide — the answer opens the way the SDK's ConnectionError does (`HTTP <status> from <url>: …`, `Transport failure reaching <url>: …`).
-// What the sentence quotes of its own is a table's logical name, which has no space in it for a phrase to be read out of.
+//   enrichDefaultViews: 2 view(s) on 'contoso_task' were saved but the publish FAILED, so none of them is live (HTTP 503 from https://<org>/api/data/v9.2/PublishXml: Service Unavailable). Re-publish the entity to make them visible; the saves themselves are unaffected.
+// That is not a refusal: the answer inside says whether a run again can help (a 503, a customization lock), as it did when the build read the whole message. So rule 4 leaves these codes alone — but ONLY the answer
+// inside is read, never the sentence around it: it names the maker's table, and a logical name has no space in it for a phrase to be read out of, yet it can be a word of the rule (`contoso_customizationlockexception`
+// is a valid name, and the rule matches that word anywhere, in any case). So the sentence is taken apart, anchored at both ends on the SDK's own fixed words, and what is inside the parentheses is read exactly as the
+// ConnectionError it came from is: `HTTP <status> from <url>: <the service's words>`, or `Transport failure reaching <url>: <the transport's words>` for status 0 (lib/maker-sdk.js, ConnectionError). The status decides
+// first, then a reset, then the words after the url — never the table, never the url. A sentence that does not read this way (another wording, an answer that does not open as a ConnectionError does, a table or an url
+// with a space in it, where nothing says where the answer starts) FAILS CLOSED: it is a typed refusal like any other, and nothing in it is read. A change of the sentence in a later SDK is caught by
+// tests/halt-retry-policy.test.js, which has the real bundle build it.
 const WRAPPED_SERVICE_CODES = Object.freeze(new Set(['ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED']));
-const EMBEDDED_STATUS = /\(HTTP (\d{3}) from /;
-const EMBEDDED_TRANSPORT = /\(Transport failure reaching /;
+const WRAPPER_SENTENCE = /^enrichDefaultViews: \d+ view\(s\) on '[^'\s]*' were saved but the publish FAILED, so none of them is live \(([\s\S]+)\)\. Re-publish the entity to make them visible; the saves themselves are unaffected\.$/;
+const EMBEDDED_ANSWER = /^(?:HTTP (\d{3}) from|Transport failure reaching) (\S+): ([\s\S]*)$/;
 
 // How far down the chain of causes the decision looks. Deeper than any failure the build raises (a halt, a step's wrapper, the SDK's error, the system error under it).
 const MAX_CHAIN = 8;
@@ -92,12 +97,16 @@ const isConnectionError = (error) => error.code === 'CONNECTION_ERROR';
 const typedCode = (error) => (typeof error.code === 'string' && error.code ? error.code : null);
 const messageOf = (error) => (typeof error.message === 'string' ? error.message : '');
 
-// An SDK error that carries a failed request's answer in its message (WRAPPED_SERVICE_CODES), and the status that answer opens with: 0 for any other error.
+// An SDK error that carries a failed request's answer in its message (WRAPPED_SERVICE_CODES) — the code alone says nothing of whether that answer can be read.
 const wrapsServiceFailure = (error) => WRAPPED_SERVICE_CODES.has(typedCode(error));
-function embeddedStatus(error) {
-  const found = wrapsServiceFailure(error) ? EMBEDDED_STATUS.exec(messageOf(error)) : null;
-  return found ? Number(found[1]) : 0;
+// What such an error embeds, as { status, answer }: the status the service answered (0 for a failure of the transport) and the words after the url — or null when the sentence is not the one the SDK words (see
+// WRAPPED_SERVICE_CODES), and then nothing of it is read.
+function embeddedFailure(error) {
+  const sentence = wrapsServiceFailure(error) ? WRAPPER_SENTENCE.exec(messageOf(error)) : null;
+  const answer = sentence ? EMBEDDED_ANSWER.exec(sentence[1]) : null;
+  return answer ? { status: answer[1] === undefined ? 0 : Number(answer[1]), answer: answer[3] } : null;
 }
+const embeddedStatus = (error) => (embeddedFailure(error) || { status: 0 }).status;
 
 // The errors of a failure, outermost first: the error and its causes. A cause that is not an object (a response body held as a string) ends it; so does an SDK ConnectionError that
 // carries an HTTP status, whose `cause` is the response body and not an error — and a body is never read as one.
@@ -118,6 +127,8 @@ function causeChain(error) {
 //   HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.2/roles?$filter=name eq 'SQL Timeout Reader': Sql error: Generic SQL error. Sql Number: 1205
 //   Transport failure reaching https://contoso.crm.dynamics.com/api/data/v9.2/$batch: Request failed: read ECONNRESET
 function answerOf(error) {
+  const embedded = embeddedFailure(error);
+  if (embedded) return embedded.answer;
   const message = messageOf(error);
   if (isConnectionError(error) && typeof error.url === 'string' && Number.isInteger(error.statusCode)) {
     const lead = error.statusCode > 0 ? `HTTP ${error.statusCode} from ${error.url}: ` : `Transport failure reaching ${error.url}: `;
@@ -126,16 +137,19 @@ function answerOf(error) {
   return message;
 }
 
+// A failure of the transport, as an SDK ConnectionError of status 0 reports it, or as an SDK error that wraps one embeds it: there are no service words in it, only the transport's.
+const isTransportFailure = (error) => (isConnectionError(error) && error.statusCode === 0) || (embeddedFailure(error) || {}).status === 0;
+
 // A timeout or a reset of the transport.
 function isTransportBlip(error) {
   const code = typedCode(error);
   if (code && TRANSPORT_CODES.has(code)) return true;
-  if (isConnectionError(error) && error.statusCode === 0 && TRANSPORT_WORDS.test(answerOf(error))) return true;
-  return wrapsServiceFailure(error) && EMBEDDED_TRANSPORT.test(messageOf(error)) && TRANSPORT_WORDS.test(messageOf(error));
+  return isTransportFailure(error) && TRANSPORT_WORDS.test(answerOf(error));
 }
 
-// An error the SDK or the plugin has typed: its code says what it is, and what it is is not a service hiccup.
-const isTypedRefusal = (error) => !isHalt(error) && typedCode(error) !== null && !isConnectionError(error) && !TRANSPORT_CODES.has(typedCode(error)) && !wrapsServiceFailure(error);
+// An error the SDK or the plugin has typed: its code says what it is, and what it is is not a service hiccup. The one exception is an SDK error that wraps a failed publish in a sentence this code can take apart
+// (embeddedFailure): it is the service's answer, and is judged as such. One it cannot take apart is a refusal like any other.
+const isTypedRefusal = (error) => !isHalt(error) && typedCode(error) !== null && !isConnectionError(error) && !TRANSPORT_CODES.has(typedCode(error)) && embeddedFailure(error) === null;
 
 // What the rule above finds in a failure: { never, transientStatus, transport, text }. `never` covers the explicit marker and a typed refusal with nothing transient beside it; `text` is the
 // service's own words, empty when none may be read.
@@ -148,9 +162,8 @@ function judgeFailure(error) {
   if (explicit || (typed && !transientStatus && !transport)) return { never: true, transientStatus, transport, text: '' };
   if (typed) return { never: false, transientStatus, transport, text: '' };
   const declared = chain.find((e) => typeof e.retryText === 'string');
-  const words = declared
-    ? declared.retryText
-    : chain.filter((e) => !isHalt(e) && !(isConnectionError(e) && e.statusCode === 0)).map(answerOf).join(' ');
+  // A failure of the transport has no words to read (rule 3 decided it), and a halt's own message is never read.
+  const words = declared ? declared.retryText : chain.filter((e) => !isHalt(e) && !isTransportFailure(e)).map(answerOf).join(' ');
   return { never: false, transientStatus, transport, text: words };
 }
 
