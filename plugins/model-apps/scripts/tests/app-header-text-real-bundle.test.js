@@ -535,8 +535,12 @@ for (const [faultWhat, fault] of COMPARISON_FAULTS) {
         assert.deepStrictEqual(headerWrites(f.writes), [], 'no PATCH of the appmodule was sent');
         assert.deepStrictEqual(f.state.refused, [], 'so nothing a String column cannot take reached the server');
         assert.deepStrictEqual(sitemapWrites(f.writes), [], 'and the navigation was not written: the SDK writes the header first');
-        // No PATCH of anything, and nothing published. (What a rebuild does before its push — the app's solution membership, an idempotent add — is not the push's.)
-        assert.deepStrictEqual(f.writes.filter((w) => w.verb === 'patch' || /\/PublishXml/.test(w.url)), []);
+        // No PATCH of anything, and the app not published. (What a rebuild does before its push — the app's solution membership, an idempotent add — is not the push's.) The one publish
+        // before the push is the request that publishes, ahead of the app's write, the tables whose forms that write adds (publishTablesBeforeApp): it is made before the push is tried,
+        // whichever way the push then ends, and it names tables only.
+        assert.deepStrictEqual(f.writes.filter((w) => w.verb === 'patch'), []);
+        const publishes = f.writes.filter((w) => /\/PublishXml/.test(w.url)).map((w) => String((w.body || {}).ParameterXml || ''));
+        assert.ok(publishes.length <= 1 && publishes.every((xml) => /^<importexportxml><entities>(<entity>[a-z_]+<\/entity>)+<\/entities><\/importexportxml>$/.test(xml)), `at most the one request for the tables before the app, and no publish of the app: ${JSON.stringify(publishes)}`);
         assert.deepStrictEqual([f.state.name, f.state.description], [shape, 'Tickets'], 'the app is as it was');
         assert.strictEqual(warnings.filter((w) => /^app "Probe": its description was not applied: the app's name /.test(w)).length, 1, `the held-back description is still reported, once: ${JSON.stringify(warnings)}`);
 
