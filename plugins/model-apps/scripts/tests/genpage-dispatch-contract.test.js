@@ -467,8 +467,9 @@ test('the docs say the gates hold a page to what a run would add, and say what e
 
 // A page write that cannot say what it did must never be sent again blindly, and what the maker or the agent does next depends on what the write can have done. The SDK writes a page as ONE atomic change
 // set, so a write either landed whole or wrote nothing; an unknown outcome is settled by reading the page, and the advice an update's refusal carries depends on the caller. AGENTS.md says so,
-// and says every page-write error is final for the build's own retry. scripts/tests/genpage-sdk.test.js and genpage-sdk-real-bundle.test.js run what the backend does.
-test('AGENTS.md says a page write whose outcome is not known is never sent again blindly, where each caller is pointed, and that every page-write error is final for the build\'s retry', () => {
+// and says every page-write error is final for the build's own retry — but a throttle (HTTP 429) the service refused the write with, which is waited out and sent again, and left to the build when it outlasts the waits.
+// scripts/tests/genpage-sdk.test.js and genpage-sdk-real-bundle.test.js run what the backend does.
+test('AGENTS.md says a page write whose outcome is not known is never sent again blindly, where each caller is pointed, that a throttled write is waited out and why that is safe, and that every other page-write error is final for the build\'s retry', () => {
   const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
   assert.match(agents, /\*\*Generative pages are written through the SDK\*\*/);
   assert.match(agents, /so a write either landed whole or wrote nothing/);
@@ -482,8 +483,17 @@ test('AGENTS.md says a page write whose outcome is not known is never sent again
   assert.match(agents, /The turn keeps \*\*one identity\*\* across that read \(`newTurn\.id`, minted per update\)/);
   // The advice depends on the caller: the upload script has a base marker to check against, the build has none and reads every page again when it runs.
   assert.match(agents, /the upload script's message names `genpage-base\.js check` \(the deployed page against the file and the base marker beside it\), and a re-run goes back through the script's own guards; the \*\*build\*\* keeps no base marker and reads every page again when it runs, so its message says to run the build again\./);
-  // Every error is final for the build's own retry of a halt that reads as transient — the page's name and the service's words are what that retry reads.
-  assert.match(agents, /\*\*Every page-write error carries `transient: false`\*\*/);
+  // A refusal with a throttle is the one write that is not a known failure of the page: it is waited out and sent again, and why that cannot write a page twice is written down.
+  assert.match(agents, /\*\*A first send the service refuses with a throttle \(HTTP 429\) is waited out and sent again\*\* \(`pushThroughThrottle`\), where any other 4xx is final\./);
+  assert.match(agents, /A 429 is the service declining to \*start\* the request, so the atomic change set committed nothing; and sending it again cannot write a page twice: a create's ids are minted before the first send/);
+  assert.match(agents, /an update's turn carries one identity from which the SDK derives its messages' ids\. An update's send goes through the SDK's version check again, so a page someone saved during the wait is refused as `VERSION_CONFLICT` and not written over/);
+  assert.match(agents, /an update's writes carry `If-Match: \*`, and `lib\/sdk-http-client\.js` re-sends a `\$batch` only when it is made of conditional deletes/);
+  assert.match(agents, /at most six sends in all, and `dispose\(\)` ends a wait that is under way\. A \*\*resumed\*\* create is not sent again this way/);
+  assert.match(agents, /alone among the errors a page write raises — \*\*without\*\* `transient: false` \(`throttledError`\), so the build runs the phase again/);
+  assert.match(agents, /A 502, 503 or 504 is not waited out as a throttle: an intermediary answered, so the write may have committed and it is \*unknown\*/);
+  assert.match(agents, /A write that was throttled and then taken says so in the `warnings` of its result \(which the build prints with the page's name\)/);
+  // Every other error is final for the build's own retry of a halt that reads as transient — the page's name and the service's words are what that retry reads.
+  assert.match(agents, /\*\*Every other page-write error carries `transient: false`\*\*/);
   assert.match(agents, /so without the marker a re-run would send a write again\./);
   assert.match(agents, /A \*publish\* that fails after a write is not an error: it is returned \(`publish\.kind: 'failed'`\) with the page's id, because the caller must still record that the page exists\./);
   assert.match(agents, /halts on it as `pages-publish-failed` \(re-runnable: the page is reused and published, not written again\)/);

@@ -414,13 +414,214 @@ test('create: a refused RESEND while the first send lands late — the page is f
 });
 
 test('create: a refusal of the FIRST send is the one case where the refusal settles it — nothing was sent before it, so nothing was written, and no id is claimed', async () => {
-  const sdk = new FakeSdk().script('push', { drop: connectionError(429, 'Too many requests') });
+  // A 4xx that is not a throttle: the service looked at the request and refused it. (A throttle is waited out and sent again: the tests below.)
+  const sdk = new FakeSdk().script('push', { drop: connectionError(403, 'Forbidden') });
   await assert.rejects(backend(sdk).create({ name: 'P', source: 'src' }), (e) => {
     assert.strictEqual(e.outcome, 'nothing');
     assert.strictEqual(e.pageId, undefined, 'there is no page to look for');
+    assert.strictEqual(e.transient, false);
     return true;
   });
   assert.strictEqual(sdk.count('fetchArtifact'), 0);
+});
+
+// ── A write the service refuses with a throttle (HTTP 429) ─────────────────────────────────────────────────────────────
+// A 429 is the service declining to START the request, so nothing in the atomic change set committed; and the page's id (a create) and the turn's identity (an update) are minted before the first send, so even a
+// refused request that had somehow been processed would meet itself on the id, and be rolled back whole. So a first send that is refused with a throttle is waited out — the schedule of every other throttled
+// write (the HTTP client's: 1 s, 2 s, 4 s, 8 s, 8 s, and what the answer's Retry-After asks) — and sent again, as many as six sends in all. Each send of an update goes through the SDK's own version check again,
+// so a page that someone changed during the wait is refused, never overwritten. What outlasts the wait is not final: nothing was written, so the build may run again. A refusal that is not a throttle — or
+// is the answer to a send while an earlier one is still open — settles what it always did (the tests above).
+const pausing = () => {
+  const slept = [];
+  return { slept, deps: { sleep: async (ms) => { slept.push(ms); }, random: () => 0 } };
+};
+const throttled = (note = 'Too many requests.') => ({ drop: connectionError(429, note) });
+
+test('create: a first send refused with a throttle (429) wrote nothing — it waits as the schedule says and sends again: the page is created once, and nothing is read', async () => {
+  const sdk = new FakeSdk().script('push', throttled(), throttled(), 'commit');
+  const { slept, deps } = pausing();
+  const out = await backend(sdk, deps).create({ name: 'P', source: 'src' });
+  assert.strictEqual(out.pageId, ID);
+  assert.deepStrictEqual(slept, [1000, 2000], 'the schedule of every other throttled write');
+  assert.strictEqual(sdk.count('pushArtifact'), 3);
+  assert.strictEqual(sdk.count('fetchArtifact'), 0, 'a refusal that proves nothing was written needs no read to settle it');
+  assert.strictEqual(sdk.pages.size, 1, 'one page, under the id minted before the first send');
+  assert.deepStrictEqual(new Set(sdk.of('createArtifact').map((c) => c.args[1].id)), new Set([ID]));
+  assert.strictEqual(sdk.count('publishArtifact'), 1);
+  assert.deepStrictEqual(out.warnings, ['the service throttled the write of generative page "P" (HTTP 429) 2 times: a refused request writes nothing, so it was sent again after waiting 1 s, 2 s, and written once'], 'the result says why it was slow');
+});
+
+test('create: a throttle that outlasts the waits is not final — nothing was written, the error says so and reads as the service\'s to say: six sends in all, the schedule\'s five waits, no read', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const { retryPolicyFor } = require('../lib/retry-policy.js');
+  const sdk = new FakeSdk().script('push', ...Array.from({ length: 6 }, () => throttled('Too many requests, try again later')), 'commit');
+  const { slept, deps } = pausing();
+  await assert.rejects(backend(sdk, deps).create({ name: 'SQL Timeouts', source: 'src' }), (e) => {
+    assert.strictEqual(e.outcome, 'nothing');
+    assert.strictEqual(e.pageId, undefined, 'there is no page to look for');
+    assert.notStrictEqual(e.transient, false, 'not marked: a run again cannot send anything twice, because nothing was written');
+    assert.match(e.message, /"SQL Timeouts" was not created \(nothing was written\)/);
+    assert.match(e.message, /429/);
+    assert.match(e.message, /throttle/i);
+    assert.strictEqual(e.cause.statusCode, 429, 'the failure itself is the cause, which is what the build decides from');
+    assert.strictEqual(isTransientHalt(e), true);
+    assert.strictEqual(isTransientHalt(new BuildHalt(`pages failed: ${e.message}`, { phase: 'pages', code: 'sdk-error', cause: e, retry: retryPolicyFor(e) })), true, 'as the runner wraps it');
+    return true;
+  });
+  assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000]);
+  assert.strictEqual(sdk.count('pushArtifact'), 6, 'a seventh is never sent');
+  assert.strictEqual(sdk.count('fetchArtifact'), 0);
+  assert.strictEqual(sdk.pages.size, 0);
+});
+
+test('create: after a throttle the next send is judged as any first send is — a refusal that is not a throttle settles it, an unknown outcome is read for', async () => {
+  const refused = new FakeSdk().script('push', throttled(), { drop: connectionError(403, 'Forbidden') }, 'commit');
+  const { slept, deps } = pausing();
+  await assert.rejects(backend(refused, deps).create({ name: 'P', source: 'src' }), (e) => e.outcome === 'nothing' && e.transient === false && /Forbidden/.test(e.message));
+  assert.deepStrictEqual(slept, [1000]);
+  assert.strictEqual(refused.count('pushArtifact'), 2);
+  assert.strictEqual(refused.count('fetchArtifact'), 0);
+
+  // The throttle is not an open send, so the resend after an unknown outcome still comes once, after the read: three sends in all, never a fourth.
+  const lost = new FakeSdk().script('push', throttled(), { drop: reset() }, 'commit');
+  const again = pausing();
+  const out = await backend(lost, again.deps).create({ name: 'P', source: 'src' });
+  assert.strictEqual(out.pageId, ID);
+  assert.strictEqual(lost.count('pushArtifact'), 3);
+  assert.strictEqual(lost.count('fetchArtifact'), 1, 'the page was read once, for the answer that was lost');
+  assert.strictEqual(lost.pages.size, 1);
+  assert.deepStrictEqual(again.slept, [1000], 'the resend after an unknown outcome is not waited for');
+
+  const twice = new FakeSdk().script('push', throttled(), { drop: reset() }, { drop: reset() }, 'commit');
+  await assert.rejects(backend(twice, pausing().deps).create({ name: 'P', source: 'src' }), (e) => e.outcome === 'unknown' && e.transient === false && /was sent twice and neither answer could be used/.test(e.message));
+  assert.strictEqual(twice.count('pushArtifact'), 3, 'one refused, two that got no answer: never a fourth');
+});
+
+test('create (resumed): a throttle on the first send is not waited out — an earlier request is still open, and a refusal of this send says nothing about it', async () => {
+  const sdk = new FakeSdk().script('push', throttled(), 'commit');
+  const { slept, deps } = pausing();
+  await assert.rejects(backend(sdk, deps).create({ name: 'P', source: 'src', pageId: ID }), (e) => e.outcome === 'unknown' && e.transient === false && e.pageId === ID);
+  assert.deepStrictEqual(slept, []);
+  assert.strictEqual(sdk.count('pushArtifact'), 1, 'it was not sent again');
+});
+
+test('create: a backend that is disposed while a throttle is waited out sends nothing after it', async () => {
+  const sdk = new FakeSdk().script('push', throttled(), 'commit');
+  // A lent SDK keeps its workspace somewhere dispose() cannot close, so it gives the operation under way (this one: it is asleep inside dispose) the time to end; here, a moment.
+  const genpage = backend(sdk, { sleep: async () => { await genpage.dispose(); }, random: () => 0, drainMs: 10 });
+  await assert.rejects(genpage.create({ name: 'P', source: 'src' }), (e) => e.code === 'GENPAGE_BACKEND_CLOSED' && e.transient === false);
+  assert.strictEqual(sdk.count('pushArtifact'), 1);
+});
+
+test('update: a send refused with a throttle (429) wrote nothing — it waits and sends again; the turn is recorded once and the page is read only for its baseline', async () => {
+  const sdk = seeded().script('push', throttled(), throttled(), 'commit');
+  const { slept, deps } = pausing();
+  const out = await backend(sdk, deps).update(ID, { source: 'new', prompt: 'Change it', agentMessage: 'Changed' });
+  assert.deepStrictEqual(slept, [1000, 2000]);
+  assert.strictEqual(sdk.count('pushArtifact'), 3);
+  assert.strictEqual(sdk.count('fetchArtifact'), 1, 'the baseline: nothing was written, so there is nothing to settle by reading');
+  assert.strictEqual(sdk.pages.get(ID).source, 'new');
+  assert.deepStrictEqual(sdk.pages.get(ID).conversation.map((m) => m.message), ['first prompt', 'first reply', 'Change it', 'Changed'], 'the turn is recorded once');
+  assert.strictEqual(sdk.count('publishArtifact'), 1);
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /^the service throttled the write of generative page "[^"]*" \([0-9a-f-]{36}\) \(HTTP 429\) 2 times: a refused request writes nothing, so it was sent again after waiting 1 s, 2 s, and written once$/, 'the result says why it was slow');
+});
+
+test('update: a page someone changed while the throttle was waited out is refused by the SDK\'s version check on the next send — nothing is written over it', async () => {
+  const conflict = { report: { saved: false, error: sdkError('VERSION_CONFLICT', 'Version conflict (412)') } };
+  const sdk = seeded().script('push', throttled(), conflict, 'commit');
+  const { slept, deps } = pausing();
+  await assert.rejects(backend(sdk, deps).update(ID, { source: 'new', caller: 'build' }), (e) => {
+    assert.strictEqual(e.code, 'VERSION_CONFLICT');
+    assert.strictEqual(e.outcome, 'nothing');
+    assert.strictEqual(e.transient, false, 'a page someone else changed is not run again by the build: the next run reads it first');
+    assert.match(e.message, /changed by someone else after it was read, and nothing was written/);
+    return true;
+  });
+  assert.deepStrictEqual(slept, [1000]);
+  assert.strictEqual(sdk.count('pushArtifact'), 2, 'the resend was the SDK\'s to refuse, and it did');
+  assert.strictEqual(sdk.pages.get(ID).source, deployed().source, 'the page is as it was');
+});
+
+test('update: a throttle that outlasts the waits is not final either — nothing was written, and it reads as the service\'s to say', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const sdk = seeded({ name: 'Concurrent Deletes' }).script('push', ...Array.from({ length: 6 }, () => throttled('Too many requests, try again later')), 'commit');
+  const { slept, deps } = pausing();
+  await assert.rejects(backend(sdk, deps).update(ID, { source: 'new' }), (e) => {
+    assert.strictEqual(e.outcome, 'nothing');
+    assert.strictEqual(e.pageId, ID);
+    assert.notStrictEqual(e.transient, false);
+    assert.match(e.message, /failed and wrote nothing/);
+    assert.match(e.message, /429/);
+    assert.strictEqual(isTransientHalt(e), true);
+    return true;
+  });
+  assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000]);
+  assert.strictEqual(sdk.count('pushArtifact'), 6);
+  assert.strictEqual(sdk.pages.get(ID).source, deployed().source, 'the page is as it was');
+  assert.strictEqual(sdk.count('publishArtifact'), 0);
+});
+
+test('update: after a throttle the next send is judged as any first send is — an unknown outcome is read for, and the resend after it is still once', async () => {
+  const sdk = seeded().script('push', throttled(), { drop: reset() }, 'commit');
+  const { slept, deps } = pausing();
+  const out = await backend(sdk, deps).update(ID, { source: 'new', prompt: 'Change it', agentMessage: 'Changed' });
+  assert.deepStrictEqual(slept, [1000]);
+  assert.strictEqual(sdk.count('pushArtifact'), 3);
+  assert.strictEqual(sdk.count('fetchArtifact'), 2, 'the baseline, then the read for the answer that was lost');
+  assert.deepStrictEqual(sdk.pages.get(ID).conversation.map((m) => m.message), ['first prompt', 'first reply', 'Change it', 'Changed'], 'the turn is recorded once, not twice');
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /^the service throttled the write of generative page .* \(HTTP 429\) once: .* after waiting 1 s, and written once$/);
+});
+
+// The SDK reports a refused request as a typed error that carries the status and the body of the answer, and not its headers — so the `Retry-After` of a throttle is lost on the way up. The backend listens to the answers of
+// the one request that writes a page (`postRaw`, the `$batch`) as they pass, and keeps the longest wait a refused one asked for; the client is otherwise left as it is.
+test('watchThrottles: the wait a refused $batch asks for is heard — in the answer\'s headers or in a refused part\'s own — and the answer is passed on as it came', async () => {
+  const { watchThrottles } = require('../lib/genpage-sdk.js');
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  const multipart = (...operations) => ['--batchresponse_1', ...operations.flatMap((operation) => ['--changesetresponse_1', 'Content-Type: application/http', '', operation, '']), '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n');
+  const cases = [
+    ['a throttle with its Retry-After in seconds', { status: 429, headers: { 'retry-after': '7' }, body: '{}' }, [7000]],
+    ['the header name in any case', { status: 429, headers: { 'Retry-After': '7' }, body: '{}' }, [7000]],
+    ['a gateway answer with an HTTP date', { status: 503, headers: { 'retry-after': 'Wed, 30 Sep 2026 10:00:20 GMT' }, body: '' }, [20000]],
+    ['a wait longer than the cap', { status: 429, headers: { 'retry-after': '600' }, body: '{}' }, [60000]],
+    ['the wait in a refused part\'s own headers', { status: 429, headers: {}, body: multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30\r\nContent-Type: application/json') }, [30000]],
+    ['the longer of the answer\'s wait and the part\'s', { status: 429, headers: { 'retry-after': '50' }, body: multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 10') }, [50000]],
+    ['a throttle that asks for nothing', { status: 429, headers: {}, body: '{}' }, []],
+    ['a value that is no wait', { status: 429, headers: { 'retry-after': 'soon' }, body: '{}' }, []],
+    ['an answer that was not refused', { status: 200, headers: { 'retry-after': '7' }, body: '' }, []],
+    ['a refusal that is no request to try again later', { status: 400, headers: { 'retry-after': '7' }, body: '{}' }, []],
+    ['an answer with no headers at all', { status: 503, body: 'gateway' }, []],
+  ];
+  for (const [what, answer, want] of cases) {
+    const heard = [];
+    const sent = [];
+    const client = { get: async () => ({ status: 200, headers: {}, body: 'read' }), postRaw: async (...args) => { sent.push(args); return answer; }, patchRaw: async () => ({ status: 204, headers: {}, body: '' }) };
+    const original = client.postRaw;
+    const watched = watchThrottles(client, (ms) => heard.push(ms), () => NOW);
+    const options = { headers: { 'Content-Type': 'multipart/mixed; boundary=batch_1' } };
+    assert.strictEqual(await watched.postRaw('https://contoso.crm.dynamics.com/api/data/v9.0/$batch', 'body', options), answer, `${what}: the answer is the client's own`);
+    assert.deepStrictEqual(sent, [['https://contoso.crm.dynamics.com/api/data/v9.0/$batch', 'body', options]], `${what}: the request is passed on as it is`);
+    assert.deepStrictEqual(heard, want, what);
+    assert.strictEqual(client.postRaw, original, `${what}: the client itself is not changed`);
+    assert.strictEqual((await watched.get('https://contoso.crm.dynamics.com/x')).body, 'read', `${what}: every other request is the client's`);
+    assert.strictEqual(typeof watched.patchRaw, 'function');
+  }
+
+  // Only the `$batch` is listened to: a read that is throttled is the client's own to wait for, and a client that cannot write a page atomically is left as it is.
+  const heard = [];
+  const reads = watchThrottles({ get: async () => ({ status: 429, headers: { 'retry-after': '9' }, body: '' }), postRaw: async () => ({ status: 204, headers: {}, body: '' }) }, (ms) => heard.push(ms));
+  await reads.get('https://contoso.crm.dynamics.com/x');
+  assert.deepStrictEqual(heard, []);
+  const bare = { get: async () => ({ status: 200, headers: {}, body: '' }) };
+  assert.strictEqual(watchThrottles(bare, (ms) => heard.push(ms)), bare);
+  assert.strictEqual(watchThrottles(undefined, () => {}), undefined);
+
+  // A request that fails in transport raises what it raised.
+  const failing = watchThrottles({ postRaw: async () => { throw new Error('Request failed: read ECONNRESET'); } }, (ms) => heard.push(ms));
+  await assert.rejects(failing.postRaw('https://contoso.crm.dynamics.com/api/data/v9.0/$batch', 'body', {}), /ECONNRESET/);
+  assert.deepStrictEqual(heard, []);
 });
 
 test('create: an id the caller supplies is the one the page is created under, and beforeSend hears it before anything is sent — a resume can reuse the id it recorded', async () => {
@@ -1033,7 +1234,7 @@ test('no error a page write raises is one the build retries — whatever the pag
     const scenarios = [
       ['create: sent twice, no usable answer', () => backend(new FakeSdk().script('push', { drop: TRY_AGAIN }, { drop: TRY_AGAIN })).create({ name: pageName, source: 'x' })],
       ['create: unknown outcome, the read fails', () => backend(new FakeSdk().script('push', { lose: TRY_AGAIN }).script('fetch', TRY_AGAIN)).create({ name: pageName, source: 'x' })],
-      ['create: a 4xx', () => backend(new FakeSdk().script('push', { drop: connectionError(429, 'Too many requests, try again later') })).create({ name: pageName, source: 'x' })],
+      ['create: a 4xx', () => backend(new FakeSdk().script('push', { drop: connectionError(403, 'Forbidden — try again later') })).create({ name: pageName, source: 'x' })],
       ['create: refused before writing', async () => { const sdk = new FakeSdk(); sdk.createError = sdkError('VALIDATION_ERROR', 'SQL timeout while resolving the data source'); return backend(sdk).create({ name: pageName, source: 'x' }); }],
       ['update: overtaken', () => backend(seeded({ name: pageName }).script('push', { drop: TRY_AGAIN }).script('fetch', undefined, (s, t, id) => { s.pages.get(id).source = 'theirs'; })).update(ID, { source: 'new' })],
       ['update: sent twice, no usable answer', () => backend(seeded({ name: pageName }).script('push', { drop: TRY_AGAIN }, { drop: TRY_AGAIN })).update(ID, { source: 'new' })],

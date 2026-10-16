@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createAzHttpClient, retryAfterMs, isBatchThrottled, isColumnCreateBatch, batchRetryAfterMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
+const { createAzHttpClient, retryAfterMs, isBatchThrottled, isColumnCreateBatch, batchRetryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
 
 // A fake transport that records the last request and returns a scripted response.
 function fakeTransport(scripted) {
@@ -815,6 +815,15 @@ test('a batch refused operation by operation waits for the Retry-After in the re
   assert.strictEqual(batchRetryAfterMs({ body: batchAnswer(['HTTP/1.1 204 No Content\r\nRetry-After: 30']) }), 0, 'only a refused operation\u2019s wait counts');
   assert.strictEqual(batchRetryAfterMs({ body: '{"error":{}}' }), 0, 'a plain answer has no parts');
   assert.strictEqual(batchRetryAfterMs(undefined), 0);
+});
+
+// The page backend waits out a throttled page write on this very schedule (a page's change set is not re-sent by the client: lib/genpage-sdk.js), so it is one function the client and the backend share.
+test('throttleBackoffMs is the schedule every throttled request waits on: 1 s, 2 s, 4 s, 8 s, 8 s — and up to a quarter more in jitter', () => {
+  assert.deepStrictEqual([0, 1, 2, 3, 4, 5, 6].map((attempt) => throttleBackoffMs(attempt, () => 0)), [1000, 2000, 4000, 8000, 8000, 8000, 8000]);
+  assert.deepStrictEqual([0, 1, 3, 4].map((attempt) => throttleBackoffMs(attempt, () => 0.5)), [1125, 2250, 9000, 9000], 'the jitter is on top of the capped base, so a wait can pass 8 s');
+  assert.strictEqual(throttleBackoffMs(0, () => 0.999999), 1249, 'and stays under a quarter of the base');
+  const real = throttleBackoffMs(2);
+  assert.ok(real >= 4000 && real < 5000, `the default source of randomness: ${real}`);
 });
 
 test('isBatchThrottled reads the answer, not the outer status alone', () => {

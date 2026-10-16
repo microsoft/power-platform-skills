@@ -4036,3 +4036,153 @@ test('deploy: a record the earlier proof wrote (schema 2) does not skip a publis
     fs.rmSync(appDir, { recursive: true, force: true });
   }
 });
+
+// ── A page write the service throttles ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A throttle (HTTP 429) refuses a request before it starts, so the page's change set committed nothing, and the page backend waits it out and sends it again inside the pages phase — under the id it minted (a create) or
+// the turn identity it recorded (an update) — without the build running again. One that outlasts the backend's waits wrote nothing either and reads as the service's to say: the build runs again, as for any transient
+// failure, and the page is written once, by the run that gets through. These tests drive the REAL build, its retry loop, the real backend and the real SDK over the stateful fake of the page tables, with the waits recorded
+// and not taken.
+const throttleBackend = (server, slept) => makeGenpageSdk(PAGE_SERVICE, { httpClient: server.http(), sleep: async (ms) => { slept.push(ms); }, random: () => 0 });
+const pagesWorkspace = (appDir) => ({ workspaceDir: path.join(appDir, '.maker-workspace') });
+
+test('deploy: a page write the service throttles once (429) is waited out inside the pages phase — the build runs once, and the page, its turn and its publish are each there once', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  server.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '2' } } : undefined);
+  const slept = [];
+  const genpage = throttleBackend(server, slept);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage, runOpts: pagesWorkspace(appDir) });
+    assert.strictEqual(out.halt, null);
+    assert.strictEqual(out.result.ok, true);
+    assert.deepStrictEqual([out.attempts, out.retried], [1, 0], 'the backend rode it out: the build did not have to run again');
+    assert.deepStrictEqual(slept, [2000], 'the wait the answer asked for');
+    const id = out.result.created.pages.p;
+    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'one page');
+    assert.strictEqual(server.messagesOf(id).length, 2, 'the prompt and the reply, once');
+    assert.deepStrictEqual(server.published, [id], 'published once');
+    assert.strictEqual(server.batches.length, 2, 'the change set that was refused, and the one that was taken');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and the record of the creation under way is consumed');
+  } finally {
+    await genpage.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: a throttle that outlasts the backend\'s waits writes nothing and is run again by the build — the page, a "SQL Timeouts" one, is there once, from the run that got through', async () => {
+  const { appDir, spec } = onePageApp('SQL Timeouts');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  // The six sends of the first run are refused, and the first of the second run is taken.
+  server.failBatch = (n) => (n <= 6 ? 429 : undefined);
+  const slept = [];
+  const genpage = throttleBackend(server, slept);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage, runOpts: pagesWorkspace(appDir) });
+    assert.strictEqual(out.halt, null);
+    assert.strictEqual(out.result.ok, true);
+    assert.deepStrictEqual([out.attempts, out.retried], [2, 1], 'the build ran again: the throttle is the service\'s to say, whatever the page is called');
+    assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000], 'the waits between the first run\'s sends');
+    const id = out.result.created.pages.p;
+    assert.deepStrictEqual([...server.state.projects.keys()], [id], 'one page');
+    assert.strictEqual(server.messagesOf(id).length, 2);
+    assert.strictEqual(server.batches.length, 7, 'six refused change sets, then the one that was taken');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+  } finally {
+    await genpage.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: a throttle that never lifts ends the build with nothing written and nothing left behind — a healthy build afterwards creates the page once', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  server.failBatch = () => 429;
+  const genpage = throttleBackend(server, []);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage, runOpts: pagesWorkspace(appDir) });
+    assert.ok(out.halt, 'the build stops');
+    assert.strictEqual(out.halt.phase, 'pages');
+    assert.match(out.halt.message, /was not created \(nothing was written\)[\s\S]*throttled/);
+    assert.ok(out.attempts > 1, `the failure reads as the service's, so the build ran again: ${out.attempts} run(s)`);
+    assert.strictEqual(out.retried, out.attempts - 1);
+    assert.strictEqual(server.batches.length, out.attempts * 6, 'six sends in each run, and no seventh');
+    assert.strictEqual(server.state.projects.size, 0, 'nothing was written');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'a creation that was refused every time leaves no record of one under way');
+    assert.deepStrictEqual(receiptsOf(spec, appDir), []);
+  } finally { await genpage.dispose(); }
+
+  // The service lets requests through again: the next build creates the page, once.
+  server.failBatch = undefined;
+  const healthy = throttleBackend(server, []);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: healthy, runOpts: pagesWorkspace(appDir) });
+    assert.strictEqual(out.halt, null);
+    assert.strictEqual(out.result.ok, true);
+    const id = out.result.created.pages.p;
+    assert.deepStrictEqual([...server.state.projects.keys()], [id]);
+    assert.strictEqual(server.messagesOf(id).length, 2);
+  } finally {
+    await healthy.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: an edited page whose update the service throttles is waited out and written once — its turn is recorded once, and the build runs once; one that is throttled for good is not half-written', async () => {
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const first = throttleBackend(server, []);
+  let id;
+  try {
+    id = (await driveBuild(spec, appDir, { genpage: first, runOpts: pagesWorkspace(appDir) })).result.created.pages.p;
+  } finally { await first.dispose(); }
+  assert.strictEqual(server.messagesOf(id).length, 2);
+
+  // The author edits the page; the update's change set is refused once.
+  const edited = PAGE_SOURCE.replace('Page</div>', 'Edited</div>');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), edited, 'utf8');
+  const sentBefore = server.batches.length;
+  server.failBatch = (n) => (n === sentBefore + 1 ? { status: 429, headers: { 'retry-after': '4' } } : undefined);
+  const slept = [];
+  const second = throttleBackend(server, slept);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: second, runOpts: pagesWorkspace(appDir) });
+    assert.strictEqual(out.halt, null);
+    assert.deepStrictEqual([out.attempts, out.retried], [1, 0]);
+    assert.deepStrictEqual(slept, [4000]);
+    assert.strictEqual(server.rowText(id, 'src/pages/page.tsx'), edited, 'the page holds the edit');
+    assert.strictEqual(server.messagesOf(id).length, 4, 'the turn is recorded once, after the create\'s own');
+    assert.strictEqual(server.batches.length, sentBefore + 2);
+  } finally { await second.dispose(); }
+
+  // Another edit that the service throttles every time: the page is as it was, no turn is recorded, and the next healthy build writes it once.
+  const again = edited.replace('Edited</div>', 'Edited again</div>');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), again, 'utf8');
+  server.failBatch = () => 429;
+  const stuck = throttleBackend(server, []);
+  const writesBefore = server.batches.length;
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: stuck, runOpts: pagesWorkspace(appDir) });
+    assert.ok(out.halt, 'the build stops');
+    assert.match(out.halt.message, /failed and wrote nothing[\s\S]*throttled/);
+    assert.ok(out.attempts > 1, 'after running again');
+    assert.strictEqual(server.batches.length, writesBefore + out.attempts * 6);
+    assert.strictEqual(server.rowText(id, 'src/pages/page.tsx'), edited, 'the page is as it was');
+    assert.strictEqual(server.messagesOf(id).length, 4, 'and no turn was recorded');
+  } finally { await stuck.dispose(); }
+
+  server.failBatch = undefined;
+  const healthy = throttleBackend(server, []);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: healthy, runOpts: pagesWorkspace(appDir) });
+    assert.strictEqual(out.halt, null);
+    assert.strictEqual(server.rowText(id, 'src/pages/page.tsx'), again);
+    assert.strictEqual(server.messagesOf(id).length, 6, 'one more turn, once');
+  } finally {
+    await healthy.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});

@@ -120,8 +120,8 @@ class FakeGenPageServer {
     this.afterCommit = undefined;
     // Called when a `$batch` ARRIVES, before it is executed. Throw to model a request that never reached the server.
     this.beforeBatch = undefined;
-    // `(n) => status | undefined`: answer an HTTP status for the whole of `$batch` request number n (1-based) instead of executing it —
-    // a throttle (429) or a gateway answer. Nothing is written: the request was refused.
+    // `(n) => status | { status, headers } | undefined`: answer an HTTP status for the whole of `$batch` request number n (1-based) instead of executing it —
+    // a throttle (429) or a gateway answer, with the headers the answer carries (`{ 'retry-after': '7' }`) when it is given as an object. Nothing is written: the request was refused.
     this.failBatch = undefined;
     // `(n) => boolean`: STRAND `$batch` request number n. The client is told it failed — a transport timeout, as the plugin's client
     // reports one — but the request is not lost: it is held, and COMMITS when `landStranded()` is called, as a request still in flight
@@ -298,7 +298,7 @@ class FakeGenPageServer {
     this.requests.push({ method: 'POST', path: '/$batch', headers: {}, body, batched: false });
     if (this.beforeBatch) this.beforeBatch(body);
     const refused = this.failBatch ? this.failBatch(this.batches.length) : undefined;
-    if (refused !== undefined) return Promise.resolve(json(refused, { error: { message: 'injected' } }));
+    if (refused !== undefined) return Promise.resolve(typeof refused === 'object' ? json(refused.status, { error: { message: 'injected' } }, refused.headers || {}) : json(refused, { error: { message: 'injected' } }));
     if (this.strandBatch && this.strandBatch(this.batches.length)) {
       this.stranded.push(body);
       return Promise.reject(new Error('Request failed: connect ETIMEDOUT'));

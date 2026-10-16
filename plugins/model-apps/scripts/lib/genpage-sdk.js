@@ -72,10 +72,18 @@ function suppliedButBlank(value) {
 // `transient: false` — on itself or anywhere along its causes — is never run again, whatever its text quotes (the page's name is the maker's: "SQL Timeouts", "Concurrent Deletes"). So every error a page write raises says
 // so. A write that failed for a known reason would only fail again, and one whose outcome is not
 // known must not be sent by a re-run that does not know it: a create would mint a second page beside the first one if it landed,
-// and an update could record its turn twice.
+// and an update could record its turn twice. The one write that is NOT final is a throttle that outlasted every wait (throttledError): nothing was written, and the service's load is not the maker's to fix.
 function genpageError(message, props = {}) {
   const { cause, ...rest } = props;
   return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { transient: false }, rest);
+}
+
+// The error of a write the service REFUSED with a throttle every time it was sent — the one page-write error that does not say `transient: false`. Nothing was written: a request the service declines to start commits nothing, and
+// the page's id (a create) and the turn's identity (an update) were fixed before the first send, so a run again sends the same page, never a second one. What refused it is the service's load, which a run again a little later
+// may find lifted, so the build is left to read the failure itself — the SDK's own 429, kept as the cause (lib/retry-policy.js) — and run the phase again, as it does for every failure that is the service's to say.
+function throttledError(message, props = {}) {
+  const { cause, ...rest } = props;
+  return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), rest);
 }
 
 const messageOf = (error) => String((error && error.message) || error);
@@ -145,6 +153,39 @@ function writeOutcome(error) {
     return Number.isInteger(status) && status >= 400 && status < 500 ? 'nothing' : 'unknown';
   }
   return PRE_WRITE_REFUSALS.has(error.code) ? 'nothing' : 'unknown';
+}
+
+// A send the service refused with a throttle: the SDK's typed `ConnectionError` with status 429, read from its structure and never from its words. Dataverse's service protection limits answer a request they will not
+// START this way (HTTP 429, with a `Retry-After`), so no part of the change set ran.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations
+function isThrottle(error) {
+  return isSdkError(error) && error.code === 'CONNECTION_ERROR' && error.statusCode === 429;
+}
+
+// How many times a first send the service refused with a throttle is sent AGAIN: five, so six sends in all — the attempts the HTTP client gives every other throttled request (sdk-http-client.js `maxAttempts`), and on the
+// same schedule (throttleBackoffMs: 1 s, 2 s, 4 s, 8 s, 8 s, plus jitter), or longer when the answer's `Retry-After` asks for it (up to RETRY_AFTER_CAP_MS). A write rides out the ~23 s of service protection a read does, and no longer.
+const THROTTLE_RESENDS = 5;
+
+// Wraps the HTTP client the SDK is given so the backend can read the `Retry-After` of a page write the service refused. The SDK reports a refused request as a typed error that carries the status and the body of the answer but NOT
+// its headers, so the wait the service asked for would be lost on the way up; the wrapper sees the answer first. Only the one request that writes a page is listened to — the `$batch`, `postRaw` — and only the answers that ask a
+// caller to try again later: a 429, and the 5xx of a gateway (RFC 9110 defines `Retry-After` for a 503, and a 502 or 504 that carries one asks the same). Whatever such an answer asks — in its own headers, or in the headers of a
+// refused operation inside it, as the HTTP client reads both (retryAfterMs, batchRetryAfterMs) and capped as it caps — is handed to `record(ms)`. The answer itself is returned as it came, and every other request is the client's own.
+// A client that has no `postRaw` is returned as it is: the SDK refuses to write a page through it anyway.
+// See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after and https://www.rfc-editor.org/rfc/rfc6585#section-4 (429)
+function watchThrottles(client, record, now = Date.now) {
+  if (!client || typeof client.postRaw !== 'function') return client;
+  const { retryAfterMs, batchRetryAfterMs } = require('./sdk-http-client.js');
+  // `Object.create` keeps every other method, own or inherited, exactly as the client has it.
+  const watched = Object.create(client);
+  watched.postRaw = async (...args) => {
+    const answer = await client.postRaw(...args);
+    if (answer && (answer.status === 429 || answer.status >= 500)) {
+      const asked = Math.max(retryAfterMs(answer.headers, now()), batchRetryAfterMs({ body: answer.body }, now()));
+      if (asked > 0) record(asked);
+    }
+    return answer;
+  };
+  return watched;
 }
 
 // The page's source as TEXT — the one place bytes become text, and it runs ONCE. The caller that reads a file calls this on the bytes it
@@ -533,6 +574,30 @@ function makeGenpageSdk(env, deps = {}) {
   const running = new Set();
   const closedError = () => genpageError('the page backend was disposed, or its workspace was discarded: an operation that was under way is cut short, and none can start on a backend that was disposed', { code: 'GENPAGE_BACKEND_CLOSED' });
 
+  // ── Waiting out a throttle ──
+  // The wait the last refused answer of a page write asked for (its `Retry-After`, as watchThrottles heard it): pushOnce clears it before a push and hands it to the caller in the push's own answer.
+  let asked = 0;
+  const random = deps.random || Math.random;
+  // The waits in progress. release() ends them, and an operation that wakes to a backend that was closed, or whose workspace was discarded, sends nothing more: `generation` is what release() moves.
+  let generation = 0;
+  const sleepers = new Set();
+  // `deps.sleep` is a test seam (the waits are recorded, not taken). Either way a wait is one release() can end — a build that is told to stop must not go on to send a write after a pause it was woken from.
+  function pause(ms) {
+    return new Promise((resolve) => {
+      let timer;
+      const wake = () => { clearTimeout(timer); sleepers.delete(wake); resolve(); };
+      sleepers.add(wake);
+      if (deps.sleep) Promise.resolve().then(() => deps.sleep(ms)).then(wake, wake);
+      else timer = setTimeout(wake, ms);
+    });
+  }
+  async function pauseFor(ms) {
+    if (!(ms > 0)) return;
+    const epoch = generation;
+    await pause(ms);
+    if (closed || epoch !== generation) throw closedError();
+  }
+
   // The SDK, made on first use. `languageCode` only matters to an app edit (a sitemap title is written in it) and is the SDK's
   // construction-time option, so one SDK per language.
   async function getSdk(languageCode) {
@@ -553,7 +618,8 @@ function makeGenpageSdk(env, deps = {}) {
           const sdk = createMakerSdk({
             workspaceStorage: guard.storage,
             instanceUrl: env,
-            httpClient: deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env),
+            // Watched, so a refused page write's Retry-After reaches this backend (watchThrottles): the SDK's error for it carries no headers.
+            httpClient: watchThrottles(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env), (ms) => { asked = Math.max(asked, ms); }, deps.now),
             // A page's file downloads overlap (four at a time): a read of a page is its rows' bytes, one request each.
             readConcurrency: 4,
             ...(options.languageCode ? { languageCode: options.languageCode } : {}),
@@ -598,23 +664,52 @@ function makeGenpageSdk(env, deps = {}) {
   // One push, its answer sorted by what it says about the page. The SDK REPORTS some failures instead of throwing them
   // (`saved: false` with an `error`): an id that already exists, and a version conflict.
   //   { saved: true, result }
-  //   { saved: false, outcome: 'nothing' | 'unknown' | 'exists' | 'conflict', error }
+  //   { saved: false, outcome: 'nothing' | 'unknown' | 'exists' | 'conflict', error, asked, throttled? }
+  // `asked` is the wait, in milliseconds, that the answer to this push asked for in its `Retry-After` (watchThrottles; 0 when it asked for none). `throttled` is there when a 'nothing' was the service's throttle (HTTP 429).
   // A create whose ids already exist — an earlier request that carried them landed — comes back one of two ways, and neither is ever "nothing was
   // written": the SDK reports the service's 412 as `ARTIFACT_ALREADY_EXISTS` ('exists'), and a change set the service rolled back for it is an answer the
   // SDK cannot account for (a CONNECTION_ERROR with status 200, "cannot be confirmed": 'unknown'). Both end in a read of the id.
   async function pushOnce(sdk, id) {
+    asked = 0;
+    // `asked` is read as the push ends, before anything else can answer.
+    const unsaved = (outcome, error) => ({ saved: false, outcome, error, asked, ...(outcome === 'nothing' && isThrottle(error) ? { throttled: true } : {}) });
     let result;
     try {
       result = await sdk.pushArtifact('genPage', id);
     } catch (error) {
-      return { saved: false, outcome: writeOutcome(error), error };
+      return unsaved(writeOutcome(error), error);
     }
     if (result && result.saved === true) return { saved: true, result };
     const error = result && result.error;
-    if (error && error.code === 'ARTIFACT_ALREADY_EXISTS') return { saved: false, outcome: 'exists', error };
-    if (error && error.code === 'VERSION_CONFLICT') return { saved: false, outcome: 'conflict', error };
-    return { saved: false, outcome: error ? writeOutcome(error) : 'unknown', error: error || new Error('the SDK did not report the page as saved') };
+    if (error && error.code === 'ARTIFACT_ALREADY_EXISTS') return unsaved('exists', error);
+    if (error && error.code === 'VERSION_CONFLICT') return unsaved('conflict', error);
+    return unsaved(error ? writeOutcome(error) : 'unknown', error || new Error('the SDK did not report the page as saved'));
   }
+
+  // A first send the service REFUSED with a throttle (HTTP 429), waited out and sent again — at most THROTTLE_RESENDS times, six sends in all — and the answer of the last one. The wait is the HTTP client's schedule for every
+  // other throttled request (throttleBackoffMs), or what the answer's Retry-After asks when that is longer (capped, and read by watchThrottles). Why a send that follows a 429 is safe, and why it is made here and not by the
+  // HTTP client re-sending the request (as it does for a conditional delete):
+  //  - A 429 is the service declining to START the request: the change set is atomic, so nothing in it committed. The page is as unsent as it was.
+  //  - And even a request that had been processed could not write a page twice. A create's ids — the page's, and those of its rows — are minted before the first send, so a second send meets the first and is rolled back whole (the
+  //    property the resend after an unknown outcome rests on, too). An update's turn carries an identity from which the SDK derives the ids of its messages, so a second send addresses the same two rows and collides the same way.
+  //  - The SDK compares the version tokens of the page's rows with the ones this operation read, on EVERY push: an update sent again after the wait is refused (`VERSION_CONFLICT`, reported by value and judged by the caller as any
+  //    first send's) when anyone changed the page meanwhile, and is never sent over what they saved. The update's writes carry `If-Match: *`, so a request replayed by the HTTP client after the wait would skip that check —
+  //    which is why that client leaves a page's change set to this backend (sdk-http-client.js, `isConditionalDeleteBatch`).
+  //  - It is bounded (the sends, and each wait), and cut short by dispose() (pauseFor).
+  // A refusal that is not a throttle, and a send that got no usable answer, are not waited out: they are settled as they always were by the caller.
+  async function pushThroughThrottle(sdk, id, first, waited = []) {
+    let pushed = first;
+    for (let resend = 0; !pushed.saved && pushed.throttled && resend < THROTTLE_RESENDS; resend += 1) {
+      const { throttleBackoffMs } = require('./sdk-http-client.js');
+      const wait = Math.max(throttleBackoffMs(resend, random), pushed.asked);
+      await pauseFor(wait);
+      waited.push(wait);
+      pushed = await pushOnce(sdk, id);
+    }
+    return pushed;
+  }
+  // What an operation says of a write that was throttled and then taken: why it was slow, and that the page was written once. `waited` is what pushThroughThrottle recorded.
+  const throttleNote = (what, waited) => `the service throttled the write of ${what} (HTTP 429) ${waited.length === 1 ? 'once' : `${waited.length} times`}: a refused request writes nothing, so it was sent again after waiting ${waited.map((ms) => `${Math.round(ms / 100) / 10} s`).join(', ')}, and written once`;
 
   // Publish the page and prove the published copy is the one just written. The SDK answers `publish.kind`:
   //   'verified'      the published projection serves exactly what was saved
@@ -719,6 +814,10 @@ function makeGenpageSdk(env, deps = {}) {
     //   a known failure             -> reported with the SDK's own code and message, and not sent again: the SDK refused it before
     //                                  writing, or the server answered the change set with a 4xx (atomic: nothing was written). It is
     //                                  a known failure of the page only while no earlier send is still open.
+    //   a throttle (HTTP 429)       -> the service declined to start the request, so nothing was written; with no earlier send open it is waited out — the HTTP
+    //                                  client's schedule, or what the answer's Retry-After asks — and sent again under the same id, six sends in all
+    //                                  (pushThroughThrottle says why that is safe). One that outlasts them is reported as nothing written and, alone among
+    //                                  the errors a page write raises, is not marked `transient: false`: the build may run again.
     //   an UNKNOWN outcome          -> read the id. Present: it landed (see "a page found" below). Absent: nothing was written YET, so the
     //                                  create is sent ONCE more under the SAME id: a first send that lands late collides on the id
     //                                  — no second page can exist — and that collision, like a second unknown, is settled by reading
@@ -783,16 +882,27 @@ function makeGenpageSdk(env, deps = {}) {
 
       const warnings = [];
       let pushed = await pushOnce(sdk, id);
+      // A first send the service refused with a throttle wrote nothing, and is waited out and sent again under the same id (pushThroughThrottle). Not when a send is already open — a resumed create: what the refusal says is then
+      // about this send alone, and the request an earlier call gave up on can still land, so the refusal is judged below, by reading the page, as it always was.
+      const waited = [];
+      if (!open.length) pushed = await pushThroughThrottle(sdk, id, pushed, waited);
+      if (waited.length) warnings.push(throttleNote(`generative page ${who}`, waited));
       for (let send = 1; !pushed.saved; send += 1) {
         const refused = pushed.outcome === 'nothing';
         // Settled: there has been no other send, and this one is known to have written nothing.
         if (refused && !open.length) {
-          throw genpageError(`generative page ${who} was not created (nothing was written): ${messageOf(pushed.error)}`, { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing' });
+          const failure = { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing' };
+          // A throttle that outlasted every wait is the one refusal a run again can change.
+          throw pushed.throttled
+            ? throttledError(`generative page ${who} was not created (nothing was written): the service throttled all ${THROTTLE_RESENDS + 1} sends, waiting between them (${messageOf(pushed.error)})`, failure)
+            : genpageError(`generative page ${who} was not created (nothing was written): ${messageOf(pushed.error)}`, failure);
         }
         if (!refused) open.push(pushed.error);
         // What the sends said, for a message: a refused send is named as such, because it says nothing about the ones before it.
         const said = [...open.map(messageOf), ...(refused ? [`a later send was refused: ${messageOf(pushed.error)}`] : [])].join('; ');
         const code = (open[0] && open[0].code) || (pushed.error && pushed.error.code);
+        // An answer that asked to wait (a gateway's 503 with a Retry-After) is waited for before the page is read: a request still on its way has had that time to land.
+        await pauseFor(pushed.asked);
         const found = await readServer(sdk, id);
         if (found.kind === 'unreadable') {
           throw genpageError(`generative page ${who}: the outcome of creating it is unknown (${said}), and reading the page it would have (id ${id}) failed too (${messageOf(found.error)}). It was not sent again. Look for page ${id} before creating it again.`, { code, cause: open[0] || pushed.error, outcome: 'unknown', pageId: id });
@@ -820,7 +930,7 @@ function makeGenpageSdk(env, deps = {}) {
             }
             return {
               pageId: id, name, publish: updated.publish, fingerprint, ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}),
-              warnings: [`the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
+              warnings: [...warnings, `the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
             };
           }
           warnings.push(`the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed that it had been written — so it was not sent again`);
@@ -868,6 +978,8 @@ function makeGenpageSdk(env, deps = {}) {
     //   anything else                           -> refused, with where to look first. `caller: 'build'` words that for the build,
     //                                              which keeps no base marker and reads every page again when it runs; otherwise the
     //                                              standalone upload's `genpage-base.js check` (`appId` and `sourceFile` name its arguments).
+    // A first send the service refuses with a throttle (HTTP 429) wrote nothing: it is waited out and sent again (pushThroughThrottle), and the SDK's version check runs again on that send, so a page someone saved meanwhile
+    // is refused (`VERSION_CONFLICT`), never written over. A throttle that outlasts the waits is reported as nothing written and is not marked `transient: false`, so the build may run again.
     async update(pageId, args = {}) {
       if (!GUID_RE.test(String(pageId || ''))) throw genpageError(`'${pageId}' is not a page id`, { code: 'GENPAGE_ID_INVALID' });
       const id = String(pageId).toLowerCase();
@@ -933,7 +1045,10 @@ function makeGenpageSdk(env, deps = {}) {
       } catch (error) {
         throw genpageError(`the update of generative page ${who()} was refused before anything was written: ${messageOf(error)}`, { code: error && error.code, cause: error, outcome: 'nothing', pageId: id });
       }
-      let pushed = await pushOnce(sdk, id);
+      // A first send the service refused with a throttle wrote nothing, and is waited out and sent again — the SDK's version check runs again on each push (pushThroughThrottle).
+      const waited = [];
+      let pushed = await pushThroughThrottle(sdk, id, await pushOnce(sdk, id), waited);
+      if (waited.length) warnings.push(throttleNote(`generative page ${who()}`, waited));
       for (let send = 1; !pushed.saved; send += 1) {
         // The one outcome that is known: the first send is the only one so far, and it wrote nothing. A version conflict is that when it is the first —
         // the SDK compared the page's version tokens before it wrote anything and found them moved — and so is a refusal or a 4xx. Every later failure
@@ -943,8 +1058,14 @@ function makeGenpageSdk(env, deps = {}) {
           throw genpageError(`the update of generative page ${who()} was refused because the page was changed by someone else after it was read, and nothing was written (${messageOf(pushed.error)}). Read the page again and apply the change to what it holds now.`, { code: 'VERSION_CONFLICT', cause: pushed.error, outcome: 'nothing', pageId: id });
         }
         if (send === 1 && pushed.outcome === 'nothing') {
-          throw genpageError(`the update of generative page ${who()} failed and wrote nothing: ${messageOf(pushed.error)}`, { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing', pageId: id });
+          const failure = { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing', pageId: id };
+          // A throttle that outlasted every wait is the one refusal a run again can change.
+          throw pushed.throttled
+            ? throttledError(`the update of generative page ${who()} failed and wrote nothing: the service throttled all ${THROTTLE_RESENDS + 1} sends, waiting between them (${messageOf(pushed.error)})`, failure)
+            : genpageError(`the update of generative page ${who()} failed and wrote nothing: ${messageOf(pushed.error)}`, failure);
         }
+        // An answer that asked to wait (a gateway's 503 with a Retry-After) is waited for before the page is read: a request still on its way has had that time to land.
+        await pauseFor(pushed.asked);
         const now = await readServer(sdk, id);
         if (now.kind !== 'present') {
           throw genpageError(`the update of generative page ${who()} MAY HAVE LANDED (${messageOf(pushed.error)}), and ${now.kind === 'absent' ? 'the page can no longer be read — it was deleted' : `reading it failed (${messageOf(now.error)})`}. It was NOT sent again. ${lookFirst()}`, { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'unknown', pageId: id });
@@ -1457,6 +1578,9 @@ function makeGenpageSdk(env, deps = {}) {
   //   from here, so its owner — who removes the folder after this — is given the time the operations still running on it need to end, at
   //   most `deps.drainMs` (10 s, the time the page reads this replaced were given to let go of their folders).
   function release(waitMs) {
+    // A throttle that is being waited out is ended: the operation wakes to a closed backend and sends nothing more.
+    generation += 1;
+    for (const wake of [...sleepers]) wake();
     const workspaces = made.splice(0);
     for (const { guard } of workspaces) guard.close();
     byLanguage.clear();
@@ -1569,5 +1693,5 @@ async function appsNaming(sdk, pageId) {
 
 module.exports = {
   makeGenpageSdk, unescapePacName, suppliedButBlank, sourceText, dataSourcesOf, promptTranscript, configJson, pageFolderFiles,
-  genPagesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, GUID_RE,
+  genPagesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, watchThrottles, GUID_RE,
 };

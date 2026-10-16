@@ -764,6 +764,244 @@ test('REAL BUNDLE: an update whose resend is refused (429) while the first send 
   });
 });
 
+// ── A write the service REFUSES with a throttle (HTTP 429) is waited out and sent again ─────────────────────────────────────────────
+// What makes the second send safe: a 429 is the service declining to start the request, so the atomic change set committed nothing; the page's id and the turn's identity were minted before the first send, so a
+// request that WAS processed would collide on them and be rolled back whole; and the SDK's own version check runs again on the resend, so a page someone changed during the wait is refused, not overwritten.
+// `sleep` and `random` are the backend's seams: the waits are recorded and not taken.
+const quickly = () => {
+  const slept = [];
+  return { slept, deps: { sleep: async (ms) => { slept.push(ms); }, random: () => 0 } };
+};
+
+test('REAL BUNDLE: a create the service refuses with a throttle (429) wrote nothing — it waits what the answer\'s Retry-After asks, and goes again: one page, one turn, one publish', async () => {
+  const server = makeServer();
+  server.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '7' } } : undefined);
+  const { slept, deps } = quickly();
+  await withBackend(server, async (genpage) => {
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+    assert.deepStrictEqual(projectIds(server), [out.pageId], 'one page');
+    assert.strictEqual(server.batches.length, 2, 'the change set went out twice: the first refused, the second taken');
+    assert.deepStrictEqual(slept, [7000], 'the wait the service asked for, which is longer than the schedule\'s first');
+    assert.deepStrictEqual(snapshot(server, out.pageId).messages, ['p', 'r'], 'the turn is in the conversation once');
+    assert.strictEqual(out.publish.kind, 'verified');
+    assert.deepStrictEqual(server.published, [out.pageId]);
+    assert.deepStrictEqual(out.warnings, ['the service throttled the write of generative page "Overview" (HTTP 429) once: a refused request writes nothing, so it was sent again after waiting 7 s, and written once'], 'the result says why it was slow');
+  }, deps);
+});
+
+test('REAL BUNDLE: what a throttled answer asks for is waited out up to a cap, and the schedule is the floor — no header, a short one, a long one', async () => {
+  for (const [what, answer, waits] of [
+    ['no Retry-After', 429, [1000]],
+    ['one shorter than the schedule', { status: 429, headers: { 'retry-after': '0' } }, [1000]],
+    ['one longer than the cap', { status: 429, headers: { 'Retry-After': '600' } }, [60000]],
+  ]) {
+    const server = makeServer();
+    server.failBatch = (n) => (n === 1 ? answer : undefined);
+    const { slept, deps } = quickly();
+    await withBackend(server, async (genpage) => {
+      const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+      assert.deepStrictEqual(projectIds(server), [out.pageId], what);
+      assert.deepStrictEqual(slept, waits, what);
+    }, deps);
+  }
+});
+
+// Each wait is the LONGER of the schedule (which grows with every refusal) and what the answer asks, so a Retry-After shorter than the schedule does not hold it back, and one longer than it is not cut short.
+test('REAL BUNDLE: every wait is the longer of the schedule and the Retry-After — three refusals asking for one second wait 1 s, 2 s and 4 s; three asking for thirty wait thirty each', async () => {
+  for (const [header, waits] of [['1', [1000, 2000, 4000]], ['30', [30000, 30000, 30000]]]) {
+    const server = makeServer();
+    server.failBatch = (n) => (n <= 3 ? { status: 429, headers: { 'retry-after': header } } : undefined);
+    const { slept, deps } = quickly();
+    await withBackend(server, async (genpage) => {
+      const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+      assert.deepStrictEqual(projectIds(server), [out.pageId], `Retry-After: ${header}`);
+      assert.strictEqual(server.batches.length, 4);
+      assert.deepStrictEqual(slept, waits, `Retry-After: ${header}`);
+    }, deps);
+  }
+});
+
+test('REAL BUNDLE: an update the service refuses with a throttle (429) waits and goes again — the turn is recorded once and only what differs is written', async () => {
+  const server = makeServer();
+  const { slept, deps } = quickly();
+  await withBackend(server, async (genpage) => {
+    const { pageId } = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'first', agentMessage: 'ok' });
+    server.failBatch = (n) => (n === 2 ? { status: 429, headers: { 'retry-after': '3' } } : undefined);
+    server.requests.length = 0;
+    const out = await genpage.update(pageId, { source: SOURCE.replace('Hello', 'Ninth'), prompt: 'ninth', agentMessage: 'done' });
+    assert.deepStrictEqual(slept, [3000]);
+    assert.strictEqual(server.batches.length, 3, 'the create, the update that was refused, and the update that was taken');
+    assert.deepStrictEqual(snapshot(server, pageId).messages, ['first', 'ok', 'ninth', 'done'], 'the turn is recorded once');
+    assert.strictEqual(snapshot(server, pageId).files[PAGE_TSX], SOURCE.replace('Hello', 'Ninth'));
+    assert.strictEqual(out.publish.kind, 'verified');
+    assert.match(out.warnings.join('\n'), /^the service throttled the write of generative page "Overview" \([0-9a-f-]{36}\) \(HTTP 429\) once: a refused request writes nothing, so it was sent again after waiting 3 s, and written once$/);
+    assert.deepStrictEqual(describeWrites(server, pageId), [
+      '[batch] PATCH file src/pages/page.tsx',
+      '[batch] PATCH file src/pages/page.compiled',
+      '[batch] PATCH project',
+      '[batch] POST /agentconversationmessages',
+      '[batch] POST /agentconversationmessages',
+    ], 'what the change set that was taken wrote — the refused one wrote nothing — and no other row');
+  }, deps);
+});
+
+// The wait is a window in which someone else can save the page. The SDK compares the version tokens of the page's rows with the ones this operation read first, on EVERY push — so the resend is refused when they
+// moved, and nothing is written over what the other writer saved. (An HTTP-level resend of the same request could not do this: its `If-Match: *` writes carry no version, and the check had already been made.)
+test('REAL BUNDLE: a page another writer saves while an update waits out a throttle is NOT overwritten — the SDK\'s version check refuses the resend, and no second change set is sent', async () => {
+  const server = makeServer();
+  const theirs = 'export default function Theirs() { return null; }\n';
+  let pageId;
+  const slept = [];
+  await withBackend(server, async (genpage) => {
+    ({ pageId } = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'first', agentMessage: 'ok' }));
+    server.failBatch = (n) => (n === 2 ? 429 : undefined);
+    const batches = server.batches.length;
+    const error = await genpage.update(pageId, { source: SOURCE.replace('Hello', 'Tenth'), prompt: 'tenth', agentMessage: 'done', caller: 'build' }).then(() => null, (e) => e);
+    assert.ok(error, 'the update is refused');
+    assert.strictEqual(error.code, 'VERSION_CONFLICT');
+    assert.strictEqual(error.outcome, 'nothing', 'the SDK compared the version tokens before it wrote anything');
+    assert.strictEqual(error.transient, false, 'a page someone else changed is read again by the next run, not sent over by this one');
+    assert.strictEqual(server.batches.length, batches + 1, 'only the refused change set was ever sent: the resend stopped at the version check');
+    assert.strictEqual(snapshot(server, pageId).files[PAGE_TSX], theirs, 'the other writer\'s save is what the page holds');
+    assert.deepStrictEqual(snapshot(server, pageId).messages, ['first', 'ok'], 'and no turn was recorded');
+  }, { sleep: async (ms) => { slept.push(ms); server.otherWorkspaceDraft(pageId, PAGE_TSX, theirs); }, random: () => 0 });
+  assert.deepStrictEqual(slept, [1000]);
+});
+
+test('REAL BUNDLE: a throttle that outlasts the waits writes nothing and is not final — six change sets were sent and refused, no page exists, and a healthy run afterwards creates it', async () => {
+  const server = makeServer();
+  server.failBatch = () => 429;
+  const { slept, deps } = quickly();
+  await withBackend(server, async (genpage) => {
+    const error = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' }).then(() => null, (e) => e);
+    assert.ok(error);
+    assert.strictEqual(error.outcome, 'nothing');
+    assert.strictEqual(error.pageId, undefined);
+    assert.notStrictEqual(error.transient, false);
+    assert.strictEqual(error.cause.statusCode, 429);
+    assert.strictEqual(server.batches.length, 6);
+    assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000]);
+    assert.deepStrictEqual(projectIds(server), [], 'nothing was written');
+
+    server.failBatch = undefined;
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+    assert.deepStrictEqual(projectIds(server), [out.pageId]);
+    assert.deepStrictEqual(snapshot(server, out.pageId).messages, ['p', 'r']);
+  }, deps);
+});
+
+// The wait is the real one here (no `sleep` seam), and a minute long: dispose() ends it, the create stops with the backend's own "closed" error instead of sleeping on, and it sends nothing after the wake-up — a build that is
+// told to stop must not write a page a minute later, into a workspace that is gone.
+test('REAL BUNDLE: dispose() while a throttle is being waited out ends the wait at once — the create stops, sends nothing more, and leaves no timer behind', async () => {
+  const server = makeServer();
+  server.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '60' } } : undefined);
+  const { genpage, made } = harness(server);
+  const creating = genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' }).then(() => null, (e) => e);
+  while (server.batches.length < 1) await turns(1);
+  // The refusal is answered and the backend is asleep for the minute the answer asked for (the wait starts a few turns after the refused change set was received).
+  await turns(200);
+  assert.strictEqual(server.batches.length, 1, 'the change set was refused, and the wait began');
+  const ended = await Promise.race([
+    genpage.dispose().then(() => creating),
+    new Promise((resolve) => { setTimeout(() => resolve('the wait was not ended'), 10000).unref(); }),
+  ]);
+  assert.ok(ended && ended.code === 'GENPAGE_BACKEND_CLOSED', `the create ended with the backend's closed error: ${ended && (ended.code || ended)}`);
+  assert.strictEqual(server.batches.length, 1, 'and nothing was sent after the wait ended');
+  assert.deepStrictEqual(projectIds(server), []);
+  for (const dir of made) assert.ok(!fs.existsSync(dir), 'the workspace is gone');
+});
+
+// A 503 is a different answer: it comes from something between the caller and the service, so the request may have committed. It is settled the way every unknown outcome is — the page is read, and it is sent once
+// more only if it is not there — and when the answer asks to wait (Retry-After) the wait comes BEFORE that read, so a request still on its way has had the time to land. Without a Retry-After nothing is waited for.
+test('REAL BUNDLE: a send the gateway answers 503 with a Retry-After is read for only after the wait — and, not found, sent once more under the same id', async () => {
+  const server = makeServer();
+  server.failBatch = (n) => (n === 1 ? { status: 503, headers: { 'retry-after': '3' } } : undefined);
+  const before = [];
+  const slept = [];
+  await withBackend(server, async (genpage) => {
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+    assert.deepStrictEqual(slept, [3000]);
+    assert.deepStrictEqual(before, ['POST /$batch'], 'the last thing the service heard before the wait was the refused change set: the read comes after it');
+    assert.strictEqual(server.batches.length, 2);
+    const sends = server.requests.map((r, at) => (r.path === '/$batch' ? at : -1)).filter((at) => at >= 0);
+    assert.ok(server.requests.slice(sends[0] + 1, sends[1]).some((r) => r.method === 'GET' && /^\/uxagentprojects\(/.test(r.path)), 'the page was read between the two sends: a 503 may have committed, so it is reconciled and not simply sent again');
+    assert.deepStrictEqual(projectIds(server), [out.pageId], 'one page');
+    assert.deepStrictEqual(snapshot(server, out.pageId).messages, ['p', 'r']);
+  }, { sleep: async (ms) => { slept.push(ms); before.push(`${server.requests[server.requests.length - 1].method} ${server.requests[server.requests.length - 1].path}`); }, random: () => 0 });
+
+  // No Retry-After: the unknown outcome is read for at once, as it always was.
+  const plain = makeServer();
+  plain.failBatch = (n) => (n === 1 ? 503 : undefined);
+  const { slept: none, deps } = quickly();
+  await withBackend(plain, async (genpage) => {
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+    assert.deepStrictEqual(projectIds(plain), [out.pageId]);
+    assert.strictEqual(plain.batches.length, 2);
+  }, deps);
+  assert.deepStrictEqual(none, [], 'nothing to wait for');
+
+  // What an answer asks for is the business of that answer alone: a throttle that asked for 7 s, then a 503 that asked for nothing, is not waited for a second time before the page is read.
+  const mixed = makeServer();
+  mixed.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '7' } } : n === 2 ? 503 : undefined);
+  const { slept: once, deps: onceDeps } = quickly();
+  await withBackend(mixed, async (genpage) => {
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+    assert.deepStrictEqual(projectIds(mixed), [out.pageId]);
+    assert.strictEqual(mixed.batches.length, 3, 'refused, lost, and the one more that was sent after the page was read');
+  }, onceDeps);
+  assert.deepStrictEqual(once, [7000], 'the throttle\'s wait, and no other');
+});
+
+test('REAL BUNDLE: an update the gateway answers 503 with a Retry-After is read for only after the wait — and, found as it was, sent once more with the same turn', async () => {
+  const server = makeServer();
+  const before = [];
+  const slept = [];
+  await withBackend(server, async (genpage) => {
+    const { pageId } = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'first', agentMessage: 'ok' });
+    server.failBatch = (n) => (n === 2 ? { status: 503, headers: { 'retry-after': '4' } } : undefined);
+    const mark = server.requests.length;
+    const out = await genpage.update(pageId, { source: SOURCE.replace('Hello', 'Eleventh'), prompt: 'eleventh', agentMessage: 'done' });
+    assert.deepStrictEqual(slept, [4000]);
+    assert.deepStrictEqual(before, ['POST /$batch'], 'the last thing the service heard before the wait was the refused change set');
+    const sends = server.requests.map((r, at) => (r.path === '/$batch' && at >= mark ? at : -1)).filter((at) => at >= 0);
+    assert.strictEqual(sends.length, 2, 'the update was sent twice');
+    assert.ok(server.requests.slice(sends[0] + 1, sends[1]).some((r) => r.method === 'GET' && /^\/uxagentprojects\(/.test(r.path)), 'and the page was read between the two sends');
+    assert.deepStrictEqual(snapshot(server, pageId).messages, ['first', 'ok', 'eleventh', 'done'], 'the turn is recorded once');
+    assert.strictEqual(snapshot(server, pageId).files[PAGE_TSX], SOURCE.replace('Hello', 'Eleventh'));
+    assert.strictEqual(out.publish.kind, 'verified');
+  }, { sleep: async (ms) => { slept.push(ms); const last = server.requests[server.requests.length - 1]; before.push(`${last.method} ${last.path}`); }, random: () => 0 });
+});
+
+// The production client does not send a page's `$batch` again itself (sdk-http-client.test.js holds that: an update's `If-Match: *` writes would skip the SDK's version check), so the throttle reaches the backend, with the
+// headers its answer carried: that is what the backend reads Retry-After from.
+test('REAL BUNDLE: through the production HTTP client a throttled page write is not re-sent by the client — the backend waits what the answer\'s Retry-After asked, and sends it again', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const server = makeServer();
+  server.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '5' } } : undefined);
+  const raw = server.http();
+  const clientSleeps = [];
+  const client = createAzHttpClient(INSTANCE, {
+    getToken: () => 'TOK', sleep: async (ms) => { clientSleeps.push(ms); }, random: () => 0,
+    request: async ({ url, method, headers, body }) => {
+      const answer = method === 'POST' && url.endsWith('/$batch') ? await raw.postRaw(url, body, { headers })
+        : method === 'GET' ? await raw.get(url, { headers })
+          : method === 'DELETE' ? await raw.delete(url, { headers })
+            : method === 'PATCH' && Buffer.isBuffer(body) ? await raw.patchRaw(url, body, { headers })
+              : await raw[method.toLowerCase()](url, typeof body === 'string' ? JSON.parse(body) : body, { headers });
+      const text = typeof answer.body === 'string' || Buffer.isBuffer(answer.body) ? answer.body : JSON.stringify(answer.body === undefined ? null : answer.body);
+      return { statusCode: answer.status, headers: answer.headers || {}, body: text };
+    },
+  });
+  const { slept, deps } = quickly();
+  await withBackend(server, async (genpage) => {
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+    assert.deepStrictEqual(projectIds(server), [out.pageId]);
+    assert.strictEqual(server.batches.length, 2);
+    assert.deepStrictEqual(clientSleeps, [], 'the client did not back off and re-send: a page\'s change set is the backend\'s to send again');
+    assert.deepStrictEqual(slept, [5000], 'the backend waited what the answer asked');
+  }, { ...deps, httpClient: client });
+});
+
 // ── dispose() coordinates with what is still running ──────────────────────────────────────────────────────────────────────────
 
 // The race: the SDK's initialization is stopped at its first storage write, the reads are ended and the backend disposed, and the write is

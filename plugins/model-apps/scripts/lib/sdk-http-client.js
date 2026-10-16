@@ -71,6 +71,19 @@ function retryAfterMs(headers, now = Date.now()) {
   return Number.isFinite(ms) && ms > 0 ? Math.min(ms, RETRY_AFTER_CAP_MS) : 0;
 }
 
+/**
+ * The wait before send number `attempt` + 1 of a throttled request, in milliseconds: capped exponential backoff with jitter. Metadata customizations serialize on a per-entity lock; when several
+ * artifacts (forms/views/charts) for the same table retry concurrently, a fixed schedule wakes them in lockstep so they re-collide forever. Jitter de-syncs them.
+ * The BASE is capped at 8000 ms (1 s, 2 s, 4 s, 8 s, 8 s); the returned delay then adds up to +25% jitter on top, so the actual sleep can exceed 8000 ms (e.g. ~9000 ms). The cap is on the base, not the final sleep —
+ * jitter is intentionally allowed to push past it to de-sync lockstep collisions.
+ * It is exported because the page backend waits out a throttled page write on this same schedule (lib/genpage-sdk.js): a page's change set is not re-sent by this client (see `call`), so the wait is the backend's,
+ * and it is the one every other throttled request gets.
+ */
+function throttleBackoffMs(attempt, random = Math.random) {
+  const base = Math.min(1000 * 2 ** attempt, 8000);
+  return base + Math.floor(random() * base * 0.25);
+}
+
 /** True when a raw transport response says SQL rolled this request back as a deadlock victim. */
 function isSqlDeadlockVictim(res) {
   if (!res || res.statusCode !== 500 || res.body === undefined || res.body === null) return false;
@@ -315,16 +328,8 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // false "concurrent edit" — a build that failed over a write that had succeeded.
   const READ_TIMEOUT_MS = 60000;
   const WRITE_TIMEOUT_MS = 300000;
-  // Jittered, capped exponential backoff. Metadata customizations serialize on a per-entity
-  // lock; when several artifacts (forms/views/charts) for the same table retry concurrently,
-  // a fixed schedule wakes them in lockstep so they re-collide forever. Jitter de-syncs them.
-  const backoffMs = (attempt) => {
-    // The BASE is capped at 8000ms (1s,2s,4s,8s,8s); the returned delay then adds up to +25% jitter
-    // on top, so the actual sleep can exceed 8000ms (e.g. ~9000ms). The cap is on the base, not the
-    // final sleep — jitter is intentionally allowed to push past it to de-sync lockstep collisions.
-    const base = Math.min(1000 * 2 ** attempt, 8000);
-    return base + Math.floor(random() * base * 0.25);
-  };
+  // Jittered, capped exponential backoff (throttleBackoffMs, which says why).
+  const backoffMs = (attempt) => throttleBackoffMs(attempt, random);
   // The wait before re-sending an answered request: the backoff above, or longer when the answer asks
   // for longer in `Retry-After` (retryAfterMs, capped).
   const retryWaitMs = (res, attempt) => Math.max(backoffMs(attempt), retryAfterMs(res.headers, now()));
@@ -532,4 +537,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, retryAfterMs, RETRY_AFTER_CAP_MS };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS };
