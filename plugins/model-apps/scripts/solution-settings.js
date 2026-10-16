@@ -35,7 +35,7 @@
 //             printed; `applied` names the entries of the file that was read, which is the file pac imported. The copy holds the filled values, so it is its OWNER'S ALONE before a byte is written and that is
 //             read back, or pac is not run (PAC_SETTINGS_COPY_FAILED): on Windows an access list with the current user as its one entry whatever the temp folder grants others, on POSIX the modes 0700 and
 //             0600 (lib/private-folder.js). It is removed however the run ends — success, failure, `process.exit`, an uncaught error, Ctrl+C or a terminated terminal (lib/exit-cleanup.js). A process that is
-//             KILLED runs nothing, so a copy such a run made stays, in a folder named `solution-settings-<random>`, for a sweep of the temp folder to find.
+//             KILLED runs nothing, so a copy such a run made stays, in its folder in the plugin's own temp folder (lib/temp-workspace.js), which a later run's sweep removes once the run is gone and the folder is old.
 // Any other failure is reported with the SDK's own code and is never answered by pac.
 //
 // ExportSolution, StageSolution and ImportSolution are sent EXACTLY ONCE (solutionHttpClient): they are long-running, a gateway can answer 502, 504 or 401
@@ -851,8 +851,8 @@ function pacError(code, message, refusal) {
   return error;
 }
 
-// The name every folder a pac fallback works in starts with, and the six characters mkdtemp adds. It is stable on purpose: a folder a KILLED run left behind (nothing runs when a process is killed: see
-// lib/exit-cleanup.js) is found by this name, and removed by whoever sweeps the temporary folder for what a dead run made.
+// The name every folder a pac fallback works in starts with: the maker (lib/temp-workspace.js) adds the run's pid and six characters, so that the folder a KILLED run left behind (nothing runs when a process is killed:
+// see lib/exit-cleanup.js) says whose it was, and a later run's sweep of the plugin's own temp folder can tell whether its run is gone.
 const WORK_FOLDER_PREFIX = 'solution-settings-';
 
 // Removes a work folder, with the bounded retry a Windows lock needs, and answers the note of one that STAYS — its path, the code, what is in it — else null. What is in a folder that stays can be sensitive,
@@ -887,7 +887,8 @@ function writeNote(note, leaving) {
 // Windows lock needs (a scanner or a sync client holding a file pac has just written: removeTreeWithRetry), and a folder that STILL stays is never left unsaid. What it holds — pac's template, the package the SDK
 // exported, the copy of the settings file pac was given — is not worth keeping and can be sensitive (a template's defaults can be values; a settings file's values are), so a leftover is reported with its path: as
 // `leftover` beside the value of a run that worked, and on the error (`leftoverWarnings`, see withLeftover) of one that did not. `holds` says what is in the folder, for that note. The folder is made by
-// lib/temp-workspace.js in the plugin's own temp folder, named WORK_FOLDER_PREFIX, the run's pid and six characters.
+// lib/temp-workspace.js in the plugin's own temp folder, named WORK_FOLDER_PREFIX, the run's pid and six characters — or, where that folder cannot be used, in the temp folder itself as `WORK_FOLDER_PREFIX` and six characters,
+// with no owner record, so that no sweep finds it (everything below holds there too).
 // pac is another process and is given paths in this folder (the zip it reads, the file it writes, the settings copy it imports with). On POSIX it outlives a run that is killed (SIGKILL, an agent's timeout),
 // and a sweep that takes the folder because this run is gone would remove it from under pac. So the folder is made LENT — recorded as such once, when it is made — and a sweep keeps it for as long as it is
 // young, whether or not this run is still going (lib/temp-workspace.js). Nothing is recorded about pac itself, and nothing about the folder is changed after pac has started.

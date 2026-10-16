@@ -6,7 +6,9 @@
 //   node interrupted-import-child.js <package> <settings> <ending> [<ready>]      ending: exit | throw | wait
 //     ready   a file to say where the copy is in, written whole by a rename, for a child that has no IPC channel — one started in a console of its own, which is sent a console event (console-event.js)
 const fs = require('node:fs');
+const path = require('node:path');
 const { createCloud, ORG } = require('./fake-power-platform.js');
+const { ownerRecordOf } = require('./solution-settings-work-folder.js');
 const ss = require('../../solution-settings.js');
 
 const [packagePath, settingsPath, ending, readyFile] = process.argv.slice(2);
@@ -32,10 +34,12 @@ ss.runImport({ command: 'import', env: ORG, packagePath, settingsPath }, {
   pac: {
     spawn: (name, args) => {
       const copy = args[args.indexOf('--settings-file') + 1];
-      // What the copy held while pac "ran", read here: a child that ends itself right after it speaks has removed the copy by the time the parent looks.
+      // What the copy held while pac "ran", read here: a child that ends itself right after it speaks has removed the copy by the time the parent looks. The owner record of its folder (the maker's, from
+      // lib/temp-workspace.js) is read the same way, for the parent to say that the folder is the one the maker made for the run.
       const text = fs.readFileSync(copy, 'utf8');
+      const record = ownerRecordOf(path.dirname(copy));
       // The message is flushed before the process ends itself, or the parent would never hear where the copy was.
-      tell({ kind: 'copy-ready', copy, text, pid: process.pid }, () => {
+      tell({ kind: 'copy-ready', copy, text, pid: process.pid, record }, () => {
         if (ending === 'exit') process.exit(3);
         if (ending === 'throw') setImmediate(() => { throw new Error('an error nothing catches'); });
       });

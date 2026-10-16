@@ -13,6 +13,7 @@ const realAuth = require('../lib/dataverse-auth.js');
 // The copy of the settings that pac is given is made the plain way here (helpers/plain-private-file.js: the real one asks Windows for an access list, half a second a copy); before the script is loaded.
 const plainPrivateFile = require('./helpers/plain-private-file.js');
 plainPrivateFile.install();
+const { WORK_FOLDER, PLAIN_WORK_FOLDER, ownerRecordOf, refusingWorkFolders, assertMadeByTheMaker } = require('./helpers/solution-settings-work-folder.js');
 
 const SCRIPT = path.resolve(__dirname, '..', 'solution-settings.js');
 const ss = require(SCRIPT);
@@ -30,7 +31,7 @@ const tempDir = () => {
   tempDirs.push(dir);
   return dir;
 };
-test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
 const ZIP = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(' a solution package')]);
 function files(dir) {
@@ -1156,7 +1157,7 @@ test('a failure to install the file keeps every warning the run already knew —
   const realRemove = fs.rmSync;
   let left;
   fs.rmSync = (target, options) => {
-    if (/^solution-settings-[A-Za-z0-9]{6}$/.test(path.basename(String(target)))) {
+    if (WORK_FOLDER.test(path.basename(String(target)))) {
       left = String(target);
       throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${target}'`), { code: 'EBUSY' });
     }
@@ -1468,8 +1469,10 @@ test('import: a settings feature the SDK does not apply goes to pac with the sam
 // --- the settings pac is given ---------------------------------------------------------------------------------------------------------------------
 // The run reads the settings file ONCE: the sanitizer is built from it, the SDK is given what it parsed, and `applied` names its entries. The staging that comes before an import takes as long as the platform takes,
 // and a file a maker (or a deployment) saves in that time is a file the run never looked at — if pac read the file by its path, its values would reach pac, and pac's own words about them, with no sanitizer that knows them.
-// So pac is given a private copy of the BYTES the run read, in a folder of the run's own that is removed afterwards.
-const PRIVATE_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
+// So pac is given a private copy of the BYTES the run read, in a folder of the run's own that is removed afterwards. The folder is made by lib/temp-workspace.js — in the plugin's own folder of the temp directory, named for the
+// run's pid and recorded, so that a later run's sweep can find the folder of a run that was killed — or, where that folder cannot be used, in the temp directory itself (the name tests below accept both: what the run
+// guarantees about the folder does not depend on which).
+const PRIVATE_FOLDER = WORK_FOLDER;
 // A stand-in sdkFirst that does what the real one does when the SDK refuses — after `meanwhile()`: the staging is where the file gets saved.
 const refusedAfter = (meanwhile, sdk) => async (env, plan) => { meanwhile(); return stubSdkFirst(sdk)(env, plan); };
 const withFeature = (settings) => ({ ...settings, Workflows: [{ WorkflowId: 'x' }] });
@@ -1478,7 +1481,7 @@ const toPac = () => {
   sdk.importSolution = async () => { throw refusal('INVALID_ARGUMENT', listSentence('Workflows')); };
   return sdk;
 };
-// A pac that reads the settings file it is given at the time of the call, and says where it found it.
+// A pac that reads the settings file it is given at the time of the call, and says where it found it — and the owner record the folder held then (a folder that is removed has none to read afterwards).
 function readingPac(answer = () => ({ status: 0, stdout: 'Solution Imported successfully.\n', stderr: '' })) {
   const seen = [];
   return {
@@ -1486,7 +1489,7 @@ function readingPac(answer = () => ({ status: 0, stdout: 'Solution Imported succ
     pac: {
       spawn: (name, args) => {
         const file = flagValue(args, '--settings-file');
-        seen.push({ file, dir: path.dirname(file), bytes: fs.readFileSync(file) });
+        seen.push({ file, dir: path.dirname(file), bytes: fs.readFileSync(file), record: ownerRecordOf(path.dirname(file)) });
         return answer(args, seen[seen.length - 1]);
       },
     },
@@ -1504,7 +1507,7 @@ test('pac is given a private copy of the bytes the run read — never the file\'
   assert.strictEqual(seen.length, 1);
   assert.notStrictEqual(seen[0].file, settings, 'not the maker\'s file');
   assert.strictEqual(path.basename(seen[0].file), 'settings.json');
-  assert.match(path.basename(seen[0].dir), PRIVATE_FOLDER, 'in a folder of the run\'s own');
+  assertMadeByTheMaker(seen[0].dir, { pid: process.pid, record: seen[0].record }); // in a folder of the run's own: the plugin's folder, the run's pid, recorded and lent
   assert.ok(seen[0].bytes.equals(original), 'the bytes the run read, byte order mark and line ends included');
   assert.strictEqual(fs.readFileSync(settings, 'utf8'), edited, 'the maker\'s file is as they saved it');
   assert.strictEqual(fs.existsSync(seen[0].dir), false, 'and the copy is gone');
@@ -1582,20 +1585,14 @@ test('a copy that cannot be made is a failure of the pac step — nothing is sen
   assert.ok(seen.folder && !fs.existsSync(seen.folder), 'the folder was removed');
 });
 
-test('a folder for the copy that cannot be made is the same failure — PAC_SETTINGS_COPY_FAILED with the reason pac was asked, no SDK import job named, pac never started', async () => {
+test('a folder for the copy that cannot be made — in the plugin\'s own folder and in the temp folder it falls back to — is the same failure: PAC_SETTINGS_COPY_FAILED with the reason pac was asked, no SDK import job named, pac never started', async (t) => {
   const { request } = importFiles(withFeature(filled()));
   const { pac, calls } = fakePac(() => ({ status: 0, stdout: 'ok', stderr: '' }));
-  const real = fs.mkdtempSync;
-  fs.mkdtempSync = (prefix, ...rest) => {
-    if (String(prefix).endsWith('solution-settings-')) throw Object.assign(new Error(`EACCES: permission denied, mkdtemp '${prefix}XXXXXX'`), { code: 'EACCES' });
-    return real(prefix, ...rest);
-  };
+  // Each way of making the folder fails, with a code of its own: an error is reported only when the plain call fails too, and then it is that call's (lib/temp-workspace.js), which the reason shows.
+  const refused = refusingWorkFolders(t, { plugin: 'ENOSPC', plain: 'EACCES' });
   let failure;
-  try {
-    await ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac, importJobId: JOB }).catch((err) => { failure = err; });
-  } finally {
-    fs.mkdtempSync = real;
-  }
+  await ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac, importJobId: JOB }).catch((err) => { failure = err; });
+  assert.deepStrictEqual(refused.map(({ way, code }) => [way, code]), [['plugin', 'ENOSPC'], ['plain', 'EACCES']], 'the folder was asked for in the plugin\'s own folder, and then in the temp folder');
   assert.ok(failure, 'the import failed');
   assert.strictEqual(failure.code, 'PAC_SETTINGS_COPY_FAILED');
   assert.strictEqual(failure.message, COPY_FAILED('EACCES'));
@@ -1603,6 +1600,24 @@ test('a folder for the copy that cannot be made is the same failure — PAC_SETT
   assert.deepStrictEqual(ss.describeFailure(failure), { ok: false, error: COPY_FAILED('EACCES'), code: 'PAC_SETTINGS_COPY_FAILED', fallback: failure.fallback });
   assert.ok(!('importJobId' in failure), 'the SDK sent no import, and pac mints its own job: there is none to look up');
   assert.deepStrictEqual(calls, [], 'pac was never started');
+});
+
+// The plugin's own folder is a courtesy to the next run, never a reason for this one to fail (lib/temp-workspace.js): where it will not take a folder, the run makes its own in the temp folder itself, as it always did —
+// unrecorded, so that nothing sweeps it — and everything else about the folder is as it is anywhere: the copy is made in it, and the folder is removed.
+test('a plugin folder that will not take the work folder does not fail the import — the run goes on in the temp folder itself: pac is given its copy there, and the folder is removed', async (t) => {
+  const { request, settings } = importFiles(withFeature(filled()));
+  const original = fs.readFileSync(settings);
+  const refused = refusingWorkFolders(t, { plugin: 'ENOSPC', plain: null });
+  const { seen, pac } = readingPac();
+  const result = await ss.runImport(request, { sdkFirst: stubSdkFirst(toPac()), pac });
+  assert.deepStrictEqual(refused.map(({ way, code }) => [way, code]), [['plugin', 'ENOSPC']], 'only the plugin\'s folder refused');
+  assert.strictEqual(result.source, 'pac');
+  assert.strictEqual(seen.length, 1, 'pac ran');
+  assert.ok(seen[0].bytes.equals(original), 'with the bytes the run read');
+  assert.strictEqual(path.dirname(seen[0].dir), os.tmpdir(), 'in a folder of the temp folder itself');
+  assert.match(path.basename(seen[0].dir), PLAIN_WORK_FOLDER, 'named as it always was, with no pid');
+  assert.strictEqual(seen[0].record, null, 'and unrecorded');
+  assert.strictEqual(fs.existsSync(seen[0].dir), false, 'and the folder is gone');
 });
 
 test('a copy whose protection cannot be set or verified — the private-copy step refuses — is the same failure, however it words the reason: pac is not run and the folder is removed', async () => {

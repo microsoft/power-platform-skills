@@ -4107,9 +4107,14 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     and run the import again to apply it. `pac` still reads the package from its path. The copy and its folder are removed
     however `pac` ends (next bullet).
   - **The folder a `pac` fallback works in is removed, and said when it stays** (`inWorkFolder`, `lib/safe-fs.js`
-    `removeTreeWithRetry`). `pac solution create-settings` writes into a `solution-settings-<random>` folder under the
-    temp directory, which holds the package the SDK exported and pac's template — defaults that can be values — and
-    `pac solution import` is given its copy of the settings in one (above). It is removed however the run ends, with the
+    `removeTreeWithRetry`). `pac solution create-settings` writes into a work folder of the run's own, which holds the
+    package the SDK exported and pac's template — defaults that can be values — and `pac solution import` is given its
+    copy of the settings in one (above). The folder is made by `lib/temp-workspace.js` (`makeTempWorkspace(prefix,
+    { lent: true })`): `solution-settings-<pid>-<random>` in the plugin's own folder of the temp directory, with the
+    maker's owner record `.owner.json` in it (the process, the host, the time — no value of the run, so it is not among
+    the files that are emptied below) and LENT to `pac`, which is another process and may outlive a run that is killed;
+    where the plugin's own folder cannot be used it is `solution-settings-<random>` in the temp directory itself, as it
+    always was, with no record, and every guarantee below holds there too. It is removed however the run ends, with the
     bounded retry a Windows lock needs (a scanner or a sync client that holds
     what pac just wrote answers `rm` with EBUSY, EPERM or EACCES: six attempts over about three quarters of a second;
     on other systems a lock code is not waited out). A folder that STILL stays is a warning with its path and what is in
@@ -4138,9 +4143,10 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     stays released — the registry is looked at again before ours is put back and after, and a listener of a registry that
     is gone is taken off — and ours is put back even when a notification throws. A process that is
     KILLED (SIGKILL, TerminateProcess)
-    runs nothing, and the folder it made stays —
-    named `solution-settings-<random>` so that a sweep of the temp folder can find it; the plugin does not sweep for it
-    by that prefix itself.
+    runs nothing, and the folder it made stays — recorded and lent, in the plugin's own folder, so that a later run's
+    sweep (`sweepDeadWorkspaces`, `lib/temp-workspace.js`) removes it, the copy of the settings with it, once its run is
+    gone AND the folder is old (a lent folder is kept for a week: `pac` may still be using it). A folder that was made
+    in the temp directory itself, where the plugin's own folder could not be used, has no record and is never swept.
   - **A failure to install the template keeps what the run knew.** `writeTemplate` is the last step of `template`, after the
     SDK has staged, refused and cleaned up (or not) and pac has made its folder. When it fails — `OUT_EXISTS` because the
     name was taken while the run worked, or any file-system error — the SDK's cleanup warnings and the note of a pac folder
@@ -4188,13 +4194,21 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     only from its fallback (or, for the tabular form and `--package` with no `--env`, its `pac`-only path).
     `solution-settings-snapshot.test.js` says what only the operating system can: on Windows, in a temp folder that
     grants the Users group read access and in a plain one under the user's own temp folder (where Windows gives a new
-    folder entries of its own for SYSTEM and Administrators), the folder and the copy each have the current user's SID as
+    folder entries of its own for SYSTEM and Administrators), and for the work folder in each of the two places it is
+    made in (the plugin's own folder, and the temp folder itself — a file where the plugin's folder would be — which is
+    where a folder that cannot be used sends it), the folder and the copy each have the current user's SID as
     their ONE access entry (read back through PowerShell, a route independent of the `icacls` the code uses, and
     compared as full SIDs, never by the alias the SDDL text uses), and when
-    `icacls` cannot be started the import is not run through `pac`; elsewhere the modes under a hostile umask; and, with
-    a real child process that runs the importer, that the copy is gone after `process.exit`, an uncaught error and — on
+    `icacls` cannot be started the import is not run through `pac`; elsewhere the modes under a hostile umask, in each
+    of the two places; and, with
+    a real child process that runs the importer, that the copy is in the folder the maker made for the run (the
+    plugin's own folder, the run's pid, recorded and lent) and is gone after `process.exit`, an uncaught error and — on
     POSIX — SIGINT, SIGTERM and SIGHUP (the child ends BY the signal) and — on Windows — a REAL Ctrl+C and Ctrl+Break
-    (the child ends with 0xC000013A, as one that registers nothing does: `helpers/console-event.js`). `private-folder.test.js` runs the Windows
+    (the child ends with 0xC000013A, as one that registers nothing does: `helpers/console-event.js`); and that a run
+    that is KILLED for real leaves its folder, copy and all, which a sweep keeps while it is young and removes once it
+    is old. The tests find the work folder by `helpers/solution-settings-work-folder.js`: its name in either place, the
+    plugin's folder of a given temp folder, the files in it but for the owner record, and a refusal of each way of
+    making it (`fs.mkdtempSync`, which the maker calls for both). `private-folder.test.js` runs the Windows
     sequence over a stand-in for the process runner (the SDDL `icacls /save` writes, the CSV `whoami` prints, the order of
     the steps, the System32-only lookup, every way to fail closed, the question put to the machine about `LA` and `LG`)
     and the POSIX one over a stand-in for `fs`, and, with the real tools, how this machine writes its own Administrator

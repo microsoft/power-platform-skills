@@ -17,6 +17,7 @@ const { EventEmitter } = require('node:events');
 const ss = require('../solution-settings.js');
 const { createCloud, ORG } = require('./helpers/fake-power-platform.js');
 const { runScript } = require('./helpers/run-with-fakes.js');
+const { WORK_FOLDER, workFoldersIn, entriesOf, assertMadeByTheMaker } = require('./helpers/solution-settings-work-folder.js');
 
 const SOLUTION_SETTINGS = path.resolve(__dirname, '..', 'solution-settings.js');
 const STRAY_OUTPUT_PRELOAD = path.resolve(__dirname, 'helpers', 'fake-stray-output-preload.js');
@@ -342,7 +343,7 @@ test('the note a process that is ending leaves about a folder that stayed goes t
   for (const name of Object.keys(old)) process.env[name] = temp;
   // A removal of a work folder fails as a scanner's lock makes it fail.
   fs.rmSync = (target, options) => {
-    if (/^solution-settings-[A-Za-z0-9]{6}$/.test(path.basename(String(target)))) {
+    if (WORK_FOLDER.test(path.basename(String(target)))) {
       held.add(String(target));
       throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${target}'`), { code: 'EBUSY' });
     }
@@ -382,12 +383,13 @@ test('the note a process that is ending leaves about a folder that stayed goes t
 
 // --- what stays when the folder pac worked in cannot be removed -------------------------------------------------------------------------------------
 
-// pac writes its template into a folder of the run's own under the temp directory (`solution-settings-<random>`), beside the package the SDK exported when the run exported one, and the run removes the folder when it ends.
+// pac writes its template into a folder of the run's own (made by lib/temp-workspace.js: in the plugin's own folder of the temp directory, as `solution-settings-<pid>-<random>`), beside the package the SDK exported when
+// the run exported one, and the run removes the folder when it ends.
 // When the folder cannot be removed (a scanner or a sync client holds a file: EBUSY) what stays on disk must hold no value — a template's defaults, and the defaults of the package it was made from, can be values, a token
 // among them — so both files are EMPTIED, and the warning says so. These are real processes with the removal of the work folder held (helpers/fake-held-work-folder-preload.js), run with a temporary folder of their own,
-// which is where the test reads what stayed.
+// which is where the test reads what stayed. The folder holds the owner record of the maker (`.owner.json`: the process, the host, the time, and that the folder was lent to pac), which a later run's sweep reads to find
+// the folder of a run that is gone; it holds no value, and `entriesOf` leaves it out of what the tests list (`assertNoneOnDisk` reads it with every other file).
 const HELD_WORK_FOLDER = path.resolve(__dirname, 'helpers', 'fake-held-work-folder-preload.js');
-const WORK_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
 // The package the SDK exported, with the token in it in the clear — where a leftover could be read — as a default value, and the template pac wrote from it with the same default.
 const PACKAGE_WITH_DEFAULT = Buffer.concat([ZIP, Buffer.from(` new_Url ${TOKEN}`)]);
 const TEMPLATE_WITH_DEFAULT = JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'new_Url', Value: '', DefaultValue: TOKEN }], ConnectionReferences: [] }, null, 2);
@@ -400,8 +402,7 @@ function temporaryFolder(t) {
 }
 // What a run needs to take `temp` for its temporary folder and — `held` — to be unable to remove its work folder.
 const environmentOf = (temp, held) => ({ TEMP: temp, TMP: temp, TMPDIR: temp, ...(held ? { NODE_OPTIONS: `--require=${JSON.stringify(HELD_WORK_FOLDER)}` } : {}) });
-const workFoldersIn = (temp) => fs.readdirSync(temp).filter((name) => WORK_FOLDER.test(name)).map((name) => path.join(temp, name));
-const sizesIn = (folder) => Object.fromEntries(fs.readdirSync(folder).sort().map((name) => [name, fs.statSync(path.join(folder, name)).size]));
+const sizesIn = (folder) => Object.fromEntries(entriesOf(folder).map((name) => [name, fs.statSync(path.join(folder, name)).size]));
 // No file under `temp`, whatever its name, holds any of `pieces`: the bytes of every one are read.
 function assertNoneOnDisk(temp, pieces, what) {
   const filesIn = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? filesIn(path.join(dir, entry.name)) : [path.join(dir, entry.name)]));
@@ -431,6 +432,8 @@ test('template: pac\'s template and the package it was made from, both holding t
   assertNoneOnDisk(temp, PIECES, 'a work folder that could not be removed');
   const [folder, ...more] = workFoldersIn(temp);
   assert.ok(folder && more.length === 0, 'the work folder is what stayed, and only it');
+  // What stays is where a later run's sweep looks for the folder of a run that is gone: the plugin's own folder, under the run's pid, recorded and lent (the sweep takes a lent folder once it is old).
+  assertMadeByTheMaker(folder, { temp });
   assert.deepStrictEqual(sizesIn(folder), { 'settings.json': 0, 'solution.zip': 0 }, 'pac\'s template and the exported package are there, with nothing in them');
   assert.deepStrictEqual(JSON.parse(held.lines[0]).warnings, [`The folder ${folder} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
   assertNoToken(held, 'a run whose work folder stayed');
@@ -458,6 +461,7 @@ test('template: a pac that fails after it wrote its template leaves that templat
   assertNoneOnDisk(temp, PIECES, 'a work folder that could not be removed, after a failure');
   const [folder, ...more] = workFoldersIn(temp);
   assert.ok(folder && more.length === 0);
+  assertMadeByTheMaker(folder, { temp });
   assert.deepStrictEqual(sizesIn(folder), { 'settings.json': 0, 'solution.zip': 0 });
   const out = JSON.parse(held.lines[0]);
   assert.deepStrictEqual([out.ok, out.code], [false, 'PAC_FAILED']);
@@ -482,6 +486,7 @@ test('template --package without --env: the folder holds pac\'s template alone �
   assertNoneOnDisk(temp, [value], 'a work folder that could not be removed');
   const [folder, ...more] = workFoldersIn(temp);
   assert.ok(folder && more.length === 0);
+  assertMadeByTheMaker(folder, { temp });
   assert.deepStrictEqual(sizesIn(folder), { 'settings.json': 0 }, 'only pac\'s template is there: there was no package to export, and none was made');
   const out = JSON.parse(run.lines[0]);
   assert.deepStrictEqual([out.ok, out.source], [true, 'pac']);
@@ -537,6 +542,7 @@ test('template: when the process ends while pac runs, the cleanup EMPTIES pac\'s
   }), (error) => error.code === 'PAC_FAILED');
 
   assert.deepStrictEqual(atTheEnd, { 'settings.json': 0, 'solution.zip': 0 }, 'what the folder held when the cleanup had run: nothing');
+  assertMadeByTheMaker(folder, { temp, pid: process.pid });
   assert.strictEqual(notes.length, 1, notes.join('\n'));
   assert.strictEqual(notes[0], `The folder ${folder} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.\n`);
   assertNoneOnDisk(temp, PIECES, 'the folder a process that was ending left');

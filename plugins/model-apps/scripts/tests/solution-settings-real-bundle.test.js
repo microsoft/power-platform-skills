@@ -16,6 +16,7 @@ const ss = require('../solution-settings.js');
 const { createCloud, LOCK_REFUSAL, CONCURRENCY_REFUSAL, ORG, DATAVERSE_TOKEN } = require('./helpers/fake-power-platform.js');
 const { runScript } = require('./helpers/run-with-fakes.js');
 const { VALUES, spellingsOfValue } = require('./helpers/value-spellings.js');
+const { WORK_FOLDER, RECORDED_WORK_FOLDER, PLAIN_WORK_FOLDER, entriesOf, pluginFolderOf, assertMadeByTheMaker, refusingWorkFolders } = require('./helpers/solution-settings-work-folder.js');
 
 const SECRET = 'kv-secret-value-0123456789';
 const CONNECTION_ID = 'shared-commondataser-00000000-0000-0000-0000-00000000abcd';
@@ -31,7 +32,7 @@ const tempDir = () => {
   tempDirs.push(dir);
   return dir;
 };
-test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
 // What StageSolution says the package holds.
 const STAGE = {
@@ -155,10 +156,11 @@ test('REAL BUNDLE: a staging copy that cannot be deleted is a warning on the out
 });
 
 // --- the folder a pac fallback works in ----------------------------------------------------------------------------------------------------
-// A template that pac makes is written into a folder of the run's own under the temp directory (`solution-settings-<random>`), which holds the package the SDK exported and pac's template — whose defaults can be
-// values. It is removed however the run ends, with the bounded retry a Windows lock needs; a folder that stays is SAID, with its path, on the output of a run that succeeded and beside the failure of one that did not,
-// and its files are EMPTIED first, so that what stays holds no value.
-const WORK_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
+// A template that pac makes is written into a folder of the run's own, which holds the package the SDK exported and pac's template — whose defaults can be values. The folder is made by lib/temp-workspace.js, in the
+// plugin's own folder of the temp directory (`solution-settings-<pid>-<random>`, with the owner record `.owner.json` a later run's sweep reads) or, where that cannot be used, in the temp directory itself
+// (`solution-settings-<random>`): the tests find a work folder by either name (helpers/solution-settings-work-folder.js). It is removed however the run ends, with the bounded retry a Windows lock needs; a folder that
+// stays is SAID, with its path, on the output of a run that succeeded and beside the failure of one that did not, and its files are EMPTIED first, so that what stays holds no value. The owner record is not one of
+// those files: it is the plugin's own — the process that made the folder, the host, the time, and that the folder was lent to pac — and holds no value, so the lists below leave it out (`entriesOf`) and one test reads it.
 // Holds the work folders as a scanner does: every removal of one answers `code` for its first `times` calls (all of them when Infinity), and what is left is removed when the test ends. `dirs` are the
 // folders the script tried to remove. The test's own folders (`solution-settings-real-…`) have a longer name and are never held.
 function holdingWorkFolders(t, { times = Infinity, code = 'EBUSY', platform } = {}) {
@@ -197,8 +199,10 @@ test('REAL BUNDLE: a pac template folder that cannot be removed is said — its 
   assert.strictEqual(result.source, 'pac');
   assert.strictEqual(held.dirs.size, 1);
   const [left] = held.dirs;
-  assert.deepStrictEqual(fs.readdirSync(left).sort(), ['settings.json', 'solution.zip'], 'the exported package and pac\'s template are what stayed');
-  assert.deepStrictEqual(fs.readdirSync(left).sort().map((name) => fs.readFileSync(path.join(left, name), 'utf8')), ['', ''], 'both are EMPTIED: what a template\'s defaults and a package\'s definitions hold is not left on disk');
+  assert.deepStrictEqual(entriesOf(left), ['settings.json', 'solution.zip'], 'the exported package and pac\'s template are what stayed');
+  assert.deepStrictEqual(entriesOf(left).map((name) => fs.readFileSync(path.join(left, name), 'utf8')), ['', ''], 'both are EMPTIED: what a template\'s defaults and a package\'s definitions hold is not left on disk');
+  // What stays is where a later run's sweep looks for the folder of a run that is gone: the plugin's own folder, under this process's pid, recorded and lent. Its record holds none of the template's values.
+  assert.ok(!JSON.stringify(assertMadeByTheMaker(left, { pid: process.pid })).includes('config.contoso.example'), 'the owner record is the maker\'s, with no value of the run');
   assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
   assert.strictEqual(JSON.parse(fs.readFileSync(f.out, 'utf8')).EnvironmentVariables[0].SchemaName, 'new_Url');
 });
@@ -213,7 +217,7 @@ test('REAL BUNDLE: and beside the failure of a run that did not — pac refuses 
     assert.strictEqual(err.code, 'PAC_FAILED');
     assert.strictEqual(err.fallback.code, 'SOLUTION_STAGING_FAILED');
     const described = ss.describeFailure(err, readCleanupWarnings);
-    assert.deepStrictEqual(fs.readdirSync(left).sort().map((name) => fs.readFileSync(path.join(left, name), 'utf8')), ['', ''], 'a template that pac wrote before it failed is emptied too');
+    assert.deepStrictEqual(entriesOf(left).map((name) => fs.readFileSync(path.join(left, name), 'utf8')), ['', ''], 'a template that pac wrote before it failed is emptied too');
     assert.deepStrictEqual(described.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the solution package this run exported and the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
     assert.match(described.error, /pac refused the package/);
     return true;
@@ -243,7 +247,7 @@ test('REAL BUNDLE: without --env the zip is read by pac alone, and its folder is
   const result = await ss.runTemplate(templateRequest(f, { env: undefined, packagePath: f.pkg }), { pac: pacWritesTemplate() });
   assert.strictEqual(result.source, 'pac');
   const [left] = held.dirs;
-  assert.deepStrictEqual(fs.readdirSync(left), ['settings.json']);
+  assert.deepStrictEqual(entriesOf(left), ['settings.json']);
   assert.strictEqual(fs.readFileSync(path.join(left, 'settings.json'), 'utf8'), '', 'pac\'s template is emptied');
   assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the settings template pac wrote (emptied, so it keeps no value). Delete it.`]);
 });
@@ -783,25 +787,41 @@ test('REAL BUNDLE: a template made by pac whose work folder cannot be removed, a
 });
 
 // --- a folder for pac's copy that cannot be made --------------------------------------------------------------------------------------------------
-test('REAL BUNDLE: a folder for the settings copy that cannot be made — after the SDK refused a feature pac applies — is PAC_SETTINGS_COPY_FAILED with the reason pac was asked, and names no SDK import job', async (t) => {
-  const real = fs.mkdtempSync;
-  fs.mkdtempSync = (prefix, ...rest) => {
-    if (String(prefix).endsWith('solution-settings-')) throw Object.assign(new Error('EACCES: cannot allocate work folder'), { code: 'EACCES' });
-    return real(prefix, ...rest);
-  };
-  t.after(() => { fs.mkdtempSync = real; });
+test('REAL BUNDLE: a folder for the settings copy that cannot be made — in the plugin\'s own folder and in the temp folder it falls back to — after the SDK refused a feature pac applies, is PAC_SETTINGS_COPY_FAILED with the reason pac was asked, and names no SDK import job', async (t) => {
+  // Each way fails with a code of its own: the plugin's folder is a courtesy to the next run and its refusal is never the run's failure — an error is reported only when the plain call fails too, and then it is that call's.
+  const refused = refusingWorkFolders(t, { plugin: 'ENOSPC', plain: 'EACCES' });
   const { http } = world();
   const f = files({ Workflows: [{ WorkflowId: 'x' }] });
   let pacCalls = 0;
   const pac = { spawn: () => { pacCalls += 1; return { status: 0, stdout: '', stderr: '' }; } };
   let failure;
   await ss.runImport(importRequest(f), { http, pac, importJobId: JOB }).catch((error) => { failure = ss.describeFailure(error, readCleanupWarnings); });
+  assert.deepStrictEqual(refused.map(({ way, code }) => [way, code]), [['plugin', 'ENOSPC'], ['plain', 'EACCES']], 'the folder was asked for in the plugin\'s own folder, and then in the temp folder');
   assert.ok(failure, 'the import failed');
   assert.strictEqual(pacCalls, 0, 'pac was not started');
   assert.strictEqual(failure.code, 'PAC_SETTINGS_COPY_FAILED');
   assert.strictEqual(failure.error, '`pac solution import` was not run: a private copy of the settings file could not be made (EACCES).');
   assert.strictEqual(failure.fallback.code, 'INVALID_ARGUMENT');
   assert.ok(!('importJobId' in failure), 'no SDK import was attempted for a feature only pac applies');
+});
+
+// Where only the plugin's own folder will not take the work folder the run goes on in the temp folder itself, as it always did, and what the run guarantees about a folder that cannot be removed holds there as well:
+// the copy of the settings is emptied and the folder is said — with nothing that records it, so that no later run's sweep will find it, which is what the note's "Delete it" is for.
+test('REAL BUNDLE: a settings copy in the temp folder itself — the plugin\'s own folder would not take the work folder — that cannot be removed is emptied and said all the same', async (t) => {
+  const refused = refusingWorkFolders(t, { plugin: 'ENOSPC', plain: null });
+  const held = holdingWorkFolders(t);
+  const { http } = world();
+  const f = files({ Workflows: [{ WorkflowId: 'x' }] });
+  const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
+  assert.deepStrictEqual(refused.map(({ way }) => way), ['plugin'], 'only the plugin\'s folder refused');
+  assert.strictEqual(result.source, 'pac');
+  assert.strictEqual(held.dirs.size, 1);
+  const [left] = held.dirs;
+  assert.strictEqual(path.dirname(left), os.tmpdir(), 'the folder is in the temp folder itself');
+  assert.match(path.basename(left), PLAIN_WORK_FOLDER, 'named as it always was');
+  assert.deepStrictEqual(fs.readdirSync(left), ['settings.json'], 'and holds the copy alone: no owner record');
+  assert.strictEqual(fs.readFileSync(path.join(left, 'settings.json'), 'utf8'), '', 'what could not be removed holds no value');
+  assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the copy of the settings file that pac was given, which can hold secrets (emptied, so it keeps no value). Delete it.`]);
 });
 
 // --- real processes -----------------------------------------------------------------------------------------------------------------
@@ -1382,7 +1402,9 @@ test('PROCESS: a settings file that changes while the SDK stages — and the SDK
   assert.strictEqual(run.pacCalls.length, 1);
   assert.strictEqual(JSON.parse(run.outputs['settings.json']).EnvironmentVariables[0].Value, SECRET_NEW, 'the maker\'s edit is on disk, as saved');
   assert.strictEqual(JSON.parse(run.pacCalls[0].snapshots['--settings-file'].text).EnvironmentVariables[0].Value, SECRET_OLD, 'and is not what pac read: pac read the bytes the run read');
-  assert.match(path.basename(path.dirname(pacsFile(run))), /^solution-settings-[A-Za-z0-9]{6}$/, 'in a folder of the run\'s own');
+  // A child process of its own: the folder the copy was made in is the maker's (lib/temp-workspace.js) — in the plugin's own folder of the temp folder, named for the pid of that process.
+  assert.strictEqual(path.dirname(path.dirname(pacsFile(run))), pluginFolderOf(), 'in the plugin\'s own folder');
+  assert.match(path.basename(path.dirname(pacsFile(run))), RECORDED_WORK_FOLDER, 'in a folder of the run\'s own');
   assert.strictEqual(path.basename(pacsFile(run)), 'settings.json');
   assert.strictEqual(fs.existsSync(path.dirname(pacsFile(run))), false, 'removed after pac ran');
   assert.match(JSON.parse(run.lines[0]).error, /withheld/, 'pac quoted the value it read, which the sanitizer knows');
@@ -1442,8 +1464,9 @@ test('REAL BUNDLE: a copy of the settings that cannot be removed is emptied and 
   const result = await ss.runImport(importRequest(f), { http, pac: { spawn: () => ({ status: 0, stdout: 'Solution Imported successfully.', stderr: '' }) }, importJobId: JOB });
   assert.strictEqual(result.source, 'pac');
   const [left] = held.dirs;
-  assert.deepStrictEqual(fs.readdirSync(left), ['settings.json']);
+  assert.deepStrictEqual(entriesOf(left), ['settings.json']);
   assert.strictEqual(fs.readFileSync(path.join(left, 'settings.json'), 'utf8'), '', 'what could not be removed holds no value');
+  assertMadeByTheMaker(left, { pid: process.pid }); // and what stays is in the plugin's own folder, recorded and lent, for a later run's sweep
   assert.deepStrictEqual(result.warnings, [`The folder ${left} could not be removed (EBUSY); it holds the copy of the settings file that pac was given, which can hold secrets (emptied, so it keeps no value). Delete it.`]);
 });
 
