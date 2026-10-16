@@ -34,6 +34,9 @@
 //   node kill-target.js sweep-pause <tempRoot>
 //        sweeps the plugin's folder of the temp folder <tempRoot> and pauses for two minutes at the one moment a sweep that is killed can leave a removal half done: after the record
 //        has been moved out of the dead run's folder and before the empty folder is removed. Says `before-rmdir <folder>` there.
+//   node kill-target.js sweep <tempRoot>
+//        one sweep of the plugin's folder of the temp folder <tempRoot>, by a process of its own — the next run, which knows nothing of the last one's memory, only of what it left on disk. Says
+//        `swept {"removed":[<folder names>],"failed":<how many>,"kept":<how many>}` and ends. The Windows access-list reader is stood in for: the folder is the test's own, and what is under test is the sweep.
 //
 // The test sets TMPDIR, TEMP and TMP to a folder of its own for these, so everything the process makes is in a place the test removes.
 const fs = require('node:fs');
@@ -182,6 +185,11 @@ async function main() {
       fs: { ...fs, rmdirSync: (dir, ...rest) => { say(`before-rmdir ${dir}`); pause(120000); return fs.rmdirSync(dir, ...rest); } },
     });
     say('swept');
+  } else if (mode === 'sweep') {
+    const { sweepDeadWorkspaces } = require('../../lib/temp-workspace.js');
+    const [root] = args;
+    const swept = sweepDeadWorkspaces({ os: { tmpdir: () => root }, folderPrivacy: () => ({ ok: true, reason: 'stood in for' }) });
+    say(`swept ${JSON.stringify({ removed: swept.removed.map((r) => r.name), failed: swept.failed.length, kept: swept.kept })}`);
   } else {
     process.stderr.write(`unknown mode ${mode}\n`);
     process.exit(2);

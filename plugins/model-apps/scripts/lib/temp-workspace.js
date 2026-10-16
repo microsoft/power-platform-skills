@@ -39,15 +39,17 @@
 // WHY THE SWEEP CANNOT REMOVE A LIVE RUN'S WORKSPACE
 //   * It lists the plugin's folder once, and judges each entry on its own record; a workspace made after the listing is not in it. A name is never
 //     made twice (mkdtemp picks it at random), so an entry cannot be replaced by another run's between the judgement and the removal.
-//   * A folder is named after the process that made it — `genpage-4242-AbC123`: the prefix, the pid, mkdtemp's six random characters — so that a sweep can
+//   * A folder is named after the process that made it — `genpage-4242-AbC123`: the prefix, the pid, mkdtemp's six random characters (a prefix that does not end in a hyphen is given one, `work` is
+//     `work-4242-AbC123`, so that the pid always follows the hyphen a sweep reads it from) — so that a sweep can
 //     tell a run that is still going WITHOUT opening anything in its folder. That matters on Windows, where a file that is deleted while another process
 //     has it open stays in its folder until that process lets go: a sweep that read the record of a live run at the moment the run removed its workspace
 //     made the run's own removal fail (ENOTEMPTY — measured, on Node 20), and a run's removal is not retried by every caller. A folder whose name does not
 //     name a pid, or names one that runs, is not opened; the one exception is Linux, where a file can always be deleted while it is open and the record's start
 //     time can show that a pid was handed out again.
 //   * Just before it removes an entry it reads the record again, and judges again, and takes the entry only if both are as they were.
-//   * It removes what is inside first and the record last, and the record leaves the folder only for as long as the folder itself is being removed (it is put back if that
-//     fails), so a removal that fails — half way, or at the very end — leaves a folder that is still recorded: still found, and still swept, by the next run, rather than
+//   * It removes what is inside first and the record last, and the record leaves the folder only for as long as the folder itself is being removed (it is moved back if that
+//     fails — and if even that fails it stays beside the folder, whole, for the next sweep to finish the removal from; it is never WRITTEN into the folder again, because a write can be cut off), so a removal that fails — half way, or at the very end —
+//     leaves a folder that is still recorded: still found, and still swept, by the next run, rather than
 //     one that nothing can prove is dead. (Windows keeps a file that is deleted while another process holds it open, and lists it, until the holder lets go — Node 20 does; Node 22
 //     deletes it at once — and the folder cannot be removed meanwhile. A removal that consumed the record with the rest left an empty folder that no later sweep could ever
 //     tell from a stranger's. If the record itself is the file that is held open, it is renamed out of the folder, which Windows allows, rather than deleted.)
@@ -55,6 +57,13 @@
 //     file, and the next sweep FINISHES the removal — when the file is a record of the folder's own (its name, a record that names the pid in it, an owner that is gone) and the folder
 //     is empty or already gone. Anything that does not agree is left exactly as it is.
 //   * It never removes the plugin's folder itself: another run may be making a workspace in it that moment.
+//
+// A SWEEP IS BOUNDED, AND FAIR. It looks at no more than MAX_EXAMINED entries and removes no more than MAX_REMOVED, so a folder that has somehow collected thousands is worked off over several runs and not in the time of one. If the
+// entries it looked at were always the first ones, a folder whose first MAX_EXAMINED must be kept — folders no record vouches for, a record that cannot be read for a moment — would hide every entry after them for good: a dead run's
+// workspace, and a removal that a kill left half done, among them. So the entries are taken in name order, and a sweep that could not look at all of them writes down the name of the last it looked at (CURSOR_FILE: a small file in the plugin's
+// folder, written whole, there only while the folder holds more than a sweep looks at); the next sweep — in this process or a later one — starts after that name and wraps round to the first. Every entry is looked at within
+// ceil(entries / MAX_EXAMINED) sweeps, whatever the first of them are. The cursor says where to start and nothing else: it cannot make a sweep take what it would not have taken, one that is missing, unreadable or not what was written
+// starts at the first entry, and the name in it is only ever compared with the names in the folder.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -65,16 +74,21 @@ const PARENT_NAME = 'power-platform-skills-model-apps';
 const OWNER_FILE = '.owner.json';
 // What a removal in progress leaves beside the folder (see removeWorkspace): the folder's record, moved out of it.
 const REMOVING_SUFFIX = '.removing';
+// Where a sweep that could not look at every entry writes down the last it looked at (see the top of this file, and windowOf). Its name cannot be a workspace's (those end in `-<pid>-<six characters>`) or a removal's
+// (`.removing`), so no sweep takes it for either. `isCursorName` is that name, and the shape of the temporary copy it is written through (writeWhole): `.sweep-cursor.json.<pid>.<random>.tmp` — what a sweep
+// that was killed while it wrote the cursor leaves. Nothing else is the sweep's own: a file or a folder that only looks like these is an entry like any other, and is never removed.
+const CURSOR_FILE = '.sweep-cursor.json';
+const isCursorName = (name) => name === CURSOR_FILE || (name.startsWith(`${CURSOR_FILE}.`) && /^\.\d+\.[a-z0-9]*\.tmp$/.test(name.slice(CURSOR_FILE.length)));
 // What a prefix may be: a name, never a path. A prefix that is not one would put the folder outside the plugin's own.
 const SAFE_PREFIX = /^[A-Za-z0-9._-]+$/;
-// A record is a few hundred bytes. One that is much larger is not a record.
+// A record, or the cursor, is a few hundred bytes at most. One that is much larger is not one.
 const OWNER_FILE_MAX_BYTES = 4096;
 // How old a LENT workspace must be before a sweep takes it (and only then, and only if its maker is gone): seven days without anything written in the folder or to its record. pac is given an
 // hour for an import (lib/pac-fallback.js PAC_IMPORT_TIMEOUT_MS) and three minutes for a read, so this is two orders of magnitude past the longest program of ours — the one place a time
 // decides anything here, and it errs long on purpose: a folder that stays costs a few kilobytes, a folder taken from a program that still writes in it costs its work.
 const LENT_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 // The most one sweep looks at, and removes: a plugin's folder that has somehow collected thousands of entries is worked off over several runs, not in
-// the time of one.
+// the time of one — and which entries a sweep looks at moves on from one sweep to the next, so that no entry is out of reach for good (see the top of this file).
 const MAX_EXAMINED = 500;
 const MAX_REMOVED = 100;
 // How often a workspace is made again after the plugin's folder gave a reason to ask again (see makeTempWorkspace), and how long it waits between: ENOENT is asked again at once, a
@@ -90,7 +104,7 @@ const uidOf = (deps) => (deps.uid !== undefined ? deps.uid : (typeof process.get
 // A run that meets a folder in that state would otherwise make its workspace in the temp folder, unrecorded, so that a kill would leave it for good. It asks again after a short pause, as
 // lib/safe-fs.js does for a rename that a scanner holds (the same codes, the same kind of waits), and a folder that is
 // still refusing then is not used. Only where there are no owners to compare (Windows): elsewhere EPERM and EACCES are the answers they sound like. The same three codes are what a scanner that is
-// holding a file that was just made gives for its rename (mark).
+// holding a file that was just made gives for its rename (writeWhole).
 const TRANSIENT_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const windowsRefusesForAMoment = (e, deps) => uidOf(deps) === null && !!e && TRANSIENT_CODES.has(e.code);
@@ -178,31 +192,36 @@ function protectNewParent(parent, deps) {
   throw Object.assign(new Error(`${parent} could not be made private: ${answer.reason}`), { code: answer.unreadable ? 'EBUSY' : NOT_PRIVATE });
 }
 
-// The owner record of a folder this process made: the same stamp whose pid is in the folder's name — with `lent: true` for a workspace that is to be handed to another program (see the top of
-// this file). It is written ONCE, and whole: to a file of its own name, then renamed to `.owner.json`, which is atomic, so that a sweep (which reads the record of a live run's folder on
-// Linux) or a kill finds no record at all or all of it, never half; and it is never written again, because a record that is changed later can be unreadable at that moment — a scanner, a
-// backup, an editor holds it — and what the folder says then is not what the run decided. A record that cannot be written leaves the folder as it would have been before records existed —
-// it works, and nothing ever sweeps it — so it is never a reason to fail.
-function mark(dir, stamp, deps) {
+// A file written WHOLE: to a file of its own name, then renamed over `file`, which is atomic — a reader (a sweep, which reads the record of a live run's folder on Linux) or a kill finds the file as it was or all of the
+// new text, never half. Nothing in this module writes a file any other way, so there is no write that a full disk or a kill can cut off and leave a damaged file where a good one was needed. The temporary copy is
+// created with `wx` — it is a name that did not exist — and removed if anything fails. True when `file` is written. A failure is never thrown: what is written here is a courtesy to the next run (the record of a folder,
+// the cursor of a sweep), and a run does not fail for the lack of it.
+function writeWhole(file, text, deps) {
   const fsx = deps.fs || fs;
-  const file = path.join(dir, OWNER_FILE);
   const temp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
-    fsx.writeFileSync(temp, JSON.stringify(stamp), { flag: 'wx', mode: 0o600 });
+    fsx.writeFileSync(temp, text, { flag: 'wx', mode: 0o600 });
     // On Windows a scanner that has just seen the new file can hold it for a moment, and the rename is refused (EPERM, EACCES or EBUSY): the same short waits as for the folder.
     for (let attempt = 0; ; attempt += 1) {
       try {
         fsx.renameSync(temp, file);
-        return;
+        return true;
       } catch (e) {
         if (!windowsRefusesForAMoment(e, deps) || attempt >= WAITS_MS.length) throw e;
         (deps.pause || pauseSync)(WAITS_MS[attempt]);
       }
     }
   } catch {
-    try { fsx.rmSync(temp, { force: true }); } catch { /* the temp file is not the record */ }
+    try { fsx.rmSync(temp, { force: true }); } catch { /* the temp file is not what was to be written */ }
+    return false;
   }
 }
+
+// The owner record of a folder this process made: the same stamp whose pid is in the folder's name — with `lent: true` for a workspace that is to be handed to another program (see the top of
+// this file). It is written ONCE, and whole (writeWhole): a sweep or a kill finds no record at all or all of it; and it is never written again, because a record that is changed later can be
+// unreadable at that moment — a scanner, a backup, an editor holds it — and what the folder says then is not what the run decided. A record that cannot be written leaves the folder as it would have
+// been before records existed — it works, and nothing ever sweeps it — so it is never a reason to fail.
+const mark = (dir, stamp, deps) => { writeWhole(path.join(dir, OWNER_FILE), JSON.stringify(stamp), deps); };
 
 // The pid a workspace's name names — `genpage-4242-AbC123` is 4242's — or null: a name this maker did not give. mkdtemp's six random characters are
 // always the end of the name, and the pid is the number before them, so a prefix with numbers of its own cannot be mistaken for one.
@@ -226,35 +245,44 @@ function prune(parent, deps) {
   pruneAtExit.set(parent, deps.fs || fs);
 }
 
-// A record file's text and the record it holds, and when it was last written — or null when there is none that can be believed: no file, one that is not a regular file, a very large one, text that
-// is not JSON, JSON that is not a record, a `lent` that is anything but `true` (it is written as that and as nothing else). Not being able to read it — another program holds it exclusively for
-// a moment — is null as well, and every caller takes "no record I can believe" as "not shown to be dead": the folder is kept.
-function readRecord(file, deps) {
+// A small JSON file this module wrote, as its text and the value in it, and when it was last written — or null when there is none that can be believed: no file, one that is not a regular file (a link is not followed),
+// a very large one, or text that is not JSON. Not being able to read it — another program holds it exclusively for a moment — is null as well.
+function readSmallJson(file, deps) {
   const fsx = deps.fs || fs;
   try {
     const st = fsx.lstatSync(file);
     if (!st.isFile() || st.size > OWNER_FILE_MAX_BYTES) return null;
     const raw = fsx.readFileSync(file, 'utf8');
-    const stamp = JSON.parse(raw);
-    return isOwnerStamp(stamp) && (stamp.lent === undefined || stamp.lent === true) ? { raw, stamp, mtimeMs: st.mtimeMs } : null;
+    return { raw, value: JSON.parse(raw), mtimeMs: st.mtimeMs };
   } catch {
     return null;
   }
 }
+
+// A record file's text and the record it holds, and when it was last written — or null when there is none that can be believed: no file, one that is not a regular file, a very large one, text that
+// is not JSON, JSON that is not a record, a `lent` that is anything but `true` (it is written as that and as nothing else). Not being able to read it — another program holds it exclusively for
+// a moment — is null as well, and every caller takes "no record I can believe" as "not shown to be dead": the folder is kept.
+function readRecord(file, deps) {
+  const found = readSmallJson(file, deps);
+  const stamp = found && found.value;
+  return found && isOwnerStamp(stamp) && (stamp.lent === undefined || stamp.lent === true) ? { raw: found.raw, stamp, mtimeMs: found.mtimeMs } : null;
+}
 const readMarker = (dir, deps) => readRecord(path.join(dir, OWNER_FILE), deps);
 
-// A workspace removed with its owner record LAST, and kept recorded until the folder is really gone. `record` is the text of the record the sweep judged.
+// A workspace removed with its owner record LAST, and kept recorded until the folder is really gone.
 //   1. What is inside, except the record, is removed. A removal that fails part way (Windows holds a file a scanner is reading) throws here, with the record still in place.
 //   2. Windows lists a file that was deleted while another process had it open (Node 20: the deletion stays pending until the holder lets go) — and the folder cannot go meanwhile —
 //      so anything but the record that is still listed ends the removal here, again with the record in place: the next sweep tries again.
 //   3. The record is RENAMED out of the folder — to `<folder>.removing`, a file beside it in the plugin's folder, which a sweep never reads as a workspace — and the empty folder removed. A rename, not a
 //      delete: a delete of a file another process has open leaves it pending in the folder (the very thing that keeps the folder from going, and a name that cannot be made again),
-//      while Windows lets such a file be renamed away. If the folder will not go, the record is moved back — or, should even that fail, written again from `record` — so
-//      that what is left is still known to be a dead run's. A sweep that is KILLED between the move and the removal leaves the empty folder and `<folder>.removing`: the next sweep
-//      finishes it (finishInterruptedRemoval), which is why the file is named for the folder and holds its record whole.
+//      while Windows lets such a file be renamed away. If the folder will not go, the record is moved back, so that what is left is still known to be a dead run's — and if even that is refused it
+//      stays where it is, beside the folder and whole: the folder is empty (the record was all that was left in it), which is exactly what the next sweep finishes the removal from (finishInterruptedRemoval),
+//      as it does for a sweep that is KILLED between the move and the removal, which is why the file is named for the folder and holds its record whole. The record is never WRITTEN into the folder
+//      instead: a write can be cut off (a full disk, a kill), and a damaged record in the folder beside the whole one would leave neither this path (which believes no damaged record) nor the next sweep's
+//      (which needs the folder empty) able to finish the removal.
 // False when there was nothing left to remove: another run's sweep, started at the same moment (two builds starting after a kill), took the folder first — that is neither this
 // sweep's removal nor its failure, and it says nothing of it.
-function removeWorkspace(dir, record, deps) {
+function removeWorkspace(dir, deps) {
   const fsx = deps.fs || fs;
   const missing = (e) => !!e && e.code === 'ENOENT';
   // Windows answers EBUSY or EPERM for a moment while a handle that was just released lets go of a file; rmSync retries those.
@@ -295,12 +323,7 @@ function removeWorkspace(dir, record, deps) {
     }
     try {
       fsx.renameSync(aside, file);
-    } catch {
-      try {
-        fsx.writeFileSync(file, record, { flag: 'wx', mode: 0o600 });
-        fsx.rmSync(aside, { force: true });
-      } catch { /* nothing more can be done: what is left is the copy beside the folder, which says whose it was */ }
-    }
+    } catch { /* the record stays beside the folder, whole: see above */ }
     throw e;
   }
   try { fsx.rmSync(aside, { force: true }); } catch { /* as above */ }
@@ -322,9 +345,43 @@ function lentIsOld(dir, found, deps) {
   }
 }
 
+// The entries a sweep looks at, in the order it looks at them (see "A SWEEP IS BOUNDED, AND FAIR" at the top of this file). `listing` is the plugin's folder as `readdirSync(…, { withFileTypes: true })` gives it.
+//   * The cursor, and the temporary copies it is written through, are the sweep's own: they are not entries. (Only a regular file with one of those names is ever removed — by a sweep that has no use for a cursor.)
+//   * A listing no longer than the window is looked at whole, in the order the system gives it, as it always was. There is no use for a cursor then: none is read, and one that an earlier sweep left — or the
+//     copy of one that a killed sweep left — is removed, so that a plugin's folder that has been worked off down to nothing can be removed in its turn when a run ends, and a normal run leaves the temp folder as it found it.
+//   * A longer one is put in name order — in UTF-16 code units, the order every process agrees on, where the file system's own is not the same on every system and moves as entries come and go — and the window is the
+//     next `maxExamined` names after the cursor's, wrapping round to the first; no entry twice. The cursor is written BEFORE the entries are looked at: an entry that a sweep cannot get past (it throws, the
+//     process is killed on it) must not be the one the next sweep starts at again.
+// Never throws.
+function windowOf(listing, parent, maxExamined, deps) {
+  const own = listing.filter((entry) => isCursorName(entry.name));
+  const entries = listing.filter((entry) => !isCursorName(entry.name));
+  if (entries.length <= maxExamined) {
+    for (const entry of own) {
+      if (!entry.isFile()) continue;
+      try { (deps.fs || fs).rmSync(path.join(parent, entry.name), { force: true }); } catch { /* a few dozen bytes: the next sweep that looks at everything tries again */ }
+    }
+    return entries;
+  }
+  // The limit as `slice(0, n)` reads it: nothing for what is not a number.
+  const size = Math.min(entries.length, Math.max(0, Math.trunc(maxExamined) || 0));
+  if (size === 0) return [];
+  const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  // The cursor: {"v":1,"after":"genpage-4242-AbC123"} — the name of the last entry the sweep before looked at. It is read as text and compared with names; it is never used as a path. Anything else in its place — no
+  // file, a link, a folder, text that is not JSON, another version, a name that is not a string — is no cursor, and the sweep starts at the first entry.
+  const found = readSmallJson(path.join(parent, CURSOR_FILE), deps);
+  const after = found && found.value && found.value.v === 1 && typeof found.value.after === 'string' ? found.value.after : null;
+  const next = after === null ? -1 : sorted.findIndex((entry) => entry.name > after);
+  const start = next === -1 ? 0 : next;
+  const window = Array.from({ length: size }, (_, i) => sorted[(start + i) % sorted.length]);
+  writeWhole(path.join(parent, CURSOR_FILE), JSON.stringify({ v: 1, after: window[size - 1].name }), deps);
+  return window;
+}
+
 /**
  * Removes the workspaces in the plugin's folder whose owner is provably gone — and, for one that was lent to another program, only when it is old as well (LENT_KEEP_MS) — and finishes the
- * removals that an earlier sweep began and was killed in. Never throws; never touches anything it cannot prove dead.
+ * removals that an earlier sweep began and was killed in. Looks at no more than `maxExamined` entries and removes no more than `maxRemoved`, and the entries it looks at move on from one sweep to the next
+ * (windowOf), so that none is out of reach for good. Never throws; never touches anything it cannot prove dead.
  * @param {object} [deps] test seams: fs, os, uid, owner (the process-owner.js seams: hostname, platform, pid, probe, now, …), limits ({ maxExamined, maxRemoved })
  * @returns {{ parent: string, removed: Array<{ name: string, stamp: object }>, failed: Array<{ name: string, stamp: object, error: string }>, kept: number }}
  */
@@ -337,12 +394,12 @@ function sweepDeadWorkspaces(deps = {}) {
   const probe = (deps.owner && deps.owner.probe) || probeProcess;
   // The real place of a path: a link, or a Windows junction that an older Node does not report as one, resolves to somewhere else.
   const realPath = (p) => (fsx.realpathSync.native || fsx.realpathSync)(p);
-  let entries;
+  let listing;
   let realParent;
   try {
     checkParent(parent, deps);
     realParent = realPath(parent);
-    entries = fsx.readdirSync(parent, { withFileTypes: true });
+    listing = fsx.readdirSync(parent, { withFileTypes: true });
   } catch {
     return result;
   }
@@ -397,7 +454,7 @@ function sweepDeadWorkspaces(deps = {}) {
     return true;
   };
 
-  for (const entry of entries.slice(0, maxExamined)) {
+  for (const entry of windowOf(listing, parent, maxExamined, deps)) {
     if (entry.isFile() && entry.name.endsWith(REMOVING_SUFFIX)) {
       if (!finishInterruptedRemoval(entry.name)) result.kept += 1;
       continue;
@@ -415,7 +472,7 @@ function sweepDeadWorkspaces(deps = {}) {
     const again = readMarker(dir, deps);
     if (!removable(dir, named, again) || again.raw !== marker.raw) { result.kept += 1; continue; }
     try {
-      if (removeWorkspace(dir, marker.raw, deps)) result.removed.push({ name: entry.name, stamp: marker.stamp });
+      if (removeWorkspace(dir, deps)) result.removed.push({ name: entry.name, stamp: marker.stamp });
       else result.kept += 1;
     } catch (e) {
       result.failed.push({ name: entry.name, stamp: marker.stamp, error: String((e && e.code) || (e && e.message) || e) });
@@ -463,7 +520,7 @@ const refusing = new Set();
  *
  * `lent: true` is for a folder one of whose paths is to be GIVEN to another program — pac, writing its settings file in it: say so here, when the folder is made, and not later (see the top of
  * this file). The record is then written once with that word in it, and a sweep never takes the folder because this run is gone: only when it is old as well (LENT_KEEP_MS).
- * @param {string} prefix what the folder's name starts with (a name, not a path), so a folder left behind says whose it was
+ * @param {string} prefix what the folder's name starts with (a name, not a path), so a folder left behind says whose it was: `<prefix><pid>-<random>`, with a hyphen put before the pid when the prefix does not end in one
  * @param {object} [deps] `lent` (see above), and test seams: fs, os, uid, mkdtempSync (what makes the folder, given the path to start its name with), warn, owner, pause (sleeps, given milliseconds), folderPrivacy (the Windows access-list reader), folderProtect (the Windows maker of an access list)
  * @returns {string} the folder
  */
@@ -472,8 +529,11 @@ function makeTempWorkspace(prefix, deps = {}) {
   const mkdtemp = deps.mkdtempSync || ((start) => fsx.mkdtempSync(start));
   if (typeof prefix === 'string' && SAFE_PREFIX.test(prefix)) {
     let parent = null;
-    // What this process is, as it will be recorded — and named: the folder is `<prefix><pid>-<random>` (see the top of this file).
+    // What this process is, as it will be recorded — and named: the folder is `<prefix><pid>-<random>` (see the top of this file), and a sweep reads the pid from the hyphen before it (pidOfName). A prefix
+    // that does not end in one is given it: `work` is `work-4242-AbC123`, and not `work4242-AbC123`, which no sweep could tell was a workspace's — it would be recorded, and never taken. A prefix that
+    // ends in one (every caller's) is named exactly as it was. The plain call at the end is the caller's own prefix, as it always was.
     let stamp = null;
+    const named = prefix.endsWith('-') ? prefix : `${prefix}-`;
     try { parent = workspaceParent(deps); stamp = ownerStamp(deps.owner); } catch { parent = null; /* no temp folder to name: the plain call below says so */ }
     if (stamp !== null && deps.lent === true) stamp = { ...stamp, lent: true };
     for (let attempt = 1; parent !== null && attempt <= MAKE_ATTEMPTS && !refusing.has(parent); attempt += 1) {
@@ -488,7 +548,7 @@ function makeTempWorkspace(prefix, deps = {}) {
       try {
         ensureParent(parent, deps);
         sweepOnce(parent, deps);
-        dir = mkdtemp(path.join(parent, `${prefix}${stamp.pid}-`));
+        dir = mkdtemp(path.join(parent, `${named}${stamp.pid}-`));
       } catch (e) {
         if (e && e.code === 'ENOENT') continue;
         if (windowsRefusesForAMoment(e, deps)) {
@@ -511,4 +571,4 @@ function makeTempWorkspace(prefix, deps = {}) {
   return mkdtemp(path.join((deps.os || os).tmpdir(), prefix));
 }
 
-module.exports = { PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, LENT_KEEP_MS, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning };
+module.exports = { PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning };

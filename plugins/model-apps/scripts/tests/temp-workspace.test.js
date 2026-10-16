@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, LENT_KEEP_MS, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning,
+  PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning,
 } = require('../lib/temp-workspace.js');
 const { ownerStamp, isOwnerStamp } = require('../lib/process-owner.js');
 const { privateTempRoot, tempEnv, startTarget, deadPid, pause, waitUntil } = require('./helpers/kill-target-client.js');
@@ -23,7 +23,8 @@ const onlyPosix = { skip: !POSIX && 'POSIX modes, owners and links' };
 // few tests that are about the Windows tools.
 function tempRoot(t, { realReader = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temp-ws-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // The retries are for the tests that make hundreds of folders: on Windows a scanner can hold one for a moment when they are all removed at once.
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   return { root, deps: { os: { tmpdir: () => root }, ...(realReader ? {} : { folderPrivacy: () => ({ ok: true, reason: 'stood in for' }), folderProtect: () => ({ ok: true, reason: 'stood in for' }) }) } };
 }
 const entriesOf = (dir) => fs.readdirSync(dir).sort();
@@ -1276,12 +1277,17 @@ test('a workspace that is lent keeps the record it was made with, for as long as
   assert.deepStrictEqual(mentioning(/\b(?:lendWorkspace|changeRecord|rewriteRecord|stillRunning|onSpawn)\b/), []);
   // The one script that names the record's file is the one that makes it, sweeps it and removes it.
   assert.deepStrictEqual(mentioning(/\.owner\.json|\bOWNER_FILE\b/), ['lib/temp-workspace.js']);
-  // And of what it does with it, only the maker writes it: `mark`, once, and the removal that puts a record BACK, word for word, when a folder will not go.
+  // And of what it does with it, only the maker writes it: `mark`, once. Nothing PUTS a record back by writing it into a folder again — a write can be cut off (a full disk, a kill), and a record that is cut
+  // off, beside the whole one that a removal moved out of the folder, leaves neither that removal nor the next sweep able to finish it. The one `writeFileSync` in the module writes a file WHOLE — to a name
+  // of its own that nothing else reads, then renamed into place — and is called twice: for the record, by the maker, and for the sweep's cursor.
   const source = fs.readFileSync(path.join(SCRIPTS_DIR, 'lib', 'temp-workspace.js'), 'utf8');
-  const writers = source.split('\n').filter((line) => /writeFileSync\(/.test(line) && !/^\s*\/\//.test(line));
-  assert.strictEqual(writers.length, 2, writers.join('\n'));
-  assert.ok(writers.some((line) => /temp, JSON\.stringify\(stamp\)/.test(line)), 'the maker\'s write: a temp file, then renamed');
-  assert.ok(writers.some((line) => /file, record,/.test(line)), 'and the put-back of the record that was judged');
+  const lines = (pattern) => source.split('\n').filter((line) => pattern.test(line) && !/^\s*\/\//.test(line));
+  const writers = lines(/writeFileSync\(/);
+  assert.strictEqual(writers.length, 1, writers.join('\n'));
+  assert.ok(/temp, text, \{ flag: 'wx'/.test(writers[0]), 'a whole-file write: to a temp file that did not exist, then renamed');
+  const callers = lines(/\bwriteWhole\(/).filter((line) => !/^\s*function /.test(line));
+  assert.strictEqual(callers.length, 2, callers.join('\n'));
+  assert.ok(callers.some((line) => /OWNER_FILE/.test(line)) && callers.some((line) => /CURSOR_FILE/.test(line)), 'the maker\'s record, and the sweep\'s cursor');
 });
 
 // A record that was moved out of its folder by a removal that was killed — `<folder>.removing` — is finished by the next sweep, when everything agrees.
@@ -1544,22 +1550,388 @@ test('a record that cannot be taken out of its folder — a program holds it ope
   assert.ok(!fs.existsSync(dir));
 });
 
-test('a record that was taken out of a folder that then will not go, and cannot be moved back, is written again — the folder is never left recorded by nothing', (t) => {
+test('a record that was taken out of a folder that then will not go, and cannot be moved back, stays beside the folder, whole — it is never written into the folder again — and the next sweep finishes the removal from it', (t) => {
   const { deps } = tempRoot(t);
   const parent = workspaceParent(deps);
   const dir = plant(deps, goneRecord());
+  const sidecar = `${dir}${REMOVING_SUFFIX}`;
   const before = fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8');
   const eperm = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
   const stuck = {
     ...fs,
     rmdirSync: (target, ...rest) => { if (target === dir) throw eperm(); return fs.rmdirSync(target, ...rest); },
-    // The way back is shut as well: only a record that is written again is left.
+    // The way back is shut as well: the record is not moved into the folder again.
     renameSync: (from, to) => { if (to === path.join(dir, OWNER_FILE)) throw eperm(); return fs.renameSync(from, to); },
   };
   const result = sweepDeadWorkspaces({ ...deps, fs: stuck });
   assert.deepStrictEqual(result.failed.map((f) => [f.name, f.error]), [[path.basename(dir), 'EPERM']]);
-  assert.strictEqual(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8'), before, 'the record is back, word for word');
-  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(dir)], 'and no copy of it is left beside the folder');
-  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(dir)], 'and the next sweep removes the folder');
+  assert.strictEqual(fs.readFileSync(sidecar, 'utf8'), before, 'the record is beside the folder, word for word');
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'and nothing was written into the folder: it is empty, which is what the next sweep finishes the removal from');
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), [path.basename(dir), path.basename(sidecar)].sort());
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(dir)], 'the next sweep finishes the removal');
+  assert.deepStrictEqual(fs.readdirSync(parent), [], 'the folder and the record beside it are gone');
+});
+
+test('a record that cannot be moved back is not WRITTEN into the folder either, however the write ends: one that is cut off — a full disk, a kill — would leave a damaged record beside the whole one, and neither could finish the removal', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const dir = plant(deps, goneRecord());
+  const marker = path.join(dir, OWNER_FILE);
+  const sidecar = `${dir}${REMOVING_SUFFIX}`;
+  const record = fs.readFileSync(marker, 'utf8');
+  const busy = () => Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+  const writes = [];
+  const faulty = {
+    ...fs,
+    rmdirSync: (target, ...rest) => { if (target === dir) throw busy(); return fs.rmdirSync(target, ...rest); },
+    renameSync: (from, to, ...rest) => { if (from === sidecar && to === marker) throw busy(); return fs.renameSync(from, to, ...rest); },
+    // A write of the record into the folder that is cut off half way: the half is really written, and then the write fails.
+    writeFileSync: (file, text, ...rest) => {
+      if (file !== marker) return fs.writeFileSync(file, text, ...rest);
+      writes.push(file);
+      fs.writeFileSync(file, String(text).slice(0, 6), ...rest);
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    },
+  };
+  const first = sweepDeadWorkspaces({ ...deps, fs: faulty });
+  assert.deepStrictEqual(first.failed.map((f) => [f.name, f.error]), [[path.basename(dir), 'EBUSY']], 'the failure that stopped the removal is the one that is reported');
+  assert.deepStrictEqual(writes, [], 'no record is written into the folder');
+  assert.strictEqual(fs.readFileSync(sidecar, 'utf8'), record, 'the complete record is beside the folder');
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'and no half of one is in it');
+  // Sweeps that run on a healthy file system finish it: the folder is empty, and the record beside it is whole.
+  const second = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual([second.removed.map((r) => r.name), second.failed], [[path.basename(dir)], []]);
   assert.deepStrictEqual(fs.readdirSync(parent), []);
+  assert.deepStrictEqual([sweepDeadWorkspaces(deps).removed, sweepDeadWorkspaces(deps).failed], [[], []], 'and nothing is left for the ones after');
+});
+
+test('a removal that fails at any step writes no file at all — the record is only ever moved — and leaves the failure to be reported and the removal to the next sweep', (t) => {
+  for (const [what, breaks] of [
+    ['a file that cannot be removed', () => ({ rmSync: (target, options) => { if (path.basename(target) === 'manifest.json') throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); return fs.rmSync(target, options); } })],
+    ['a record that cannot be moved out', () => ({ renameSync: (from, to) => { if (path.basename(from) === OWNER_FILE) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); return fs.renameSync(from, to); } })],
+    ['a folder that will not go', (dir) => ({ rmdirSync: (target, ...rest) => { if (target === dir) throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); return fs.rmdirSync(target, ...rest); } })],
+  ]) {
+    const { deps } = tempRoot(t);
+    const dir = plant(deps, goneRecord());
+    const written = [];
+    const watched = { ...fs, writeFileSync: (file, ...rest) => { written.push(path.basename(file)); return fs.writeFileSync(file, ...rest); }, ...breaks(dir) };
+    const result = sweepDeadWorkspaces({ ...deps, fs: watched });
+    assert.strictEqual(result.failed.length, 1, what);
+    assert.deepStrictEqual(written, [], `${what}: nothing was written`);
+    assert.ok(recordOfFolder(dir), `${what}: and the folder is still recorded`);
+    assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(dir)], `${what}: the next sweep takes it`);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The name a workspace is given: `<prefix><pid>-<random>`, and the sweep reads the pid back from the hyphen before it
+// ---------------------------------------------------------------------------------------------------------------------
+
+test('a prefix that does not end in a hyphen still makes a workspace a sweep recognises — the pid always follows a hyphen — and a prefix that ends in one is named exactly as it was', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const gone = deadPid();
+  const asked = [];
+  const made = (prefix) => makeTempWorkspace(prefix, { ...deps, owner: { pid: gone }, mkdtempSync: (start) => { asked.push(start); return fs.mkdtempSync(start); } });
+  const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Each is a name the module accepts as a prefix (letters, digits, `.`, `_`, `-`); only the last two end in a hyphen.
+  const prefixes = ['work', 'work.', 'work_', 'w', '9', 'a.b', 'model-app-2', 'work-', 'model-app-2-'];
+  const dirs = prefixes.map((prefix) => made(prefix));
+  prefixes.forEach((prefix, i) => {
+    const named = prefix.endsWith('-') ? prefix : `${prefix}-`;
+    assert.deepStrictEqual([path.dirname(dirs[i]), asked[i]], [parent, path.join(parent, `${named}${gone}-`)], `${prefix}: made in the plugin's folder, asked for the name <prefix>[-]<pid>-`);
+    assert.match(path.basename(dirs[i]), new RegExp(`^${escaped(named)}${gone}-[A-Za-z0-9]{6}$`), prefix);
+    assert.strictEqual(recordOfFolder(dirs[i]).pid, gone, `${prefix}: recorded, with the pid that is in the name`);
+  });
+  const result = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual(result.removed.map((r) => r.name).sort(), dirs.map((dir) => path.basename(dir)).sort(), 'a sweep recognises every one of them as its own, and takes each: its maker is gone');
+  assert.deepStrictEqual(fs.readdirSync(parent), []);
+  // The plain call a workspace falls back to is as it always was: the caller's prefix, as it is.
+  const plain = tempRoot(t);
+  fs.writeFileSync(workspaceParent(plain.deps), 'in the way');
+  assert.match(path.basename(makeTempWorkspace('work', plain.deps)), /^work[A-Za-z0-9]{6}$/, 'no hyphen is added to the name mkdtemp makes in the temp folder');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fair discovery. A sweep looks at no more than LIMITS.MAX_EXAMINED entries, so that the time of one run is bounded however many a folder has collected. If it were always the FIRST ones, a folder whose first
+// MAX_EXAMINED entries must be kept — folders no record vouches for, a record that cannot be read — would hide every entry after them for good: a dead run's workspace, and a removal that a kill left half done.
+// So the window moves on: a sweep that could not look at everything writes down where it stopped (CURSOR_FILE), and the next one — in this process or in a new one — carries on from there.
+// ---------------------------------------------------------------------------------------------------------------------
+
+// A listing in name order, whatever order the file system gives, so that a test that says "the first MAX_EXAMINED entries are the ones to keep" says it on every system: NTFS lists by name and ext4 does not.
+const nameOf = (entry) => String(entry.name || entry);
+const inNameOrder = { ...fs, readdirSync: (target, options) => fs.readdirSync(target, options).sort((a, b) => (nameOf(a) < nameOf(b) ? -1 : 1)) };
+
+// What a sweep has to leave — MAX_EXAMINED folders named for a pid that is gone, with no record to say whose they are — and, sorting after them, what it should take: the workspace of a dead run, and a removal
+// that a kill left half done (the empty folder, and the record beside it).
+function retainedHead(t) {
+  const { root, deps } = tempRoot(t);
+  const gone = goneRecord();
+  const parent = workspaceParent(deps);
+  fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const retained = Array.from({ length: LIMITS.MAX_EXAMINED }, () => fs.mkdtempSync(path.join(parent, `a-genpage-${gone.pid}-`)));
+  const ordinary = plant(deps, gone, { prefix: 'z-genpage-' });
+  const killed = interrupted(deps, { record: gone, prefix: 'z-interrupted-' });
+  return { root, deps, parent, retained, ordinary, killed };
+}
+const namesOf = (dirs) => dirs.map((dir) => path.basename(dir)).sort();
+
+test('a folder whose first MAX_EXAMINED entries must all be kept does not hide what comes after them: the workspace of a dead run and a removal a kill left half done are both taken within the sweeps its size needs — and nothing that was kept is touched', (t) => {
+  const { deps, parent, retained, ordinary, killed } = retainedHead(t);
+  const entries = fs.readdirSync(parent).length;
+  assert.strictEqual(entries, LIMITS.MAX_EXAMINED + 3, 'the folders to keep, the dead run\'s workspace, the folder of the killed removal and the record beside it');
+  const bound = Math.ceil(entries / LIMITS.MAX_EXAMINED);
+  const taken = [];
+  for (let sweeps = 1; sweeps <= bound; sweeps += 1) {
+    const result = sweepDeadWorkspaces({ ...deps, fs: inNameOrder });
+    assert.deepStrictEqual(result.failed, [], `sweep ${sweeps}`);
+    taken.push(...result.removed.map((r) => r.name));
+  }
+  assert.deepStrictEqual(taken.sort(), namesOf([ordinary, killed.dir]), `both are taken within ${bound} sweeps`);
+  assert.ok(!fs.existsSync(ordinary) && !fs.existsSync(killed.dir) && !fs.existsSync(killed.sidecar), 'the workspace is gone, and so are the folder of the killed removal and its record');
+  assert.deepStrictEqual(fs.readdirSync(parent).filter((name) => name !== CURSOR_FILE).sort(), namesOf(retained), 'and every folder a sweep had to keep is where it was: nothing it cannot show to be a dead run\'s is removed');
+});
+
+test('REAL PROCESSES: the same folder swept by a new process each time — nothing is remembered in memory — is worked off all the same: the next process carries on where the last one stopped', async (t) => {
+  const { root, parent, retained, ordinary, killed } = retainedHead(t);
+  const bound = Math.ceil(fs.readdirSync(parent).length / LIMITS.MAX_EXAMINED);
+  const taken = [];
+  for (let sweeps = 1; sweeps <= bound; sweeps += 1) {
+    const sweeper = startTarget(t, ['sweep', root], { env: tempEnv(root) });
+    const said = JSON.parse((await sweeper.waitFor(/^swept /)).slice('swept '.length));
+    await sweeper.exited;
+    assert.strictEqual(said.failed, 0, `process ${sweeps}`);
+    taken.push(...said.removed);
+  }
+  assert.deepStrictEqual(taken.sort(), namesOf([ordinary, killed.dir]), `both are taken by the ${bound} processes`);
+  assert.ok(!fs.existsSync(ordinary) && !fs.existsSync(killed.dir) && !fs.existsSync(killed.sidecar));
+  assert.deepStrictEqual(fs.readdirSync(parent).filter((name) => name !== CURSOR_FILE).sort(), namesOf(retained), 'and what had to be kept is where it was');
+});
+
+test('each sweep looks at the next MAX_EXAMINED entries in name order and wraps round to the first, so every entry is looked at within ceil(entries / MAX_EXAMINED) sweeps — and none is looked at twice by one sweep', (t) => {
+  const pids = Array.from({ length: 11 }, (_, i) => 2000000000 + i);
+  const sweepsOf = (deps, maxExamined) => {
+    const asked = [];
+    const owner = { platform: 'win32', probe: (pid) => { asked.push(pid); return 'alive'; } };
+    return () => { asked.length = 0; sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined } }); return [...asked]; };
+  };
+  // The order the file system lists in is nobody's business: the windows are the same from a listing in name order and from one in the opposite order.
+  const descending = { ...fs, readdirSync: (target, options) => fs.readdirSync(target, options).sort((a, b) => (nameOf(a) < nameOf(b) ? 1 : -1)) };
+  for (const [what, system] of [['the system\'s own order', fs], ['the opposite order', descending]]) {
+    const { deps } = tempRoot(t);
+    for (const pid of pids) plant(deps, null, { pid });
+    const sweep = sweepsOf({ ...deps, fs: system }, 4);
+    assert.deepStrictEqual(sweep(), pids.slice(0, 4), what);
+    assert.deepStrictEqual(sweep(), pids.slice(4, 8), what);
+    assert.deepStrictEqual(sweep(), [...pids.slice(8), pids[0]], `${what}: the third reaches the end and wraps round to the first`);
+    assert.deepStrictEqual(sweep(), pids.slice(1, 5), `${what}: and the fourth goes on from there`);
+  }
+  // Whatever the size of the window: every entry within ceil(entries / window) sweeps, and no sweep looks at more than its window.
+  for (const window of [1, 2, 3, 5, 10]) {
+    const { deps } = tempRoot(t);
+    for (const pid of pids) plant(deps, null, { pid });
+    const next = sweepsOf(deps, window);
+    const seen = new Set();
+    for (let sweeps = 1; sweeps <= Math.ceil(pids.length / window); sweeps += 1) {
+      const asked = next();
+      assert.ok(asked.length <= window && new Set(asked).size === asked.length, `window ${window}, sweep ${sweeps}: ${asked.length} looked at`);
+      asked.forEach((pid) => seen.add(pid));
+    }
+    assert.deepStrictEqual([...seen].sort(), pids, `window ${window}: all ${pids.length} looked at within ${Math.ceil(pids.length / window)} sweeps`);
+  }
+});
+
+test('the cursor is written BEFORE the entries are looked at: a sweep that cannot get past an entry — it throws, or its process is killed there — does not make the next one start at the same window', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const pids = Array.from({ length: 11 }, (_, i) => 2000000000 + i);
+  for (const pid of pids) plant(deps, null, { pid });
+  try {
+    sweepDeadWorkspaces({ ...deps, owner: { platform: 'win32', probe: (pid) => { if (pid === pids[1]) throw new Error('this sweep cannot get past this entry'); return 'alive'; } }, limits: { maxExamined: 4 } });
+  } catch { /* whether the sweep reports it or not, what matters is where the next one starts */ }
+  const sorted = fs.readdirSync(parent).filter((name) => name !== CURSOR_FILE).sort();
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(parent, CURSOR_FILE), 'utf8')), { v: 1, after: sorted[3] }, 'the window was taken, though it was not all looked at');
+  const asked = [];
+  sweepDeadWorkspaces({ ...deps, owner: { platform: 'win32', probe: (pid) => { asked.push(pid); return 'alive'; } }, limits: { maxExamined: 4 } });
+  assert.deepStrictEqual(asked, pids.slice(4, 8), 'and the next sweep goes on past it');
+});
+
+test('a sweep that can look at every entry — the folder holds no more than a window — reads and writes no cursor, and looks at them as it always did: in the order the file system lists them', (t) => {
+  const { deps } = tempRoot(t);
+  for (let i = 0; i < 6; i += 1) plant(deps, null, { pid: 2000000000 + i });
+  const parent = workspaceParent(deps);
+  const touched = [];
+  const watched = {
+    ...fs,
+    // A listing in an order of its own (name order, reversed): the file system's order is whatever it is, and a sweep that can look at all of it goes by that.
+    readdirSync: (target, options) => (target === parent && options && options.withFileTypes ? inNameOrder.readdirSync(target, options).reverse() : fs.readdirSync(target, options)),
+    lstatSync: (file, ...rest) => { if (path.basename(file) === CURSOR_FILE) touched.push(['lstat', CURSOR_FILE]); return fs.lstatSync(file, ...rest); },
+    readFileSync: (file, ...rest) => { touched.push(['read', path.basename(file)]); return fs.readFileSync(file, ...rest); },
+    writeFileSync: (file, ...rest) => { touched.push(['write', path.basename(file)]); return fs.writeFileSync(file, ...rest); },
+    renameSync: (from, to) => { touched.push(['rename', path.basename(to)]); return fs.renameSync(from, to); },
+    rmSync: (target, ...rest) => { touched.push(['remove', path.basename(target)]); return fs.rmSync(target, ...rest); },
+  };
+  const asked = [];
+  sweepDeadWorkspaces({ ...deps, fs: watched, owner: { platform: 'win32', probe: (pid) => { asked.push(pid); return 'alive'; } }, limits: { maxExamined: 6 } });
+  assert.deepStrictEqual(asked, Array.from({ length: 6 }, (_, i) => 2000000005 - i), 'in the order the system listed them (here, name order reversed)');
+  assert.deepStrictEqual(touched, [], 'and nothing was read, written, renamed or removed, the cursor included: it is not looked for');
+  assert.ok(!fs.existsSync(path.join(parent, CURSOR_FILE)));
+});
+
+test('the cursor is one small file in the plugin\'s folder, written whole and holding the name of the last entry looked at — there only while a sweep cannot look at everything — and it is never a workspace, a record or an entry that is looked at', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const owner = { platform: 'win32', probe: () => 'alive' };
+  for (let i = 0; i < 7; i += 1) plant(deps, null, { pid: 2000000000 + i });
+  const names = fs.readdirSync(parent).sort();
+  // Things in the plugin's folder that are not the sweep's: a sweep never removes them, whatever it does with its own.
+  const notes = path.join(parent, 'notes.txt');
+  fs.writeFileSync(notes, 'somebody\'s');
+  const strangers = path.join(parent, 'somebody-elses-folder');
+  fs.mkdirSync(strangers);
+  fs.writeFileSync(path.join(strangers, 'keep.txt'), 'x');
+  const all = [...names, 'notes.txt', 'somebody-elses-folder'].sort();
+  const log = [];
+  const watched = {
+    ...fs,
+    writeFileSync: (file, data, options) => { log.push(['write', path.basename(file).replace(/\.\d+\.[a-z0-9]+\.tmp$/, '.<pid>.<random>.tmp'), options && options.flag]); return fs.writeFileSync(file, data, options); },
+    renameSync: (from, to) => { log.push(['rename', path.basename(from).replace(/\.\d+\.[a-z0-9]+\.tmp$/, '.<pid>.<random>.tmp'), path.basename(to)]); return fs.renameSync(from, to); },
+  };
+  sweepDeadWorkspaces({ ...deps, fs: watched, owner, limits: { maxExamined: 3 } });
+  assert.deepStrictEqual(log, [['write', `${CURSOR_FILE}.<pid>.<random>.tmp`, 'wx'], ['rename', `${CURSOR_FILE}.<pid>.<random>.tmp`, CURSOR_FILE]], 'one write, to a file that did not exist, and one rename over to the cursor: a reader finds the old cursor or the whole of the new');
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), [...all, CURSOR_FILE].sort(), 'the cursor is the one thing added, and no temporary copy is left');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(parent, CURSOR_FILE), 'utf8')), { v: 1, after: all[2] }, 'it names the last of the three entries that were looked at');
+  // A name that no workspace, no record of a removal and no temporary copy of a record can have: a workspace ends in `-<pid>-<six characters>`, a record in `.removing`.
+  for (const name of [CURSOR_FILE, `${CURSOR_FILE}.4242.abc123.tmp`]) {
+    assert.ok(!/-\d{1,10}-[A-Za-z0-9]{6}$/.test(name) && !name.endsWith(REMOVING_SUFFIX), `${name} is not a name the sweep gives a meaning`);
+  }
+  // It is not one of the entries: with a window of exactly the entries there are, a sweep looks at every one of them — and then there is no use for it, and it is removed.
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: all.length } });
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), all, 'a sweep that looked at everything leaves no cursor');
+  assert.strictEqual(fs.readFileSync(notes, 'utf8'), 'somebody\'s');
+  assert.strictEqual(fs.readFileSync(path.join(strangers, 'keep.txt'), 'utf8'), 'x', 'and no entry that is not a cursor was touched');
+  // What a sweep that was killed while it wrote the cursor leaves — a temporary copy — goes the same way, and only that and the cursor itself: names that only look like them are entries like any other.
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 3 } });
+  const stray = path.join(parent, `${CURSOR_FILE}.4242.abc123.tmp`);
+  fs.writeFileSync(stray, '{"v":1');
+  const lookAlikes = [`${CURSOR_FILE}.backup`, `${CURSOR_FILE}.tmp`, `${CURSOR_FILE}.notes.tmp`, `${CURSOR_FILE}.4242.abc123.tmp.old`, 'sweep-cursor.json'];
+  for (const name of lookAlikes) fs.writeFileSync(path.join(parent, name), 'somebody\'s');
+  fs.mkdirSync(path.join(parent, `${CURSOR_FILE}.4242.abc123.tmp.d`));
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 100 } });
+  assert.deepStrictEqual(fs.readdirSync(parent).sort(), [...all, ...lookAlikes, `${CURSOR_FILE}.4242.abc123.tmp.d`].sort(), 'the cursor and the copy are gone, and nothing that only looks like them is');
+  assert.ok(!fs.existsSync(stray));
+});
+
+test('a cursor that is missing, unreadable or not what was written starts the sweep at the first entry — and is replaced by a good one — and one that names an entry that is gone, or is past the last, resumes at the next name', (t) => {
+  const pids = Array.from({ length: 11 }, (_, i) => 2000000000 + i);
+  const run = (cursorText) => {
+    const { deps } = tempRoot(t);
+    const parent = workspaceParent(deps);
+    for (const pid of pids) plant(deps, null, { pid });
+    const sorted = fs.readdirSync(parent).sort();
+    if (cursorText !== undefined) fs.writeFileSync(path.join(parent, CURSOR_FILE), typeof cursorText === 'function' ? cursorText(sorted) : cursorText);
+    const asked = [];
+    sweepDeadWorkspaces({ ...deps, owner: { platform: 'win32', probe: (pid) => { asked.push(pid); return 'alive'; } }, limits: { maxExamined: 4 } });
+    return { asked, sorted, parent };
+  };
+  const first = pids.slice(0, 4);
+  assert.deepStrictEqual(run().asked, first, 'no cursor');
+  for (const [what, text] of [
+    ['an empty file', ''],
+    ['text that is not JSON', '{"v":1,"aft'],
+    ['JSON that is not a cursor', '[1, 2]'],
+    ['a name that is not a string', '{"v":1,"after":5}'],
+    ['a cursor of another version', (sorted) => JSON.stringify({ v: 2, after: sorted[4] })],
+    ['a file far too large to be one, though what it says is a name', (sorted) => JSON.stringify({ v: 1, after: sorted[4], padding: 'x'.repeat(5000) })],
+  ]) {
+    const { asked, sorted, parent } = run(text);
+    assert.deepStrictEqual(asked, first, `${what}: the first entries`);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(parent, CURSOR_FILE), 'utf8')), { v: 1, after: sorted[3] }, `${what}: and the cursor is a good one now`);
+  }
+  // A name is compared with the names in the folder and nothing else: one that is not there goes on from where it would have been.
+  assert.deepStrictEqual(run((sorted) => JSON.stringify({ v: 1, after: `${sorted[4]}-gone-meanwhile` })).asked, pids.slice(5, 9), 'an entry that is gone: the next name after it');
+  assert.deepStrictEqual(run(JSON.stringify({ v: 1, after: 'zzzz-past-the-last' })).asked, first, 'past the last: round to the first');
+  assert.deepStrictEqual(run(JSON.stringify({ v: 1, after: '' })).asked, first, 'an empty name sorts before every entry');
+  assert.deepStrictEqual(run(JSON.stringify({ v: 1, after: '../../etc/passwd' })).asked, first, 'and a name is only ever compared, never used as a path');
+});
+
+test('POSIX: a cursor that is a link is no cursor — it is not followed, and what it points at is not written to — and a sweep that has no use for a cursor does not remove a link either', onlyPosix, (t) => {
+  const { root, deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const pids = Array.from({ length: 6 }, (_, i) => 2000000000 + i);
+  for (const pid of pids) plant(deps, null, { pid });
+  const elsewhere = path.join(root, 'elsewhere.json');
+  const pointedAt = JSON.stringify({ v: 1, after: fs.readdirSync(parent).sort()[3] });
+  fs.writeFileSync(elsewhere, pointedAt);
+  const link = path.join(parent, CURSOR_FILE);
+  fs.symlinkSync(elsewhere, link);
+  const asked = [];
+  const owner = { platform: 'win32', probe: (pid) => { asked.push(pid); return 'alive'; } };
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 3 } });
+  assert.deepStrictEqual(asked, pids.slice(0, 3), 'what the link points at says to start after the fourth entry: it is not read');
+  assert.strictEqual(fs.readFileSync(elsewhere, 'utf8'), pointedAt, 'and it is not written to');
+  // The cursor that sweep wrote took the link's place. A link put there again is not removed by a sweep that has no use for a cursor: only a file is.
+  fs.rmSync(link);
+  fs.symlinkSync(elsewhere, link);
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 100 } });
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link is still there');
+  assert.strictEqual(fs.readFileSync(elsewhere, 'utf8'), pointedAt);
+});
+
+test('a folder that is named like the cursor is not a cursor, and is not touched: the sweep starts at the first entry, cannot write a cursor over it, leaves no temporary copy, and fails at nothing', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const pids = Array.from({ length: 6 }, (_, i) => 2000000000 + i);
+  for (const pid of pids) plant(deps, null, { pid });
+  const folder = path.join(parent, CURSOR_FILE);
+  fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, 'keep.txt'), 'x');
+  const asked = [];
+  const owner = { platform: 'win32', probe: (pid) => { asked.push(pid); return 'alive'; } };
+  const result = sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 3 }, pause: () => {} });
+  assert.deepStrictEqual([asked, result.failed], [pids.slice(0, 3), []]);
+  assert.deepStrictEqual(fs.readdirSync(parent).filter((name) => name.startsWith(CURSOR_FILE)), [CURSOR_FILE], 'no temporary copy is left beside the folder');
+  assert.deepStrictEqual(fs.readdirSync(folder), ['keep.txt']);
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 100 } });
+  assert.deepStrictEqual(fs.readdirSync(folder), ['keep.txt'], 'and a sweep that looked at everything does not remove it');
+});
+
+test('a cursor that cannot be written — the disk is full, a scanner holds the folder — is no failure of the sweep and leaves no temporary copy: it costs only that the next sweep starts at the first entry again', (t) => {
+  const full = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  for (const [what, breaks] of [
+    ['the write fails', { writeFileSync: (file, ...rest) => { if (path.basename(file).startsWith(CURSOR_FILE)) throw full; return fs.writeFileSync(file, ...rest); } }],
+    ['the rename fails', { renameSync: (from, to) => { if (path.basename(to) === CURSOR_FILE) throw full; return fs.renameSync(from, to); } }],
+  ]) {
+    const { deps } = tempRoot(t);
+    const parent = workspaceParent(deps);
+    const pids = Array.from({ length: 8 }, (_, i) => 2000000000 + i);
+    for (const pid of pids) plant(deps, null, { pid });
+    // A dead run's workspace, in the first window: a sweep that cannot write its cursor takes it all the same.
+    const dead = plant(deps, goneRecord(), { prefix: 'a-genpage-' });
+    const before = fs.readdirSync(parent).filter((name) => name !== path.basename(dead)).sort();
+    const failing = sweepDeadWorkspaces({ ...deps, fs: { ...fs, ...breaks }, limits: { maxExamined: 3 } });
+    assert.deepStrictEqual([failing.removed.map((r) => r.name), failing.failed], [[path.basename(dead)], []], what);
+    assert.deepStrictEqual(fs.readdirSync(parent).sort(), before, `${what}: no cursor, and no temporary copy`);
+    const asked = [];
+    sweepDeadWorkspaces({ ...deps, owner: { platform: 'win32', probe: (pid) => { asked.push(pid); return 'alive'; } }, limits: { maxExamined: 3 } });
+    assert.deepStrictEqual(asked, pids.slice(0, 3), `${what}: the next sweep, on a healthy file system, starts at the first entry`);
+  }
+});
+
+test('the removal cap does not narrow the window: what a sweep looked at and kept for the cap is for a later one, and every dead run\'s workspace is taken in a bounded number of sweeps', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const gone = goneRecord();
+  const dirs = Array.from({ length: 9 }, () => plant(deps, gone));
+  const limits = { maxExamined: 4, maxRemoved: 1 };
+  const left = () => dirs.filter((dir) => fs.existsSync(dir));
+  let sweeps = 0;
+  while (left().length > 0 && sweeps < 2 * dirs.length) {
+    const before = left().length;
+    const result = sweepDeadWorkspaces({ ...deps, limits });
+    sweeps += 1;
+    assert.deepStrictEqual([result.removed.length, before - left().length], [1, 1], `sweep ${sweeps}: one taken, which is the cap, and what it says it took is gone`);
+  }
+  assert.deepStrictEqual(left(), [], `every one is taken, in ${sweeps} sweeps`);
+  assert.deepStrictEqual(fs.readdirSync(parent), [], 'and the folder is left as empty as it was found: no cursor either');
 });
