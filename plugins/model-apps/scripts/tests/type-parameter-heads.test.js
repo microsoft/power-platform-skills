@@ -11,10 +11,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { opensTypeParameters, blankNonCodePreservingTemplateExpressions, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS } = require('../lib/source-literals.js');
+const { opensTypeParameters, blankNonCodePreservingTemplateExpressions, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS, OPERATOR_WORD_ENDS_MEMBER_AFTER, OPERATOR_WORDS_THAT_ARE_NAMES } = require('../lib/source-literals.js');
 const { resolvePageRefs, navigationFrontier } = require('../lib/pageref-resolver.js');
 const { loadTypescriptOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
 const { cleanSourceFile, readingAt, isElement, tokenVocabulary } = require('./helpers/angle-frames.js');
+const { NEWLINE_GAPS, DECORATED_PLACES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES } = require('./helpers/type-head-pages.js');
 
 const SKIP = 'no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it';
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -47,7 +48,8 @@ function readPage(code, lexer = { resolvePageRefs, navigationFrontier }) {
   const after = [...deployed.matchAll(/"(?:PAGEREF_detail|11111111-1111-4111-8111-111111111111)"/g)];
   return { rewritten: before.filter((token, k) => after[k][0] === `"${ID}"`).map((token) => token.index), tokens: before.map((token) => token.index), frontier: lexer.navigationFrontier ? lexer.navigationFrontier(code) : null };
 }
-// `expect` is 'exact' (the real call is rewritten, the data is not, and no guess is named) or 'refused' (the data is not rewritten and a guess is named, so the page is refused after it).
+// `expect` is 'exact' (the real call is rewritten, the data is not, and no guess is named) or 'refused' (the data is not rewritten and a guess is named, so the page is refused after it): 'refused:identifier' names the kind of the
+// guess, 'refused:identifier|newline' one of two (the first guess at a `<` is the one that the frontier names), and a plain 'refused' is the guess `generic`.
 function assertRead(code, expect, label) {
   const { rewritten, tokens, frontier } = readPage(code);
   assert.strictEqual(tokens.length, 2, `${label}: a real call and a note`);
@@ -56,7 +58,8 @@ function assertRead(code, expect, label) {
     assert.strictEqual(frontier, null, `${label}: no guess is named`);
     assert.deepStrictEqual(rewritten, [tokens[0]], `${label}: the real call is rewritten`);
   } else {
-    assert.ok(frontier && frontier.kind === 'generic', `${label}: a guess is named: ${visible(frontier)}`);
+    const kinds = expect.startsWith('refused:') ? expect.slice('refused:'.length).split('|') : ['generic'];
+    assert.ok(frontier && kinds.includes(frontier.kind), `${label}: the guess ${kinds.join(' or ')} is named: ${visible(frontier)}`);
   }
 }
 // How many of the pages the released lexer reads wrong: it rewrites the token that is data.
@@ -246,26 +249,30 @@ test('TypeScript: a line break before `delete` begins a member only after the to
   assert.deepStrictEqual(unsound.slice(0, 5), [], 'a member that follows a token across a line break is read as the text of an element');
   // The tokens that end a member: a closing bracket, a separator, a postfix operator, a mark, a generator's `*`, and every name, keyword and literal.
   for (const token of ['}', ')', ']', ';', ',', '>', '*', '++', '--', '!', '?', 'x', 'delete', 'in', "'x'", '`x`', '1', '/x/']) assert.ok(ends.has(token), `TypeScript lets a member follow ${token} across a line break`);
-  // The tokens that never do — an operator, an `=`, an `=>`, a `:`, an opening bracket, a `.` — put the line break in the middle of an expression: an element after `void` there is read as text, with no guess.
+  // The tokens that never do — an operator, an `=`, an `=>`, a `:`, an opening bracket, a `.` — put the line break in the middle of an expression: an element after `void` there is read as text, with no guess. Where the braces may hold members, which a
+  // property of a class is (`class K { p = a /` and a line break, then `void <span>…`), a `/` that ends a regex literal ends the property's initializer, and the `>` of `>>` and `>>>` may close type arguments: the lexer cannot tell them from an operator, and guesses.
+  // At the top level of the source no member stands, and it does not.
   const operandFrames = [['', ''], ['a ', ''], ['(', ')'], ['[', ']'], ['f(', ')'], ['{ k: ', ' }'], ['() ', ''], ['x ? a : ', ''], ['x ? ', ' : y'], ['a ', ' b'], ['f(a, ', ')']];
-  const imprecise = new Set();
-  const meetsAMember = [];
+  const places = [['the top level', (e) => `const e = ${e};\n${CALL};`, []], ['a class property', (e) => `class K { p = ${e}; }\n${CALL};`, ['/', '>>', '>>>']]];
   let checked = 0;
-  for (const token of punctuatorsOf(ts)) {
-    if (ends.has(token)) continue;
-    for (const [left, right] of operandFrames) {
-      const code = `const e = ${left}${token}\nvoid <span>(MARK); // note</span>${right};\n${CALL};`;
-      if (!cleanSourceFile(ts, code)) continue;
-      checked += 1;
-      if (guessesOf(code).length > 0) imprecise.add(token);
-      // A `.` and a `?.` before `void` make it a property: `a.void<span>(MARK)` is a call, and the text in it is code.
-      if (readsAsCode(code) && token !== '.' && token !== '?.') meetsAMember.push(token);
+  for (const [place, wrap, guessed] of places) {
+    const imprecise = new Set();
+    const meetsAMember = [];
+    for (const token of punctuatorsOf(ts)) {
+      if (ends.has(token)) continue;
+      for (const [left, right] of operandFrames) {
+        const code = `${wrap(`${left}${token}\nvoid <span>(MARK); // note</span>${right}`)}`;
+        if (!cleanSourceFile(ts, code)) continue;
+        checked += 1;
+        if (guessesOf(code).length > 0) imprecise.add(token);
+        // A `.` and a `?.` before `void` make it a property: `a.void<span>(MARK)` is a call, and the text in it is code.
+        if (readsAsCode(code) && token !== '.' && token !== '?.') meetsAMember.push(token);
+      }
     }
+    assert.deepStrictEqual(meetsAMember, [], `${place}: an element after a token that wants its operand is read as the members of a type`);
+    assert.deepStrictEqual([...imprecise].sort(), guessed, `${place}: a guess where no member can follow the token`);
   }
-  assert.ok(checked >= 60, `only ${checked} expression pages were valid`);
-  assert.deepStrictEqual(meetsAMember, [], 'an element after a token that wants its operand is read as the members of a type');
-  // A `/` that ends a regex literal ends a class property's initializer, and the `>` of `>>` and `>>>` may close type arguments: the lexer cannot tell them from an operator, and guesses.
-  assert.deepStrictEqual([...imprecise].sort(), ['/', '>>', '>>>'], 'a guess where no member can follow the token');
+  assert.ok(checked >= 120, `only ${checked} expression pages were valid`);
 });
 
 // ─── Words before the name of a member ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -497,8 +504,12 @@ test('opensTypeParameters: where no member begins, a head whose list an arrow fo
   }
   // A list that the lexer's scan closes at a parenthesis in an attribute string of a nested element (a JSX string has no escapes, a JavaScript one has) shows an arrow that is not there: the head is the guess, read as a type.
   assert.deepStrictEqual(opensTypeParameters('<in U>(a = x + <Child x="\\" y=") =>" />)</in>', 0, null, false, true), TYPE_GUESS);
-  // A list that holds a regex, an element or a template in a default is not read to its end: no arrow is seen, and the head stays an element.
-  for (const code of ['<> ([*/</>)', '<in U>([*/</in>)', '<public U>(a = f(/)/)</public>', '<>(a,\n[/</>']) assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), ELEMENT, visible(code));
+  // A list that holds a regex, an element or a template in a default is not read to its end: no arrow is seen, but none is ruled out either, and the head is the guess, read as an element, where it was a certain element before.
+  // (Where an expression is known to start, the rule's answer is the element.)
+  for (const code of ['<> ([*/</>)', '<in U>([*/</in>)', '<public U>(a = f(/)/)</public>', '<>(a,\n[/</>']) {
+    assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), GUESS, visible(code));
+    assert.deepStrictEqual(opensTypeParameters(code, 0, null, true), ELEMENT, `in an expression: ${visible(code)}`);
+  }
 });
 
 test('a function type with a head that starts like an element\'s is read as the type it is after a `:`, an `=>`, a `(`, a `[` and an `=`, and the note after it is data', (t) => {
@@ -599,4 +610,400 @@ test('a method with a body whose class holds a comment, a string or a template a
   if (base) assert.ok(misreadByBase(base, codes) >= 20, `the released lexer misreads only ${misreadByBase(base, codes)} of the ${codes.length} pages`);
   // With nothing that could hold the closing tag the text after the body is read as it is: the next member's `}` fails the element, and the type is certain.
   for (const name of ['delete', 'new', 'm?']) assertRead(pageOf(`class C { ${name}<U>(y) {} x = 1; }`, 'U'), 'exact', `${name} and no comment`);
+});
+
+// ─── A type parameter written with a Unicode escape ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// An identifier may be written with a Unicode escape, and the parser reads the word it spells: `delete<\u0054>(): void` is a method named `delete` that has the type parameter T. The name of an element's tag or attribute may hold none
+// (TS17021, "Unicode escape sequence cannot appear here"), so the head is no element's — and the lexer, which reads no escape in a tag, must not take it for one: an element read for the method took the rest of the type for JSX text that
+// runs on to a closing tag in a later string, and the call in it for code. The head is read as the list it may be, and is the guess `identifier`: the page is refused after it, and the call in the note is never rewritten.
+// (The heads, places and gaps are those of helpers/type-head-pages.js, which the sweep of the same pages reads.)
+
+test('a method named like an operator, a signature or a method whose type parameter is written with a Unicode escape: the page is refused after the guess `identifier`, and the note after it is data', (t) => {
+  const ts = loadTypescriptOracle();
+  const base = loadBaseLexer();
+  const codes = [];
+  let valid = 0;
+  const names = [...MEMBER_NAME_OPERATORS, 'm'];
+  for (const [head, closing] of ESCAPED_HEADS) {
+    for (const [place, wrap] of ESCAPE_PLACES) {
+      for (const name of names) {
+        for (const gap of ESCAPE_GAPS) {
+          // An object literal has a property with no gap before the list: `delete\n<T>()` is two members there, which a comma would have to separate.
+          if (place === 'an object literal' && gap !== '') continue;
+          const code = pageOf(wrap(`${name}${gap}${head}(): void`), closing);
+          const label = `${place} / ${name}${visible(gap)}${visible(head)}`;
+          codes.push(code);
+          // A name and a `<` on the next line are two members to the parser, and the position of the `<` is the guess `newline` (a `<` on a later line than the word before it, or after `void` and a line break), which may be reported before the head is read.
+          assertRead(code, (name === 'm' || name === 'void') && /[\n]/.test(gap) ? 'refused:identifier|newline' : 'refused:identifier', label);
+          if (ts && cleanSourceFile(ts, code)) {
+            valid += 1;
+            assertTypeScriptReads(ts, code, label);
+          }
+        }
+      }
+    }
+  }
+  if (!ts) t.diagnostic(SKIP);
+  else assert.ok(valid >= 400, `${valid} of the ${codes.length} pages are valid to TypeScript`);
+  // The released lexer and the one before this change took the head for an element and rewrote the note.
+  if (base) assert.ok(misreadByBase(base, codes) >= 150, `the released lexer misreads only ${misreadByBase(base, codes)} of the ${codes.length} pages`);
+  // The guess is named at the `<` of the head, and it is the escape that is reported: `identifier`.
+  const found = guessesOf('interface Api { delete<\\u0054>(): MARK }');
+  assert.deepStrictEqual(found, [[found[0] && found[0][0], 'identifier']], 'one guess, at the head');
+  assert.strictEqual('interface Api { delete<\\u0054>(): MARK }'[found[0][0]], '<');
+});
+
+test('a type parameter that is written with an escape costs the page the calls after it, and the same type with the name spelled out is read as it was: a call after it is rewritten where nothing in the type holds the closing tag', () => {
+  const after = (head) => `interface Api { delete${head}(): void; }\nfunction openDetail() { ${CALL}; }\nexport default function Page() { return null; }\n`;
+  for (const head of ['<T>', '<in U>', '<public U>', '<const U>']) {
+    const plain = readPage(after(head));
+    assert.strictEqual(plain.frontier, null, `${head}: no guess is named`);
+    assert.strictEqual(plain.rewritten.length, 1, `${head}: the call after the type is rewritten`);
+  }
+  for (const head of [String.raw`<\u0054>`, String.raw`<in \u0054>`, String.raw`<public \u0054>`, String.raw`<const \u0054>`]) {
+    const escaped = readPage(after(head));
+    assert.ok(escaped.frontier && escaped.frontier.kind === 'identifier', `${head}: the guess is named: ${visible(escaped.frontier)}`);
+    assert.deepStrictEqual(escaped.rewritten, [], `${head}: the call after the guess is not rewritten`);
+  }
+});
+
+// ─── A parameter list that cannot be read to its end ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// Where no member begins, a head that starts like an element's is a type if an arrow follows its parameter list, and the list is read to find it. A list that cannot be read — a template with a template or a comment in a substitution, a regex
+// after a call in a default, a list longer than the window — shows no arrow, which says nothing about one: `callback: <in U>(value: `${`prefix`}`) => void` is a function type. It is the guess `generic`, as it is for a head that is no
+// modifier's, and not the certain element that it was: read for an element's text it took the closing tag in a later string of the type for its own.
+const ORDINARY_HEAD = /^<(?:U|const U)>$/;
+
+test('opensTypeParameters: where no member begins, a head whose parameter list cannot be read to its end is the guess, with an arrow after it or none, and an element where an expression is known to start', () => {
+  for (const head of UNREADABLE_HEADS) {
+    for (const [what, list] of UNREADABLE_LISTS) {
+      const label = `${visible(head)} and ${what}`;
+      assert.deepStrictEqual(opensTypeParameters(`${head}${list} => void; note: '</in>'`, 0, null, false, true), GUESS, `an arrow after it: ${label}`);
+      if (!ORDINARY_HEAD.test(head)) {
+        // A head that no element has the text of is read where an arrow follows; a text with none is an element's that cannot be told from a function type's.
+        assert.deepStrictEqual(opensTypeParameters(`${head}${list} text</in>`, 0, null, false, true), GUESS, `no arrow after it: ${label}`);
+        assert.deepStrictEqual(opensTypeParameters(`${head}${list} => void; note: '</in>'`, 0, null, true), ELEMENT, `in an expression: ${label}`);
+      }
+    }
+  }
+  // A list that is read to its end is not the guess: with no arrow after it, it is the text of an element for certain, and with one, a type.
+  for (const head of UNREADABLE_HEADS.filter((head) => !ORDINARY_HEAD.test(head))) {
+    for (const list of ['(y: U)', '(value: `a${string}`)', '(x = 1)', '(x?: U, ...rest: V[])']) {
+      assert.deepStrictEqual(opensTypeParameters(`${head}${list} text</in>`, 0, null, false, true), ELEMENT, `${visible(head)}${list}`);
+      assert.deepStrictEqual(opensTypeParameters(`${head}${list} => void; note: '</in>'`, 0, null, false, true), TYPE, `${visible(head)}${list} =>`);
+    }
+  }
+});
+
+test('a function type whose parameter list cannot be read to its end: the note after it is data, and the page is refused after the guess, in every place a function type stands', (t) => {
+  const ts = loadTypescriptOracle();
+  const base = loadBaseLexer();
+  const codes = [];
+  for (const head of UNREADABLE_HEADS) {
+    for (const [place, wrap] of FUNCTION_TYPE_PLACES) {
+      for (const [what, list] of UNREADABLE_LISTS) {
+        const code = pageOf(wrap(`${head}${list} => void`), closingOf(head));
+        const label = `${place} / ${visible(head)} / ${what}`;
+        codes.push(code);
+        assertRead(code, 'refused', label);
+        if (ts) {
+          assertTypeScriptReads(ts, code, label);
+          assert.strictEqual(readingAt(ts, cleanSourceFile(ts, code), code.indexOf(head)), 'FunctionType', `${label}: TypeScript reads a function type`);
+        }
+      }
+    }
+  }
+  if (!ts) t.diagnostic(SKIP);
+  // The head of an element in the same places cannot be told apart either, and neither can one that is no element's: the page is refused, and the note is data. The released lexer reads the head of every modifier and fragment as an element.
+  if (base) assert.ok(misreadByBase(base, codes) >= 5 * FUNCTION_TYPE_PLACES.length * UNREADABLE_LISTS.length, `the released lexer misreads only ${misreadByBase(base, codes)} of the ${codes.length} pages`);
+  // Readable lists are read exactly where the note comes after them.
+  for (const head of ['<in U>', '<public U>', '<const in U>', '<>']) {
+    for (const list of ['(value: `a${string}`)', '(x = 1)', '(x?: U)']) {
+      for (const [place, wrap] of FUNCTION_TYPE_PLACES) assertRead(pageOf(wrap(`${head}${list} => void`), closingOf(head)), 'exact', `${place} / ${visible(head)}${list}`);
+    }
+  }
+});
+
+// ─── A word that takes an operand, before a line break ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// A token that wants an operand — an `=`, an `&&`, a `(` — leaves the expression to go on across a line break, and so does a word that wants one: `const e = void` and a line break, then `void <span>(x)</span>` is the `void` of an element, as it is
+// on one line (`void void <span>…`), and the `//` in the element is JSX text. The word before the break ends a member where it is the name of one or a type: `a: void` and a line break, then `delete<U>(y: U): T`, is a type and a method.
+const BREAK_ELEMENTS = ['<span>(MARK); // note</span>', '<span>(MARK) text</span>', '<span>(MARK)</span>', '<span>(x = f(/)/)) MARK</span>', '<>(MARK); // note</>', '<public U>(MARK); // note</public>'];
+const LINE_BREAKS = NEWLINE_GAPS;
+const OPERAND_PLACES = [['an initializer', (w) => `const e = ${w};`], ['an argument', (w) => `f(${w});`], ['an array element', (w) => `const a = [${w}];`], ['the right side of +', (w) => `const e = x + ${w};`], ['the right side of &&', (w) => `const e = x && ${w};`],
+  ['the right side of <', (w) => `const e = x < ${w};`], ['an async function', (w) => `async function f() { const e = ${w}; }`], ['a property value', (w) => `const o = { k: ${w} };`], ['a class property', (w) => `class K { p = ${w}; }`],
+  ['a class property that a decorator precedes', (w) => `class K { @dec p = ${w}; }`], ['a static class property', (w) => `class K { static p = ${w}; }`]];
+
+test('an element after `void`, `typeof` or `delete` that follows a word taking an operand is read for certain, with every kind of line break between the words, as it is on one line', (t) => {
+  const ts = loadTypescriptOracle();
+  let valid = 0;
+  for (const [place, wrap] of OPERAND_PLACES) {
+    for (const first of ['void', 'typeof', 'delete', 'a in', 'a instanceof']) {
+      for (const gap of LINE_BREAKS) {
+        for (const word of ['void', 'typeof', 'delete']) {
+          for (const text of BREAK_ELEMENTS) {
+            // A property value is after a `:`, where a type may stand: `void` there may be the type, so the word before the line break is not read as an operator.
+            if (place === 'a property value' && !/^(?:void|typeof|delete)$/.test(first)) continue;
+            const code = `${wrap(`${first}${gap}${word} ${text}`)}\n${CALL};`;
+            const label = `${place} / ${first} / ${visible(gap)} / ${word} / ${text}`;
+            if (place === 'a property value') {
+              // After a `:` the word may be a type, and a method may follow it: not decided, and never rewritten.
+              if (!/\n|\u2028|\u2029/.test(gap)) assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess on one line`);
+              continue;
+            }
+            assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+            assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+            if (ts && cleanSourceFile(ts, code)) valid += 1;
+          }
+        }
+      }
+    }
+  }
+  if (ts) assert.ok(valid >= 2000, `${valid} of the pages are valid to TypeScript`);
+  else t.diagnostic(SKIP);
+});
+
+// The words that end a member before a line break: a type or a name after the tokens of OPERATOR_WORD_ENDS_MEMBER_AFTER, the name of a member, and the words that are names as well.
+const WORD_ENDINGS = ['a: void', 'a: A | void', 'a: A & void', 'a: () => void', 'a: typeof void', 'a: keyof void', 'a: readonly void', 'a(x): x is void', 'a: A.void', 'a: A.delete', 'a: delete', 'a: in', 'a: instanceof', 'a: return', 'a?: void', 'a: [x: void]',
+  'void', 'delete', 'typeof', 'instanceof', 'in', 'static void', 'readonly delete', 'public in', 'get void'];
+const CLASS_WORD_ENDINGS = [...WORD_ENDINGS, 'a = x.void', 'a = x?.delete', 'a = x as void', 'a = x satisfies void', 'a = await', 'a = yield', 'a = of', 'const e = await', 'static e = await'];
+
+test('a member that follows a word that ends a member is read as one: a type or a name after a line break, and the words that are names as well', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  let checked = 0;
+  for (const word of MEMBER_NAME_OPERATORS) {
+    for (const [place, endings, frame] of [['an interface', WORD_ENDINGS, (m) => `interface I { ${m}\n  ${word}<U>(y: U): MARK }`], ['a type literal', WORD_ENDINGS, (m) => `type L = { ${m}\n  ${word}<U>(y: U): MARK };`],
+      ['a class', CLASS_WORD_ENDINGS, (m) => `class C { ${m}\n  ${word}<U>(y: U): MARK {} }`]]) {
+      for (const ending of endings) {
+        for (const separator of ['', ';', ',']) {
+          const code = frame(`${ending}${separator}`);
+          if (!methodNamed(ts, code, word)) continue;
+          checked += 1;
+          assert.ok(readsAsCode(code), `${place}: ${visible(code)} is read as a member`);
+        }
+      }
+    }
+  }
+  assert.ok(checked >= 250, `${checked} programs were valid`);
+});
+
+test('TypeScript: a word that begins an expression ends a member before a line break only after the tokens of OPERATOR_WORD_ENDS_MEMBER_AFTER, a separator, a modifier or a decorator, and the words that are names as well always — derived from the parser, and read as a member after each', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  // The words of EXPR_START_WORDS (an operator before an operand), a sample of the reserved ones and the three that are names as well.
+  const words = ['void', 'typeof', 'delete', 'in', 'instanceof', 'new', 'return', 'default', 'await', 'yield', 'of'];
+  const lefts = ['', 'a', 'a: A', 'a: ()', 'a = x', 'a = f(', 'a = [', 'a = (', 'x.', 'a: A.', 'a = x as', 'a: keyof', 'a: A |', 'a: A &', 'a = x ?', 'a = !', 'a = x +', '@d', '@d()', 'static', 'a: typeof', 'a: unique', 'a(x): x', 'a: readonly', 'a: A extends B ? C :', 'a: { [K in', 'a = x satisfies', 'a = -', 'a: [x:'];
+  const frames = [(s) => `interface I { ${s}\n delete<U>(y: U): MARK }`, (s) => `class C { ${s}\n delete<U>(y: U): MARK {} }`];
+  const tokens = [...tokenVocabulary(ts), 'x', "'x'", '1', '`t`'];
+  const after = new Map(words.map((word) => [word, new Set()]));
+  const unsound = [];
+  // TypeScript's parser stops with an assertion on a few programs that this makes of the keyword `using`: such a program is no page.
+  const methodAfter = (code) => {
+    try {
+      return methodNamed(ts, code, 'delete');
+    } catch (error) {
+      return false;
+    }
+  };
+  for (const word of words) {
+    for (const token of tokens) {
+      for (const left of lefts) {
+        for (const frame of frames) {
+          const code = frame(`${left} ${token} ${word}`);
+          if (!methodAfter(code)) continue;
+          after.get(word).add(token === '?.' ? '.' : token);
+          if (!readsAsCode(code)) unsound.push(visible(code));
+        }
+      }
+    }
+  }
+  assert.deepStrictEqual(unsound.slice(0, 5), [], 'a member after a line break that follows a word is read as the text of an element');
+  // The words that are names as well are those a class field may be initialised with: `a = await`, `a = yield`, `a = of`.
+  const names = words.filter((word) => methodNamed(ts, `class C { a = ${word}\n delete<U>(y: U): MARK {} }`, 'delete'));
+  assert.deepStrictEqual([...OPERATOR_WORDS_THAT_ARE_NAMES].sort(), names.sort(), 'the operator words that may end a field');
+  // After every other token that the words before a member may follow, the lexer knows the member by another rule: a separator, a modifier (`MEMBER_PREFIX_WORDS`), the end of a decorator (here a tagged template: `@d `t` void`).
+  const union = new Set();
+  for (const word of words) if (!OPERATOR_WORDS_THAT_ARE_NAMES.has(word)) for (const token of after.get(word)) union.add(token);
+  const known = new Set([...OPERATOR_WORD_ENDS_MEMBER_AFTER, ';', ',', '`t`', ...MEMBER_PREFIX_WORDS]);
+  assert.deepStrictEqual([...union].filter((token) => !known.has(token)).sort(), [], 'a token after which TypeScript lets a member follow a word, and the lexer does not know');
+  assert.deepStrictEqual([...OPERATOR_WORD_ENDS_MEMBER_AFTER].filter((token) => !union.has(token)).sort(), [], 'a token of OPERATOR_WORD_ENDS_MEMBER_AFTER that no program has before a word');
+});
+
+test('`await`, `yield` and `of` before a line break may end a member, and a page that holds an element after them is read exactly where the braces hold statements and refused where they may hold members: the class field is a name', (t) => {
+  const ts = loadTypescriptOracle();
+  // A field that is initialised with the identifier `await` and a method that starts on the next line: TypeScript reads both, in a class and in an async function.
+  for (const word of OPERATOR_WORDS_THAT_ARE_NAMES) {
+    for (const code of [`class C { const e = ${word}\n delete<U>(y: U): MARK {} }`, `class C { e = ${word}\n void<U>(y: U): MARK {} }`, `async function f() { class C { e = ${word}\n typeof<U>(y: U): MARK {} } }`]) {
+      if (ts) assert.ok(methodNamed(ts, code, /delete|void|typeof/.exec(code)[0]), `TypeScript reads a method: ${visible(code)}`);
+      assert.ok(readsAsCode(code), `read as a member: ${visible(code)}`);
+    }
+  }
+  if (!ts) t.diagnostic(SKIP);
+  // An element after `await` and a line break is the operand of an operator in the braces of a function, where no member stands: it is read for certain, and so is the one after every word that is only an operator.
+  const element = '<span>(MARK); // note</span>';
+  const real = `function openDetail() { ${CALL}; }\n`;
+  for (const word of ['await', 'yield', 'of', 'void', 'typeof', 'delete']) {
+    const code = `async function f() { const e = ${word}\nvoid ${element}; }\n${real}`;
+    const { rewritten, frontier } = readPage(code);
+    assert.deepStrictEqual([frontier, rewritten.length], [null, 1], `${word}: the call after the element is rewritten`);
+    if (ts) assert.ok(cleanSourceFile(ts, code), `${word}: TypeScript parses the page`);
+  }
+  // Where the braces may be a class's, an object literal's or a type's — the block of an arrow function and its value in an object literal — the line break may end a field or a member that `await` is the name of: a guess. The words that are
+  // only operators are read, except after an `=>`, where a type may end in `void` (`a: () => void`).
+  for (const [place, wrap] of [['the block of an async arrow', (s) => `const f = async () => { const e = ${s}; };`], ['the value of an async arrow in an object', (s) => `const o = { f: async () => ${s} };`]]) {
+    const code = wrap(`await\nvoid ${element}`) + `\n${real}`;
+    const { rewritten, frontier } = readPage(code);
+    assert.ok(frontier && frontier.kind === 'generic', `${place}: a guess is named: ${visible(frontier)}`);
+    assert.deepStrictEqual(rewritten, [], `${place}: the call after the guess is not rewritten`);
+    if (ts) assert.ok(cleanSourceFile(ts, code), `${place}: TypeScript parses the page`);
+  }
+  for (const word of ['void', 'typeof', 'delete']) {
+    const code = `const f = async () => { const e = ${word}\nvoid ${element}; };\n${real}`;
+    assert.deepStrictEqual(readPage(code).frontier, null, `${word}: read for certain in the block of an arrow`);
+  }
+});
+
+// ─── A decorator, and an expression after it ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// A class member may be preceded by decorators, and `@dec delete<U>(y: U): T {}` is a decorated method named `delete`: where a member may begin is where a decorator ends. An `@` earlier on the statement says nothing about the token before the word:
+// in `@dec(void <span>…</span>)` it is the `(` of the decorator's arguments, in `@dec x = void <span>…` an initializer's `=`, and in a decorated method's body whatever that body holds. (The places are those of helpers/type-head-pages.js.)
+
+test('an element after `void`, `typeof` or `delete` is read for certain wherever a decorator stands earlier on its statement: in its arguments, a field initializer and a method body', (t) => {
+  const ts = loadTypescriptOracle();
+  let valid = 0;
+  for (const [place, wrap] of DECORATED_PLACES) {
+    // After `return` and a line break in the block of an arrow function the statement may have ended: that place is read below.
+    if (place === 'the value of a return in an arrow') continue;
+    for (const gap of LINE_BREAKS) {
+      for (const word of ['void', 'typeof', 'delete']) {
+        for (const text of BREAK_ELEMENTS) {
+          const code = `${wrap(`${gap}${word} ${text}`)}\n${CALL};`;
+          const label = `${place} / ${visible(gap)} / ${word} / ${text}`;
+          assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+          assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+          if (ts && cleanSourceFile(ts, code)) valid += 1;
+        }
+      }
+    }
+  }
+  if (ts) assert.ok(valid >= 1500, `${valid} of the pages are valid to TypeScript`);
+  else t.diagnostic(SKIP);
+  // `return` and a line break in the block of an arrow function: the braces may be a type's, the statement may have ended there, and a member named `return` may stand in it: not decided, as it was not before a decorator. In the body of a method, a
+  // block, the statement that the line break ends is certain.
+  for (const gap of LINE_BREAKS.filter((gap) => /\n|\u2028|\u2029/.test(gap))) {
+    const arrow = `class C { @decorate method = () => { return${gap}void ${BREAK_ELEMENTS[0]}; } }\n${CALL};`;
+    const method = `class C { @decorate method() { return${gap}void ${BREAK_ELEMENTS[0]}; } }\n${CALL};`;
+    assert.ok(guessesOf(arrow).length > 0, `a guess is named after a return in an arrow and ${visible(gap)}`);
+    assert.deepStrictEqual(guessesOf(method), [], `no guess after a return in a method and ${visible(gap)}`);
+    if (ts) for (const code of [arrow, method]) assert.ok(cleanSourceFile(ts, code), `TypeScript parses the page: ${visible(code)}`);
+  }
+  assert.deepStrictEqual(guessesOf(`class C { @decorate method = () => { return void ${BREAK_ELEMENTS[0]}; } }\n${CALL};`), [], 'no guess on one line');
+});
+
+const DECORATORS = ['@dec', '@a.b', '@a?.b', '@a!', '@a!.b', '@dec()', '@dec()!', '@(x)', '@dec<T>()', '@dec<A, B>()', '@dec<(x: A) => B>()', '@tag`x`', '@dec()`x`', '@1', "@'x'", '@new X()', '@new X', '@#a', '@a.#b', '@this', '@this.x', '@super.x', '@import("x")', '@a\n.b',
+  '@function(){}', '@class {}', '@async', '@static', '@a.static', '@readonly', '@get', '@\\u0064ec', '@dec(\n1,\n2\n)', '@dec(() => { return 1; })', '@dec({ a: 1, b: [1, 2] })', '@dec("a;b", \'c,d\')', '@dec(`x${y}`)', '@dec(/x/)', '@dec() @dec2()', '@dec @dec2', '@dec static', '@dec static async', '@dec async *',
+  '@dec readonly', '@dec get', '@dec public', '@dec override', '@dec accessor', '@dec declare', '@dec abstract', '@dec in', '@dec out', '@dec export', '@dec const', '@dec(a => a)', '@dec(a ? b : c)', '@dec(a, b)', '@dec(a = 1)', '@dec(typeof x)', '@dec(void 0)'];
+const DECORATED_FRAMES = [
+  (d, w) => `class C { ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { m() {} ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { x = 1; ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { x = 1\n ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { ${d}\n ${w}<U>(y: U): MARK {} }`,
+  (d, w) => `abstract class C { ${d} abstract ${w}<U>(y: U): MARK; }`, (d, w) => `const K = class { ${d} ${w}<U>(y: U): MARK {} };`, (d, w) => `declare class C { ${d} ${w}<U>(y: U): MARK; }`,
+];
+
+test('TypeScript: a decorated method named like an operator is read as a member after every shape of decorator, and an expression that holds an `@` earlier on its statement is not', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  let checked = 0;
+  for (const decorator of DECORATORS) {
+    for (const word of MEMBER_NAME_OPERATORS) {
+      for (const frame of DECORATED_FRAMES) {
+        const code = frame(decorator, word);
+        if (!methodNamed(ts, code, word)) continue;
+        checked += 1;
+        assert.ok(readsAsCode(code), `read as a member: ${visible(code)}`);
+      }
+    }
+  }
+  assert.ok(checked >= 1500, `${checked} programs were valid`);
+  const element = BREAK_ELEMENTS[0];
+  for (const code of [`class C { @dec(a, void ${element}) m() {} }`, `class C { @dec(a ? 1 : void ${element}) m() {} }`, `class C { @dec x = (void ${element}); }`, `class C { @dec x = a in void ${element}; }`, `class C { @dec x = [void ${element}]; }`,
+    `class C { @dec x = f(typeof void ${element}); }`, `@dec class C { m() { const e = void ${element}; } }`, `class C { @dec m(a = void ${element}) {} }`, `class C { @dec(x) y = z in void ${element}; }`, `class C { @dec static x = void ${element}; }`]) {
+    assert.ok(cleanSourceFile(ts, code), `TypeScript parses ${visible(code)}`);
+    assert.ok(!readsAsCode(code), `the element is text: ${visible(code)}`);
+    assert.deepStrictEqual(guessesOf(code), [], `no guess: ${visible(code)}`);
+  }
+});
+
+// ─── Where no member stands ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// The braces of a function, a method and a statement hold statements, never members: the word before an element is an operator there, whatever stands before it and after a line break too (`const e = await` and a line break, then
+// `void <span>…</span>`). The braces of a class, an object literal and a type may hold members, and braces that the lexer does not know for a block are taken for them (membersMayStandAt, blockBraceAt).
+const STATEMENT_BRACES = [
+  ['a function', (s) => `async function f() { ${s} }`], ['a function expression', (s) => `const f = async function () { ${s} };`], ['a named function expression', (s) => `const f = async function g(a) { ${s} };`], ['a method of a class', (s) => `class C { async m(a) { ${s} } }`],
+  ['a method of a class that extends a call', (s) => `class C extends mixin(A) { async m() { ${s} } }`], ['a getter', (s) => `class C { get x() { ${s} } }`], ['a constructor', (s) => `class C { constructor(a) { ${s} } }`], ['a method of an object literal', (s) => `const o = { async m() { ${s} } };`],
+  ['a static method', (s) => `class C { static async m() { ${s} } }`], ['a generator', (s) => `function* g() { ${s} }`], ['an if block', (s) => `async function f() { if (a) { ${s} } }`], ['an else block', (s) => `async function f() { if (a) { b; } else { ${s} } }`],
+  ['a for block', (s) => `async function f() { for (let i = 0; i < n; i += 1) { ${s} } }`], ['a for-await block', (s) => `async function f() { for await (const x of y) { ${s} } }`], ['a while block', (s) => `async function f() { while (a) { ${s} } }`],
+  ['a do block', (s) => `async function f() { do { ${s} } while (a); }`], ['a switch', (s) => `async function f() { switch (a) { case 1: ${s} } }`], ['a try block', (s) => `async function f() { try { ${s} } catch { g(); } }`],
+  ['a catch block', (s) => `async function f() { try { g(); } catch (e) { ${s} } }`], ['a finally block', (s) => `async function f() { try { g(); } finally { ${s} } }`], ['a block after a statement', (s) => `async function f() { a; { ${s} } }`], ['the top level', (s) => s],
+];
+
+test('an element after a word that takes an operand and a line break is read for certain in the braces of a function, a method and a block, and the top level, wherever they stand', (t) => {
+  const ts = loadTypescriptOracle();
+  let valid = 0;
+  for (const [place, wrap] of STATEMENT_BRACES) {
+    for (const prefix of ['void', 'typeof', 'delete', 'await', 'a in', 'a instanceof']) {
+      for (const gap of ['\n', '/*\n*/', '\r\n']) {
+        const code = `${wrap(`const e = ${prefix}${gap}void ${BREAK_ELEMENTS[0]};`)}\n${CALL};`;
+        const label = `${place} / ${prefix} / ${visible(gap)}`;
+        assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+        assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+        if (ts && cleanSourceFile(ts, code)) valid += 1;
+      }
+    }
+  }
+  if (ts) assert.ok(valid >= 300, `${valid} of the pages are valid to TypeScript`);
+  else t.diagnostic(SKIP);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
+  // The same words are a guess where the braces may be a class's, an object literal's or a type's: the block of an arrow function, which a function type's object type cannot be told from, and what the lexer does not read.
+  for (const [place, wrap] of [['the block of an arrow', (s) => `const f = async () => { ${s} };`], ['the value of an arrow in an object', (s) => `const o = { f: async () => ${s.replace(/^const e = /, '').replace(/;$/, '')} };`],
+    ['braces after a colon', (s) => `async function f() { l: { ${s} } }`], ['braces after a closing brace', (s) => `async function f() { if (a) { b; } { ${s} } }`], ['a template substitution', (s) => `const t = \`\${(() => { ${s} })()}\`;`]]) {
+    const code = `${wrap(`const e = await\nvoid ${BREAK_ELEMENTS[0]};`)}\n${CALL};`;
+    assert.ok(guessesOf(code).length > 0, `${place}: a guess is named`);
+    const { rewritten, frontier } = readPage(code);
+    assert.ok(frontier && frontier.kind === 'generic', `${place}: the guess is generic: ${visible(frontier)}`);
+    assert.deepStrictEqual(rewritten, [], `${place}: the call after the guess is not rewritten`);
+  }
+});
+
+test('TypeScript: a method named like an operator is a member in the braces of a class after every heritage — a call, a parenthesis, `new`, a function or a class, a name that a keyword of a block spells or an escape cuts — and in an object literal that follows a `;` of a `for` head, and the lexer reads it as code', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  let checked = 0;
+  for (const heritage of CLASS_HERITAGES) {
+    for (const word of ['delete', 'void']) {
+      for (const [separator, before] of [[' ', ''], [' ', 'a = await\n'], ['', '']]) {
+        const code = `${heritage}${separator}{ ${before}${word}<U>(y: U): MARK {} }`;
+        if (!methodNamed(ts, code, word)) continue;
+        checked += 1;
+        assert.ok(readsAsCode(code), `read as a method: ${visible(code)}`);
+      }
+    }
+  }
+  assert.ok(checked >= 250, `${checked} programs were valid`);
+  // A `;` of a `for` head and an `=>` before braces that are not a block: the braces of an object literal and a type literal, whose methods and signatures are members.
+  const bodies = [(m) => `for (let i = 0;; { ${m} }) {}`, (m) => `for (let i = 0; i < 1; { ${m} }) {}`, (m) => `for (;;) { for (;; { ${m} }) {} }`, (m) => `const e = <div style={{ ${m} }} />;`, (m) => `class K { static p = { ${m} }; }`,
+    (m) => `const s = \`\${{ ${m} }}\`;`, (m) => `function k(a = { ${m} }) {}`];
+  const signatures = [(m) => `type F = () => { ${m} };`, (m) => `let f: (a) => { ${m} };`, (m) => `type G = new () => { ${m} };`, (m) => `function g(): { ${m} } { return null as any; }`, (m) => `let x: { ${m} };`];
+  for (const word of MEMBER_NAME_OPERATORS) {
+    for (const [wraps, tail] of [[bodies, '{}'], [signatures, ';']]) {
+      for (const wrap of wraps) {
+        const code = wrap(`${word}<U>(y: U): MARK ${tail}`);
+        if (!methodNamed(ts, code, word)) continue;
+        checked += 1;
+        assert.ok(readsAsCode(code), `read as a method: ${visible(code)}`);
+      }
+    }
+  }
+  assert.ok(checked >= 300, `${checked} programs were valid`);
+  t.diagnostic(`${checked} programs valid to TypeScript`);
 });

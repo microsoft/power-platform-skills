@@ -126,7 +126,8 @@ function prevSignificant(src, i) {
 //   angle               a `>` may close type arguments, a JSX tag or a comparison; the `>` of `=>`, the closer of a cast the lexer proves is one (castKeywordIsCertain) and the end of an element
 //                       or a regex it read are certain
 //                         const half = total as Types . Alias<number> / 2; const re = /x/;
-//   identifier          an identifier written with a Unicode escape, or a keyword-looking word cut by `#` or a non-ASCII letter
+//   identifier          an identifier written with a Unicode escape, or a keyword-looking word cut by `#` or a non-ASCII letter; the name of a type parameter written with one (`delete<\u0054>(): void`) is the parser's `T` and
+//                       no element's, and the head is read as the list it may be
 //                         var Al\u0069as = 12;        this.#new / total / 2
 //   operator            a `/` after a spread `...` or after a run of three signs, and the second `<` of a shift before a name that may start an element
 //                       (`1<<n>x</n>`; where what follows cannot be one, `1<<n;`, it is the shift it is); and a `<` whose head has a constraint and a parameter list
@@ -167,8 +168,11 @@ function prevSignificant(src, i) {
 //                       element's — a modifier before the name, alone or in a run with `const` (`<in U>(y)`, `<public U>(y)`, `<const in U>(y)`), an empty list (`<>(y)`), a method named
 //                       `delete`, `typeof`, `void` or `instanceof` (`delete<U>(y)`) — where a type has them as a signature's type parameters, or as a generic function type's where no
 //                       member begins (`cb: <in U>(y: U) => void`: the `=>` after the list tells it), and a guess where the two readings may end the head in different places (a string with an
-//                       escaped quote, a regex for a constraint, a comment in the head) (signatureHeadFollows); there a `:` or a `{` after the list is read through too, and a body is
-//                       read from its end (PROSE_BODY);
+//                       escaped quote, a regex for a constraint, a comment in the head) or the list cannot be read to its end where a function type may stand (a template with a template or a comment in a
+//                       substitution, a regex after a call in a default, a list longer than the window: it shows no arrow, and rules none out) (signatureHeadFollows); there a `:` or a `{` after the list is read through too, and a body is
+//                       read from its end (PROSE_BODY); a method named so is a member only where members may stand — not in parentheses or brackets, at the top level of the source, or in the braces of a
+//                       function, a method or a statement (membersMayStandAt) — and where a member may begin there (memberMayBeginAt: after a separator, a modifier, a decorator, or on a later line a token that
+//                       may end a member), else the word is an operator and the element after it certain;
 //                       and TypeScript's rule
 //                       for a `<` (see below) decides everything else
 //                         interface Callable { <T>(x: T): T }          <span>(required): Name</span>          const f: <T>(x: { 'a'?(y: T): T }) => T = g;
@@ -927,9 +931,11 @@ function signatureHeadFollows(src, i, budget, noMember = false) {
     return { generic: false, ambiguity: src.slice(wordStart, wordEnd) === 'extends' && regexEnd(src, tag.slash) !== -1 ? 'generic' : null };
   }
   const type = genericFunctionTypeFollows(src, tag.resume, i, budget, noMember, true);
-  // Where no member begins only an arrow makes the head a type, a function type's, and the reading says so where it finds one after the list. A list it cannot read to its end — an unclosed parenthesis, a default that holds a regex, a
-  // template or an element — shows no arrow, and the head stays the element it always was there: `f(<> ([*/</>) > …` is a fragment whose text starts with a parenthesis.
-  return noMember && !type.generic ? { generic: false, ambiguity: null } : type;
+  // Where no member begins only an arrow makes the head a type, a function type's, and the reading says so where it finds one after the list. A list that it can read to its end and finds no arrow after is an element's text, and
+  // that is certain (callSignatureOrElement). A list it cannot read to its end — a regex, a template or an element in a default, a template with a comment or another template in a substitution, a list longer than the window —
+  // shows no arrow either, but that is not the same thing: it says nothing about whether one follows, and the answer stays the guess it is (`generic`). `callback: <in U>(value: `${`prefix`}`) => void` is a function type whose list is
+  // unreadable, and read for an element's text its `</in>` was found in a later string of the type, and the call in it rewritten.
+  return type;
 }
 
 // Whether a line terminator stands in src between `from` and `to` — in a comment too, which is a line break to the grammar when it holds one.
@@ -1144,34 +1150,166 @@ const MEMBER_PREFIX_WORDS = new Set(['abstract', 'accessor', 'async', 'const', '
 const MEMBER_LOOKBACK = 8;
 
 // Whether a member of a type, a class or an object literal may begin at the word that ends right before the `<` at `i`, read from the tokens that stand before the word. Where it cannot — after an `=`, an operator, `return`, a `(`, on this line
-// or after a line break — the word is an operator, and the `<` after it an element.
+// or after a line break, or where no member can stand at all (membersMayStandAt) — the word is an operator, and the `<` after it an element.
 function memberMayBeginAtWord(out, i) {
-  return memberMayBeginAt(out, wordBefore(out, i).start + 1, 0);
+  const at = wordBefore(out, i).start + 1;
+  return membersMayStandAt(out, at) && memberMayBeginAt(out, at, 0);
+}
+
+// Whether members can stand directly at `at`, which only the braces of a class, an interface, a type literal and an object literal hold. They do not stand inside parentheses or brackets that nothing has closed — the arguments of a call, a parameter list, an array,
+// a tuple, the head of a `for` (`f(a, void <span>…</span>)`, `@dec(void <span>…</span>)`) — nor in a block, the body of a function, a statement or a `switch` (`async function f() { const e = await` and a line break, then `void <span>…</span>`), nor at the top level of the source, where
+// nothing is open: the brackets read back from `at` are balanced all the way to its start. A window that ends first says nothing (true), and so does any braces that blockBraceAt does not know for a block: the answer false is the one that reads a method as an element, so
+// it is given only where the parser has no member to read.
+function membersMayStandAt(out, at) {
+  const opener = openerBefore(out, at);
+  if (opener.ch === '{') return !blockBraceAt(out, opener.index);
+  return opener.ch === '?';
+}
+
+// The innermost bracket that nothing has closed before `at`, read back over the lexer's output, where the brackets of a string, a comment, a regex and JSX text are blank: `{ ch, index }` with the character of its `(`, `[` or `{`; `ch` is `''` where nothing is
+// open (the brackets are balanced all the way back to the start of the source) and `'?'` where the window ends first.
+function openerBefore(out, at) {
+  let depth = 0;
+  for (let k = at - 1; k >= 0 && at - k <= LOOKAHEAD; k -= 1) {
+    const c = out[k];
+    if (c === ')' || c === ']' || c === '}') {
+      depth += 1;
+    } else if (c === '(' || c === '[' || c === '{') {
+      if (depth === 0) return { ch: c, index: k };
+      depth -= 1;
+    }
+  }
+  return { ch: depth !== 0 || at > LOOKAHEAD ? '?' : '', index: -1 };
+}
+
+// The words that open a block of statements: `else {`, `try {`, `catch {`, `finally {`, `do {`. All are reserved, so no name is spelled so; a property of such a name, which a heritage clause may end in (`class C extends a.else {`), is no keyword, nor is a word that an escape, `#` or a
+// letter beyond ASCII cuts short (blockBraceAt).
+const BLOCK_BEFORE_BRACE = new Set(['else', 'try', 'catch', 'finally', 'do']);
+
+// Whether the `{` at `k` opens a block, where no member stands, as the tokens before it say. TypeScript puts members in the braces of a class, an interface, a type literal, an enum and an object literal, which follow a name, a type, a `:`, an `=`, a `(`, a `,`, a `{`,
+// an `=>` and the like, and a statement's block follows the few things below. Only those are read; every other token, `}` and the `${` of a template's substitution among them, leaves the braces open to members, so that what is not read is a guess and never a block.
+//   `else {`, `try {`, `catch {`, `finally {`, `do {`   the words of BLOCK_BEFORE_BRACE
+//   `{` as the first token of the source                a block: a statement cannot begin with an object literal
+//   `;` before it                                       a statement ended and a block follows (`a; { … }`): no member is followed by a `{`, and the braces or the top level of the source hold it. Between parentheses or brackets the `{` is an
+//                                                       object literal's (`for (;; { m<U>() {} })`)
+//   `)` before it                                       closes the head of a function or a method (`function f(a) {`, `m(a) {`, `get x() {`) or of `if`, `for`, `while`, `switch`, `catch` and `with` (closesBodyHead)
+function blockBraceAt(out, k) {
+  const { token, index } = tokenBeforeAngle(out, k);
+  if (token === '') return true;
+  if (token === ';') {
+    const outer = openerBefore(out, k).ch;
+    return outer === '{' || outer === '';
+  }
+  if (token === ')') return closesBodyHead(out, index);
+  if (!BLOCK_BEFORE_BRACE.has(token)) return false;
+  const before = index - token.length;
+  return !isPropertyName(out, before) && !cutsWord(out, before);
+}
+
+// Whether the `)` at `close`, which a `{` follows, ends the head of a function, a method or a statement, whose braces are its body or block, and not the heritage of a class, where they hold members: `class C extends mixin(A) {`, `extends (Base) {`,
+// `extends a.b.mixin(A) {`, `extends new Base() {` are valid, and the one place that a `)` is followed by the braces of members. A call or a parenthesis that follows `extends` or `new`, directly or as the last of the names that dots join (`a.b.mixin`), may
+// be one, so it is not taken for a head. Neither is a call that follows anything the names do not go back to: a `)`, a `]`, a `>` (type arguments), a `?.` or a `!`, an escape, a letter beyond ASCII — what is not read is not a head.
+function closesBodyHead(out, close) {
+  let depth = 0;
+  let open = -1;
+  for (let j = close; j >= 0 && close - j <= LOOKAHEAD; j -= 1) {
+    if (out[j] === ')') depth += 1;
+    else if (out[j] === '(' && --depth === 0) { open = j; break; }
+  }
+  if (open === -1) return false;
+  let name = wordBefore(out, open);
+  if (name.word === 'extends') return false;
+  while (name.word !== '') {
+    if (cutsWord(out, name.start)) return false;
+    const before = prevSignificant(out, name.start + 1);
+    if (before.ch !== '.') {
+      const { token } = tokenBeforeAngle(out, name.start + 1);
+      return token !== 'extends' && token !== 'new';
+    }
+    name = wordBefore(out, before.index);
+  }
+  return false;
 }
 
 // Whether a member may begin at `at`, where a word or a `*` starts. After a separator it does; after a modifier on the same line it does if a member may begin at the modifier (`a in delete <U>(y)</U>` has an operator, not a modifier,
-// and `x = in …` no program); after a generator's `*` if one may begin at the `*`; after a decorator (decoratorBefore); on a later line after any token that may end a member (memberMayEndBefore) — a name, a keyword, a closing bracket —
-// and not after one that wants its operand, the `=`, `=>`, `:`, `(`, `[` or operator of an expression that goes on (`const e =` and a line break, then `void <span>…</span>`).
+// and `x = in …` no program); after a generator's `*` if one may begin at the `*`; after a decorator (decoratorBefore); on a later line after any token that may end a member (memberMayEndBefore, wordMayEndMember) — a name, a keyword,
+// a closing bracket — and not after one that wants its operand, the `=`, `=>`, `:`, `(`, `[` or operator of an expression that goes on (`const e =` and a line break, then `void <span>…</span>`), or a word that takes an operand,
+// `void` and the like (`const e = void` and a line break, then `void <span>…</span>`).
 function memberMayBeginAt(out, at, depth) {
   const before = tokenBeforeAngle(out, at);
   const { token, newline, index } = before;
   if (MEMBER_START_BEFORE.has(token) || depth >= MEMBER_LOOKBACK) return true;
   if (token === '*') return memberMayBeginAt(out, index, depth + 1);
   const word = /^[\w$]+$/.test(token);
-  if (newline) return word || memberMayEndBefore(out, before, depth);
-  if (word && MEMBER_PREFIX_WORDS.has(token)) return memberMayBeginAt(out, index - token.length + 1, depth + 1);
+  if (newline) return word ? wordMayEndMember(out, before, depth) : memberMayEndBefore(out, before, depth);
+  // A modifier on the same line, or the last name of a decorator that a modifier's word spells (`@async`, `@a.static`).
+  if (word && MEMBER_PREFIX_WORDS.has(token)) return memberMayBeginAt(out, index - token.length + 1, depth + 1) || decoratorBefore(out, index);
   return decoratorBefore(out, index);
 }
 
-// Whether a decorator ends at `index`, the last character of the token before a member's name. A class member may have any number of them before its name and its modifiers (parseModifiers allows decorators in a class, and in no other
-// place a member stands: `@dec`, `@a.b`, `@dec(1)`, `@(x)`, `@dec<T>()`), and no program has an `@` in code anywhere else, so one earlier on the statement says that what stands before the name is a decorator's. The statement is the
-// text back to a `;` or a line break, within the window.
+// The words of EXPR_START_WORDS that are plain names where no operand follows them. `of` is no keyword outside a `for` head, and `await` and `yield` are names unless an async function or a generator makes them operators (the parser takes
+// `await` before a line break for the identifier outside an `await` context: parseAwaitExpression, isAwaitExpression, nextTokenIsIdentifierOrKeywordOrLiteralOnSameLine,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts). The lexer does not track those contexts, so a line break after one of them may end a member whatever stands before it, as the one after a name does:
+//   class C { a = await⏎ delete<U>(y: U): T {} }        a field that is initialised with the identifier `await`, and a method
+const OPERATOR_WORDS_THAT_ARE_NAMES = new Set(['of', 'await', 'yield']);
+// The tokens after which a word that begins an expression and wants an operand (EXPR_START_WORDS) may still end a member, where the member may not begin at the word: the word is a type or a name there, and no operator.
+//   a type after a `:`, a `|`, a `&` or an `=>`        a: void⏎     a: A | void⏎     a: A & void⏎     a: () => void⏎
+//   a type after the word that takes one               x as void⏎   x satisfies void⏎   a(x): x is void⏎   a: keyof void⏎   a: readonly void⏎   a: unique void⏎   a: typeof void⏎        (`typeof` takes an entity name, which any word is)
+//   a name after a `.` (`?.` ends in one)              a: A.delete⏎ a = x?.in⏎
+//   a type in the style of JSDoc after a `?`, a `!` or a `??`   x as ?void⏎   (the parser reads them and the checker rejects them, TS8020: no page that builds has one)
+// Every other token puts the word where an operand is wanted — an `=`, a `(`, a `[`, an operator, another word that takes an operand: `a = void⏎` is no member, and a class field cannot end in it. The tests derive the list from the parser, with
+// every token of its vocabulary before each of the words, so a TypeScript that takes another token fails one rather than leaving a method to be read as the text of an element.
+const OPERATOR_WORD_ENDS_MEMBER_AFTER = new Set(['.', '=>', '&', '|', '!', '?', '??', ':', 'typeof', 'as', 'satisfies', 'is', 'keyof', 'readonly', 'unique']);
+
+// Whether the word that ends a line, `token`, whose last character is at `index`, may end a member, so that a member may begin on the next line. Most words do: a name, a type, a literal (`a: string`, `a = x`, `this`). A word that begins an expression
+// and wants its operand — `void`, `typeof`, `delete`, `in`, `instanceof` and the rest of EXPR_START_WORDS — makes the expression go on across the line break, as an `=` does: `const e = void` and a line break, then `void <span>(x)</span>` is the `void`
+// of an element, and the page is no member's. It ends a member only where it is not the operator: the name of a member (a member may begin at the word: `interface I { void⏎ void<U>(y): void }`, and every keyword is a name there), a type or a
+// name after the tokens of OPERATOR_WORD_ENDS_MEMBER_AFTER (`a: void⏎`), or a word that is a name as well (OPERATOR_WORDS_THAT_ARE_NAMES).
+function wordMayEndMember(out, { token, index }, depth) {
+  if (!EXPR_START_WORDS.has(token) || OPERATOR_WORDS_THAT_ARE_NAMES.has(token)) return true;
+  const at = index - token.length + 1;
+  return memberMayBeginAt(out, at, depth + 1) || OPERATOR_WORD_ENDS_MEMBER_AFTER.has(tokenBeforeAngle(out, at).token);
+}
+
+// Whether a decorator ends at `index`, the last character of the token before a member's name. A class member may have any number of them before its name and its modifiers (parseModifiers allows decorators in a class, and in no other place
+// a member stands): `@dec`, `@a.b`, `@dec(1)`, `@(x)`, `@dec<T>()`, `@tag`x``. A decorator is an `@` and a left-hand-side expression, so what ends one is a name, a literal or a closing bracket, and between the `@` and that token stand only
+// what such an expression holds at its own level — names, dots, `?.`, `!`, literals, and brackets that are closed (the arguments and the type arguments of a call) — never an `=`, a `,`, a `:` or a `;`. That is read back from `index`, and
+// what else is on the way means that the token ends no decorator, and a member does not begin after it:
+//   @decorate(void <span>…</span>) m() {}         the `(` that the argument list opened and nothing closed
+//   @decorate element = void <span>…</span>;      an initializer's `=`
+//   @decorate m() { const e = void <span>…        the `{` of the method's body
+// (No program has an `@` in code but a decorator's, and a string, a comment or a template that holds one is blank in `out`.) Brackets that hold more than the window reads are not decided: a member may begin after the decorator.
 function decoratorBefore(out, index) {
-  for (let k = index; k >= 0 && index - k <= LOOKAHEAD; k -= 1) {
-    if (out[k] === '@') return true;
-    if (out[k] === ';' || isLineTerminator(out[k])) return false;
+  const last = out[index] || '';
+  if (!/[\w$\\)\]}!'"`]/.test(last) && last.charCodeAt(0) <= 0x7f) return false;
+  let brackets = 0;   // the closing brackets read whose opener is not read yet
+  let angles = 0;     // the same for the `>` that ends type arguments
+  let k = index;
+  for (; k >= 0 && index - k <= LOOKAHEAD; k -= 1) {
+    const c = out[k];
+    if (c === ')' || c === ']' || c === '}') {
+      brackets += 1;
+    } else if (c === '(' || c === '[' || c === '{') {
+      if (brackets === 0) return false;
+      brackets -= 1;
+    } else if (brackets > 0) {
+      continue;
+    } else if (c === '>') {
+      // The `>` of an arrow in a function type that is a type argument ends nothing: `@dec<(x: A) => B>()`.
+      if (out[k - 1] === '=') k -= 1;
+      else angles += 1;
+    } else if (c === '<') {
+      if (angles === 0) return false;
+      angles -= 1;
+    } else if (angles > 0) {
+      continue;
+    } else if (c === '@') {
+      return true;
+    } else if (c === '=' || c === ';' || c === ',' || c === ':') {
+      return false;
+    }
   }
-  return false;
+  return k >= 0;
 }
 
 // Whether the token that ends a line, which is no word and no separator, may end a member: a closing bracket (`m()`, `[k: string]: T`, `a: A<B>`), a string or template (`a: 'x'`, a literal name), a postfix `++` or `--`, a `/` that ends a regex
@@ -1198,19 +1336,23 @@ function operandEndsAt(out, index) {
 }
 
 // Whether the head that starts at the `<` at `i` may be a list of type parameters, read as parseTypeParameters reads one: `<>`, a name that a `>`, a `,`, a `=` or `extends` follows (`<U>`, `<U extends X>`), or modifiers
-// and a name (`<in U>`, `<const U>`), the name on the line of the modifier (or any line after `static`). A head of any other shape — two words and no modifier, a word with an escape — is no type's (`<a b>`).
-function mayBeTypeParameters(src, i) {
+// and a name (`<in U>`, `<const U>`), the name on the line of the modifier (or any line after `static`). A head of any other shape — two words and no modifier — is no type's (`<a b>`): null. Otherwise `{ escaped }`, where
+// `escaped` says that one of the two words the shape rests on is written with a Unicode escape. The parser takes such a word for the word it spells (`<\u0054>` is `<T>`, and `delete<\u0054>(): void` a method with a type
+// parameter T), where the name of an element's tag or attribute may hold no escape (TS17021, "Unicode escape sequence cannot appear here": parseJsxElementName and parseJsxAttribute call
+// parseIdentifierNameErrorOnUnicodeEscapeSequence, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts). So an escape is no reason to rule a list out — it rules the element out — and the head is
+// read as the list it may be, with the escape reported (`identifier`): its words are not the ones the reading above looks at, so what it says of them rests on a word written in disguise.
+function typeParametersMayStart(src, i) {
   const at = (j) => readRuleToken(src, skipSpaceAndComments(src, j));
   const first = at(i + 1);
-  if (first.kind === 'gt') return true;
-  if (first.kind !== 'word' || first.escaped) return false;
+  if (first.kind === 'gt') return { escaped: false };
+  if (first.kind !== 'word') return null;
   const second = at(first.end);
-  if (second.escaped) return false;
+  const escaped = first.escaped || second.escaped;
   const modifier = isTypeParameterModifier(first.text);
-  if (modifier && second.kind === 'word' && second.text !== 'extends') return first.text === 'static' || !lineBreakBetween(src, first.end, skipSpaceAndComments(src, first.end));
+  if (modifier && second.kind === 'word' && second.text !== 'extends') return first.text === 'static' || !lineBreakBetween(src, first.end, skipSpaceAndComments(src, first.end)) ? { escaped } : null;
   // A reserved word is no name.
-  if (RESERVED_WORDS.has(first.text)) return false;
-  return second.kind === 'gt' || second.kind === 'comma' || second.kind === 'equals' || (second.kind === 'word' && second.text === 'extends');
+  if (RESERVED_WORDS.has(first.text)) return null;
+  return second.kind === 'gt' || second.kind === 'comma' || second.kind === 'equals' || (second.kind === 'word' && second.text === 'extends') ? { escaped } : null;
 }
 
 // What a `<` at `i`, where an expression may start, opens: { generic, ambiguity }. `src` is the source and `out` the lexer's output.
@@ -1224,7 +1366,14 @@ function angleOpens(src, out, i, budget = null, certainOperator = false) {
   if (before.read === 'element') {
     // The operand of one of these is an element — and `delete`, `typeof`, `void` and `instanceof` are also the names of the members of a type, a class and an object literal, where a `<` and a name begin
     // a method's type parameters (`delete<U>(y): void`): that is read where a member may begin at the word, from what follows the list.
-    if (MEMBER_NAME_OPERATORS.has(before.token) && memberMayBeginAtWord(out, i) && mayBeTypeParameters(src, i)) return signatureHeadFollows(src, i, budget);
+    if (MEMBER_NAME_OPERATORS.has(before.token) && memberMayBeginAtWord(out, i)) {
+      const list = typeParametersMayStart(src, i);
+      if (list !== null) {
+        const type = signatureHeadFollows(src, i, budget);
+        // A word written with an escape (`delete<\u0054>(): void`) is in no head that the tag reading reads, so the answer above is the guess and nothing about it is certain: it says so as the rule for a `<` does (opensTypeParameters).
+        return list.escaped ? { generic: type.generic, ambiguity: 'identifier' } : type;
+      }
+    }
     return { generic: false, ambiguity: null };
   }
   if (before.read === 'typeParameters') return { generic: true, ambiguity: null };
@@ -4104,4 +4253,4 @@ function ellipsisFollowedByStatement(mask, k) {
   return STATEMENT_WORDS.has(word) || word === 'import' || word === 'export';
 }
 
-module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS };
+module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS, OPERATOR_WORD_ENDS_MEMBER_AFTER, OPERATOR_WORDS_THAT_ARE_NAMES };

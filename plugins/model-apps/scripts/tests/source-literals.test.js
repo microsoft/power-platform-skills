@@ -3199,8 +3199,12 @@ test('opensTypeParameters: a modifier before the name, and an empty list, are ty
     assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), TYPE, `where no member begins: ${JSON.stringify(code)}`);
     assert.deepStrictEqual(opensTypeParameters(code, 0, null, true), ELEMENT, `in an expression: ${JSON.stringify(code)}`);
   }
-  // Where no member begins, a fragment or a tag with a modifier whose text starts with a parenthesis is an element unless an arrow follows the list (a function type), and a list that the reading cannot read to its end (`f(<> ([*/</>)`) shows none.
-  for (const code of ['<> ([*/</>)', '<in U>([*/</in>)', '<public U>(a = f(/)/)</public>', '<>(a,\n[/</>']) assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), ELEMENT, JSON.stringify(code));
+  // Where no member begins, a fragment or a tag with a modifier whose text starts with a parenthesis is an element unless an arrow follows the list (a function type). A list that the reading cannot read to its end (`f(<> ([*/</>)`) shows no
+  // arrow, but says nothing about one either: it is the guess, as it is for a head that is no modifier's. Where an expression is known to start the rule's answer stands.
+  for (const code of ['<> ([*/</>)', '<in U>([*/</in>)', '<public U>(a = f(/)/)</public>', '<>(a,\n[/</>']) {
+    assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), GUESS, JSON.stringify(code));
+    assert.deepStrictEqual(opensTypeParameters(code, 0, null, true), ELEMENT, `in an expression: ${JSON.stringify(code)}`);
+  }
   // A word that TypeScript takes for no modifier of a type parameter, a modifier with no name after it, a name on the next line, and a self-closing tag are an element's head: the type has no such list.
   for (const code of ['<export U>(y) }', '<default U>(y) }', '<get U>(y) }', '<set U>(y) }', '<type U>(y) }', '<in>(y) }', '<in extends X>(y) }', '<in\nU>(y) }', '<public\nU>(y) }', '<in U/>', '<>/']) {
     assert.deepStrictEqual(opensTypeParameters(code, 0), ELEMENT, JSON.stringify(code));
@@ -3311,9 +3315,10 @@ test('a method named like an operator that has type parameters is a member where
       assert.ok(!readsAsCode(code), `read as an element: ${JSON.stringify(code)}`);
     }
     // Where the closing tag could be in a comment, and a member of a type may begin at the word (after a `{`, or a line break for the three that start an expression), both programs compile: a guess. After an operator none begins, and the
-    // element is certain.
+    // element is certain, and so it is at the top level of the source, where no member stands (after the `;` of `x;` nothing is open).
     assert.deepStrictEqual(ambiguities(`interface I {\n  ${word} <U>(y); // </U>\n}`).map(([, kind]) => kind), ['generic'], word);
-    if (word !== 'instanceof') assert.deepStrictEqual(ambiguities(`x;\n${word} <U>(y); // </U>\n;`).map(([, kind]) => kind), ['generic'], `${word} after a line break`);
+    if (word !== 'instanceof') assert.deepStrictEqual(ambiguities(`class C { x;\n${word} <U>(y); // </U>\n}`).map(([, kind]) => kind), ['generic'], `${word} after a line break`);
+    if (word !== 'instanceof') assert.deepStrictEqual(ambiguities(`x;\n${word} <U>(y); // </U>\n;`), [], `${word} after a line break at the top level`);
     assert.deepStrictEqual(ambiguities(`const e = ${prefix}${word} <U>(y); // </U>\n;`), [], `${word}: after an operator`);
   }
   // `new` before type parameters: a construct signature in a type, with a modifier or no name in its list.

@@ -30,7 +30,7 @@ const { extractNavTargets, resolvePageRefs, strayPageRefs, navMalformedRefs, rev
 const { LONG_KEY, MISREAD_PAGES, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 const { ANY_SPACE } = require('./helpers/jsx-element-fuzz.js');
 const { numberedMemberPages, nestedTextPages, expressionLinePages, literalTagPages, nestedSoupPages, nestedCodePages, nestedTagPages, nestedPairPages, taggedStringPages, importTypePages, accessorNamePages } = require('./helpers/hidden-closing-pages.js');
-const { typeHeadPages, newlinePages } = require('./helpers/type-head-pages.js');
+const { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages } = require('./helpers/type-head-pages.js');
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const CALL = 'navigateTo({pageType:"generative", pageId:"PAGEREF_detail"});';
@@ -1216,6 +1216,127 @@ test('sweep (an element after `void`, `typeof` or `delete` where an expression i
   assert.strictEqual(reading.stats.guessed, 0, `an element after a unary word was guessed at: ${JSON.stringify(reading.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
   assert.strictEqual(reading.stats.exact, reading.stats.valid, 'every page is read exactly');
   assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+});
+
+// A word that takes an operand before a line break, and then an element: `const e = void` and a line break, then `void <span>(value); // note</span>`. The word is an operator wherever the token before it wants an operand, and its operand is the element, whose
+// `//` is JSX text; the base resolves every such page. The braces of a function, a method and a block hold statements, never members, so the page is read exactly there. After `await` a line break may end a field of a class that the identifier initialises, and
+// a method named `void` may follow (the lexer does not know the function is async): where the braces may be a class's, an object's or a type's — the block of an arrow function and the value of one in an object literal — the pages whose element can hide its
+// closing tag in a comment are refused after a guess, and each of those holds the guess `generic`.
+test('sweep (a word that takes an operand before a line break and an element after it, TypeScript parser): the element is read exactly in every place that holds statements, and a guess is made only after `await` where the braces may hold members', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...keywordLinePages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.strictEqual(reading.stats.valid, pages.length, 'every page is valid to TypeScript');
+  const guessable = (program) => /^the (?:block|value) of an async arrow[^/]* \/ await \//.test(program.label) || /^the value of an async arrow in an object \/ (?:void|typeof|delete) \//.test(program.label);
+  assert.deepStrictEqual(reading.guessedPrograms.filter((program) => !guessable(program)).slice(0, 3).map((program) => program.label), [], 'a guess in braces that hold statements, or after a word that is only an operator and no arrow\'s');
+  assert.ok(reading.stats.guessed > 0 && reading.stats.guessed < reading.stats.valid / 20, `${reading.stats.guessed} pages were guessed at, in arrows only`);
+  assert.deepStrictEqual(reading.lostPrograms.filter((program) => !guessable(program)).slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+});
+
+// A decorator earlier on the statement. A member may begin where a decorator ends, and not in the arguments of the decorator, a field initializer or a method body that follows it: the element there is read exactly, whatever stands between the `@` and it.
+test('sweep (an element after `void`, `typeof` or `delete` after a decorator, TypeScript parser): the element is read exactly, with no guess, in the arguments, a field initializer and a method body, and the base reads the same', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...decoratedPages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.strictEqual(reading.stats.valid, pages.length, 'every page is valid to TypeScript');
+  // The one place that stays a guess is the value of a `return` after a line break in the block of an arrow function: the braces may be a type's, the statement may have ended, and a member may be named `return`.
+  const guessable = (program) => /^the value of a return in an arrow \/ "(?:\\n|\\r\\n|\u2028|\u2029|\/\*\\n\*\/|\/\/ note\\n)"/.test(program.label);
+  assert.deepStrictEqual(reading.guessedPrograms.filter((program) => !guessable(program)).slice(0, 3).map((program) => program.label), [], 'a guess that is no return in an arrow');
+  assert.deepStrictEqual(reading.lostPrograms.filter((program) => !guessable(program)).slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+  assert.ok(reading.stats.exact >= pages.length - 120, `only ${reading.stats.exact} of the ${pages.length} pages were read exactly`);
+});
+
+// A method named like an operator that has type parameters is a member in the braces of a class, an object literal and a type, and the lexer may only take braces for a block where the parser has no member to read there. Every heritage that ends a class's head
+// (a call, a parenthesis, `new`, a function or a class, a name that a keyword of a block spells, one written with an escape, a `$` or a letter beyond ASCII), the `;` of a `for` head before an object literal, an arrow before a type literal. A method read for an
+// element would run on to the closing tag in the string after it and rewrite the call that the string holds.
+test('sweep (a method named like an operator in the braces of a class after every heritage, of an object literal and of a type, TypeScript parser): the method is a member and the note after it is data, and a guess is made only for a list on the next line and a name written with an escape', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...containerPages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(reading.stats.valid >= 2500, `only ${reading.stats.valid} of the ${pages.length} pages are valid to TypeScript`);
+  // A method whose list starts on the line after its name is a guess after `void` (the name and an element are the other reading), and a heritage written with an escape is a guess about the word: neither is ever read wrong.
+  assert.deepStrictEqual(reading.guessedPrograms.filter((program) => !/ \/ a line break before the list|an escape/.test(program.label)).slice(0, 3).map((program) => program.label), [], 'a method in braces that may hold members is guessed at');
+  assert.deepStrictEqual([...reading.kinds.keys()].sort(), ['generic', 'identifier'], 'the guesses');
+  assert.ok(reading.stats.exact >= reading.stats.valid - 450, `only ${reading.stats.exact} of the ${reading.stats.valid} valid pages were read exactly`);
+  if (base) assert.ok(reading.stats.baseMisread >= 1500, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
+});
+
+// A seeded grammar of nested braces, parentheses and brackets (helpers/type-head-pages.js): a method named like an operator or an element after one of the words that take an operand, wrapped in up to four frames — a function, a class, an object literal, a
+// call, an array, a template, a JSX container, the head of a `for`. What TypeScript reads at the payload decides what the lexer must read: a method is code (its name MARK is visible) and an element is text (MARK is blank), or the page is refused after a guess
+// that is named at or before the `<`. The decoy after a method (a string with its closing tag and a call) is data wherever the method stands.
+function payloadIsRead(ts, page) {
+  const source = cleanSourceFile(ts, page.code);
+  if (!source) return false;
+  let found = false;
+  (function visit(node) {
+    if (page.holds === 'member' ? node.name && node.typeParameters && node.name.text === page.name : ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === 'span') found = true;
+    ts.forEachChild(node, visit);
+  })(source);
+  return found;
+}
+test('sweep (a seeded grammar of nested braces, parentheses and brackets, TypeScript parser): a method named like an operator is read as code and an element after one as text, wherever they stand, or the page is refused after a guess', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...nestedBracePages(0x6b3d, 14000)].filter((page) => payloadIsRead(ts, page));
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  const misread = pages.filter((page) => {
+    const at = page.code.indexOf(page.holds === 'member' ? '<U>' : '<span>');
+    const frontier = navigationFrontier(page.code);
+    const visible = blankNonCodePreservingTemplateExpressions(page.code).includes('MARK');
+    return !((page.holds === 'member' ? visible : !visible) || (frontier !== null && frontier.start <= at));
+  });
+  assert.deepStrictEqual(misread.slice(0, 3).map((page) => page.label), [], 'a method read as text, or an element read as code, with no guess before it');
+  assert.ok(reading.stats.valid >= 8000, `only ${reading.stats.valid} of the pages are valid to TypeScript`);
+  assert.ok(reading.stats.exact >= 0.95 * reading.stats.valid, `only ${reading.stats.exact} of the ${reading.stats.valid} valid pages were read exactly`);
+  assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+  if (base) assert.ok(reading.stats.baseMisread >= 3000, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
+});
+
+// A function type whose head starts like an element's and whose parameter list cannot be read to its end. An arrow follows the list, so it is a function type in every place; the lexer cannot tell, and refuses the page after the guess instead of reading an element
+// whose text ends at the closing tag in the note after it.
+test('sweep (a function type whose parameter list cannot be read to its end, TypeScript parser): the note after it is data, and the page is refused after a guess in every place', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...unreadableListPages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.strictEqual(reading.stats.valid, pages.length, 'every page is valid to TypeScript');
+  assert.strictEqual(reading.stats.guessed, pages.length, 'every page is refused after a guess');
+  assert.deepStrictEqual([...reading.kinds.keys()], ['generic'], 'the guess is `generic`');
+  if (base) assert.ok(reading.stats.baseMisread >= 5 * 77, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
+});
+
+// A type parameter written with a Unicode escape, in a method named like an operator, a method and a signature. TypeScript reads the word it spells, and an element has no escape in a tag or attribute name: the lexer refuses the page after the guess
+// `identifier`, and where a line break stands before the `<` the guess at its position (`newline`) may be named first.
+test('sweep (a type parameter written with a Unicode escape, TypeScript parser): the note after the member is data, and the page is refused after a guess', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...escapedHeadPages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(reading.stats.valid >= 400, `only ${reading.stats.valid} of the ${pages.length} pages are valid to TypeScript`);
+  assert.strictEqual(reading.stats.guessed, reading.stats.valid, 'every valid page is refused after a guess');
+  assert.deepStrictEqual([...reading.kinds.keys()].filter((kind) => kind !== 'identifier' && kind !== 'newline'), [], 'the guess is `identifier`, or `newline` at a `<` on a later line');
+  if (base) assert.ok(reading.stats.baseMisread >= 300, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
 });
 
 // The same text as an element, where it stays certain: JSX text that starts with a parenthesis in every place an element stands, with white space of every kind after the `)`, nested elements with

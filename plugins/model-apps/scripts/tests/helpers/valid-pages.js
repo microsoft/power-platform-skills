@@ -398,6 +398,17 @@ const EVERYDAY = [
   // An element whose first attribute is named `extends` and that closes at once: in a type the same `<T extends /` opens type parameters whose constraint is a regex. Where the regex does not close on its line
   // it is unterminated, and only the element compiles; where another `/` on the line closes it, both do.
   'const e1 = <Flag extends />;', 'const e2 = <Flag extends/>;', 'const e3 = <Flag extends />; const r = a / b;',
+  // An element after a word that takes an operand, which a line break follows: the word is an operator wherever the token before it wants an operand, and a method named like it cannot begin there (source-literals.js, wordMayEndMember).
+  'const k6 = void\nvoid <span>(value); // note</span>;', 'const k7 = typeof\nvoid <>(value); // note</>;', 'const k8 = delete\ntypeof <public U>(value); // note</public>;', 'const k9 = a in\nvoid <span>(value); // note</span>;',
+  'const k10 = a instanceof\ndelete <span>(value); // note</span>;', 'f(void\nvoid <span>(value); // note</span>);', 'const k11 = x && void\ntypeof <span>(x = f(/)/))</span>;', 'const k12 = [void\ndelete <in U>(value); // note</in>];',
+  // An element after a word in the arguments of a decorator, a field initializer and a method body, and after a `,` or `;` in parentheses and brackets, where no member of a type begins.
+  'class D1 { @decorate(void <span>(value); // note</span>) method() {} }', 'class D2 { @decorate element = void <span>(value); // note</span>; }', 'class D3 { @decorate method() { const e = void <span>(value); // note</span>; } }',
+  'class D4 { @decorate(a, void <span>(value); // note</span>) method() {} }', 'class D5 { @decorate(() => typeof <span>(value); // note</span>) method() {} }', 'class D6 { @decorate static x = delete <>(value); // note</>; }',
+  'f(a, void <span>(value); // note</span>);', 'const k13 = [x, void <span>(value); // note</span>];', 'const k14 = (0, void <span>(value); // note</span>);', 'for (let i = 0; i < 1; void <span>(value); // note</span>) { g(); }',
+  // The same words in the braces of a function, a method and a block, where no member of a type begins and a line break after `await` or `return` ends the statement or goes on: the braces are a body, whatever stands before the word.
+  'async function k15() { const e = await\nvoid <span>(value); // note</span>; return e; }', 'class K16 { async m() { const e = await\ndelete <span>(value); // note</span>; } }', 'const k17 = { async m() { return await\ntypeof <span>(value); // note</span>; } };',
+  'class K18 extends mixin(B) { async m() { const e = await\nvoid <>(value); // note</>; } }', 'if (a) { const e = await\nvoid <span>(value); // note</span>; }', 'class K19 { @decorate method() { return\nvoid <span>(value); // note</span>; } }',
+  'function k20() { try { g(); } catch (e) { return\ndelete <span>(value); // note</span>; } finally { h(); } }', 'class K21 { constructor(a) { this.x = a in\nvoid <span>(value); // note</span>; } }',
 ];
 
 // The pages. Each is { group, name, code }; the test drops those TypeScript does not parse.
