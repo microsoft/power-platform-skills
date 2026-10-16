@@ -16,7 +16,7 @@ const { fork, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
 const ss = require('../solution-settings.js');
 const { createCloud, ORG } = require('./helpers/fake-power-platform.js');
-const { runInConsoles } = require('./helpers/console-event.js');
+const { runInConsoles, controlProblem } = require('./helpers/console-event.js');
 
 const SECRET = 'synthetic-snapshot-secret-not-a-real-value';
 const ZIP = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(' a solution package')]);
@@ -253,10 +253,9 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 // Windows has no signals to deliver, but a user's Ctrl+C reaches the importer all the same: as a console event, which Node turns into SIGINT (Ctrl+Break: SIGBREAK). So the real importer runs in a child with a console of
 // its own (helpers/console-event.js — nothing is ever sent to the console of whoever runs the tests), with a pac that never answers, and is sent the real thing. The copy must be gone afterwards, AND the process must end
 // as Windows ends one that a console event cancels — STATUS_CONTROL_C_EXIT, 0xC000013A, which is how whoever started it can tell a cancelled run from one that failed (status 1). The control of each event is a child that
-// registers nothing of ours: how Windows ends a process that nothing handles, which the importer's must end as.
-// STATUS_CONTROL_C_EXIT is written out here, not taken from the code under test: this is what the test says Windows does.
+// registers nothing of ours: how Windows ends a process that nothing handles, which the importer's must end as. A machine whose control does not end that way, or that cannot send the event at all, skips these tests
+// with the reason — the answer every console test gives (helpers/console-event.js, `controlProblem`, which has the status written out: it is what the test says Windows does, not taken from the code under test).
 // See: https://learn.microsoft.com/openspecs/windows_protocols/ms-erref/596a1078-e883-4972-9bbc-49e60bebca55
-const CONTROL_C_EXIT = 0xC000013A;
 const CONSOLE_EVENTS = [['CTRL_C', 'Ctrl+C'], ['CTRL_BREAK', 'Ctrl+Break']];
 let consoleRuns;
 function importersInConsoles() {
@@ -297,8 +296,10 @@ for (const [event, key] of CONSOLE_EVENTS) {
   test(`the settings copy is removed when ${key} reaches the importer while pac runs — and the process ends with STATUS_CONTROL_C_EXIT, as one that ${key} cancels does, not with the status 1 of a failure`, { skip: !WINDOWS && 'console events are a Windows thing: POSIX has signals, tested above' }, async (t) => {
     const { controls, importers } = await importersInConsoles();
     const control = controls[event];
-    if (!control.delivered || !control.exited || control.status !== CONTROL_C_EXIT) {
-      t.skip(`this environment could not deliver ${key} to a console child that registers nothing, so it cannot say how the importer ends (the control: ${JSON.stringify(control)})`);
+    // The answer every console test gives (helpers/console-event.js): a machine that cannot send the event, or whose control does not end as a cancelled process, skips with the reason; a defect fails.
+    const problem = controlProblem(control, key);
+    if (problem) {
+      t.skip(problem);
       return;
     }
     const run = importers.find((importer) => importer.event === event);

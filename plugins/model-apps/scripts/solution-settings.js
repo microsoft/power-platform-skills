@@ -62,8 +62,11 @@
 //     underscores must not touch another one: a one-letter value would otherwise withhold every message that holds the letter);
 //   - a variable the package says is not a secret, and a connection id: replaced by `<redacted>` where the text spells it as it is (the text is withheld whole when only a decoded form holds it).
 //     A value of that kind shorter than six characters is NOT hidden: it is a word as much as a value, and by the package's own definition there is nothing in it to protect.
-// A token is never printed: the Dataverse HttpClient (lib/sdk-http-client.js) takes the access token out of every answer that is not a success and out of a transport failure's text, and the reason read from
-// a failed import's job log — a 200 answer, which that client never alters — is scrubbed of every token the run sent where it is extracted (importFailure). What remains is stated, not hidden: a value of the second kind that is shorter than six characters is printed when a text quotes it glued to word characters or inside an
+// A token is never printed or written: the Dataverse HttpClient (lib/sdk-http-client.js) takes the access token out of every answer that is not a success and out of a transport failure's text, and what a success says is the caller's data,
+// which that client never alters. An HTTP 200 can still carry a diagnostic — StageSolution answers 200 with a status of "Failed", and the SDK's message for it quotes the dependencies and validation results it was given; a job's log is a 200 too —
+// so a text of another party is cleaned where it is shown: the sanitizer an import builds takes every token the run has sent (recordingTokens) out of it, whole and by part, before it looks for the file's values. And behind that sits ONE
+// function, scrubTokens, applied to everything the script writes, so that a path nobody thought of cannot miss it: both its streams (guardOutput wraps them, so what code the script does not own prints, a library's console.error, is cleaned
+// on the way out as well), the file `template` writes at --out, and the note a process that is ending leaves on stderr (writeNote). What remains is stated, not hidden: a value of the second kind that is shorter than six characters is printed when a text quotes it glued to word characters or inside an
 // escape the decoders do not read (`\042`, `%u0022`, `&#x22` without its `;`), and any value is printed when a text quotes only part of it, hashes or base64-encodes it, writes it as a named HTML
 // entity beyond XML's five, normalizes its Unicode or nests the encodings more than three deep (a text of more than 1 MiB is withheld, not read). The whole-word rule has a cost too: a short value of the
 // second kind that is itself a whole word of the SDK's own sentence about an entry (`none`, `is`, `the`) still withholds that sentence, and with it which entry is wrong — its status and code stay. A sentence
@@ -869,6 +872,17 @@ function removeWorkFolder(dir, holds, empty) {
   return `The folder ${dir} could not be removed (${stopped}); it holds ${holds}${kept}. Delete it.`;
 }
 
+// The note a process that is ENDING leaves about a folder that stayed. It has no stream to put it in and no way to wait for one, so it is written to stderr's descriptor, synchronously, and given up on if that cannot be
+// done. Like everything else the script writes it goes through `leaving`, the one function that takes the access tokens the run sent out of a text (the note is the plugin's own sentence, a path and a code, but what is written
+// does not rest on that).
+function writeNote(note, leaving) {
+  try {
+    fs.writeSync(2, `${leaving(note)}\n`);
+  } catch {
+    // Nothing is left to say it to.
+  }
+}
+
 // A folder of this run's own under the temp directory — for what pac reads or writes — removed however `work(dir)` ends: its value, or its failure, which is rethrown. The removal has the bounded retry a
 // Windows lock needs (a scanner or a sync client holding a file pac has just written: removeTreeWithRetry), and a folder that STILL stays is never left unsaid. What it holds — pac's template, the package the SDK
 // exported, the copy of the settings file pac was given — is not worth keeping and can be sensitive (a template's defaults can be values; a settings file's values are), so a leftover is reported with its path: as
@@ -883,8 +897,10 @@ function removeWorkFolder(dir, holds, empty) {
 // `empty` names the files (relative to the folder) that hold values: when the folder cannot be removed they are EMPTIED, so that what stays on disk is at least not the values, and the note says whether that worked.
 // `prepare(dir)` makes the folder ready for the work — for the settings copy, restricts it to its owner and writes the file. Making the folder and preparing it are ONE guarded step: a failure of either — the
 // folder could not be made, or could not be made private, or the file could not be written — is `prepareFailure(error)`, the error the caller throws instead, and the work is not started. A folder that was made
-// is removed first, as after any failure.
-async function inWorkFolder(holds, work, { empty = [], prepare = null, prepareFailure = (error) => error } = {}) {
+// is removed first, as after any failure. `leaving(text)` is the one function everything the script writes goes through (the note of a folder that stays, when the process ends, is written with it: writeNote); it is
+// required, so that a caller that forgets it fails at once instead of writing a note nothing cleaned. `proc` is the test seam of lib/exit-cleanup.js: a stand-in for the process the cleanup is registered on.
+async function inWorkFolder(holds, work, { empty = [], prepare = null, prepareFailure = (error) => error, leaving, proc } = {}) {
+  if (typeof leaving !== 'function') throw new TypeError('inWorkFolder needs `leaving`, the function everything the script writes goes through');
   let dir;
   try {
     dir = makeTempWorkspace(WORK_FOLDER_PREFIX, { lent: true });
@@ -893,15 +909,8 @@ async function inWorkFolder(holds, work, { empty = [], prepare = null, prepareFa
   }
   const releaseCleanup = onProcessEnd(() => {
     const note = removeWorkFolder(dir, holds, empty);
-    // A process that is ending has no output to put it in but stderr, and no way to wait for it: written synchronously, and given up on if it cannot be.
-    if (note) {
-      try {
-        fs.writeSync(2, `${note}\n`);
-      } catch {
-        // Nothing is left to say it to.
-      }
-    }
-  });
+    if (note) writeNote(note, leaving);
+  }, proc ? { process: proc } : undefined);
   let value;
   let failure;
   let failed = false;
@@ -957,7 +966,7 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
     } catch (err) {
       throw pacError('PAC_OUTPUT_UNREADABLE', err.message, refusal);
     }
-  });
+  }, { leaving: deps.leaving, proc: deps.process });
   return leftover ? { ...value, warnings: [leftover] } : value;
 }
 
@@ -971,7 +980,7 @@ async function templateThroughPac({ packagePath, packageBytes }, refusal, deps =
 // system's code or the step that failed and never a value. A copy was chosen over refusing a file that changed: the import still happens, of what the run checked, and an edit made meanwhile is neither applied
 // nor printed. The package is still read by pac from its path: it is not a secret, and the run checked it without keeping it.
 // The folder goes however pac ends — and when the process is ended while pac runs, by anything that can be caught — with the bounded retry (inWorkFolder); one that stays is emptied of the values and said:
-// `warnings` on the answer, `leftoverWarnings` on the error. `deps.privateFile(dir, name, bytes)` is the test seam for making the copy; it answers the copy's path.
+// `warnings` on the answer, `leftoverWarnings` on the error. `deps.privateFile(dir, name, bytes)` is the test seam for making the copy; it answers the copy's path. `deps.process` is the seam of lib/exit-cleanup.js: a stand-in for the process.
 async function importThroughPac({ env, packagePath, settingsBytes }, redact, refusal, deps = {}) {
   const label = 'pac solution import';
   // The reason is the system's code alone (EACCES, ENOSPC, …) or, for a step of the private folder, the plugin's own words — a tool, a step, a number: never a path or a value. The error's own text is not the
@@ -1000,6 +1009,8 @@ async function importThroughPac({ env, packagePath, settingsBytes }, redact, ref
     empty: ['settings.json'],
     prepare: (dir) => { copy = (deps.privateFile || createPrivateFile)(dir, 'settings.json', settingsBytes); },
     prepareFailure: copyFailed,
+    leaving: deps.leaving,
+    proc: deps.process,
   });
   return leftover ? { warnings: [leftover] } : {};
 }
@@ -1029,14 +1040,15 @@ function withKnownWarnings(error, warnings) {
   return failure;
 }
 
-// Writes the settings file and describes it: where, and how many entries — never what they hold.
-function writeTemplate(request, text, settings, extra) {
+// Writes the settings file and describes it: where, and how many entries — never what they hold. The text goes through `leaving`, the one function that takes the access tokens the run sent out of what the script writes: the
+// template is made of a package's own data — names, defaults — and holds no token, but what is written does not rest on that.
+function writeTemplate(request, text, settings, extra, leaving) {
   const writeWarnings = [];
   try {
     // Without --force the file must still be absent when it is INSTALLED, not only when the run began: the export, staging or pac work in between takes minutes, and a
     // file a maker started filling in meanwhile — or another run's — is exactly what the refusal at the start protects. The file system decides, in one step
     // (writeFileSafe's `exclusive`), so there is no gap between a look and a write.
-    writeFileSafe(request.outPath, text, { encoding: 'utf8', exclusive: !request.force, onWarning: (warning) => writeWarnings.push(warning) });
+    writeFileSafe(request.outPath, leaving(text), { encoding: 'utf8', exclusive: !request.force, onWarning: (warning) => writeWarnings.push(warning) });
   } catch (err) {
     let failure = err;
     if (err && err.code === 'IO_ERROR' && err.reason === 'exists') failure = outExists(request.outPath, err.leftoverNote);
@@ -1057,14 +1069,16 @@ function writeTemplate(request, text, settings, extra) {
 }
 
 /** `template`: the settings file for a package, written to `--out`. */
-async function runTemplate(request, deps = {}) {
+async function runTemplate(request, given = {}) {
   checkOutTarget(request.outPath, request.force);
   if (request.packagePath) inspectPackage(request.packagePath, { withBytes: false });
+  // A template reads no settings file, so there is no sanitizer to build; what the run writes is cleaned of the tokens it sends by `deps.leaving`, and what it prints by the guard on the streams (main).
+  const deps = withLeaving(given);
 
   // No environment, nothing to stage a package in: pac reads the zip, offline.
   if (!request.env) {
     const made = await templateThroughPac({ packagePath: request.packagePath }, null, deps);
-    return { source: 'pac', ...writeTemplate(request, made.text, made.settings, made.warnings ? { warnings: made.warnings } : undefined) };
+    return { source: 'pac', ...writeTemplate(request, made.text, made.settings, made.warnings ? { warnings: made.warnings } : undefined, deps.leaving) };
   }
 
   let exported; // the package as the SDK exported it, when it did: pac needs it should the SDK refuse to stage it
@@ -1093,12 +1107,12 @@ async function runTemplate(request, deps = {}) {
     const { settings, warnings } = outcome.value;
     return {
       source: 'sdk',
-      ...writeTemplate(request, `${JSON.stringify(settings, null, 2)}\n`, settings, warnings && warnings.length ? { warnings } : {}),
+      ...writeTemplate(request, `${JSON.stringify(settings, null, 2)}\n`, settings, warnings && warnings.length ? { warnings } : {}, deps.leaving),
     };
   }
   // The SDK's cleanup warnings of the attempt it refused (carried across the fallback: lib/sdk-first.js) come first, then the note of the folder pac worked in, should it have stayed.
   const warnings = [...(outcome.warnings || []), ...(outcome.value.warnings || [])];
-  return { source: 'pac', ...writeTemplate(request, outcome.value.text, outcome.value.settings, warnings.length ? { warnings } : undefined), fallback: outcome.fallback };
+  return { source: 'pac', ...writeTemplate(request, outcome.value.text, outcome.value.settings, warnings.length ? { warnings } : undefined, deps.leaving), fallback: outcome.fallback };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1204,7 +1218,7 @@ function isComposed(error) {
 
 /**
  * The error an import leaves this module with: a NEW error whose every text another party wrote has been through `sanitize` — the message, the reason pac was asked, the SDK's cleanup
- * warnings, the job log's words — so nothing the SDK, the platform or pac said reaches an output with a filled value in it. (The SDK's own error is not passed on: its `cause`
+ * warnings, the job log's words — so nothing the SDK, the platform or pac said reaches an output with a filled value, or an access token the run sent, in it. (The SDK's own error is not passed on: its `cause`
  * holds the raw answer of the service and its attached warnings are unfiltered.) It keeps the code, the status and the reason pac was asked, and — for a failure of the SDK path —
  * names the import job. For a request that was SENT, the job's log is read once for the real reason (the platform's own answer is often only "An unexpected error
  * occurred"), and an outcome that is not known (see outcomeUnknown) says that the request was not repeated and where to look.
@@ -1215,7 +1229,7 @@ function isComposed(error) {
  * What this function sanitizes: the SDK's own message (it quotes names, and can quote what the platform said), the SDK's staging-reply reason, its cleanup warnings, and a job log's reason (which is
  * appended to the plugin's own sentence AFTER it is sanitized, and the sentence around it is not looked at).
  */
-async function importFailure(err, { sanitize, settings, importJobId, env, deps, sends, tokens = new Set() }) {
+async function importFailure(err, { sanitize, settings, importJobId, env, deps, sends }) {
   const original = err instanceof Error ? err : new Error(String(err));
   const failure = new Error(isComposed(original) ? original.message : sanitize(original.message, 'message', sdkLead(original)));
   if (typeof original.code === 'string') failure.code = original.code;
@@ -1234,9 +1248,10 @@ async function importFailure(err, { sanitize, settings, importJobId, env, deps, 
   if (importRequestFailed(original)) {
     const reason = await readImportJobFailure(env, importJobId, deps);
     if (reason) {
-      // The log was read with a request that SUCCEEDED, so the client handed it back as it came (a success is the caller's data) and what it says is extracted here: it is scrubbed of every access token the run
-      // sent first, whole and by part, and only then of the settings file's values. A log is the platform's account of components and no way is known for it to hold a token, but what is printed does not rest on that.
-      failure.message += ` The import job's log (importjobs(${importJobId})) says: ${oneLine(sanitize(scrubTokens(reason, tokens), "the job log's text"))}`;
+      // The log was read with a request that SUCCEEDED, so the client handed it back as it came (a success is the caller's data) and what it says is extracted here — and sanitized like every other text of another party, which
+      // takes every access token the run sent out of it first, whole and by part, and only then the settings file's values (runImport builds `sanitize` so). A log is the platform's account of components and no way is known for
+      // it to hold a token, but what is printed does not rest on that.
+      failure.message += ` The import job's log (importjobs(${importJobId})) says: ${oneLine(sanitize(reason, "the job log's text"))}`;
     } else if (outcomeUnknown(original.statusCode)) {
       failure.message += `${resent ? ' The last send was not sent again' : ' The request was sent once and was not sent again'}: the environment may have accepted it.${lookUpJob(importJobId)}`;
     }
@@ -1278,8 +1293,58 @@ function recordingTokens(http, tokens) {
   };
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// What leaves the script
+// ---------------------------------------------------------------------------------------------------------------------
+// An HTTP 200 is not always a success: StageSolution answers 200 with a status of "Failed" and the SDK's message for it quotes the dependencies and validation results it was given, and the HTTP client hands a 200 back
+// untouched (a success is the caller's data: a package, a log). So the access tokens a run has sent are taken out where another party's words are shown (withoutTokens), and — so that a path nobody thought of cannot
+// miss them — out of everything the script writes: `leavingWith(tokens)` is the ONE function that does it, and what it is given leaves through nothing else. The run's `tokens` are the set recordingTokens fills.
+
+// The function everything a run shows or writes leaves through: `text` with every access token in `tokens` taken out of it, whole and by part.
+const leavingWith = (tokens) => (text) => scrubTokens(text, tokens);
+
+// `sanitize` (the settings file's: `sanitizer`) made to take every access token the run has sent out of a text of another party FIRST — whole and by part — and only then look for the file's values: the SDK's message for
+// a staging that failed, the reason pac was asked, a warning, a job log's reason, pac's own words and the transport's all pass through it, so each is clean wherever it is shown from. `lead` is the SDK's status line, which
+// holds no token and is still found at the start of what is left.
+function withoutTokens(sanitize, tokens) {
+  return (text, what, lead) => sanitize(text === null || text === undefined ? text : scrubTokens(text, tokens), what, lead);
+}
+
+// What one run needs to keep its tokens out of what it shows and writes: the set they are recorded in (`deps.tokens` when the caller gives one — main does, because it also guards the streams with it — else one of its own),
+// the function that takes them out of a text (`leaving`) and the HTTP seams that record them (recordingTokens).
+function withLeaving(deps) {
+  const tokens = deps.tokens || new Set();
+  return { ...deps, tokens, leaving: leavingWith(tokens), http: recordingTokens(deps.http, tokens) };
+}
+
+// What a stream is given, with the tokens taken out: a string as it is, and bytes (a Buffer or another typed array) only when they hold a token as text — bytes that are not text, or hold none, are passed on as they are,
+// never decoded into something else.
+function chunkWithout(chunk, leaving) {
+  if (typeof chunk === 'string') return leaving(chunk);
+  if (!ArrayBuffer.isView(chunk)) return chunk;
+  const text = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).toString('utf8');
+  const clean = leaving(text);
+  return clean === text ? chunk : Buffer.from(clean, 'utf8');
+}
+
+/**
+ * Takes the access tokens in `tokens` out of everything written to stdout and stderr from now on — as it is written, so it covers what `emitResult` prints, the usage error, and whatever code the script does not own writes with
+ * `console.error` or `process.stderr.write` (the SDK's XML parser reports with `console.warn` and `console.error`). The tokens are looked up when each chunk is written, so one a run is given later is taken out too, and a
+ * run that has been given none writes every chunk as it is. A token is also taken out of a chunk that holds it only in part (scrub: each part of 24 characters or more); a token split across two writes is not seen, and the
+ * script writes its result in one.
+ */
+function guardOutput(tokens, streams = [process.stdout, process.stderr]) {
+  const leaving = leavingWith(tokens);
+  for (const stream of streams) {
+    const write = stream.write;
+    stream.write = function guardedWrite(chunk, ...rest) {
+      return write.call(this, chunkWithout(chunk, leaving), ...rest);
+    };
+  }
+}
+
 /** `import`: the package into `--env`, with the settings file applied in the same import. */
-async function runImport(asked, deps = {}) {
+async function runImport(asked, given = {}) {
   // The settings file is read ONCE, as bytes: the sanitizer, the SDK's import, `applied` and — should the SDK refuse — the copy pac is given (importThroughPac) all come from this one reading, so
   // nothing that reaches an output or pac is a value the sanitizer was not built from. The path is never read again.
   const { settings, bytes } = readSettingsFile(asked.settingsPath);
@@ -1287,7 +1352,9 @@ async function runImport(asked, deps = {}) {
   // What the package's own definitions say each variable is: filled in as the SDK reads the package (the StageSolution reply that passes through the client below), and looked at
   // by the sanitizer each time it is asked — see secrecyOf for why the file's `TypeId` is not what decides whether a value is a secret.
   const definitions = new Map();
-  const sanitize = sanitizer(settings, definitions);
+  // The run's tokens: recorded as its clients are given them (recordingTokens), and taken out of every text of another party before the file's values are looked for (withoutTokens) and out of everything the run writes (`deps.leaving`).
+  const deps = withLeaving(given);
+  const sanitize = withoutTokens(sanitizer(settings, definitions), deps.tokens);
   const { base64 } = inspectPackage(request.packagePath, { withBytes: true });
   const importJobId = deps.importJobId || crypto.randomUUID();
   // The import's sends, as the client tells of them (solutionHttpClient's `onImportRefused`): `jobId` is the job the last send carried — the first send's until a refusal is sent again. `stopped` is what it
@@ -1298,12 +1365,10 @@ async function runImport(asked, deps = {}) {
     sends.jobId = nextImportJobId;
   };
   const onImportRetryStopped = (event) => { sends.stopped = event; };
-  const tokens = new Set();
-  const withTokens = { ...deps, http: recordingTokens(deps.http, tokens) };
   try {
     const outcome = await (deps.sdkFirst || sdkFirst)(request.env, {
       refusal: (error) => importRefusal(error, settings),
-      httpClient: (env) => solutionHttpClient(env, withTokens.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize, onImportRefused, onImportRetryStopped }),
+      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize, onImportRefused, onImportRetryStopped }),
       fromSdk: (sdk) => sdk.importSolution({
         base64,
         // pac's defaults: --force-overwrite and --activate-plugins are off. Both are required by the SDK, which no longer defaults them.
@@ -1333,7 +1398,7 @@ async function runImport(asked, deps = {}) {
     ];
     return { source: 'pac', applied: filledNames(settings), fallback: shownRefusal(outcome.fallback, settings, sanitize), ...(warnings.length ? { warnings } : {}) };
   } catch (err) {
-    throw await importFailure(err, { sanitize, settings, importJobId: sends.jobId, env: request.env, deps: withTokens, sends, tokens });
+    throw await importFailure(err, { sanitize, settings, importJobId: sends.jobId, env: request.env, deps, sends });
   }
 }
 
@@ -1360,6 +1425,10 @@ function describeFailure(error, readWarnings = () => undefined) {
 }
 
 async function main() {
+  // The tokens this run sends are recorded in `tokens` (recordingTokens, through the `deps` given to the run), and the streams are guarded with the same set from the first line: nothing the script writes — a result, the
+  // usage error, what a library prints — goes round the function that takes them out (guardOutput).
+  const tokens = new Set();
+  guardOutput(tokens);
   const { request, error } = readRequest(process.argv.slice(2));
   if (error) {
     process.stderr.write(`✗ ${error}\n${USAGE}\n`);
@@ -1369,7 +1438,7 @@ async function main() {
   let outcome;
   let failure;
   try {
-    outcome = request.command === 'template' ? await runTemplate(request) : await runImport(request);
+    outcome = request.command === 'template' ? await runTemplate(request, { tokens }) : await runImport(request, { tokens });
   } catch (err) {
     failure = err;
   }
@@ -1413,6 +1482,8 @@ module.exports = {
   runTemplate,
   runImport,
   describeFailure,
+  guardOutput,
+  writeNote,
 };
 
 if (require.main === module) {

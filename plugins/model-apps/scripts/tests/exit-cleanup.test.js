@@ -12,7 +12,7 @@ const path = require('node:path');
 const { EventEmitter, once } = require('node:events');
 const { fork } = require('node:child_process');
 const { onProcessEnd, SIGNALS } = require('../lib/exit-cleanup.js');
-const { runInConsoles } = require('./helpers/console-event.js');
+const { runInConsoles, controlProblem } = require('./helpers/console-event.js');
 
 const WINDOWS = process.platform === 'win32';
 const CHILD = path.join(__dirname, 'helpers', 'exit-cleanup-child.js');
@@ -122,14 +122,25 @@ test('a signal that another listener also has is that listener\'s to act on: the
 
 // A program that has a handler of its own for the signal keeps the decision how the process ends: the cleanups run, our listeners come off, nothing is done to the process, and the handler is neither removed nor
 // replaced. Node takes a ONE-SHOT handler off the list just before it calls it, and a handler can take itself off, so by the time a listener that runs after such a handler looks, the handler is no longer there
-// to be counted — and a program that began an orderly shutdown in it (the usual use of `process.once('SIGINT', …)`) would be ended under its feet. Whichever was registered first.
-const HOW = Object.freeze({ on: 'persistent', once: 'one-shot', 'self-removing': 'self-removing' });
+// to be counted — and a program that began an orderly shutdown in it (the usual use of `process.once('SIGINT', …)`) would be ended under its feet. Whichever was registered first — and however it was put on the
+// list: `prepend…` puts it AHEAD of everything there, the cleanup's listener included, which is where a one-shot handler is out of the count unless the cleanup is put back in front of it.
+const HOW = Object.freeze({
+  on: 'persistent',
+  once: 'one-shot',
+  'self-removing': 'self-removing',
+  prepend: 'prepended persistent',
+  'prepend-once': 'prepended one-shot',
+  'prepend-self-removing': 'prepended self-removing',
+});
+const PERSISTENT = new Set(['on', 'prepend']);
 function registerOwner(proc, signal, how, heard) {
   const owner = function owner() {
     heard.push(how);
-    if (how === 'self-removing') proc.removeListener(signal, owner);
+    if (how.endsWith('self-removing')) proc.removeListener(signal, owner);
   };
   if (how === 'once') proc.once(signal, owner);
+  else if (how === 'prepend-once') proc.prependOnceListener(signal, owner);
+  else if (how.startsWith('prepend')) proc.prependListener(signal, owner);
   else proc.on(signal, owner);
   return owner;
 }
@@ -146,8 +157,9 @@ function ownerKeepsTheDecision(platform, signal, how, when) {
   assert.deepStrictEqual(ran, ['cleanup'], 'and the cleanup ran');
   assert.deepStrictEqual(proc.killed, [], 'the signal is not raised again');
   assert.deepStrictEqual(proc.exited, [], 'the process is not ended: that is the handler\'s to do, when and how it chooses');
-  assert.deepStrictEqual(listenerCounts(proc), { ...NONE, [signal]: how === 'on' ? 1 : 0 }, 'our listeners are off, and nothing but the program\'s own is left');
-  if (how === 'on') assert.deepStrictEqual(proc.listeners(signal), [owner], 'a persistent handler is still there, the same function');
+  assert.deepStrictEqual(listenerCounts(proc), { ...NONE, [signal]: PERSISTENT.has(how) ? 1 : 0 }, 'our listeners are off, and nothing but the program\'s own is left');
+  if (PERSISTENT.has(how)) assert.deepStrictEqual(proc.listeners(signal), [owner], 'a persistent handler is still there, the same function');
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(proc, 'prependListener'), false, 'and the process has its own prependListener again, not the cleanup\'s');
 }
 for (const platform of ['linux', 'win32']) {
   const where = platform === 'win32' ? 'Windows' : 'POSIX';
@@ -158,6 +170,7 @@ for (const platform of ['linux', 'win32']) {
   }
   for (const signal of SIGNALS.filter((name) => name !== 'SIGINT')) {
     test(`${where}: a one-shot ${signal} handler registered before the cleanup keeps the decision too — every signal the cleanup listens for`, () => ownerKeepsTheDecision(platform, signal, 'once', 'before'));
+    test(`${where}: and so does a one-shot ${signal} handler that the program PREPENDS after the cleanup`, () => ownerKeepsTheDecision(platform, signal, 'prepend-once', 'after'));
   }
 }
 
@@ -170,6 +183,92 @@ test('the cleanup is first in line for a signal, so that it can count every hand
   const listeners = proc.listeners('SIGINT');
   assert.strictEqual(listeners.length, 3);
   assert.deepStrictEqual(listeners.slice(1), handlers);
+});
+
+// Appending keeps the cleanup first; PREPENDING does not, and a program may do it at any time — `process.prependOnceListener('SIGINT', shutdown)` is how a one-shot handler is put in front of the others. A
+// one-shot handler in front of the cleanup is taken off the list by Node before the cleanup looks, so the cleanup would count no handler at all and end the process under the handler's shutdown. The cleanup
+// is put back in front before the program's call returns: a signal can be raised in the very turn that it is made (`process.emit`), so there is no later moment at which to do it.
+test('the cleanup STAYS first in line when the program prepends a handler — prependListener and prependOnceListener, at any time — and the program\'s handlers keep the order they asked for after it', () => {
+  const proc = standIn();
+  const [a, b, c, d] = [() => {}, () => {}, () => {}, () => {}];
+  proc.on('SIGINT', a);
+  proc.on('SIGTERM', d);
+  onProcessEnd(() => {}, { process: proc });
+  proc.prependListener('SIGINT', b);
+  proc.prependOnceListener('SIGINT', c);
+  proc.prependListener('SIGTERM', () => {});
+  const [first, ...rest] = proc.rawListeners('SIGINT');
+  assert.deepStrictEqual(rest.map((listener) => listener.listener || listener), [c, b, a], 'the program\'s handlers are in the order it asked for, as if the cleanup were not there');
+  assert.ok(![a, b, c].includes(first.listener || first), 'and the one in front of them is not one of theirs');
+  assert.strictEqual(proc.rawListeners('SIGTERM').length, 3);
+  assert.strictEqual(proc.rawListeners('SIGTERM')[2], d, 'another signal is kept the same way');
+  assert.deepStrictEqual(listenerCounts(proc), { exit: 1, SIGINT: 4, SIGTERM: 3, SIGHUP: 1, SIGBREAK: 1 }, 'nothing was lost, nothing was added twice');
+});
+
+test('a prepend that is NOT for one of the cleanup\'s signals is the program\'s alone — it is passed to the process\'s own method as it came, and its answer is the process\'s', () => {
+  const proc = standIn();
+  onProcessEnd(() => {}, { process: proc });
+  const handler = () => {};
+  assert.strictEqual(proc.prependListener('SIGUSR2', handler), proc, 'an EventEmitter answers itself');
+  assert.strictEqual(proc.prependOnceListener('custom', handler), proc);
+  assert.deepStrictEqual(proc.listeners('SIGUSR2'), [handler]);
+  assert.strictEqual(proc.listenerCount('custom'), 1);
+});
+
+// The wrapping lasts as long as a cleanup is registered, and leaves the process as it found it.
+test('the process\'s own prependListener is wrapped only while a cleanup is registered, and is the process\'s own again after — and what a program had put there before stays', () => {
+  const proc = standIn();
+  const release = onProcessEnd(() => {}, { process: proc });
+  assert.notStrictEqual(proc.prependListener, EventEmitter.prototype.prependListener, 'wrapped while the cleanup is registered');
+  assert.strictEqual(Object.prototype.propertyIsEnumerable.call(proc, 'prependListener'), false, 'and not where an enumeration of the process would see it');
+  release();
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(proc, 'prependListener'), false);
+  assert.strictEqual(proc.prependListener, EventEmitter.prototype.prependListener);
+
+  const calls = [];
+  const programs = function prependListener(...args) { calls.push(args[0]); return EventEmitter.prototype.prependListener.apply(this, args); };
+  proc.prependListener = programs;
+  const releaseAgain = onProcessEnd(() => {}, { process: proc });
+  const before = calls.length; // the cleanup's own listeners were put on through it
+  proc.prependOnceListener('SIGINT', () => {});
+  assert.strictEqual(calls[before], 'SIGINT', 'the wrapper the program had put there is still called for the program\'s own prepend, through ours');
+  releaseAgain();
+  assert.strictEqual(proc.prependListener, programs, 'and is what is there again');
+});
+
+test('a wrapper that the program puts over ours is left where it is when the cleanup is released — it keeps working, and the cleanup does not come back', () => {
+  const proc = standIn();
+  const release = onProcessEnd(() => {}, { process: proc });
+  const ours = proc.prependListener;
+  const later = function prependListener(...args) { return ours.apply(this, args); };
+  proc.prependListener = later;
+  release();
+  assert.strictEqual(proc.prependListener, later, 'not ours to take off');
+  const handler = () => {};
+  proc.prependOnceListener('SIGINT', handler);
+  assert.deepStrictEqual(proc.rawListeners('SIGINT').map((listener) => listener.listener || listener), [handler], 'nothing of the cleanup is put back on the list');
+  assert.deepStrictEqual(listenerCounts(proc), { ...NONE, SIGINT: 1 });
+});
+
+test('a cleanup that the program removed itself — removeAllListeners — is not put back by a later prepend: the program\'s own handlers are all that is left to it', () => {
+  const proc = standIn();
+  onProcessEnd(() => {}, { process: proc });
+  proc.removeAllListeners('SIGINT');
+  const handler = () => {};
+  proc.prependOnceListener('SIGINT', handler);
+  assert.deepStrictEqual(proc.rawListeners('SIGINT').map((listener) => listener.listener || listener), [handler]);
+});
+
+test('a process whose bookkeeping cannot be done never fails the program\'s own call — the handler is still registered, and the cleanup still runs when the process exits', () => {
+  const proc = standIn();
+  const ran = [];
+  onProcessEnd(() => ran.push('cleanup'), { process: proc });
+  proc.rawListeners = () => { throw new Error('this stand-in has no way to list its listeners'); };
+  const handler = () => {};
+  assert.doesNotThrow(() => proc.prependListener('SIGINT', handler));
+  assert.ok(proc.listeners('SIGINT').includes(handler));
+  proc.emit('exit', 0);
+  assert.deepStrictEqual(ran, ['cleanup']);
 });
 
 test('a handler for ANOTHER signal does not take the decision: SIGINT, which only the cleanup listens for, still ends the process', () => {
@@ -240,7 +339,7 @@ const dirs = [];
 test.after(() => { for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); });
 
 // Starts helpers/exit-cleanup-child.js — it registers a cleanup that writes `marker` — and waits until it has. `ending` says how it ends: exit | throw | release | wait (for a signal) | emit:<SIGNAL> (the child raises
-// it in itself); `owner` gives it a handler of its own, as the helper's header says.
+// it in itself, on a later turn) | emit-now:<SIGNAL> (in the very turn that an owner with `when: 'now'` is put in place); `owner` gives it a handler of its own, as the helper's header says.
 async function child(t, ending, { owner } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exit-cleanup-'));
   dirs.push(dir);
@@ -310,6 +409,30 @@ for (const when of ['before', 'after']) {
   });
 }
 
+// ...and so does one the program PREPENDS after the cleanup, which puts it ahead of the cleanup's own listener: Node takes a one-shot handler off the list before it calls it, so the cleanup, if it were
+// left behind it, would find no handler and end the process under the handler's shutdown. Raised in the very turn that the handler is put in place — `process.prependOnceListener('SIGINT', …)` and then
+// `process.emit('SIGINT')`, with nothing between them — and on a later turn, as the operating system delivers one.
+for (const how of ['prepend-once', 'prepend-self-removing']) {
+  test(`real process: a ${HOW[how]} SIGINT handler that the program puts in place after the cleanup, in the very turn that it raises the signal, keeps the decision — the cleanup runs, and the process ends with the handler's status`, async (t) => {
+    const run = await child(t, 'emit-now:SIGINT', { owner: { signal: 'SIGINT', how, when: 'now', status: 23, delayMs: 50 } });
+    assert.deepStrictEqual(await run.exited, [23, null], 'the program\'s own shutdown ended it, with its own status — not the cleanup, with the status of a cancellation');
+    assert.strictEqual(fs.readFileSync(run.marker, 'utf8'), 'cleaned');
+    assert.strictEqual(fs.readFileSync(run.handled, 'utf8'), 'handled');
+  });
+  test(`real process: the same on a later turn — a ${HOW[how]} SIGINT handler registered after the cleanup, and the signal raised afterwards`, async (t) => {
+    const run = await child(t, 'emit:SIGINT', { owner: { signal: 'SIGINT', how, when: 'after', status: 23, delayMs: 50 } });
+    assert.deepStrictEqual(await run.exited, [23, null]);
+    assert.strictEqual(fs.readFileSync(run.marker, 'utf8'), 'cleaned');
+    assert.strictEqual(fs.readFileSync(run.handled, 'utf8'), 'handled');
+  });
+}
+
+test('real process: with no handler of the program\'s in the way, the same turn changes nothing — the cleanup runs and the process ends as a process that nothing listens for does', async (t) => {
+  const run = await child(t, 'emit-now:SIGINT');
+  assert.deepStrictEqual(await run.exited, WINDOWS ? [CONTROL_C_EXIT, null] : [null, 'SIGINT']);
+  assert.strictEqual(fs.readFileSync(run.marker, 'utf8'), 'cleaned');
+});
+
 // A signal from OUTSIDE — a real one, delivered by the operating system — where the platform has them.
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   test(`real process: ${signal} runs the cleanup, and the process then ends BY ${signal} — the status a process that had no handler would have had`, { skip: WINDOWS && 'Windows has no signals to deliver: a signal sent to a process ends it at once, without running anything (its console events are tested below)' }, async (t) => {
@@ -338,6 +461,14 @@ for (const when of ['before', 'after']) {
   });
 }
 
+test('real process: and so does a one-shot SIGTERM handler that the program PREPENDS after the cleanup, when the signal is delivered from outside', { skip: WINDOWS && 'Windows has no signals to deliver' }, async (t) => {
+  const run = await child(t, 'wait', { owner: { signal: 'SIGTERM', how: 'prepend-once', when: 'after', status: 9, delayMs: 50 } });
+  run.proc.kill('SIGTERM');
+  assert.deepStrictEqual(await run.exited, [9, null], 'the process ended by the program\'s own shutdown, not by the cleanup');
+  assert.strictEqual(fs.readFileSync(run.marker, 'utf8'), 'cleaned');
+  assert.strictEqual(fs.readFileSync(run.handled, 'utf8'), 'handled');
+});
+
 // --- Windows: Ctrl+C and Ctrl+Break, as the console sends them ----------------------------------------------------------------------------------------
 
 // A real console event is the only thing that ends a Windows process "by a signal" — and the status it gives (0xC000013A) is what the cleanup's process must end with: not 1, which is all `process.kill` and
@@ -349,10 +480,12 @@ const CONSOLE_SCENARIOS = [
   { id: 'cleanup', event: 'CTRL_C', config: {} },
   { id: 'once-before', event: 'CTRL_C', config: { owner: { signal: 'SIGINT', how: 'once', when: 'before', status: 23, delayMs: 50 } } },
   { id: 'once-after', event: 'CTRL_C', config: { owner: { signal: 'SIGINT', how: 'once', when: 'after', status: 23, delayMs: 50 } } },
+  { id: 'prepend-once-after', event: 'CTRL_C', config: { owner: { signal: 'SIGINT', how: 'prepend-once', when: 'after', status: 23, delayMs: 50 } } },
   { id: 'persistent-before', event: 'CTRL_C', config: { owner: { signal: 'SIGINT', how: 'on', when: 'before', status: 9 } } },
   { id: 'plain', event: 'CTRL_BREAK', config: { plain: true } },
   { id: 'cleanup', event: 'CTRL_BREAK', config: {} },
   { id: 'once-before', event: 'CTRL_BREAK', config: { owner: { signal: 'SIGBREAK', how: 'once', when: 'before', status: 23, delayMs: 50 } } },
+  { id: 'prepend-once-after', event: 'CTRL_BREAK', config: { owner: { signal: 'SIGBREAK', how: 'prepend-once', when: 'after', status: 23, delayMs: 50 } } },
 ];
 let consoleRuns;
 function inConsoles() {
@@ -377,15 +510,17 @@ function inConsoles() {
 const KEYS = { CTRL_C: 'Ctrl+C', CTRL_BREAK: 'Ctrl+Break' };
 const SIGNAL_OF = { CTRL_C: 'SIGINT', CTRL_BREAK: 'SIGBREAK' };
 
-// The result of `id` for `event`, and the control's; null (the test is skipped) when this environment could not deliver the event to its control — a console that does not take events says nothing about the cleanup.
+// The result of `id` for `event`, and the control's; null (the test is skipped, with the reason) when this machine cannot send the event, or its control — a child that registers nothing — does not end as a cancelled
+// process: a console that does not take events says nothing about the cleanup. The answer is the one every console test gives (helpers/console-event.js `controlProblem`): the machine's unsuitability skips, a defect of the
+// sender or of the child fails, and so does a scenario that is not delivered once its control was.
 async function consoleRun(t, id, event) {
   const runs = await inConsoles();
   const control = runs[`plain/${event}`];
-  if (!control.delivered || !control.exited) {
-    t.skip(`this environment could not deliver ${KEYS[event]} to a console child that registers nothing (${JSON.stringify({ ...control, files: undefined })}), so it cannot say how the cleanup's process ends`);
+  const problem = controlProblem(control, KEYS[event]);
+  if (problem) {
+    t.skip(problem);
     return null;
   }
-  assert.strictEqual(control.status, CONTROL_C_EXIT, `the control: Windows ends a process that nothing handles with STATUS_CONTROL_C_EXIT, however ${KEYS[event]} reached it`);
   const run = runs[`${id}/${event}`];
   assert.deepStrictEqual([run.delivered, run.exited, run.error], [true, true, null], JSON.stringify({ ...run, files: undefined }));
   return { run, control };
@@ -403,6 +538,7 @@ for (const event of ['CTRL_C', 'CTRL_BREAK']) {
 for (const [id, what, status] of [
   ['once-before', 'one-shot', 23],
   ['once-after', 'one-shot', 23],
+  ['prepend-once-after', 'one-shot PREPENDED', 23],
   ['persistent-before', 'persistent', 9],
 ]) {
   test(`real Ctrl+C (Windows console event): a program whose own ${what} SIGINT handler is registered ${id.endsWith('before') ? 'before' : 'after'} the cleanup keeps the decision — the cleanup runs, and the process ends with the handler's status ${status}`, { skip: !WINDOWS && 'console events are a Windows thing' }, async (t) => {
@@ -414,10 +550,12 @@ for (const [id, what, status] of [
   });
 }
 
-test('real Ctrl+Break (Windows console event): a program whose own one-shot SIGBREAK handler is registered before the cleanup keeps the decision too', { skip: !WINDOWS && 'console events are a Windows thing' }, async (t) => {
-  const answer = await consoleRun(t, 'once-before', 'CTRL_BREAK');
-  if (!answer) return;
-  assert.strictEqual(answer.run.status, 23);
-  assert.strictEqual(fs.readFileSync(answer.run.files.marker, 'utf8'), 'cleaned');
-  assert.strictEqual(fs.readFileSync(answer.run.files.handled, 'utf8'), 'handled');
-});
+for (const id of ['once-before', 'prepend-once-after']) {
+  test(`real Ctrl+Break (Windows console event): a program whose own one-shot SIGBREAK handler is registered ${id.endsWith('before') ? 'before' : 'after (and PREPENDED)'} the cleanup keeps the decision too`, { skip: !WINDOWS && 'console events are a Windows thing' }, async (t) => {
+    const answer = await consoleRun(t, id, 'CTRL_BREAK');
+    if (!answer) return;
+    assert.strictEqual(answer.run.status, 23);
+    assert.strictEqual(fs.readFileSync(answer.run.files.marker, 'utf8'), 'cleaned');
+    assert.strictEqual(fs.readFileSync(answer.run.files.handled, 'utf8'), 'handled');
+  });
+}

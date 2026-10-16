@@ -18,7 +18,14 @@
 //     env      environment variables for the child alone
 //   `status` is the child's exit status as Windows has it, unsigned (a console event ends a child with 0xC000013A, which is -1073741510 as a signed number). `delivered` is false when the event could not be
 //   sent (the child never became ready, or the console could not be attached), and `exited` false when the child was still running 20 seconds after it: it is ended then, and the caller decides what that means.
+//
+// WHEN A TEST THAT USES IT SKIPS, AND WHEN IT FAILS — one answer for every test file, given here (`consoleVerdict`, `controlProblem`) so that it cannot differ from file to file. Whether a machine can carry a console event to
+// a child at all is a fact about the machine, not about the code under test: a test SKIPS, with the reason, when the PowerShell cannot compile the sender (a constrained language mode), when the child's console cannot be
+// attached or listed, when the event cannot be sent, when the child's console is shared with another process (nothing is sent then, by design), or when the CONTROL of an event — a child that registers nothing — does not end as a
+// cancelled process (0xC000013A): a machine that cannot show how a process with no handler ends cannot say how another one does. It FAILS when an event was delivered to a console that another process shared, when the control
+// child could not be run for a reason the sender does not explain, and for every defect of the sender or of the child: those say something about the code, and a skip would hide it.
 // See: https://learn.microsoft.com/windows/console/generateconsolectrlevent
+const assert = require('node:assert');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 
@@ -61,9 +68,11 @@ public static class ConsoleEvents {
   public static void EnableCtrlC() { SetConsoleCtrlHandler(IntPtr.Zero, false); }
   // An event sent to the console reaches every process attached to it — the group 0 of GenerateConsoleCtrlEvent is all of them, and Ctrl+C cannot be aimed at less — so nothing is sent until the console this
   // process has just attached to is KNOWN to hold the child and this process and nobody else: the console made for the child, not the console of whoever is running the tests, a shell, or another job.
+  // Every refusal of Send ends in "no event was sent", in this file's words and not in the language of the operating system's own message (Refused): that is what the tests tell a machine that cannot send an event from a defect.
+  static Exception Refused(string what, int error) { return new InvalidOperationException(what + " (" + new Win32Exception(error).Message + "): no event was sent"); }
   public static void Send(uint pid, uint ev) {
     FreeConsole();
-    if (!AttachConsole(pid)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    if (!AttachConsole(pid)) throw Refused("the child's console could not be attached", Marshal.GetLastWin32Error());
     uint self = GetCurrentProcessId();
     uint[] attached = new uint[64];
     uint count = GetConsoleProcessList(attached, (uint)attached.Length);
@@ -75,7 +84,7 @@ public static class ConsoleEvents {
     }
     if (!childIsThere) { FreeConsole(); throw new InvalidOperationException("the child is not on the console that was attached: no event was sent"); }
     SetConsoleCtrlHandler(ignore, true);
-    if (!GenerateConsoleCtrlEvent(ev, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    if (!GenerateConsoleCtrlEvent(ev, 0)) throw Refused("the event could not be sent", Marshal.GetLastWin32Error());
   }
   public static void Detach() { FreeConsole(); }
 }
@@ -165,4 +174,48 @@ function runInConsoles(scenarios) {
   });
 }
 
-module.exports = { WINDOWS, runInConsoles, STATUS_CONTROL_C_EXIT };
+// What the sender's own refusals say. The one that a test may EXPECT — a child whose console is shared — is told apart from the others, which mean that this machine cannot send an event at all.
+const SHARED_CONSOLE = /shared with another process: no event was sent/;
+// A PowerShell that cannot compile the sender (a constrained language mode, or a compiler that fails); a refusal of `Send` — attaching to the child's console, listing it, sending (each ends in "no event was sent", see `Refused` in
+// the driver); and PowerShell's own wrapper for whatever `Send` throws, `Exception calling "Send" with "2" argument(s): "<the operating system's words>"`, which an operating system's own message for a failed attach (`The handle is
+// invalid`, `Access is denied`) arrives in when it is not worded by the driver.
+const UNAVAILABLE = /language mode|could not be compiled|\bno event was sent\b|^Exception calling "Send"/;
+
+/**
+ * What one result of `runInConsoles` says, so that every test that runs a console scenario answers the same question the same way (see the top of the file):
+ *   `delivered`    the event was sent: what became of the child is for the test to judge
+ *   `shared`       the sender refused, by design, because the child's console is shared with another process: the right answer for a child that shares its console on purpose (console-event.test.js), and for any other
+ *                  test a machine that gives a child no console of its own
+ *   `unavailable`  this machine cannot send a console event, and nothing was sent: `reason` says why. A test that needs an event skips, with the reason
+ *   `defect`       anything else, which the sender does not explain — a child that was never ready, a driver that failed in another way: the failure of a sender or a child, which a test reports and never skips
+ * @param {{ delivered: boolean, error: string|null }} result
+ * @returns {{ kind: 'delivered'|'shared'|'unavailable'|'defect', reason?: string }}
+ */
+function consoleVerdict(result) {
+  if (result.delivered) return { kind: 'delivered' };
+  const error = String(result.error === null || result.error === undefined ? '' : result.error);
+  if (SHARED_CONSOLE.test(error)) return { kind: 'shared', reason: `the child's console is shared with another process (${error})` };
+  if (UNAVAILABLE.test(error)) return { kind: 'unavailable', reason: `this machine cannot send a console event to a child (${error})` };
+  return { kind: 'defect', reason: error || 'no event was sent, and no reason was given' };
+}
+
+/**
+ * The check every test that compares how a process ends with how the CONTROL of the same event ends shares: a control is a child that registers nothing, and it shows how Windows ends a process that nothing handles when
+ * the event reaches it — STATUS_CONTROL_C_EXIT. Answers `null` when the control ended so, and otherwise the reason to skip the test with: this machine cannot send the event, or its console is shared, or the control
+ * did not end as a cancelled process, so it cannot say how any other process ends. Fails (an AssertionError) when the control could not be run for a reason that is a defect of the sender or of the child.
+ * @param {{ delivered: boolean, exited: boolean, status: number|null, error: string|null }} control
+ * @param {string} key - the event as a person names it, for the reason: `Ctrl+C`
+ * @returns {string|null}
+ */
+function controlProblem(control, key) {
+  const verdict = consoleVerdict(control);
+  if (verdict.kind === 'unavailable' || verdict.kind === 'shared') return `${verdict.reason}, so it cannot say how a process ends when ${key} reaches it`;
+  assert.notStrictEqual(verdict.kind, 'defect', `the control of ${key}, a child that registers nothing, could not be run: ${JSON.stringify({ ...control, files: undefined })}`);
+  if (!control.exited) return `the control of ${key}, a child that registers nothing, was still running 20 seconds after the event was sent to it, so this machine cannot say how a process ends when ${key} reaches it`;
+  if (control.status !== STATUS_CONTROL_C_EXIT) {
+    return `the control of ${key}, a child that registers nothing, ended with status ${control.status} and not with STATUS_CONTROL_C_EXIT (${STATUS_CONTROL_C_EXIT}), so this machine cannot say how a process that is cancelled by ${key} ends`;
+  }
+  return null;
+}
+
+module.exports = { WINDOWS, runInConsoles, consoleVerdict, controlProblem, STATUS_CONTROL_C_EXIT };
