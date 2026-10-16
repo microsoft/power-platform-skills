@@ -110,8 +110,8 @@ const TWO_WAY = [
   },
   {
     kind: 'generic',
-    // An element whose text starts with a parenthesis stands where a member of a type may begin at its head — after a `return` here, where `return <U>(x)` is also a method named `return` — so that the text alone does not tell the two programs
-    // apart. After an `=`, a `(`, a `[`, a `:` or an `=>` no member begins, and such an element is read for certain (source-literals.js, NO_MEMBER_BEFORE).
+    // An element whose text starts with a parenthesis stands where a member of a type may begin at its head — after a `return` in the block of an arrow function here (see `placed`), where `return <U>(x)` is also a method named `return` — so that the text
+    // alone does not tell the two programs apart. After an `=`, a `(`, a `[`, a `:` or an `=>` no member begins, and such an element is read for certain (source-literals.js, NO_MEMBER_BEFORE), as it is where none can stand at all.
     pairs: [
       ['an interface with a call signature, and a string that holds the call', `interface P { <U>(x: U): T; }\nconst s = '</U>;${CALL};//';`, 0],
       ['an element whose text starts with a parenthesis, then the call', `const el = <U>(x: U): T;</U>;\n${CALL};`, 1],
@@ -237,6 +237,9 @@ const TWO_WAY = [
 ];
 
 const wrap = (snippet) => `import * as React from "react";\nexport default function Page() {\n  ${snippet.replace(/\n/g, '\n  ')}\n  return null;\n}\n`;
+// The braces of a function hold statements, where no member of a type stands and an element after `return` or a `?` is certain (source-literals.js, membersMayStandAt); those of an arrow function may be a type's. So the second program of a pair that
+// starts with a `return` or a conditional stands in the block of an arrow function, where the text still does not tell the two programs apart.
+const placed = (kind, snippet) => (kind === 'generic' && /^(?:return |const el = c \? )/.test(snippet) ? `const f = () => {\n${snippet}\n};` : snippet);
 const parses = (ts, code) => ts.createSourceFile('page.tsx', code, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
 const realCalls = (ts, source) => {
   let found = 0;
@@ -354,7 +357,7 @@ test('valid pages: each recorded class is two programs with the same text, both 
   for (const { kind, pairs, baseRight } of TWO_WAY) {
     let baseWrong = 0;
     for (const [what, snippet, calls] of pairs) {
-      const code = wrap(snippet);
+      const code = wrap(placed(kind, snippet));
       const source = parses(ts, code);
       assert.deepStrictEqual(source.parseDiagnostics.map((d) => d.code), [], `${kind}: ${what} compiles: ${JSON.stringify(snippet)}`);
       assert.strictEqual(realCalls(ts, source), calls, `${kind}: ${what}: the calls TypeScript reads: ${JSON.stringify(snippet)}`);
@@ -371,8 +374,8 @@ test('valid pages: each recorded class is two programs with the same text, both 
   }
 });
 
-// The lines that end in an open `[`, an initializer's `=` after a `?` or a type, or an `=` or an operator in a parameter list, behind a `//` and a path on the next line, at a head where a member of a type may begin (`return`, `,`,
-// `;`, `{`, a `?`, `default`): the text could be the members of a type, and a regex may begin at the path's `/`, which TypeScript reads (source-literals.js, regexFailsInAType).
+// The lines that end in an open `[`, an initializer's `=` after a `?` or a type, or an `=` or an operator in a parameter list, behind a `//` and a path on the next line, at a head where a member of a type may stand (in the braces of an arrow function,
+// of a JSX container or of a template's substitution, which the lexer does not know for a block: after a `return`, a `,`, a `;`, a `{`, a `?` or `default` there): the text could be the members of a type, and a regex may begin at the path's `/`, which TypeScript reads (source-literals.js, regexFailsInAType).
 //   - A regex that cannot be part of a type that parses leaves only the element: the path's line does not close it (the closing tag is on the next line, TS1161), or it ends at the `/` of the closing tag, whose name is its flags, and
 //     the `>` that follows is a comparison with no operand after it (the tag is followed by a `;`, `)`, `}`, `,` or `:`), or it closes before the closing tag, which follows it directly: `</` is a token that no operand goes on with. These
 //     pages are resolved, as 2.13.0 resolves them, and the same text as the members of a type is a parse error for every continuation (so no program has the closing tag in that regex).

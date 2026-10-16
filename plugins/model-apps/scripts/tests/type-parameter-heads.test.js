@@ -1007,3 +1007,237 @@ test('TypeScript: a method named like an operator is a member in the braces of a
   assert.ok(checked >= 300, `${checked} programs were valid`);
   t.diagnostic(`${checked} programs valid to TypeScript`);
 });
+
+// ─── A heritage that ends in a call after `implements` or a comma ─────────────────────────────────────────────────────────────────────────────────────────
+
+// A heritage clause is a list, and the parser reads each element as a left-hand-side expression (parseExpressionWithTypeArguments), so `class C implements B() {`, `class C extends A, B() {` and `interface I extends A, B() {` parse; only the checker objects
+// (TS2500, TS1174, TS2499). The braces after such a `)` hold members, as they do after `extends mixin(A)`: a call that follows `implements` or a comma is no function's head. A lexer that took it for one read the method after it for an element, whose text ran on
+// to the closing tag in the note, and rewrote the call there — and with the type parameter written with an escape the guard that refuses such a name was bypassed too. A call that follows a comma in an object literal is a method's head all the same, whose braces
+// hold statements: the comma has to be read back to the keyword that begins its list, or to what no list holds.
+const CALL_HERITAGES = [
+  ['a class that implements a call', 'class C implements B()', 'class'], ['a class that implements a parenthesis', 'class C implements (B)', 'class'], ['a class that implements two names and calls the second', 'class C implements A, B()', 'class'],
+  ['a class that extends two names and calls the second', 'class C extends A, B()', 'class'], ['a class with a base that implements a call', 'class C extends A implements B()', 'class'], ['a call with a path', 'class C implements A, ns.B()', 'class'],
+  ['a call after another call', 'class C implements A(x, y), B()', 'class'], ['type arguments before the comma', 'class C implements A<T>, B()', 'class'], ['a comment and a line break after the comma', 'class C implements A, /* c */\n  B()', 'class'],
+  ['three elements', 'class C implements A, B(), D()', 'class'], ['a call named `$`', 'class C implements A, $()', 'class'], ['an abstract class', 'abstract class C implements A, B()', 'class'],
+  ['an interface that extends two names and calls the second', 'interface I extends A, B()', 'interface'], ['an interface that extends a call', 'interface I extends B()', 'interface'], ['an interface with three elements', 'interface I extends A, B(), C()', 'interface'],
+  ['an interface that implements a call', 'interface I implements B()', 'interface'], ['an interface with a path', 'interface I extends A, ns.B()', 'interface'], ['an interface with type arguments before the comma', 'interface I extends A<T>, B()', 'interface'],
+  ['an interface with a comment after the comma', 'interface I extends A, /* c */ B()', 'interface'],
+];
+const CALL_HERITAGE_HEADS = ['<T>', '<in T>', '<>', '<T extends string>'];
+
+test('TypeScript: a method named like an operator is a member in the braces of a class or an interface after a heritage that ends in a call after `implements` or a comma, and the note after it is data', (t) => {
+  const ts = loadTypescriptOracle();
+  const base = loadBaseLexer();
+  const codes = [];
+  let valid = 0;
+  for (const [what, heritage, kind] of CALL_HERITAGES) {
+    for (const word of MEMBER_NAME_OPERATORS) {
+      for (const head of CALL_HERITAGE_HEADS) {
+        const member = kind === 'class' ? `${word}${head}(x: MARK): void {}` : `${word}${head}(x: MARK): void;`;
+        const code = pageOf(`${heritage} { ${member} }`, closingOf(head));
+        const label = `${what} / ${word}${visible(head)}`;
+        if (ts && !cleanSourceFile(ts, code)) continue;
+        codes.push(code);
+        assertRead(code, 'exact', label);
+        assert.ok(readsAsCode(code), `${label}: the method is code`);
+        if (ts) {
+          assertTypeScriptReads(ts, code, label);
+          assert.ok(methodNamed(ts, code, word), `${label}: TypeScript reads a method`);
+          valid += 1;
+        }
+      }
+    }
+  }
+  if (!ts) t.diagnostic(SKIP);
+  else assert.ok(valid >= 19 * 4 * 3, `${valid} pages are valid to TypeScript`);
+  // The released lexer reads the head after `delete`, `typeof`, `void` and `instanceof` for an element in every place, and rewrites the note.
+  if (base) assert.ok(misreadByBase(base, codes) >= codes.length / 2, `the released lexer misreads only ${misreadByBase(base, codes)} of the ${codes.length} pages`);
+  // A type parameter written with an escape is the parser's, and no element has the name: the page is refused after the guess `identifier` and the note is never rewritten — after these heritages too.
+  const escaped = [];
+  for (const [what, heritage, kind] of CALL_HERITAGES) {
+    for (const word of MEMBER_NAME_OPERATORS) {
+      for (const head of [String.raw`<\u0054>`, String.raw`<in \u0054>`]) {
+        const member = kind === 'class' ? `${word}${head}(x: MARK): void {}` : `${word}${head}(x: MARK): void;`;
+        const code = pageOf(`${heritage} { ${member} }`, closingOf(head));
+        if (ts && !cleanSourceFile(ts, code)) continue;
+        escaped.push(code);
+        assertRead(code, 'refused:identifier', `${what} / ${word}${visible(head)}`);
+      }
+    }
+  }
+  if (ts) assert.ok(escaped.length >= 19 * 4 * 2, `${escaped.length} pages with an escape are valid to TypeScript`);
+  if (base) assert.ok(misreadByBase(base, escaped) >= escaped.length / 2, `the released lexer misreads only ${misreadByBase(base, escaped)} of the ${escaped.length} pages with an escape`);
+  // A single call after `extends` was read as members before, and a call after a comma is read the same way now.
+  const note = (heritage) => pageOf(`${heritage} { delete<T>(x: MARK): void; }`, 'T');
+  assertRead(note('interface I extends A, B()'), 'exact', 'a call after a comma');
+  assertRead(note('interface I extends B()'), 'exact', 'a call after `extends`');
+});
+
+// What may stand before the comma in a heritage list: any left-hand-side expression, with type arguments, whatever its brackets, quotes and operators hold. The list is read back from the comma to the keyword that begins it, and a method after the call that ends it is a member
+// wherever the keyword is (`class C implements A, B() {`, `class C extends A, B() {`, `interface I extends A, B() {`).
+const LIST_ELEMENTS = ['A', 'A.B', 'A<T>', 'A<T, U>', 'A<(x: T) => U>', 'A<{ a: 1, b: 2 }>', 'A<B<C>>', 'A<X extends Y ? 1 : 2>', 'a?.b', 'a?.b()', 'a[0]', 'a[b, c]', 'x!', 'this', '"x"', "'x, y'", '`x, y`', 'tag`x`', 'class {}', 'class D extends E {}', 'function () {}', 'function* () {}',
+  'async function () {}', 'new B', 'new B()', '(B, C)', '(cond ? A : B)', 'f(g(1, 2))', 'f({ a: 1 }, [2, 3])', 'f(function () { return 1; })', 'f(/a,b/)', 'import("x")', '/* c */ A', 'A /* c */', 'A // c\n', '\u00e9', String.raw`\u0041`, '$', 'a.b.c', 'null', '1',
+  '/x/', '/x, y/g', '1e+5', '1E-5', '.5e+3', '1_0e+1', 'a?.[0]', 'a?.(b)', 'a!.b', 'this.#x'];
+
+test('TypeScript: the elements of a heritage list before a call — names, paths, type arguments, optional chains, calls, literals, functions and classes — are read back to the keyword, and the braces after the call hold members', (t) => {
+  const ts = loadTypescriptOracle();
+  const shapes = [(e) => `class C implements ${e}, B()`, (e) => `class C extends ${e}, B()`, (e) => `class C implements ${e}, D, B()`, (e) => `interface I extends ${e}, B()`, (e) => `interface I extends D, ${e}, B()`];
+  let valid = 0;
+  for (const element of LIST_ELEMENTS) {
+    for (const shape of shapes) {
+      const heritage = shape(element);
+      const code = pageOf(`${heritage} { delete<T>(x: MARK): void${heritage.startsWith('class') ? ' {}' : ';'} }`, 'T');
+      if (ts && !cleanSourceFile(ts, code)) continue;
+      valid += 1;
+      // A name written with an escape is a guess of its own (`identifier`), wherever it stands, and so is a `/` right after `implements`, a word that a name may be (`keyword`: a regex or a division): the page is refused after it, and the note is never rewritten.
+      const before = heritage.slice(0, heritage.indexOf(element));
+      const guess = element.includes('\\') ? 'refused:identifier' : /^\/[^*/]/.test(element) && /implements $/.test(before) ? 'refused:keyword' : 'exact';
+      assertRead(code, guess, visible(heritage));
+      if (guess === 'exact') assert.ok(readsAsCode(code), `${visible(heritage)}: the method is code`);
+    }
+  }
+  if (!ts) t.diagnostic(SKIP);
+  else assert.ok(valid >= LIST_ELEMENTS.length * shapes.length * 0.7, `${valid} pages are valid to TypeScript`);
+  // A list longer than the window that is read back (2,000 characters) leaves the keyword out of sight: the braces may hold members, and the method is read as one.
+  const names = Array.from({ length: 300 }, (unused, k) => `Base${k}`).join(', ');
+  for (const heritage of [`class C implements ${names}, B()`, `interface I extends ${names}, B()`]) {
+    const code = pageOf(`${heritage} { delete<T>(x: MARK): void${heritage.startsWith('class') ? ' {}' : ';'} }`, 'T');
+    assertRead(code, 'exact', `a list of ${names.length} characters`);
+    if (ts) assertTypeScriptReads(ts, code, 'a long list');
+  }
+});
+
+test('a call after a comma in an object literal is a method\'s head whose braces hold statements, so an element after `void` that follows a statement there is read for certain', (t) => {
+  const ts = loadTypescriptOracle();
+  const body = 'x;\nvoid <span>(MARK); // note</span>;';
+  const frames = [
+    ['a property', (b) => `const o = { a: 1, m() { ${b} } };`], ['a shorthand property', (b) => `const o = { a, m() { ${b} } };`], ['a shorthand property and a method before it', (b) => `const o = { a, b() {}, m() { ${b} } };`],
+    ['a spread', (b) => `const o = { ...s, m() { ${b} } };`], ['a quoted key', (b) => `const o = { 'k': 1, m() { ${b} } };`], ['a computed key', (b) => `const o = { [k]: 1, m() { ${b} } };`],
+    ['a getter before it', (b) => `const o = { get a() { return 1; }, m() { ${b} } };`], ['a conditional', (b) => `const o = { a: c ? d : e, m() { ${b} } };`], ['a call', (b) => `const o = { a: f(x, y), m() { ${b} } };`],
+    ['an array', (b) => `const o = { a: [1, 2], m() { ${b} } };`], ['an object', (b) => `const o = { a: { b: 1 }, m() { ${b} } };`], ['a string with a comma', (b) => `const o = { a: 'x, y', m() { ${b} } };`],
+    ['a comparison', (b) => `const o = { a: x > y, m() { ${b} } };`], ['an arrow', (b) => `const o = { a: (x) => y, m() { ${b} } };`], ['an element', (b) => `const o = { a: <b>t</b>, m() { ${b} } };`],
+    ['type arguments', (b) => `const o = { a: f<A, B>(x), m() { ${b} } };`], ['an async method', (b) => `const o = { a: 1, async m() { ${b} } };`], ['a generator', (b) => `const o = { a: 1, *m() { ${b} } };`],
+    ['a method before it', (b) => `const o = { n() {}, m() { ${b} } };`], ['an argument', (b) => `f({ a: 1, m() { ${b} } });`], ['a returned object', (b) => `function g() { return { a: 1, m() { ${b} } }; }`],
+    ['a property named like a heritage keyword', (b) => `const o = { a: x.extends, m() { ${b} } };`], ['a property named implements', (b) => `const o = { a: x.implements, m() { ${b} } };`], ['a key named like a heritage keyword', (b) => `const o = { extends: 1, implements: 2, m() { ${b} } };`],
+    ['a class that implements a call, whose method has the body', (b) => `class C implements A, B() { m() { ${b} } }`], ['a class that extends a call after a comma, whose method has the body', (b) => `class C extends A, B() { m() { ${b} } }`],
+  ];
+  let valid = 0;
+  for (const [what, wrap] of frames) {
+    const code = `${wrap(body)}\n${CALL};`;
+    assert.deepStrictEqual(guessesOf(code), [], `${what}: no guess`);
+    assert.ok(!readsAsCode(code), `${what}: the text of the element is text`);
+    assert.deepStrictEqual(readPage(code).rewritten.length, 1, `${what}: the call after it is rewritten`);
+    if (ts && cleanSourceFile(ts, code)) valid += 1;
+  }
+  if (ts) assert.strictEqual(valid, frames.length, 'every page is valid to TypeScript');
+  else t.diagnostic(SKIP);
+});
+
+// ─── Where no member stands, the head of an element is read for certain ───────────────────────────────────────────────────────────────────────────────────────
+
+// A head that starts like an element's is the type parameters of a signature where a member of a type may begin at it, and the text after its list can hide the closing tag (`<in U>(y); // note</in>`: the comment may hold it): both programs compile, and the page
+// is refused after the guess. Where no member can stand — after `return`, after a comma in parentheses or brackets, and at the start of a statement in a block or at the top level — the head is an element, and the text is read as the element's: nothing is guessed. The
+// places are those where membersMayStandAt answers no; a lexer that asked it only for a word before the head (`void`, `delete`) guessed here as it does for a signature.
+const NO_MEMBER_HEADS = ['<>', '<in U>', '<out U>', '<public U>', '<const in U>', '<const in out U>', '<U>', '<static\nU>'];
+const NOTE_TEXTS = ['(MARK); // note', '(MARK), x; // note', '(MARK); /* note */', '(MARK) plain text // note'];
+const NO_MEMBER_PLACES = [
+  ['the value of a return', (e) => `function f() { return ${e}; }`], ['the value of a return in a method', (e) => `class C { m() { return ${e}; } }`], ['the value of a return in a method that follows a property of an object literal', (e) => `const o = { a: 1, m() { return ${e}; } };`],
+  ['an argument after a comma', (e) => `f(a, ${e});`], ['an operand after a comma in parentheses', (e) => `const v = (touch(), ${e});`], ['an element of an array after a comma', (e) => `const v = [a, ${e}];`],
+  ['the start of the source', (e) => `${e};`], ['the start of a statement after a statement', (e) => `x;\n${e};`], ['the start of a statement in a function', (e) => `function f() { ${e}; }`], ['the start of a statement in a block', (e) => `{ ${e}; }`],
+  ['the start of a statement in an if block', (e) => `if (a) { ${e}; }`], ['the start of a statement in an else block', (e) => `if (a) { b; } else { ${e}; }`], ['the start of a statement in a try block', (e) => `try { ${e}; } catch { g(); }`],
+  ['the start of a statement in an async method', (e) => `class C { static async m(a) { ${e}; } }`], ['the body of an if with no braces', (e) => `if (a) ${e};`],
+];
+
+test('a head that starts like an element\'s is an element for certain after `return`, after a comma in parentheses or brackets and at the start of a statement in a block or at the top level, wherever the text after its list could hide the closing tag', (t) => {
+  const ts = loadTypescriptOracle();
+  let valid = 0;
+  for (const [place, wrap] of NO_MEMBER_PLACES) {
+    for (const head of NO_MEMBER_HEADS) {
+      for (const text of NOTE_TEXTS) {
+        const code = `${wrap(`${head}${text}</${closingOf(head)}>`)}\n${CALL};`;
+        const label = `${place} / ${visible(head)} / ${text}`;
+        if (ts && !cleanSourceFile(ts, code)) continue;
+        valid += 1;
+        assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+        assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+        assert.strictEqual(readPage(code).rewritten.length, 1, `${label}: the call after the element is rewritten`);
+        if (ts) assert.ok(isElement(readingAt(ts, cleanSourceFile(ts, code), code.indexOf(head))), `${label}: TypeScript reads an element`);
+      }
+    }
+  }
+  if (!ts) t.diagnostic(SKIP);
+  else assert.ok(valid >= NO_MEMBER_PLACES.length * NO_MEMBER_HEADS.length * 3, `${valid} pages are valid to TypeScript`);
+});
+
+test('a head that starts like an element\'s stays a guess where a member of a type may begin, in the braces that the lexer does not know for a block, and where its list cannot be read or its head holds a comment', (t) => {
+  const ts = loadTypescriptOracle();
+  const heads = ['<>', '<in U>', '<public U>', '<const in U>', '<U>'];
+  // A member of a type begins here, and so do the braces after a heritage that ends in a call, a class and an arrow's block: the same text is a signature's.
+  const members = [
+    ['a member of an interface', (e) => `interface I {\n  ${e}\n}`], ['a member of a type literal', (e) => `type L = {\n  ${e}\n};`], ['a member after a comma', (e) => `interface I { a: A,\n  ${e}\n}`], ['a member after a semicolon', (e) => `interface I { a: A;\n  ${e}\n}`],
+    ['a member after a heritage that ends in a call', (e) => `interface I extends A, B() {\n  ${e}\n}`], ['a member after `extends` and a call', (e) => `interface I extends B() {\n  ${e}\n}`],
+    ['the block of an arrow', (e) => `const f = () => {\n  ${e};\n};`], ['braces after a colon', (e) => `l: {\n  ${e};\n}`], ['a template substitution', (e) => `const s = \`\${(() => {\n  ${e};\n})()}\`;`],
+  ];
+  for (const [place, wrap] of members) {
+    for (const head of heads) {
+      const code = `${wrap(`${head}(y); // note</${closingOf(head)}>`)}\n${CALL};`;
+      const { rewritten, frontier } = readPage(code);
+      assert.ok(frontier && frontier.kind === 'generic', `${place} / ${visible(head)}: the guess is named: ${visible(frontier)}`);
+      assert.deepStrictEqual(rewritten, [], `${place} / ${visible(head)}: the call after the guess is not rewritten`);
+      if (ts && place !== 'braces after a colon' && place !== 'the block of an arrow' && place !== 'a template substitution') assert.ok(cleanSourceFile(ts, code), `${place} / ${visible(head)}: TypeScript parses the page`);
+    }
+  }
+  // No member stands in the braces of a function, and the list cannot be read to its end, or the head holds a comment that the lexer does not read: the guess stays, as it does after an `=`.
+  const unread = [['a regex after a call in a default', '<in U>(a = f(/)/))</in>'], ['a regex in parentheses in a default', '<public U>(a = (/[)]/))</public>'], ['a template in a template', '<in U>(x: `${`p`}`)</in>'],
+    ['a head with a comment', '<public /* c */ U>(y)</public>'], ['a comment in a fragment head', '<in /* c */ U>(y)</in>']];
+  for (const [place, wrap] of NO_MEMBER_PLACES.filter(([what]) => /return|comma|source|statement in a function/.test(what))) {
+    for (const [what, element] of unread) {
+      const code = `${wrap(element)}\n${CALL};`;
+      const { rewritten, frontier } = readPage(code);
+      assert.ok(frontier && frontier.kind === 'generic', `${place} / ${what}: the guess is named: ${visible(frontier)}`);
+      assert.deepStrictEqual(rewritten, [], `${place} / ${what}: the call after the guess is not rewritten`);
+      if (ts) assert.ok(cleanSourceFile(ts, code), `${place} / ${what}: TypeScript parses the page`);
+    }
+  }
+  // A token that is a guess of its own before the head — `in`, `>=`, `<` — keeps its guess wherever it stands: only after a token that the rule reads (`return`, a `,`, a `;`) does the place say that no member stands.
+  for (const place of ['const k = a in @;', 'const k = a >= @;', 'x = a < @;', 'function f() { return a in @; }']) {
+    const code = `${place.replace('@', '<in U>(y); // note</in>')}\n${CALL};`;
+    const { rewritten, frontier } = readPage(code);
+    assert.ok(frontier && frontier.kind === 'generic', `${place}: the guess is named: ${visible(frontier)}`);
+    assert.deepStrictEqual(rewritten, [], `${place}: the call after the guess is not rewritten`);
+  }
+});
+
+// ─── A long run of postfix `!` ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// Whether a line break before a word ends a member depends on whether an operand ended before it: after a name, `!` is the postfix operator of a non-null assertion, and a run of them is walked back to the name. A page is untrusted input, and a call per `!` overflowed
+// the stack a few thousand of them in (the same walk as positionAfterPrefixable, which is a loop). A run longer than the window that the lexer looks back over (2,000 characters) puts the braces that hold the statement out of sight: where the braces matter, the
+// page is refused after the guess `generic`, as for any statement that long, and never rewritten after it.
+test('a run of 20,000 postfix `!` before a line break and an element is read, not a stack overflow: exactly where the braces are in sight, and after a guess where they are not', (t) => {
+  const ts = loadTypescriptOracle();
+  const element = 'void <span>(MARK); // note</span>;';
+  // [place, the page for a run of n, what a short run gives, what a run longer than the window gives]: 'exact' resolves the call after it, 'generic' names the guess.
+  const pages = (n) => [
+    ['a function body', `function f() { const p = value${'!'.repeat(n)}\n${element} }\n${CALL};`, 'exact', 'generic'],
+    ['the block of an arrow', `const f = () => { const p = value${'!'.repeat(n)}\n${element} };\n${CALL};`, 'generic', 'generic'],
+    ['a class property', `class C { x = value${'!'.repeat(n)}\n  void<U>(y: MARK): T {} }\n${CALL};`, 'exact', 'exact'],
+    ['prefix operators, which no operand precedes', `function f() { const p =${'!'.repeat(n)}\n${element} }\n${CALL};`, 'exact', 'exact'],
+  ];
+  for (const n of [20, 20000, 200000]) {
+    for (const [what, code, short, long] of pages(n)) {
+      const label = `${what} / ${n}`;
+      let read;
+      assert.doesNotThrow(() => { read = readPage(code); }, `${label}: no stack overflow`);
+      if ((n <= 20 ? short : long) === 'exact') {
+        assert.strictEqual(read.frontier, null, `${label}: no guess is named`);
+        assert.strictEqual(read.rewritten.length, 1, `${label}: the call after it is rewritten`);
+      } else {
+        assert.ok(read.frontier && read.frontier.kind === 'generic', `${label}: the guess generic is named: ${visible(read.frontier)}`);
+        assert.deepStrictEqual(read.rewritten, [], `${label}: the call after the guess is not rewritten`);
+      }
+      // The method of the class is code and the text of an element is text, wherever the run ends: the guess reads the head as the element it may be.
+      assert.strictEqual(readsAsCode(code), what === 'a class property', `${label}: the method is code and the element's text is text`);
+      if (ts && n <= 20) assert.ok(cleanSourceFile(ts, code), `${label}: TypeScript parses the page`);
+    }
+  }
+});

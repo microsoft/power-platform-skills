@@ -243,15 +243,19 @@ function signaturePage(frame, head, ending, decoy = DECOYS.string) {
 }
 const signaturePages = (endings, decoy = DECOYS.string) => SIGNATURE_FRAMES.flatMap(([frameName, frame]) => SIGNATURE_HEADS.flatMap((head) => endings.map((ending) => ({ ...signaturePage(frame, head, ending, decoy), label: `${frameName} / ${head} / ${JSON.stringify(ending)}` }))));
 
-// The places an element stands. The third entry says whether a member of a type may begin there (after a `{`, a `,`, a `;`, `return`, `default`, a `?`): where none can — after an `=`, a `(`, a `[`, a `:` or an `=>` — the text of a head
-// with a parameter list that neither `=>` nor `:` follows is an element, for certain, whatever it holds (source-literals.js, NO_MEMBER_BEFORE).
+// The places an element stands. The third entry says whether a member of a type may stand there, as far as the lexer can tell (membersMayStandAt): where it may — in the braces of a JSX container and of a template's substitution, of an arrow function and of a label,
+// which it does not know for a block — the text of a head with a parameter list that neither `=>` nor `:` follows is a guess where it could hide its closing tag; where none can, after an `=`, a `(`, a `[`, a `:` or an `=>`, after `return` or a `,` in parentheses, and at the start of
+// a statement in a function, a block or the top level, it is an element, for certain, whatever it holds (source-literals.js, NO_MEMBER_BEFORE, angleOpens).
 const ELEMENT_FRAMES = [
-  ['a declaration', 'const e = @;', false], ['an argument', 'f(@);', false], ['a property', 'const o = { k: @ };', false], ['a child', 'const p = <p>{@}</p>;', true], ['a return', 'function g() { return @; }', true],
-  ['a default export', 'export default @;', true], ['a conditional', 'const k = c ? @ : null;', true], ['an arrow body', 'const m = items.map((x) => @);', false], ['a block', 'if (a) { @ }', true], ['an array', 'const l = [@];', false],
+  ['a declaration', 'const e = @;', false], ['an argument', 'f(@);', false], ['a property', 'const o = { k: @ };', false], ['a child', 'const p = <p>{@}</p>;', true], ['a return', 'function g() { return @; }', false],
+  ['a default export', 'export default @;', false], ['a conditional', 'const k = c ? @ : null;', false], ['an arrow body', 'const m = items.map((x) => @);', false], ['a block', 'if (a) { @ }', false], ['an array', 'const l = [@];', false],
   // A quote on the line after the element: the apostrophe in its text is no string that this quote could close.
-  ['a conditional with a string', "const k = c ? @ : 'none';", true], ['a template', 'const k = `${@}`;', true],
+  ['a conditional with a string', "const k = c ? @ : 'none';", false], ['a template', 'const k = `${@}`;', true],
+  // The braces of an arrow function are a function type's object type as well, and so are the braces after a `:`: a member of a type may begin in them, wherever a statement does.
+  ['a return in the block of an arrow', 'const g = () => { return @; };', true], ['a statement in the block of an arrow', 'const g = () => { @ };', true], ['a conditional in the block of an arrow', 'const g = () => { const k = c ? @ : null; };', true],
+  ['a conditional with a string in the block of an arrow', "const g = () => { const k = c ? @ : 'none'; };", true], ['a statement in a labelled block', 'l: { @ }', true],
 ];
-// The frames where a member of a type may begin at the head, and where none can.
+// The frames where a member of a type may stand at the head, and where none can.
 const MEMBER_ELEMENT_FRAMES = ELEMENT_FRAMES.filter(([, , member]) => member);
 const NO_MEMBER_ELEMENT_FRAMES = ELEMENT_FRAMES.filter(([, , member]) => !member);
 // A tag that no type has — an attribute with a value, an attribute that `extends` does not introduce, a dotted name with an attribute, a fragment — is an element to every reading, and its text opens nothing: a URL, an apostrophe, a back-tick or a

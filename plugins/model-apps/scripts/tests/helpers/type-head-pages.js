@@ -251,7 +251,10 @@ const ESCAPED_HEADS = [[String.raw`<\u0054>`, 'T'], [String.raw`<\u{54}>`, 'T'],
   ['<static\n\\u0054>', 'static'],
   // A keyword spelled with an escape is TS1260 to the parser, which reads it as the keyword all the same: no page that builds has one, and it is refused like the rest.
   [String.raw`<\u0069n U>`, 'in'], [String.raw`<T \u0065xtends X>`, 'T']];
-const ESCAPE_PLACES = [['an interface', (m) => `interface Api { ${m}; }`], ['a type literal', (m) => `type Api = { ${m} };`], ['a class', (m) => `class Api { ${m} {} }`], ['an object literal', (m) => `const api = { ${m} {} };`]];
+const ESCAPE_PLACES = [['an interface', (m) => `interface Api { ${m}; }`], ['a type literal', (m) => `type Api = { ${m} };`], ['a class', (m) => `class Api { ${m} {} }`], ['an object literal', (m) => `const api = { ${m} {} };`],
+  // After a heritage that ends in a call after a comma or `implements`: the braces hold members there too.
+  ['an interface that extends a call after a comma', (m) => `interface Api extends A, B() { ${m}; }`], ['a class that implements a call', (m) => `class Api implements B() { ${m} {} }`],
+  ['a class that extends a call after a comma', (m) => `class Api extends A, B() { ${m} {} }`], ['a class that implements a call after a comma', (m) => `class Api implements A, ns.B() { ${m} {} }`]];
 const ESCAPE_GAPS = ['', ' ', '\n', '/**/', '/*\n*/'];
 function* escapedHeadPages() {
   for (const [head, closing] of ESCAPED_HEADS) {
@@ -277,8 +280,22 @@ const CLASS_HERITAGES = [
   'class C<T> extends B<T> implements I', 'class C extends mixin<T>(A)', 'class C extends (B as any)', 'class C extends mixin(function () { return A; })', 'class C extends function f(a) {}.bind(x)', 'class C extends a.static', 'class C extends static', 'class static',
   'class $', 'class C extends $', 'class C extends mixin($)', 'class C extends \u00e9a(A)', 'class C extends a.\u00e9b(A)', String.raw`class C extends \u0061(A)`, String.raw`class C extends a.\u0062(A)`, 'abstract class C', 'abstract class C extends mixin(A)',
   'class C extends A\n', 'class C extends mixin(A)\n', '@dec() class C', '@dec class C extends mixin(A)',
+  // A heritage clause is a list, and the parser reads each element as a left-hand-side expression (parseExpressionWithTypeArguments): a call or a parenthesis stands after `implements` and after a comma as it does after `extends`, and the checker
+  // alone objects (TS2500, and TS1174 for a second base class). The braces after such a `)` hold members.
+  'class C implements B()', 'class C implements (B)', 'class C implements A, B()', 'class C extends A, B()', 'class C extends A implements B()', 'class C extends A implements I, B()', 'class C implements ns.B()', 'class C implements A, ns.B()', 'class C extends A, ns.B()',
+  'class C implements A<T>, B()', 'class C implements A, B(c, d)', 'class C implements A(x, y), B()', 'class C implements A,\n  B()', 'class C implements A, /* c */ B()', 'class C implements A, B(), D()', 'class C implements A, $()', 'class C implements A, B()\n',
+  'abstract class C implements A, B()', 'export class C implements A, B()', '@dec class C implements B()', 'declare class C implements A, B()', 'class C implements "x", B()', String.raw`class C implements A, \u0042()`, String.raw`class C implements A, a.\u0062()`,
+  // What stays as it was: a parenthesis, a `new` and an unread callee after a comma.
+  'class C implements A, (B)', 'class C extends A, (B)', 'class C extends A, new B()', 'class C implements A, B<T>()', 'class C extends A, a?.b(c)', 'class C extends A, B.C().d()', 'class C<T> extends A<T>, B() implements I',
 ];
 const CLASS_CONTAINER_WRAPS = [(c) => c, (c) => `export ${c}`, (c) => `function f() { ${c} }`, (c) => `if (a) { b; } else { ${c} }`, (c) => `a(b)\n${c}`, (c) => `async () => { ${c} }`];
+// The same for an interface, which names its bases after `extends` (and, to the parser, after `implements`, which only the checker refuses).
+const INTERFACE_HERITAGES = [
+  'interface I extends J', 'interface I extends A, B()', 'interface I extends B()', 'interface I extends A<T>, B()', 'interface I extends A, ns.B()', 'interface I extends A, B(), C()', 'interface I extends B(),\n  C()', 'interface I extends A, /* c */ B()', 'interface I extends A, B(x, y)',
+  'interface I extends A(x, y), B()', 'interface I implements B()', 'interface I implements A, B()', 'export interface I extends A, B()', 'declare interface I extends A, B()', 'interface I<T> extends A<T>, B()', 'interface I extends A, B()\n',
+  // What stays as it was: a parenthesis after a comma, and an unread callee.
+  'interface I extends A, (B)', 'interface I extends A, B<T>()', 'interface I extends A, a?.b()',
+];
 const OBJECT_CONTAINER_WRAPS = [
   (m) => `const o = { ${m} };`, (m) => `f({ ${m} });`, (m) => `function g() { return { ${m} }; }`, (m) => `x = [{ ${m} }];`, (m) => `for (let i = 0;; { ${m} }) {}`, (m) => `for (let i = 0; i < 1; { ${m} }) {}`, (m) => `for (const x of [{ ${m} }]) {}`,
   (m) => `({ ${m} });`, (m) => `a ? { ${m} } : b;`, (m) => `const s = \`\${{ ${m} }}\`;`, (m) => `const e = <div style={{ ${m} }} />;`, (m) => `const h = () => ({ ${m} });`, (m) => `function k(a = { ${m} }) {}`, (m) => `new Foo({ ${m} });`,
@@ -289,6 +306,7 @@ const TYPE_CONTAINER_WRAPS = [
   (m) => `interface I { ${m} }`, (m) => `interface I extends J { ${m} }`, (m) => `type T = { ${m} };`, (m) => `type T = A & { ${m} };`, (m) => `function f(a: { ${m} }) {}`, (m) => `let x: { ${m} };`, (m) => `f<{ ${m} }>();`, (m) => `const f = (a: { ${m} }) => a;`,
   (m) => `function f(): { ${m} } { return null as any; }`, (m) => `class K { p: { ${m} }; }`, (m) => `type F = () => { ${m} };`, (m) => `let f: (a) => { ${m} };`, (m) => `function f(a: () => { ${m} }) {}`, (m) => `const g = (): { ${m} } => null as any;`,
   (m) => `type G = new () => { ${m} };`, (m) => `interface I { p: () => { ${m} } }`,
+  ...INTERFACE_HERITAGES.map((heritage) => (m) => `${heritage} { ${m} }`),
 ];
 function* containerPages() {
   const page = (code, label) => ({ code: `function openDetail(){${CALL};}\n${code}\nconst note = '</U>};${CALL};//';\nexport default function Page(){return null;}\n`, label });
@@ -326,8 +344,11 @@ const NEST_FRAMES = [
   ['stmt', 'stmt', 'try { } finally { __X__ }'], ['stmt', 'stmt', 'switch (a) { case 1: __X__ }'], ['stmt', 'stmt', 'l: { __X__ }'], ['stmt', 'stmt', 'class C { m() { __X__ } }'], ['stmt', 'stmt', 'class C extends mixin(A) { m() { __X__ } }'],
   ['stmt', 'stmt', 'class C { constructor(a) { __X__ } }'], ['stmt', 'stmt', 'class C { get x() { __X__ } }'], ['stmt', 'stmt', 'class C { static { __X__ } }'], ['stmt', 'stmt', 'class C { async m() { __X__ } }'], ['stmt', 'stmt', 'a;\n{ __X__ }'],
   ['stmt', 'stmt', 'const f = () => { __X__ };'], ['stmt', 'stmt', 'const f = async () => { __X__ };'], ['stmt', 'stmt', 'const f = function () { __X__ };'], ['stmt', 'stmt', 'const o = { m() { __X__ } };'], ['stmt', 'stmt', 'const o = { async m() { __X__ } };'],
+  // A method after another member of an object literal has a comma before its name, which a heritage clause that ends in a call has too (`class C implements A, B() { … }`): the first braces hold statements and the second members.
+  ['stmt', 'stmt', 'const o = { a: 1, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { a, b() {}, m() { __X__ } };'], ['stmt', 'stmt', 'class C implements A, B() { m() { __X__ } }'], ['stmt', 'stmt', 'class C extends A, B() { m() { __X__ } }'],
   // Statements inside, an expression.
   ['stmt', 'expr', '(function () { __X__ })'], ['stmt', 'expr', '(() => { __X__ })'], ['stmt', 'expr', '(async () => { __X__ })'], ['stmt', 'expr', '({ m() { __X__ } })'], ['stmt', 'expr', '({ get x() { __X__ } })'], ['stmt', 'expr', '(class { m() { __X__ } })'],
+  ['stmt', 'expr', '({ a: 1, m() { __X__ } })'],
   ['stmt', 'expr', '(class extends mixin(A) { m() { __X__ } })'], ['stmt', 'expr', '(function* () { __X__ })'], ['stmt', 'expr', '(class { static { __X__ } })'],
   // An expression inside, a statement.
   ['expr', 'stmt', 'f(__X__);'], ['expr', 'stmt', '[__X__];'], ['expr', 'stmt', '(__X__);'], ['expr', 'stmt', 'const e = __X__;'], ['expr', 'stmt', 'a ? __X__ : b;'], ['expr', 'stmt', 'const o = { k: __X__ };'], ['expr', 'stmt', 'const h = () => __X__;'],
@@ -341,6 +362,8 @@ const NEST_FRAMES = [
   ['member', 'stmt', 'class C { __X__ }'], ['member', 'stmt', 'class C extends B { __X__ }'], ['member', 'stmt', 'class C extends mixin(A) { __X__ }'], ['member', 'stmt', 'class C extends (B) { __X__ }'], ['member', 'stmt', 'class C extends new X() { __X__ }'],
   ['member', 'stmt', 'class C extends a.else { __X__ }'], ['member', 'stmt', 'abstract class C { __X__ }'], ['member', 'stmt', 'declare class C { __X__ }'], ['member', 'stmt', 'class C<T> extends B<T> implements I { __X__ }'], ['member', 'stmt', 'class C extends f(A)(B) { __X__ }'],
   ['member', 'stmt', 'interface I { __X__ }'], ['member', 'stmt', 'type T = { __X__ };'], ['member', 'stmt', 'let x: { __X__ };'], ['member', 'stmt', 'type F = () => { __X__ };'], ['member', 'stmt', 'const o = { __X__ };'],
+  ['member', 'stmt', 'class C implements B() { __X__ }'], ['member', 'stmt', 'class C implements A, B() { __X__ }'], ['member', 'stmt', 'class C extends A, B() { __X__ }'], ['member', 'stmt', 'class C extends A implements B() { __X__ }'], ['member', 'stmt', 'interface I extends A, B() { __X__ }'],
+  ['member', 'stmt', 'interface I extends B() { __X__ }'],
   ['member', 'expr', '({ __X__ })'], ['member', 'expr', '(class { __X__ })'], ['member', 'expr', '(class extends mixin(A) { __X__ })'],
 ];
 // What stands before the payload member, by the kind of the braces: a member that a separator or a line break ends.

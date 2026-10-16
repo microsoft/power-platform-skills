@@ -3093,13 +3093,14 @@ test('JSX text that starts with a parenthesis is an element, for certain, wherev
 });
 
 test('JSX text that starts with a parenthesis is a guess where the closing tag could be inside a template, a comment or a regex that its text opens: the element is read, nothing after it is trusted', (t) => {
-  // Where a member of a type may begin at the head, the text could be a type's members; a list that the scan cannot read is a guess wherever the head stands.
+  // Where a member of a type may stand at the head — the braces of a JSX container, of a template's substitution and of an arrow function, which the lexer does not know for a block — the text could be a type's members; a list that the scan cannot read is a guess wherever the head stands.
   const pages = [...elementPages(HIDDEN_TEXT_ELEMENTS, undefined, MEMBER_ELEMENT_FRAMES), ...elementPages(UNREAD_LIST_ELEMENTS)];
   for (const { code, at, label } of pages) {
     assert.deepStrictEqual(earliestAmbiguity(code), [at, 'generic'], label);
     assert.notStrictEqual(maskOf(code)[code.indexOf('(', at)], '(', `${label}: read as an element`);
   }
-  // After an `=`, a `(`, a `[`, a `:` or an `=>` no member of a type begins, and a head with a parameter list that neither `=>` nor `:` follows is an element, for certain, whatever its text holds.
+  // After an `=`, a `(`, a `[`, a `:` or an `=>` no member of a type begins, nor where none can stand at all — after a `return` or a `,` in parentheses, at the start of a statement in a function, a block or the top level — and a head with a parameter list that
+  // neither `=>` nor `:` follows is an element, for certain, whatever its text holds.
   const certain = elementPages(HIDDEN_TEXT_ELEMENTS, undefined, NO_MEMBER_ELEMENT_FRAMES);
   for (const { code, at, label } of certain) {
     assert.deepStrictEqual(ambiguities(code), [], label);

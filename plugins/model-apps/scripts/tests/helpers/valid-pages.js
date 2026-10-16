@@ -32,16 +32,17 @@ function page({ top = '', body = '', ownDefault = false }) {
   ].join('\n');
 }
 
-// Where a value stands. `$` is the value. The third entry says whether a member of a type may begin there, which a head in a type's members could be at: after a `,`, a `{`, `return`, `default` or a `?`. After an `=`, a `(`, a `[`, a
-// `:`, an `=>` or a binary operator none can, and a parameter list that neither `=>` nor `:` follows is an element for certain (source-literals.js, NO_MEMBER_BEFORE).
+// Where a value stands. `$` is the value. The third entry says whether a member of a type may stand there, as far as the lexer can tell (membersMayStandAt), which a head in a type's members could be at: in the braces of a JSX container, of a template's substitution
+// and of an arrow function, which it does not know for a block. After an `=`, a `(`, a `[`, a `:`, an `=>` or a binary operator none can, nor after `return`, `default`, a `?` or a `,` in parentheses in the braces of a function, a method or a block or at the top level, and a
+// parameter list that neither `=>` nor `:` follows is an element for certain (source-literals.js, NO_MEMBER_BEFORE, angleOpens).
 const VALUE_POSITIONS = [
   ['an initializer', (v) => ({ body: `const f = ${v};` }), false],
   ['an argument', (v) => ({ body: `g(${v});` }), false],
-  ['a second argument', (v) => ({ body: `g(a, ${v});` }), true],
-  ['a return value', (v) => ({ body: `function mk() { return ${v}; }` }), true],
+  ['a second argument', (v) => ({ body: `g(a, ${v});` }), false],
+  ['a return value', (v) => ({ body: `function mk() { return ${v}; }` }), false],
   ['an array element', (v) => ({ body: `const r = [${v}];` }), false],
   ['an object value', (v) => ({ body: `const o = { k: ${v} };` }), false],
-  ['a conditional branch', (v) => ({ body: `const c = cond ? ${v} : null;` }), true],
+  ['a conditional branch', (v) => ({ body: `const c = cond ? ${v} : null;` }), false],
   ['the right side of ||', (v) => ({ body: `const d = a || ${v};` }), false],
   ['the right side of ??', (v) => ({ body: `const e = a ?? ${v};` }), false],
   ['parentheses', (v) => ({ body: `const p = (${v});` }), false],
@@ -51,11 +52,17 @@ const VALUE_POSITIONS = [
   ['a nested JSX attribute container', (v) => ({ body: `const el = <A><B render={${v}} /></A>;` }), true],
   ['an assignment', (v) => ({ body: `let w; w = ${v};` }), false],
   ['a class property', (v) => ({ top: `class K { f = ${v}; }` }), false],
-  ['an export default', (v) => ({ top: `export default ${v};`, ownDefault: true }), true],
+  ['an export default', (v) => ({ top: `export default ${v};`, ownDefault: true }), false],
   ['a default parameter', (v) => ({ top: `function dp(cb = ${v}) {}` }), false],
   ['a template substitution', (v) => ({ body: `const t = \`a\${${v}}b\`;` }), true],
   ['a spread', (v) => ({ body: `const s = [...g(${v})];` }), false],
   ['an await', (v) => ({ body: 'async function aw() { await (' + v + '); }' }), false],
+  // The braces of an arrow function are a function type's object type as well, which a lexer without a parser cannot tell from a block: a member of a type may stand there, after a `return`, a `?` and at the start of a statement.
+  ['a return value in the block of an arrow', (v) => ({ body: `const mk2 = () => { return ${v}; };` }), true],
+  ['a conditional branch in the block of an arrow', (v) => ({ body: `const ck = () => { const c = cond ? ${v} : null; };` }), true],
+  ['a statement in the block of an arrow', (v) => ({ body: `const sk = () => { ${v}; };` }), true],
+  // The braces after a `:` or a `}` are none that the lexer knows for a block either.
+  ['a return value in a labelled block', (v) => ({ body: `lbl: { return ${v}; }` }), true],
 ];
 
 // Generic arrows, of every kind.
@@ -469,7 +476,8 @@ function* heldOpenLinePages() {
   for (const line of PROSE_OPEN_LINES) {
     for (const follower of OPERAND_FOLLOWERS) {
       const text = `<p>(a);\n  ${line}\n  /b</p>\n  ${follower};`;
-      yield { group: 'operand after the closing tag', name: `${line} / ${follower}`, text, code: page({ body: `function mk() { return ${text} }` }) };
+      // In the block of an arrow function, whose braces may be a type's: in the body of a function no member stands, and the element is certain.
+      yield { group: 'operand after the closing tag', name: `${line} / ${follower}`, text, code: page({ body: `const mk = () => { return ${text} };` }) };
     }
   }
 }

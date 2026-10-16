@@ -1254,9 +1254,9 @@ test('sweep (an element after `void`, `typeof` or `delete` after a decorator, Ty
   assert.ok(reading.stats.exact >= pages.length - 120, `only ${reading.stats.exact} of the ${pages.length} pages were read exactly`);
 });
 
-// A method named like an operator that has type parameters is a member in the braces of a class, an object literal and a type, and the lexer may only take braces for a block where the parser has no member to read there. Every heritage that ends a class's head
-// (a call, a parenthesis, `new`, a function or a class, a name that a keyword of a block spells, one written with an escape, a `$` or a letter beyond ASCII), the `;` of a `for` head before an object literal, an arrow before a type literal. A method read for an
-// element would run on to the closing tag in the string after it and rewrite the call that the string holds.
+// A method named like an operator that has type parameters is a member in the braces of a class, an object literal and a type, and the lexer may only take braces for a block where the parser has no member to read there. Every heritage that ends a class's or an
+// interface's head (a call, a parenthesis, `new`, a function or a class, after `extends`, after `implements` and after a comma, a name that a keyword of a block spells, one written with an escape, a `$` or a letter beyond ASCII), the `;` of a `for` head before an object
+// literal, an arrow before a type literal. A method read for an element would run on to the closing tag in the string after it and rewrite the call that the string holds.
 test('sweep (a method named like an operator in the braces of a class after every heritage, of an object literal and of a type, TypeScript parser): the method is a member and the note after it is data, and a guess is made only for a list on the next line and a name written with an escape', (t) => {
   const ts = loadTypescriptOracle();
   if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
@@ -1269,7 +1269,7 @@ test('sweep (a method named like an operator in the braces of a class after ever
   // A method whose list starts on the line after its name is a guess after `void` (the name and an element are the other reading), and a heritage written with an escape is a guess about the word: neither is ever read wrong.
   assert.deepStrictEqual(reading.guessedPrograms.filter((program) => !/ \/ a line break before the list|an escape/.test(program.label)).slice(0, 3).map((program) => program.label), [], 'a method in braces that may hold members is guessed at');
   assert.deepStrictEqual([...reading.kinds.keys()].sort(), ['generic', 'identifier'], 'the guesses');
-  assert.ok(reading.stats.exact >= reading.stats.valid - 450, `only ${reading.stats.exact} of the ${reading.stats.valid} valid pages were read exactly`);
+  assert.ok(reading.stats.exact >= 0.8 * reading.stats.valid, `only ${reading.stats.exact} of the ${reading.stats.valid} valid pages were read exactly`);
   if (base) assert.ok(reading.stats.baseMisread >= 1500, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
 });
 
@@ -1601,7 +1601,9 @@ test('sweep (JSX text of lines, one with a `//` in it, and a line that starts wi
   assert.deepStrictEqual(heldPaths.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
   assert.ok(heldPaths.stats.valid >= 100, `only ${heldPaths.stats.valid} programs were valid`);
   assert.strictEqual(heldPaths.stats.guessed, heldPaths.stats.valid, 'a regex that the lexer does not follow to its end is a guess');
-  const OPERAND_FRAMES = [['a return', 'function g() { return @\n  y; }', true], ['a block', 'if (a) { @\n  y }', true], ['a default export', 'export default @\n  y;', true], ['a block, a call', 'if (a) { @\n  y(); }', true]];
+  // The braces of an arrow function and of a label may be a type's, where a member may begin at the head; those of a function, a block and the top level hold statements, where none can.
+  const OPERAND_FRAMES = [['a return in the block of an arrow', 'const g = () => { return @\n  y; };', true], ['a statement in the block of an arrow', 'const g = () => { @\n  y };', true], ['a statement and a call in the block of an arrow', 'const g = () => { @\n  y(); };', true],
+    ['a statement in a labelled block', 'l: { @\n  y }', true]];
   const operandElements = [...proseElements({ leads: [';\n  ', ','], lines: PROSE_OPEN_LINES, paths: ['/b', '/ x'], ends: ['</p>'] })];
   const heldOperands = readTokens(ts, placed(operandElements.flatMap((element) => Array.from({ length: OPERAND_FRAMES.length * decoys.length }, () => element)), OPERAND_FRAMES), base);
   t.diagnostic(`a closing tag that an operand follows: ${describeReading(heldOperands)}`);

@@ -2584,11 +2584,15 @@ test('a signature whose parameter list or text holds its closing tag in a string
     `interface I { <T>(x: "</T>") }\n${TS_DECOY_STRING('T')}\n${DETAIL_CALL}`,
     `type L = { <T>(x: '</T>'); m: 1 };\n${TS_DECOY_STRING('T')}\n${DETAIL_CALL}`,
     `interface I { <T>(x /* </T> */) }\n${TS_DECOY_STRING('T')}\n${DETAIL_CALL}`,
-    // Where a member of a type may begin at the head (after a `return`), the element with a comment in its text is a guess; after an `=` it is not.
-    `function g() { return <p>(a); // c </p>; }\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`,
+    // Where a member of a type may stand at the head — after a `return` in the block of an arrow function, whose braces may be a type's — the element with a comment in its text is a guess; after an `=`, and in the braces of a function, it is not.
+    `const g = () => { return <p>(a); // c </p>; };\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`,
   ]) {
     const frontier = navigationFrontier(code);
     assert.ok(frontier && frontier.kind === 'generic', JSON.stringify(code));
     assert.strictEqual(resolveOne(code).deployment.get('x'), code, 'nothing is rewritten after the guess');
+  }
+  for (const code of [`function g() { return <p>(a); // c </p>; }\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`, `const e = (touch(), <p>(a); // c </p>);\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`, `<p>(a); // c </p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`]) {
+    assert.strictEqual(navigationFrontier(code), null, `no guess where no member stands: ${JSON.stringify(code)}`);
+    assert.deepStrictEqual(extractNavTargets(code).map((t) => [t.kind, t.key]), [['pageref', 'detail']], 'one real call');
   }
 });
