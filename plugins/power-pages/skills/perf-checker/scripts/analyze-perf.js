@@ -559,9 +559,14 @@ function scanWebApiContent(content, relPath) {
     const at = `${relPath}:${lineOf(content, m.index)}`;
     const hasSelect = /[?&]\$select=/i.test(url);
     const selectStar = /[?&]\$select=\*/i.test(url);
-    // "collection query" heuristic: presence of any of these options implies a
-    // multi-row query where an unbounded result set matters.
-    const isCollectionQuery = /[?&]\$(filter|orderby|expand|apply)=/i.test(url);
+    // Collection query heuristic: a bare entity-set path such as `/_api/contacts`
+    // is already a multi-row read even when it has no query string. A record path
+    // like `/_api/contacts(<id>)` is a single-row read and should not require $top.
+    const apiPathMatch = decodedUrl.match(/\/_api\/([^?#'"`\s\\]+)/i);
+    const firstPathSegment = apiPathMatch ? apiPathMatch[1].split('/')[0] : '';
+    const isServicePath = firstPathSegment === '' || firstPathSegment.startsWith('$');
+    const isSingleRecordPath = /\([^)]*\)/.test(firstPathSegment);
+    const isCollectionQuery = Boolean(firstPathSegment) && !isServicePath && !isSingleRecordPath;
     const hasAnyOption = /[?&]\$(filter|orderby|expand|apply|select|top|count)=/i.test(url);
     const topMatch = url.match(/[?&]\$top=(\d+)/i);
     const hasTop = Boolean(topMatch);
@@ -583,7 +588,7 @@ function scanWebApiContent(content, relPath) {
         fix: 'Replace $select=* with an explicit $select=col1,col2,... list.',
         autoFixAvailable: false,
       }));
-    } else if (hasAnyOption && !hasSelect) {
+    } else if ((hasAnyOption || isCollectionQuery) && !hasSelect) {
       out.push(finding({
         tag: 'PERF-WEBAPI-NO-SELECT',
         severity: SEVERITY.WARNING,

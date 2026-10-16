@@ -309,6 +309,20 @@ test('scanWebApiContent flags a collection query with no $top as PERF-WEBAPI-NO-
   assert.ok(tags(scanWebApiContent(code, 'a.js')).includes('PERF-WEBAPI-NO-TOP'));
 });
 
+test('scanWebApiContent flags a bare collection request as missing $select and $top', () => {
+  const code = 'fetch("/_api/contacts")';
+  const found = tags(scanWebApiContent(code, 'a.js'));
+  assert.ok(found.includes('PERF-WEBAPI-NO-SELECT'));
+  assert.ok(found.includes('PERF-WEBAPI-NO-TOP'));
+});
+
+test('scanWebApiContent does NOT require $top for a single-record request', () => {
+  const code = 'fetch("/_api/contacts(11111111-1111-4111-8111-111111111111)?$select=fullname")';
+  const found = tags(scanWebApiContent(code, 'a.js'));
+  assert.ok(!found.includes('PERF-WEBAPI-NO-TOP'));
+  assert.ok(!found.includes('PERF-WEBAPI-NO-SELECT'));
+});
+
 test('scanWebApiContent flags large $top values as PERF-WEBAPI-LARGE-TOP', () => {
   const code = `fetch("/_api/contacts?$select=fullname&$top=${WEBAPI_MAX_TOP + 1}")`;
   const found = tags(scanWebApiContent(code, 'a.js'));
@@ -358,7 +372,6 @@ test('scanWebApiContent does NOT flag a well-formed bounded query', () => {
   const found = tags(scanWebApiContent(code, 'a.js'));
   assert.ok(!found.includes('PERF-WEBAPI-SELECT-STAR'));
   assert.ok(!found.includes('PERF-WEBAPI-NO-SELECT'));
-  // No $filter/$orderby/$expand/$apply ⇒ not treated as an unbounded collection query.
   assert.ok(!found.includes('PERF-WEBAPI-NO-TOP'));
 });
 
