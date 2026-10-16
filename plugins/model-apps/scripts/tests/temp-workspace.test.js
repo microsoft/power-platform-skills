@@ -1822,6 +1822,28 @@ test('the cursor is one small file in the plugin\'s folder, written whole and ho
   assert.ok(!fs.existsSync(stray));
 });
 
+test('the copies of the cursor that killed sweeps left are removed a window\'s worth per sweep, the cursor first: a pile of them is worked off over runs, never in one burst, and nothing else is touched', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent(deps);
+  const owner = { platform: 'win32', probe: () => 'alive' };
+  plant(deps, null, { pid: 2000000000 });
+  const live = fs.readdirSync(parent);
+  fs.writeFileSync(path.join(parent, CURSOR_FILE), JSON.stringify({ v: 1, after: live[0] }));
+  // What twelve sweeps killed while they wrote the cursor leave: partial copies under names of their own.
+  for (let i = 0; i < 12; i += 1) fs.writeFileSync(path.join(parent, `${CURSOR_FILE}.${4000 + i}.abc${String(i).padStart(3, '0')}.tmp`), '{"v":1');
+  const removed = [];
+  const counting = { ...fs, rmSync: (file, ...rest) => { removed.push(path.basename(file)); return fs.rmSync(file, ...rest); } };
+  const copies = () => fs.readdirSync(parent).filter((name) => name.startsWith(`${CURSOR_FILE}.`)).length;
+  sweepDeadWorkspaces({ ...deps, fs: counting, owner, limits: { maxExamined: 5 } });
+  assert.strictEqual(removed.length, 5, 'no more than a window\'s worth of the sweep\'s own files in one sweep');
+  assert.strictEqual(removed[0], CURSOR_FILE, 'the cursor goes first: a folder worked off down to nothing must not keep one');
+  assert.strictEqual(copies(), 8, 'eight copies are left for the next sweeps');
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 5 } });
+  sweepDeadWorkspaces({ ...deps, owner, limits: { maxExamined: 5 } });
+  assert.strictEqual(copies(), 0, 'and they are worked off over runs');
+  assert.deepStrictEqual(fs.readdirSync(parent), live, 'the live workspace is where it was, and nothing else was touched');
+});
+
 test('a cursor that is missing, unreadable or not what was written starts the sweep at the first entry — and is replaced by a good one — and one that names an entry that is gone, or is past the last, resumes at the next name', (t) => {
   const pids = Array.from({ length: 11 }, (_, i) => 2000000000 + i);
   const run = (cursorText) => {

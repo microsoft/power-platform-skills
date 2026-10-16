@@ -357,8 +357,13 @@ function windowOf(listing, parent, maxExamined, deps) {
   const own = listing.filter((entry) => isCursorName(entry.name));
   const entries = listing.filter((entry) => !isCursorName(entry.name));
   if (entries.length <= maxExamined) {
-    for (const entry of own) {
+    // No more of the sweep's own files than a window's worth are removed by one sweep — the cursor first, then the copies sweeps killed while they wrote it left — so a pile of those copies costs
+    // a bounded amount of work per run, as the entries do, and is worked off over runs rather than in one burst.
+    let budget = Math.max(0, Math.trunc(maxExamined) || 0);
+    for (const entry of [...own.filter((e) => e.name === CURSOR_FILE), ...own.filter((e) => e.name !== CURSOR_FILE)]) {
+      if (budget === 0) break;
       if (!entry.isFile()) continue;
+      budget -= 1;
       try { (deps.fs || fs).rmSync(path.join(parent, entry.name), { force: true }); } catch { /* a few dozen bytes: the next sweep that looks at everything tries again */ }
     }
     return entries;
