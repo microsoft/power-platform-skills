@@ -15,8 +15,10 @@
 //   3. CODE. A condition the service names by the `error.code` of its answer — the OData error the SDK keeps, as the cause of its ConnectionError — is run again on any status: a customization or
 //      solution lock, SQL giving up waiting, a concurrent request on the same record (TRANSIENT_SERVICE_CODES), and the lag of a column the build has only just created (the spec says which are its).
 //      Never the words beside it: see 5.
-//   4. TRANSPORT. A timeout or a reset of the connection: a system error whose `code` is one of TRANSPORT_CODES, or an SDK ConnectionError of status 0 whose own words say so.
-//      A transport failure for another reason (a certificate, an unknown host) is not a blip.
+//   4. TRANSPORT. A timeout or a reset of the connection. The HTTP client puts Node's own `code` on the error it throws for a request that failed, and the SDK keeps that error as the cause of its ConnectionError of status 0: when the
+//      failure carries a code, THE CODE DECIDES — one of TRANSPORT_CODES is a blip, and any other (a certificate that does not verify: ERR_TLS_CERT_ALTNAME_INVALID, UNABLE_TO_VERIFY_LEAF_SIGNATURE, …; an unknown host) is not,
+//      whatever words come beside it: a certificate quotes the host and the names it carries, and a name can spell a reset. Only a failure with no code (a transport that reports none; the sentence an SDK error wraps around a
+//      failed publish) is read by its words, and there a certificate's own phrases (CERTIFICATE_WORDS) are read first. A transport failure for another reason is not a blip.
 //   5. A PERMANENT STATUS. Any other HTTP status in the chain — a 400, 401, 403, 404, 409, 412, a 500, and the 200 of an answer the SDK could not use — is a verdict, and nothing in the answer's WORDS
 //      can undo it: a service echoes what the maker named (the table in "does not contain the attribute", the privilege derived from it in "missing prvRead…", the segment of a url), and a table's
 //      logical name is one word that can be any word — `contoso_customizationlockexception` is a valid one — so a rule that finds a transient-sounding word anywhere in an answer runs a build four times
@@ -55,6 +57,16 @@ const TRANSPORT_CODES = Object.freeze(new Set([
 // The same list lib/sdk-http-client.js (TRANSIENT_TRANSPORT_FAILURE) sends a request again for — that file is copied into the pcf plugin, which has no policy, so the two are kept equal by a test
 // (tests/sdk-http-client.test.js): the build and the client call the same failures a blip, and a certificate that does not verify, a host that does not exist and a refused connection are neither's.
 const TRANSPORT_WORDS = /\b(?:ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EAI_AGAIN)\b|socket hang up|timed out|Connection closed before the response completed|Response (?:aborted|failed) before it completed|Client network socket disconnected before secure TLS connection was established/i;
+// What Node and OpenSSL say when a certificate does not verify (lib/sdk-http-client.js, CERTIFICATE_FAILURE, which this equals): a failure with no code is read for these before it is read for a reset, because the names a certificate carries
+// — and Node quotes — can be any text. Each phrase has a space or a slash in it, which no host name has.
+const CERTIFICATE_WORDS = new RegExp([
+  'unable to verify the (?:first|leaf) certificate',
+  'unable to get (?:local )?issuer certificate',
+  'self[- ]signed certificate',
+  'certificate (?:has expired|is not yet valid|revoked|not trusted|rejected|signature failure|chain too long|verify failed)',
+  'invalid CA certificate',
+  "does not match certificate's altnames",
+].join('|'), 'i');
 
 // The SDK errors that are typed and are still the service's to explain: the SDK words a sentence of its own around the error it caught and puts that error's message inside it, without
 // attaching it as a cause. `enrichDefaultViews` does so when the publish of the views it has saved fails (a build without --publish):
@@ -149,11 +161,16 @@ function answerOf(error) {
 // A failure of the transport, as an SDK ConnectionError of status 0 reports it, or as an SDK error that wraps one embeds it: there are no service words in it, only the transport's.
 const isTransportFailure = (error) => (isConnectionError(error) && error.statusCode === 0) || (embeddedFailure(error) || {}).status === 0;
 
-// A timeout or a reset of the transport.
+// A timeout or a reset of the transport. When the error the transport raised carries Node's code, the code decides — on the error itself, or, for an SDK ConnectionError of status 0, which keeps what the HTTP client threw as its `cause`,
+// on that cause: one of TRANSPORT_CODES is a blip and any other code is final, whatever words come beside it. The words are read only when there is no code, and a certificate's own phrases before a reset's.
 function isTransportBlip(error) {
   const code = typedCode(error);
   if (code && TRANSPORT_CODES.has(code)) return true;
-  return isTransportFailure(error) && TRANSPORT_WORDS.test(answerOf(error));
+  if (!isTransportFailure(error)) return false;
+  const raised = isObject(error.cause) ? typedCode(error.cause) : null;
+  if (raised && raised !== 'CONNECTION_ERROR') return TRANSPORT_CODES.has(raised);
+  const words = answerOf(error);
+  return !CERTIFICATE_WORDS.test(words) && TRANSPORT_WORDS.test(words);
 }
 
 // An error the SDK or the plugin has typed: its code says what it is, and what it is is not a service hiccup. The one exception is an SDK error that wraps a failed publish in a sentence this code can take apart

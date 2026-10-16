@@ -1,5 +1,5 @@
 'use strict';
-// lib/throttle-budget.js: the one budget a build run spends on waiting out a throttled service, in the page backend (the waits between a page write's sends) and in the build's own retry loop (the wait before it runs again).
+// lib/throttle-budget.js: the budget a run allows its own retry layers for waiting out a throttled service — in the page backend (the waits between a page write's sends) and in the build's own retry loop (the wait before it runs again). The HTTP client's own re-sends are not drawn from it.
 // The layers wait with seams of their own, so the budget only COUNTS: what a wait is, and whether it fits, is decided here, once.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -54,23 +54,23 @@ test('waitDoesNotFit: says what the service asked, how much of the budget is lef
   budget.spend(245500);
   assert.strictEqual(
     waitDoesNotFit(budget, { askedMs: 600000, waitMs: 600000 }),
-    'the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service (246 s are spent). Nothing more is sent now: run the same command again later, and it continues from here.',
+    'the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service (246 s are spent). Nothing more is sent now: run the same command again later, and it continues from here.',
   );
   assert.match(waitDoesNotFit(budget, { askedMs: 60001, waitMs: 60001 }), /^the service asked to wait 61 s before the next send/, 'rounded up: a service that asked for 60.001 s is not asked less');
   assert.strictEqual(
     waitDoesNotFit(budget, { waitMs: 9000 }),
-    'the next wait, 9 s, does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service (246 s are spent). Nothing more is sent now: run the same command again later, and it continues from here.',
+    'the next wait, 9 s, does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service (246 s are spent). Nothing more is sent now: run the same command again later, and it continues from here.',
     'with no request from the service the wait is the schedule\'s',
   );
-  assert.match(waitDoesNotFit(makeThrottleBudget({ totalMs: 90000 }), { askedMs: 120000, waitMs: 120000 }), /what is left of the 90 seconds a run spends/, 'a budget that is not whole minutes is said in seconds');
-  assert.match(waitDoesNotFit(makeThrottleBudget({ totalMs: 60000 }), { askedMs: 120000, waitMs: 120000 }), /what is left of the 1 minute a run spends/);
+  assert.match(waitDoesNotFit(makeThrottleBudget({ totalMs: 90000 }), { askedMs: 120000, waitMs: 120000 }), /what is left of the 90 seconds a run allows itself/, 'a budget that is not whole minutes is said in seconds');
+  assert.match(waitDoesNotFit(makeThrottleBudget({ totalMs: 60000 }), { askedMs: 120000, waitMs: 120000 }), /what is left of the 1 minute a run allows itself/);
 });
 
 test('spentNote: how much of the budget is gone, in the words of the line that announces a wait', () => {
   const budget = makeThrottleBudget();
   budget.spend(46500);
-  assert.strictEqual(spentNote(budget), '47 s of the 5 minutes a run spends in all on waiting out a throttled service are spent');
-  assert.strictEqual(spentNote(makeThrottleBudget({ totalMs: 90000 })), '0 s of the 90 seconds a run spends in all on waiting out a throttled service are spent');
+  assert.strictEqual(spentNote(budget), '47 s of the 5 minutes a run allows itself for waiting out a throttled service are spent');
+  assert.strictEqual(spentNote(makeThrottleBudget({ totalMs: 90000 })), '0 s of the 90 seconds a run allows itself for waiting out a throttled service are spent');
 });
 
 // What the module is NOT: it writes nothing itself. The lines it announces go to the caller's `warn` seam, which the build wires to stderr — stdout carries the JSON result of the run.

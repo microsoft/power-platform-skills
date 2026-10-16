@@ -511,7 +511,7 @@ test('transient auto-retry: a non-transient halt is NOT retried', async () => {
   assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
 });
 
-// ── A throttle's wait crosses the layers, and all of it is one budget ───────────────────────────────────────────────────────────────────────────────
+// ── A throttle's wait crosses the layers, and what the build's own layers add is one budget ──────────────────────────────────────────────────────────
 // The page backend sends a throttled page write again up to six times, waiting what the service asked; when that is not enough it raises an error that carries the last ask (`retryAfterMs`) and the moment before which
 // nothing may be sent (`retryNotBefore`). The loop that runs the build again then waits for THAT — never its own, shorter, backoff — and every wait it spends on a throttle comes out of the budget the backend spends from:
 // five minutes for the whole run (lib/throttle-budget.js). A wait that does not fit ends the run with a halt that says what the service asked, and that a later run continues.
@@ -587,7 +587,7 @@ test('retry loop: the ask is a moment on the clock — what has passed since the
   assert.ok(past.sleeps.length === 1 && past.sleeps[0] >= 3000 && past.sleeps[0] < 4000, `${past.sleeps}`);
 });
 
-test('retry loop: every wait a throttle costs comes out of one budget of five minutes — the build stops, with a halt that says what the service asked, when the next wait does not fit', async () => {
+test('retry loop: every wait the build adds for a throttle comes out of one budget of five minutes — the build stops, with a halt that says what the service asked, when the next wait does not fit', async () => {
   // The service asks for two minutes each time: two waits are 240 s of the 300, and the third does not fit.
   const out = await throttleDriver({ failures: (n, clock) => throttledFailure(clock, 120000) });
   assert.strictEqual(out.attempts, 3, 'the build ran three times, and not a fourth');
@@ -599,7 +599,7 @@ test('retry loop: every wait a throttle costs comes out of one budget of five mi
   assert.strictEqual(out.halt.recoverable, true);
   assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: the service is throttling, and a later run can go on');
   assert.strictEqual(out.halt.statusCode, 429);
-  assert.match(out.halt.message, /the service asked to wait 120 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service \(240 s are spent\)/);
+  assert.match(out.halt.message, /the service asked to wait 120 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(240 s are spent\)/);
   assert.match(out.halt.message, /run the same command again later, and it continues from here/);
   assert.strictEqual(out.halt.cause.cause.statusCode, 429, 'the failure itself is its cause');
   assert.strictEqual(out.closed.length, 1, 'the journal says where the run stopped');
@@ -608,7 +608,7 @@ test('retry loop: every wait a throttle costs comes out of one budget of five mi
   const long = await throttleDriver({ failures: (n, clock) => throttledFailure(clock, 600000) });
   assert.strictEqual(long.attempts, 1);
   assert.deepStrictEqual(long.sleeps, []);
-  assert.match(long.halt.message, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service \(0 s are spent\)/);
+  assert.match(long.halt.message, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)/);
 });
 
 test('retry loop: the budget is the run\'s — the backend\'s waits count, so what is left for the build is what the backend did not spend — and a caller may give a smaller one', async () => {
@@ -628,7 +628,7 @@ test('retry loop: the budget is the run\'s — the backend\'s waits count, so wh
   assert.strictEqual(given.spentMs(), 7000, 'and the wait was spent from it');
   const second = await throttleDriver({ budget: makeThrottleBudget({ totalMs: 10000 }), failures: (n, clock) => throttledFailure(clock, 7000) });
   assert.strictEqual(second.attempts, 2, '7 s fits in 10 s, and a second 7 s does not');
-  assert.match(second.halt.message, /what is left of the 10 seconds a run spends/);
+  assert.match(second.halt.message, /what is left of the 10 seconds a run allows itself/);
   const own = await throttleDriver({ failures: (n) => (n === 1 ? throttledFailure(0, 0) : null) });
   assert.ok(own.budgets.length === 2 && own.budgets[0] === own.budgets[1], 'a run with no budget given makes one, the same for every run of the engine');
   assert.ok(own.budgets[0].spentMs() >= 3000, 'and a throttle that asked for nothing still waited the build\'s backoff, which is a throttle wait too');

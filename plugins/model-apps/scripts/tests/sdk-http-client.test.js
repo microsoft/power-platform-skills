@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createAzHttpClient, retryAfterMs, isBatchThrottled, completeBatchStatus, isColumnCreateBatch, batchRetryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
+const { createAzHttpClient, retryAfterMs, isBatchThrottled, isBatchDeadlockVictim, completeBatchStatus, isColumnCreateBatch, batchRetryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
 
 // A fake transport that records the last request and returns a scripted response.
 function fakeTransport(scripted) {
@@ -294,6 +294,17 @@ const CERTIFICATE_FAILURES = [
   'certificate revoked', 'certificate not trusted',
   "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:other.example", 'ERR_TLS_CERT_ALTNAME_INVALID',
   'error:0A000086:SSL routines:tls_post_process_server_certificate:certificate verify failed',
+  // The names a certificate carries — and Node quotes — can be any text, a transport code included: a failure to verify is not a blip because of a word in the names it quotes.
+  "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:ECONNRESET.example.com",
+  "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not cert's CN: socket hang up",
+  'unable to verify the first certificate (the issuer of etimedout.example.com is not trusted: connection timed out)',
+];
+// Node's own list of the codes a certificate error carries, and the one of a name that does not match — https://nodejs.org/api/tls.html#x509-certificate-error-codes, https://nodejs.org/api/errors.html#err_tls_cert_altname_invalid.
+const X509_CODES = [
+  'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_CRL', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_DECRYPT_CRL_SIGNATURE', 'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY', 'CERT_SIGNATURE_FAILURE', 'CRL_SIGNATURE_FAILURE',
+  'CERT_NOT_YET_VALID', 'CERT_HAS_EXPIRED', 'CRL_NOT_YET_VALID', 'CRL_HAS_EXPIRED', 'ERROR_IN_CERT_NOT_BEFORE_FIELD', 'ERROR_IN_CERT_NOT_AFTER_FIELD', 'ERROR_IN_CRL_LAST_UPDATE_FIELD', 'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+  'OUT_OF_MEM', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_CHAIN_TOO_LONG', 'CERT_REVOKED', 'INVALID_CA',
+  'PATH_LENGTH_EXCEEDED', 'INVALID_PURPOSE', 'CERT_UNTRUSTED', 'CERT_REJECTED', 'HOSTNAME_MISMATCH', 'ERR_TLS_CERT_ALTNAME_INVALID',
 ];
 // What the transport says when a connection is reset, or a request or its answer times out or is cut off — the failures the build's own retry policy calls transient too (lib/retry-policy.js).
 const TRANSIENT_TRANSPORT_FAILURES = [
@@ -355,6 +366,107 @@ test('the transport failures this client sends again are exactly the ones lib/re
   for (const words of [...TRANSIENT_TRANSPORT_FAILURES, ...CERTIFICATE_FAILURES, 'getaddrinfo ENOTFOUND contoso.invalid', 'connect ECONNREFUSED 127.0.0.1:443', 'boom']) {
     assert.strictEqual(isTransientTransportFailure(words), blip(words), words);
   }
+});
+
+// ── What decides a failure of the transport is Node's own CODE when it gave one, and the words only when it gave none ───────────────────────────────────────────────────────────
+// `makeRequest` (lib/dataverse-auth.js) reports `code` beside the message of a request that failed. The code is the fact: a failure to verify a certificate quotes the host and the certificate's names, a name can spell anything
+// (`DNS:ECONNRESET.example.com` is a valid one), and a transient word found ANYWHERE in such a message sent the request six times — 23 s of waiting for the same refusal. So a code that is not one of the transient ones is final
+// whatever the words say; a failure that arrived with no code (one this module words itself — a timeout, a connection closed — or a transport that reports none) is read by its words, and there the phrases of a certificate that
+// does not verify are read first.
+test('a certificate that does not verify is sent ONCE by its code — each code of Node\'s own list — whatever the words beside it quote', async () => {
+  const quoting = 'a problem with econnreset.example.com: ETIMEDOUT, EAI_AGAIN, socket hang up, connection timed out, Response aborted before it completed';
+  for (const code of X509_CODES) {
+    for (const [what, send] of [
+      ['a read', (http) => http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects')],
+      ['an unconditional write', (http) => http.patch('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects(1)', { name: 'A' })],
+      ['a metadata delete', (http) => http.delete("https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_x')")],
+    ]) {
+      const slept = [];
+      const { request, calls } = fakeTransport({ error: quoting, code });
+      const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+      await assert.rejects(send(http), (error) => error.message === `Request failed: ${quoting}` && error.code === code, `${what}: ${code}`);
+      assert.strictEqual(calls.length, 1, `${what}: ${code} — sent once`);
+      assert.deepStrictEqual(slept, [], `${what}: ${code} — nothing waited for`);
+    }
+  }
+});
+
+test('Node\'s own verification error for a certificate whose alternative name spells a transport code is sent once — by its code, and by its words when no code arrived', async () => {
+  const tls = require('node:tls');
+  // No fabricated wording and no connection: Node makes this error itself for a certificate that does not name the host.
+  const failure = tls.checkServerIdentity('contoso.crm.dynamics.com', { subjectaltname: 'DNS:ECONNRESET.example.com' });
+  assert.strictEqual(failure.code, 'ERR_TLS_CERT_ALTNAME_INVALID');
+  assert.match(failure.message, /ECONNRESET/, 'the control: the words do hold a transport code');
+  for (const [what, answer] of [['the code beside the words', { error: failure.message, code: failure.code }], ['the words alone', { error: failure.message }]]) {
+    const slept = [];
+    const { request, calls } = fakeTransport(answer);
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); }, random: () => 0 });
+    await assert.rejects(http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects'), /Hostname\/IP does not match certificate's altnames/, what);
+    assert.strictEqual(calls.length, 1, `${what}: sent once`);
+    assert.deepStrictEqual(slept, [], `${what}: nothing waited for`);
+  }
+});
+
+test('a transient code is sent again whatever the words say — the six the module treats as transient — and any other code is final even when the words sound transient', async () => {
+  const { TRANSIENT_TRANSPORT_CODES } = require('../lib/sdk-http-client.js');
+  assert.deepStrictEqual([...TRANSIENT_TRANSPORT_CODES].sort(), ['EAI_AGAIN', 'ECONNABORTED', 'ECONNRESET', 'EPIPE', 'ESOCKETTIMEDOUT', 'ETIMEDOUT']);
+  for (const code of TRANSIENT_TRANSPORT_CODES) {
+    const slept = [];
+    const { request, calls } = fakeTransport({ error: 'nothing here that a word list would recognise', code });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); }, random: () => 0 });
+    await assert.rejects(http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects'), (error) => error.code === code, code);
+    assert.strictEqual(calls.length, 6, `${code}: six sends`);
+    assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000], code);
+  }
+  for (const code of ['ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ERR_SOCKET_CLOSED', 'ERR_SSL_WRONG_VERSION_NUMBER']) {
+    const { request, calls } = fakeTransport({ error: 'read ECONNRESET, socket hang up, timed out', code });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {}, random: () => 0 });
+    await assert.rejects(http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects'), (error) => error.code === code, code);
+    assert.strictEqual(calls.length, 1, `${code}: the code is final, and the words are not read`);
+  }
+});
+
+test('the error the client throws for a failed request carries Node\'s code beside the same message — the SDK keeps it as the cause of its own error, and the build reads it from there — and carries none when none arrived', async () => {
+  const cases = [
+    ['an ordinary failure', { error: 'connect ECONNREFUSED 127.0.0.1:443', code: 'ECONNREFUSED' }, (http) => http.get('https://org.crm.dynamics.com/x'), 'Request failed: connect ECONNREFUSED 127.0.0.1:443'],
+    ['a conditional write that is not re-sent', { error: 'read ECONNRESET', code: 'ECONNRESET' }, (http) => http.patch('https://org.crm.dynamics.com/x', { a: 1 }, { headers: { 'If-Match': 'W/"1"' } }), /^Request failed: read ECONNRESET — this conditional PATCH was not re-sent/],
+    ['a POST whose answer was cut off', { error: 'socket hang up', code: 'ECONNRESET', incompleteResponse: true, statusCode: 201 }, (http) => http.post('https://org.crm.dynamics.com/x', { a: 1 }), /^Request failed: socket hang up — the server had already answered 201, so this POST may have been applied/],
+  ];
+  for (const [what, answer, send, message] of cases) {
+    const { request } = fakeTransport(answer);
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {}, random: () => 0 });
+    const error = await send(http).then(() => null, (e) => e);
+    assert.ok(error instanceof Error, what);
+    if (typeof message === 'string') assert.strictEqual(error.message, message, what); else assert.match(error.message, message, what);
+    assert.strictEqual(error.code, answer.code, `${what}: Node's code`);
+  }
+  const { request } = fakeTransport({ error: 'Request timed out' });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {}, random: () => 0, sendOnce: () => true });
+  const bare = await http.get('https://org.crm.dynamics.com/x').then(() => null, (e) => e);
+  assert.strictEqual(bare.message, 'Request failed: Request timed out');
+  assert.ok(!('code' in bare), 'a failure Node gave no code for has none');
+});
+
+// The client and the build's policy are written apart (the client is copied into the pcf plugin, which has no policy), so these hold them together for the code, as the test above holds the words: a failure either calls a blip is a blip for both.
+test('the client and lib/retry-policy.js decide a failure alike by its code — with the words beside it, whatever they quote', () => {
+  const { judgeFailure, TRANSPORT_CODES } = require('../lib/retry-policy.js');
+  const { ConnectionError } = require('../lib/maker-sdk.js');
+  const { isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES } = require('../lib/sdk-http-client.js');
+  const url = 'https://org.crm.dynamics.com/api/data/v9.0/x';
+  // What the SDK does with the error the client throws: a ConnectionError of status 0 that keeps it as its cause (cds-maker-sdk DataverseClient.send).
+  const blip = (words, code) => {
+    const thrown = Object.assign(new Error(`Request failed: ${words}`), code ? { code } : {});
+    return judgeFailure(new ConnectionError(url, 0, thrown.message, thrown)).transport;
+  };
+  for (const code of [...TRANSIENT_TRANSPORT_CODES, ...X509_CODES, 'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH', 'ERR_SOCKET_CLOSED']) {
+    for (const words of ['read ECONNRESET', 'nothing to recognise', "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:ECONNRESET.example.com"]) {
+      assert.strictEqual(isTransientTransportFailure(words, code), blip(words, code), `${code}: ${words}`);
+      assert.strictEqual(isTransientTransportFailure(words, code), TRANSIENT_TRANSPORT_CODES.has(code), `${code}: the code alone decides: ${words}`);
+    }
+  }
+  // The policy's list is the client's, and the codes of undici's own errors — which the plugin's https transport never raises, and a fetch-based caller can.
+  assert.deepStrictEqual([...TRANSPORT_CODES].filter((code) => !TRANSIENT_TRANSPORT_CODES.has(code)).sort(), ['UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET']);
+  for (const code of TRANSIENT_TRANSPORT_CODES) assert.ok(TRANSPORT_CODES.has(code), code);
 });
 
 // A record delete that LOST A SQL DEADLOCK is the exception: the server answered that it rolled the
@@ -571,6 +683,11 @@ const batchAnswer = (...parts) => [
 ].join('\r\n');
 const DEADLOCK_PART = ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } })];
 const BATCH_DEADLOCK_500 = { statusCode: 500, headers: {}, body: batchAnswer(DEADLOCK_PART) };
+// What a malformed answer looks like that STILL closes its outer boundary: the change set's own closing delimiter is missing, or a part follows the others that is cut off. `withPart` adds a part after the ones
+// `batchAnswer` made — `lines` is what follows its delimiter: the part's headers, a blank line, what it says — and `unclosed` takes the change set's closing delimiter away.
+const withPart = (answer, lines) => answer.replace('--changesetresponse_c1--', ['--changesetresponse_c1', ...lines, '--changesetresponse_c1--'].join('\r\n'));
+const unclosed = (answer) => answer.replace('--changesetresponse_c1--\r\n', '');
+const CUT_OFF_PART = ['Content-Type: application/http', 'Content-Transfer-Encoding: binary', '', 'HTTP/1.1 20'];
 // A batch request as the SDK renders one: `ops` are [method, url, extra header lines].
 const batchRequest = (...ops) => [
   '--batch_b', 'Content-Type: multipart/mixed;boundary=changeset_c', '',
@@ -618,6 +735,9 @@ test('postRaw re-sends a $batch ONLY when its answer proves every operation was 
     // about the other (independent operations can be answered separately).
     'the marker twice in one operation, none in the other': batchAnswer(['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Sql Number: 1205 (inner: Sql Number: 1205)' } })], ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { message: 'Generic SQL error' } })]),
     'a truncated answer (no closing delimiter)': batchAnswer(DEADLOCK_PART).replace(/--batchresponse_b1--\r\n$/, ''),
+    // Closed at the OUTER boundary and still incomplete inside: nothing proves the deadlock was the answer of every operation, so the one complete part that says so is not taken for the whole.
+    'an answer closed at its outer boundary whose change set is never closed': unclosed(batchAnswer(DEADLOCK_PART)),
+    'an answer closed at its outer boundary with a part cut off after the deadlocked one': withPart(batchAnswer(DEADLOCK_PART), CUT_OFF_PART),
     // Only a 500 is a rolled-back deadlock victim; another status whose message quotes one is not.
     'another status whose error quotes the deadlock': batchAnswer(['HTTP/1.1 400 Bad Request', JSON.stringify({ error: { message: 'Validation failed (inner: Sql Number: 1205)' } })]),
     'a complete answer with no operation results': '--batchresponse_b1\r\n--batchresponse_b1--\r\n',
@@ -699,6 +819,9 @@ test('postRaw re-sends a 429 $batch ONLY when it is made of conditional deletes 
     'an operation that committed beside the refused one': batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 429 Too Many Requests', '{}']),
     'a refusal beside another failure': batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 500 Internal Server Error', '{}']),
     'a multipart answer cut short': batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']).replace(/--batchresponse_b1--\r\n$/, ''),
+    // Closed at the OUTER boundary and still incomplete inside: the refusal is not the whole story, so the batch is not sent again on its word.
+    'an answer closed at its outer boundary whose change set is never closed': unclosed(batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'])),
+    'an answer closed at its outer boundary with a part cut off beside the refused one': withPart(batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']), CUT_OFF_PART),
     'a complete answer with no operation results': '--batchresponse_b1\r\n--batchresponse_b1--\r\n',
   };
   for (const [what, body] of Object.entries(answers)) {
@@ -789,6 +912,8 @@ test('postRaw sends a $batch of column creates ONCE after every answer but a 429
     'an operation that committed beside the refused one': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 429 Too Many Requests', '{}']) },
     'a refusal beside another failure': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 500 Internal Server Error', '{}']) },
     'a multipart answer cut short': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']).replace(/--batchresponse_b1--\r\n$/, '') },
+    'an answer closed at its outer boundary whose change set is never closed': { statusCode: 429, headers: {}, body: unclosed(batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'])) },
+    'an answer closed at its outer boundary with a part cut off beside the refused one': { statusCode: 429, headers: {}, body: withPart(batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']), CUT_OFF_PART) },
     'a complete answer with no operation results': { statusCode: 429, headers: {}, body: '--batchresponse_b1\r\n--batchresponse_b1--\r\n' },
   };
   for (const [what, answer] of Object.entries(answers)) {
@@ -924,6 +1049,132 @@ test('completeBatchStatus: the one status a COMPLETE multipart answer reports fo
   assert.strictEqual(completeBatchStatus({ body: batchAnswer(['HTTP/1.1 403 Forbidden']).replace(/--batchresponse_b1--\r\n$/, '') }), 0, 'an answer cut short before its closing boundary proves nothing');
   for (const body of ['', '{"error":{}}', undefined, null, 5, Buffer.from('x')]) assert.strictEqual(completeBatchStatus({ body }), 0, String(body));
   assert.strictEqual(completeBatchStatus(undefined), 0);
+});
+
+// ── The parser is strict: every part is a complete response, and every boundary a part opens is closed ────────────────────────────────────────────────
+// What proves a change set was refused — or rolled back as a deadlock victim — is an answer that SAYS so for every operation it answers. An envelope that closes its OUTER boundary can still be incomplete inside: a change set whose own
+// closing delimiter is missing, a part cut off in its status line. A parser that dropped what it could not read would prove the whole from the part it could — the one complete 429 beside a part that may have been a success. So anything
+// missing or malformed makes the WHOLE answer unproven; an answer that is not proven reaches the SDK as it came, and the write behind it stays an outcome nobody knows.
+const REFUSED_429 = ['HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7', '{"error":{"message":"throttled"}}'];
+const MALFORMED_ENVELOPES = {
+  'a change set whose closing delimiter is missing, the outer boundary closed': (part) => unclosed(batchAnswer(part)),
+  'a part whose status line is cut off': (part) => withPart(batchAnswer(part), CUT_OFF_PART),
+  'a part with no status line at all': (part) => withPart(batchAnswer(part), ['Content-Type: application/http', '', '{"error":{"message":"there is no status line"}}']),
+  'a part that is only headers': (part) => withPart(batchAnswer(part), ['Content-Type: application/http', 'Content-ID: 2']),
+  'a part that is not an HTTP response, whatever it quotes': (part) => withPart(batchAnswer(part), ['Content-Type: application/json', '', 'HTTP/1.1 429 Too Many Requests']),
+  'a closing delimiter for a change set that was never opened': (part) => batchAnswer(part).replace('--batchresponse_b1--', '--changesetresponse_other--\r\n--batchresponse_b1--'),
+  'a second change set opened inside the first and never closed': (part) => batchAnswer(part).replace('--changesetresponse_c1--', ['--changesetresponse_inner', 'Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests', '', '--changesetresponse_c1--'].join('\r\n')),
+  'text after the change set\'s closing delimiter': (part) => batchAnswer(part).replace('--changesetresponse_c1--\r\n', '--changesetresponse_c1--\r\nunexpected text\r\n'),
+  'a complete response after the change set\'s closing delimiter that no delimiter opens': (part) => batchAnswer(part).replace('--changesetresponse_c1--\r\n', `--changesetresponse_c1--\r\n${part[0]}\r\n`),
+  'a change set closed after the outer boundary': (part) => batchAnswer(part).replace('--changesetresponse_c1--\r\n--batchresponse_b1--', '--batchresponse_b1--\r\n--changesetresponse_c1--'),
+};
+
+test('the parser is strict: an envelope that closes its outer boundary but is incomplete inside — a part with no status line, a change set never closed — proves nothing, whatever its complete parts say', () => {
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  for (const [what, make] of Object.entries(MALFORMED_ENVELOPES)) {
+    const refused = make(REFUSED_429);
+    assert.strictEqual(completeBatchStatus({ body: refused }), 0, `${what}: no status`);
+    for (const statusCode of [200, 429]) assert.strictEqual(isBatchThrottled({ statusCode, body: refused }), false, `${what}: not a throttle, under HTTP ${statusCode} either`);
+    assert.strictEqual(batchRetryAfterMs({ body: refused }, NOW, Infinity), 0, `${what}: what it asks for is not heard`);
+    assert.strictEqual(isBatchDeadlockVictim({ body: make(DEADLOCK_PART) }), false, `${what}: not a deadlock victim`);
+  }
+  // The controls: the same parts in an envelope that IS complete say what they say.
+  assert.strictEqual(completeBatchStatus({ body: batchAnswer(REFUSED_429) }), 429);
+  assert.strictEqual(isBatchThrottled({ statusCode: 200, body: batchAnswer(REFUSED_429) }), true);
+  assert.strictEqual(batchRetryAfterMs({ body: batchAnswer(REFUSED_429) }, NOW, Infinity), 7000);
+  assert.strictEqual(isBatchDeadlockVictim({ body: batchAnswer(DEADLOCK_PART) }), true);
+});
+
+// The parser as it stood before it checked what it dropped, kept here as the reference the strict one is held to. On every well-formed answer the two agree; on every damaged one — a line gone, a line cut in half, a line
+// replaced — the strict parser may prove LESS than the old one did, never more: nothing a caller re-sends a request for, or reads a refusal from, is proven on weaker evidence than before.
+function referenceResults(res) {
+  const lines = res.body.split(/\r?\n/);
+  const nonEmpty = lines.map((l) => l.trim()).filter(Boolean);
+  const outer = /^--(\S+)$/.exec(nonEmpty[0] || '');
+  if (!outer || nonEmpty[nonEmpty.length - 1] !== `--${outer[1]}--`) return null;
+  const parts = [];
+  let part = null;
+  for (const line of lines) {
+    if (/^--\S/.test(line)) {
+      if (part) parts.push(part);
+      part = [];
+    } else if (part) {
+      part.push(line);
+    }
+  }
+  return parts
+    .map((p) => ({ status: (p.map((l) => /^HTTP\/1\.1 (\d{3})\b/.exec(l)).find(Boolean) || [])[1], text: p.join('\n') }))
+    .filter((r) => r.status);
+}
+function reference(body, now) {
+  const results = referenceResults({ body });
+  const multipart = /^--\S/.test(body.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '');
+  const asked = (results || []).filter((r) => r.status === '429').map((r) => { const m = /^Retry-After:[ \t]*(\S.*?)[ \t]*$/im.exec(r.text); return m ? retryAfterMs({ 'retry-after': m[1] }, now, Infinity) : 0; });
+  return {
+    status: !results || results.length === 0 || !results.every((r) => r.status === results[0].status) ? 0 : Number(results[0].status),
+    throttled: multipart && !!results && results.length > 0 && results.every((r) => r.status === '429'),
+    deadlock: !!results && results.length > 0 && results.every((r) => r.status === '500' && /\bSql Number:\s*1205\b/i.test(r.text)),
+    retryAfter: Math.max(0, ...asked),
+  };
+}
+const strict = (body, now) => ({
+  status: completeBatchStatus({ body }),
+  throttled: isBatchThrottled({ statusCode: 200, body }),
+  deadlock: isBatchDeadlockVictim({ body }),
+  retryAfter: batchRetryAfterMs({ body }, now, Infinity),
+});
+
+test('the strict parser agrees with the old one on every well-formed answer, and proves nothing more than it on any damaged one — a line deleted, cut in half or replaced', (t) => {
+  const { batchEnvelope } = require('./helpers/fake-genpage-server.js');
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  const two = batchAnswer(REFUSED_429, ['HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30', '{}']);
+  const corpus = {
+    'a change set that succeeded': batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 204 No Content']),
+    'a refused change set, with a Retry-After in the part': batchAnswer(REFUSED_429),
+    'two refused operations': two,
+    'a deadlock victim': batchAnswer(DEADLOCK_PART),
+    'a success beside a deadlock victim': batchAnswer(['HTTP/1.1 204 No Content'], DEADLOCK_PART),
+    'a refusal beside another failure': batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 500 Internal Server Error', '{}']),
+    'the sample the transport tests send': BATCH_RESPONSE,
+    'what the page service answers (a change set that announces its own boundary)': batchEnvelope([{ contentId: 1, status: 429, headers: { 'Retry-After': '7' } }]),
+    'the same, a 403': batchEnvelope([{ contentId: 1, status: 403 }]),
+    'an envelope that names no change set (the parts follow the outer boundary directly)': ['--batchresponse_b1', '--changesetresponse_c1', 'Content-Type: application/http', '', 'HTTP/1.1 403 Forbidden', '', '--changesetresponse_c1--', '--batchresponse_b1--', ''].join('\r\n'),
+    'operations with no change set at all': ['--batchresponse_b1', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', '', 'HTTP/1.1 429 Too Many Requests', 'Retry-After: 3', '', '{}', '--batchresponse_b1--', ''].join('\r\n'),
+    'two change sets': ['--batchresponse_b1', 'Content-Type: multipart/mixed; boundary=changesetresponse_c1', '', '--changesetresponse_c1', 'Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests', '', '--changesetresponse_c1--', '--batchresponse_b1', 'Content-Type: multipart/mixed; boundary=changesetresponse_c2', '', '--changesetresponse_c2', 'Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests', 'Retry-After: 11', '', '--changesetresponse_c2--', '--batchresponse_b1--', ''].join('\r\n'),
+    'no operation at all': '--batchresponse_b1\r\n--batchresponse_b1--\r\n',
+    'a plain error answer': '{"error":{"code":"0x80072322","message":"Number of requests exceeded the limit"}}',
+  };
+  const variants = {};
+  for (const [what, body] of Object.entries(corpus)) {
+    variants[what] = body;
+    variants[`${what}, with LF line ends`] = body.replace(/\r\n/g, '\n');
+    variants[`${what}, with blank lines after it`] = `${body}\r\n\r\n`;
+  }
+  let stricter = 0;
+  for (const [what, body] of Object.entries(variants)) {
+    assert.deepStrictEqual(strict(body, NOW), reference(body, NOW), `well-formed: ${what}`);
+    const eol = body.includes('\r\n') ? '\r\n' : '\n';
+    const lines = body.split(/\r?\n/);
+    const damaged = [];
+    lines.forEach((line, i) => {
+      damaged.push(['deleted', lines.filter((_, j) => j !== i)]);
+      damaged.push(['cut in half', lines.map((l, j) => (j === i ? l.slice(0, Math.floor(l.length / 2)) : l))]);
+      damaged.push(['replaced', lines.map((l, j) => (j === i ? 'x' : l))]);
+    });
+    for (const [how, list] of damaged) {
+      const damagedBody = list.join(eol);
+      const was = reference(damagedBody, NOW);
+      const now = strict(damagedBody, NOW);
+      const where = `${what}: a line ${how} (${JSON.stringify(damagedBody.slice(0, 60))}…)`;
+      if (now.status !== 0) assert.strictEqual(now.status, was.status, where);
+      if (now.throttled) assert.strictEqual(was.throttled, true, where);
+      if (now.deadlock) assert.strictEqual(was.deadlock, true, where);
+      if (now.retryAfter > 0) assert.strictEqual(now.retryAfter, was.retryAfter, where);
+      if (was.status !== now.status || was.throttled !== now.throttled || was.deadlock !== now.deadlock || was.retryAfter !== now.retryAfter) stricter += 1;
+    }
+  }
+  t.diagnostic(`${Object.keys(variants).length} answers, ${stricter} damaged ones the old parser took for proof and this one does not`);
+  assert.ok(stricter > 50, `the damaged answers the old parser took for proof, and this one does not: ${stricter}`);
 });
 
 // The page backend honours what a throttled answer asks for whole, inside a budget of its own (lib/throttle-budget.js); the client's own retries keep the cap.

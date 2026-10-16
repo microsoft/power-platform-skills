@@ -199,6 +199,13 @@ function connectionError(statusCode, words, url = `${ENV}/api/data/v9.2/roles?$f
   const lead = statusCode > 0 ? `HTTP ${statusCode} from ${url}: ` : `Transport failure reaching ${url}: `;
   return Object.assign(new Error(`${lead}${words}`), { code: 'CONNECTION_ERROR', statusCode, url });
 }
+// The failure of the transport as the plugin raises it: the HTTP client throws an Error that carries Node's own code beside the message (when Node gave one), and the SDK keeps it as the cause of its ConnectionError of status 0.
+const transportFailure = (words, code) => {
+  const thrown = Object.assign(new Error(`Request failed: ${words}`), code ? { code } : {});
+  return new ConnectionError(`${ENV}/api/data/v9.2/roles`, 0, thrown.message, thrown);
+};
+// What Node says when a certificate does not name the host: the names it quotes can be any text, a transport code included.
+const ALTNAME_FAILURE = "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:ECONNRESET.example.com";
 // Failures a run again cannot change, as the SDK, the service and the machine report them — every one with a label that reads as transient where a label can be.
 // What `enrichDefaultViews` raises when the publish of the views it saved fails: an SdkError of its own code, the publish error's message inside it, and no cause.
 const wrappedPublish = (answer, table = 'contoso_order') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
@@ -214,6 +221,9 @@ const REFUSALS = [
   ['a lock named only by its words, on a 409', () => connectionError(409, 'CustomizationLockException: another solution install is running')],
   ['SQL timeout named only by its words, under the code every SQL failure shares', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, 'SQL timeout expired.', { error: { code: '0x80044150', message: 'SQL timeout expired.' } })],
   ['a 403 whose answer names a privilege derived from a table called like a lock', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 403, 'Principal user is missing prvReadcontoso_customizationlockexception privilege.', { error: { code: '0x80040220', message: 'Principal user is missing prvReadcontoso_customizationlockexception privilege.' } })],
+  // A certificate that does not verify is a fact about this machine's trust store: its names quote anything, and no word in them — a reset, a timeout — makes it a blip. Decided by Node's code when the error carries one, and by the certificate's own phrases when it does not.
+  ['a certificate that does not name the host, whose alternative name spells a transport code (Node\'s code on the error)', () => transportFailure(ALTNAME_FAILURE, 'ERR_TLS_CERT_ALTNAME_INVALID')],
+  ['the same failure from a transport that reports no code', () => transportFailure(ALTNAME_FAILURE)],
 ];
 // Failures that ARE the service's to say, whatever anything is called.
 const GENUINE = [
@@ -226,6 +236,7 @@ const GENUINE = [
   // A condition the service names by the code of its answer is run again on any status.
   ['a customization lock, named by the code of its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 409, 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.', { error: { code: '0x8004F064', message: 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.' } })],
   ['SQL giving up waiting, named by the code of its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, 'SQL timeout expired.', { error: { code: '0x80044151', message: 'SQL timeout expired.' } })],
+  ['a reset of the connection, with Node\'s code on the error the client raised', () => transportFailure('read ECONNRESET', 'ECONNRESET')],
 ];
 
 // The spec every row's retry loop runs on: valid, and not the point.
@@ -491,6 +502,29 @@ test('halt policy: the real SDK\'s read of a table called like a lock is run onc
     for (const [what, status, answerBody, attempts] of CASES) {
       const sdk = await viewsReadFailing({ status, headers: {}, body: answerBody });
       assert.strictEqual(await attemptsOfTheLoop(defaultViewsSpec(table), sdk, ['views']), attempts, `${what}, ${table}`);
+    }
+  }
+});
+
+// The transport's own failures, through the PRODUCTION HTTP client, the real SDK (which wraps what the client throws in a ConnectionError of status 0 and keeps it as the cause) and the real retry loop. A certificate that does not verify
+// quotes the names it carries, and a name can spell a transport code: it is a fact about this machine, never a blip — by Node's code when the transport gave one, and by the certificate's own phrases when it did not.
+test('halt policy: a certificate failure whose names spell a transport code is run once through the real HTTP client, the real SDK and the real loop — and a reset, with or without Node\'s code, is run again', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const CASES = [
+    ['a certificate that does not name the host, with its code', { error: ALTNAME_FAILURE, code: 'ERR_TLS_CERT_ALTNAME_INVALID' }, 1],
+    ['the same failure from a transport that reports no code', { error: ALTNAME_FAILURE }, 1],
+    ['a certificate nobody trusts', { error: 'unable to verify the first certificate', code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' }, 1],
+    ['an unknown host', { error: 'getaddrinfo ENOTFOUND contoso.invalid', code: 'ENOTFOUND' }, 1],
+    ['a reset, with its code', { error: 'read ECONNRESET', code: 'ECONNRESET' }, 4],
+    ['a reset, from a transport that reports no code', { error: 'read ECONNRESET' }, 4],
+  ];
+  for (const table of ['contoso_item', 'contoso_customizationlockexception']) {
+    for (const [what, failure, attempts] of CASES) {
+      const httpClient = createAzHttpClient(ENV, { getToken: () => 'TOK', sleep: async () => {}, random: () => 0, request: async () => failure });
+      const sdk = createMakerSdk({ instanceUrl: ENV, workspaceStorage: createNodeWorkspaceStorage(tempDir('halt-policy-sdk')), httpClient });
+      await sdk.initWorkspace();
+      const enriching = { enrichDefaultViews: sdk.enrichDefaultViews.bind(sdk) };
+      assert.strictEqual(await attemptsOfTheLoop(defaultViewsSpec(table), enriching, ['views']), attempts, `${what}, ${table}`);
     }
   }
 });

@@ -588,6 +588,7 @@ test('watchThrottles: the wait a refused $batch asks for is heard — in the ans
     ['a wait longer than the HTTP client\'s cap, which is the budget\'s to judge and so is heard whole', { status: 429, headers: { 'retry-after': '600' }, body: '{}' }, [600000]],
     ['the wait in a refused part\'s own headers', { status: 429, headers: {}, body: multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30\r\nContent-Type: application/json') }, [30000]],
     ['the longer of the answer\'s wait and the part\'s', { status: 429, headers: { 'retry-after': '50' }, body: multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 10') }, [50000]],
+    ['the wait of a refused part in an envelope that is not complete — another part is cut off in its status line — is not heard', { status: 429, headers: {}, body: multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30', 'HTTP/1.1 20') }, []],
     ['a throttle that asks for nothing', { status: 429, headers: {}, body: '{}' }, []],
     ['a value that is no wait', { status: 429, headers: { 'retry-after': 'soon' }, body: '{}' }, []],
     ['an answer that was not refused', { status: 200, headers: { 'retry-after': '7' }, body: '' }, []],
@@ -645,6 +646,10 @@ test('watchThrottles: a COMPLETE refusal inside an HTTP 200 — every part a 400
     ['a 412, which is the id of an earlier send', answered(multipart('HTTP/1.1 412 Precondition Failed')), [], []],
     ['a 500', answered(multipart('HTTP/1.1 500 Internal Server Error')), [], []],
     ['an answer cut off before its closing boundary', answered(multipart('HTTP/1.1 403 Forbidden').replace(/--batchresponse_1--\r\n$/, '')), [], []],
+    // Closed at the OUTER boundary and still incomplete inside: the one complete part is not taken for the whole answer.
+    ['an answer that closes its outer boundary but not its change set', answered(multipart('HTTP/1.1 403 Forbidden').replace('--changesetresponse_1--\r\n', '')), [], []],
+    ['a 429 beside a part that is cut off in its status line', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7', 'HTTP/1.1 20')), [], []],
+    ['a 403 beside a part with no status line at all', answered(['--batchresponse_1', '--changesetresponse_1', 'Content-Type: application/http', '', 'HTTP/1.1 403 Forbidden', '', '--changesetresponse_1', 'Content-Type: application/http', '', '{"error":{}}', '', '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n')), [], []],
     ['a change set that succeeded', answered(multipart('HTTP/1.1 204 No Content', 'HTTP/1.1 204 No Content')), [], []],
     ['a plain error body', answered('{"error":{"message":"nope"}}'), [], []],
   ];

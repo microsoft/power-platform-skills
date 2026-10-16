@@ -181,8 +181,9 @@ const PROVEN_REFUSALS = Object.freeze(new Set([400, 403, 404, 429]));
 //   - An answer that asks a caller to try again later — a 429, and the 5xx of a gateway (RFC 9110 defines `Retry-After` for a 503, and a 502 or 504 that carries one asks the same) — hands `record(ms)` whatever it asks, in its own
 //     headers or in the headers of a refused operation inside it, as the HTTP client reads both (retryAfterMs, batchRetryAfterMs). It is the service's request WHOLE: the HTTP client's cap is for that client's own retries, and
 //     what fits is the run's throttle budget's to judge (lib/throttle-budget.js).
-//   - An answer of 2xx that is a COMPLETE multipart envelope whose every part carries one of PROVEN_REFUSALS — read with the HTTP client's own strict parser (isBatchThrottled, completeBatchStatus) — is the change set the
-//     service refused, and `refused({ status, outer, url })` says so. An answer that is cut off, mixes statuses or carries any other status proves nothing about the change set and is not heard.
+//   - An answer of 2xx that is a COMPLETE, well-formed multipart envelope whose every part carries one of PROVEN_REFUSALS — read with the HTTP client's own strict parser (isBatchThrottled, completeBatchStatus), which takes anything missing or
+//     malformed (a change set never closed, a part with no status line or one cut off) as proving nothing — is the change set the
+//     service refused, and `refused({ status, outer, url })` says so. An answer that is cut off or incomplete inside, mixes statuses or carries any other status proves nothing about the change set and is not heard.
 // The answer itself is returned as it came, and every other request is the client's own. A client that has no `postRaw` is returned as it is: the SDK refuses to write a page through it anyway.
 // See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after and https://www.rfc-editor.org/rfc/rfc6585#section-4 (429)
 function watchThrottles(client, record, now = Date.now, refused) {
@@ -987,10 +988,12 @@ function makeGenpageSdk(env, deps = {}) {
             // Ours, but it holds what an earlier create under the id sent (another model, other data sources or bindings, or a name this one does not): brought to what this
             // create asks for by the ordinary update, which reads it again, writes only what differs, records this create's turn, publishes it and proves the publish. Publishing
             // it as it is would put the earlier content live under this create's name.
+            // The update is one more write of this run, so it spends THIS create's budget — the run's, or the one this create made for itself when it was given none — and not a new one: a
+            // budget the update made would give it five more minutes, and what the run (or this create's own pause before its read) already spent would not be there to refuse a wait that does not fit.
             const differing = edits.map((e) => e.key);
             let updated;
             try {
-              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence });
+              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget });
             } catch (error) {
               // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
               throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });

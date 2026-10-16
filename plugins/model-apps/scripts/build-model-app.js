@@ -416,9 +416,10 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
-  // One budget for all the waiting a throttled service costs this run — the page backend's waits between the sends of a page write and this loop's own waits before it runs the build again — so the run can
-  // neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js). `now` is the clock the page backend stamps the moment
-  // before which nothing may be sent on (`retryNotBefore`): a test seam, with `sleep`.
+  // One budget for the waiting the BUILD'S OWN retry layers add when a service throttles — the page backend's waits between the sends of a page write (a `$batch` the HTTP client never re-sends) and this loop's own waits before it runs
+  // a phase again — so the run can neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js). It is NOT a bound on all the waiting a run does:
+  // the production HTTP client re-sends a throttled read, publish, delete or column create on a schedule of its own (at most five re-sends, honouring a `Retry-After` of up to a minute), exactly as it did before there was a budget, and
+  // that is not charged to it — a throttled build that succeeds today would otherwise halt. `now` is the clock the page backend stamps the moment before which nothing may be sent on (`retryNotBefore`): a test seam, with `sleep`.
   const throttle = deps.throttle || makeThrottleBudget({ warn: deps.warn });
   const now = deps.now || Date.now;
   let authorizedFormRemovals;

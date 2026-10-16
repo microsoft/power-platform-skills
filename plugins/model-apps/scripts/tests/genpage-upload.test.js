@@ -2027,7 +2027,7 @@ test('REAL SDK: a throttled write the service asks to wait nine seconds for is a
   assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
   assert.deepStrictEqual(slept, [9000], 'the answer\'s Retry-After was waited, whole');
   assert.deepStrictEqual(written.filter((line) => /throttled the write/.test(line)), [
-    'WARNING: generative page "Throttled page": the service throttled the write (HTTP 429); waiting 9 s before sending it again (9 s of the 5 minutes a run spends in all on waiting out a throttled service are spent)\n',
+    'WARNING: generative page "Throttled page": the service throttled the write (HTTP 429); waiting 9 s before sending it again (9 s of the 5 minutes a run allows itself for waiting out a throttled service are spent)\n',
   ]);
   assert.deepStrictEqual([...server.state.projects.keys()], [r.payload.pageId], 'one page');
   assert.ok((r.payload.warnings || []).some((w) => /throttled the write of generative page "Throttled page" \(HTTP 429\) once/.test(w)), 'the result says it was throttled, as before');
@@ -2042,7 +2042,7 @@ test('REAL SDK: a throttle that asks for longer than the budget stops the upload
   const r = await run(['--env', INSTANCE, '--code-file', file, '--name', 'Throttled page', ...P, '--agent-message', 'm'],
     realBackend(server, { deps: { sleep: async (ms) => { slept.push(ms); }, random: () => 0 } }));
   assert.strictEqual(r.ok, false);
-  assert.match(r.payload.error, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service \(0 s are spent\)\. Nothing more is sent now: run the same command again later, and it continues from here\./);
+  assert.match(r.payload.error, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)\. Nothing more is sent now: run the same command again later, and it continues from here\./);
   assert.doesNotMatch(r.payload.error, /\bbuild\b/);
   assert.deepStrictEqual(slept, []);
   assert.strictEqual(server.state.projects.size, 0, 'a refused change set wrote nothing');

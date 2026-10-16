@@ -81,6 +81,50 @@ test('judgeFailure: a timeout or a reset of the transport is transient; a transp
   assert.strictEqual(isTransientHalt(connectionError(500, 'the request timed out')), false);
 });
 
+// The HTTP client puts Node's own `code` on the error it throws for a request that failed (lib/sdk-http-client.js), and the SDK keeps that error as the cause of its ConnectionError of status 0 (DataverseClient.send). A certificate that
+// does not verify quotes the host and the certificate's names — a name can spell anything, a transport code included — so the words beside a code are not read: the code decides, and the words only when the error carries none.
+test('judgeFailure: a failure of the transport is decided by Node\'s own code when the error the transport raised carries one — and by its words, a certificate\'s own phrases first, when it carries none', () => {
+  const SAN = "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:ECONNRESET.example.com";
+  const raised = (words, code) => {
+    const thrown = Object.assign(new Error(`Request failed: ${words}`), code ? { code } : {});
+    return new ConnectionError(URL_WITH_LABEL, 0, thrown.message, thrown);
+  };
+  const verdict = (words, code) => { const j = judgeFailure(raised(words, code)); return { transient: j.transient, never: j.never, transport: j.transport }; };
+  const X509 = ['UNABLE_TO_GET_ISSUER_CERT', 'CERT_SIGNATURE_FAILURE', 'CERT_NOT_YET_VALID', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_REVOKED', 'INVALID_CA', 'CERT_UNTRUSTED', 'HOSTNAME_MISMATCH', 'ERR_TLS_CERT_ALTNAME_INVALID'];
+  // The code first: a certificate that does not verify is never run again, whatever its names say.
+  for (const code of X509) {
+    assert.deepStrictEqual(verdict(SAN, code), { transient: false, never: true, transport: false }, `${code}: final`);
+    assert.deepStrictEqual(verdict('read ECONNRESET, socket hang up, timed out', code), { transient: false, never: true, transport: false }, `${code}: whatever the words quote`);
+    assert.strictEqual(isTransientHalt(raised(SAN, code)), false, code);
+    assert.strictEqual(retryPolicyFor(raised(SAN, code)), RETRY.NEVER, code);
+  }
+  // A transient code is run again, whatever the words say; another code is final even when the words sound transient.
+  for (const code of ['ECONNRESET', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNABORTED', 'EPIPE', 'EAI_AGAIN']) {
+    assert.deepStrictEqual(verdict('nothing a word list would recognise', code), { transient: true, never: false, transport: true }, code);
+    assert.strictEqual(isTransientHalt(raised('nothing a word list would recognise', code)), true, code);
+  }
+  for (const code of ['ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']) {
+    assert.strictEqual(verdict('read ECONNRESET, socket hang up, timed out', code).transient, false, `${code}: the code is final, and the words are not read`);
+    assert.strictEqual(isTransientHalt(raised('read ECONNRESET', code)), false, code);
+  }
+  // No code: the words, and a certificate's own phrases before a transient word beside them.
+  assert.strictEqual(verdict(SAN).transient, false, 'the names of a certificate that does not verify are not a reset');
+  assert.strictEqual(verdict('Hostname/IP does not match certificate\'s altnames: Host: x. is not cert\'s CN: socket hang up').transient, false);
+  assert.strictEqual(verdict('unable to verify the first certificate for etimedout.example.com').transient, false);
+  assert.strictEqual(verdict('read ECONNRESET').transient, true, 'a reset with no code is a blip by its words, as it always was');
+  assert.strictEqual(verdict('connect ETIMEDOUT 10.0.0.1:443').transient, true);
+  assert.strictEqual(verdict('Client network socket disconnected before secure TLS connection was established').transient, true, 'the reset in the middle of the TLS handshake is not a certificate');
+  assert.strictEqual(isTransientHalt(raised(SAN)), false);
+  // The same through the sentence an SDK error wraps around a failed publish, which holds the words and no error to take the code from.
+  const publishUrl = 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml';
+  const wrap = (answer) => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on 'contoso_task' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
+  assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: ${SAN}`)), false);
+  assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: read ECONNRESET`)), true);
+  // A code on the error that is not the transport's — the one that wraps it — does not make it a failure of the transport.
+  assert.strictEqual(judgeFailure(Object.assign(new Error('wrapper'), { cause: raised(SAN, 'ERR_TLS_CERT_ALTNAME_INVALID') })).transient, false);
+  assert.strictEqual(judgeFailure(Object.assign(new Error('wrapper'), { cause: raised('read ECONNRESET', 'ECONNRESET') })).transient, true);
+});
+
 test('judgeFailure: an error the SDK or the plugin types is a refusal whatever it says — its words are read only when it carries no code', () => {
   for (const code of ['VALIDATION_ERROR', 'VERSION_CONFLICT', 'ARTIFACT_NOT_FOUND', 'ARTIFACT_ALREADY_EXISTS', 'INVALID_ARGUMENT', 'APP_SOURCE_PATH', 'TABLE_METADATA_NOT_VISIBLE']) {
     assert.strictEqual(isTransientHalt(typed(code, `${LABEL}: CustomizationLockException, try again later`)), false, code);

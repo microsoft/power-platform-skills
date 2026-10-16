@@ -190,43 +190,127 @@ function isColumnCreateBatch(body) {
  *   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. ... Sql Number: 1205"}}
  *   --changesetresponse_<id>--
  *   --batchresponse_<id>--
- * The answer is read part by part (the text between delimiter lines, `--<boundary>`), and it proves the
- * rollback only when it is complete (it closes the boundary it opened with: first line `--<boundary>`,
- * last line `--<boundary>--`), it answers at least one operation, and EVERY operation's own part is a 500
- * carrying the deadlock marker. Anything
+ * The answer is read part by part (batchResults), and it proves the rollback only when it is a complete, well-formed envelope (its outer boundary closed, every change set in it closed, every part a complete response with a
+ * status line), it answers at least one operation, and EVERY operation's own part is a 500 carrying the deadlock marker. Anything
  * else (one success, another failure, an operation whose part does not name the deadlock itself, a
- * truncated answer) is returned as it came.
+ * truncated answer, an answer that closes its outer boundary and is incomplete inside) is returned as it came.
  */
 function isBatchDeadlockVictim(res) {
   const results = batchResults(res);
   return !!results && results.length > 0 && results.every((r) => r.status === '500' && SQL_DEADLOCK_VICTIM.test(r.text));
 }
 
+// The characters RFC 2046 allows in a multipart boundary: a line that opens with two dashes and goes on with anything else (an HTML comment's `-->`, `--- end of trace ---`) is TEXT, never a delimiter.
+// A closing delimiter is the boundary followed by two more dashes, and the boundary may itself end in a dash, so the boundary is read lazily and the two dashes belong to the delimiter.
+// See: https://www.rfc-editor.org/rfc/rfc2046#section-5.1.1
+const DELIMITER_LINE = /^--([0-9A-Za-z'()+_,./:=?-]+?)(--)?$/;
+// A line of a part's own MIME header block (`Content-Type: application/http`, `Content-ID: 1`), and a header folded onto the line before it (a line that starts with white space). A header name is an RFC 9110 token; a status
+// line (`HTTP/1.1 204 No Content`) is not one — it has a slash before any colon — so it starts the response and ends the headers even when no blank line separates them.
+const MIME_HEADER_LINE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+:/;
+const FOLDED_HEADER_LINE = /^[ \t]+\S/;
+const STATUS_LINE = /^HTTP\/1\.1 (\d{3})\b/;
+
 /**
- * The operations a complete multipart `$batch` answer reports, as `{ status, text }` per part (the text
- * between delimiter lines, `--<boundary>`), or null when the answer is not a complete multipart envelope
- * (its first line `--<boundary>`, its last `--<boundary>--`). Parts without an `HTTP/1.1 <status>` line
- * (the change-set headers) are not operations and are left out.
+ * Reads what lies between two delimiters (`part`, its lines) of a multipart `$batch` answer, and adds the operation it holds to `results`. `after` says what the delimiter before it was: the outer boundary (`outer`), the
+ * boundary of a change set (`nested`) or a closing delimiter (`close`). True when the part is nothing, a change set's header block, or an operation that is a COMPLETE response; false for anything else.
+ *   - nothing: no line, or only blank ones — an envelope that has no change-set header block, or no part at all.
+ *   - a change set's header block, directly under the outer boundary: nothing but MIME headers, one of them `Content-Type: multipart/mixed; boundary=…`. It holds no operation.
+ *   - an operation: `Content-Type: application/http` — or no type at all — and, after its headers and the blank line that ends them, a status line `HTTP/1.1 <3 digits>` as the FIRST line of the response.
+ *   - after a closing delimiter nothing may follow but blank lines.
+ */
+function readBatchPart(part, after, results) {
+  const blank = (line) => line.trim() === '';
+  if (part.every(blank)) return true;
+  if (after === 'close') return false;
+  let at = 0;
+  let type = null;
+  while (at < part.length && MIME_HEADER_LINE.test(part[at])) {
+    const declared = /^content-type:\s*([^;\s]+)/i.exec(part[at]);
+    if (declared && type === null) type = declared[1].toLowerCase();
+    at += 1;
+    while (at < part.length && FOLDED_HEADER_LINE.test(part[at])) at += 1;
+  }
+  if (type !== null && type.startsWith('multipart/')) return after === 'outer' && part.slice(at).every(blank);
+  if (type !== null && type !== 'application/http') return false;
+  while (at < part.length && blank(part[at])) at += 1;
+  const status = STATUS_LINE.exec(part[at] || '');
+  if (!status) return false;
+  results.push({ status: status[1], text: part.join('\n') });
+  return true;
+}
+
+/**
+ * The operations a complete, well-formed multipart `$batch` answer reports, as `{ status, text }` per operation (`text` is every line of its part, headers included), or null when the answer is anything else. Every
+ * operation is a part of a change set, which is itself a part of the answer — the shape the service answers with (abridged; the live capture quoted at isBatchDeadlockVictim is of the same shape):
+ *   --batchresponse_<id>
+ *   Content-Type: multipart/mixed; boundary=changesetresponse_<id>
+ *
+ *   --changesetresponse_<id>
+ *   Content-Type: application/http
+ *   Content-Transfer-Encoding: binary
+ *   Content-ID: 1
+ *
+ *   HTTP/1.1 204 No Content
+ *   OData-Version: 4.0
+ *
+ *   --changesetresponse_<id>--
+ *   --batchresponse_<id>--
+ * The callers prove something about EVERY operation from this — that a change set was refused, or rolled back as a deadlock victim, as a whole (isBatchThrottled, isBatchDeadlockVictim, completeBatchStatus) — so the answer
+ * is read only when ALL of it holds:
+ *   - its first line is the outer delimiter `--<boundary>`, its last the closing `--<boundary>--`, and nothing but blank lines follows;
+ *   - a change set opened inside it (a delimiter of another boundary) is closed with its own `--<boundary>--` before the outer boundary goes on or closes, and no change set opens inside another;
+ *   - every part is a change set's header block or a COMPLETE operation (readBatchPart): a status line, as the first line of a part that is `application/http`.
+ * Anything missing or malformed — a change set left open, a part with no status line or one cut off (`HTTP/1.1 20`), a part of another kind, text after a closing delimiter — makes the WHOLE answer null: a part that cannot be
+ * read is not one that can be left out, it may be the operation that succeeded. (Parts without a status line used to be dropped, so an answer that closed its OUTER boundary proved the one part in it that happened to read.)
+ * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api (the format is the OData batch's, 11.7 of
+ * http://docs.oasis-open.org/odata/odata/v4.0/errata03/os/complete/part1-protocol/odata-v4.0-errata03-os-part1-protocol-complete.html)
  */
 function batchResults(res) {
   if (!res || typeof res.body !== 'string') return null;
   const lines = res.body.split(/\r?\n/);
-  const nonEmpty = lines.map((l) => l.trim()).filter(Boolean);
-  const outer = /^--(\S+)$/.exec(nonEmpty[0] || '');
-  if (!outer || nonEmpty[nonEmpty.length - 1] !== `--${outer[1]}--`) return null;
-  const parts = [];
-  let part = null;
-  for (const line of lines) {
-    if (/^--\S/.test(line)) {
-      if (part) parts.push(part);
-      part = [];
-    } else if (part) {
-      part.push(line);
+  const start = lines.findIndex((l) => l.trim() !== '');
+  const outer = start < 0 ? null : /^--(\S+)$/.exec(lines[start].trim());
+  if (!outer) return null;
+  const results = [];
+  let nested = null;
+  let after = 'outer';
+  let closed = false;
+  let part = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const text = lines[i].trimEnd();
+    let kind = null;
+    let boundary = null;
+    if (text === `--${outer[1]}`) kind = 'outer-open';
+    else if (text === `--${outer[1]}--`) kind = 'outer-close';
+    else {
+      const found = DELIMITER_LINE.exec(text);
+      if (found) {
+        kind = found[2] ? 'nested-close' : 'nested-open';
+        boundary = found[1];
+      }
+    }
+    if (kind === null) {
+      part.push(lines[i]);
+      continue;
+    }
+    // A delimiter ends the part before it, and nothing may come after the outer boundary has closed.
+    if (closed || !readBatchPart(part, after, results)) return null;
+    part = [];
+    if (kind === 'outer-open' || kind === 'outer-close') {
+      if (nested !== null) return null;
+      after = kind === 'outer-open' ? 'outer' : 'close';
+      closed = kind === 'outer-close';
+    } else if (kind === 'nested-open') {
+      if (nested !== null && nested !== boundary) return null;
+      nested = boundary;
+      after = 'nested';
+    } else {
+      if (nested !== boundary) return null;
+      nested = null;
+      after = 'close';
     }
   }
-  return parts
-    .map((p) => ({ status: (p.map((l) => /^HTTP\/1\.1 (\d{3})\b/.exec(l)).find(Boolean) || [])[1], text: p.join('\n') }))
-    .filter((r) => r.status);
+  return closed && nested === null && readBatchPart(part, after, results) ? results : null;
 }
 
 /**
@@ -236,9 +320,9 @@ function batchResults(res) {
  *   - the whole request refused before any operation was read: a plain error answer with status 429, not
  *     a multipart one — service protection limits answer this way, e.g.
  *       HTTP 429  {"error":{"code":"0x80072322","message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds."}}
- *   - a complete multipart answer in which EVERY operation it answers is a 429 (read part by part, as
+ *   - a complete, well-formed multipart answer (batchResults) in which EVERY operation it answers is a 429 (read part by part, as
  *     isBatchDeadlockVictim reads a deadlock).
- * An answer that starts as a multipart envelope but is cut short proves nothing and is returned as it came.
+ * An answer that starts as a multipart envelope but is cut short, or is incomplete inside (a change set never closed, a part with no status line), proves nothing and is returned as it came.
  * See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits
  */
 function isBatchThrottled(res) {
@@ -272,8 +356,8 @@ function batchRetryAfterMs(res, now = Date.now(), cap = RETRY_AFTER_CAP_MS) {
 }
 
 /**
- * The one HTTP status a COMPLETE multipart `$batch` answer reports for every operation it answers — 0 when the answer is not a complete envelope (read as isBatchThrottled reads one: its first line
- * `--<boundary>`, its last `--<boundary>--`, every part with a status line), has no operation, or its operations do not all say the same. A change set the service refuses AS A WHOLE is answered HTTP 200 with
+ * The one HTTP status a COMPLETE multipart `$batch` answer reports for every operation it answers — 0 when the answer is not a complete, well-formed envelope (read as isBatchThrottled reads one, by batchResults: closed at its outer
+ * boundary, every change set in it closed, every part a complete response with a status line), has no operation, or its operations do not all say the same. A change set the service refuses AS A WHOLE is answered HTTP 200 with
  * the single part that failed (abridged):
  *   --batchresponse_<id>
  *   Content-Type: multipart/mixed; boundary=changesetresponse_<id>
@@ -296,19 +380,41 @@ function completeBatchStatus(res) {
 }
 
 // ---- Which failures of the transport are worth sending a request again for ----------------------------------------------------------------
-// `res.error` is what makeRequest (lib/dataverse-auth.js) reports when the request itself failed: Node's own message for the error, with the code of it only when the message happens to spell it:
-//   read ECONNRESET       write EPIPE       connect ETIMEDOUT 10.0.0.1:443       getaddrinfo EAI_AGAIN contoso.crm.dynamics.com       Request timed out       socket hang up
-//   Response aborted before it completed       Response failed before it completed: aborted       Connection closed before the response completed
-//   Client network socket disconnected before secure TLS connection was established        (a reset in the middle of the TLS handshake: code ECONNRESET)
+// `res` is what makeRequest (lib/dataverse-auth.js) reports when the request itself failed: Node's own message for the error and — when Node gave one — its CODE, which the message spells only by chance:
+//   { error: 'read ECONNRESET', code: 'ECONNRESET' }       { error: 'write EPIPE', code: 'EPIPE' }       { error: 'connect ETIMEDOUT 10.0.0.1:443', code: 'ETIMEDOUT' }       { error: 'getaddrinfo EAI_AGAIN contoso.crm.dynamics.com', code: 'EAI_AGAIN' }
+//   { error: 'socket hang up', code: 'ECONNRESET' }       { error: 'Client network socket disconnected before secure TLS connection was established', code: 'ECONNRESET' }        (a reset in the middle of the TLS handshake)
+//   { error: 'Request timed out' }       { error: 'Response aborted before it completed' }       { error: 'Response failed before it completed: aborted' }       { error: 'Connection closed before the response completed' }       (this module's own words: no code)
 // A reset, a timeout, an answer cut off and a TEMPORARY failure of name resolution (EAI_AGAIN) can be gone on the next send, and are what this client sends again, on the throttle schedule. Nothing else is:
 // a failure to VERIFY the server's certificate is a fact about this machine's trust store and the server, the same on every send, and sending the request six times only waited 23 s for the same refusal —
 //   unable to verify the first certificate  (UNABLE_TO_VERIFY_LEAF_SIGNATURE)     certificate has expired  (CERT_HAS_EXPIRED)     self-signed certificate  (DEPTH_ZERO_SELF_SIGNED_CERT)
 //   self-signed certificate in certificate chain  (SELF_SIGNED_CERT_IN_CHAIN)     Hostname/IP does not match certificate's altnames: …  (ERR_TLS_CERT_ALTNAME_INVALID)     …certificate verify failed
 // — and neither is a host that does not exist (ENOTFOUND), a refused connection (ECONNREFUSED) or a message nobody recognises. So it is a list of what IS worth another send, and the rest returns at once.
-// It is the same list lib/retry-policy.js uses to tell the build a failure is a blip (TRANSPORT_WORDS), kept equal by a test: this file is copied into the pcf plugin, which has no policy.
-// See https://nodejs.org/api/errors.html#common-system-errors and https://docs.openssl.org/3.0/man1/openssl-verification-flags/
+// WHAT DECIDES is Node's code, when the failure came with one: a code in TRANSIENT_TRANSPORT_CODES is sent again and any other code is final, whatever the words beside it say. A certificate that does not verify quotes the host and the
+// names the certificate carries, a name can spell anything (`DNS:ECONNRESET.example.com` is a valid alternative name), and a transient word found ANYWHERE in such a message sent the request six times. Only a failure with NO code — one this
+// module words itself, or a transport that reports none — is read by its words, and there the phrases of a certificate that does not verify (CERTIFICATE_FAILURE) are read first, so a name quoted in them is not a reset either.
+// Both are the same list lib/retry-policy.js uses to tell the build a failure is a blip (TRANSPORT_CODES, TRANSPORT_WORDS, CERTIFICATE_WORDS), kept equal by a test: this file is copied into the pcf plugin, which has no policy.
+// See https://nodejs.org/api/errors.html#common-system-errors, https://nodejs.org/api/tls.html#x509-certificate-error-codes and https://docs.openssl.org/3.0/man1/openssl-verification-flags/
+const TRANSIENT_TRANSPORT_CODES = Object.freeze(new Set(['ECONNRESET', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNABORTED', 'EPIPE', 'EAI_AGAIN']));
 const TRANSIENT_TRANSPORT_FAILURE = /\b(?:ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EAI_AGAIN)\b|socket hang up|timed out|Connection closed before the response completed|Response (?:aborted|failed) before it completed|Client network socket disconnected before secure TLS connection was established/i;
-const isTransientTransportFailure = (error) => TRANSIENT_TRANSPORT_FAILURE.test(String(error));
+// What Node and OpenSSL say when a certificate does not verify. Each phrase has a space or a slash in it, which no host name has, so a name that a transient message quotes cannot spell one; and each is the text of a code of Node's own list.
+const CERTIFICATE_FAILURE = new RegExp([
+  'unable to verify the (?:first|leaf) certificate', // UNABLE_TO_VERIFY_LEAF_SIGNATURE
+  'unable to get (?:local )?issuer certificate', // UNABLE_TO_GET_ISSUER_CERT, UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+  'self[- ]signed certificate', // DEPTH_ZERO_SELF_SIGNED_CERT, SELF_SIGNED_CERT_IN_CHAIN
+  'certificate (?:has expired|is not yet valid|revoked|not trusted|rejected|signature failure|chain too long|verify failed)', // CERT_HAS_EXPIRED, CERT_NOT_YET_VALID, CERT_REVOKED, CERT_UNTRUSTED, CERT_REJECTED, … and OpenSSL 3's own
+  'invalid CA certificate', // INVALID_CA
+  "does not match certificate's altnames", // ERR_TLS_CERT_ALTNAME_INVALID: "Hostname/IP does not match certificate's altnames: Host: <host>. is not in the cert's altnames: DNS:<name>, …"
+].join('|'), 'i');
+function isTransientTransportFailure(error, code) {
+  if (typeof code === 'string' && code) return TRANSIENT_TRANSPORT_CODES.has(code);
+  const words = String(error);
+  return !CERTIFICATE_FAILURE.test(words) && TRANSIENT_TRANSPORT_FAILURE.test(words);
+}
+// The error thrown for a request that failed: the same message as ever, with Node's code on it when Node gave one. The SDK wraps whatever this client throws in a ConnectionError of status 0 and keeps it as that error's `cause`, and the
+// build's retry decision (lib/retry-policy.js) reads the code there — so a certificate that does not verify is not run again because a name in its message spells a reset.
+function transportError(res, message) {
+  return Object.assign(new Error(message), typeof res.code === 'string' && res.code ? { code: res.code } : {});
+}
 /**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
@@ -476,16 +582,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
       const res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
       if (res.error) {
         if (conditional) {
-          throw new Error(`Request failed: ${res.error} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
+          throw transportError(res, `Request failed: ${res.error} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
         }
         // The server ANSWERED (status and headers arrived) and the body was then cut off. A POST may
         // already have been applied — re-sending a create here made a second row — so it is reported
         // as an uncertain outcome rather than replayed. The idempotent rebuild adopts whatever landed.
         // Reads, PATCH/PUT and metadata deletes keep the retry below.
         if (res.incompleteResponse && method_ === 'POST') {
-          throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Re-run to reconcile.`);
+          throw transportError(res, `Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Re-run to reconcile.`);
         }
-        if (last || noRetry || !isTransientTransportFailure(res.error)) throw new Error(`Request failed: ${res.error}`);
+        if (last || noRetry || !isTransientTransportFailure(res.error, res.code)) throw transportError(res, `Request failed: ${res.error}`);
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -579,4 +685,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS };
