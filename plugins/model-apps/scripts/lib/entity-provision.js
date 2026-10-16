@@ -794,13 +794,29 @@ function inlineColumnsOf(buildable, { primaryName, tableLogical }) {
 // a plain text name column created this way 850 characters long whatever length is asked (DEFAULT_PRIMARY_NAME_LENGTH), and the
 // re-run that follows leaves an existing table's name column as it is. Nothing is said for an auto-numbered name column, which
 // keeps the length asked, or for the longest length there is (850), which the column comes out as either way.
+//
+// PRIMARY_COLUMN_REQUIRED_NOT_APPLIED is the same statement about a table whose name column was asked to be required
+// (`primaryColumnRequired`, sent only when the spec states a `required` for that column). The create ignores the level on a plain text
+// name column (measured on Dataverse 9.2.26101), so the SDK reads the level back after the create and sets it with an update; when it
+// cannot confirm the level, the table exists with a name column that may not be required. The build stops and says so; the re-run finds
+// the table and sets the level on the name column the way it does for any existing column with an explicit `required`.
+const nameLengthMayBeIgnored = (createOpts, askedLength) => askedLength !== undefined && askedLength !== PRIMARY_NAME_MAX_LENGTH
+  && !createOpts.primaryColumnAutoNumberFormat;
+
 async function createNewTable(sdk, createOpts, { warn, askedLength } = {}) {
   try {
     return await sdk.createTable(createOpts);
   } catch (err) {
-    if (err && err.code === 'TABLE_METADATA_NOT_VISIBLE' && askedLength !== undefined && askedLength !== PRIMARY_NAME_MAX_LENGTH
-      && !createOpts.primaryColumnAutoNumberFormat && typeof warn === 'function') {
-      warn(`table ${createOpts.schemaName} was created, but its metadata could not be read back yet, so the build stops here — the spec asks for a primary name column length of ${askedLength}, which may not have been applied (some environments make a name column created this way ${PRIMARY_NAME_MAX_LENGTH} characters long), and a re-run leaves an existing table's name column as it is: after the re-run, check ${String(createOpts.primaryColumnSchemaName).toLowerCase()} in Maker and set its length there if it matters`);
+    if (typeof warn === 'function') {
+      const primaryLogical = String(createOpts.primaryColumnSchemaName).toLowerCase();
+      if (err && err.code === 'TABLE_METADATA_NOT_VISIBLE' && nameLengthMayBeIgnored(createOpts, askedLength)) {
+        warn(`table ${createOpts.schemaName} was created, but its metadata could not be read back yet, so the build stops here — the spec asks for a primary name column length of ${askedLength}, which may not have been applied (some environments make a name column created this way ${PRIMARY_NAME_MAX_LENGTH} characters long), and a re-run leaves an existing table's name column as it is: after the re-run, check ${primaryLogical} in Maker and set its length there if it matters`);
+      } else if (err && err.code === 'PRIMARY_COLUMN_REQUIRED_NOT_APPLIED') {
+        const length = nameLengthMayBeIgnored(createOpts, askedLength)
+          ? `; the spec also asks for a name column length of ${askedLength}, which may not have been applied either (some environments make a name column created this way ${PRIMARY_NAME_MAX_LENGTH} characters long) and a re-run leaves an existing table's name column length as it is: after the re-run, check it in Maker and set it there if it matters`
+          : '';
+        warn(`table ${createOpts.schemaName} was created, but the required level (${createOpts.primaryColumnRequired}) of its primary name column ${primaryLogical} could not be confirmed, so the build stops here — the table exists: run the build again, which finds it, does not create it again, and sets that level on the column${length}`);
+      }
     }
     throw err;
   }
@@ -1324,7 +1340,14 @@ const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-works
 // capture forms, views or charts, and the artifact may predate the app (an interrupted FIRST build leaves
 // views and forms before the app exists). Both codes are pinned against the real bundle in
 // workspace-projection-real-bundle.test.js.
+//
+// PRIMARY_COLUMN_REQUIRED_NOT_APPLIED: the table WAS created, but the required level asked of its name column could not be confirmed, and the
+// message ends with "Do NOT re-run the create" and the SDK call that sets the level. Running this build again is the fix: it finds the table (it
+// is not created twice) and sets the level the way it does for any existing column with an explicit `required`.
 function operatorRemedy(err) {
+  if (err && err.code === 'PRIMARY_COLUMN_REQUIRED_NOT_APPLIED') {
+    return ' — the table exists. Run the build again: it finds the table, does not create it again, and sets the required level of its primary name column (the call the message names is made for you).';
+  }
   if (err && err.code === 'ARTIFACT_PROJECTION_STALE') {
     return ` — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). To reset it, ${RESET_WORKSPACE}, and re-run: the build re-reads the copies and re-applies every edit from the spec.`;
   }
@@ -1858,6 +1881,12 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           primaryColumnMaxLength: primaryNameLength(e.primaryAttribute) };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
+        // The name column's requirement level, when the spec states one (an omitted `required` sends nothing, as before). The create alone
+        // does not keep it on a plain text name column (measured on Dataverse 9.2.26101: stored not required whatever is sent, while an
+        // auto-numbered one keeps it), so the SDK reads the level back after the create, sets it with one update where it differs, reads it
+        // again and answers it as `primaryColumnRequired`; a level it cannot confirm is PRIMARY_COLUMN_REQUIRED_NOT_APPLIED (createNewTable).
+        // The update is a PUT, which the SDK refuses to leave unmade: without one on the HTTP client it refuses before it creates anything.
+        if (hasExplicitRequired(e.primaryAttribute)) createOpts.primaryColumnRequired = REQUIRED(e.primaryAttribute);
         // Same reasoning as columns: set the description at CREATE time, and omit it when absent so
         // a rebuild never blanks a description someone added in the maker.
         if (e.description) createOpts.description = String(e.description);
@@ -1866,6 +1895,9 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
           createdTable = t;
         } catch (err) {
+          // The SDK says of this refusal that the table WAS created. What its cause carries — a 409 from the update, a word in the platform's reason —
+          // is no sign that the table's name is taken, so it is never taken for an already-exists answer and "rediscovered".
+          if (err && err.code === 'PRIMARY_COLUMN_REQUIRED_NOT_APPLIED') throw err;
           if (!isAlreadyExists(err)) throw err;
           // First POST likely succeeded server-side; a transient-network retry hit "already exists".
           // Rediscover to capture entitySetName (required by later phases). No poisoning concern
@@ -2037,9 +2069,24 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
       });
     }
     for (const c of requiredDeclared) {
-      if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {
-        runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (applied on create)`);
+      if (existingTable && existingCols.has(c.schemaName.toLowerCase())) continue;
+      // A column's level is part of its own create request — except the primary name column's: it is asked in the table's create, which
+      // does not keep it on a plain text name column, so it is applied only when the SDK says it read the level back (`primaryColumnRequired`,
+      // answered for a level other than None). A table found after its create, or an SDK that answers nothing, is not that: the level is
+      // not reported as applied, and the re-run reconciles it as it does an existing column's.
+      const desired = REQUIRED(c);
+      if (c === e.primaryAttribute && desired !== 'None' && !(createdTable && createdTable.primaryColumnRequired === desired)) {
+        const confirmed = createdTable && createdTable.primaryColumnRequired;
+        const why = createdTable
+          ? `the SDK confirmed ${confirmed ? `'${confirmed}'` : 'no level'} for the name column of the table it created`
+          : existingTable
+            ? 'the table exists but its columns could not be read, so its current level is unknown'
+            : 'the table was found after its create, so nothing shows that the level was applied';
+        await runBestEffort(runner, 'data-model', `required ${e.schemaName}.${c.schemaName} -> ${desired}`, async () => { throw refusal(why); },
+          warn, `could not confirm the required level of ${logical}.${String(c.schemaName).toLowerCase()} (${desired}) — a re-run sets it, and the rest of the build continues`);
+        continue;
       }
+      runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (applied on create)`);
     }
     for (const c of capabilityDeclared) {
       if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {

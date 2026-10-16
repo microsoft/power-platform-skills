@@ -820,7 +820,8 @@ child view id. Each step emits `[n/total]`.
     `workflows` row through the SDK's generic artifact surface, with no bound member involved.
 - Supported: the full data model — all column types, **AutoNumber primary**, global choices, status
   reasons, alternate keys, **N:N + junction-with-payload**; **`required` reconciled on existing
-  columns** (an explicit `required` converges on rebuild; an omitted one never demotes);
+  columns** (an explicit `required` converges on rebuild; an omitted one never demotes) and **asked
+  of a new table's primary column in its create**, said applied only once the SDK confirms it;
   **Boolean `defaultValue`**, whole-number **`integerFormat`** (incl. `Duration`), and per-column
   **write permissions** (`isValidForCreate` / `isValidForUpdate` / `isValidForRead` — this is how you
   make a column read-only), all applied on **create and on rebuild**; adaptive

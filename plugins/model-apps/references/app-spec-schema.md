@@ -485,7 +485,14 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   already exists (including the primary/name column), a rebuild first reads its current
   `RequiredLevel` and only writes when the explicit spec value differs. If `required` is omitted,
   the build leaves the existing column alone instead of treating omission as `None`, so it never
-  silently demotes a field a maker already made Business Required.
+  silently demotes a field a maker already made Business Required. The primary/name column's
+  `required` is applied on a **new** table too: it is asked in the table's create, and because a plain
+  text name column is stored not required whatever the create asks (an auto-numbered one keeps the
+  level), the build's SDK reads the level back and sets it with one update. The build says the level
+  was applied on create only once the SDK has confirmed it. When it cannot be confirmed the table
+  still exists: the build stops (or, for a table found after the answer to its create was lost,
+  warns), and running the build again finds the table and sets the level as it does for any existing
+  column — it never creates the table twice.
 - **`defaultValue`, `integerFormat`, and `isValidFor*` converge differently: by re-assertion, not
   by diff.** Unlike `required` above, a rebuild does not read the column's current state first —
   it simply re-sends whichever of these fields the spec sets explicitly, on every build, for both a
