@@ -33,9 +33,16 @@
 //     after what it compares — assert.ok(value[, message]), assert.equal(actual, expected[, message]),
 //     assert.match(string, regexp[, message]) — so the second argument of a two-argument
 //     `assert.equal(label, 'Task-6: Overview')` is the expected value, which is data, and the third of
-//     `assert.equal(label, 'x', 'Task-6: Overview')` is a message. That needs the lexical structure of the call
-//     (a comma inside a nested call, a string, a template or a regular expression separates nothing; a call
+//     `assert.equal(label, 'x', 'Task-6: Overview')` is a message. assert.throws and its kin take
+//     (fn[, error][, message]) and the error is optional, so there a string in the second place is the message
+//     and a matcher (a regular expression, a class, an object, a function) is not. That needs the lexical structure
+//     of the call (a comma inside a nested call, a string, a template or a regular expression separates nothing; a call
 //     written inside a string or a comment is not one), so `lex` below reads it.
+//   * A comment and a test title are found the same way, from the lexical structure and not from the look of a
+//     line. In JavaScript, TypeScript and JSON the text of a string, a template or a regular expression is data,
+//     however it reads: a `//` inside a quoted value opens no comment, a template line that starts with `//` or `#`
+//     is no comment line, a test call written in a template is text, and JSON holds no comment of its own. Any other
+//     text file (Markdown, XML, plain text) has no lexer here and is read by the look of its lines.
 //   * A rule about the numbered titles under a heading needs the heading. A test title that opens with its own
 //     number ("#2b ...") is flagged only in a file whose prose also labels its groups "Finding N"
 //     (`numbered-title-under-finding`): there the numbers are the review's, not the suite's. Elsewhere it is an
@@ -80,7 +87,8 @@ const FINDING_NUMBER = /\b[Ff]indings?\s+#?\d{1,2}[a-z]?\b/;
 
 // scope 'any': every line. scope 'prose': comments and Markdown prose only (a Markdown code fence is data). scope 'note': what a person wrote for a
 // reader and nothing a program reads — prose, the title literal of a test, the message of an assertion or of a skip (found by its position among the
-// call's arguments) — never the data on the same line. scope 'title': the title literal of a test alone. A pattern with `inFile` applies only in a file
+// call's arguments) — never the data on the same line. scope 'title': the title literal of a test alone. A comment, a title and a message are found in
+// JavaScript, TypeScript and JSON by `readSource`, so the text of a string or a template is never one. A pattern with `inFile` applies only in a file
 // in which the pattern it names flags something: a rule about the numbered titles under a heading needs the heading.
 const PATTERNS = [
   {
@@ -221,9 +229,9 @@ const PATTERNS = [
   },
   {
     name: 'id-title-prefix',
-    scope: 'any',
-    why: 'a finding id opening a test title: "I1: ...", "C2 exception: ...". The title is read by everyone who runs the suite, and the id points into a review; say what the test proves.',
-    re: new RegExp(String.raw`^\s*(?:test|it|describe)(?:\.\w+)?\(\s*['"\x60]${ID}(?::|\s+[a-z]+:)`),
+    scope: 'title',
+    why: 'a finding id opening a test title: "I1: ...", "C2 exception: ...". The title is read by everyone who runs the suite, and the id points into a review; say what the test proves. A test call written in a template or a string is text, not a title.',
+    re: new RegExp(String.raw`^${ID}(?::|\s+[a-z]+:)`),
     bad: [
       "test('I1: apply refuses ANY partial phase range except the full build', async () => {});",
       "test('I1 exception: a changed-only pages-only fast apply is NOT refused', async () => {});",
@@ -287,6 +295,7 @@ const PATTERNS = [
       '// Task 3 — every page must be an appShell subarea',
       '// ── Task 11: assignPageKeys + missingDownloads ──',
       "test('Task-6: a Maker-added page gets a minted key', () => {});",
+      "assert.rejects(load, 'Task 12: the verify gate');",
       '// loose Plan-4 coupling',
       "// Task 8's pages phase needs a real file",
       '// ── Plan 5 three-authority safety gates: existence-driven',
@@ -427,12 +436,26 @@ const LEGITIMATE = [
   ['a.js', "assert.deepEqual(titles, ['Task 12: the verify gate', 'Task 1 (Plan 2)']);"],
   ['a.js', "assert.deepStrictEqual(f(a, 'x'), { name: 'Task 1 (Plan 2)' });"],
   ['a.js', "assert.match(text, /Task-6: (Plan 4)/);"],
-  ['a.js', "assert.throws(run, 'Task-6: Overview');"],
+  // The error an assertion expects is data too: a matcher (a regular expression, an object, a function, a class) in the place of the optional error is no
+  // message, whatever it holds.
+  ['a.js', "assert.throws(run, /Task-6: Overview/);"],
+  ['a.js', "assert.rejects(run, { message: 'Task 12: the verify gate' });"],
+  ['a.js', "assert.doesNotThrow(run, (error) => error.message === 'Task-6: Overview');"],
+  ['a.js', "assert.doesNotReject(run, TypeError);"],
+  ['a.js', "assert.throws(run, /gate/, 'name kept');"],
   ['a.js', "assert.ok('Task 12: a value');"],
   ['a.js', "assert.ok(ok, `Task ${n} follows ${'Task 1 (Plan 2)'}`);"],
   ['a.js', "assert.equal(app.name,\n  'Task 1 (Plan 2)');"],
   ['a.js', "const sample = `\nassert.ok(x, 'Task 12: the gate (Plan 4)');\n`;"],
   ['a.js', "const rule = /assert.ok(x, 'Task 12: gate')/;"],
+  // Text that reads like a comment or a test but sits in a string, a template, a regular expression or a JSON value is data: a `//` opens a comment in code
+  // only. (The tests that follow the reader of messages take the same shapes one by one.)
+  ['fixture.json', '{"note":"a // R4 - the retry rule","other":"x // T4 says so"}'],
+  ['a.js', "const source = { name: 'Task 1 // (Plan 2)', other: 'it\\'s // (Plan 2)' };"],
+  ['a.js', 'const rule = /Task 1 \\/\\/ \\(Plan 2\\)/;'],
+  ['a.js', "test('a line that starts with // R4 - the retry rule is data, not a comment', () => {});"],
+  ['a.js', 'const source = `\n// Task 12: the gate\n/* (Plan 4) */\n * R4 - the retry rule\n# R4 - the retry rule\n<!-- (Plan 2) -->\n`;'],
+  ['a.js', 'const source = `a ${b}\n// ${c} (Plan 2)\n`;'],
   // Words and numbers that look like the findings of a review but are not: a finding with no number, the name of a lint result, a numbered test that belongs
   // to no review, an issue number a reader can follow, and a review mentioned as the place a fix was found.
   ['a.js', '// each finding names its table; a finding is a warning, not an error'],
@@ -450,25 +473,35 @@ const LEGITIMATE = [
   ['a.js', '// the important part is that a minor change keeps its key; Major versions bump'],
 ];
 
+// How a comment is told in a file that `lex` cannot read (Markdown, XML, plain text): by the look of the line. A line that opens with a comment lead is
+// one, and so is what follows " // " after other text. Neither can tell a comment from a string that holds the same characters, which is why JavaScript,
+// TypeScript and JSON are not read this way (see `readSource`).
 const COMMENT_LEAD = /^\s*(?:\/\/|\/\*|\*(?!\/)|#|<!--)/;
 const TRAILING_COMMENT = /\s\/\/\s(.*)$/;
 // The title of a test: its first argument, a string literal.   test('a page keeps its key', async () => {
 const TITLE_LITERAL = /^\s*(?:test|it|describe)(?:\.\w+)?\(\s*(['"\x60])((?:\\.|(?!\1)[^\\])*)\1/;
-// JavaScript and TypeScript source, whose calls `messageLiterals` reads.
-const SOURCE_FILE = /\.(?:[cm]?js|jsx|ts|tsx)$/i;
+// The files whose comments, strings, templates and regular expressions `lex` tells apart: JavaScript and TypeScript source, and JSON (a file of JSON
+// lines too), where a string is data and the only comment, in a file that allows one, is outside it.
+const LEXED_FILE = /\.(?:[cm]?js|jsx|[cm]?ts|tsx|jsonl?)$/i;
 
 // ── where the message of an assertion sits ─────────────────────────────────────────────────────────────────────────────────────
 
-// A call whose message is a string a person reads, and the position of that argument among its top-level arguments. An assertion takes its message
-// LAST, after what it compares: assert.ok(value[, message]), assert.equal(actual, expected[, message]), assert.match(string, regexp[, message]).
-// With fewer arguments there is none, whatever the last one is: `assert.equal(label, 'Task-6: Overview')` asserts a label. assert.throws and its
-// kin take (fn[, error][, message]), so with two arguments the second may be the error to expect, and only a third is read. A skip takes its reason.
+// A call whose message is a string a person reads, and the position of that argument among its top-level arguments (a list when the position depends on
+// what the caller left out). An assertion takes its message LAST, after what it compares: assert.ok(value[, message]), assert.equal(actual, expected[,
+// message]), assert.match(string, regexp[, message]). With fewer arguments there is none, whatever the last one is: `assert.equal(label, 'Task-6:
+// Overview')` asserts a label. assert.throws and its kin take (fn[, error][, message]) and the error is optional: "If a string is provided as the second
+// argument, then error is assumed to be omitted and the string will be used for message instead"
+// (https://nodejs.org/api/assert.html#assertthrowsfn-error-message; assert.rejects, assert.doesNotThrow and assert.doesNotReject read it the same way).
+// So the second argument is the message when it is a string, and not when it is a matcher (a regular expression, a class, an object, a function): that
+// is no single literal, so it is not read, and the third argument is the message then. Both places are read, and each only if it is one literal.
+// A skip takes its reason.
+const FN_ERROR_MESSAGE = [1, 2];
 const MESSAGE_ARGUMENT = {
   assert: 1, 'assert.ok': 1,
   'assert.equal': 2, 'assert.notEqual': 2, 'assert.strictEqual': 2, 'assert.notStrictEqual': 2,
   'assert.deepEqual': 2, 'assert.notDeepEqual': 2, 'assert.deepStrictEqual': 2, 'assert.notDeepStrictEqual': 2,
   'assert.match': 2, 'assert.doesNotMatch': 2,
-  'assert.throws': 2, 'assert.doesNotThrow': 2, 'assert.rejects': 2, 'assert.doesNotReject': 2,
+  'assert.throws': FN_ERROR_MESSAGE, 'assert.doesNotThrow': FN_ERROR_MESSAGE, 'assert.rejects': FN_ERROR_MESSAGE, 'assert.doesNotReject': FN_ERROR_MESSAGE,
   'assert.fail': 0,
   skip: 0, todo: 0, 't.skip': 0, 't.todo': 0,
 };
@@ -478,15 +511,16 @@ const CODE = 0;
 const STRING = 1;
 const COMMENT = 2;
 const REGEX = 3;
-// A `/` opens a regular expression, not a division, after one of these characters or words: where an operand is expected.
+// A `/` opens a regular expression, not a division, after one of these characters or words: where an operand is expected. It is a guess from the previous
+// token and not a parse, so two rare shapes are misread: a slash after `)` is a division (`if (ok) /re/.test(s)`), and one after `++` a regular expression (`i++ / 2`).
 const REGEX_AFTER_CHAR = /[(,=:[!&|?{};+\-*%<>~^]/;
 const REGEX_AFTER_WORD = /^(?:return|typeof|case|in|of|delete|void|throw|new|else|do)$/;
 
-// Classifies every character of a JavaScript source as code, string (the quotes, and the text of a template), comment or regular expression, and
-// records where each string or template starts and ends (`ends`: start -> index after the last character) and which stretches of it are its own text
-// (`texts`: start -> [from, to) ranges; a template's `${ ... }` is code again, with braces that nest, and a string inside it is another token). It does
-// not parse: whatever it cannot read (a string that does not close, a regular expression that does not close on its line) ends where the line does,
-// because a wrong guess may lose a message and must never make one up.
+// Classifies every character of a JavaScript, TypeScript or JSON source as code, string (the quotes, and the text of a template), comment or regular
+// expression, and records where each string or template starts and ends (`ends`: start -> index after the last character) and which stretches of it are its
+// own text (`texts`: start -> [from, to) ranges; a template's `${ ... }` is code again, with braces that nest, and a string inside it is another token). It
+// does not parse: whatever it cannot read (a string that does not close, a regular expression that does not close on its line) ends where the line does,
+// because a wrong guess may lose a message and must never make one up. `messageLiterals` and `readSource` are its readers.
 function lex(text) {
   const kind = new Uint8Array(text.length);
   const ends = new Map();
@@ -519,8 +553,10 @@ function lex(text) {
     return text.length;
   };
   const regexAllowed = (at) => {
+    // The last token of code before the slash decides, so white space and comments are stepped over: `return /re/`, or a regular expression that opens the
+    // line after a comment. (Comments before this point are already marked.)
     let j = at - 1;
-    while (j >= 0 && /\s/.test(text[j])) j -= 1;
+    while (j >= 0 && (kind[j] === COMMENT || /\s/.test(text[j]))) j -= 1;
     if (j < 0) return true;
     if (/[\w$]/.test(text[j])) {
       let k = j;
@@ -563,12 +599,18 @@ function lex(text) {
   return { kind, ends, texts };
 }
 
-// The messages of `text` by line: Map<line index, string[]>. Each is the text of the string or template literal that sits at the message position of an
+// The offset at which each line of `text` starts. The patterns and the reports speak of lines, and the lexer of offsets.
+function lineStartsOf(text) {
+  const starts = [0];
+  for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n', at + 1)) starts.push(at + 1);
+  return starts;
+}
+
+// The messages of `text` by line: Map<line index, string[]>. Each is the text of the string or template literal that sits at a message position of an
 // assertion or a skip (MESSAGE_ARGUMENT) — a template's own text, not the code of its `${ }` — credited to the line it is written on.
-function messageLiterals(text) {
-  const { kind, ends, texts } = lex(text);
-  const lineStarts = [0];
-  for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n', at + 1)) lineStarts.push(at + 1);
+function messageLiterals(text, lexed = lex(text)) {
+  const { kind, ends, texts } = lexed;
+  const lineStarts = lineStartsOf(text);
   const lineOf = (offset) => {
     let low = 0;
     let high = lineStarts.length - 1;
@@ -576,9 +618,21 @@ function messageLiterals(text) {
     return low;
   };
   const found = new Map();
+  // One string or template and nothing else is a message: `'a' + b` and `fn('a')` are not, nor is a matcher such as `/a/` or `{ message: 'a' }`.
+  const read = (literal) => {
+    if (literal.from < 0 || ends.get(literal.from) !== literal.to) return;
+    // Its own text by line, so a pointer's shape on one line survives an interpolation on another.
+    const written = new Map();
+    for (const [start, stop] of texts.get(literal.from) || []) {
+      for (let at = start; at < stop; at += 1) {
+        if (text[at] !== '\n' && text[at] !== '\r') written.set(lineOf(at), (written.get(lineOf(at)) || '') + text[at]);
+      }
+    }
+    for (const [line, piece] of written) found.set(line, [...(found.get(line) || []), piece]);
+  };
   for (const call of text.matchAll(CALLEE)) {
     if (kind[call.index] !== CODE) continue;
-    const position = MESSAGE_ARGUMENT[call[1]];
+    const positions = [].concat(MESSAGE_ARGUMENT[call[1]] ?? []);
     // The top-level arguments: `[from, to)` of each, without the white space and comments around it.
     const args = [];
     let depth = 0;
@@ -598,24 +652,55 @@ function messageLiterals(text) {
       if (from < 0) from = at;
       to = at + 1;
     }
-    if (!closed || position === undefined || args.length <= position || args[position].from < 0) continue;
-    const literal = args[position];
-    // One string or template and nothing else: `'a' + b` and `fn('a')` are not a message.
-    if (ends.get(literal.from) !== literal.to) continue;
-    // Its own text by line, so a pointer's shape on one line survives an interpolation on another.
-    const written = new Map();
-    for (const [start, stop] of texts.get(literal.from) || []) {
-      for (let at = start; at < stop; at += 1) {
-        if (text[at] !== '\n' && text[at] !== '\r') written.set(lineOf(at), (written.get(lineOf(at)) || '') + text[at]);
-      }
-    }
-    for (const [line, piece] of written) found.set(line, [...(found.get(line) || []), piece]);
+    if (!closed) continue;
+    for (const position of positions) if (position < args.length) read(args[position]);
   }
   return found;
 }
 
-// The part of `line` that is prose: a whole comment line, the comment after code (`foo(); // why`), or any
-// Markdown line outside a fenced code block. Null for code.
+// The title of a test that opens `line`: the literal after `test(` and its kin, without its quotes. Null when the line opens no test.
+function titleOf(line) {
+  const title = TITLE_LITERAL.exec(line);
+  return title ? title[2] : null;
+}
+
+// What a person wrote in a JavaScript, TypeScript or JSON file, by line index, read with the lexer so that the text of a string, a template or a regular
+// expression is data however it reads:
+//   prose     Map<line, string>    the comments on the line: `// why` after `foo();`, `/* why */` in the middle of one, the part of a block comment on it
+//   titles    Map<line, string>    the title of a test call that opens the line as code: `test('a page keeps its key', async () => {`
+//   messages  Map<line, string[]>  see messageLiterals
+// A line that starts with `//`, `#` or `test(` inside a template or a string is none of these, though it reads like all three: the text of a fixture must not
+// fail the guard. A comment is what `lex` calls one, so the lines of a block comment count with or without a star, and `//why` with no space counts too.
+function readSource(text) {
+  const lexed = lex(text);
+  const { kind } = lexed;
+  const starts = lineStartsOf(text);
+  const prose = new Map();
+  const titles = new Map();
+  starts.forEach((from, index) => {
+    // The line without its break, as `text.split(/\r?\n/)` cuts it: the rows of a scan are made that way.
+    let to = index + 1 < starts.length ? starts[index + 1] - 1 : text.length;
+    if (to > from && text[to - 1] === '\r') to -= 1;
+    const pieces = [];
+    for (let at = from; at < to;) {
+      if (kind[at] !== COMMENT) { at += 1; continue; }
+      let end = at;
+      while (end < to && kind[end] === COMMENT) end += 1;
+      const piece = text.slice(at, end);
+      if (piece.trim()) pieces.push(piece);
+      at = end;
+    }
+    if (pieces.length) prose.set(index, pieces.join('\n'));
+    const line = text.slice(from, to);
+    const title = titleOf(line);
+    // The pattern is anchored on the line's first character, so that character decides whether the call is code.
+    if (title !== null && kind[from + line.search(/\S/)] === CODE) titles.set(index, title);
+  });
+  return { prose, titles, messages: messageLiterals(text, lexed) };
+}
+
+// The part of `line` that is prose in a file `lex` cannot read: a whole Markdown line outside a fenced code block, and in any other text file a whole
+// comment line or the comment after code (`foo(); // why`), judged by the look of the line. Null for code.
 function proseOf(file, line, inFence) {
   if (/\.md$/i.test(file)) return inFence ? null : line;
   if (COMMENT_LEAD.test(line)) return line;
@@ -625,15 +710,12 @@ function proseOf(file, line, inFence) {
 
 // What a person wrote for a reader, and not the data beside it: the prose, the title of a test, and the messages of the assertions and skips written on the
 // line (found by their position: see messageLiterals). Null for code, a JSON value, and a Markdown code fence (`prose` is already null there, and a fence
-// is never searched for titles).
-function noteOf(file, line, prose, messages) {
+// has no title and no message).
+function noteOf(prose, title, messages) {
   const parts = [];
   if (prose !== null) parts.push(prose);
-  if (!/\.md$/i.test(file)) {
-    const title = TITLE_LITERAL.exec(line);
-    if (title) parts.push(title[2]);
-    if (messages) parts.push(...messages);
-  }
+  if (title !== null) parts.push(title);
+  if (messages) parts.push(...messages);
   return parts.length ? parts.join('\n') : null;
 }
 
@@ -645,14 +727,15 @@ function matches(p, row) {
 
 function scanText(file, text) {
   const markdown = /\.md$/i.test(file);
-  const messages = SOURCE_FILE.test(file) ? messageLiterals(text) : new Map();
+  // JavaScript, TypeScript and JSON are read token by token; any other file is read by the look of its lines.
+  const source = LEXED_FILE.test(file) ? readSource(text) : null;
   let inFence = false;
   const rows = text.split(/\r?\n/).map((line, index) => {
     // A fence line toggles the state and is itself code: ```js
     if (markdown && /^\s*(?:```|~~~)/.test(line)) inFence = !inFence;
-    const prose = proseOf(file, line, inFence);
-    const title = markdown ? null : TITLE_LITERAL.exec(line);
-    return { line, index, prose, note: noteOf(file, line, prose, messages.get(index)), title: title ? title[2] : null };
+    const prose = source ? (source.prose.get(index) ?? null) : proseOf(file, line, inFence);
+    const title = markdown ? null : source ? (source.titles.get(index) ?? null) : titleOf(line);
+    return { line, index, prose, note: noteOf(prose, title, source ? source.messages.get(index) : null), title };
   });
   const hits = [];
   const flagged = new Set();
@@ -773,8 +856,9 @@ test('an assertion\'s message is the argument after what it compares: the second
   assert.deepEqual(names("assert.ok('Task 12: a value');"), []);
   assert.deepEqual(names("assert.match(text, /Task 12: gate/, 'Task 12: the verify gate');"), ['1:plan-task-label']);
   assert.deepEqual(names("assert.match(text, /Task-6: (Plan 4)/);"), []);
-  // assert.throws takes (fn[, error][, message]): with two arguments the second may be the error to expect, so only a third is a message.
-  assert.deepEqual(names("assert.throws(run, 'Task-6: Overview');"), []);
+  // assert.throws takes (fn[, error][, message]): a string in the place of the optional error is the message, a matcher there is not, and the third argument is.
+  assert.deepEqual(names("assert.throws(run, 'Task-6: Overview');"), ['1:plan-task-label']);
+  assert.deepEqual(names("assert.throws(run, /Task-6: Overview/);"), []);
   assert.deepEqual(names("assert.throws(run, /gate/, 'Task 12: the verify gate');"), ['1:plan-task-label']);
   assert.deepEqual(names("assert.fail('the step is not landed (Task 3)');"), ['1:plan-task-in-parens']);
   assert.deepEqual(names("assert(ok, 'Task 12: the verify gate');"), ['1:plan-task-label']);
@@ -817,6 +901,8 @@ test('the reader of messages follows the language: a division is not a regular e
   assert.deepEqual(messages("assert.ok(a / b > 1 && c / d, 'x / y');"), ['0:x / y'], 'two divisions, and a slash in the message');
   assert.deepEqual(messages("assert.ok(/'/.test(s), 'm');"), ['0:m'], 'a quote inside a regular expression opens no string');
   assert.deepEqual(messages("assert.ok(/[/']+/.test(s), 'm');"), ['0:m'], 'a slash inside a class does not close the regular expression');
+  assert.deepEqual(messages("// why\n/'/.test(s) && assert.ok(x, 'm');"), ['1:m'], 'a regular expression that opens the line after a comment is one');
+  assert.deepEqual(messages("/* why */ /'/.test(s) && assert.ok(x, 'm');"), ['0:m'], 'and so is one after a block comment on the same line');
   assert.deepEqual(messages("assert.ok(`a ${f(`b ${c}`, 'd, e')} f`.length, 'm');"), ['0:m'], 'a template inside the expression of a template');
   assert.deepEqual(messages('assert.ok(ok, `one\ntwo ${n} three`);'), ['0:one', '1:two  three'], 'a template over two lines is credited to each');
   assert.deepEqual(messages("assert.ok(x, /* why, (really) */ 'm');"), ['0:m'], 'a comment inside the arguments');
@@ -825,7 +911,83 @@ test('the reader of messages follows the language: a division is not a regular e
   assert.deepEqual(messages("assert.ok(x, 'it\\'s, fine');"), ["0:it\\'s, fine"], 'an escaped quote');
   assert.deepEqual(messages("assert.ok(x, 'unfinished"), [], 'a call that does not close says nothing');
   assert.deepEqual(messages("assert.ok(x, 'a'); assert.equal(y, 'b'); assert.equal(y, 'c', 'd');"), ['0:a|d']);
+  assert.deepEqual(messages("assert.throws(f, 'a'); assert.throws(f, /b/, 'c'); assert.equal(x, 'd');"), ['0:a|c'], 'a string in the place of the optional error, a matcher and a third argument');
 });
+
+// Text that reads like a comment or a test call but sits in a string, a template, a regular expression or a JSON value is data: a `//` opens a comment in
+// code only, a template's own lines are text, and JSON holds no comment. One test per shape, so a failure names it.
+for (const [label, file, text] of [
+  ['a JSON value that holds " // "', 'fixture.json', '{"app":{"name":"Task 1 // (Plan 2)"}}'],
+  ['an object literal that holds " // "', 'fixture.js', 'const source = { name: "Task 1 // (Plan 2)" };'],
+  ['the expected value of an assertion that holds " // "', 'fixture.js', "assert.equal(label, 'Task 1 // (Plan 2)');"],
+  ['a template line that reads like a comment', 'fixture.js', 'const source = `\n// (Plan 2)\n`;'],
+  ['a template line that reads like a test call', 'fixture.js', 'const source = `\ntest("Task 12: overview", () => {});\n`;'],
+  ['a template line that reads like a test title that opens with an id', 'fixture.js', "const source = `\ntest('I1: apply refuses a partial range', () => {});\n`;"],
+]) {
+  test(`${label} is data, not prose`, () => assert.deepEqual(scanText(file, text), []));
+}
+
+test('a comment, a test title and a message are read in code, beside strings, templates and regular expressions that hold the same characters', () => {
+  const names = (file, text) => scanText(file, text).map((hit) => `${hit.line}:${hit.name}`);
+  // A comment after code is a comment, whatever the code before it holds: a string with " // ", a regular expression, a template and its `${ }`.
+  assert.deepEqual(names('a.js', 'const source = "plain"; // (Plan 2)'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'const url = "http://x"; // (Plan 2)'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', "const note = 'Task 1 // x'; // (Plan 2)"), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'const rule = /\\/\\//; // (Plan 2)'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', "// why\n/'/.test(s) && run(); // (Plan 2)"), ['2:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'const rows = `a\n// text\nb`; // (Plan 2)'), ['3:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'const label = `a ${b /* (Plan 2) */} c`;'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'const label = `a ${b // (Plan 2)\n} c`;'), ['1:plan-task-in-parens']);
+  // A block comment is prose on every line it covers, with a leading star or not, and one in the middle of a line is read.
+  assert.deepEqual(names('a.js', ['/*', ' * Task 12: the verify gate', ' */'].join('\n')), ['2:plan-task-label']);
+  assert.deepEqual(names('a.js', ['/*', '   Task 12: the verify gate', '*/'].join('\n')), ['2:plan-task-label']);
+  assert.deepEqual(names('a.js', 'run(/* (Plan 2) */ 1);'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'run(1); //(Plan 2)'), ['1:plan-task-in-parens']);
+  // Every comment on a line is read, not the first alone, and the two kinds of line break cut lines alike.
+  assert.deepEqual(names('a.js', 'run(/* fine */ 1); /* (Plan 2) */'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'const doc = `\r\n// (Plan 2)\r\n`;\r\nrun(); // (Plan 2)\r\n'), ['4:plan-task-in-parens']);
+  // A line that opens like a comment is one in code only: not in a template, not in a string that goes on to the next line.
+  assert.deepEqual(names('a.js', 'const doc = `\n# R4 - the retry rule\n * R4 - the retry rule\n`;'), []);
+  assert.deepEqual(names('a.js', "const doc = 'one\\\n// (Plan 2)';"), []);
+  // JSON holds no comment: a string is data, while a comment in a JSON file with comments is read, and so is each line of a file of JSON lines.
+  assert.deepEqual(names('f.json', '{ "a": 1 } // (Plan 2)'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('f.json', ['{ "a": 1,', '  "b": "x // (Plan 2)" }'].join('\n')), []);
+  assert.deepEqual(names('t.jsonl', ['{"a":"x // (Plan 2)"}', '{"b":"// R4 - the retry rule"}'].join('\n')), []);
+  // The module flavours of JavaScript and TypeScript are source files too.
+  for (const file of ['a.mjs', 'a.cjs', 'a.jsx', 'a.ts', 'a.mts', 'a.cts', 'a.tsx']) assert.deepEqual(names(file, 'const note = "x // (Plan 2)";'), [], file);
+  // Any other file is read by its lines, as before: a line that opens like a comment, or a comment after a space.
+  assert.deepEqual(names('f.xml', '<!-- a pointer (Plan 2) -->'), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('f.txt', 'rows // (Plan 2)'), ['1:plan-task-in-parens']);
+  // A test title is read where the test call is code: not in a template, but on the line after one, and a title that opens with an id is a title.
+  assert.deepEqual(names('a.js', ['const sample = `', 'test("Task-6: in a template", () => {});', '`;', "test('Task-6: in code', () => {});"].join('\n')), ['4:plan-task-label']);
+  assert.deepEqual(names('a.js', ['const sample = `', "test('I1: in a template', () => {});", '`;', "test('I1: in code', () => {});"].join('\n')), ['4:id-title-prefix']);
+  assert.deepEqual(names('a.js', "  it.skip('R4: the retry is idempotent', () => {});"), ['1:id-title-prefix']);
+  // A message that holds " // " is still a message, read by its position.
+  assert.deepEqual(names('a.js', "assert.equal(label, 'x', 'Task 1 // (Plan 2)');"), ['1:plan-task-in-parens']);
+  assert.deepEqual(names('a.js', 'assert.ok(ok, `Task 1 // (Plan 2)`);'), ['1:plan-task-in-parens']);
+});
+
+// assert.throws(fn[, error][, message]) and its kin: the error to expect is optional, and a string in its place is the message, as Node reads it
+// (https://nodejs.org/api/assert.html#assertthrowsfn-error-message). A matcher there is not a message, and the third argument is. One test per assertion.
+for (const name of ['throws', 'rejects', 'doesNotThrow', 'doesNotReject']) {
+  test(`assert.${name}: a string in the place of the optional error is its message; a matcher is not, and the third argument is`, () => {
+    const names = (text) => scanText('a.js', text).map((hit) => `${hit.line}:${hit.name}`);
+    assert.deepEqual(names(`assert.${name}(run, 'Task 12: the verify gate');`), ['1:plan-task-label']);
+    assert.deepEqual(names(`assert.${name}(run, \`Task 12: the verify gate\`);`), ['1:plan-task-label']);
+    assert.deepEqual(names(`assert.${name}(run, 'the step is not landed (Task 3)');`), ['1:plan-task-in-parens']);
+    assert.deepEqual(names(`assert.${name}(\n  run,\n  'Task 12: the verify gate',\n);`), ['3:plan-task-label']);
+    assert.deepEqual(names(`assert.${name}(run, /Task-6: Overview/);`), []);
+    assert.deepEqual(names(`assert.${name}(run, { message: 'Task 12: the verify gate' });`), []);
+    assert.deepEqual(names(`assert.${name}(run, (error) => error.message === 'Task-6: Overview');`), []);
+    assert.deepEqual(names(`assert.${name}(run, TypeError);`), []);
+    assert.deepEqual(names(`assert.${name}(run, /gate/, 'Task 12: the verify gate');`), ['1:plan-task-label']);
+    assert.deepEqual(names(`assert.${name}(run, { code: 'E_GATE' }, 'Task 12: the verify gate');`), ['1:plan-task-label']);
+    assert.deepEqual(names(`assert.${name}(run, TypeError, 'the step is not landed (Task 3)');`), ['1:plan-task-in-parens']);
+    // An expression is not a literal: its text says nothing to a reader of the source.
+    assert.deepEqual(names(`assert.${name}(run, 'Task 12: ' + gate);`), []);
+    assert.deepEqual(names(`assert.${name}(run, label('Task 12: the verify gate'));`), []);
+  });
+}
 
 test('a numbered finding heading, the numbered titles under it and a count of a review\'s findings are flagged; ordinary numbered tests and fixture values are not', () => {
   const names = (file, text) => scanText(file, text).map((hit) => `${hit.line}:${hit.name}`);

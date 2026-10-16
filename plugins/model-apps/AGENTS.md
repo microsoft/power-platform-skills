@@ -89,8 +89,12 @@ plain words a pointer is made of ("Task 1", "Addendum") are data when they are a
 name that holds them in parentheses is still a name), an assertion's expected value or inside a code
 fence, and are flagged only in a pointer's shape in prose or in a message. A message is found by its
 position: the argument after what an assertion compares, so the second argument of a two-argument
-`assert.equal` is data and the third a message. Its header lists the patterns and what is kept on purpose
-(generic provenance such as "found in review", and pointers a reader can follow such as "design §13.1").
+`assert.equal` is data and the third a message; the error of `assert.throws` and its kin is optional, so
+a string in its place is the message and a matcher is not. A comment and a test title are found from the
+code's own tokens, in JavaScript, TypeScript and JSON: a `//` inside a string, a template or a JSON value,
+and a template line that reads like a comment or a test call, are data. Its header lists the patterns and
+what is kept on purpose (generic provenance such as "found in review", and pointers a reader can follow
+such as "design §13.1").
 
 ## app-builder — intent → model-driven app
 
