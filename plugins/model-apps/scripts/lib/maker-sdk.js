@@ -18,13 +18,18 @@
 // client the factory gives: the SDK's reads through the Power Platform API (a Test org's, and a connector's tables) need a `powerPlatformApiClient`, and the
 // tables a `connectorRuntimeClient` too, which an Azure CLI token cannot back (lib/sdk-first.js, "No Power Platform API client").
 //
-// The `httpClient` the caller names is handed to the SDK with one addition (lib/app-header-text.js): a PATCH of an app module row whose name or description is not a string — through `patch`, through
+// The `httpClient` the caller names is handed to the SDK with two additions, each of which looks at one kind of request and leaves every other request as it is. The first (lib/collection-answers.js): the read of the environment's table list must answer a list. The SDK's findTables() reads a 2xx with no `value` list
+// as "no tables" (`body.value ?? []`) — and a sign-in or proxy page, `{}` and `null` are such answers — and every script that asks it turns "no tables" into a conclusion: a table is missing, create it, nothing clashes, it is not a
+// system table, so delete it. Guarded here, once, no script that makes an SDK can forget it, and no request is added or changed: only that answer is looked at. It then fails as an SdkError (TABLES_UNREADABLE), which the
+// bundle rethrows as it is.
+// The second (lib/app-header-text.js): a PATCH of an app module row whose name or description is not a string — through `patch`, through
 // `patchRaw`, or in a change set a caller sends raw (`dataverse.postBatch`) — is refused before it is sent. The SDK's push of an app writes the header from the workspace copy whenever its own comparison
 // read of the header cannot be made, and the build never edits a header text that is not plain, so the request itself is the last place to stop one. Guarded here, once, so no script that makes an SDK
 // can leave an app push unguarded (tests/maker-sdk.test.js pins that no script makes one another way); the refusal is an SdkError (APP_HEADER_NOT_PLAIN_TEXT), which the bundle rethrows as it is. No request
 // is added or changed: only writes of that row are looked at, and every other member of the client runs on the client itself, so a client whose methods keep private state still works.
 const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
+const { guardTableLists } = require('./collection-answers.js');
 const { guardAppHeaderWrites } = require('./app-header-text.js');
 
 // `create` given the vendored compiler unless the options name one, and — only for a caller that asked — the Power Apps service client
@@ -33,6 +38,7 @@ function withVendoredCompiler(create) {
   return (options) => {
     const { connectivity, ...forSdk } = options || {};
     const made = { typescript: () => loadVendoredTypeScript(), ...forSdk };
+    if (made.httpClient) made.httpClient = guardTableLists(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.httpClient) made.httpClient = guardAppHeaderWrites(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (connectivity && made.powerAppsServiceClient === undefined) {
       // Required here, not at the top: the client pulls in the Azure CLI token code, which an instance that never reads connections does not need.

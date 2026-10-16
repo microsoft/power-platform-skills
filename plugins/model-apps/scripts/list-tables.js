@@ -41,6 +41,9 @@
 //   `isCustom` is what `pac` printed as Type `Custom` (true) or `Standard` (false); every table a managed solution brought counts as custom. A table with
 //   no display name has "".
 //   A failed read: { "ok": false, "error": "<message>", "code": "<SDK error code, when it has one>" } on stdout and the message on stderr.
+//   An answer that is not a list of tables is a failed read too, with code TABLES_UNREADABLE: the platform answered a 2xx whose body has no `value` list — a sign-in or proxy page, `{}`, `null`. The SDK
+//   reads such an answer as "no tables" (`value ?? []`), which `--exact` would report as every searched table `missing` and the planner read as "create it"; lib/maker-sdk.js holds that one answer to being
+//   a list (lib/collection-answers.js), so the read fails, and only `{ "value": [] }` is an empty answer.
 //
 // Exit codes: 0 read; 1 usage error (stderr names the flag and the usage, stdout stays empty) or a failure to read.
 

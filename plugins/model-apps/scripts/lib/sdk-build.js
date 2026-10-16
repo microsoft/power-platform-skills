@@ -22,6 +22,7 @@ const { leftOnDiskWarning } = require('./left-on-disk.js');
 // The pages lock is taken through the snapshot lease's exclusive create-and-reclaim, and reclaimed only from a build that is provably gone.
 const { acquireLease, releaseLease } = require('./apply-snapshot-store.js');
 const { ownerStamp, ownerState, describeOwner } = require('./process-owner.js');
+const { unreadableAnswer } = require('./collection-answers.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
@@ -5756,12 +5757,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // `findTables` is the SDK's only table-existence surface and takes no server-side filter, so
         // the match is made here. It runs ONLY on the create path (never on reuse), and the SDK
         // caches the metadata read, so this does not add a per-build enumeration.
+        //
+        // The list is read through lib/maker-sdk.js, which refuses an answer that is no list of tables (a sign-in or proxy
+        // page, `{}`, `null`) instead of reading it as "no table owns this name" — the one answer of the three ("owns it",
+        // "owns nothing", "could not be asked") the check must not draw a conclusion from. The check stays a diagnostic: the
+        // create below goes ahead, and the platform rejects a real collision itself. What changes is that it says so when it
+        // could not be made.
         if (!clash && typeof provision.findTables === 'function') {
           try {
             const tables = await provision.findTables();
             const owner = (tables || []).find((t) => t && String(t.logicalName || '').toLowerCase() === unique);
             if (owner) clash = `the table '${owner.logicalName}'`;
-          } catch { /* diagnostic only */ }
+          } catch (e) {
+            // The first sentence of the failure says what was read; the rest advises a script that stopped, and this build goes on.
+            if (unreadableAnswer(e) && typeof opts.warn === 'function') {
+              opts.warn(`business process flow "${flow.name}" on ${flow.entity}: could not check whether a table already holds the name '${unique}' it derives — ${String(e.message).split('. ')[0]}. The flow is created anyway; if the create fails over a name already in use, rename the flow.`);
+            }
+          }
         }
         if (clash) {
           throw new BuildHalt(

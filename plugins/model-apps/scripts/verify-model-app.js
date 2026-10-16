@@ -205,6 +205,10 @@ function readerFor(sdk, appUnique, opts) {
   // One catalog scan per verification pass, not per reader. A reader is reused across verifies;
   // keeping the first scan would report a table created between passes as missing, and a rejected
   // scan would fail every later pass. verifySpec calls beginVerificationPass at the start of each.
+  //
+  // The scan is a failure when the answer is no list of tables (a sign-in or proxy page, `{}`, `null`: lib/maker-sdk.js
+  // refuses it, TABLES_UNREADABLE). Read as "no tables", it reported every declared table as missing — a verdict about
+  // the app from an answer that said nothing about it — and it is now the verify that fails, with the reason.
   let catalogP;
   // Set once verifySpec has ended this reader's page reads (endPageReads, below): no page read starts again until the next pass begins.
   let pageReadsEnded = false;

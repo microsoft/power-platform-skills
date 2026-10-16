@@ -66,6 +66,7 @@ const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { savedPageRows, currentLayerRow } = require('./app-components.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
+const { unreadableAnswer } = require('./collection-answers.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-sdk.js');
 const { readPageOwnership, readPendingCreations, recordPageTeardown, completePageDeletions, completePendingCreations } = require('./page-ownership-records.js');
@@ -1070,6 +1071,15 @@ const KIND_HANDLERS = {
     //    Dataverse refuses to delete it, so a delete attempt would only surface a noisy error.
     // A table that can't be discovered is treated as already-gone: fall through to the delete
     // call, which tolerates the cosmetic/absent 404 (see tolerateNotFound).
+    //
+    // One failure of that read is not "can't be discovered": an answer that is no list of tables — a
+    // sign-in or proxy page, `{}`, `null`, which lib/maker-sdk.js turns into TABLES_UNREADABLE — says the
+    // environment is not answering as Dataverse. The SDK reads it as "no tables", so the system-table check
+    // below would go unmade; and where every answer is such a page, the DELETE that follows is answered
+    // with one too, which the SDK takes for done (measured on the real bundle) — a teardown that reports a
+    // table deleted that nothing deleted, on the one operation whose report must be trustworthy. So this
+    // read fails CLOSED, as the ownership reads above do: the step fails with the reason, nothing is
+    // deleted, and a re-run once the environment answers finishes it.
     async resolve(sdk, target) {
       if (target.existing) {
         return { items: [], skipReason: 'reused table (existing: true) — not created by this build' };
@@ -1078,7 +1088,13 @@ const KIND_HANDLERS = {
       try {
         const hits = await sdk.findTables(target.logical, { top: 50 });
         table = (hits || []).find((t) => String(t.logicalName).toLowerCase() === target.logical) || null;
-      } catch { table = null; }
+      } catch (err) {
+        const unreadable = unreadableAnswer(err);
+        if (unreadable) {
+          throw Object.assign(new Error(`table '${target.logical}' was not deleted: ${unreadable.message}`), { code: unreadable.code, cause: unreadable, failClosed: true });
+        }
+        table = null;
+      }
       if (table && table.isCustom === false) {
         return { items: [], skipReason: 'system table — not created by this build' };
       }

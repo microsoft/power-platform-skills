@@ -33,6 +33,7 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const { odataLit } = require('./odata.js');
 // The one PublishXml that publishes tables by name (also the pre-app publish of sdk-build.js).
 const { publishTablesXml } = require('./table-publish.js');
+const { unreadableAnswer } = require('./collection-answers.js');
 const { readRelationshipsOf, findRelationshipHolder, sameRelationship, describeRelationship, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
 // Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
 // construction-time option, so the LCID must be known before the SDK that would normally read it.
@@ -1532,7 +1533,18 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
     // because assuming absent turns a transient read failure into a duplicate-create attempt.
   }
   if (typeof (provision && provision.findTables) !== 'function') return null;
-  const hits = await provision.findTables(schemaName, { top: 50 });
+  // The fallback is a read of the whole table list, and its answer decides between "reuse" and "create": `findTables`
+  // reads a 2xx that is no list of tables (a sign-in or proxy page, `{}`, `null`) as "no tables", so — the narrow read
+  // having been inconclusive too — a table that exists would be created again. lib/maker-sdk.js refuses such an answer
+  // (TABLES_UNREADABLE), and that is as inconclusive as the narrow read was: the build stops here, before any create, as
+  // it does for a localized table above; a plan reads it as `unknown`. Any other failure of the read is the read's own.
+  let hits;
+  try {
+    hits = await provision.findTables(schemaName, { top: 50 });
+  } catch (err) {
+    if (!unreadableAnswer(err)) throw err;
+    throw new BuildHalt(`could not determine whether table '${logical}' already exists: ${err.message}`, { phase: 'data-model', code: 'table-list-unreadable', recoverable: true, cause: err });
+  }
   return (hits || []).find((t) => t.logicalName === logical) || null;
 }
 

@@ -3,7 +3,8 @@
 // connector.js, solution-settings.js, genpage-upload.js and genpage.js replaced the `pac` commands those documents used to name (pac-replaced-commands.test.js and
 // pac-fallback-commands.test.js pin that no SCRIPT runs one). Nothing executes a document, so without this a regression to the old command — or a flag the script does
 // not have — is invisible until an agent runs it. Three pins:
-//   1. the `pac` commands the documents name are exactly the ones that stay: signing in, the environment and the version, and a connector's tables (no script lists them);
+//   1. the `pac` commands the documents name are exactly the ones that stay: signing in, the environment (`pac org who`) and the version, and a connector's tables (no script lists them) — in the
+//      skills, agents, references, docs and README as written, and in AGENTS.md, the contributor guide, which may also describe what a script replaced or what stands behind it, as a sentence;
 //   2. every command a document gives for one of the eight scripts uses that script's own subcommand and flags (and the table of them is itself checked against the script);
 //   3. each flow's document names the script that does its work, and says what a failed read means.
 const { test } = require('node:test');
@@ -40,26 +41,29 @@ const squash = (text) => text.replace(/^[ \t]*>[ \t]?/gm, '').replace(/\s+/g, ' 
 // Every other `pac` command a document names is one a script replaced, or one only a script runs: `pac model list`, `create`, `list-tables`, `list-languages`, every page verb of
 // `pac model genpage` (`upload`, `list`, `download`, `generate-types`, `add`, `transpile` — genpage-upload.js and genpage.js do them), the two connector verbs and `pac connection list`
 // (connector.js and list-connections.js run them as fallbacks, and a document never tells the agent to), and the two `pac solution` commands of the deployment settings
-// (solution-settings.js's fallbacks).
+// (solution-settings.js's fallbacks). Of the `org` family only `pac org who` stays: the pre-flight reads the environment with it, and `pac org list`, `select` and the rest are not commands a document gives.
 const STAYS = new Set(['list-connector-tables']);
 // The page verbs of `pac model genpage` the scripts replaced. No document names one as the way to do anything.
 const REPLACED_PAGE_VERBS = ['upload', 'list', 'download', 'generate-types', 'add', 'transpile'];
-// A `pac` command in a document: the first word names the group, and up to two more words name the command (`pac model genpage list --app-id`). The pattern is case-sensitive on purpose:
-// "PAC CLI" is the product, `pac` the command, and "pac is Y" in a sentence names no group.
-const PAC_COMMAND = /\bpac(?:\.exe)?\s+(auth|org|model|solution|connection|package|pcf|canvas|admin|application|data|env|help|install|use)\b((?:[ \t]+[a-z][\w-]*){0,2})/g;
+// A `pac` command in a document: the first word names the group, and up to two more words name the command (`pac model genpage list --app-id`). `pac.exe` and `pac.cmd` are the program under the
+// names a Windows install gives it, and a command may be written in any letter case (`PAC.EXE MODEL LIST`): the words are lower-cased before they are judged. "PAC CLI" is the product, and
+// "pac is Y" a sentence: neither names a group.
+const PAC_COMMAND = /\bpac(?:\.exe|\.cmd)?\s+(auth|org|model|solution|connection|package|pcf|canvas|admin|application|data|env|help|install|use)\b((?:[ \t]+[a-z][\w-]*){0,2})/gi;
 
-function pacCommands(text) {
+// `lineText` is the text whose lines are counted when it is not `text`: the same characters at the same offsets, so a line number is the one the file has (see `joinWrappedSpans`, which turns line breaks into spaces).
+function pacCommands(text, lineText = text) {
   const found = [];
   for (const m of text.matchAll(PAC_COMMAND)) {
-    const words = [m[1], ...m[2].trim().split(/\s+/).filter(Boolean)];
-    found.push({ words, at: text.slice(0, m.index).split('\n').length });
+    const words = [m[1], ...m[2].trim().split(/\s+/).filter(Boolean)].map((word) => word.toLowerCase());
+    found.push({ words, at: lineText.slice(0, m.index).split('\n').length, index: m.index });
   }
   return found;
 }
 
 function staysPac(words) {
   const [group, ...rest] = words;
-  if (group === 'help' || group === 'auth' || group === 'org') return true;
+  if (group === 'help' || group === 'auth') return true;
+  if (group === 'org') return rest[0] === 'who';
   if (group !== 'model') return false;
   // `pac model genpage …`: the family named on its own in a sentence is not a command; a verb must be one that stays.
   return rest[0] === 'genpage' && (rest.length === 1 || STAYS.has(rest[1]));
@@ -141,6 +145,287 @@ test('no document names the retired type-generator verb or the pac transpile', (
     }
   }
   assert.deepEqual(found, []);
+});
+
+test('a command written as `pac.exe` or `pac.cmd`, or in any letter case, is read as the command it is — what stays stays in any case, and the product and a sentence are no command', () => {
+  for (const spelling of ['pac', 'pac.exe', 'pac.cmd', 'PAC', 'Pac.Exe', 'PAC.CMD']) {
+    assert.deepEqual(strayCommands(`Run \`${spelling} model list --environment x\`.`).map(({ command }) => command), ['pac model list'], spelling);
+    assert.deepEqual(strayCommands(`${spelling} MODEL GENPAGE UPLOAD --page-id z`).map(({ command }) => command), ['pac model genpage upload'], spelling);
+    assert.deepEqual(strayCommands(`\`\`\`powershell\n${spelling} Solution Import --path a.zip\n\`\`\``).map(({ command }) => command), ['pac solution import'], spelling);
+    assert.deepEqual(strayCommands(`${spelling} AUTH LIST; ${spelling} Org Who; ${spelling} HELP; ${spelling} Model Genpage List-Connector-Tables`), [], spelling);
+  }
+  assert.deepEqual(strayCommands('PAC CLI > 2.10.0; the PAC is Y; Pac-Man; a pac of cards; unpac model list; spac.exe model list'), []);
+});
+
+test('of the `pac org` family only `pac org who` stays: `pac org list`, `select`, `fetch-latest-version` and the family on its own are commands a document does not give', () => {
+  assert.deepEqual(strayCommands('Run `pac org who` to see the environment; PAC ORG WHO and pac.exe org who too.'), []);
+  assert.deepEqual(
+    strayCommands('Run `pac org list`, then `pac org select --environment x`, `PAC.EXE ORG FETCH-LATEST-VERSION`, and `pac org`.').map(({ command }) => command),
+    ['pac org list', 'pac org select', 'pac org fetch-latest-version', 'pac org'],
+  );
+  assert.equal(staysPac(['org', 'who']), true);
+  for (const words of [['org'], ['org', 'list'], ['org', 'select'], ['org', 'wh'], ['org', 'whoami']]) assert.equal(staysPac(words), false, words.join(' '));
+  for (const words of [['auth'], ['auth', 'list'], ['auth', 'create'], ['help']]) assert.equal(staysPac(words), true, words.join(' '));
+});
+
+// --- 1b. AGENTS.md: the contributor guide, held to the same rule ---------------------------------------------------------------------------------------------------
+// AGENTS.md is current guidance — for whoever works on the plugin, an agent included — so it is scanned, with the same reader and the same commands that stay. It also has to say what each script replaced
+// and which `pac` command stands behind a script as its fallback, by name, and it does that in sentences: "the replacement for `pac model list`", "`pac connection list` runs only where the SDK refuses".
+// So it may name those, as many times as it needs to: the guide is edited by many hands, and how often a sentence names a command says nothing about whether pac is used where it should not be. What it may not do is
+// USE pac where the plugin does not — name a command that the plugin neither keeps, replaced nor falls back to (a new `pac` use, which pac-allowlist.test.js has to name first), or offer one as a command to run: at the
+// start of a line, behind a prompt or a bullet, or right after an imperative ("Run `pac model list …`"). That is how a `pac` command that a script replaced cannot come back into the guide as an instruction, and how a
+// new `pac` use cannot be documented without being looked at. (CHANGELOG.md is the history of what the scripts replaced, and is not scanned.)
+//
+// What AGENTS.md may name besides what stays:
+//   replaced    the commands the scripts replaced, named in the sentence that says what replaced them or what the old command did
+//   fallbacks   run by a script only where the SDK refuses (lib/sdk-first.js), or by its pac-only path: described, never given to the agent
+const AGENTS_MD = path.join(PLUGIN, 'AGENTS.md');
+const AGENTS_MAY_NAME = new Set([
+  // replaced
+  'pac model list', 'pac model create', 'pac model list-tables', 'pac model list-languages',
+  ...REPLACED_PAGE_VERBS.map((verb) => `pac model genpage ${verb}`),
+  // fallbacks
+  'pac connection list',
+  'pac model genpage list-connector-operations', 'pac model genpage get-connector-schema',
+  'pac solution create-settings', 'pac solution import',
+]);
+// A group named with no verb (`pac model`, `pac solution`) is the family on its own, which is no command.
+const AGENTS_FAMILIES = new Set(['pac model', 'pac solution', 'pac connection']);
+// The pac starts that pac-allowlist.test.js names as exceptions (NAMED_ROUTES): the guide has to keep saying where pac is still started without a refusal of the SDK before it, or a start that is on the list and in
+// no document is one that nobody reading the guide knows about.
+const AGENTS_MUST_NAME = { 'the offline settings template': 'pac solution create-settings' };
+
+// `pac model\n  create` — hard-wrapped prose breaks a command inside a code span across two lines. A line break and its indentation inside a span read as spaces; each is replaced by as many, so every
+// offset stays the file's own. A line NUMBER does not: the joined text has fewer line breaks, so lines are counted in the original text and a command is judged on the original line it starts on (below).
+const joinWrappedSpans = (text) => text.replace(/`[^`\n]*\n[ \t]*[^`\n]*`/g, (span) => span.replace(/\n[ \t]*/g, (gap) => ' '.repeat(gap.length)));
+
+// The command a mention names: its group and verb (`pac model genpage list --app-id x` is `pac model genpage list`; `pac model list and` is `pac model list` — what follows the verb is prose or flags).
+function commandName(words) {
+  const [group, ...rest] = words;
+  return `pac ${[group, ...rest.slice(0, group === 'model' && rest[0] === 'genpage' ? 2 : 1)].join(' ')}`;
+}
+
+// The mentions of a command that does not stay, each with its line, its name, and whether it is OFFERED as a command to run. Two things offer one:
+//   - a line that is a command: `pac connection list --environment x`, `$ pac …`, `PS> pac …`, and in a list `- pac …`, `1. pac …`, `- [ ] pac …`, `> pac …`, each also with the command in a code span (``- `pac model list` ``);
+//   - a command right after an imperative in a sentence ("Run `pac model list`", "use PAC.EXE MODEL CREATE").
+// A mention in the voice of a description offers nothing: "the planner ran `pac model list-languages …`", "- `pac connection list` runs only where the SDK refuses", "`pac model create` → `apps.js create`". Nor does one
+// that says what NOT to run: "Do not use `pac model create`; use `apps.js create`" is the migration, said again, and the guide has to be free to say it. (AGENTS.md's file tree is a fenced block of sentences, so a fence
+// says nothing: the line does.)
+//
+// What may stand before a command that begins a line: block quotes (`> `), a list marker (`-`, `*`, `+`, `1.`, `1)`) with its task box (`[ ] `), a shell prompt (`$ `, `PS> `, `PS C:\repo> `) and the opening of a code span.
+// A code span at the start of a line with no marker and no prompt before it is the first words of a hard-wrapped sentence ("`pac model list …` runs only where the SDK refuses"), so only a list item or a prompt makes a
+// span a command line; a bare command is one whatever stands before it, as it always was (a fence, an indented block).
+const COMMAND_LEAD = /^[ \t]*(?:>[ \t]*)*(?<marker>(?:[-*+]|\d{1,3}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?(?<prompt>(?:\$|PS[^>\n]*>|>)[ \t]*)?(?<span>`{1,3})?(?=pac(?:\.exe|\.cmd)?\s)/i;
+// What follows a command and makes it the subject of a statement, not a command to run: a dash, an arrow, a colon or a parenthesis, or a verb in the voice of a description.
+//   - `pac model list` was replaced by `apps.js list`          - `pac model list-tables` → `list-tables.js`          * `pac connection list` runs only where the SDK refuses
+const DESCRIBED = /^(?:[\u2014\u2013\u2192(]|-{1,2}>|=>|:(?:\s|$)|-\s|,\s*(?:which|where|replaced|replacing|superseded|formerly|now|no\s+longer|since|because|the|an?|used|as)\b|(?:is|are|was|were|has|had|did|does|runs?|ran|replaced?|replaces|stays?|stood|stands?|still|now|no\s+longer|prints?|printed|returns?|returned|lists?|listed|creates?|created|names?|named|reads?|used|uses|means?)\b)/i;
+// Commands named together are described together: "- `pac model list` and `pac model create` were replaced by …" says what the verb after the last of them says of all of them.
+const COORDINATED = /^\s*(?:,|and|or|\/)\s*(?:(?:and|or)\s+)?`+[^`\n]*`+/i;
+function isCommandLine(line) {
+  const lead = COMMAND_LEAD.exec(line);
+  if (!lead) return false;
+  const { marker, prompt, span } = lead.groups;
+  if (span && !marker && !prompt) return false;
+  const rest = line.slice(lead[0].length);
+  const command = new RegExp(PAC_COMMAND.source, 'i').exec(rest);
+  if (!command) return true;
+  // The text after the command's own words (and after its closing backticks, when it is in a code span) is what says whether it is described.
+  const words = [command[1], ...command[2].trim().split(/\s+/).filter(Boolean)].map((word) => word.toLowerCase());
+  const named = commandName(words).split(' ').length;
+  const end = [...command[0].matchAll(/\S+/g)][named - 1];
+  let tail = rest.slice(end.index + end[0].length);
+  if (span) {
+    tail = tail.includes(span) ? tail.slice(tail.indexOf(span) + span.length) : '';
+    while (COORDINATED.test(tail)) tail = tail.replace(COORDINATED, '');
+  }
+  return !DESCRIBED.test(tail.trimStart());
+}
+// An imperative that ends the text before a command, with the code span or quote that opens the command: "Run `", "use the command `", 'Execute "'.
+const IMPERATIVE = /\b(?:run|use|call|execute|invoke|type|enter)\s+(?:the\s+(?:command\s+)?)?["'`]{0,3}$/i;
+// A negation right before the imperative, in the same clause: "Do not use", "don't run", "Never run", "must not call", "no longer run", "Avoid ... " — and no more than an adverb between them ("do not ever use"). A word that
+// is not an adverb ends the reach of the negation: "do not forget to run `pac model list`" is an instruction.
+const NEGATION = /(?:\b(?:do|does|did|should|must|shall|will|would|can|could)\s+not|\b(?:do|does|did|should|must|shall|will|would|can|could)n['\u2019]t|\bcannot|\bnever|\bno\s+longer|\bavoid|\bunder\s+no\s+circumstances|\bnot)(?:[\s,]+(?:ever|again|simply|just|also|manually|directly|yourself|anymore|any\s+more|under\s+any\s+circumstances))*[\s,]+$/i;
+// The end of a clause: a sentence stop or colon or semicolon followed by space, a dash, a blank line. A line break alone is not one: a hard-wrapped "Do not\nuse `pac …`" is one sentence.
+const CLAUSE_END = /[.!?;:](?=\s)|[\u2014\u2013]|\n[ \t]*\n/;
+function followsImperative(source, index) {
+  const before = source.slice(Math.max(0, index - 100), index);
+  const verb = IMPERATIVE.exec(before);
+  if (!verb) return false;
+  const clause = before.slice(0, verb.index).split(CLAUSE_END).at(-1);
+  return !NEGATION.test(clause);
+}
+function agentsMentions(text) {
+  const lines = text.split('\n');
+  const source = joinWrappedSpans(text);
+  return pacCommands(source, text).filter(({ words }) => !staysPac(words)).map(({ words, at, index }) => ({
+    name: commandName(words),
+    at,
+    offered: isCommandLine(lines[at - 1]) || followsImperative(source, index),
+  }));
+}
+
+function agentsProblems(text) {
+  const problems = [];
+  const named = new Set();
+  for (const { name, at, offered } of agentsMentions(text)) {
+    named.add(name);
+    if (!AGENTS_MAY_NAME.has(name) && !AGENTS_FAMILIES.has(name)) {
+      problems.push(`AGENTS.md:${at}: ${name} is a pac command that the plugin neither keeps, replaced nor falls back to — a new use of pac, which pac-allowlist.test.js has to name first`);
+    }
+    if (offered) problems.push(`AGENTS.md:${at}: ${name} is offered as a command to run (at the start of a line, or after an imperative) — name the script that does it instead`);
+  }
+  for (const [route, name] of Object.entries(AGENTS_MUST_NAME)) {
+    if (!named.has(name)) problems.push(`AGENTS.md no longer names \`${name}\`, the pac start of ${route} (a named route in pac-allowlist.test.js): the guide has to say where pac is still started`);
+  }
+  return problems;
+}
+
+test('AGENTS.md uses pac only as the plugin does — it names no command that the plugin neither keeps, replaced nor falls back to, offers none to run, and still names the exceptions the allowlist names', () => {
+  assert.deepEqual(agentsProblems(read(AGENTS_MD)), []);
+});
+
+test('AGENTS.md is held to the rule, not to a count: a command the plugin does not use, a command to run (a line of its own, behind a prompt or a bullet, after an imperative) in any letter case, and a gone exception each fail it', () => {
+  const guide = read(AGENTS_MD);
+  const fails = (extra, pattern) => {
+    const problems = agentsProblems(`${guide}\n${extra}\n`);
+    assert.ok(problems.some((problem) => pattern.test(problem)), `${extra}\n→ ${JSON.stringify(problems)}`);
+  };
+  // A verb the plugin does not use is a new use of pac, whichever way the command is spelled.
+  fails('Then `pac model genpage publish --app-id a`.', /pac model genpage publish is a pac command that the plugin neither keeps/);
+  fails('Or `pac org list`, or `pac solution export --name x`.', /pac org list is a pac command that the plugin neither keeps/);
+  fails('Or `pac org list`, or `pac solution export --name x`.', /pac solution export is a pac command that the plugin neither keeps/);
+  fails('See `PAC.EXE SOLUTION CLONE --name x` and `pac.cmd package deploy`.', /pac solution clone is a pac command that the plugin neither keeps/);
+  fails('See `PAC.EXE SOLUTION CLONE --name x` and `pac.cmd package deploy`.', /pac package deploy is a pac command that the plugin neither keeps/);
+  // A command to run, in a sentence...
+  for (const extra of [
+    'Run `pac model list --environment <envUrl>` to see the apps.',
+    'Use PAC.EXE MODEL CREATE --name x when the script is down.',
+    'To check it by hand, run `pac.cmd connection list --environment <origin>`.',
+    'Then call the command `pac solution import --path a.zip`.',
+    'Execute pac model genpage upload --code-file p.tsx to push it.',
+  ]) fails(extra, /is offered as a command to run/);
+  // ... and on a line of its own, in a fence, behind a prompt or a bullet.
+  for (const line of ['pac connection list --environment <origin>', '    pac.exe model list', '$ pac model genpage download --app-id a', 'PS> PAC Solution Import --path a.zip', '- pac model create --name x']) {
+    fails(`\`\`\`powershell\n${line}\n\`\`\``, /is offered as a command to run/);
+  }
+  // The exception stays named: take every mention of it out of the guide, however it is wrapped or cased, and the guide no longer says where pac starts without a refusal.
+  const gone = guide.replace(/pac\s+solution\s+create-settings/gi, 'the settings template');
+  assert.notEqual(gone, guide, 'the guide names it');
+  assert.ok(agentsProblems(gone).some((problem) => /no longer names `pac solution create-settings`, the pac start of the offline settings template/.test(problem)));
+  // What it MAY do is describe, as often and wherever a sentence needs: a count is not the rule. Every replaced command and every fallback, in any case, a family on its own, and what stays.
+  const described = [
+    'The script replaced `pac model list`; the planner no longer runs `pac model list` or `pac model create`.',
+    '`apps.js create` does what `pac model create` did, and the `pac model list` it replaced printed a table; `pac model list-tables`, `pac model list-languages` too.',
+    'No `pac model genpage upload` is left: `genpage-upload.js` does it, and `pac model genpage download`, `pac model genpage generate-types` and `pac model genpage add` went with it.',
+    '`pac connection list --environment <origin>` runs only where the SDK refuses, as `pac model genpage list-connector-operations`, `pac model genpage get-connector-schema`, `pac solution import` and `pac solution create-settings` do.',
+    'The `pac model` and `pac solution` families, PAC.EXE MODEL LIST in the old text, and pac.cmd model create too.',
+  ];
+  assert.deepEqual(agentsProblems(`${guide}\n${described.join('\n')}\n${described.join('\n')}\n${described.join(' ')}\n`), []);
+  // What stays is no problem either, in any case, in a sentence or on a line of its own; a wrapped mention is the command it names.
+  assert.deepEqual(agentsProblems(`${guide}\nRun pac auth list, PAC ORG WHO, pac.exe help and \`pac model genpage list-connector-tables\`.\n\`\`\`powershell\npac auth list\npac org who\n\`\`\`\n`), []);
+  assert.deepEqual(agentsMentions('the names `pac model\n  create` actually made').map(({ name, at }) => [name, at]), [['pac model create', 1]]);
+  assert.equal(joinWrappedSpans('a `pac model\n  create` b\nc').length, 'a `pac model\n  create` b\nc'.length, 'every offset is kept');
+});
+
+// --- 1c. AGENTS.md: a prohibition is no instruction, and a command in a list is one ------------------------------------------------------------------------------
+// The guide may tell a contributor what NOT to do ("Do not use `pac model create`; use `apps.js create`"): that is the migration, said again, and the command in it is not offered to anyone. And it
+// may not offer a command in the shapes a guide lists commands in: a bullet or a numbered item, a task box, a quote, with the command in a code span or not.
+const guideWith = (extra) => agentsProblems(`${read(AGENTS_MD)}\n${extra}\n`);
+const offeredIn = (extra) => guideWith(extra).filter((problem) => /is offered as a command to run/.test(problem));
+
+test('AGENTS.md: telling a contributor not to run a replaced command is no instruction to run it — and an instruction beside a prohibition, or after it, still fails', () => {
+  for (const extra of [
+    'Do not use `pac model create`; use `apps.js create` instead.',
+    "Don't run `pac model list`: `apps.js list` does it.",
+    'Don\u2019t run `pac model list`: `apps.js list` does it.',
+    'Never run `pac model genpage upload`; `genpage-upload.js` does.',
+    'You must not call `pac model create` by hand.',
+    'Contributors should not execute `pac connection list` unless the SDK refused.',
+    'Please do not ever use PAC.EXE MODEL LIST.',
+    'If it fails, do not invoke ``pac model create``; report the code.',
+    'Do not type `pac solution import --path a.zip` \u2014 `solution-settings.js import` does it.',
+    'No longer run `pac model list-tables`.',
+    'Avoid it: do not simply run `pac model genpage download`.',
+    'The agent cannot use pac.cmd model list-languages any more.',
+    'Never, ever, use `pac model create`.',
+    'Do not use the command `pac model create`.',
+    'Under no circumstances run `pac model create`.',
+    'Do not, under any circumstances, run `pac model list`.',
+  ]) assert.deepEqual(guideWith(extra), [], extra);
+  for (const extra of [
+    'Do not use `pac model create`; run `pac model list` instead.',
+    'Never run it twice: run `pac model list` once.',
+    'Use `pac model create` and do not use `apps.js create`.',
+    "Don't forget to run `pac model list` first.",
+    'Do not hesitate; call `pac model create --name x`.',
+    'You should not run it by hand, but when the script is down, run `pac model list`.',
+    'Not `apps.js list` \u2014 use `pac model list`.',
+    'Do not stop here: run `pac model list`.',
+  ]) assert.ok(offeredIn(extra).length > 0, extra);
+  // The same words in the same order, with the negation taken out, are the instruction they were the opposite of.
+  assert.ok(offeredIn('Use `pac model create`; use `apps.js create` instead.').length > 0);
+  assert.ok(offeredIn('Run `pac model list` by hand.').length > 0);
+  assert.deepEqual(offeredIn('Do not run `pac model list` by hand.'), []);
+});
+
+test('AGENTS.md: a command in a list is a command to run — a bullet, a numbered item or a task, quoted or not, with its command in a code span or not — and a list item that describes it is not', () => {
+  for (const item of [
+    '- `pac model list --environment <envUrl>`',
+    '1. pac model create --name Example --solution Contoso',
+    '* `pac solution import --path a.zip --environment <envUrl>`',
+    '+ pac connection list --environment <origin>',
+    '2) `pac model genpage download --app-id <id>`',
+    '   - `pac.exe model list`',
+    '10. `PAC MODEL LIST-TABLES --search x`',
+    '> - `pac model list`',
+    '- [ ] `pac model create --name x`',
+    '- [x] pac model genpage upload --code-file p.tsx',
+    '1. ``pac model list``',
+    '$ `pac model list`',
+    '- Run `pac model list`',
+  ]) {
+    assert.ok(offeredIn(item).length > 0, item);
+    assert.ok(offeredIn(`A list:\n${item}\n- the next item`).length > 0, `inside a list: ${item}`);
+  }
+  for (const item of [
+    '- `pac model list` was replaced by `apps.js list`.',
+    '1. `pac model create` \u2014 the script `apps.js create` does it now.',
+    '* `pac connection list` runs only where the SDK refuses.',
+    '- `pac model list-tables` \u2192 `list-tables.js`',
+    '- `pac model list-languages` -> `list-languages.js`',
+    '2) `pac solution import` (the fallback of `solution-settings.js import`)',
+    '- pac model genpage upload: replaced by `genpage-upload.js`',
+    '- `pac model create`: replaced by `apps.js create`',
+    '10. pac model list is gone: `apps.js list` is the script.',
+    '- [x] `pac model genpage download` still stands behind `genpage.js download`, as a fallback',
+    '- The script replaced `pac model create`.',
+    '| `pac model list` | `apps.js list` |',
+    '1. Do not run `pac model list`.',
+    '- `pac model list`, replaced by `apps.js list`.',
+    '- `pac model list` and `pac model create` were replaced by `apps.js list` and `apps.js create`.',
+    '* `pac model list`, `pac model create` and `pac model list-tables` are gone: the scripts do them.',
+    'the planner ran\n  `pac model list-languages --environment \'<envUrl>\'` when the script exited non-zero,\n  so that a page needed no Azure CLI',
+  ]) assert.deepEqual(offeredIn(item), [], item);
+  // Commands listed together are commands to run together, unless what follows says what became of them.
+  for (const item of [
+    '- `pac model list` and `pac model create`',
+    '- `pac model list`, then `pac model create`',
+    '1. pac model list; pac model create',
+  ]) assert.ok(offeredIn(item).length > 0, item);
+  // The count-free property: describe as often as a sentence needs.
+  assert.deepEqual(guideWith('- `pac model list` was replaced by `apps.js list`.\n- `pac model create` was replaced by `apps.js create`.\n'.repeat(3)), []);
+});
+
+test('AGENTS.md: a mention is reported on the line the file has it on, whatever code spans the lines before it hold — and a command that starts a line is found after a line that ends in a code span', () => {
+  // Prose in the guide often ends a line in one code span and begins the next with another; the reader of hard-wrapped spans must not take those two lines for one span and lose a line number on each.
+  const prose = Array.from({ length: 40 }, (_, at) => `line ${at} ends in a \`span\`\nand the next one begins with \`another\` one`).join('\n');
+  const mentionLine = `${prose}\n`.split('\n').length;
+  assert.deepEqual(agentsMentions(`${prose}\nRun \`pac model list\` now.\n`).map(({ name, at }) => [name, at]), [['pac model list', mentionLine]]);
+  // The command stands at the start of line 2, which also holds a code span, below a line that ends in one: it is still a command to run.
+  const problems = agentsProblems('see `x`\npac model list --environment <envUrl> `y`\n');
+  assert.ok(problems.some((problem) => /^AGENTS\.md:2: pac model list is offered as a command to run/.test(problem)), JSON.stringify(problems));
+  // A wrapped mention is reported where it starts.
+  assert.deepEqual(agentsMentions('one\ntwo `pac model\n  create` three\n').map(({ name, at }) => [name, at]), [['pac model create', 2]]);
 });
 
 // --- 2. the commands the documents give for the scripts ----------------------------------------------------------------------------------------------------------

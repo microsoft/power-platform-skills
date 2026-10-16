@@ -11,19 +11,24 @@
 //                                   connector.js, through lib/pac-fallback.js: the same, for a connector's operations and schemas, and
 //                                   for a tabular connector's table columns.
 //   pac solution create-settings | import
-//                                   solution-settings.js, through lib/pac-fallback.js: a settings template made offline from a zip,
-//                                   and the import features the SDK does not apply.
+//                                   solution-settings.js, through lib/pac-fallback.js: a settings template made offline from a zip — the one
+//                                   start no SDK refusal precedes, so it is named (NAMED_ROUTES) — and the import features the SDK does not apply.
 //   pac --version, pac auth who     lib/telemetry/lib: the shared telemetry library (a byte copy of shared/telemetry/lib) reads
 //                                   pac's version and signed-in identity for its event dimensions; changing that is the shared
 //                                   library's business, not this plugin's.
 // A "start" is a call whose first argument is a literal that names pac (any quote) — `pac`, `pac.exe`, `pac.cmd`, a path ending in one
 // of them, in any letter case — or, for exec and execSync, a command line that begins with such a name. lib/pac-fallback.js's runPac is
 // the one wrapper that takes its argv from a caller, so its calls are pinned as well. Comments are not code (helpers/production-scripts.js).
+// The files read are the plugin's scripts AND its hooks, in `.js`, `.cjs` and `.mjs` (helpers/production-scripts.js): a pac started from a hook, or from a module with another extension,
+// fails the same way.
+//
+// Of the starts that stay, one is not behind a refusal of the SDK, and is named so (NAMED_ROUTES below): the settings template made offline.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { SCRIPTS_DIR, productionScripts, withoutComments } = require('./helpers/production-scripts.js');
+const { SCRIPTS_DIR, HOOKS_DIR, productionScripts, scriptLabel, withoutComments } = require('./helpers/production-scripts.js');
 
 // The names a script starts pac by — not only `pac`. On Windows Node starts a program by its file name, so a direct
 // `spawnSync('pac.exe', …)` starts the dotnet-tool install with no shell and no process runner; `pac.cmd` is the shim the other installs
@@ -67,10 +72,9 @@ function scan(sources) {
   return { starts: starts.sort(), runPacCalls: runPacCalls.sort(), literalFiles: literalFiles.sort() };
 }
 
-const SOURCES = productionScripts().map((file) => [
-  path.relative(SCRIPTS_DIR, file).split(path.sep).join('/'),
-  fs.readFileSync(file, 'utf8'),
-]);
+// The files a scan reads, as [label, source]: `label` names a file the way the expectations below do (helpers/production-scripts.js scriptLabel).
+const loadSources = (files, label = scriptLabel) => files.map((file) => [label(file), fs.readFileSync(file, 'utf8')]);
+const SOURCES = loadSources(productionScripts());
 const PRODUCTION = scan(SOURCES);
 
 // What the scan may find in the production scripts. The tests below assert exactly this, and the last ones add a script of their own to
@@ -172,3 +176,155 @@ for (const [spelling, code] of NEW_SCRIPT_SPELLINGS) {
     assert.ok(grown.starts.includes('lib/new-script.js: solution export'), `the start is listed with its verb: ${JSON.stringify(grown.starts)}`);
   });
 }
+
+// --- hooks, and files of another extension -----------------------------------------------------------------------------------------------
+
+// The same violation in each kind of file the scan must read besides scripts/*.js: a hook, and a module with each extension Node loads as code.
+const NEW_FILE_KINDS = [
+  ['a hook', 'hooks/new-hook.js'],
+  ['a hook with the .cjs extension', 'hooks/new-hook.cjs'],
+  ['a CommonJS module (.cjs)', 'lib/new-module.cjs'],
+  ['an ES module (.mjs)', 'lib/new-module.mjs'],
+];
+
+for (const [kind, name] of NEW_FILE_KINDS) {
+  test(`pac started from ${kind} fails the allowlist`, () => {
+    const grown = scan([...SOURCES, [name, "spawnSync('pac', ['solution', 'export', '--name', name]);"]]);
+    assert.notDeepStrictEqual(grown.starts, ALLOWED_STARTS);
+    assert.notDeepStrictEqual(grown.literalFiles, ALLOWED_LITERAL_FILES);
+    assert.ok(grown.starts.includes(`${name}: solution export`), JSON.stringify(grown.starts));
+  });
+}
+
+test('the files the scan reads are the plugin\u2019s scripts and every one of its hooks — and no hook starts pac itself', () => {
+  const labels = SOURCES.map(([name]) => name);
+  assert.ok(labels.includes('lib/pac-fallback.js') && labels.includes('check-auth.js'), 'the scripts');
+  const hooks = fs.readdirSync(HOOKS_DIR).filter((name) => /\.(?:js|cjs|mjs)$/.test(name)).map((name) => `hooks/${name}`);
+  assert.ok(hooks.length >= 4, `the plugin has hooks: ${hooks.join(', ')}`);
+  for (const hook of hooks) assert.ok(labels.includes(hook), `${hook} is read`);
+  assert.deepStrictEqual(labels.filter((name) => name.startsWith('hooks/')).sort(), hooks.sort(), 'and nothing else of hooks/');
+  // The hooks reach pac only through the shared telemetry library (lib/telemetry/lib, allowed above).
+  assert.deepStrictEqual(PRODUCTION.starts.filter((start) => start.startsWith('hooks/')), []);
+  assert.deepStrictEqual(PRODUCTION.literalFiles.filter((name) => name.startsWith('hooks/')), []);
+});
+
+test('a pac start planted in a script, a hook, a .cjs or a .mjs file on disk is found — and in vendor/, tests/ and node_modules/, which hold generated or test code, is not', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pac-allowlist-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const start = "spawnSync('pac.exe', ['solution', 'export', '--name', name]);\n";
+  const planted = {
+    'scripts/lib/ok.js': 'module.exports = 1;\n',
+    'scripts/lib/bad-script.js': start,
+    'scripts/lib/bad-common.cjs': start,
+    'scripts/bad-module.mjs': start,
+    'hooks/bad-hook.js': start,
+    'hooks/bad-hook.cjs': start,
+    'hooks/README.md': 'pac solution export\n',
+    'scripts/vendor/skipped.cjs': start,
+    'scripts/tests/skipped.js': start,
+    'scripts/lib/node_modules/skipped.js': start,
+  };
+  for (const [name, text] of Object.entries(planted)) {
+    fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+    fs.writeFileSync(path.join(root, name), text);
+  }
+  const files = productionScripts([path.join(root, 'scripts'), path.join(root, 'hooks')]);
+  const label = (file) => path.relative(root, file).split(path.sep).join('/');
+  assert.deepStrictEqual(files.map(label).sort(), ['hooks/bad-hook.cjs', 'hooks/bad-hook.js', 'scripts/bad-module.mjs', 'scripts/lib/bad-common.cjs', 'scripts/lib/bad-script.js', 'scripts/lib/ok.js']);
+  assert.deepStrictEqual(scan(loadSources(files, label)).starts, [
+    'hooks/bad-hook.cjs: solution export',
+    'hooks/bad-hook.js: solution export',
+    'scripts/bad-module.mjs: solution export',
+    'scripts/lib/bad-common.cjs: solution export',
+    'scripts/lib/bad-script.js: solution export',
+  ]);
+  assert.deepStrictEqual(productionScripts(path.join(root, 'missing')), [], 'a root that does not exist holds nothing');
+});
+
+// --- the one pac start no refusal of the SDK precedes -----------------------------------------------------------------------------------
+
+// Every other pac start of the plugin is a pre-flight, telemetry, or the fallback behind a typed refusal of the SDK (lib/sdk-first.js decides when; pac-fallback-commands.test.js pins that each pac
+// code path is reached only from its fallback hook). A route that is none of those is named here, with the code that is it, when it is reached and why pac is the only way — so that a second one
+// cannot arrive unargued, and this one cannot leave the code and stay on the list. `solution-settings.js` says the same in its own header, and AGENTS.md names it as one of the two pac-only paths.
+const NAMED_ROUTES = {
+  'the offline settings template': {
+    start: 'solution-settings.js: solution create-settings',
+    reached: '`solution-settings.js template --package <zip>` with no `--env`',
+    call: 'templateThroughPac({ packagePath: request.packagePath }, null, deps)',
+    guard: /if\s*\(\s*!request\.env\s*\)\s*\{\s*const made = await\s+$/,
+    why: 'The SDK reads a solution package only by staging it in an environment (StageSolution), so with no environment there is nothing to ask; pac reads the zip offline. The result says `source: "pac"` and carries no `fallback`.',
+  },
+};
+
+// The arguments of the call whose opening parenthesis is at `open`, split where the call splits them: brackets nest, and a string literal is skipped over.
+function callArguments(code, open) {
+  const args = [];
+  let depth = 0;
+  let start = open + 1;
+  let quote = null;
+  for (let at = open + 1; at < code.length; at += 1) {
+    const char = code[at];
+    if (quote) {
+      if (char === '\\') at += 1;
+      else if (char === quote) quote = null;
+    } else if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+    } else if ('([{'.includes(char)) {
+      depth += 1;
+    } else if (')]}'.includes(char)) {
+      if (depth === 0) return [...args, code.slice(start, at).trim()];
+      depth -= 1;
+    } else if (char === ',' && depth === 0) {
+      args.push(code.slice(start, at).trim());
+      start = at + 1;
+    }
+  }
+  throw new Error('a call that does not close');
+}
+
+// What is wrong with the routes into the settings-template wrapper `templateThroughPac(args, refusal, deps)`: it is called exactly twice — once with the refusal the SDK gave (the fallback hook)
+// and once with `null`, the named route, as the first statement of the `if (!request.env)` block it belongs to.
+function routeProblems(source, route) {
+  const code = withoutComments(source);
+  const calls = [...code.matchAll(/(?<!function\s)\btemplateThroughPac\s*\(/g)].map((match) => {
+    const args = callArguments(code, match.index + match[0].length - 1);
+    return { refusal: args[1], text: `templateThroughPac(${args.join(', ')})`, before: code.slice(0, match.index) };
+  });
+  const problems = [];
+  const unrefused = calls.filter((call) => call.refusal === 'null');
+  if (unrefused.length !== 1) problems.push(`${unrefused.length} calls pass no refusal: the named route is exactly one`);
+  else {
+    if (unrefused[0].text !== route.call) problems.push(`the call that passes no refusal is ${unrefused[0].text}, not ${route.call}`);
+    if (!route.guard.test(unrefused[0].before)) problems.push('the call that passes no refusal is not the first statement of the `if (!request.env)` block');
+  }
+  const refused = calls.filter((call) => call.refusal !== 'null');
+  if (refused.length !== 1 || refused[0].refusal !== 'refusal') problems.push('the other call is exactly one, and passes the SDK\u2019s `refusal`');
+  return problems;
+}
+
+test('the offline settings template is named on the list — the one pac start no SDK refusal precedes — and is exactly where it says it is', () => {
+  const source = fs.readFileSync(path.join(SCRIPTS_DIR, 'solution-settings.js'), 'utf8');
+  for (const [name, route] of Object.entries(NAMED_ROUTES)) {
+    assert.ok(PRODUCTION.runPacCalls.includes(route.start), `${name}: ${route.start} is a start the scan finds`);
+    assert.ok(ALLOWED_RUN_PAC_CALLS.includes(route.start), `${name}: and one the list allows`);
+    assert.deepStrictEqual(routeProblems(source, route), [], name);
+    assert.match(source, /the zip is read by pac, offline/, `${name}: the script\u2019s own header says so`);
+  }
+  assert.deepStrictEqual(Object.keys(NAMED_ROUTES), ['the offline settings template'], 'a second route is added here, with its reason, or not at all');
+});
+
+test('a second call that passes no refusal, a removed guard, a fallback that passes none, and a call moved out of its guard each fail the named route', () => {
+  const route = NAMED_ROUTES['the offline settings template'];
+  const source = fs.readFileSync(path.join(SCRIPTS_DIR, 'solution-settings.js'), 'utf8');
+  const mutations = {
+    'a second call that passes no refusal': `${source}\nasync function elsewhere(request) { return templateThroughPac({ packagePath: request.packagePath }, null, {}); }\n`,
+    'the guard removed': source.replace('if (!request.env) {', 'if (request.env === 0) {'),
+    'the fallback hook passing none': source.replace(/\n(\s*)refusal,(\r?\n\s*deps\r?\n)/, '\n$1null,$2'),
+    'the offline call run for every package': source.replace(/if \(!request\.env\) \{(\r?\n)(\s*)const made/, 'if (request.packagePath) {$1$2const made'),
+    'the offline call with other arguments': source.replace('templateThroughPac({ packagePath: request.packagePath }, null, deps)', 'templateThroughPac({ packagePath: request.packagePath, extra: true }, null, deps)'),
+  };
+  for (const [what, mutated] of Object.entries(mutations)) {
+    assert.notStrictEqual(mutated, source, `${what}: the mutation changed the source`);
+    assert.notDeepStrictEqual(routeProblems(mutated, route), [], what);
+  }
+});
