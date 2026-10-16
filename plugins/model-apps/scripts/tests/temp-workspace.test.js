@@ -434,6 +434,14 @@ test('sweepWarning: says how many, whose they were, and what is left to delete b
   assert.ok(sweepWarning({ parent: '/p', removed: [{ name: 'evil\u001b[31m\nname', stamp }], failed: [] }).includes('?'), 'a name with control characters is not shown');
 });
 
+test('sweepWarning: a pac fallback\'s work folder of solution-settings is said to have held settings, not page source — and a mix of both is said as a mix', () => {
+  const stamp = { pid: 4242 };
+  const settings = sweepWarning({ parent: '/tmp/p', removed: [{ name: 'solution-settings-4242-AbC123', stamp }], failed: [] });
+  assert.strictEqual(settings, 'removed 1 temporary workspace left in /tmp/p by a run that is no longer running — it held a settings template, an exported package or a copy of a settings file, which can hold its values: solution-settings-4242-AbC123 (pid 4242)');
+  const mixed = sweepWarning({ parent: '/tmp/p', removed: [{ name: 'genpage-4242-AbC123', stamp }, { name: 'solution-settings-4242-XyZ789', stamp }], failed: [] });
+  assert.ok(mixed.includes("— they held page source, the environment's address, or a settings file's values: "), mixed);
+});
+
 // A plugin's folder that exists only as a listing: `count` workspaces, each named for a pid and holding the record of a run of `system` — all served from memory, so
 // that what a sweep does with hundreds of entries is shown without making one. (The pids are far above any a system hands out: none can be this process's.)
 function listedWorkspaces(deps, count, system) {

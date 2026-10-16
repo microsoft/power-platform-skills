@@ -487,6 +487,17 @@ function sweepDeadWorkspaces(deps = {}) {
 }
 
 // The words for what a sweep did: a name is shown only if it is a plain one (a name is what a record's maker chose, and this goes to a terminal).
+// What removed workspaces held, by the maker their names say made them: the work folder of a pac fallback of solution-settings.js (`solution-settings-…`) holds pac's settings template, the
+// package the SDK exported or a copy of the settings file pac imports with, any of which can hold the settings' values; every other workspace is an SDK's, and holds page source and the
+// environment's address.
+const SETTINGS_WORK_PREFIX = 'solution-settings-';
+function heldBy(list) {
+  const settings = list.filter((item) => String(item.name).startsWith(SETTINGS_WORK_PREFIX)).length;
+  if (settings === 0) return "page source and the environment's address";
+  if (settings === list.length) return "a settings template, an exported package or a copy of a settings file, which can hold its values";
+  return "page source, the environment's address, or a settings file's values";
+}
+
 function sweepWarning(result) {
   const shown = (list, detail) => {
     const names = list.slice(0, 5).map((item) => `${/^[A-Za-z0-9._-]+$/.test(item.name) ? item.name : '?'} (${detail(item)})`);
@@ -495,7 +506,7 @@ function sweepWarning(result) {
   const parts = [];
   if (result.removed.length) {
     const n = result.removed.length;
-    parts.push(`removed ${n} temporary workspace${n === 1 ? '' : 's'} left in ${result.parent} by ${n === 1 ? 'a run' : 'runs'} that ${n === 1 ? 'is' : 'are'} no longer running — ${n === 1 ? 'it' : 'they'} held page source and the environment's address: ${shown(result.removed, (item) => `pid ${item.stamp.pid}`)}`);
+    parts.push(`removed ${n} temporary workspace${n === 1 ? '' : 's'} left in ${result.parent} by ${n === 1 ? 'a run' : 'runs'} that ${n === 1 ? 'is' : 'are'} no longer running — ${n === 1 ? 'it' : 'they'} held ${heldBy(result.removed)}: ${shown(result.removed, (item) => `pid ${item.stamp.pid}`)}`);
   }
   if (result.failed.length) {
     const n = result.failed.length;
