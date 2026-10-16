@@ -39,6 +39,8 @@ Rule catalog for `scripts/analyze-perf.js` — the deterministic analyzer behind
       "title": "FetchXML retrieves all attributes",
       "location": ".powerpages-site/web-templates/home/Home.webtemplate.source.html:2",
       "details": "...",
+      "aiSuggestion": "Code-aware recommendation generated after inspecting the local snippet.",
+      "mitigation": "Concrete mitigation plan that preserves behavior and names manual validation.",
       "fix": "...",
       "autoFixAvailable": false,
       "fixSkill": null,
@@ -50,7 +52,7 @@ Rule catalog for `scripts/analyze-perf.js` — the deterministic analyzer behind
 }
 ```
 
-This is the exact `{ status, findings, details }` shape that `scripts/build-review-data.js` (via the `perf-checker.json` `SECTION_MAP` entry, id `performance`, icon ⚡) and `scripts/render-review.js` consume — the same shared HTML report pipeline `scan-site` uses. `severityCounts` is an analyzer convenience for the in-chat summary; the renderer ignores it.
+The deterministic analyzer emits the stable rule fields (`tag`, `severity`, `details`, `fix`, `autoFixAvailable`, `fixAction`). The skill then enriches every non-`PERF-NONE` finding with `aiSuggestion` and `mitigation` after inspecting the customer-code snippet at `location`. This enriched `{ status, findings, details }` shape is what `scripts/build-review-data.js` (via the `perf-checker.json` `SECTION_MAP` entry, id `performance`, icon ⚡) and `scripts/render-review.js` consume — the same shared HTML report pipeline `scan-site` uses. `severityCounts` is an analyzer convenience for the in-chat summary; the renderer ignores it.
 
 When no anti-pattern is found the analyzer still emits one `info` finding tagged `PERF-NONE` so the report is never empty.
 
@@ -181,6 +183,18 @@ For findings with `autoFixAvailable: true`, `fixAction` tells the SKILL.md Phase
 | `set-yaml-field` | `field`, `value`, optional `recordName` | Use `Edit` at the finding's precise `location` to set `<field>: <value>` (e.g., `adx_enabletracking: false`). For classic aggregate `sitesetting.yml`, `recordName` identifies the record and the location points at its exact `adx_value` line. |
 
 **Output-cache fixes carry a mandatory caveat** (already baked into the finding's `fix` text): enabling `Header/Footer/OutputCache/Enabled` alone is **not** sufficient — the Header, Footer, and Languages-Dropdown web templates must also use the `{% substitution %}` Liquid tag, or those regions stop rendering. Always surface this caveat when applying the fix and recommend verifying the templates.
+
+## AI-driven suggestions and mitigations
+
+The analyzer stays deterministic; it does **not** call an AI service or mutate source. The `/power-pages:perf-checker` workflow performs a separate AI mitigation pass over analyzer results:
+
+- Read the local customer-code snippet behind each finding (`location`, about 20 lines on either side when available).
+- Preserve static fields exactly as emitted; do not hide, downgrade, or invent findings.
+- Add `aiSuggestion` with a snippet-grounded recommendation and `mitigation` with the safest behavior-preserving edit path plus manual validation notes.
+- Mark heuristic findings as conditional when the snippet is not enough to prove the issue.
+- Keep auto-fixable findings aligned with their `fixAction`, and repeat required caveats such as Header/Footer `{% substitution %}` after enabling output caching.
+
+The shared review template renders `aiSuggestion` and `mitigation` as first-class fields under each finding, so review-mode JSON and interactive HTML reports both carry the static check plus the AI-driven guidance.
 
 ---
 

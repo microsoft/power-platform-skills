@@ -6,8 +6,9 @@ description: >-
   custom data APIs, FetchXML over-fetching / N+1 / advanced query hints / cache
   bypassing, unbounded Web API queries, disabled header/footer output caching,
   sign-in and page tracking, main-thread-blocking JS, CSS @import, frequent Web
-  API polling, and oversized assets — then reports them and offers safe
-  auto-fixes with per-fix approval.
+  API polling, and oversized assets — then enriches findings with AI-driven
+  suggestions and mitigations grounded in the affected customer-code snippets,
+  reports them, and offers safe auto-fixes with per-fix approval.
   Use when the user wants to: "check performance", "perf check", "find
   performance issues", "why is my site slow", "optimize my Power Pages site",
   "find anti-patterns", "review FetchXML performance", "is my site over-fetching
@@ -22,7 +23,7 @@ model: opus
 
 # perf-checker
 
-Statically analyzes the **entire local Power Pages codebase** for known performance anti-patterns, presents them by severity in an HTML report + plain-language summary, and offers **safe auto-fixes with per-fix approval**. Never applies a fix without explicit consent.
+Statically analyzes the **entire local Power Pages codebase** for known performance anti-patterns, enriches the static findings with **AI-driven, code-aware suggestions and mitigations**, presents them by severity in an HTML report + plain-language summary, and offers **safe auto-fixes with per-fix approval**. Never applies a fix without explicit consent.
 
 This skill reads local source only — it does not call the deployed site. For a live security/vulnerability scan use `/scan-site`.
 
@@ -70,7 +71,8 @@ must cover all of these categories:
 1. **Prerequisites** — locate the project, confirm the site exists, detect review mode
 1.5. **Ground in current performance guidance** — optional Microsoft Learn cross-check (capped, offline-safe)
 2. **Scan** — run the deterministic analyzer over the codebase
-3. **Present findings** — severity table + coverage stats
+2.5. **AI mitigation pass** — inspect customer-code snippets behind each finding and add code-aware suggestions/mitigations
+3. **Present findings** — severity table + coverage stats + AI suggestions
 4. **Offer auto-fixes** — per-finding consent loop for the safely-automatable findings
 5. **Verify** — re-run the analyzer to confirm fixes resolved their findings
 6. **Report & next action** — render the HTML report, summarize, and route follow-ups
@@ -82,7 +84,7 @@ Create tasks in three groups. Mark each `in_progress` when starting, `completed`
 | Group | When to create | Tasks |
 |-------|----------------|-------|
 | 1 | At start | Verify prerequisites and locate project |
-| 2 | After prerequisites pass | Scan codebase for anti-patterns · Present findings |
+| 2 | After prerequisites pass | Scan codebase for anti-patterns · Add AI-driven suggestions and mitigations · Present findings |
 | 3 | After findings presented (skip all three in review mode) | Offer auto-fixes (only if any `autoFixAvailable`) · Verify fixes · Render report and route follow-ups |
 
 ---
@@ -131,11 +133,47 @@ The analyzer prints a single JSON object `{ status, findings, details, severityC
 
 If the only finding is `PERF-NONE`, the codebase is clean — note this and skip Phase 4/5 (still render the report in Phase 6 so the user has a record).
 
+## Phase 2.5 — Add AI-driven suggestions and mitigations
+
+Run this after every deterministic scan result that will be presented or written
+to `perf-checker.json` (including **review mode**). Skip only `PERF-NONE`.
+
+For each finding, inspect the relevant customer-code context before writing the
+final JSON:
+
+1. Read the file named by `finding.location` and capture a tight snippet around
+   the line (about 20 lines before/after, capped so the report stays readable).
+   If the file no longer exists or the finding has no location, use the finding's
+   `details` and `fix` only.
+2. Add these fields to the finding object:
+   - `aiSuggestion`: one or two sentences explaining the best next change for
+     this specific code path, grounded in the snippet and the rule catalog.
+   - `mitigation`: a concrete mitigation plan that preserves behavior. Name the
+     likely code/config edit, the safer alternative when there are tradeoffs, and
+     anything the user must verify manually.
+3. Keep the deterministic fields (`tag`, `severity`, `fix`, `fixAction`,
+   `autoFixAvailable`) unchanged. Do **not** downgrade, suppress, or invent
+   analyzer findings during this AI pass.
+4. For heuristic findings (for example webpage-as-API, Web API N+1, cache
+   bypassing, related-column ordering), say that the suggestion is conditional
+   and name the observation that would confirm it.
+5. For auto-fixable site-setting/tracking findings, keep `mitigation` aligned
+   with the existing `fixAction` and repeat any important caveat, especially the
+   Header/Footer output-cache substitution requirement.
+
+The report renderer displays `aiSuggestion` and `mitigation` as separate fields,
+so write them into the JSON rather than only mentioning them in chat. If the
+current AI context cannot safely inspect a file because it is restricted or too
+large, add a conservative mitigation based on `details`/`fix` and explicitly say
+the source snippet was not inspected.
+
 ## Phase 3 — Present findings
 
 > Skip in **review mode** (go straight to Step 5.1's JSON write).
 
-Present all findings grouped by severity, highest first:
+Present all findings grouped by severity, highest first. Include the AI
+suggestion and mitigation under each row (or immediately after the table for long
+items) so the user sees both the static check and the code-aware recommendation:
 
 | # | Severity | Tag | Issue | Location | Auto-fix? |
 |---|----------|-----|-------|----------|-----------|
@@ -144,7 +182,9 @@ Present all findings grouped by severity, highest first:
 
 Then show the coverage stats from `details.entries` (FetchXML/Liquid, list,
 Web API/script and CSS files scanned; web-file/web-role counts; total findings).
-Keep the language plain; explain a tag only when asked.
+Keep the language plain; explain a tag only when asked. Make clear that AI
+suggestions are grounded in the local snippet but still require developer
+judgment for business-specific behavior.
 
 ## Phase 4 — Offer auto-fixes
 
@@ -200,7 +240,7 @@ Handled at Step 6.2 below — review mode never reaches the HTML render or the f
 
 ### Step 6.2 — Write the review JSON
 
-Write the analyzer's `{ status, findings, details }` object (the Phase 5 re-scan result if a re-scan ran, otherwise the Phase 2 result) to a JSON file:
+Write the enriched `{ status, findings, details }` object (the Phase 5 re-scan result if a re-scan ran, otherwise the Phase 2 result, with Phase 2.5 `aiSuggestion`/`mitigation` fields applied) to a JSON file:
 
 - **Review mode**: write to `<REVIEW_DIR>/perf-checker.json`, then **stop**. The orchestrating skill (e.g., `security-review`) handles presentation.
 - **Interactive mode**: write to `<TEMP_DIR>/perf-checker.json` where `<TEMP_DIR>` is a scratch directory containing only this file.
