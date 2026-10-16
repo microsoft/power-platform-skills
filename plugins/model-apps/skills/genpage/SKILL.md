@@ -1017,11 +1017,12 @@ compiles the checked file itself.
 An update is held to what it **adds**. A page deployed before this check existed can already carry such a key — the old
 `borderWidth` grep never caught `borderColor` under `:hover` — and it renders without it today. The script reads the
 deployed page anyway (for the base check below) and compares: a key the deployed page already had, set to the same value in
-the same place (the same `makeStyles` call and slot and selector — and the same branch, where a condition chooses between two style objects), goes ahead, and the result's `warnings` names each one with both ways out:
+the same place (the same `makeStyles` hook — told by the name it is bound to at the top of the file, even with a type annotation — and its slot and selector, and the same arm of every condition above the key), goes ahead, and the result's `warnings` names each one with both ways out:
 **delete the key** (nothing changes on screen) or **write the longhands** (the style
 starts to render, so the page changes). Only a key the deployed page did not have in that place stops the upload: a key it had in
-another place (an edit that removes it from one slot and sets it in another, or renames the slot, or moves it to another hook's slot of the same name — every hook has a `root` — or into the other arm of a condition, has added a key there), or one it had,
+another place (an edit that removes it from one slot and sets it in another, or renames the slot, or moves it to another hook's slot of the same name — every hook has a `root` — or into the other arm of a condition, at any level, has added a key there), or one it had,
 given another value, because Griffel drops the new value just as it dropped the old, so the page would show none of the change.
+A hook whose name the file does not prove — written inside a function or a block, passed as an argument, exported as the default, or bound to a name two hooks share — has no earlier self to be compared with, so a key in it is refused on an update like any new one: delete it, or write the longhands.
 If the deployed page
 cannot be read (possible only with `--overwrite-deployed`), the update goes ahead with that warning. A `makeStyles` call the
 checker cannot read for certain is refused as one it could not read, with what to change in the code, unless the file is the

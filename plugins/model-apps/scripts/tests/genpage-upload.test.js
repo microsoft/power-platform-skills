@@ -1514,7 +1514,7 @@ test('an UPDATE that moves a key to another hook\'s slot of the same name, or in
     return `${GRIFFEL_IMPORT}${order === 'pc' ? panel + card : card + panel}export default function P() { return null; }\n`;
   };
   const arms = (a, b) => `${GRIFFEL_IMPORT}const dark = true;\nconst useStyles = makeStyles(dark ? {\n  root: { ${a} },\n} : {\n  root: { ${b} },\n});\nexport default function P() { return null; }\n`;
-  for (const [what, build, owner, branch] of [['two hooks', hooks, 'useCard#0', 0], ['the arms of a condition', arms, 'useStyles#0', 1]]) {
+  for (const [what, build, owner, branch] of [['two hooks', hooks, 'useCard', 0], ['the arms of a condition', arms, 'useStyles', 1]]) {
     const deployed = build("borderColor: 'red'", "padding: '1px'");
     const moved = build("padding: '1px'", "borderColor: 'red'");
     const { file, genpage, r } = await griffelUpdate(moved, deployed);
@@ -1534,6 +1534,45 @@ test('an UPDATE that moves a key to another hook\'s slot of the same name, or in
   const reordered = await griffelUpdate(hooks("borderColor: 'red'", "borderStyle: 'solid'", 'cp'), deployed);
   assert.strictEqual(reordered.r.ok, true, JSON.stringify(reordered.r.payload));
   assert.strictEqual(reordered.genpage.of('update').length, 1);
+});
+
+// The place of a key is the hook that holds it — told by the name it is bound to at the top of the page, through a type annotation or a property it is assigned to — and the arm of every condition between the call and
+// the key, below the call as well as at it. Each of these moves a shorthand to a place the deployed page did not have it in, as the first kind of edit the check exists to stop; the upload refuses it, and writes nothing.
+const MOVES = [
+  ['a condition in a slot', "const useStyles = makeStyles({ root: dark ? { borderColor: 'red' } : { padding: '1px' } });\n", "const useStyles = makeStyles({ root: dark ? { padding: '1px' } : { borderColor: 'red' } });\n"],
+  ['a condition under a selector', "const useStyles = makeStyles({ root: { ':hover': dark ? { borderColor: 'red' } : { padding: '1px' } } });\n", "const useStyles = makeStyles({ root: { ':hover': dark ? { padding: '1px' } : { borderColor: 'red' } } });\n"],
+  ['a condition in a spread', "const useStyles = makeStyles({ root: { ...(dark ? { borderColor: 'red' } : { padding: '1px' }) } });\n", "const useStyles = makeStyles({ root: { ...(dark ? { padding: '1px' } : { borderColor: 'red' }) } });\n"],
+  ['typed hooks that change places', "const usePanel: Hook = makeStyles({ root: { borderColor: 'red' } });\nconst useCard: Hook = makeStyles({ root: { padding: '1px' } });\n", "const useCard: Hook = makeStyles({ root: { borderColor: 'red' } });\nconst usePanel: Hook = makeStyles({ root: { padding: '1px' } });\n"],
+  ['hooks assigned to properties that change places', "const hooks: any = {};\nhooks.panel = makeStyles({ root: { borderColor: 'red' } });\nhooks.card = makeStyles({ root: { padding: '1px' } });\n", "const hooks: any = {};\nhooks.card = makeStyles({ root: { borderColor: 'red' } });\nhooks.panel = makeStyles({ root: { padding: '1px' } });\n"],
+  ['hooks of the same name written in two functions that change places', "function panel() { const useStyles = makeStyles({ root: { borderColor: 'red' } }); return useStyles; }\nfunction card() { const useStyles = makeStyles({ root: { padding: '1px' } }); return useStyles; }\n", "function card() { const useStyles = makeStyles({ root: { borderColor: 'red' } }); return useStyles; }\nfunction panel() { const useStyles = makeStyles({ root: { padding: '1px' } }); return useStyles; }\n"],
+];
+test('an UPDATE that moves a key to another arm of a condition below the call, or to another hook while the hooks change places — however the hooks are typed, assigned or scoped — is refused, and writes nothing', async () => {
+  const page = (declarations) => `${GRIFFEL_IMPORT}const dark = true;\ntype Hook = () => Record<string, string>;\n${declarations}export default function P() { return null; }\n`;
+  for (const [what, before, after] of MOVES) {
+    const { file, genpage, r } = await griffelUpdate(page(after), page(before));
+    assert.strictEqual(r.ok, false, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(r.payload.code, 'griffel-shorthand', what);
+    assert.strictEqual(genpage.of('update').length, 0, `${what}: nothing is written`);
+    assert.deepStrictEqual(r.payload.problems.map((p) => p.property), ['borderColor'], `${what}: the key where it is set now`);
+    assert.ok(r.payload.error.includes(`${file}:${placeOf(page(after), "borderColor: 'red'")}: \`borderColor\``), `${what}: named where it is`);
+  }
+});
+
+test('an UPDATE of a page with the same hooks and arms — reformatted, the hooks reordered with their keys, the other place edited — goes ahead with the warning an inherited key gets', async () => {
+  const page = (declarations) => `${GRIFFEL_IMPORT}const dark = true;\ntype Hook = () => Record<string, string>;\n${declarations}export default function P() { return null; }\n`;
+  for (const [what, before, edited] of [
+    ['a condition in a slot, the other arm edited', MOVES[0][1], MOVES[0][1].replace("padding: '1px'", "padding: '2px'")],
+    ['a condition in a slot, reformatted', MOVES[0][1], "const useStyles = makeStyles({\n  root: dark\n    ? { borderColor: \"red\" }\n    : { padding: '1px' },\n});\n"],
+    ['a condition under a selector, the other arm edited', MOVES[1][1], MOVES[1][1].replace("padding: '1px'", "padding: '2px'")],
+    ['a condition in a spread, reformatted', MOVES[2][1], "const useStyles = makeStyles({\n  root: {\n    ...(dark ? { borderColor: 'red' } : { padding: '1px' }),\n  },\n});\n"],
+    ['typed hooks reordered with their keys', MOVES[3][1], "const useCard: Hook = makeStyles({ root: { padding: '1px' } });\nconst usePanel: Hook = makeStyles({ root: { borderColor: 'red' } });\n"],
+    ['hooks assigned to properties reordered with their keys', MOVES[4][1], "const hooks: any = {};\nhooks.card = makeStyles({ root: { padding: '1px' } });\nhooks.panel = makeStyles({ root: { borderColor: 'red' } });\n"],
+  ]) {
+    const { genpage, r } = await griffelUpdate(page(edited), page(before));
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(genpage.of('update').length, 1, `${what}: the page is written`);
+    assert.strictEqual((r.payload.warnings || []).filter((w) => /Griffel/.test(w)).length, 1, `${what}: with the warning of an inherited key`);
+  }
 });
 
 // A key the deployed page already has is not what the check holds back — but a key given ANOTHER value is a change the maker meant to see, and Griffel drops the new value just as it
