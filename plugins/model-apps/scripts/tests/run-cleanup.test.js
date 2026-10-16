@@ -216,3 +216,68 @@ test('the real SDK rolls back only its new model id while plugin cleanup keeps s
   assert.ok(wireDeletes[0].endsWith(`/msdyn_aimodels(${newId})`));
   assert.deepEqual(state.deletes, [], 'the plugin must not follow the exact-id rollback with a name-only delete');
 });
+
+// An org without the AI template a row summary is built from is an environment gate like the licence refusal: the SDK reads the
+// template before its first write and refuses with ROW_SUMMARY_TEMPLATE_NOT_FOUND ("Nothing was written"), so the summary is skipped with
+// one warning and the build goes on — and, as nothing was written, there is no model to look for or report.
+test('an org with no row-summary AI template skips the summary with one warning and looks for no model', async () => {
+  const { sdk } = makeSimpleMockSdk();
+  const queries = [];
+  const deletes = [];
+  const warnings = [];
+  const events = [];
+  sdk.configureRowSummary = async () => {
+    throw Object.assign(new Error("Cannot configure the row summary of 'contoso_ticket': this org has no AI template 'GptPowerPrompt' (msdyn_aitemplates), which a row-summary model is built from. Nothing was written."), { code: 'ROW_SUMMARY_TEMPLATE_NOT_FOUND' });
+  };
+  sdk.queryRecords = async (entity) => { queries.push(entity); return []; };
+  sdk.deleteRecord = async (entity, id) => { deletes.push({ entity, id }); };
+  const s = spec();
+  s.entities.push({ ...s.entities[0], schemaName: 'contoso_request' });
+  s.ai.summaries.tables.contoso_request = { enabled: true };
+
+  const r = await runSdkBuild(s, { sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w), emit: (e) => events.push(e) });
+
+  assert.equal(r.ok, true, 'the build goes on');
+  assert.deepEqual(r.skipped.aiSummaries, ['contoso_ticket', 'contoso_request']);
+  assert.deepEqual(events.filter((e) => e.status === 'skip' && /^row summary for /.test(e.label)).map((e) => e.label),
+    ['row summary for contoso_ticket (no row-summary AI template in this environment)', 'row summary for contoso_request (no row-summary AI template in this environment)']);
+  assert.equal(warnings.length, 1, `one warning for two tables, got ${JSON.stringify(warnings)}`);
+  assert.match(warnings[0], /AI row summaries were NOT created: this environment has no 'GptPowerPrompt' AI template/);
+  assert.match(warnings[0], /nothing was written for them/);
+  assert.deepEqual(queries.filter((entity) => entity === 'msdyn_aimodel'), [], 'nothing was written, so no same-name model is looked for');
+  assert.deepEqual(deletes, []);
+});
+
+test('the real SDK refuses a row summary on an org with no AI template before any write, and the build skips it', async (t) => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-summary-template-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const writes = [];
+  const response = (body) => ({ status: 200, headers: {}, body });
+  const real = createMakerSdk({
+    workspaceStorage: createNodeWorkspaceStorage(dir),
+    instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: {
+      get: async (url) => {
+        if (url.includes('/aiskillconfigs?') || url.includes('/msdyn_aitemplates?')) return response({ value: [] });
+        if (url.includes("/EntityDefinitions(LogicalName='contoso_ticket')")) return response({ MetadataId: OLDEST });
+        throw new Error(`unexpected offline GET ${url}`);
+      },
+      post: async (url) => { writes.push(`POST ${url}`); return response({}); },
+      patch: async (url) => { writes.push(`PATCH ${url}`); return response({}); },
+      put: async (url) => { writes.push(`PUT ${url}`); return response({}); },
+      delete: async (url) => { writes.push(`DELETE ${url}`); return { status: 204, headers: {}, body: {} }; },
+    },
+  });
+  await real.initWorkspace();
+  const { sdk, state } = summarySdk('ModelNotSupported');
+  sdk.configureRowSummary = real.configureRowSummary.bind(real);
+
+  const r = await runSdkBuild(spec(), { sdk, apply: true, phases: ['ai-features'], warn: (w) => state.warnings.push(w) });
+
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.skipped.aiSummaries, ['contoso_ticket']);
+  assert.deepEqual(writes, [], 'the SDK read the template first and wrote nothing');
+  assert.deepEqual(state.queries, [], 'no model inventory read: nothing was written for it to report');
+  assert.ok(state.warnings.some((w) => /no 'GptPowerPrompt' AI template/.test(w)));
+});

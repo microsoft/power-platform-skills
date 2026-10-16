@@ -7136,7 +7136,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       summaryOverrides.set(String(key).toLowerCase(), val);
     }
     const DUPLICATE_MODEL_REASON = 'a model with this name already exists';
+    // An org without the AI template a row summary is built from. The SDK reads the template before its first write and refuses with its own
+    // code (`configureRowSummary`: ROW_SUMMARY_TEMPLATE_NOT_FOUND, "Nothing was written"), where it used to publish a model that named no template and let the
+    // platform answer. It is the same kind of environment gate as the licence refusal below — nothing in the spec can fix it — so it skips the same way.
+    const NO_TEMPLATE_REASON = 'no row-summary AI template in this environment';
     const aiSummaryUnsupported = (err) => {
+      if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') return NO_TEMPLATE_REASON;
       const detail = `${(err && err.message) || ''} ${JSON.stringify((err && err.cause) || '')}`;
       // Match the platform's own error CODE, not the prose: the message is localized and the status
       // alone (403/400) is also what a plain privilege or validation failure returns, which must
@@ -7195,14 +7200,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
             const reason = aiSummaryUnsupported(err);
             if (!reason) return false;
             result.skipped.aiSummaries.push(logical);
-            pendingAiSummaryReports.push(logical);
+            // Nothing was written for a table the SDK refused before its first write, so there is no model to look for.
+            if (reason !== NO_TEMPLATE_REASON) pendingAiSummaryReports.push(logical);
             // Warn ONCE per build: on a gated environment every table skips for the same reason, and
             // N copies of the same paragraph buries the rest of the output.
             if (!aiSummaryGateWarned && typeof opts.warn === 'function') {
               aiSummaryGateWarned = true;
-              opts.warn(reason === DUPLICATE_MODEL_REASON
-                ? `AI row summaries were NOT created: an AI model named "<table> row summary" already exists for a table in this spec, so the platform refused to create another (duplicate key on 'ndx_Uniquename'). Same-name models are kept because this attempt returned no created-model id. Review the reported ids before any separate cleanup. Everything else in the app was built normally.`
-                : `AI row summaries were NOT created: this environment does not license the row-summary (AI Builder) capability, so there is no supported way to author them here — the org's 'EnableFormInsights' setting can read ON and the publish still be refused. Everything else in the app was built normally. Re-run against a licensed environment, or set ai.summaries.default to "off" (with no per-table enabled:true) to stop requesting them.`);
+              if (reason === DUPLICATE_MODEL_REASON) {
+                opts.warn(`AI row summaries were NOT created: an AI model named "<table> row summary" already exists for a table in this spec, so the platform refused to create another (duplicate key on 'ndx_Uniquename'). Same-name models are kept because this attempt returned no created-model id. Review the reported ids before any separate cleanup. Everything else in the app was built normally.`);
+              } else if (reason === NO_TEMPLATE_REASON) {
+                opts.warn(`AI row summaries were NOT created: this environment has no 'GptPowerPrompt' AI template, which a row summary is built from (AI Builder provides it), so none can be authored here, and nothing was written for them. Everything else in the app was built normally. Re-run once the environment has the template, or set ai.summaries.default to "off" (with no per-table enabled:true) to stop requesting them.`);
+              } else {
+                opts.warn(`AI row summaries were NOT created: this environment does not license the row-summary (AI Builder) capability, so there is no supported way to author them here — the org's 'EnableFormInsights' setting can read ON and the publish still be refused. Everything else in the app was built normally. Re-run against a licensed environment, or set ai.summaries.default to "off" (with no per-table enabled:true) to stop requesting them.`);
+              }
             }
             return reason;
           },
