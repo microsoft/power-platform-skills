@@ -497,8 +497,9 @@ const ASSET_SOURCES = {
 };
 const compId = (n) => `44444444-0000-4000-8000-${String(n).padStart(12, '0')}`;
 // An SDK double that holds one app: `tables` maps a table component's MetadataId to its logical name, `assets` maps a component type to { id: the table
-// of the view, form or chart }, and `shape(type, rows)` changes what a lookup of those tables answers. `reads` keeps every request, in order.
-function inventorySdk({ tables = {}, assets = {}, shape = (type, rows) => rows } = {}) {
+// of the view, form or chart }, `shape(type, rows)` changes what a lookup of those tables answers and `shapeList(type, rows)` what a component list answers.
+// `reads` keeps every request, in order.
+function inventorySdk({ tables = {}, assets = {}, shape = (type, rows) => rows, shapeList = (type, rows) => rows } = {}) {
   const reads = [];
   return {
     reads,
@@ -522,7 +523,7 @@ function inventorySdk({ tables = {}, assets = {}, shape = (type, rows) => rows }
       reads.push(`${set}: ${filter}`);
       if (set === 'appmodulecomponent') {
         const type = Number((/componenttype eq (\d+)/.exec(filter) || [])[1]);
-        return type === 1 ? Object.keys(tables).map((objectid) => ({ objectid, componenttype: 1 })) : Object.keys(assets[type] || {}).map((objectid) => ({ objectid, componenttype: type }));
+        return shapeList(type, type === 1 ? Object.keys(tables).map((objectid) => ({ objectid, componenttype: 1 })) : Object.keys(assets[type] || {}).map((objectid) => ({ objectid, componenttype: type })));
       }
       const [type, source] = Object.entries(ASSET_SOURCES).find(([, s]) => s.set === set);
       return shape(Number(type), Object.entries(assets[type] || {}).filter(([id]) => filter.includes(id)).map(([id, table]) => ({ [source.id]: id, [source.table]: table })));
@@ -661,4 +662,63 @@ test('requireIdentified reads the answer strictly: a row counts for an id the co
   const everything = await read((type, rows) => [{ formid: compId(53), objecttypecode: 'contoso_lookup' }, ...rows.filter((row) => row.formid !== form), { formid: held, objecttypecode: 12345 }]);
   assert.equal(everything.notes.length, 1, 'one note for the type, with every reason in it');
   assert.equal(everything.notes[0].reason, `tables derived from app component type 60 could not be fully identified (no systemform record answered for ${form}; the systemform answer for ${held} names no usable table (12345))`);
+});
+
+// --- readAppComponentInventory: the component list itself, read strictly -------------------------------------------------------
+//   GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <layer> and componenttype eq 60
+//   { "value": [ { "objectid": "44444444-…", "componenttype": 60 } ] }
+// A caller that proves something from the list (the build's publish before the app) must be able to place EVERY row of it. A row it cannot place — no record, an
+// objectid that is no GUID, a component type that is not the one asked for — would otherwise vanish in the filter or in the normalising of the ids, and the component it
+// stood for would read as "the app holds no such component", which makes an incomplete list look complete. The download keeps reading the list as it always did.
+const BAD_ROWS = [
+  ['a null row', (id) => null, 'row 2 is not a record'],
+  ['a row that is text', (id) => 'objectid', 'row 2 is not a record'],
+  ['a row that is a list', (id) => [id], 'row 2 is not a record'],
+  ['an objectid that is only braces', (id) => ({ objectid: '{}', componenttype: 60 }), 'row 2 has an objectid that is no GUID ("{}")'],
+  ['an objectid that is no GUID', (id) => ({ objectid: 'not-a-guid', componenttype: 60 }), 'row 2 has an objectid that is no GUID ("not-a-guid")'],
+  ['an objectid that is not text', (id) => ({ objectid: 12345, componenttype: 60 }), 'row 2 has an objectid that is no GUID (12345)'],
+  ['no objectid', (id) => ({ componenttype: 60 }), 'row 2 has no objectid'],
+  ['a null objectid', (id) => ({ objectid: null, componenttype: 60 }), 'row 2 has no objectid'],
+  ['a component type that is text', (id) => ({ objectid: id, componenttype: 'bad' }), 'row 2 has component type "bad", not 60'],
+  ['a component type that is a boolean', (id) => ({ objectid: id, componenttype: true }), 'row 2 has component type true, not 60'],
+  ['a component type of another kind', (id) => ({ objectid: id, componenttype: 59 }), 'row 2 has component type 59, not 60'],
+  ['no component type', (id) => ({ objectid: id }), 'row 2 says no component type'],
+];
+
+for (const [what, damaged, said] of BAD_ROWS) {
+  test(`requireIdentified: a component list that holds ${what} is unreadable, with the row named, and no table is offered from the rest of it`, async () => {
+    const [first, held] = [compId(60), compId(61)];
+    const assets = { 60: { [first]: 'contoso_form', [held]: 'contoso_held' } };
+    // The list answers the first component and, in the second row's place, the damaged one: the component it stood for is not in what the build reads.
+    const shapeList = (type, rows) => (type === 60 ? [rows.find((row) => row.objectid === first), damaged(held)] : rows);
+    const read = await readAppComponentInventory(inventorySdk({ assets, shapeList }), APP, { componentTypes: [60], requireIdentified: true, savedLayer: true });
+    assert.deepEqual(read.notes, [{ kind: 'tables', reason: `app component type 60 could not be read (the component list holds 1 row it cannot place: ${said})` }]);
+    assert.equal(read.componentProblems.get(60), `the component list holds 1 row it cannot place: ${said}`);
+    assert.deepEqual(read.assetTables, [], 'nothing is looked up for a list that cannot be placed whole');
+    assert.ok(!read.assetTablesByType.has(60) || read.assetTablesByType.get(60).size === 0);
+  });
+}
+
+test('requireIdentified: every unplaceable row is counted, three are named and the rest are cut, and a well-formed list (braces, capitals, a numeric text type) is read as before', async () => {
+  const ids = [compId(70), compId(71)];
+  const assets = { 60: Object.fromEntries(ids.map((id) => [id, 'contoso_form'])) };
+  const many = await readAppComponentInventory(inventorySdk({ assets, shapeList: (type, rows) => [...rows, null, null, { objectid: '{}', componenttype: 60 }, { componenttype: 60 }, 'x'] }), APP, { componentTypes: [60], requireIdentified: true });
+  assert.equal(many.notes.length, 1);
+  assert.equal(many.notes[0].reason, 'app component type 60 could not be read (the component list holds 5 rows it cannot place: row 3 is not a record; row 4 is not a record; row 5 has an objectid that is no GUID ("{}") and 2 more)');
+  const spelled = await readAppComponentInventory(inventorySdk({ assets, shapeList: (type, rows) => rows.map((row, i) => ({ objectid: i ? `{${row.objectid.toUpperCase()}}` : row.objectid, componenttype: i ? ' 60 ' : '60' })) }), APP, { componentTypes: [60], requireIdentified: true });
+  assert.deepEqual(spelled.notes, [], 'a GUID with braces or capitals and a type spelled as text are placeable');
+  assert.deepEqual(spelled.assetTables, ['contoso_form']);
+});
+
+test('the download reads the component list as it always did: a row that cannot be placed is left out, as before, without a note — except one with no objectid, which has always been said', async () => {
+  const [first, held] = [compId(80), compId(81)];
+  const assets = { 60: { [first]: 'contoso_form', [held]: 'contoso_held' } };
+  const lenient = (damaged) => readAppComponentInventory(inventorySdk({ assets, shapeList: (type, rows) => [rows.find((row) => row.objectid === first), damaged(held)] }), APP, { componentTypes: [60] });
+  for (const what of ['a null row', 'an objectid that is only braces', 'a component type that is text', 'a component type of another kind']) {
+    const read = await lenient(BAD_ROWS.find(([name]) => name === what)[1]);
+    assert.deepEqual(read.notes, [], `${what}: unchanged, the row is dropped without a word`);
+    assert.deepEqual(read.assetTables, ['contoso_form'], what);
+  }
+  const noId = await lenient(() => ({ componenttype: 60 }));
+  assert.deepEqual(noId.notes, [{ kind: 'tables', reason: 'an app component of type 60 has no objectid and could not be recovered' }], 'the one case the download has always said');
 });

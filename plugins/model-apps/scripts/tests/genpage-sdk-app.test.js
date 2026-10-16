@@ -408,6 +408,72 @@ test('pinning: a table name is escaped into the OData filter as a literal', asyn
   assert.match(seen[0], /returnedtypecode eq 'o''brien' and/);
 });
 
+// ── placeInApp: the caller's last word before the app is written (`beforeAppWrite`) ──────────────────────────────────────────────
+// The build publishes the tables whose forms the app's publish would otherwise strand, and a placement pushes and publishes the app by itself, inside this backend, only when it
+// finds something to write. So the build hands the placement that request, and the placement awaits it right before its first write, and not at all when it writes nothing.
+
+test('placeInApp: beforeAppWrite is awaited once, after the edits are made and before the app is pushed or published, and nothing is sent while it is outstanding', async () => {
+  const sdk = placing(appArtifact(), viewRecords());
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let called = 0;
+  const beforeAppWrite = async () => {
+    called += 1;
+    sdk.calls.push({ name: 'beforeAppWrite', args: [] });
+    await gate;
+  };
+  const placement = backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'One' }], dataSources: ['account'], beforeAppWrite });
+  for (let i = 0; i < 50 && called === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(called, 1, 'the hook is called');
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(sdk.count('pushArtifact') + sdk.count('publishArtifact'), 0, 'the app is neither pushed nor published while the hook is outstanding');
+  release();
+  const out = await placement;
+  assert.strictEqual(called, 1, 'once, for one push and one publish');
+  assert.deepStrictEqual(out.added, [P1]);
+  const order = sdk.calls.map((c) => c.name).filter((name) => ['updateElement', 'addElement', 'beforeAppWrite', 'pushArtifact', 'publishArtifact'].includes(name));
+  assert.deepStrictEqual(order, ['updateElement', 'addElement', 'beforeAppWrite', 'pushArtifact', 'publishArtifact'], 'the edits are in the workspace copy, then the hook, then the first thing sent');
+});
+
+test('placeInApp: a placement with nothing to write — every page placed, every view pinned — does not call beforeAppWrite: the request is not made for a write that is not', async () => {
+  const app = appArtifact();
+  app.siteMap.areas[0].groups[0].subAreas.push({ id: 'sub_p', type: 'GenPage', genPageId: P1, title: 'Overview' });
+  const sdk = placing(app, viewRecords({ held: [V_ACCOUNT] }));
+  let called = 0;
+  const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], dataSources: ['account'], beforeAppWrite: async () => { called += 1; } });
+  assert.strictEqual(out.appEdited, false);
+  assert.strictEqual(called, 0);
+  assert.strictEqual(sdk.count('pushArtifact') + sdk.count('publishArtifact'), 0);
+});
+
+test('placeInApp finish: a completion that only publishes the app, with nothing to write, calls beforeAppWrite before that publish', async () => {
+  const { sdk } = savedButUnpublished();
+  const order = [];
+  const publish = sdk.publishArtifact.bind(sdk);
+  sdk.publishArtifact = async (type, id, options) => { order.push('publishArtifact'); return publish(type, id, options); };
+  const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], finish: true, beforeAppWrite: async () => { order.push('beforeAppWrite'); } });
+  assert.strictEqual(out.provedPublished, true);
+  assert.deepStrictEqual(order, ['beforeAppWrite', 'publishArtifact'], 'the publish is a write of the app too');
+  assert.strictEqual(sdk.count('pushArtifact'), 0, 'and there is no push to put it before');
+});
+
+test('placeInApp: a beforeAppWrite that throws stops the placement before anything is sent, and its own error is what the caller sees', async () => {
+  const sdk = placing(appArtifact(), viewRecords());
+  const refusal = new Error('the request before the app failed');
+  await assert.rejects(backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'One' }], dataSources: ['account'], beforeAppWrite: async () => { throw refusal; } }), (e) => e === refusal);
+  assert.strictEqual(sdk.count('pushArtifact') + sdk.count('publishArtifact'), 0, 'the edits stay in the throwaway workspace copy, which the next fetch replaces');
+  assert.deepStrictEqual(sdk.apps.get(APP).siteMap.areas[0].groups[0].subAreas.map((s) => s.id), ['sub_1'], 'and the server still holds the navigation it had');
+});
+
+test('placeInApp: without beforeAppWrite the placement is what it was, and a value that is no function is ignored', async () => {
+  for (const hook of [undefined, null, 'later', {}]) {
+    const sdk = placing(appArtifact());
+    const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'One' }], beforeAppWrite: hook });
+    assert.deepStrictEqual(out.added, [P1]);
+    assert.deepStrictEqual([sdk.count('pushArtifact'), sdk.count('publishArtifact')], [1, 1]);
+  }
+});
+
 test('dispose: an SDK that is lent (or injected) leaves nothing for dispose() to remove, and dispose() may be called any number of times', () => {
   const removed = [];
   const lent = makeGenpageSdk(ENV, { sdk: new FakeSdk(), rmSync: (dir) => removed.push(dir) });

@@ -136,13 +136,13 @@ const LAYER_ID = '22222222-0000-4000-8000-000000000002';
 const guid = (n) => `33333333-0000-4000-8000-${String(n).padStart(12, '0')}`;
 // An SDK double for the reads of what an app holds: the app's layer, its components by type, a table component's metadata and the table of a view,
 // form or chart component. `tables` maps a logical name to its MetadataId; `assets` maps `<componenttype>` to { id: table }; `reads` keeps every
-// request; `shape(type, rows)` changes the rows the platform answers a lookup of a component's table with; `failLookup` is a component type whose
-// lookup the platform refuses.
+// request; `shape(type, rows)` changes the rows the platform answers a lookup of a component's table with; `shapeList(type, rows)` changes the rows its component list
+// answers with; `failLookup` is a component type whose lookup the platform refuses.
 // The lookup is the SAVED layer's, as the build makes it:
 //   GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq <id> or formid eq <id>
 // A PLAIN read of the record (`queryRecords` of its entity) answers the published layer only, so a record never published has no row in it. The double
 // fails that read loudly, so a regression to it shows as itself and not as a quiet hole.
-function appSdk({ tables = {}, assets = {}, layer = true, failType, failLookup, shape = (type, rows) => rows } = {}) {
+function appSdk({ tables = {}, assets = {}, layer = true, failType, failLookup, shape = (type, rows) => rows, shapeList = (type, rows) => rows } = {}) {
   const tableOf = { 26: ['savedquery', 'savedqueryid', 'returnedtypecode'], 59: ['savedqueryvisualization', 'savedqueryvisualizationid', 'primaryentitytypecode'], 60: ['systemform', 'formid', 'objecttypecode'] };
   const collections = { savedqueries: 26, savedqueryvisualizations: 59, systemforms: 60 };
   const reads = [];
@@ -172,7 +172,7 @@ function appSdk({ tables = {}, assets = {}, layer = true, failType, failLookup, 
         const type = Number((/componenttype eq (\d+)/.exec(filter) || [])[1]);
         if (type === failType) throw new Error(`type ${type} could not be read`);
         if (type === 1) return Object.values(tables).map((objectid) => ({ objectid, componenttype: 1 }));
-        return Object.keys(assets[type] || {}).map((objectid) => ({ objectid, componenttype: type }));
+        return shapeList(type, Object.keys(assets[type] || {}).map((objectid) => ({ objectid, componenttype: type })));
       }
       throw new Error(`a plain read of ${set} answers the published layer only: a record the app holds that was never published has no row in it`);
     },
@@ -333,6 +333,28 @@ test('readAppFormChartTables: every read it rests on, refused, malformed or lost
       assert.ok(read.reason && read.tables === undefined, `the component list of type ${type} ${mode}: a reason and no table`);
     }
   }
+});
+
+test('readAppFormChartTables: a row of the component list that cannot be placed makes the app unreadable, whatever else the list holds, and no table is offered', async () => {
+  const assets = { 59: { [guid(11)]: 'contoso_chart' }, 60: { [guid(12)]: 'contoso_form', [guid(13)]: 'contoso_held' } };
+  // The held form's component is replaced by a row that stands for nothing the build can place, so without the check the list would read as one component short.
+  const without = (type, rows) => rows.filter((row) => row.objectid !== guid(13));
+  for (const [what, type, damaged, reason] of [
+    ['a null row', 60, null, 'row 2 is not a record'],
+    ['an objectid that is only braces', 60, { objectid: '{}', componenttype: 60 }, 'row 2 has an objectid that is no GUID ("{}")'],
+    ['a component type that is text', 60, { objectid: guid(13), componenttype: 'bad' }, 'row 2 has component type "bad", not 60'],
+    ['a row with no objectid', 60, { componenttype: 60 }, 'row 2 has no objectid'],
+    ['a null row in the chart list', 59, null, 'row 2 is not a record'],
+  ]) {
+    const shapeList = (listType, rows) => (listType === type ? [...without(listType, rows), damaged] : rows);
+    const read = await readAppFormChartTables(appSdk({ assets, shapeList }), APP_ID);
+    assert.strictEqual(read.ok, false, what);
+    assert.strictEqual(read.reason, `app component type ${type} could not be read (the component list holds 1 row it cannot place: ${reason})`, what);
+    assert.ok(read.tables === undefined && read.forms === undefined, `${what}: the rest of the list is not offered as if it were the whole`);
+  }
+  const whole = await readAppFormChartTables(appSdk({ assets, shapeList: (type, rows) => rows.map((row) => ({ ...row, objectid: `{${row.objectid.toUpperCase()}}`, componenttype: String(row.componenttype) })) }), APP_ID);
+  assert.strictEqual(whole.ok, true, 'a list that can be placed — braces, capitals, a type spelled as text — is read as before');
+  assert.deepStrictEqual(sorted(whole.tables), ['contoso_chart', 'contoso_form', 'contoso_held']);
 });
 
 test('readAppFormChartTables: no app, no client, a client that throws: none of them throws', async () => {

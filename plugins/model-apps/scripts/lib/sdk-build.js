@@ -2440,12 +2440,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // that only `app.tables` pins (a table component: the SDK expands no form of it). The components are read for an EXISTING app, on every build that
   // publishes: a new app has nothing on the server to read, and what it is created with are the forms and charts this build creates or reconciles,
   // which are covered above, and the Main forms its own write adds. The read is complete or it does not count — a component the lookup cannot place, or
-  // places ambiguously, makes it unreadable — and then the request names what the build changed and what its write of the app adds, and the build says
-  // which proof failed (describeUnreadAppComponents). The forms the write adds are only those of a build that writes the app through the SDK: a new app,
-  // and an existing one whose sitemap this build writes (existingAppSitemapIsWritten); a build that only publishes an existing app adds none.
+  // places ambiguously, and a row of the component list that cannot be placed, make it unreadable — and then the request names what the build changed and what its write
+  // of the app adds, and the build says which proof failed (describeUnreadAppComponents). A write adds Main forms only when it PUSHES the app through the SDK
+  // (`pushes`): the create of a new app, the push of an existing one (the app step's or the pages finalizer's, and the push that only carries the routing description), and the
+  // placement of a default view the app lost, which pushes by itself; a write that only publishes the app adds none.
   // That one request takes the place of the reconciled tables' envelope, so a build that reconciled something (every rebuild of an app whose
   // views or forms exist) sends the publishes it always did, and a build that reconciled nothing (a first build) sends one more (four one-table
   // publishes took 10-19 s, one envelope 3.6-3.8 s, as the SDK measured).
+  //
+  // EVERY write of the app asks for it (appWriters, below), and each asks for what ITS write needs: a build whose app step has made the request sends nothing more, because the
+  // later writers add only the tables it did not name, which on a full build is none; a run that reaches the app by another writer first — the changed-only re-upload of a page
+  // that has to pin a view the app lost has no app step at all — makes the request there, before that writer's first write. The tables a request named are remembered even when it
+  // was refused: the refusal is said once, and a later writer does not send the same request again. Concurrent writers cannot interleave (`beforeApp` runs them one after the other).
   //
   // By name through the raw client rather than the SDK's artifact publish, which names a table only through a form, view or chart that
   // the SDK's workspace holds, and a table nothing in the spec saves has none (publishTablesXml; the lookup-label repair does the same).
@@ -2456,35 +2462,77 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // what other people saved — only get a warning that says the protection did not apply and what that leaves open (describePreAppRefusal).
   // Stopping every build over a table it did not change would be out of proportion, and the client has already re-sent a throttled request.
   // Only with --publish: without it nothing here publishes a table the build did not change, as `--publish` gates the bulk publish; and an
-  // SDK with no raw client (a test double) publishes the reconciled tables as before.
-  const publishTablesBeforeApp = async (existingAppId, mainFormsByTable) => {
-    const reconciled = new Set(reconciledTables);
-    const client = provision.dataverse;
-    if (!publishInPhase8 || !client || typeof client.post !== 'function') return publishReconciledTables();
-    const added = !existingAppId || existingAppSitemapIsWritten(spec, phases, opts.changedOnly) ? appWriteTables(spec, mainFormsByTable) : [];
-    let held;
-    let heldForms;
-    if (existingAppId) {
-      const read = await readAppFormChartTables(provision, existingAppId);
-      if (read.ok) {
-        held = read.tables;
-        heldForms = read.forms;
-      } else if (typeof opts.warn === 'function') {
-        opts.warn(describeUnreadAppComponents({ reason: read.reason, added }));
+  // SDK with no raw client (a test double) publishes the reconciled tables as before. The gate is the flag and not the publish phase: a run that does not have the
+  // phase (the changed-only re-upload of a page) and still writes the app is protected when it was asked to publish.
+  const namedBeforeApp = new Set();
+  let appHolds; // what the app holds, read by the first writer that finds the app on the server: { tables, forms }, or {} when it could not be read or there was nothing to read
+  let beforeApp = Promise.resolve();
+  const publishTablesBeforeApp = (existingAppId, mainFormsByTable, { pushes = true } = {}) => {
+    const run = beforeApp.then(async () => {
+      const reconciled = new Set(reconciledTables);
+      const client = provision.dataverse;
+      if (!publish || !client || typeof client.post !== 'function') return publishReconciledTables();
+      const added = pushes ? appWriteTables(spec, mainFormsByTable) : [];
+      if (!appHolds) {
+        appHolds = {};
+        if (existingAppId) {
+          const read = await readAppFormChartTables(provision, existingAppId);
+          if (read.ok) appHolds = { tables: read.tables, forms: read.forms };
+          else if (typeof opts.warn === 'function') opts.warn(describeUnreadAppComponents({ reason: read.reason, added }));
+        }
       }
-    }
-    const tables = preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held });
-    const outcome = await publishTablesXml(client, tables);
-    if (outcome.ok) {
-      reconciledTables.clear();
+      const wanted = preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables });
+      const tables = wanted.filter((logical) => !namedBeforeApp.has(logical));
+      const outcome = await publishTablesXml(client, tables);
+      for (const logical of tables) namedBeforeApp.add(logical);
+      if (outcome.ok) {
+        reconciledTables.clear();
+        return undefined;
+      }
+      await publishReconciledTables();
+      const unprotected = tables.filter((logical) => !reconciled.has(logical));
+      if (unprotected.length && typeof opts.warn === 'function') {
+        opts.warn(describePreAppRefusal({ reason: outcome.reason, tables: unprotected, saved: savedOnTable, described: describedCharts, forms: appHolds.forms, added }));
+      }
       return undefined;
-    }
-    await publishReconciledTables();
-    const unprotected = tables.filter((logical) => !reconciled.has(logical));
-    if (unprotected.length && typeof opts.warn === 'function') {
-      opts.warn(describePreAppRefusal({ reason: outcome.reason, tables: unprotected, saved: savedOnTable, described: describedCharts, forms: heldForms, added }));
-    }
-    return undefined;
+    });
+    // A failed request (a refused publish of the reconciled tables halts the build) must not poison the chain for the writer that comes after the halt is handled.
+    beforeApp = run.catch(() => undefined);
+    return run;
+  };
+
+  // The ONLY ways the build pushes or publishes the app. Each first awaits publishTablesBeforeApp, so no write of the app can come ahead of the tables whose forms and charts the
+  // app's publish ships; a path that called the SDK for the app directly would skip it, which is why the engine makes no such call anywhere else (the contract test in
+  // publish-scope-real-bundle.test.js reads this file and fails on one). The mainForms of a write are the spec's, resolved once (resolvedMainForms).
+  // The publish phase publishes the app in the same envelope as the tables the build has artifacts of, and asks for the request too, because a run can reach that phase without the app step.
+  const appWriters = {
+    // The SDK's create of a new app: it adds the active Main forms of the navigation's tables and publishes the app by the push that makes it. Answers the push.
+    async create(def) {
+      await publishTablesBeforeApp(undefined, await resolvedMainForms(), { pushes: true });
+      const art = await provision.createArtifact('app', def);
+      return provision.pushArtifact('app', art.id);
+    },
+    // A push of an existing app: the SDK adds the Main forms of the navigation's tables on every one, whatever it changes.
+    async push(appId, name, headerChanged) {
+      const mainFormsByTable = await resolvedMainForms();
+      await publishTablesBeforeApp(appId, mainFormsByTable, { pushes: true });
+      return pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable);
+    },
+    // The publish of an app: it ships the forms the app holds, whoever last saved them.
+    async publish(appId) {
+      await publishTablesBeforeApp(appId, await resolvedMainForms(), { pushes: false });
+      return provision.publishArtifact('app', appId);
+    },
+    // The publish of the app that makes the table components pinned after its create live.
+    async publishPinned(appId) {
+      await publishTablesBeforeApp(appId, await resolvedMainForms(), { pushes: false });
+      return publishAppComponents(provision.dataverse, appId);
+    },
+    // The page backend's placement of default views: it reads the app, and pushes and publishes it by itself only when it finds a view to pin, so it is handed the request to await
+    // right before its first write, and a placement that finds nothing to pin sends nothing and asks for nothing.
+    placeViews(genpage, appId, options) {
+      return genpage.placeInApp(appId, { ...options, beforeAppWrite: async () => publishTablesBeforeApp(appId, await resolvedMainForms(), { pushes: true }) });
+    },
   };
 
   // The names of what this run CREATED on each table (`view Open Tickets`, `form Ticket`, `chart By Area`), and of a
@@ -5490,7 +5538,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const pinTables = async (appId, alreadyPublished) => {
       if (!refs) return;
       const pinned = await pinAppTables(provision.dataverse, appId, appTables, { refs });
-      if (pinned.added.length && alreadyPublished) await publishAppComponents(provision.dataverse, appId);
+      if (pinned.added.length && alreadyPublished) await appWriters.publishPinned(appId);
     };
     // Self-contained app-tile icon: a web resource IN this solution (default generated, or the
     // author's spec.app.icon). Resolved BEFORE appDef so the id is embedded at create time — the
@@ -5501,8 +5549,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
       // Whether the app exists says whether its components can be read to prove which tables it holds forms or charts of (publishTablesBeforeApp), so it is looked up first.
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
-      // Before anything below publishes the app: see publishTablesBeforeApp and publishReconciledTables.
-      await publishTablesBeforeApp(existingId, mainFormsByTable);
+      // Before anything below publishes the app: see publishTablesBeforeApp and publishReconciledTables. This step makes the request for the whole build, whether or not it writes the app
+      // itself (it also pays the publishes the reconciles deferred), and says whether the app is pushed by a write it is sure to make: a new app is, an existing one by the sitemap write of
+      // this step or of the finalizer (existingAppSitemapIsWritten). A push that is not certain — the routing description's, made only when the description differs — or not planned — the
+      // placement of a default view — asks for its own tables when it is made (appWriters), so it never names a table for a write that does not happen.
+      await publishTablesBeforeApp(existingId, mainFormsByTable, { pushes: !existingId || existingAppSitemapIsWritten(spec, phases, opts.changedOnly) });
       if (existingId) {
         appWasExisting = true;
         await provision.fetchArtifact('app', existingId);
@@ -5564,8 +5615,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', await siteMapOverLive(provision, existingId, def.siteMap, opts, result.created));
           const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
-          requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged, mainFormsByTable), `app ${def.name}`, opts.warn);
-          reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          requireSuccessfulPush(await appWriters.push(existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
+          reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
         } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
           // --apply): a page-backed app's sitemap is not written on this run, so the routing description
@@ -5577,8 +5628,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const current = await provision.getArtifact('app', existingId) || {};
           await assertAuthorizedSitemapRewrite(provision, existingId, current.siteMap || {}, opts.authorizedSitemapRemovals, 'app-shell');
           if (await applyAppAiDescription(provision, spec, existingId)) {
-            requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true, mainFormsByTable), `app ${def.name} routing description`, opts.warn);
-            reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
+            requireSuccessfulPush(await appWriters.push(existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
+            reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
           }
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName, solutionMembers);
@@ -5593,8 +5644,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // the pages phase that follows, verify, download). A failed first build would leave an app its own
       // re-run cannot see (it would POST the same unique name again), the pages phase would find no sitemap
       // and halt, and a build without --publish would never publish it. Pinned in sdk-opt-ins.test.js.
-      const art = await provision.createArtifact('app', def);
-      const pushed = requireSuccessfulPush(await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', art.id), def.name), `app ${def.name}`, opts.warn);
+      const pushed = requireSuccessfulPush(await explainAppPushWarnings(provision.dataverse, await appWriters.create(def), def.name), `app ${def.name}`, opts.warn);
       // Join the solution straight after the push, before the hidden-table pin, its read-back and the
       // publish that follows it can fail. A re-run finds the app and takes the reuse branch above, which
       // re-asserts the membership too, so a create interrupted here never leaves a solution without its app.
@@ -6311,8 +6361,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.
           const headerChanged = await applyAppAiDescription(provision, spec, result.created.app);
           const appName = (spec.app && spec.app.name) || result.created.app;
-          requireSuccessfulPush(await pushAppHeader(provision, result.created.app, appName, headerChanged, mainFormsByTable), 'app sitemap finalize', opts.warn);
-          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${appName}`, opts.warn);
+          requireSuccessfulPush(await appWriters.push(result.created.app, appName, headerChanged), 'app sitemap finalize', opts.warn);
+          reportPartialPush(await appWriters.publish(result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });
       } else {
@@ -6329,13 +6379,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // It adds those views and NOTHING else of the app's components. The SDK's app push, which carries the pin, would also add every active Main form, public view and chart of each table the
       // navigation opens — undoing this build's own `app.mainForms` list, and putting back what the app's maker took out of the app — so the backend limits it to the views it pins
       // (lib/app-component-scope.js). The sitemap push above is the build's own — it owns the whole app, and carries `mainFormsByTable` — and is not limited.
+      // When it does write — a view the app lost is pinned again — it pushes and publishes the app inside the backend, which is the one writer of the app that a changed-only re-upload
+      // of a page has (it runs this phase alone, with no app step and no finalizer), so it is handed the request to send before it writes (appWriters.placeViews).
       // `result.created.pages` holds the pages this run wrote (a page it left alone — changed-only — is not in it).
       const writtenTables = [...new Set(implemented.filter((p) => result.created.pages[keyOf(p)] !== undefined).flatMap((p) => p.dataSources || []))];
       if (writtenTables.length && typeof genpage.placeInApp === 'function') {
         // The app is edited in the authoring language this build made it in (the SDK refuses to push an artifact fetched in another one, and a label is written in it).
         const pinLanguage = opts.preResolvedLanguageCode || opts.languageCode;
         try {
-          const placed = await genpage.placeInApp(result.created.app, { pages: [], dataSources: writtenTables, ...(pinLanguage ? { languageCode: pinLanguage } : {}) });
+          const placed = await appWriters.placeViews(genpage, result.created.app, { pages: [], dataSources: writtenTables, ...(pinLanguage ? { languageCode: pinLanguage } : {}) });
           if (typeof opts.warn === 'function') for (const w of (placed && placed.warnings) || []) opts.warn(`default views of the pages' tables: ${w}`);
         } catch (e) {
           if (typeof opts.warn === 'function') opts.warn(`the pages were written, but their tables' default views could not be added to the app's components, so the maker's "/" picker may not list them (${(e && e.message) || e})`);
@@ -6972,6 +7024,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // views and forms the reconcile paths touched — when nothing above names them.
       for (const [k, target] of owed.tables) { if (!seen.has(k)) { seen.add(k); perEntity.push(forTable(k, target)); } }
       const appTarget = result.created.app ? ['app', result.created.app, `app ${(spec.app && spec.app.name) || result.created.app}`] : null;
+      // The app is published in the same envelope as the tables the build has artifacts of, so it is not ahead of them. It also ships the forms of tables the build did not touch, which the
+      // request before the app publishes — and a run can reach this phase without the app step having made it (a run that does not write the app but publishes it): a publish alone adds no form.
+      if (appTarget) await publishTablesBeforeApp(result.created.app, await resolvedMainForms(), { pushes: false });
       const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn);
       appPublishedByPublishPhase = publishedTargets.appPublished;
     });
@@ -7035,7 +7090,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (rewrite || owesPublish) {
         try {
           await provision.fetchArtifact('app', result.created.app);
-          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
+          reportPartialPush(await appWriters.publish(result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           if (rewrite) {
             // Filed like the first write: after a publish that failed or could not be confirmed, the SDK proves
             // this write only in the unpublished layer and answers `applied` + `pendingPublish`.

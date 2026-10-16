@@ -865,7 +865,7 @@ function makeGenpageSdk(env, deps = {}) {
     // Place pages into an app that exists, as the app designer does: each page becomes a sub-area of the app's navigation (the shape
     // genPageSubArea gives it), and the default public view of every table in `dataSources` joins the app's components so the
     // maker's "/" picker lists the table — pac's upload pinned those views, and the SDK's page write does not.
-    //   options: { pages: [{ pageId, title }], dataSources: [table…], languageCode, finish, finishIfUnpublished }
+    //   options: { pages: [{ pageId, title }], dataSources: [table…], languageCode, finish, finishIfUnpublished, beforeAppWrite }
     // One app edit at most: the app is read, the navigation and the components are edited, then it is pushed and published. A page the
     // navigation already names, and a view the app already holds, are left alone; when nothing is missing nothing is written.
     // The push changes the sitemap and adds the views pinned here — NOTHING else of the app's components. The SDK's own push would also add every
@@ -884,8 +884,12 @@ function makeGenpageSdk(env, deps = {}) {
     // `finishIfUnpublished` is the same completion for a caller that has no record of an earlier run to say one is owed — `add-to-app` — and asks the APP: a page this call adds is
     // published and proven, as with `finish`; for pages the saved navigation already names, the published navigation is read once, and the app is published, and proven, only when
     // it does not show every page asked for (an app that was never published, or whose published navigation cannot be read, does not show them). Pages both layers name are left exactly as they are.
+    // `beforeAppWrite` is an async function the caller wants run, and awaited, once, right before this call first writes the app — its push, or its publish when there is nothing to push — and not at all
+    // for a placement that writes and publishes nothing. The build uses it to publish the tables whose forms the app's publish would otherwise leave their saved labels out of (lib/sdk-build.js
+    // publishTablesBeforeApp): this call pushes and publishes the app by itself, so only it knows when that is about to happen. The edits are by then made in this operation's workspace copy only, so a
+    // hook that throws leaves the app as it was, and the call throws what the hook threw.
     // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? }. It throws, with
-    // the page unplaced, when the app cannot be read, the edit is refused, or the app's publish fails — and with `finish`, when the published
+    // the page unplaced, when the app cannot be read, the edit is refused, `beforeAppWrite` throws, or the app's publish fails — and with `finish`, when the published
     // navigation does not show the page after the app was published.
     async placeInApp(appId, options = {}) {
       if (!GUID_RE.test(String(appId || ''))) throw genpageError(`'${appId}' is not an app id`, { code: 'GENPAGE_ID_INVALID' });
@@ -947,6 +951,8 @@ function makeGenpageSdk(env, deps = {}) {
       }
       if (!edited && !finishing) return { added: [], alreadyPlaced, pinnedViews: [], warnings, appEdited: false };
 
+      // The first thing sent to the app is below: the caller's word comes before it (see `beforeAppWrite`, above).
+      if (typeof options.beforeAppWrite === 'function') await options.beforeAppWrite();
       if (edited) await pushApp(sdk, appId, warnings, appScope, { views: pin });
       const published = await publish(sdk, 'app', appId, undefined);
       // The failures below name the app and the page(s) the caller asked for, as `removeFromApp`'s do, so a caller that prints one can go on from it.

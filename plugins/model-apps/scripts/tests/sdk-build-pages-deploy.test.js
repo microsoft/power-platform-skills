@@ -122,10 +122,13 @@ function mockGenpageCli(live = []) {
   const uploads = [];
   // The app operations the build asked for: one entry per `placeInApp`, { appId, pages, dataSources }.
   const placements = [];
+  // The request the build hands each placement to send before it writes the app (`beforeAppWrite`): a function, so it is kept apart from the data above.
+  const hooks = [];
   const answer = (o, pageId) => ({ pageId, name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [] });
   return {
     uploads,
     placements,
+    hooks,
     enumerateEnv: async () => ({ ok: true, ids: live.map((p) => String(p.pageId).toLowerCase()), pages: live }),
     create: async (o) => {
       const pageId = o.name === 'Detail' ? DETAIL_ID : OVERVIEW_ID;
@@ -137,7 +140,9 @@ function mockGenpageCli(live = []) {
       return answer(o, id);
     },
     placeInApp: async (appId, o) => {
-      placements.push({ appId, ...o });
+      const { beforeAppWrite, ...asked } = o;
+      placements.push({ appId, ...asked });
+      hooks.push(beforeAppWrite);
       return { added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false };
     },
   };
@@ -2965,6 +2970,23 @@ test('deploy: a build whose pages read no table makes no app operation; a change
     assert.deepStrictEqual(run.genpageCli.uploads.map((u) => u.name), ['Overview'], 'only the selected page was written');
     assert.deepStrictEqual(run.genpageCli.placements, [{ appId: APP_ID, pages: [], dataSources: ['contoso_item'] }], 'so only its table is pinned: the page left alone writes nothing the app needs');
   } finally { app.cleanup(); }
+});
+
+test('deploy: the pin carries the request to send before the app is written — a function the placement awaits, which sends nothing without --publish — and what it is asked to pin is still only data', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    withTables(spec, { detail: ['contoso_item'] });
+    const genpageCli = mockGenpageCli();
+    const { sdk, calls } = mockSdk();
+    sdk.dataverse.post = async (url, body) => { calls.push({ name: 'dataverse.post', args: [url, body] }); return { status: 204, body: null }; };
+    const r = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.deepStrictEqual(genpageCli.placements, [{ appId: r.created.app, pages: [], dataSources: ['contoso_item'] }], 'the data it is given is what it always was');
+    assert.strictEqual(genpageCli.hooks.length, 1);
+    assert.strictEqual(typeof genpageCli.hooks[0], 'function');
+    const before = calls.length;
+    await genpageCli.hooks[0]();
+    assert.deepStrictEqual(calls.slice(before), [], 'without --publish the placement is not preceded by a read or a publish of anything');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 test('deploy: a table whose view could not be pinned is a warning — the pages were written, so the build does not halt', async () => {

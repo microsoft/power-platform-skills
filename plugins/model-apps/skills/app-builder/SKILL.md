@@ -469,15 +469,16 @@ never opens that workspace either, so it verifies any environment the app is dep
 
 With `--publish`, the tables the build changed, and the tables whose forms or charts the app holds or is about to hold, are published in one
 request before the build writes or publishes the app: the tables whose existing views and forms the build edited, the tables of the
-charts it wrote, the navigation's tables when the build writes the app (the SDK adds their active Main forms to it, so a form that
+charts it wrote, the navigation's tables whenever the build pushes the app (the SDK adds their active Main forms to it on every push, so a form that
 is live with a label saved and not published would otherwise be pinned and published with the app before its table was: the first
-build and the build that pins a form are covered the same way), and — for an app that already exists — the tables of the form and
+build and the build that pins a form are covered the same way, and so is a changed-only re-upload of a page that has to pin a default view
+the app lost, which pushes and publishes the app by itself), and — for an app that already exists — the tables of the form and
 chart components its saved component list names, whether or not the spec names the table (a form a maker added to it, say, one never
 published included). A label someone saved and did not publish on a form of one of them would otherwise stay unpublished once the app
 is published. A table the app is not known to hold a form or chart of is not published by it, so what a maker left unfinished there
 stays unfinished: a table only declared in `entities` (the target of a lookup column, say), one that only a page reads, or one that
-only `app.tables` pins. If the app's components cannot be read completely, or a read of them is ambiguous, the build publishes only
-the tables it changed and the navigation's, and says which read failed; run it again once the cause is cleared. That is one more
+only `app.tables` pins. If the app's components cannot be read completely, or a read of them is ambiguous (a row of the component
+list that cannot be placed included), the build publishes only the tables it changed and the navigation's, and says which read failed; run it again once the cause is cleared. That is one more
 publish for a build that edits no existing view or form (a first build included); the final publish covers the tables the build has
 artifacts of.
 If that request is refused the build goes on, and says so: it names what it saved on those tables, the forms the app holds
@@ -728,10 +729,11 @@ child view id. Each step emits `[n/total]`.
   changed, with the tables whose forms or charts the app holds or is about to hold, are published together once
   more, in one request before the app is: the tables touched by the reconcile of an existing form or view, form
   events and quick-view placement, so none of them publishes on its own, the tables of the charts the build wrote
-  (a chart's description is saved on the unpublished layer), the navigation's tables when the build writes the
+  (a chart's description is saved on the unpublished layer), the navigation's tables whenever the build pushes the
   app (the SDK adds their active Main forms to it, and a form that is live with a label saved and not published
   would otherwise be pinned and published with the app before its table was; a table whose `app.mainForms` list
-  keeps no form adds none), and — for an app that already exists — the tables of the form and chart components
+  keeps no form adds none; a changed-only re-upload of a page that has to pin a default view the app lost is
+  covered too, and one that has nothing to pin publishes nothing), and — for an app that already exists — the tables of the form and chart components
   its saved component list names, a form a maker added to it and never published included, so a label saved and
   not published there is not held back by the app's publish. A table the app is not known to hold a form or chart
   of is not named (declared only, a lookup column's target, read only by a page, or only pinned in `app.tables`):

@@ -141,6 +141,37 @@ async function publishedAppLayer(sdk, { appId, appUnique } = {}) {
   return { ok: true, appId: row.appmoduleid, appModuleIdUnique: guidKey(row.appmoduleidunique) };
 }
 
+// The rows of an app's component list that a STRICT read cannot place, each with why, for a message. The list is the server's, filtered to one component type:
+//   GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <layer> and componenttype eq 60
+//   { "value": [ { "objectid": "44444444-0000-4000-8000-000000000012", "componenttype": 60 }, null, { "objectid": "{}", "componenttype": 60 } ] }
+// The second row is no record at all and the third names no component (`{}` is braces around nothing). The filter says what type every row is, so a row that says another,
+// or none, is an answer that cannot be relied on as well. A caller that proves something from the whole list (the build's publish before the app) has to be able to place
+// every row, because a row it cannot place is silently left out below, by the filter or by the normalising of the ids, and the component it stood for then reads as "the app
+// holds no such component": an incomplete list that looks complete. One reason a row, the first that applies.
+function unplaceableRows(rows, componentType) {
+  const shown = (value) => String(JSON.stringify(value)).slice(0, 40);
+  const bad = [];
+  rows.forEach((row, index) => {
+    const at = `row ${index + 1}`;
+    let why;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      why = `${at} is not a record`;
+    } else if (row.objectid === undefined || row.objectid === null || row.objectid === '') {
+      why = `${at} has no objectid`;
+    } else if (typeof row.objectid !== 'string' || !FORM_GUID_RE.test(guidKey(row.objectid))) {
+      why = `${at} has an objectid that is no GUID (${shown(row.objectid)})`;
+    } else if (row.componenttype === undefined || row.componenttype === null) {
+      why = `${at} says no component type`;
+    } else {
+      // A number, or text that is only a number, as the filter below reads it; `true` and '' are not a type, though Number() would make them 1 and 0.
+      const type = typeof row.componenttype === 'number' ? row.componenttype : typeof row.componenttype === 'string' && /^\s*\d+\s*$/.test(row.componenttype) ? Number(row.componenttype) : NaN;
+      if (type !== componentType) why = `${at} has component type ${shown(row.componenttype)}, not ${componentType}`;
+    }
+    if (why) bad.push(why);
+  });
+  return bad;
+}
+
 async function appComponentRows(reader, appModuleIdUnique, componentType, opts = {}) {
   const parent = guidKey(appModuleIdUnique);
   const filter = `_appmoduleidunique_value eq ${parent} and componenttype eq ${componentType}`;
@@ -153,6 +184,13 @@ async function appComponentRows(reader, appModuleIdUnique, componentType, opts =
       `/appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq ${requireGuid(parent, 'app layer id')} and componenttype eq ${componentType}`,
       `app component type ${componentType}`);
   if (!Array.isArray(rows)) throw componentError('APP_COMPONENTS_UNVERIFIED', 'app components returned no readable result set');
+  if (opts.strict) {
+    const bad = unplaceableRows(rows, componentType);
+    if (bad.length) {
+      const named = bad.slice(0, 3).join('; ');
+      throw componentError('APP_COMPONENTS_UNVERIFIED', `the component list holds ${bad.length} row${bad.length === 1 ? '' : 's'} it cannot place: ${named}${bad.length > 3 ? ` and ${bad.length - 3} more` : ''}`);
+    }
+  }
   return rows.filter((row) => row && (row.componenttype === undefined || Number(row.componenttype) === componentType));
 }
 
@@ -473,7 +511,8 @@ async function readAppComponentInventory(sdk, appId, { componentTypes, requireId
   for (const componentType of everyType.filter((type) => !componentTypes || componentTypes.includes(type))) {
     let components;
     try {
-      components = await appComponentRows(sdk, inventory.layer.appModuleIdUnique, componentType);
+      // `requireIdentified` also means the list itself must be placeable row by row (unplaceableRows): a row this read cannot place is a component it would miss.
+      components = await appComponentRows(sdk, inventory.layer.appModuleIdUnique, componentType, { strict: requireIdentified });
       inventory.components.set(componentType, components);
     } catch (error) {
       inventory.componentProblems.set(componentType, reasonOf(error));

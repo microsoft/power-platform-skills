@@ -10,6 +10,9 @@
 // hold: its saved component list says so, whether or not the spec names the table. A table that is only a lookup column's target, that
 // only a page reads, or that only `app.tables` pins is not published by it: a table's publish ships everything saved on that table, whoever
 // saved it, so naming one would release a maker's unfinished work there.
+//
+// The request is made before the FIRST write of the app, whichever writer that is (the last section): a changed-only re-upload of a page that has to pin a
+// default view the app lost writes and publishes the app without the app step, and is protected the same way.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,7 +23,11 @@ const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-ma
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
+const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+const { annotateContentHashes } = require('../lib/content-hash.js');
+const { classifyChanges } = require('../lib/classify-changes.js');
 const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
+const { FakeGenPageServer, ACCOUNT_TABLE } = require('./helpers/fake-genpage-server.js');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -105,14 +112,15 @@ function scenario() {
     return sdk;
   };
   const noPageBackend = { enumerateEnv: async () => ({ ok: true, pages: [], ids: [] }) };
-  async function build(spec, { publish = true, phases = PHASES } = {}) {
+  async function build(spec, { publish = true, phases = PHASES, genpage = noPageBackend, extra = {} } = {}) {
     const sdk = await makeSdk();
     const mark = org.calls.length;
     const warned = warnings.length;
     const outcome = await runSdkBuild(spec, {
       sdk, apply: true, publish, phases, workspaceDir: dir, appDir: dir, env: org.origin,
-      genpage: noPageBackend,
+      genpage,
       warn: (w) => warnings.push(String(w)),
+      ...extra,
     });
     return { outcome, mark, warnings: warnings.slice(warned) };
   }
@@ -705,3 +713,290 @@ for (const settleSucceeds of [true, false]) {
     assert.strictEqual(s.unfinished().includes('Items'), !settleSucceeds, 'the view the build saved is live when the settle was allowed, and not when it was refused');
   });
 }
+
+// --- Every way the build writes the app --------------------------------------------------------------------------------------
+//
+// The request before the app is made before the FIRST write of the app, whichever writer that is. Besides the app step (the create and the push of an existing
+// app) the build writes the app in the pages finalizer, in the placement of the default views the pages need (which pushes and publishes the app by itself,
+// inside the page backend), in the publish phase and in the re-issue of the AI features. A changed-only re-upload of a page, which the CLI allows on --apply,
+// runs the pages phase alone: with no app step and no finalizer, so the placement is the only writer it has, and it repairs a default view a maker took out of the app.
+//
+// The pages in these runs go through the REAL page backend over a stateful fake of the page service, and the placement of default views is the real one over the
+// app's own fake. Nothing of the page is stubbed but the environment they run in.
+const PAGE_CODE = "import * as React from 'react';\nexport default function Overview() { return <div>Overview</div>; }\n";
+
+// The scenario above plus one generative page, which reads `contoso_page_only`. `t` removes the two page backends' throwaway workspaces.
+function pageScenario(t) {
+  const s = scenario();
+  const server = new FakeGenPageServer();
+  server.serveTable({ ...ACCOUNT_TABLE, logicalName: 'contoso_page_only', schemaName: 'contoso_PageOnly', entitySetName: 'contoso_page_onlys' });
+  s.org.fake.seedDefaultViews('contoso_page_only', 'Page Data');
+  const pages = makeGenpageSdk(s.org.origin, { httpClient: server.http() });
+  const placement = makeGenpageSdk(s.org.origin, { httpClient: s.org.httpClient });
+  t.after(async () => { await pages.dispose(); await placement.dispose(); });
+  const updates = [];
+  const backend = {
+    enumerateEnv: (...args) => pages.enumerateEnv(...args),
+    fileVersions: (...args) => pages.fileVersions(...args),
+    create: async (options) => {
+      const result = await pages.create(options);
+      s.org.pages.set(result.pageId, { uxagentprojectid: result.pageId, name: options.name, componentstate: 0 });
+      return result;
+    },
+    update: async (id, options) => {
+      const result = await pages.update(id, options);
+      updates.push({ id, sent: options.source, result });
+      return result;
+    },
+    placeInApp: (appId, options) => placement.placeInApp(appId, options),
+  };
+  const file = path.join(s.dir, 'Overview.tsx');
+  fs.writeFileSync(file, PAGE_CODE);
+  return { ...s, backend, updates, file, spec: pageSpec(), build: (spec, options = {}) => s.build(spec, { genpage: backend, ...options }) };
+}
+
+// What a maker leaves between two builds: the default view the first build pinned is out of the app's components, a Main form was added to the navigation's table and
+// is not an app component yet, a form the app holds has a label saved and not published, and a table only the page reads has a draft. Every edit goes through the fake
+// itself, so none of it is among the requests a build is asserted to send.
+async function afterTheMaker(p, { removeView = true } = {}) {
+  const view = p.org.fake.rows('savedqueries').find((r) => r.data.returnedtypecode === 'contoso_page_only' && r.data.isdefault).data.savedqueryid;
+  const at = p.org.components.findIndex((c) => c.objectid === view);
+  assert.ok(at >= 0, 'the first build pinned the default view of the page\u2019s table');
+  if (removeView) p.org.components.splice(at, 1);
+  const added = await p.makerEditsForm('contoso_nav', 'Main form added to the navigation table');
+  const held = await p.makerEditsForm('contoso_retained', 'Form the app holds, label saved and not published', { inApp: true });
+  await p.makerSavesForm('contoso_page_only', 'Draft on the page-only table');
+  assert.ok(!p.org.components.some((c) => c.objectid === added), 'the app does not hold the new form yet: its component list cannot prove it');
+  return { view, added, held };
+}
+
+// A page file that differs from the last build's only by a byte order mark: the build reads the text without it, so the page holds exactly what it is sent, and the
+// change classifier (the real one, over the real content hashes, which hash the file's bytes) calls it a pages-only change.
+function editByBomOnly(p) {
+  const read = (relative) => fs.readFileSync(path.join(p.dir, relative));
+  const prior = annotateContentHashes(p.spec, read);
+  fs.writeFileSync(p.file, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(PAGE_CODE)]));
+  return { prior, classification: classifyChanges(annotateContentHashes(p.spec, read), prior) };
+}
+
+// What the CLI runs for that change (lib/changed-only-flow.js): the pages phase alone, with the app's id, and without the sitemap finalizer.
+const fastRun = (p, prior, { publish = true, ...extra } = {}) => p.build(p.spec, {
+  publish,
+  phases: ['pages'],
+  extra: { changedOnly: { fastApply: true, resolvedAppId: p.org.appId(), skipSitemapFinalize: true, selectedKeys: ['overview'] }, baselineSpec: prior, ...extra },
+});
+const firstWriteOf = (requests) => requests.findIndex((c) => c.method !== 'GET');
+const HELD_AND_ADDED = 'tables contoso_item, contoso_nav, contoso_retained, contoso_stats'; // Item and Stats: the forms and the chart the app holds; Retained: a form a maker added; Nav: its Main forms are what the push adds
+
+test('the supported fast route — a page edited only by a BOM, which has to pin a default view the app lost — publishes the tables the app holds forms of, and those its push adds forms of, before the placement writes the app', async (t) => {
+  const p = pageScenario(t);
+  assert.strictEqual((await p.build(p.spec)).outcome.ok, true, 'the first build');
+  const maker = await afterTheMaker(p);
+  const { prior, classification } = editByBomOnly(p);
+  assert.deepStrictEqual([classification.verdict, classification.changedPhases], ['fast', ['pages']], 'the real classifier sends this change down the fast route');
+  const run = await fastRun(p, prior);
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual([p.updates.at(-1).sent === PAGE_CODE, p.updates.at(-1).result.publish.kind], [true, 'skipped'], 'the page holds what it is sent: its publish is skipped, so no publish of the page stands between the maker\u2019s save and the app\u2019s');
+  const requests = p.org.calls.slice(run.mark);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD_AND_ADDED, 'app'], 'two publishes: the one request for the tables, then the placement\u2019s publish of the app (the route used to send the second alone)');
+  assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the request is the first write of the run: nothing writes or publishes the app before it');
+  const pinned = requests.findIndex(pinsForm(maker.added));
+  assert.ok(pinned > requests.findIndex(isTablesPublish) && pinned < requests.findIndex(isAppPublish), 'the form the push pins is pinned after its table was published, and before the app is');
+  assert.ok(p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'this push added it to the app');
+  assert.ok(p.org.components.some((c) => c.objectid === maker.view), 'and pinned the default view it came to repair');
+  assert.deepStrictEqual(p.unfinished(), ['Draft on the page-only table'], 'the form the app holds and the form the push adds are live; what a maker left on the table only the page reads is not released');
+  assert.ok(!p.org.publishLog().some((line) => line.includes('contoso_page_only')), 'no request names that table: the placement pins a view of it, which is no form or chart');
+  assert.deepStrictEqual(run.warnings.filter((w) => /could not (publish|tell|read)/.test(w)), []);
+});
+
+test('the same fast route with nothing to repair writes and publishes nothing, as before: no request names a table, and what the app holds is not even read', async (t) => {
+  const p = pageScenario(t);
+  await p.build(p.spec);
+  await afterTheMaker(p, { removeView: false });
+  const { prior } = editByBomOnly(p);
+  const run = await fastRun(p, prior);
+  assert.strictEqual(run.outcome.ok, true);
+  const requests = p.org.calls.slice(run.mark);
+  assert.deepStrictEqual(requests.filter((c) => c.method !== 'GET'), [], 'not one write: every default view is pinned, so the placement has nothing to do');
+  assert.deepStrictEqual(p.org.publishLog(run.mark), []);
+  assert.ok(!requests.some(readsComponentsOfType(60)) && !requests.some(readsComponentsOfType(59)), 'and the request before the app is not prepared for a write that is not made');
+  assert.ok(p.unfinished().includes('Form the app holds, label saved and not published'), 'what a maker saved is left as it was: this run publishes nothing');
+});
+
+test('the fast route without --publish repairs the view as it always did, and publishes no table ahead of the app', async (t) => {
+  const p = pageScenario(t);
+  await p.build(p.spec);
+  await afterTheMaker(p);
+  const { prior } = editByBomOnly(p);
+  const run = await fastRun(p, prior, { publish: false });
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['app'], 'the placement\u2019s own publish: the --publish gate is the flag');
+  assert.ok(!p.org.calls.slice(run.mark).some(readsComponentsOfType(60)), 'and the app\u2019s components are not read');
+});
+
+test('the fast route\u2019s request refused: the app is still written, once, and the build says its protection did not apply', async (t) => {
+  const p = pageScenario(t);
+  await p.build(p.spec);
+  await afterTheMaker(p);
+  const { prior } = editByBomOnly(p);
+  p.org.refuseNextTablePublish(400);
+  const run = await fastRun(p, prior);
+  assert.strictEqual(run.outcome.ok, true, 'a refusal does not stop the build');
+  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD_AND_ADDED, 'app'], 'the request was sent once, before the app, and not again by the placement');
+  const said = run.warnings.filter((w) => /could not publish tables/.test(w));
+  assert.strictEqual(said.length, 1, run.warnings.join('\n'));
+  assert.match(said[0], /could not publish tables contoso_item, contoso_nav, contoso_retained, contoso_stats before the app \(PublishXml answered HTTP 400/);
+  assert.match(said[0], /The app holds, or this build's write of it adds, forms of contoso_item, contoso_nav, contoso_retained/);
+});
+
+test('the fast route when the app\u2019s form components cannot be read publishes what its push adds forms of, and says which read failed', async (t) => {
+  const p = pageScenario(t);
+  await p.build(p.spec);
+  await afterTheMaker(p);
+  const { prior } = editByBomOnly(p);
+  p.org.intercept(readsComponentsOfType(60), refuses(500, 'simulated read refusal'));
+  const run = await fastRun(p, prior);
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_item, contoso_nav', 'app'], 'the navigation\u2019s tables, which no read is needed to know, and nothing it cannot prove');
+  const said = run.warnings.filter((w) => /could not tell which tables/.test(w));
+  assert.strictEqual(said.length, 1, run.warnings.join('\n'));
+  assert.match(said[0], /only the tables this build changed and the navigation's tables, whose Main forms its own write of the app adds/);
+  assert.ok(p.unfinished().includes('Form the app holds, label saved and not published'), 'a table that cannot be proven is left alone');
+});
+
+test('the pages finalizer, in a run with no app step, sends the request before it pushes and publishes the app', async (t) => {
+  const p = pageScenario(t);
+  await p.build(p.spec);
+  const maker = await afterTheMaker(p, { removeView: false });
+  const run = await p.build(p.spec, { phases: ['pages'], extra: { changedOnly: { resolvedAppId: p.org.appId(), selectedKeys: ['overview'] } } });
+  assert.strictEqual(run.outcome.ok, true);
+  const requests = p.org.calls.slice(run.mark);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), [HELD_AND_ADDED, 'app'], 'the finalizer\u2019s push publishes the app once; nothing in this run is left to pin');
+  assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the first write of the run is the request');
+  assert.ok(p.org.components.some((c) => c.componenttype === 60 && c.objectid === maker.added), 'the finalizer\u2019s push added the form');
+  assert.deepStrictEqual(p.unfinished(), ['Draft on the page-only table']);
+});
+
+test('the push that only carries the routing description, in a run with no pages phase, asks for the tables whose forms it adds just before it is made — and names none when the description is unchanged and no push is made', async () => {
+  const s = scenario();
+  const spec = navOnlySpec();
+  const routed = pageSpec();
+  routed.entities = spec.entities;
+  routed.views = [];
+  routed.forms = [];
+  routed.charts = [];
+  routed.relationships = [];
+  routed.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'contoso_nav', title: 'Navigation' }, { page: 'overview', title: 'Overview' }] }] }] };
+  routed.app.aiDescription = 'Route navigation questions to this application.';
+  assert.strictEqual(validateAppSpec(routed).ok, true);
+  const patchesDescription = (c) => c.method === 'PATCH' && /^\/appmodules\(/.test(c.path) && c.body.aiappdescription === routed.app.aiDescription;
+
+  // The description changes: the app step pushes it, though it writes no navigation (a page entry waits for the pages phase), and the SDK adds the Main forms of Nav on that push.
+  await s.build(spec);
+  const formid = await s.makerEditsForm('contoso_nav', 'Form added to the navigation table');
+  assert.ok(!s.org.components.some((c) => c.objectid === formid), 'the app does not hold it yet');
+  const held = await s.makerEditsForm('contoso_retained', 'Form the app holds, label saved and not published', { inApp: true });
+  const pushed = await s.build(routed, { phases: NO_PAGES });
+  assert.strictEqual(pushed.outcome.ok, true);
+  const requests = s.org.calls.slice(pushed.mark);
+  const push = requests.findIndex(patchesDescription);
+  assert.ok(push >= 0, 'the routing description is pushed');
+  assert.deepStrictEqual(s.org.publishLog(pushed.mark), ['tables contoso_retained', 'tables contoso_nav', 'app', 'app'], 'the app step names what the app holds; the push asks for the tables whose forms it adds, when it is made; the second publish of the app is the publish phase\u2019s');
+  assert.strictEqual(firstWriteOf(requests), requests.findIndex(isTablesPublish), 'the first write of the run is a request');
+  assert.ok(requests.findIndex(isTablePublish('contoso_nav')) < push, 'and the one for Nav comes before the push');
+  assert.ok(s.org.components.some((c) => c.componenttype === 60 && c.objectid === formid), 'the push added the form');
+  assert.ok(held && s.unfinished().length === 0, `nothing a maker saved is left unpublished: ${s.unfinished().join(', ')}`);
+
+  // The description is already the app's: nothing is pushed, so no table is named for a push that is not made.
+  const again = scenario();
+  await again.build(routed, { phases: NO_PAGES });
+  const late = await again.makerEditsForm('contoso_nav', 'Form added to the navigation table after the build');
+  const idle = await again.build(routed, { phases: NO_PAGES });
+  assert.strictEqual(idle.outcome.ok, true);
+  assert.ok(!again.org.calls.slice(idle.mark).some(patchesDescription), 'the description is as it was: no push');
+  assert.deepStrictEqual(again.org.publishLog(idle.mark), ['app'], 'nothing for the app to hold, and no push to add forms: the only publish is the publish phase\u2019s');
+  assert.ok(!again.org.components.some((c) => c.objectid === late), 'the form was not added');
+  assert.deepStrictEqual(again.unfinished(), ['Form added to the navigation table after the build'], 'and what a maker left on Nav is not released');
+});
+
+test('the publish phase, in a run with no app step, publishes the tables the app holds forms of before it publishes the app, and not the ones only a push would add forms of', async (t) => {
+  const p = pageScenario(t);
+  await p.build(p.spec);
+  await afterTheMaker(p, { removeView: false });
+  const run = await p.build(p.spec, { phases: ['publish'], extra: { changedOnly: { resolvedAppId: p.org.appId() } } });
+  assert.strictEqual(run.outcome.ok, true);
+  assert.deepStrictEqual(p.org.publishLog(run.mark), ['tables contoso_item, contoso_retained, contoso_stats', 'app'], 'a publish alone adds no form, so the navigation\u2019s Nav is not named');
+  assert.strictEqual(firstWriteOf(p.org.calls.slice(run.mark)), p.org.calls.slice(run.mark).findIndex(isTablesPublish));
+});
+
+// --- A malformed row in the component list -----------------------------------------------------------------------------------
+//
+// The app's component list is read for the tables it proves the app holds forms and charts of. A row of it that cannot be placed must not read as "the app holds no
+// such component": the answer is unreadable, and the request names only what the build changed and what its write adds, with the warning every unreadable read gets.
+for (const [what, damaged] of [
+  ['a null row', () => null],
+  ['an objectid that is only braces', () => ({ componenttype: 60, objectid: '{}' })],
+  ['a component type that is no number', (held) => ({ componenttype: 'bad', objectid: held })],
+  ['a row with no objectid', () => ({ componenttype: 60 })],
+]) {
+  test(`the form component list holds ${what}: the read is unreadable, the held form is not taken for absent, and the build says so`, async () => {
+    const s = scenario();
+    await s.build(makeSpec());
+    const held = await s.makerEditsForm('contoso_retained', 'Held form with a saved label', { inApp: true });
+    const others = s.org.components.filter((c) => c.componenttype === 60 && c.objectid !== held);
+    s.org.intercept(readsComponentsOfType(60), () => rowsOf([...others, damaged(held)]));
+    const { outcome, mark, warnings } = await s.build(makeSpec());
+    assert.strictEqual(outcome.ok, true);
+    assert.deepStrictEqual(s.org.publishLog(mark), [WHAT_THE_BUILD_CHANGED, 'app', 'tables contoso_item + app'], 'only what the build changed and what its write adds: the list is not trusted');
+    const said = warnings.filter((w) => /could not tell which tables/.test(w));
+    assert.strictEqual(said.length, 1, warnings.join('\n'));
+    assert.match(said[0], /could not tell which tables the forms and charts the app already holds belong to \(/);
+    assert.ok(!/contoso_retained/.test(said[0]), 'no table is named: it cannot say which the app holds');
+    assert.deepStrictEqual(s.unfinished(), ['Held form with a saved label'], 'the held form\u2019s label is not released by a build that could not prove the form is the app\u2019s');
+  });
+}
+
+// --- One function writes the app ---------------------------------------------------------------------------------------------
+//
+// The build reaches the app through the SDK in a handful of places. Each goes through `appWriters`, whose members await the request before the app first, so a later
+// edit that calls the SDK for the app directly — a new path, say — cannot skip it. This reads the engine's source, because that is where a new path would be written.
+// (The request is made once for what it names, so a run in which the app step has made it cannot show that a LATER writer forgot to ask: this is what shows it.)
+test('sdk-build.js reaches the SDK for the app only through appWriters, and each writer sends the request before its first write of the app', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8');
+  // Code only: a comment may name what it explains.
+  const code = source.split('\n').map((line) => line.replace(/^\s*\/\/.*$/, '').replace(/\s\/\/\s.*$/, '')).join('\n');
+  const begin = code.indexOf('const appWriters = {');
+  assert.ok(begin > 0, 'one block holds the writers');
+  const end = code.indexOf('\n  };', begin);
+  const writers = code.slice(begin, end);
+  const definition = /async function pushAppHeader\([\s\S]*?\n}\n/.exec(code);
+  assert.ok(definition, 'pushAppHeader is the one helper that pushes an app, and only a writer calls it');
+  const outside = code.replace(writers, '').replace(definition[0], '');
+  // Each writer, the call of the SDK it makes for the app, and whether it asks first (by awaiting the request) or hands the request to the placement to send.
+  const methodOf = (name) => {
+    const found = new RegExp(`\\n    (?:async )?${name}\\([^)]*\\) \\{([\\s\\S]*?)\\n    \\},`).exec(writers);
+    assert.ok(found, `writer ${name}`);
+    return found[1];
+  };
+  for (const [name, call, ordered] of [
+    ['create', /\.createArtifact\(\s*'app'/, true],
+    ['push', /\bpushAppHeader\(/, true],
+    ['publish', /\.publishArtifact\(\s*'app'/, true],
+    ['publishPinned', /\bpublishAppComponents\(/, true],
+    ['placeViews', /\.placeInApp\(/, false],
+  ]) {
+    const method = methodOf(name);
+    assert.ok(call.test(method), `${name} makes the call of the SDK it is for`);
+    assert.ok(!call.test(outside), `${name}'s call is not made anywhere else in the engine`);
+    if (ordered) {
+      const asks = method.indexOf('await publishTablesBeforeApp(');
+      assert.ok(asks >= 0 && asks < method.search(call), `${name} awaits the request before its first write of the app`);
+    } else {
+      assert.ok(/beforeAppWrite: async \(\) => publishTablesBeforeApp\(/.test(method), `${name} hands the backend the request to send right before it writes: a placement that writes nothing asks for nothing`);
+    }
+  }
+  // The SDK's own push of an app is the create's, or the one inside pushAppHeader (which only a writer calls): no other line pushes an app.
+  assert.ok(/\.pushArtifact\(\s*'app'/.test(methodOf('create')) && !/\.pushArtifact\(\s*'app'/.test(outside), 'the SDK\u2019s push of an app is made nowhere else');
+  // The publish phase publishes the app in the envelope of the tables the build has artifacts of, and asks for the request too: a run can reach it without the app step.
+  assert.ok(/await publishTablesBeforeApp\([^)]*\)[\s\S]{0,400}publishTargets\(provision, runner, concurrency, perEntity, appTarget/.test(code), 'the publish phase sends the request before it publishes the app');
+});

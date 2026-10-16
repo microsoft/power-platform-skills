@@ -15,12 +15,16 @@
 //   org.addToApp(kind, id)    a maker adds a view, form or chart to the app in the designer
 //   org.intercept(match, answer)   answers the requests `match({ method, path, body })` accepts with `answer(request)` instead of the
 //                             fake's own answer, until the returned function is called: a refused read, or an answer that leaves a row out
+//   org.pages                 Map<page id, row>: the generative pages the environment lists (`uxagentprojects`), which the pages phase reads. A page
+//                             backend a test builds with records the page it creates here; the service that holds the page's files is a fake of its own
+//   org.resources             Map<id, row>: the web resources a build creates (the page manifest), read back by name
 //
 // An app is a draft until a PublishXml names it. The generated app icon and the roles exist already, as in an environment that has built
 // an app before. A plain read of a view, form or chart by id answers the published layer only, as the platform's does: a record that was never published
 // has no row in it, and only the saved layer (RetrieveUnpublishedMultiple, which the fake of views, forms and charts answers) has it. A test about a
 // record the app holds that no read answers can answer that read itself (`intercept`).
 const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
 const { createFakeDataverse } = require('./fake-dataverse.js');
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
@@ -44,6 +48,8 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
   let sitemapVersion = 1;
   let refusal = null;
   const overrides = [];
+  const pages = new Map();
+  const resources = new Map();
   const headers = (version) => ({ etag: `W/"${version}"` });
   const response = (body, version = 1) => ({ status: 200, headers: headers(version), body });
   const rows = (value) => response({ value });
@@ -83,11 +89,30 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
       const data = { ...sitemap, '@odata.etag': `W/"${sitemapVersion}"` };
       return collection(p) ? rows([data]) : response(data, sitemapVersion);
     }
-    if (method === 'GET' && /^\/webresources(et)?\?/.test(p)) return rows(p.includes('_icon') ? [{ webresourceid: ICON_ID }] : []);
+    // The page manifest is a web resource the build creates and reads back by name; a generated icon exists already.
+    //   POST  /webresourceset                       { name, content, … }  ->  204, OData-EntityId: <API>/webresourceset(<id>)
+    //   PATCH /webresourceset(<id>)                 { content }           ->  204
+    //   GET   /webresourceset?$select=webresourceid,content&$filter=name eq '<name>'&$top=1
+    let m;
+    if (method === 'POST' && /^\/webresourceset(\?|$)/.test(p)) {
+      const id = body.webresourceid || randomUUID();
+      resources.set(id, { ...body, webresourceid: id });
+      return { status: 204, headers: { 'odata-entityid': `${ORIGIN}/api/data/v9.0/webresourceset(${id})` }, body: null };
+    }
+    if (method === 'PATCH' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)/i.exec(p)) && resources.has(m[1])) {
+      Object.assign(resources.get(m[1]), body);
+      return { status: 204, headers: {}, body: null };
+    }
+    if (method === 'GET' && /^\/webresources(et)?\?/.test(p)) {
+      const named = /name eq '([^']+)'/.exec(p);
+      const stored = named ? [...resources.values()].filter((row) => row.name === named[1]) : [];
+      return rows(stored.length ? stored : p.includes('_icon') ? [{ webresourceid: ICON_ID }] : []);
+    }
+    // The environment's generative pages, plain or in the saved layer: every page of the list, whatever the filter asks (a test that needs a narrower answer intercepts).
+    if (method === 'GET' && /^\/uxagentprojects(\?|\/)/.test(p)) return rows([...pages.values()]);
     if (method === 'GET' && /^\/roles/.test(p)) return rows([{ roleid: ROLE_ID, _parentrootroleid_value: ROLE_ID }]);
     // A table component's objectid is the table's MetadataId; the inventory of what an app holds resolves it back:
     //   GET /EntityDefinitions(<MetadataId>)?$select=LogicalName,IsCustomEntity  ->  { "LogicalName": "contoso_item", "IsCustomEntity": true }
-    let m;
     if (method === 'GET' && (m = new RegExp(`^/EntityDefinitions\\((${GUID})\\)`, 'i').exec(p))) {
       const logical = Object.keys(entities || {}).find((name) => fake.entityId(name).toLowerCase() === m[1].toLowerCase());
       return logical ? response({ LogicalName: logical, IsCustomEntity: true }) : { status: 404, body: null };
@@ -148,6 +173,8 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
     calls,
     httpClient,
     components,
+    pages,
+    resources,
     appId: () => app && app.appmoduleid,
     tablePublishes: (since = 0) => publishes(since, false).map((c) => entitiesOf(c.body)),
     appPublishes: (since = 0) => publishes(since, true).map((c) => ({ tables: entitiesOf(c.body), apps: [...String(c.body.ParameterXml).matchAll(/<appmodule>([^<]+)<\/appmodule>/g)].map((x) => x[1]) })),
