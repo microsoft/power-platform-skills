@@ -11,9 +11,10 @@ const CALL = 'navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})';
 
 const MODIFIERS = ['in', 'out', 'public', 'private', 'protected', 'readonly', 'static', 'abstract', 'async', 'declare', 'override', 'accessor', 'const'];
 const OPERATORS = ['delete', 'typeof', 'void', 'instanceof'];
-// What may stand before a member's name on its line: the words of MEMBER_PREFIX_WORDS (and the one that only a class takes), a generator's `*`, and decorators in every shape (a class only).
+// What may stand before a member's name on its line: the words of MEMBER_PREFIX_WORDS (and the one that only a class takes), a generator's `*`, and decorators in every shape (a class only) — a decorator may end in the `>` of type arguments
+// (`@dec<T>`, which the parser takes for an instantiation expression when a binary operator follows it — a generator's `*`, `instanceof`, a field named `in` that a line break ends — or a line break does) and in a number's decimal point (`@1.`).
 const MEMBER_PREFIXES = ['', '', '', 'readonly ', 'static ', 'public ', 'async ', 'abstract ', 'override ', 'declare ', 'accessor ', 'in ', 'out ', 'export ', 'get ', 'set ', 'const ', 'static async ', 'public static ', '@dec ', '@dec() ', '@a.b ',
-  '@(x) ', '@dec<T>() ', 'static *', 'async *', '*'];
+  '@(x) ', '@dec<T>() ', 'static *', 'async *', '*', '@dec<T> ', '@dec<T> *', '@a.b<T> *', '@dec<A, B> *', '@dec<T>\n  ', '@dec<T> in\n  ', '@dec<T> instanceof\n  ', '@1. *', '@1.\n  *'];
 const GAPS = [' ', ' ', ' ', '\n', '\r\n', '\u2028', ' /**/ ', '/*\n*/', '\t', '  '];
 const NAMES = ['U', 'T', 'out', 'in', 'accessor'];
 // What follows the name in a list: a constraint, a default, a string with an escaped quote (which a JSX attribute string reads as ending earlier), a regex for a constraint, a self-closing end.
@@ -223,6 +224,100 @@ function* decoratedPages() {
   }
 }
 
+// A decorator that ends in the `>` of type arguments or in a number's decimal point, and a member named like an operator that has type parameters right after it. A decorator is an `@` and a left-hand-side expression, and the parser takes `@dec<T>` for an instantiation
+// expression when a binary operator follows its `>` — a generator's `*`, the name `instanceof`, a field named `in` — or a line break does (canFollowTypeArgumentsInExpression, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts); `1.` is a number of its
+// own. The member begins where the decorator ends, so the method is code and the note after it, which holds the closing tag of its type parameter and a call, is data.
+const DECORATOR_ENDS = [
+  '@dec<T>', '@dec<A, B>', '@a.b<T>', '@(d)<T>', '@dec<() => void>', '@dec<(x: A) => B>', '@dec<{ a: 1 }>', '@dec<Array<string>>', '@dec<"s">', '@dec<1>', '@dec<T>()<U>', '@dec<T> /* c */', '@dec<T> // c\n', '@1.', '@1_0.',
+  // What ended a decorator before, and a `>` that no decorator ends in.
+  '@dec', '@a.b', '@dec()', '@dec<T>()', '@(x)', '@dec!', '@1', '@1.5', "@'x'", '@dec`x`', '@dec(a > b)',
+];
+const DECORATOR_FOLLOWERS = [
+  { text: (w) => ` *${w}<U>(y: U): MARK { yield y; }` }, { text: (w) => ` * ${w}<U>(y: U): MARK { yield y; }` }, { text: (w) => `\n  *${w}<U>(y: U): MARK { yield y; }` }, { text: (w) => ` *\n  ${w}<U>(y: U): MARK { yield y; }` },
+  { text: (w) => ` ${w}<U>(y: U): MARK {}` }, { text: (w) => `\n  ${w}<U>(y: U): MARK {}` }, { text: (w) => ` in\n  ${w}<U>(y: U): MARK {}` }, { text: (w) => ` instanceof\n  ${w}<U>(y: U): MARK {}` }, { text: (w) => ` in\n  *${w}<U>(y: U): MARK { yield y; }` },
+  { text: (w) => ` in = 1;\n  ${w}<U>(y: U): MARK {}` }, { text: () => ' instanceof<U>(y: U): MARK {}', words: ['instanceof'] }, { text: () => ' instanceof /* c */ <U>(y: U): MARK {}', words: ['instanceof'] },
+];
+const DECORATOR_FRAMES = [(m) => `class C { ${m} }`, (m) => `const K = class { ${m} };`, (m) => `class C extends B { ${m} }`, (m) => `class C { x = 1; ${m} }`, (m) => `function f() { return class C { ${m} }; }`];
+function* decoratorEndPages() {
+  for (const decorator of DECORATOR_ENDS) {
+    for (const { text, words = ['delete', 'void'] } of DECORATOR_FOLLOWERS) {
+      for (const word of words) {
+        for (const [f, frame] of DECORATOR_FRAMES.entries()) {
+          yield { code: `function openDetail(){${CALL};}\n${frame(`${decorator}${text(word)}`)}\nconst note = '</U>};${CALL};//';\nexport default function Page(){return null;}\n`, label: `${JSON.stringify(decorator)} / ${JSON.stringify(text(word))} / frame ${f}` };
+        }
+      }
+    }
+  }
+}
+
+// A method, a function or a property that a heritage keyword names (`class C { implements() { … } }`, `{ extends() { … } }`), and a value that one of them spells, or that a letter beyond ASCII or a private name makes (`{ a: café, m() { … } }`, `{ a: this.#item, m() { … } }`).
+// The word before the `(` of `class C extends (B) {` or `class C implements (B) {` is the keyword of a heritage clause, whose braces hold members; here it is a name, and the braces after the `)` are the body of a function, whose statements an element may start: an element
+// after `void` there is read for certain. A comma before such a name is an object literal's, and the heritage list that a comma may belong to (`class C extends A, B() {`) is read back to the keyword that begins it, through whatever it holds.
+const KEYWORD_NAMES = ['implements', 'extends', 'new', 'ordinary'];
+// What the braces after the `)` hold: an element after `void`, and one after `return`, whose text has a comment that could hide the closing tag, so that braces that may hold members are a guess.
+const KEYWORD_BODIES = ['void <span>(MARK); // note</span>;', 'x;\nvoid <span>(MARK); // note</span>;', 'return <>(MARK); // note</>;', 'const e = <in U>(MARK); // note</in>;'];
+const KEYWORD_METHOD_FRAMES = [
+  ['a method of a class', (n, b) => `class C { ${n}() { ${b} } }`], ['a method after a method', (n, b) => `class C { a() {} ${n}() { ${b} } }`], ['a method after a field', (n, b) => `class C { a = 1; ${n}() { ${b} } }`],
+  ['a method after a field and a line break', (n, b) => `class C { a = 1\n  ${n}() { ${b} } }`], ['a method after a name and a line break', (n, b) => `class C { a\n  ${n}() { ${b} } }`], ['a method after a name and a comment', (n, b) => `class C { a /* c */\n  ${n}() { ${b} } }`],
+  // A field that a keyword names and no initializer or `;` ends, then a method on the next line: the word before the method's name is the name of a field, no keyword (`new` is read as it was: the operator).
+  ['a method after a field that the keyword names', (n, b) => (n === 'new' ? null : `class C { ${n}\n  m() { ${b} } }`)],
+  ['a static method', (n, b) => `class C { static ${n}() { ${b} } }`], ['an async method', (n, b) => `class C { async ${n}() { ${b} } }`], ['a getter', (n, b) => `class C { get ${n}() { ${b} } }`], ['a setter', (n, b) => `class C { set ${n}(v) { ${b} } }`],
+  ['a generator', (n, b) => `class C { *${n}() { ${b} } }`], ['an async generator', (n, b) => `class C { async *${n}() { ${b} } }`], ['a decorated method', (n, b) => `class C { @d ${n}() { ${b} } }`], ['a public method', (n, b) => `class C { public ${n}() { ${b} } }`],
+  ['a method of a class that extends a name', (n, b) => `class C extends B { ${n}() { ${b} } }`], ['a method of a class that extends a call', (n, b) => `class C extends mixin(A) { ${n}() { ${b} } }`], ['a method of a class that implements a name', (n, b) => `class C implements I { ${n}() { ${b} } }`],
+  ['a method of a class that implements a call', (n, b) => `class C implements B() { ${n}() { ${b} } }`], ['a method of a class that implements a parenthesis', (n, b) => `class C implements (B) { ${n}() { ${b} } }`],
+  ['a method of a class that extends a parenthesis', (n, b) => `class C extends (B) { ${n}() { ${b} } }`], ['a method of a class with type parameters', (n, b) => `class C<T> extends B<T> implements I { ${n}() { ${b} } }`],
+  ['a method of a class expression', (n, b) => `const K = class { ${n}() { ${b} } };`], ['a method of a class in a function', (n, b) => `function f() { class C { ${n}() { ${b} } } }`],
+  ['a method of an object literal', (n, b) => `const o = { ${n}() { ${b} } };`], ['a method after a property', (n, b) => `const o = { a: 1, ${n}() { ${b} } };`], ['a method after a shorthand property', (n, b) => `const o = { a, ${n}() { ${b} } };`],
+  ['a method after a method', (n, b) => `const o = { a() {}, ${n}() { ${b} } };`], ['a method after a spread', (n, b) => `const o = { ...s, ${n}() { ${b} } };`], ['a generator after a property', (n, b) => `const o = { a: 1, *${n}() { ${b} } };`],
+  ['an async method after a property', (n, b) => `const o = { a: 1, async ${n}() { ${b} } };`], ['a getter after a property', (n, b) => `const o = { a: 1, get ${n}() { ${b} } };`], ['a method of an object literal that an argument is', (n, b) => `f({ a: 1, ${n}() { ${b} } });`],
+  ['a method of an object literal that a function returns', (n, b) => `function g() { return { ${n}() { ${b} } }; }`], ['a method of an object literal after a comma', (n, b) => `const v = (0, { ${n}() { ${b} } });`],
+  ['a function', (n, b) => `function ${n}() { ${b} }`], ['a function expression', (n, b) => `const f = function ${n}() { ${b} };`], ['a generator function', (n, b) => `function* ${n}() { ${b} }`], ['a method after a class', (n, b) => `class D {}\nconst o = { ${n}() { ${b} } };`],
+];
+// A value or a name before a method, in the braces of an object literal after a comma: what a letter beyond ASCII, a private name or a word that a heritage keyword spells makes of the comma's left side. Each is read to the `:` or the `{` that tells an object literal's comma from a
+// heritage list's, and the method after the comma is a function's head. (A private name stands in a class.)
+const OBJECT_VALUES = [
+  'café', '名', 'a?.café', 'f(café)', '[café]', '{ café: 1 }', 'café.b', '"café"', '`x${café}y`', 'x as typeof café', 'café!', '(café)', '1 + café', 'café ? 1 : 2', 'café || 2', '() => café', 'café => 1', 'new Café()', 'x.café', 'x.名',
+  'this.#item', 'this.#item.x', 'this?.#item', '(this.#item)', 'f(this.#item)', '#item in this', 'this.#item!',
+  'implements', 'x.implements', 'x.extends', 'implements.x', 'implements(1)', 'typeof implements', '!implements', 'implements + 1', '[implements]', '{ implements: 1 }', 'implements ? 1 : 2', 'x => implements', '(implements)', 'f(implements)',
+];
+const OBJECT_VALUE_FRAMES = [
+  ['a property', (v, b) => `class H { #item = 1; make() { return { a: ${v}, m() { ${b} } }; } }`], ['two properties', (v, b) => `class H { #item = 1; make() { return { a: ${v}, b: ${v}, m() { ${b} } }; } }`],
+  ['a property and a method before it', (v, b) => `class H { #item = 1; make() { return { a: ${v}, n() {}, m() { ${b} } }; } }`], ['a computed key', (v, b) => `class H { #item = 1; make() { return { [k]: ${v}, m() { ${b} } }; } }`],
+  ['a quoted key', (v, b) => `class H { #item = 1; make() { return { 'k': ${v}, m() { ${b} } }; } }`], ['an argument', (v, b) => `class H { #item = 1; make() { f({ a: ${v}, m() { ${b} } }); } }`],
+  ['a getter', (v, b) => `class H { #item = 1; make() { return { a: ${v}, get m() { ${b} } }; } }`], ['an async method', (v, b) => `class H { #item = 1; make() { return { a: ${v}, async m() { ${b} } }; } }`],
+  ['a generator', (v, b) => `class H { #item = 1; make() { return { a: ${v}, *m() { ${b} } }; } }`], ['no class', (v, b) => `const o = { a: ${v}, m() { ${b} } };`],
+];
+// A name for a shorthand property, a spread and a method name: the same words and letters.
+const SHORTHAND_NAMES = ['café', '名', 'implements', 'a'];
+const SHORTHAND_FRAMES = [
+  ['a shorthand property', (v, b) => `const o = { ${v}, m() { ${b} } };`], ['a shorthand property after a property', (v, b) => `const o = { a: 1, ${v}, m() { ${b} } };`], ['two shorthand properties', (v, b) => `const o = { ${v}, ${v}2, m() { ${b} } };`],
+  ['a spread', (v, b) => `const o = { ...${v}, m() { ${b} } };`], ['a shorthand property before a method', (v, b) => `const o = { ${v}, n() {}, m() { ${b} } };`],
+];
+function* keywordNamedPages() {
+  const real = `function openDetail(){${CALL};}\n`;
+  const tail = '\nexport default function Page(){return null;}\n';
+  // The text of the element holds a token that is data (a bare token: the braces of a call would be an expression of the element).
+  const withData = (body) => body.replace('MARK', 'PAGEREF_detail');
+  for (const [place, frame] of KEYWORD_METHOD_FRAMES) {
+    for (const name of KEYWORD_NAMES) {
+      for (const body of KEYWORD_BODIES) {
+        const text = frame(name, withData(body));
+        if (text !== null) yield { code: `${real}${text}${tail}`, label: `${place} / ${name} / ${JSON.stringify(body)}`, family: 'a method named like a keyword' };
+      }
+    }
+  }
+  for (const [place, frame] of OBJECT_VALUE_FRAMES) {
+    for (const value of OBJECT_VALUES) {
+      for (const body of KEYWORD_BODIES) yield { code: `${real}${frame(value, withData(body))}${tail}`, label: `${place} / ${JSON.stringify(value)} / ${JSON.stringify(body)}`, family: 'a value before a method' };
+    }
+  }
+  for (const [place, frame] of SHORTHAND_FRAMES) {
+    for (const name of SHORTHAND_NAMES) {
+      for (const body of KEYWORD_BODIES) yield { code: `${real}${frame(name, withData(body))}${tail}`, label: `${place} / ${name} / ${JSON.stringify(body)}`, family: 'a shorthand property before a method' };
+    }
+  }
+}
+
 // A function type whose head starts like an element's and whose parameter list cannot be read to its end: a template with a template or a comment in a substitution, a regex after a call in a default, a list longer than the window. The list is no
 // less a function type for that — an arrow follows it — and a lexer that took the head for an element read the closing tag in the note after the type for its own.
 const UNREADABLE_LISTS = [
@@ -273,6 +368,11 @@ function* escapedHeadPages() {
 // A method named like an operator that has type parameters, in the braces that follow every token that a lexer may take for the opener of a block: the braces of a class after every heritage that ends in a `)` (`class C extends mixin(A) {`), after a name that a keyword
 // of a block spells (`class C extends a.else {`) or one written with an escape, a `$` or a letter beyond ASCII, those of an object literal after a `;` of a `for` head or a `{`, and those of a type literal after an `=>`. The method is the member there, and
 // the closing tag of its type parameter is in the string after the type: a lexer that took the braces for a block read the method for an element, whose text ran on to that closing tag and held the call in the string.
+// The element that ends a heritage list in a `)`: a call or a parenthesis, whatever it holds, after `implements`, after `extends A,` and after any other comma — the parser reads it as it reads any left-hand-side expression, so the braces after it hold members.
+const LAST_ELEMENTS = ['f(A)', '(A)', 'import("x")', 'this.f(A)', '(A as any)', 'f(A)(B)', 'a.b.f(A)', '(f)(A)', 'new F(A)', 'f<T>(A)', 'a?.b(A)', 'a!.b(A)', 'a[0](A)', 'f(A).g(B)', 'async(A)', 'get(A)', 'f((A))', 'f(() => A)', 'f({ a: 1 })', 'f(function () {})',
+  'f(A, B)', 'f()', 'implements(A)', 'extends(A)', 'f(caf\u00e9)'];
+const HERITAGE_INTRODUCERS = ['class C implements ', 'class C extends A, ', 'class C extends A implements ', 'class C implements A, ', 'class C extends A implements I, ', 'abstract class C implements ', 'class C<T> extends A<T> implements ', 'const K = class implements '];
+const LAST_ELEMENT_HERITAGES = HERITAGE_INTRODUCERS.flatMap((introducer) => LAST_ELEMENTS.map((element) => `${introducer}${element}`));
 const CLASS_HERITAGES = [
   'class C', 'class C extends B', 'class C extends mixin(A)', 'class C extends (B)', 'class C extends a.b.mixin(A)', 'class C extends new X()', 'class C extends new (X)', 'class C extends new X', 'class C extends f(A)(B)', 'class C extends f(A).g(B)',
   'class C extends a?.b(c)', 'class C extends a!.b(c)', 'class C extends a[0](c)', 'class C extends f<T>(c)', 'class C extends async(c)', 'class C extends import("x")', 'class C extends this.f(c)', 'class C extends (cond ? A : B)', 'class C extends class {}',
@@ -287,6 +387,10 @@ const CLASS_HERITAGES = [
   'abstract class C implements A, B()', 'export class C implements A, B()', '@dec class C implements B()', 'declare class C implements A, B()', 'class C implements "x", B()', String.raw`class C implements A, \u0042()`, String.raw`class C implements A, a.\u0062()`,
   // What stays as it was: a parenthesis, a `new` and an unread callee after a comma.
   'class C implements A, (B)', 'class C extends A, (B)', 'class C extends A, new B()', 'class C implements A, B<T>()', 'class C extends A, a?.b(c)', 'class C extends A, B.C().d()', 'class C<T> extends A<T>, B() implements I',
+  // A letter beyond ASCII in a name of the list, which the comma is read back through, and the word that begins the list in other heads.
+  'class C implements A, caf\u00e9()', 'class C extends caf\u00e9, B()', 'class C extends A, B(), caf\u00e9()', 'class C<T> implements (B)', 'abstract class C implements (B)', 'class C implements caf\u00e9, (B)', 'const K = class extends A, B()', 'class C extends implements, B()', 'class C extends A, implements, B()',
+  // Each of the elements that ends a list in a `)`, after `implements`, after a comma and after both keywords: the braces after it hold members (the sweep reads a part of them in every wrap).
+  ...LAST_ELEMENT_HERITAGES,
 ];
 const CLASS_CONTAINER_WRAPS = [(c) => c, (c) => `export ${c}`, (c) => `function f() { ${c} }`, (c) => `if (a) { b; } else { ${c} }`, (c) => `a(b)\n${c}`, (c) => `async () => { ${c} }`];
 // The same for an interface, which names its bases after `extends` (and, to the parser, after `implements`, which only the checker refuses).
@@ -295,6 +399,9 @@ const INTERFACE_HERITAGES = [
   'interface I extends A(x, y), B()', 'interface I implements B()', 'interface I implements A, B()', 'export interface I extends A, B()', 'declare interface I extends A, B()', 'interface I<T> extends A<T>, B()', 'interface I extends A, B()\n',
   // What stays as it was: a parenthesis after a comma, and an unread callee.
   'interface I extends A, (B)', 'interface I extends A, B<T>()', 'interface I extends A, a?.b()',
+  // A call, a parenthesis, an import, `this.f(A)` and a cast after `extends` and after a comma, and after `implements`, which only the checker refuses.
+  'interface I extends f(A)', 'interface I extends (A)', 'interface I extends A, f(B)', 'interface I extends A, import("x")', 'interface I extends A, this.f(B)', 'interface I extends A, (B as any)', 'interface I implements f(A)', 'interface I implements (A)',
+  'interface I<T> extends A<T>, f(B)', 'interface I extends A, f(B), g(C)', 'interface I extends A, caf\u00e9()', 'interface I extends caf\u00e9, B()',
 ];
 const OBJECT_CONTAINER_WRAPS = [
   (m) => `const o = { ${m} };`, (m) => `f({ ${m} });`, (m) => `function g() { return { ${m} }; }`, (m) => `x = [{ ${m} }];`, (m) => `for (let i = 0;; { ${m} }) {}`, (m) => `for (let i = 0; i < 1; { ${m} }) {}`, (m) => `for (const x of [{ ${m} }]) {}`,
@@ -311,11 +418,15 @@ const TYPE_CONTAINER_WRAPS = [
 function* containerPages() {
   const page = (code, label) => ({ code: `function openDetail(){${CALL};}\n${code}\nconst note = '</U>};${CALL};//';\nexport default function Page(){return null;}\n`, label });
   // A method whose list starts on the line after its name may be a method or the name and an element (the guess `generic`, after `void`): it is in the pages to show that it is never read wrong.
+  // The heritages that LAST_ELEMENT_HERITAGES make (more than a hundred) are read plain, in two wraps: the others stand in every kind of member and every wrap.
+  const generated = new Set(LAST_ELEMENT_HERITAGES);
   for (const heritage of CLASS_HERITAGES) {
     const escaped = heritage.includes('\\') ? ' / an escape' : '';
     for (const name of ['delete', 'void']) {
       for (const [kind, member] of [['plain', `${name}<U>(y: U): T {}`], ['a line break before the list', `${name}\n<U>(y: U): T {}`], ['after a field that await initialises', `a = await\n${name}<U>(y: U): T {}`]]) {
+        if (generated.has(heritage) && kind !== 'plain') continue;
         for (const [w, wrap] of CLASS_CONTAINER_WRAPS.entries()) {
+          if (generated.has(heritage) && w !== 0 && w !== 2) continue;
           yield page(wrap(`${heritage} { ${member} }`), `${JSON.stringify(heritage)}${escaped} / ${name} / ${kind} / wrap ${w}`);
           // No white space between the heritage and its braces: `class ${ … }` is a class named `$`.
           if (kind === 'plain') yield page(wrap(`${heritage.replace(/\n$/, '')}{ ${member} }`), `${JSON.stringify(heritage)}${escaped} with no space / ${name} / wrap ${w}`);
@@ -346,9 +457,13 @@ const NEST_FRAMES = [
   ['stmt', 'stmt', 'const f = () => { __X__ };'], ['stmt', 'stmt', 'const f = async () => { __X__ };'], ['stmt', 'stmt', 'const f = function () { __X__ };'], ['stmt', 'stmt', 'const o = { m() { __X__ } };'], ['stmt', 'stmt', 'const o = { async m() { __X__ } };'],
   // A method after another member of an object literal has a comma before its name, which a heritage clause that ends in a call has too (`class C implements A, B() { … }`): the first braces hold statements and the second members.
   ['stmt', 'stmt', 'const o = { a: 1, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { a, b() {}, m() { __X__ } };'], ['stmt', 'stmt', 'class C implements A, B() { m() { __X__ } }'], ['stmt', 'stmt', 'class C extends A, B() { m() { __X__ } }'],
+  // A method, a function or a property that a heritage keyword names has the body of a function; and what stands before the comma of an object literal — a name with a letter beyond ASCII, a private name, a word that a heritage keyword spells — is no heritage list's.
+  ['stmt', 'stmt', 'class C { implements() { __X__ } }'], ['stmt', 'stmt', 'class C { extends() { __X__ } }'], ['stmt', 'stmt', 'class C { static implements() { __X__ } }'], ['stmt', 'stmt', 'class C { a = 1\n  implements() { __X__ } }'], ['stmt', 'stmt', 'const o = { implements() { __X__ } };'],
+  ['stmt', 'stmt', 'const o = { a: 1, implements() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: caf\u00e9, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: implements, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { implements, m() { __X__ } };'],
+  ['stmt', 'stmt', 'class H { #x = 1; f() { return { a: this.#x, m() { __X__ } }; } }'], ['stmt', 'stmt', 'function implements() { __X__ }'], ['stmt', 'stmt', 'class C implements (B) { implements() { __X__ } }'], ['stmt', 'stmt', 'class C extends (B) { extends() { __X__ } }'],
   // Statements inside, an expression.
   ['stmt', 'expr', '(function () { __X__ })'], ['stmt', 'expr', '(() => { __X__ })'], ['stmt', 'expr', '(async () => { __X__ })'], ['stmt', 'expr', '({ m() { __X__ } })'], ['stmt', 'expr', '({ get x() { __X__ } })'], ['stmt', 'expr', '(class { m() { __X__ } })'],
-  ['stmt', 'expr', '({ a: 1, m() { __X__ } })'],
+  ['stmt', 'expr', '({ a: 1, m() { __X__ } })'], ['stmt', 'expr', '({ a: caf\u00e9, m() { __X__ } })'], ['stmt', 'expr', '({ implements() { __X__ } })'],
   ['stmt', 'expr', '(class extends mixin(A) { m() { __X__ } })'], ['stmt', 'expr', '(function* () { __X__ })'], ['stmt', 'expr', '(class { static { __X__ } })'],
   // An expression inside, a statement.
   ['expr', 'stmt', 'f(__X__);'], ['expr', 'stmt', '[__X__];'], ['expr', 'stmt', '(__X__);'], ['expr', 'stmt', 'const e = __X__;'], ['expr', 'stmt', 'a ? __X__ : b;'], ['expr', 'stmt', 'const o = { k: __X__ };'], ['expr', 'stmt', 'const h = () => __X__;'],
@@ -364,10 +479,13 @@ const NEST_FRAMES = [
   ['member', 'stmt', 'interface I { __X__ }'], ['member', 'stmt', 'type T = { __X__ };'], ['member', 'stmt', 'let x: { __X__ };'], ['member', 'stmt', 'type F = () => { __X__ };'], ['member', 'stmt', 'const o = { __X__ };'],
   ['member', 'stmt', 'class C implements B() { __X__ }'], ['member', 'stmt', 'class C implements A, B() { __X__ }'], ['member', 'stmt', 'class C extends A, B() { __X__ }'], ['member', 'stmt', 'class C extends A implements B() { __X__ }'], ['member', 'stmt', 'interface I extends A, B() { __X__ }'],
   ['member', 'stmt', 'interface I extends B() { __X__ }'],
+  ['member', 'stmt', 'class C implements (B) { __X__ }'], ['member', 'stmt', 'class C extends A implements (B) { __X__ }'], ['member', 'stmt', 'class C implements (A as any) { __X__ }'], ['member', 'stmt', 'class C<T> implements (B) { __X__ }'], ['member', 'stmt', 'class C implements import("x") { __X__ }'],
+  ['member', 'stmt', 'class C implements this.f(A) { __X__ }'], ['member', 'stmt', 'class C implements A, caf\u00e9() { __X__ }'], ['member', 'stmt', 'interface I extends A, f(B) { __X__ }'], ['member', 'stmt', 'interface I extends A, import("x") { __X__ }'],
+  ['member', 'expr', '(class extends (B) { __X__ })'], ['member', 'expr', '(class extends A implements (B) { __X__ })'],
   ['member', 'expr', '({ __X__ })'], ['member', 'expr', '(class { __X__ })'], ['member', 'expr', '(class extends mixin(A) { __X__ })'],
 ];
 // What stands before the payload member, by the kind of the braces: a member that a separator or a line break ends.
-const NEST_MEMBER_BEFORE = { body: ['', '', '', 'static ', 'async ', 'get a() { return 1; }\n', 'a = await\n', 'a = 1;\n', 'x;\n', '@dec ', 'a: 1,\n', 'a() {},\n', '*', 'readonly '], signature: ['', '', 'a: void\n', 'a: string;\n', 'a(): void\n', 'readonly ', 'a?: T,\n'] };
+const NEST_MEMBER_BEFORE = { body: ['', '', '', 'static ', 'async ', 'get a() { return 1; }\n', 'a = await\n', 'a = 1;\n', 'x;\n', '@dec ', 'a: 1,\n', 'a() {},\n', '*', 'readonly ', '@dec<T> *', '@dec<T> in\n', '@dec<T> instanceof\n', '@1. *', 'a = 1\n', 'a\n'], signature: ['', '', 'a: void\n', 'a: string;\n', 'a(): void\n', 'readonly ', 'a?: T,\n'] };
 const NEST_PRECEDING_WORDS = ['', '', 'void', 'typeof', 'delete', 'await', 'a in', 'a instanceof', 'x ? 1 :', 'a &&', 'a ||'];
 function* nestedBracePages(seed, count) {
   const { pick, chance } = generator(seed);
@@ -403,5 +521,5 @@ function* nestedBracePages(seed, count) {
   }
 }
 
-module.exports = { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages, MODIFIERS, OPERATORS, MEMBER_PREFIXES, MEMBER_PLACES, NEWLINE_GAPS, NEWLINE_PLACES, NEWLINE_ELEMENTS, KEYWORD_LINE_PLACES,
-  DECORATED_PLACES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES, CALL };
+module.exports = { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, decoratorEndPages, keywordNamedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages, MODIFIERS, OPERATORS, MEMBER_PREFIXES, MEMBER_PLACES, NEWLINE_GAPS, NEWLINE_PLACES, NEWLINE_ELEMENTS, KEYWORD_LINE_PLACES,
+  DECORATED_PLACES, DECORATOR_ENDS, DECORATOR_FOLLOWERS, DECORATOR_FRAMES, KEYWORD_NAMES, KEYWORD_BODIES, KEYWORD_METHOD_FRAMES, OBJECT_VALUES, OBJECT_VALUE_FRAMES, SHORTHAND_NAMES, SHORTHAND_FRAMES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES, LAST_ELEMENT_HERITAGES, CALL };

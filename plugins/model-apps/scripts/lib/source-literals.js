@@ -1153,10 +1153,13 @@ const MEMBER_LOOKBACK = 8;
 
 // Whether a member of a type, a class or an object literal may begin at the word that ends right before the `<` at `i`, read from the tokens that stand before the word. Where it cannot — after an `=`, an operator, `return`, a `(`, on this line
 // or after a line break, or where no member can stand at all (membersMayStandAt) — the word is an operator, and the `<` after it an element. The tokens before the word are asked first: after an `=`, an operator or a `(` they answer at once, and the
-// lookback over the brackets that says where the braces are is not made for the element that follows every `void` of such a line (a page of thousands of them would otherwise pay it for each).
+// lookback over the brackets that says where the braces are is not made for the element that follows every `void` of such a line (a page of thousands of them would otherwise pay it for each). The braces are looked for from where a run of postfix `!` that ends
+// right before the word begins: its characters are no brackets, and an operand with thousands of non-null assertions would otherwise use up the window before the braces that hold the statement.
 function memberMayBeginAtWord(out, i) {
   const at = wordBefore(out, i).start + 1;
-  return memberMayBeginAt(out, at, 0) && membersMayStandAt(out, at);
+  if (!memberMayBeginAt(out, at, 0)) return false;
+  const before = prevSignificant(out, at);
+  return membersMayStandAt(out, before.ch === '!' ? postfixRunStart(out, before.index) : at);
 }
 
 // Whether members can stand directly at `at`, which only the braces of a class, an interface, a type literal and an object literal hold. They do not stand inside parentheses or brackets that nothing has closed — the arguments of a call, a parameter list, an array,
@@ -1213,9 +1216,9 @@ function blockBraceAt(out, k) {
 // left-hand-side expressions that the parser reads as it reads any other (parseExpressionWithTypeArguments, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts), and a `)` ends the last of them when it is a call or a parenthesis:
 //   class C extends mixin(A) {        class C extends (Base) {        class C extends a.b.mixin(A) {        class C extends new Base() {         valid
 //   class C implements B() {          class C implements (B) {        class C extends A, B() {              interface I extends A, B() {       parse, and only the checker objects (TS2500, TS1174, TS2499)
-// A call or a parenthesis that follows `extends`, `implements` or `new`, directly or as the last of the names that dots join (`a.b.mixin`), or that follows a comma of such a list (heritageListBefore), may be one, so it is not taken for a head. Neither is a
-// call that follows anything the names do not go back to: a `)`, a `]`, a `>` (type arguments), a `?.` or a `!`, an escape, a letter beyond ASCII — what is not read is not a head. A comma that no heritage list holds separates the members of an object literal,
-// and the call after it is a method's head (`{ a: 1, m() { … } }`).
+// A call or a parenthesis that follows the keyword `extends` or `implements` (heritageKeywordAt), `new`, directly or as the last of the names that dots join (`a.b.mixin`), or that follows a comma of such a list (heritageListBefore), may be one, so it is not taken for a head.
+// Neither is a call that follows anything the names do not go back to: a `)`, a `]`, a `>` (type arguments), a `?.` or a `!`, an escape, a letter beyond ASCII — what is not read is not a head. A comma that no heritage list holds separates the members of an object
+// literal, and the call after it is a method's head (`{ a: 1, m() { … } }`); and a word that a class's head does not lead to is no keyword but a name, whose call is a head all the same (`class C { implements() { … } }`, `{ extends() { … } }`).
 function closesBodyHead(out, close) {
   let depth = 0;
   let open = -1;
@@ -1225,30 +1228,51 @@ function closesBodyHead(out, close) {
   }
   if (open === -1) return false;
   let name = wordBefore(out, open);
-  if (name.word === 'extends' || name.word === 'implements') return false;
+  if (heritageKeywordAt(out, name.word, name.start)) return false;
   while (name.word !== '') {
     if (cutsWord(out, name.start)) return false;
     const before = prevSignificant(out, name.start + 1);
     if (before.ch !== '.') {
       const { token, index } = tokenBeforeAngle(out, name.start + 1);
       if (token === ',') return !heritageListBefore(out, index);
-      return token !== 'extends' && token !== 'new' && token !== 'implements';
+      return token !== 'new' && !heritageKeywordAt(out, token, index - token.length);
     }
     name = wordBefore(out, before.index);
   }
   return false;
 }
 
+// Whether `word`, which ends right before a `(` or a name and starts after the character at `before`, is the keyword `extends` or `implements` of a heritage clause, whose elements follow it, and not a name that spells it: a method (`class C { implements() { … } }`), a function
+// (`function implements() { … }`), a property or a value of an object literal (`{ extends() {} }`, `{ a: implements, m() {} }`). The keyword follows the head of a class or an interface — its name, its type parameters, another heritage clause — and that head is read back from the word to
+// `class` or `interface` (readHeritageBack, which reads what a head holds). A name stands after what a head has no place for — a `{` that nothing closed, a `;`, a `:`, an `=`, a modifier, a decorator, a line break after a member — and the scan stops there. A property of another object
+// (`a.extends`) and a word that an escape, `#` or a letter beyond ASCII cuts short are no keywords. Where a complete class or interface stands right before the name, with no `;` between (`class Q {}` and a line break, then `function implements() {}`, or `{ a: class {}, implements() {} }`),
+// the scan crosses its braces and reaches its `class`: the name is taken for a keyword, which is the guess side (the braces may hold members), never a block.
+function heritageKeywordAt(out, word, before) {
+  return (word === 'extends' || word === 'implements') && !isPropertyName(out, before) && !cutsWord(out, before) && readHeritageBack(out, before + 1, false);
+}
+
+// Whether `c` is part of a name or a number in the lexer's output: a letter, a digit, `_`, `$`, the `#` of a private name, or a character beyond ASCII (a letter of a name: what is not code is blank, and white space is not this).
+function isNamePart(c) {
+  return /[\w$#]/.test(c) || (c.charCodeAt(0) > 0x7f && !isTrivia(c));
+}
+
 // Whether the `,` at `comma` separates the elements of a heritage clause — `class C implements A, B() {`, `class C extends A, B() {`, `interface I extends A, B() {` — and not the members of an object literal (`{ a: 1, m() {} }`), the other place that a name, a call and
 // braces stand after a comma. The elements are left-hand-side expressions with type arguments, so between the comma and the keyword that begins the list stand only names, dots, `?.`, `!`, a `*` (of `function*`), the quotes of literals and the `/` of a regex (their text is
-// blank in `out`), the sign of a number's exponent (`1e+5`) and commas, at the list's own level, and whatever brackets and type arguments hold: `A`, `ns.B`, `A<T, U>`, `f(x, y)`, `(B)`, `class {}`. Read back from the comma, that keyword is a heritage (true), and what no element
-// has — a `:`, a `;`, an `=`, a `?` that is no `?.`, an operator, a `<` that no `>` closed, and a bracket that nothing closed, which is the brace or the parenthesis that holds the comma — makes the comma an object literal's or an argument list's (false). A word or a
-// character that is not read (an escape, `#`, a letter beyond ASCII) leaves the list open, and so does a window that ends first: a heritage may be there (true).
+// blank in `out`), the sign of a number's exponent (`1e+5`) and commas, at the list's own level, and whatever brackets and type arguments hold: `A`, `ns.B`, `A<T, U>`, `f(x, y)`, `(B)`, `class {}`. Names are read whole, a letter beyond ASCII or
+// a private name (`café`, `this.#item`) included. Read back from the comma, a keyword that a class's or an interface's head leads to (heritageKeywordAt) is a heritage (true), and what no element has — a `:`, a `;`, an `=`, a `?` that is no `?.`, an operator, a `<` that no `>`
+// closed, and a bracket that nothing closed, which is the brace or the parenthesis that holds the comma — makes the comma an object literal's or an argument list's (false), and so does a word that spells the keyword where nothing leads from a head to it (`{ a: implements, m() {} }`).
+// What is not read — an escape, which the page names a guess for — leaves the list open, and so does a window that ends first: a heritage may be there (true).
 function heritageListBefore(out, comma) {
+  return readHeritageBack(out, comma, true);
+}
+
+// The scan behind heritageListBefore (`list`: the elements of a list, read back from a comma to the keyword that begins it) and heritageKeywordAt (not `list`: the head of a class or an interface, read back from a keyword to `class` or `interface`). The two read the same tokens; they differ
+// in the word that ends them: a keyword `extends` or `implements` for a list — which is a heritage's only where a head leads to it, so the scan of the head decides — and `class` or `interface` for a head. A property (`a.class`) is neither.
+function readHeritageBack(out, from, list) {
   let brackets = 0;   // the closing brackets read whose opener is not read yet
   let angles = 0;     // the same for the `>` that ends type arguments
-  let k = comma - 1;
-  for (; k >= 0 && comma - k <= LOOKAHEAD; k -= 1) {
+  let k = from - 1;
+  for (; k >= 0 && from - k <= LOOKAHEAD; k -= 1) {
     const c = out[k];
     if (c === ')' || c === ']' || c === '}') {
       brackets += 1;
@@ -1266,12 +1290,15 @@ function heritageListBefore(out, comma) {
       angles -= 1;
     } else if (angles > 0) {
       continue;
-    } else if (/[\w$]/.test(c)) {
+    } else if (isNamePart(c)) {
       let start = k;
-      while (start > 0 && /[\w$]/.test(out[start - 1])) start -= 1;
+      while (start > 0 && isNamePart(out[start - 1])) start -= 1;
       let word = '';
       for (let q = start; q <= k; q += 1) word += out[q];
-      if ((word === 'extends' || word === 'implements') && !isPropertyName(out, start - 1)) return true;
+      if (!isPropertyName(out, start - 1)) {
+        if (list && (word === 'extends' || word === 'implements')) return readHeritageBack(out, start, false);
+        if (!list && (word === 'class' || word === 'interface')) return true;
+      }
       k = start;
     } else if (isTrivia(c) || ',.!*/\'"`'.includes(c)) {
       continue;
@@ -1281,7 +1308,8 @@ function heritageListBefore(out, comma) {
     } else if (c === '?') {
       // `a?.b` reads back as `.` and then `?`; a `?` with no `.` after it is a conditional's or marks a name optional.
       if (out[k + 1] !== '.') return false;
-    } else if (c === '\\' || c === '#' || c.charCodeAt(0) > 0x7f) {
+    } else if (c === '\\') {
+      // A Unicode escape in a name, which the lexer reports as the guess `identifier`: the page is refused after it, and what it spells is not read here.
       return true;
     } else {
       return false;
@@ -1331,16 +1359,19 @@ function wordMayEndMember(out, { token, index }, depth) {
 }
 
 // Whether a decorator ends at `index`, the last character of the token before a member's name. A class member may have any number of them before its name and its modifiers (parseModifiers allows decorators in a class, and in no other place
-// a member stands): `@dec`, `@a.b`, `@dec(1)`, `@(x)`, `@dec<T>()`, `@tag`x``. A decorator is an `@` and a left-hand-side expression, so what ends one is a name, a literal or a closing bracket, and between the `@` and that token stand only
-// what such an expression holds at its own level — names, dots, `?.`, `!`, literals, and brackets that are closed (the arguments and the type arguments of a call) — never an `=`, a `,`, a `:` or a `;`. That is read back from `index`, and
-// what else is on the way means that the token ends no decorator, and a member does not begin after it:
+// a member stands): `@dec`, `@a.b`, `@dec(1)`, `@(x)`, `@dec<T>()`, `@dec<T>`, `@1.`, `@tag`x``. A decorator is an `@` and a left-hand-side expression, so what ends one is a name, a literal, a closing bracket, the `>` of type arguments or the decimal point of a number,
+// and between the `@` and that token stand only what such an expression holds at its own level — names, dots, `?.`, `!`, literals, and brackets that are closed (the arguments and the type arguments of a call) — never an `=`, a `,`, a `:` or a `;`.
+// The `>` is an instantiation expression, which the parser takes for one when a binary operator follows it — a generator's `*`, the name `instanceof`, a field named `in` — or a line break does (canFollowTypeArgumentsInExpression,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): `@dec<T> *delete<U>() {}`, `@dec<T> instanceof<U>() {}`. The `>` of an arrow ends none, and a `>` that no `<` at the same level opens (a comparison's) is read back like the rest: what
+// is on the way makes it no decorator's. That is read back from `index`, and what else is on the way means that the token ends no decorator, and a member does not begin after it:
 //   @decorate(void <span>…</span>) m() {}         the `(` that the argument list opened and nothing closed
 //   @decorate element = void <span>…</span>;      an initializer's `=`
 //   @decorate m() { const e = void <span>…        the `{` of the method's body
 // (No program has an `@` in code but a decorator's, and a string, a comment or a template that holds one is blank in `out`.) Brackets that hold more than the window reads are not decided: a member may begin after the decorator.
 function decoratorBefore(out, index) {
   const last = out[index] || '';
-  if (!/[\w$\\)\]}!'"`]/.test(last) && last.charCodeAt(0) <= 0x7f) return false;
+  // The `>` of type arguments ends a decorator (`@dec<T>`) and so does a number's decimal point (`@1.`); the `>` of an arrow (`=>`) ends none.
+  if (!/[\w$\\)\]}!'"`]/.test(last) && last.charCodeAt(0) <= 0x7f && !(last === '>' && out[index - 1] !== '=') && !decimalPointAt(out, index)) return false;
   let brackets = 0;   // the closing brackets read whose opener is not read yet
   let angles = 0;     // the same for the `>` that ends type arguments
   let k = index;
@@ -1371,11 +1402,23 @@ function decoratorBefore(out, index) {
   return k >= 0;
 }
 
+// Whether the `.` at `index` is the decimal point that ends a number written with no digits after it — `1.`, a literal of its own (scanNumber, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/scanner.ts) — and not the dot of a member access: `@1. *m<U>() {}`
+// is a decorated generator, and a number that a line break follows may end a member (`@1.` and a line break, then `*m<U>() {}`). The digits must stand alone: a name, another `.`, an exponent or a prefix before them makes the dot a member access's (`a1.`, `1.5.`, `1e5.`, `0x1.`, `1n.`),
+// so the run of digits and `_` before the dot has to follow something that is no part of a name or a number.
+function decimalPointAt(out, index) {
+  if (out[index] !== '.' || !/\d/.test(out[index - 1] || '')) return false;
+  let k = index - 1;
+  while (k >= 0 && /[\d_]/.test(out[k])) k -= 1;
+  const before = k >= 0 ? out[k] : '';
+  return !/[\w$.\\]/.test(before) && !(before !== '' && before.charCodeAt(0) > 0x7f);
+}
+
 // Whether the token that ends a line, which is no word and no separator, may end a member: a closing bracket (`m()`, `[k: string]: T`, `a: A<B>`), a string or template (`a: 'x'`, a literal name), a postfix `++` or `--`, a `/` that ends a regex
-// (a class property's initializer), a character beyond ASCII, which may be part of a name, a postfix `!` (the non-null assertion that ends an initializer, a definite property `m!`) and a `?` that marks a name optional (`m?`, a property
-// with no type). The tokens that want an operand are none of these, and a line break after one does not end the expression: an `=`, an `=>`, a `:`, a `(`, a `[`, a `.`, a prefix `!`, `+` or `&&`, a conditional's `?` and the rest.
+// (a class property's initializer), a character beyond ASCII, which may be part of a name, a postfix `!` (the non-null assertion that ends an initializer, a definite property `m!`), a `?` that marks a name optional (`m?`, a property
+// with no type) and the decimal point of a number (`@1.`, `a = 1.`; decimalPointAt). The tokens that want an operand are none of these, and a line break after one does not end the expression: an `=`, an `=>`, a `:`, a `(`, a `[`, a `.` that no number ends, a prefix `!`, `+` or `&&`, a conditional's `?` and the rest.
 function memberMayEndBefore(out, { token, index }, depth) {
   if (token === ')' || token === ']' || token === '>' || token === '++' || token === '--' || token === '/' || token === '"' || token === "'" || token === '`' || token === '\\' || token.charCodeAt(0) > 0x7f) return true;
+  if (token === '.') return decimalPointAt(out, index);
   if (token === '!') return operandEndsAt(out, index);
   if (token !== '?') return false;
   // After a name that a member starts with, `?` marks it optional; after any other operand it is a conditional's and wants its consequent: `const e = x ?` and a line break, then `void <span>…</span>` is no member. (A type's `?` in JSDoc
@@ -1389,11 +1432,16 @@ function memberMayEndBefore(out, { token, index }, depth) {
 // opening bracket or a keyword that takes an operand (`return`, `typeof`, …) it is the prefix operator, which wants its operand on the next line. A run of `!` is walked back over in a loop, as positionAfterPrefixable walks one: the source is untrusted, and a
 // call for each of them overflowed the call stack a few thousand in. (No operator ends in a `!`, so a `!` right before another is a token of its own, and the run is walked by its characters, each read once.)
 function operandEndsAt(out, index) {
-  let at = index;
-  for (let previous = prevSignificant(out, at); previous.ch === '!'; previous = prevSignificant(out, at)) at = previous.index;
-  const before = tokenBeforeAngle(out, at);
+  const before = tokenBeforeAngle(out, postfixRunStart(out, index));
   if (/^[\w$]+$/.test(before.token)) return !EXPR_START_WORDS.has(before.token);
   return before.token === ')' || before.token === ']' || before.token === '}' || before.token === '>' || before.token === '"' || before.token === "'" || before.token === '`';
+}
+
+// Where the run of `!` that ends at `index`, a `!`, begins: the index of its first `!`.
+function postfixRunStart(out, index) {
+  let at = index;
+  for (let previous = prevSignificant(out, at); previous.ch === '!'; previous = prevSignificant(out, at)) at = previous.index;
+  return at;
 }
 
 // Whether the head that starts at the `<` at `i` may be a list of type parameters, read as parseTypeParameters reads one: `<>`, a name that a `>`, a `,`, a `=` or `extends` follows (`<U>`, `<U extends X>`), or modifiers

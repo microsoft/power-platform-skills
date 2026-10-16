@@ -15,7 +15,7 @@ const { opensTypeParameters, blankNonCodePreservingTemplateExpressions, TYPE_PAR
 const { resolvePageRefs, navigationFrontier } = require('../lib/pageref-resolver.js');
 const { loadTypescriptOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
 const { cleanSourceFile, readingAt, isElement, tokenVocabulary } = require('./helpers/angle-frames.js');
-const { NEWLINE_GAPS, DECORATED_PLACES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES } = require('./helpers/type-head-pages.js');
+const { NEWLINE_GAPS, DECORATED_PLACES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES, LAST_ELEMENT_HERITAGES, decoratorEndPages, KEYWORD_NAMES, KEYWORD_BODIES, KEYWORD_METHOD_FRAMES, OBJECT_VALUES, OBJECT_VALUE_FRAMES, SHORTHAND_NAMES, SHORTHAND_FRAMES } = require('./helpers/type-head-pages.js');
 
 const SKIP = 'no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it';
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -903,11 +903,15 @@ test('an element after `void`, `typeof` or `delete` is read for certain wherever
 });
 
 const DECORATORS = ['@dec', '@a.b', '@a?.b', '@a!', '@a!.b', '@dec()', '@dec()!', '@(x)', '@dec<T>()', '@dec<A, B>()', '@dec<(x: A) => B>()', '@tag`x`', '@dec()`x`', '@1', "@'x'", '@new X()', '@new X', '@#a', '@a.#b', '@this', '@this.x', '@super.x', '@import("x")', '@a\n.b',
+  // An instantiation expression is a decorator's end too, and so is a number's decimal point (`1.`).
+  '@dec<T>', '@dec<A, B>', '@dec<(x: A) => B>', '@a.b<T>', '@(x)<T>', '@dec<Array<string>>', '@dec<{ a: 1 }>', '@dec<"s">', '@dec<T>()<U>', '@dec<T> /* c */', '@1.', '@1_0.',
   '@function(){}', '@class {}', '@async', '@static', '@a.static', '@readonly', '@get', '@\\u0064ec', '@dec(\n1,\n2\n)', '@dec(() => { return 1; })', '@dec({ a: 1, b: [1, 2] })', '@dec("a;b", \'c,d\')', '@dec(`x${y}`)', '@dec(/x/)', '@dec() @dec2()', '@dec @dec2', '@dec static', '@dec static async', '@dec async *',
   '@dec readonly', '@dec get', '@dec public', '@dec override', '@dec accessor', '@dec declare', '@dec abstract', '@dec in', '@dec out', '@dec export', '@dec const', '@dec(a => a)', '@dec(a ? b : c)', '@dec(a, b)', '@dec(a = 1)', '@dec(typeof x)', '@dec(void 0)'];
 const DECORATED_FRAMES = [
   (d, w) => `class C { ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { m() {} ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { x = 1; ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { x = 1\n ${d} ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { ${d}\n ${w}<U>(y: U): MARK {} }`,
   (d, w) => `abstract class C { ${d} abstract ${w}<U>(y: U): MARK; }`, (d, w) => `const K = class { ${d} ${w}<U>(y: U): MARK {} };`, (d, w) => `declare class C { ${d} ${w}<U>(y: U): MARK; }`,
+  // The name after a generator's `*`, after a field named `in` or `instanceof` that a line break ends, and after a decorator that ends in the `>` of type arguments or in a decimal point (each only where the parser reads them so).
+  (d, w) => `class C { ${d} *${w}<U>(y: U): MARK { yield y; } }`, (d, w) => `class C { ${d}\n *${w}<U>(y: U): MARK { yield y; } }`, (d, w) => `class C { ${d} in\n ${w}<U>(y: U): MARK {} }`, (d, w) => `class C { ${d} instanceof\n ${w}<U>(y: U): MARK {} }`,
 ];
 
 test('TypeScript: a decorated method named like an operator is read as a member after every shape of decorator, and an expression that holds an `@` earlier on its statement is not', (t) => {
@@ -1211,24 +1215,25 @@ test('a head that starts like an element\'s stays a guess where a member of a ty
 // ─── A long run of postfix `!` ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 // Whether a line break before a word ends a member depends on whether an operand ended before it: after a name, `!` is the postfix operator of a non-null assertion, and a run of them is walked back to the name. A page is untrusted input, and a call per `!` overflowed
-// the stack a few thousand of them in (the same walk as positionAfterPrefixable, which is a loop). A run longer than the window that the lexer looks back over (2,000 characters) puts the braces that hold the statement out of sight: where the braces matter, the
-// page is refused after the guess `generic`, as for any statement that long, and never rewritten after it.
-test('a run of 20,000 postfix `!` before a line break and an element is read, not a stack overflow: exactly where the braces are in sight, and after a guess where they are not', (t) => {
+// the stack a few thousand of them in (the same walk as positionAfterPrefixable, which is a loop). The braces that hold the statement are looked for from where the run begins, so that a run longer than the window that the lexer looks back over (2,000 characters) does not
+// put them out of sight: a function's or a method's body is read for certain at any length. The block of an arrow is the one place that stays a guess (`generic`), as for any statement in it: its braces may be a function type's object type.
+test('a run of 20,000 postfix `!` before a line break and an element is read, not a stack overflow: exactly where the braces are known for a block, and after a guess in the block of an arrow', (t) => {
   const ts = loadTypescriptOracle();
   const element = 'void <span>(MARK); // note</span>;';
-  // [place, the page for a run of n, what a short run gives, what a run longer than the window gives]: 'exact' resolves the call after it, 'generic' names the guess.
+  // [place, the page for a run of n, what the page gives]: 'exact' resolves the call after it, 'generic' names the guess.
   const pages = (n) => [
-    ['a function body', `function f() { const p = value${'!'.repeat(n)}\n${element} }\n${CALL};`, 'exact', 'generic'],
-    ['the block of an arrow', `const f = () => { const p = value${'!'.repeat(n)}\n${element} };\n${CALL};`, 'generic', 'generic'],
-    ['a class property', `class C { x = value${'!'.repeat(n)}\n  void<U>(y: MARK): T {} }\n${CALL};`, 'exact', 'exact'],
-    ['prefix operators, which no operand precedes', `function f() { const p =${'!'.repeat(n)}\n${element} }\n${CALL};`, 'exact', 'exact'],
+    ['a function body', `function f() { const p = value${'!'.repeat(n)}\n${element} }\n${CALL};`, 'exact'],
+    ['a method body', `class C { m() { const p = value${'!'.repeat(n)}\n${element} } }\n${CALL};`, 'exact'],
+    ['the block of an arrow', `const f = () => { const p = value${'!'.repeat(n)}\n${element} };\n${CALL};`, 'generic'],
+    ['a class property', `class C { x = value${'!'.repeat(n)}\n  void<U>(y: MARK): T {} }\n${CALL};`, 'exact'],
+    ['prefix operators, which no operand precedes', `function f() { const p =${'!'.repeat(n)}\n${element} }\n${CALL};`, 'exact'],
   ];
-  for (const n of [20, 20000, 200000]) {
-    for (const [what, code, short, long] of pages(n)) {
+  for (const n of [20, 1999, 2001, 20000, 200000]) {
+    for (const [what, code, expected] of pages(n)) {
       const label = `${what} / ${n}`;
       let read;
       assert.doesNotThrow(() => { read = readPage(code); }, `${label}: no stack overflow`);
-      if ((n <= 20 ? short : long) === 'exact') {
+      if (expected === 'exact') {
         assert.strictEqual(read.frontier, null, `${label}: no guess is named`);
         assert.strictEqual(read.rewritten.length, 1, `${label}: the call after it is rewritten`);
       } else {
@@ -1240,4 +1245,181 @@ test('a run of 20,000 postfix `!` before a line break and an element is read, no
       if (ts && n <= 20) assert.ok(cleanSourceFile(ts, code), `${label}: TypeScript parses the page`);
     }
   }
+});
+
+// ─── A decorator that ends in the `>` of type arguments or in a decimal point ───────────────────────────────────────────────────────────────────────────────
+
+// A decorator is an `@` and a left-hand-side expression, and the expression may end in the `>` of type arguments — an instantiation expression, `@dec<T>` — which the parser takes for one when the next token is a binary operator or stands on a later line
+// (canFollowTypeArgumentsInExpression, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): a generator's `*`, a method named `instanceof`, a field named `in` or `instanceof` that a line break ends. Or in a number's decimal point: `1.` is a
+// literal of its own, and `@1. *delete<U>() {}` a decorated generator. A member begins where the decorator ends, so a method named like an operator after it is a member and the note after it is data; a lexer that took the `>` or the `.` for the end of nothing read
+// the operator word for an operator and the `<U>` for an element, whose text ran on to the closing tag in the note and held the call there.
+// The names of the methods, accessors and signatures that have type parameters in a program that TypeScript parses with no diagnostic (null where it does not parse).
+function typeParameterNames(ts, code) {
+  const source = cleanSourceFile(ts, code);
+  if (!source) return null;
+  const names = new Set();
+  (function visit(node) {
+    if (node.name && node.typeParameters && node.name.text) names.add(node.name.text);
+    ts.forEachChild(node, visit);
+  })(source);
+  return names;
+}
+
+test('TypeScript: a method named like an operator is a member after a decorator that ends in the `>` of type arguments or in a decimal point, and the note after it is data', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  const base = loadBaseLexer();
+  const codes = [];
+  let valid = 0;
+  for (const { code, label } of decoratorEndPages()) {
+    const names = typeParameterNames(ts, code);
+    if (!names || ![...MEMBER_NAME_OPERATORS].some((word) => names.has(word))) continue;
+    valid += 1;
+    codes.push(code);
+    assertRead(code, 'exact', label);
+    assert.ok(readsAsCode(code), `${label}: the method is code`);
+  }
+  assert.ok(valid >= 1500, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
+  // The released lexer reads the head of every one of them that follows the operator word directly for an element, and rewrites the note.
+  if (base) assert.ok(misreadByBase(base, codes) >= codes.length / 2, `the released lexer misreads only ${misreadByBase(base, codes)} of the ${codes.length} pages`);
+  // The shapes in which the `>` was found: a generator, a method named `instanceof`, and a field named `in` or `instanceof` that a line break ends — and the controls that were read right before: a call, a line break, a field that a `;` ends.
+  const named = [
+    ['a generator', 'class Store { @d<string> *delete<T>(key: T) { yield key; } }', 'exact'], ['a method named instanceof', 'class Guard { @d<string> instanceof<T>(value: T): boolean { return true; } }', 'exact'],
+    ['a field named in and a line break', 'class Store { @d<string> in\n  delete<T>(key: T): void {} }', 'exact'], ['a field named instanceof and a line break', 'class Guard { @d<string> instanceof\n  void<T>(value: T): void {} }', 'exact'],
+    ['a decimal point and a generator', 'class Store { @1. *delete<T>(key: T) { yield key; } }', 'exact'], ['a decimal point, a line break and a generator', 'class Store { @1.\n  *typeof<T>(key: T) { yield key; } }', 'exact'],
+    ['control: a call and a generator', 'class Store { @d<string>() *delete<T>(key: T) { yield key; } }', 'exact'], ['control: a line break', 'class Store { @d<string>\n  delete<T>(key: T): void {} }', 'exact'],
+    ['control: a field that a semicolon ends', 'class Store { @d<string> in = 1;\n  delete<T>(key: T): void {} }', 'exact'],
+  ];
+  for (const [what, source, expect] of named) {
+    const code = pageOf(source, 'T');
+    assert.ok(cleanSourceFile(ts, code), `${what}: TypeScript parses the page`);
+    assertRead(code, expect, what);
+  }
+  // A `>` or a `.` that ends no decorator stays what it was: the `>` of a comparison and of an arrow is no end of a decorator, so the operator word after it is an operator and the element after that is text, with no guess — whatever decorator stands earlier on its statement.
+  const element = 'void <span>(MARK); // note</span>;';
+  for (const code of [`class C { @dec x = a > ${element} }`, `class C { @dec x = a >> ${element} }`, `class C { x = () => ${element} }`, `class C { @dec x = (a) => ${element} }`, `class C { @dec x = a < b > ${element} }`, `class C { @dec(a) x = b > ${element} }`,
+    `class C { @dec<T>\n  x = a > ${element} }`, `class C { @dec<T>() x = a > ${element} }`, `class C { @1. x = a > ${element} }`, `class C { @dec x = 1.5 ${element.replace('void', '+ void')} }`]) {
+    assert.ok(cleanSourceFile(ts, code), `TypeScript parses ${visible(code)}`);
+    assert.ok(!readsAsCode(code), `the element is text: ${visible(code)}`);
+    assert.deepStrictEqual(guessesOf(code), [], `no guess: ${visible(code)}`);
+  }
+});
+
+// ─── A method, a function or a property that a heritage keyword names ───────────────────────────────────────────────────────────────────────────────────────
+
+// The word before the `(` of `class C extends (B) {` and `class C implements (B) {` is the keyword of a heritage clause, and the braces after the `)` hold members. The same word names a method (`class C { implements() { … } }`), a function and a property of an object
+// literal, and the braces after its `)` are the body of a function, whose statements an element may start: `void <span>(x); // note</span>` there is an element, for certain. Which of the two a word is, is read from what stands before it: a keyword follows the name of
+// a class, its type arguments or another heritage clause, and a name follows a member's separator, a modifier, a generator's `*`, a decorator or a line break after a member. (A lexer that took every such word for the keyword refused the element, as it does where braces may
+// hold members.)
+const KEYWORD_BODY_PLACES = [['a method of a class', (n, b) => `class C { ${n}() { ${b} } }`], ['a method of an object literal', (n, b) => `const o = { ${n}() { ${b} } };`]];
+
+test('a method, a function or a property named `implements`, `extends` or `new` has the body of a function: an element after `void` there is read for certain, wherever the name stands', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  let valid = 0;
+  for (const [place, frame] of [...KEYWORD_BODY_PLACES, ...KEYWORD_METHOD_FRAMES]) {
+    for (const name of KEYWORD_NAMES) {
+      for (const body of KEYWORD_BODIES) {
+        const text = frame(name, body);
+        if (text === null) continue;
+        const code = `${text}\n${CALL};`;
+        const label = `${place} / ${name} / ${visible(body)}`;
+        if (!cleanSourceFile(ts, code)) continue;
+        valid += 1;
+        assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+        assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+        assert.strictEqual(readPage(code).rewritten.length, 1, `${label}: the call after it is rewritten`);
+      }
+    }
+  }
+  assert.ok(valid >= 300, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
+  // A method named `implements` or `extends` in the braces of a class whose heritage ends in the same word before a `(`: the first braces hold members, the second the statements, and each is read for what it is.
+  for (const heritage of ['class C implements (B)', 'class C extends (B)', 'class C extends A implements (B)', 'class C<T> implements (B)', 'abstract class C implements (B)', 'const K = class extends (B)', 'class C implements f(B)', 'class C extends A, f(B)', 'class C extends A implements B, f(C)']) {
+    for (const name of ['implements', 'extends']) {
+      const code = `${heritage} { ${name}() { void <span>(MARK); // note</span>; }\n  delete<T>(x: MARK): void {} }\nconst note = '</T>};${CALL};//';\n${CALL};`;
+      if (!cleanSourceFile(ts, code)) continue;
+      const label = `${heritage} / ${name}`;
+      assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+      assert.ok(maskOf(code).includes('MARK): void'), `${label}: the method of the heritage's braces is code`);
+      assert.ok(!/<span>\(MARK/.test(maskOf(code)), `${label}: the text of the element in the method's body is text`);
+      assert.deepStrictEqual(readPage(code).rewritten.length, 1, `${label}: the note is data and the call after it is rewritten`);
+    }
+  }
+  // A name written with an escape is a guess of its own (`identifier`) wherever it stands, in a heritage too: the page is refused after it, and nothing after it is rewritten.
+  for (const code of [String.raw`class C extends \u0041 implements (B) { delete<T>(x: MARK): void {} }`, String.raw`class \u0043 implements (B) { delete<T>(x: MARK): void {} }`]) {
+    const page = `${code}\nconst note = '</T>};${CALL};//';\n${CALL};`;
+    assert.ok(cleanSourceFile(ts, page), `TypeScript parses ${visible(page)}`);
+    const { rewritten, frontier } = readPage(page);
+    assert.ok(frontier && frontier.kind === 'identifier', `${visible(code)}: the guess identifier is named: ${visible(frontier)}`);
+    assert.deepStrictEqual(rewritten, [], `${visible(code)}: nothing after the guess is rewritten`);
+  }
+});
+
+// ─── A letter beyond ASCII, a private name and a heritage word as a value before a method ──────────────────────────────────────────────────────────────────
+
+// A comma before a name and a call is a heritage list's or an object literal's, and the lexer reads the comma back to tell them apart (heritageListBefore): `{ a: 1, m() { … } }` has a function's head after it, `class C implements A, B() { … }` an element of a list. A name
+// that a letter beyond ASCII makes (`café`), a private name (`this.#item`) and a word that a heritage keyword spells (`{ a: implements, m() { … } }`, `{ implements, m() { … } }`) are whole tokens, read as such, so the scan goes on to the `:` or the `{` that says what the comma
+// belongs to: a character that it cannot read, or a word that merely looks like the keyword, is no reason to take the comma for a list's.
+test('a method after a comma in an object literal is a function\'s head wherever the left side of the comma holds a letter beyond ASCII, a private name or a word that a heritage keyword spells', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  let valid = 0;
+  const frames = [
+    ...OBJECT_VALUE_FRAMES.flatMap(([place, frame]) => OBJECT_VALUES.map((value) => [`${place} / ${visible(value)}`, (b) => frame(value, b)])),
+    ...SHORTHAND_FRAMES.flatMap(([place, frame]) => SHORTHAND_NAMES.map((name) => [`${place} / ${name}`, (b) => frame(name, b)])),
+  ];
+  for (const [place, frame] of frames) {
+    for (const body of KEYWORD_BODIES) {
+      const code = `${frame(body)}\n${CALL};`;
+      if (!cleanSourceFile(ts, code)) continue;
+      valid += 1;
+      const label = `${place} / ${visible(body)}`;
+      assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+      assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+      assert.strictEqual(readPage(code).rewritten.length, 1, `${label}: the call after it is rewritten`);
+    }
+  }
+  assert.ok(valid >= 1500, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
+  // The same words and letters inside a heritage list: the comma belongs to the list, the braces after the call hold members, and the method there is code — as before.
+  for (const element of ['caf\u00e9', '\u540d', 'implements', 'a?.caf\u00e9', 'f(caf\u00e9)', 'caf\u00e9!', 'this.#item', 'a.implements', 'a.extends']) {
+    for (const shape of [(e) => `class C implements ${e}, B()`, (e) => `class C extends ${e}, B()`, (e) => `class C implements A, ${e}, B()`, (e) => `interface I extends ${e}, B()`, (e) => `class C extends implements, ${e}, B()`]) {
+      const heritage = shape(element);
+      const code = pageOf(`${heritage} { delete<T>(x: MARK): void${heritage.startsWith('class') ? ' {}' : ';'} }`, 'T');
+      if (!cleanSourceFile(ts, code)) continue;
+      assertRead(code, 'exact', visible(heritage));
+      assert.ok(readsAsCode(code), `${visible(heritage)}: the method is code`);
+    }
+  }
+  // A name written with an escape is a guess of its own, whatever stands around it, and the page is refused after it.
+  for (const code of [String.raw`const o = { a: \u0061, m() { void <span>(MARK); // note</span>; } };`, String.raw`const o = { \u0061, m() { void <span>(MARK); // note</span>; } };`]) {
+    const page = `${code}\n${CALL};`;
+    assert.ok(cleanSourceFile(ts, page), `TypeScript parses ${visible(page)}`);
+    const { rewritten, frontier } = readPage(page);
+    assert.ok(frontier && frontier.kind === 'identifier', `${visible(code)}: the guess identifier is named: ${visible(frontier)}`);
+    assert.deepStrictEqual(rewritten, [], `${visible(code)}: nothing after the guess is rewritten`);
+  }
+});
+
+// ─── The last element of a heritage list ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// The element that ends a list in a `)` — a call or a parenthesis of any kind — after `implements`, after `extends A,` and after any other comma: the parser reads it as any left-hand-side expression, so the braces after it hold members (the shapes of CLASS_HERITAGES that
+// LAST_ELEMENT_HERITAGES draw from a few introducers and the elements: `f(A)`, `(A)`, `import("x")`, `this.f(A)`, `(A as any)`, …).
+test('TypeScript: a method named like an operator is a member after a heritage whose last element is a call or a parenthesis of any kind, after `implements`, after `extends A,` and after every other comma', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  let valid = 0;
+  for (const heritage of LAST_ELEMENT_HERITAGES) {
+    for (const word of ['delete', 'void']) {
+      const code = pageOf(`${heritage} { ${word}<U>(x: MARK): void {} }`, 'U');
+      if (!methodNamed(ts, code, word)) continue;
+      valid += 1;
+      assertRead(code, 'exact', `${visible(heritage)} / ${word}`);
+      assert.ok(readsAsCode(code), `${visible(heritage)} / ${word}: the method is code`);
+    }
+  }
+  assert.ok(valid >= LAST_ELEMENT_HERITAGES.length, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
 });

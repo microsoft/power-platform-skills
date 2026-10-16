@@ -30,7 +30,7 @@ const { extractNavTargets, resolvePageRefs, strayPageRefs, navMalformedRefs, rev
 const { LONG_KEY, MISREAD_PAGES, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 const { ANY_SPACE } = require('./helpers/jsx-element-fuzz.js');
 const { numberedMemberPages, nestedTextPages, expressionLinePages, literalTagPages, nestedSoupPages, nestedCodePages, nestedTagPages, nestedPairPages, taggedStringPages, importTypePages, accessorNamePages } = require('./helpers/hidden-closing-pages.js');
-const { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages } = require('./helpers/type-head-pages.js');
+const { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, decoratorEndPages, keywordNamedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages } = require('./helpers/type-head-pages.js');
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const CALL = 'navigateTo({pageType:"generative", pageId:"PAGEREF_detail"});';
@@ -1252,6 +1252,39 @@ test('sweep (an element after `void`, `typeof` or `delete` after a decorator, Ty
   assert.deepStrictEqual(reading.guessedPrograms.filter((program) => !guessable(program)).slice(0, 3).map((program) => program.label), [], 'a guess that is no return in an arrow');
   assert.deepStrictEqual(reading.lostPrograms.filter((program) => !guessable(program)).slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
   assert.ok(reading.stats.exact >= pages.length - 120, `only ${reading.stats.exact} of the ${pages.length} pages were read exactly`);
+});
+
+// A decorator that ends in the `>` of type arguments (`@dec<T>`, an instantiation expression, which the parser takes for one before a binary operator or a line break) or in a number's decimal point (`@1.`), and a method named like an operator after it that a generator's `*`,
+// the name `instanceof`, a field named `in` or `instanceof`, or a line break puts right there. The member begins where the decorator ends: the method is code and the note after it, with the closing tag of its type parameter and a call, is data — and no guess is made.
+test('sweep (a method named like an operator after a decorator that ends in the `>` of type arguments or in a decimal point, TypeScript parser): the method is a member, the note after it is data, and no guess is made', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...decoratorEndPages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(reading.stats.valid >= 1500, `only ${reading.stats.valid} of the ${pages.length} pages are valid to TypeScript`);
+  assert.strictEqual(reading.stats.guessed, 0, `a decorated method was guessed at: ${guessSummary(reading.kinds)}: ${JSON.stringify(reading.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(reading.stats.exact, reading.stats.valid, 'every valid page is read exactly');
+  assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+  if (base) assert.ok(reading.stats.baseMisread >= 1000, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
+});
+
+// A method, a function or a property that a heritage keyword names, the value of an object literal before a method after a comma that a letter beyond ASCII, a private name or a word that a heritage keyword spells makes, and a shorthand property: the braces after the `)` are
+// a function's body, and the element after `void` in it is read for certain — no guess. The text of the element holds the call, which is data.
+test('sweep (a method or a function named `implements`, `extends` or `new`, and a value before a method after a comma, TypeScript parser): the braces of a function hold statements, the element in them is text, and no guess is made', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...keywordNamedPages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(reading.stats.valid >= 2000, `only ${reading.stats.valid} of the ${pages.length} pages are valid to TypeScript`);
+  assert.strictEqual(reading.stats.guessed, 0, `a function's body was guessed at: ${guessSummary(reading.kinds)}: ${JSON.stringify(reading.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(reading.stats.exact, reading.stats.valid, 'every valid page is read exactly');
+  assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
 });
 
 // A method named like an operator that has type parameters is a member in the braces of a class, an object literal and a type, and the lexer may only take braces for a block where the parser has no member to read there. Every heritage that ends a class's or an
