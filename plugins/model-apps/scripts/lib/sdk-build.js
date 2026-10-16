@@ -5829,6 +5829,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
             caller: 'build',
             // The hash of the compiled output the draft holds when the page is published, for the publish record: what is certified is the runtime, not only the source (`provedVersions`).
             runtimeEvidence: true,
+            // The budget of waiting a throttle costs this run: one for every page, and for the build's own waits (lib/throttle-budget.js). Absent when the engine is run with none, and the write then has one of its own.
+            ...(opts.throttle ? { throttle: opts.throttle } : {}),
             ...(resumeIds.has(key) ? { pageId: resumeIds.get(key), sentBefore: resumeSent.get(key) } : {}),
             beforeSend: async (id, sent) => {
               sentUnder = id;
@@ -6182,7 +6184,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
             // `publishedFingerprint` is what this workspace recorded about the page's last publish, handed over only while the page's files still read as they did right after it (`publishesStillStanding`):
             // a page that already holds this very content, and was not touched from elsewhere since, is not published again.
-            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', runtimeEvidence: true, publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
+            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', runtimeEvidence: true, publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()), ...(opts.throttle ? { throttle: opts.throttle } : {}) }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
             // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).

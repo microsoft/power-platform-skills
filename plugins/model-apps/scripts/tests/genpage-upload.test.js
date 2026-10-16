@@ -87,7 +87,7 @@ function run(argv, backend, extra = {}) {
   let made;
   return new Promise((resolve, reject) => {
     uploadMod.main(argv, {
-      makeGenpageSdk: (env) => { made = make(env); return made; },
+      makeGenpageSdk: (env, deps) => { made = make(env, deps); return made; },
       emit: (ok, payload) => resolve({ ok, payload, disposedAtEmit: made && made.disposed }),
       ...extra,
     }).catch(reject);
@@ -1816,9 +1816,10 @@ test('the page is written as the file is — one leading BOM goes, line endings 
 // (helpers/fake-genpage-server.js), so what reaches the page is what is STORED — and no process stands between the two. The server holds no apps (genpage-sdk-app.test.js holds
 // the app reads and edits against the SDK), so the backend's app reads are the one thing stood in for.
 const SOURCE = "import * as React from 'react';\nexport default function Page() { return <div>Hello</div>; }\n";
-function realBackend(server, { navigation = {}, made = [] } = {}) {
-  return (env) => {
-    const genpage = makeGenpageSdk(env, { httpClient: server.http(), mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; } });
+function realBackend(server, { navigation = {}, made = [], deps = {} } = {}) {
+  // `fromScript` is what the upload script hands its backend (its `warn` seam); `deps` is the test's own (a recorded sleep, no jitter).
+  return (env, fromScript = {}) => {
+    const genpage = makeGenpageSdk(env, { httpClient: server.http(), mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; }, ...deps, ...fromScript });
     genpage.enumeratePages = async (appId) => { const pages = navigation[appId] || []; return { ok: true, pages, empty: pages.length === 0 }; };
     genpage.placeInApp = async () => ({ added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false });
     return genpage;
@@ -2011,6 +2012,41 @@ test('REAL SDK: a create whose answer is lost and whose page cannot be read repo
   assert.strictEqual(typeof r.payload.code, 'string');
   assert.deepStrictEqual([...server.state.projects.keys()], [r.payload.pageId], 'that is the page the server holds');
   assert.strictEqual(fs.existsSync(markerPath(file)), false, 'and no base is recorded for a page nobody has seen');
+});
+
+// A throttled page write is waited out for up to five minutes (lib/throttle-budget.js), and the upload — which is not a build, and has no run budget of its own to be handed — is given a `warn` seam that writes on stderr:
+// a wait of more than a few seconds is a line there, and what the service asked is said in the words of the command and not the build's. Stdout carries the JSON result alone.
+test('REAL SDK: a throttled write the service asks to wait nine seconds for is announced on stderr as a WARNING line — once, and not in the result — and the page is written once', async (t) => {
+  const server = serverWithAccount();
+  server.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '9' } } : undefined);
+  const slept = [];
+  const written = [];
+  t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+  const r = await run(['--env', INSTANCE, '--code-file', codeFile(SOURCE), '--name', 'Throttled page', ...P, '--agent-message', 'm'],
+    realBackend(server, { deps: { sleep: async (ms) => { slept.push(ms); }, random: () => 0 } }));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual(slept, [9000], 'the answer\'s Retry-After was waited, whole');
+  assert.deepStrictEqual(written.filter((line) => /throttled the write/.test(line)), [
+    'WARNING: generative page "Throttled page": the service throttled the write (HTTP 429); waiting 9 s before sending it again (9 s of the 5 minutes a run spends in all on waiting out a throttled service are spent)\n',
+  ]);
+  assert.deepStrictEqual([...server.state.projects.keys()], [r.payload.pageId], 'one page');
+  assert.ok((r.payload.warnings || []).some((w) => /throttled the write of generative page "Throttled page" \(HTTP 429\) once/.test(w)), 'the result says it was throttled, as before');
+  assert.ok(!JSON.stringify(r.payload).includes('WARNING:'), 'the progress line is not in the result');
+});
+
+test('REAL SDK: a throttle that asks for longer than the budget stops the upload at once, and says so in the words of a command — nothing is written, and nothing is waited for', async () => {
+  const server = serverWithAccount();
+  server.failBatch = () => ({ status: 429, headers: { 'retry-after': '600' } });
+  const slept = [];
+  const file = codeFile(SOURCE);
+  const r = await run(['--env', INSTANCE, '--code-file', file, '--name', 'Throttled page', ...P, '--agent-message', 'm'],
+    realBackend(server, { deps: { sleep: async (ms) => { slept.push(ms); }, random: () => 0 } }));
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service \(0 s are spent\)\. Nothing more is sent now: run the same command again later, and it continues from here\./);
+  assert.doesNotMatch(r.payload.error, /\bbuild\b/);
+  assert.deepStrictEqual(slept, []);
+  assert.strictEqual(server.state.projects.size, 0, 'a refused change set wrote nothing');
+  assert.strictEqual(fs.existsSync(markerPath(file)), false, 'and no base is recorded for a page that was not written');
 });
 
 // The page is normalized once: a file that starts with TWO byte order marks loses the encoding marker only, in the check, the hash and the page.

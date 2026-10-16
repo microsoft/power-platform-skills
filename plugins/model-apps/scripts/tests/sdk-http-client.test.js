@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createAzHttpClient, retryAfterMs, isBatchThrottled, isColumnCreateBatch, batchRetryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
+const { createAzHttpClient, retryAfterMs, isBatchThrottled, completeBatchStatus, isColumnCreateBatch, batchRetryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
 
 // A fake transport that records the last request and returns a scripted response.
 function fakeTransport(scripted) {
@@ -277,6 +277,84 @@ test('does NOT retry a RECORD delete on a network error either (single delete, n
   const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
   await assert.rejects(() => http.delete('https://org.crm.dynamics.com/api/data/v9.0/webresourceset(1)'), /Request failed: ETIMEDOUT/);
   assert.strictEqual(calls, 1, 'exactly one record DELETE was sent (no network-error retry)');
+});
+
+// ── What a failure of the transport is worth sending a request again for ──
+// A reset or a timeout can be gone on the next send. A failure to VERIFY the server's certificate is a fact about this machine's trust store and the server, and is the same on every send: sending
+// the request again six times only waited 23 s for the same refusal (1 s + 2 s + 4 s + 8 s + 8 s). `makeRequest` (lib/dataverse-auth.js) reports Node's own message, so the family is read from
+// the message: OpenSSL's text for each verification result (https://docs.openssl.org/3.0/man1/openssl-verification-flags/ and the Node errors list, https://nodejs.org/api/errors.html), the
+// code that names it, and Node's own wording for a host the certificate does not name.
+const CERTIFICATE_FAILURES = [
+  'unable to verify the first certificate', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'unable to get local issuer certificate', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'certificate has expired', 'CERT_HAS_EXPIRED',
+  'certificate is not yet valid', 'CERT_NOT_YET_VALID',
+  'self-signed certificate', 'self signed certificate', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'self-signed certificate in certificate chain', 'self signed certificate in certificate chain', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'certificate revoked', 'certificate not trusted',
+  "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:other.example", 'ERR_TLS_CERT_ALTNAME_INVALID',
+  'error:0A000086:SSL routines:tls_post_process_server_certificate:certificate verify failed',
+];
+// What the transport says when a connection is reset, or a request or its answer times out or is cut off — the failures the build's own retry policy calls transient too (lib/retry-policy.js).
+const TRANSIENT_TRANSPORT_FAILURES = [
+  'read ECONNRESET', 'write EPIPE', 'connect ETIMEDOUT 10.0.0.1:443', 'ESOCKETTIMEDOUT', 'ECONNABORTED', 'getaddrinfo EAI_AGAIN contoso.crm.dynamics.com',
+  'Request timed out', 'socket hang up', 'Response aborted before it completed', 'Response failed before it completed: aborted',
+  'Connection closed before the response completed', 'Client network socket disconnected before secure TLS connection was established',
+];
+
+test('a failure to verify the server\'s certificate is sent ONCE — a read, an unconditional write and a metadata delete alike — and never waited for', async () => {
+  const sends = [
+    ['a read', (http) => http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects')],
+    ['an unconditional write', (http) => http.patch('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects(1)', { name: 'A' })],
+    ['a metadata delete', (http) => http.delete("https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_x')")],
+    ['a read that asks for bytes', (http) => http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles(1)/filecontent/$value')],
+  ];
+  for (const failure of CERTIFICATE_FAILURES) {
+    for (const [what, send] of sends) {
+      const slept = [];
+      const { request, calls } = fakeTransport({ error: failure });
+      const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+      await assert.rejects(send(http), (error) => error.message === `Request failed: ${failure}`, `${what}: ${failure}`);
+      assert.strictEqual(calls.length, 1, `${what}: ${failure} — sent once`);
+      assert.deepStrictEqual(slept, [], `${what}: ${failure} — nothing waited for`);
+    }
+  }
+});
+
+test('a reset, a timeout, a cut-off answer and a temporary DNS failure are still sent again on the schedule — six sends, 1 s, 2 s, 4 s, 8 s, 8 s', async () => {
+  for (const failure of TRANSIENT_TRANSPORT_FAILURES) {
+    const slept = [];
+    const { request, calls } = fakeTransport({ error: failure });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); }, random: () => 0 });
+    await assert.rejects(http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects'), (error) => error.message === `Request failed: ${failure}`, failure);
+    assert.strictEqual(calls.length, 6, `${failure}: six sends`);
+    assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000], failure);
+  }
+  // …and one that clears is a request that succeeds.
+  const { request, calls } = fakeTransport((opts, n) => (n <= 2 ? { error: 'read ECONNRESET' } : { statusCode: 200, headers: {}, body: '{"value":[]}' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  assert.deepStrictEqual((await http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects')).body, { value: [] });
+  assert.strictEqual(calls.length, 3);
+});
+
+// Only what the build's own policy calls a blip is sent again, so the two layers agree about one failure: a host that does not exist, a refused connection and a message nothing here recognises are sent once too.
+test('a failure that is not a blip — an unknown host, a refused connection, a message nothing recognises — is sent once, as the build\'s retry policy would not run it again either', async () => {
+  for (const failure of ['getaddrinfo ENOTFOUND contoso.invalid', 'connect ECONNREFUSED 127.0.0.1:443', 'connect EHOSTUNREACH 10.0.0.1:443', 'connect ENETUNREACH 10.0.0.1:443', 'boom']) {
+    const { request, calls } = fakeTransport({ error: failure });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await assert.rejects(http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojects'), (error) => error.message === `Request failed: ${failure}`, failure);
+    assert.strictEqual(calls.length, 1, failure);
+  }
+});
+
+// There is ONE definition of "a blip": the client's and the policy's are written apart (the client is copied into the pcf plugin, which has no policy), so this holds them together.
+test('the transport failures this client sends again are exactly the ones lib/retry-policy.js calls a blip — a message either decides the same way', () => {
+  const { judgeFailure } = require('../lib/retry-policy.js');
+  const blip = (words) => judgeFailure(Object.assign(new Error(`Transport failure reaching https://org.crm.dynamics.com/api/data/v9.0/x: Request failed: ${words}`), { code: 'CONNECTION_ERROR', statusCode: 0, url: 'https://org.crm.dynamics.com/api/data/v9.0/x' })).transport;
+  const { isTransientTransportFailure } = require('../lib/sdk-http-client.js');
+  for (const words of [...TRANSIENT_TRANSPORT_FAILURES, ...CERTIFICATE_FAILURES, 'getaddrinfo ENOTFOUND contoso.invalid', 'connect ECONNREFUSED 127.0.0.1:443', 'boom']) {
+    assert.strictEqual(isTransientTransportFailure(words), blip(words), words);
+  }
 });
 
 // A record delete that LOST A SQL DEADLOCK is the exception: the server answered that it rolled the
@@ -832,6 +910,33 @@ test('isBatchThrottled reads the answer, not the outer status alone', () => {
   assert.strictEqual(isBatchThrottled({ statusCode: 429, body: batchAnswer(['HTTP/1.1 204 No Content']) }), false);
   assert.strictEqual(isBatchThrottled({ statusCode: 500, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']) }), true);
   assert.strictEqual(isBatchThrottled(undefined), false);
+});
+
+// A change set the service refuses answers HTTP 200 with ONE failing part (the SDK cannot account for it: one result for N operations). The page backend asks which status that part carries, with the same strict parser
+// that tells a complete throttle from a cut-off answer: only an answer whose every part is read, and says one thing, is a status.
+test('completeBatchStatus: the one status a COMPLETE multipart answer reports for every operation it answers — and nothing for a mixed, an incomplete or an empty one', () => {
+  assert.strictEqual(completeBatchStatus({ body: batchAnswer(['HTTP/1.1 403 Forbidden', '{}']) }), 403);
+  assert.strictEqual(completeBatchStatus({ statusCode: 200, body: batchAnswer(['HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7']) }), 429);
+  assert.strictEqual(completeBatchStatus({ body: batchAnswer(['HTTP/1.1 404 Not Found'], ['HTTP/1.1 404 Not Found']) }), 404, 'every part the same');
+  assert.strictEqual(completeBatchStatus({ body: batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 204 No Content']) }), 204, 'a change set that succeeded is uniform too: the caller decides which statuses it is looking for');
+  assert.strictEqual(completeBatchStatus({ body: batchAnswer(['HTTP/1.1 403 Forbidden'], ['HTTP/1.1 429 Too Many Requests']) }), 0, 'a mix');
+  assert.strictEqual(completeBatchStatus({ body: batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 403 Forbidden']) }), 0, 'some succeeded');
+  assert.strictEqual(completeBatchStatus({ body: batchAnswer(['HTTP/1.1 403 Forbidden']).replace(/--batchresponse_b1--\r\n$/, '') }), 0, 'an answer cut short before its closing boundary proves nothing');
+  for (const body of ['', '{"error":{}}', undefined, null, 5, Buffer.from('x')]) assert.strictEqual(completeBatchStatus({ body }), 0, String(body));
+  assert.strictEqual(completeBatchStatus(undefined), 0);
+});
+
+// The page backend honours what a throttled answer asks for whole, inside a budget of its own (lib/throttle-budget.js); the client's own retries keep the cap.
+test('retryAfterMs and batchRetryAfterMs cap what they read at RETRY_AFTER_CAP_MS unless a caller names another cap — a caller that decides for itself whether a wait fits passes Infinity', () => {
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  assert.strictEqual(retryAfterMs({ 'retry-after': '600' }), RETRY_AFTER_CAP_MS);
+  assert.strictEqual(retryAfterMs({ 'retry-after': '600' }, NOW, Infinity), 600000);
+  assert.strictEqual(retryAfterMs({ 'retry-after': '600' }, NOW, 90000), 90000);
+  assert.strictEqual(retryAfterMs({ 'retry-after': 'Wed, 30 Sep 2026 10:10:00 GMT' }, NOW), RETRY_AFTER_CAP_MS);
+  assert.strictEqual(retryAfterMs({ 'retry-after': 'Wed, 30 Sep 2026 10:10:00 GMT' }, NOW, Infinity), 600000);
+  const part = batchAnswer(['HTTP/1.1 429 Too Many Requests\r\nRetry-After: 600', '{}']);
+  assert.strictEqual(batchRetryAfterMs({ body: part }, NOW), RETRY_AFTER_CAP_MS);
+  assert.strictEqual(batchRetryAfterMs({ body: part }, NOW, Infinity), 600000);
 });
 
 test('postRaw still refreshes the token once on 401 (rejected before processing, so it is safe)', async () => {

@@ -434,9 +434,12 @@ The App Spec field `languageCode` pins the same value across runs. It now covers
 data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
 1033 take the authoring language as an option.
 
-Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout, a SQL
-deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
-retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
+Narrate progress as it runs. Transient env errors (a 429 or 503, a customization lock, a concurrent-operation
+guard or a SQL timeout the service names by its error code, a timeout or reset of the connection) are
+**auto-retried** with backoff on `--apply` (the build is idempotent, so a retry reuses what's already created).
+A throttled service is waited for as long as it asks (`Retry-After`), but the whole run spends at most five
+minutes waiting for one: when the next wait does not fit, the build stops with a `throttle-budget-exhausted`
+halt that says what the service asked — run it again later and it continues. If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
 gates the final *bulk* publish**, which also carries the edits made to existing views and forms.

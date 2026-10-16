@@ -585,7 +585,7 @@ test('watchThrottles: the wait a refused $batch asks for is heard — in the ans
     ['a throttle with its Retry-After in seconds', { status: 429, headers: { 'retry-after': '7' }, body: '{}' }, [7000]],
     ['the header name in any case', { status: 429, headers: { 'Retry-After': '7' }, body: '{}' }, [7000]],
     ['a gateway answer with an HTTP date', { status: 503, headers: { 'retry-after': 'Wed, 30 Sep 2026 10:00:20 GMT' }, body: '' }, [20000]],
-    ['a wait longer than the cap', { status: 429, headers: { 'retry-after': '600' }, body: '{}' }, [60000]],
+    ['a wait longer than the HTTP client\'s cap, which is the budget\'s to judge and so is heard whole', { status: 429, headers: { 'retry-after': '600' }, body: '{}' }, [600000]],
     ['the wait in a refused part\'s own headers', { status: 429, headers: {}, body: multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30\r\nContent-Type: application/json') }, [30000]],
     ['the longer of the answer\'s wait and the part\'s', { status: 429, headers: { 'retry-after': '50' }, body: multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 10') }, [50000]],
     ['a throttle that asks for nothing', { status: 429, headers: {}, body: '{}' }, []],
@@ -622,6 +622,44 @@ test('watchThrottles: the wait a refused $batch asks for is heard — in the ans
   const failing = watchThrottles({ postRaw: async () => { throw new Error('Request failed: read ECONNRESET'); } }, (ms) => heard.push(ms));
   await assert.rejects(failing.postRaw('https://contoso.crm.dynamics.com/api/data/v9.0/$batch', 'body', {}), /ECONNRESET/);
   assert.deepStrictEqual(heard, []);
+});
+
+// A change set the service refuses AS A WHOLE is answered HTTP 200 with the one part that failed, and the SDK reports it as an answer it cannot account for (status 200, "cannot be confirmed"), which says nothing of why. The wrapper reads
+// the parts with the parser the HTTP client reads the same envelopes with, and says what a COMPLETE answer proves: every part one refusal — a 400, 403 or 404, which no send can change, or a 429, which a later send can. An answer
+// that is cut off, mixes statuses, or reports a collision (409, 412) or an internal error (500) proves nothing about the change set, and is not heard: those stay unknown outcomes, read for before anything is sent again.
+test('watchThrottles: a COMPLETE refusal inside an HTTP 200 — every part a 400, 403, 404 or 429 — is heard with its status and its own Retry-After; a mixed, a cut-off or any other answer is not', async () => {
+  const { watchThrottles } = require('../lib/genpage-sdk.js');
+  const URL = 'https://contoso.crm.dynamics.com/api/data/v9.0/$batch';
+  const NOW = Date.parse('2026-09-30T10:00:00Z');
+  const multipart = (...operations) => ['--batchresponse_1', ...operations.flatMap((operation) => ['--changesetresponse_1', 'Content-Type: application/http', '', operation, '']), '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n');
+  const answered = (body, status = 200) => ({ status, headers: {}, body });
+  const cases = [
+    ['a 400', answered(multipart('HTTP/1.1 400 Bad Request\r\nContent-Type: application/json')), [{ status: 400, outer: 200, url: URL }], []],
+    ['a 403', answered(multipart('HTTP/1.1 403 Forbidden')), [{ status: 403, outer: 200, url: URL }], []],
+    ['a 404', answered(multipart('HTTP/1.1 404 Not Found')), [{ status: 404, outer: 200, url: URL }], []],
+    ['a 429 with its own Retry-After', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7')), [{ status: 429, outer: 200, url: URL }], [7000]],
+    ['a 429 asking for longer than the client\'s own cap, which is the budget\'s to judge', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 600')), [{ status: 429, outer: 200, url: URL }], [600000]],
+    ['a 429 asking for nothing', answered(multipart('HTTP/1.1 429 Too Many Requests')), [{ status: 429, outer: 200, url: URL }], []],
+    ['a mix of a 403 and a 429', answered(multipart('HTTP/1.1 403 Forbidden', 'HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7')), [], []],
+    ['a 409, which can be the collision with an earlier send', answered(multipart('HTTP/1.1 409 Conflict')), [], []],
+    ['a 412, which is the id of an earlier send', answered(multipart('HTTP/1.1 412 Precondition Failed')), [], []],
+    ['a 500', answered(multipart('HTTP/1.1 500 Internal Server Error')), [], []],
+    ['an answer cut off before its closing boundary', answered(multipart('HTTP/1.1 403 Forbidden').replace(/--batchresponse_1--\r\n$/, '')), [], []],
+    ['a change set that succeeded', answered(multipart('HTTP/1.1 204 No Content', 'HTTP/1.1 204 No Content')), [], []],
+    ['a plain error body', answered('{"error":{"message":"nope"}}'), [], []],
+  ];
+  for (const [what, answer, wantRefusals, wantAsks] of cases) {
+    const asks = [];
+    const refusals = [];
+    const client = { postRaw: async () => answer };
+    const watched = watchThrottles(client, (ms) => asks.push(ms), () => NOW, (refusal) => refusals.push(refusal));
+    assert.strictEqual(await watched.postRaw(URL, 'body', {}), answer, `${what}: the answer is the client's own`);
+    assert.deepStrictEqual(refusals, wantRefusals, what);
+    assert.deepStrictEqual(asks, wantAsks, what);
+  }
+  // Not asked, not heard: a caller that gives no listener for refusals still works as it did.
+  const watched = watchThrottles({ postRaw: async () => answered(multipart('HTTP/1.1 403 Forbidden')) }, () => {});
+  assert.strictEqual((await watched.postRaw(URL, 'body', {})).status, 200);
 });
 
 test('create: an id the caller supplies is the one the page is created under, and beforeSend hears it before anything is sent — a resume can reuse the id it recorded', async () => {

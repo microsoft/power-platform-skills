@@ -82,6 +82,8 @@ const POLICY = {
   'role-grant-failed': { kinds: ['by-failure'] },
   'bpf-role-unresolved': { kinds: ['never'] },
   'bpf-role-grant-failed': { kinds: ['by-failure'] },
+  // The build's own loop stops with it when the next wait a throttle costs does not fit the run's budget (build-model-app.js); held beside the loop's doubles.
+  'throttle-budget-exhausted': { kinds: ['by-failure'], via: 'build-model-app.test.js' },
 };
 // The sites whose code is an expression, on purpose: the code is decided at run time, so the policy cannot be read off a literal.
 const DYNAMIC = [
@@ -208,6 +210,10 @@ const REFUSALS = [
   ['an SDK error that wraps a publish the service refused (a 403), on a table called like a timeout', () => wrappedPublish(`HTTP 403 from ${ENV}/api/data/v9.2/PublishXml: permission denied`, 'contoso_sql_timeout')],
   // A logical name has no space, but it can be a word of the rule: `CustomizationLockException` is one word, and `contoso_customizationlockexception` is a valid name.
   ['an SDK error that wraps a publish the service refused (a 403), on a table whose logical name holds a word of the retry rule', () => wrappedPublish(`HTTP 403 from ${ENV}/api/data/v9.2/PublishXml: permission denied`, 'contoso_customizationlockexception')],
+  // A status that says no is final: the words of its answer are the maker's as much as the service's (lib/retry-policy.js, rule 5), so a lock or a timeout that only the WORDS name, on a status that is not transient, is not run again.
+  ['a lock named only by its words, on a 409', () => connectionError(409, 'CustomizationLockException: another solution install is running')],
+  ['SQL timeout named only by its words, under the code every SQL failure shares', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, 'SQL timeout expired.', { error: { code: '0x80044150', message: 'SQL timeout expired.' } })],
+  ['a 403 whose answer names a privilege derived from a table called like a lock', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 403, 'Principal user is missing prvReadcontoso_customizationlockexception privilege.', { error: { code: '0x80040220', message: 'Principal user is missing prvReadcontoso_customizationlockexception privilege.' } })],
 ];
 // Failures that ARE the service's to say, whatever anything is called.
 const GENUINE = [
@@ -216,7 +222,10 @@ const GENUINE = [
   ['a reset of the connection', () => connectionError(0, 'Request failed: read ECONNRESET')],
   ['an SDK error that wraps a publish the service could not take (a 503)', () => wrappedPublish(`HTTP 503 from ${ENV}/api/data/v9.2/PublishXml: Service Unavailable`)],
   ['an SDK error that wraps a publish the service throttled (a 429), on a table whose logical name holds a word of the retry rule', () => wrappedPublish(`HTTP 429 from ${ENV}/api/data/v9.2/PublishXml: Too many requests.`, 'contoso_customizationlockexception')],
-  ['an SDK error that wraps a publish the service refused for a customization lock, in its words', () => wrappedPublish(`HTTP 500 from ${ENV}/api/data/v9.2/PublishXml: CustomizationLockException: another solution install is running`)],
+  ['an SDK error that wraps a publish the service refused for a customization lock, which is a throttle (a 429), in its words', () => wrappedPublish(`HTTP 429 from ${ENV}/api/data/v9.2/PublishXml: CustomizationLockException: another solution install is running`)],
+  // A condition the service names by the code of its answer is run again on any status.
+  ['a customization lock, named by the code of its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 409, 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.', { error: { code: '0x8004F064', message: 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.' } })],
+  ['SQL giving up waiting, named by the code of its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, 'SQL timeout expired.', { error: { code: '0x80044151', message: 'SQL timeout expired.' } })],
 ];
 
 // The spec every row's retry loop runs on: valid, and not the point.
@@ -374,7 +383,8 @@ test('halt policy: the runner\'s halt follows the failure it wraps — typed ref
   assert.strictEqual(isTransientHalt(refused), false, 'an error the engine itself marks as a refusal');
   for (const [what, failureOf] of GENUINE) assert.strictEqual(isTransientHalt(await wrap(failureOf())), true, what);
   assert.strictEqual(isTransientHalt(await wrap(new Error('Microsoft.Crm.ObjectModel.CustomizationLockException: try again later'))), true, 'the service\'s words, in an error with no status');
-  assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205'))), true, 'a deadlock victim');
+  assert.strictEqual(isTransientHalt(await wrap(new Error('Sql error: Generic SQL error. Sql Number: 1205'))), true, 'a deadlock victim, in an error with no status');
+  assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205'))), false, 'a deadlock victim the service answered with a 500 is final for the build: its SQL number is in a message, not in a code, and the HTTP client and the SDK send it again where that is safe');
   assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Internal server error', `${ENV}/api/data/v9.2/x?$filter=name eq '${LABEL}'`))), false, 'a url is not the service\'s words');
 });
 
@@ -422,7 +432,7 @@ test('halt policy: the real SDK\'s sentence around a failed publish of the defau
     ['a certificate nobody trusts', new ConnectionError(publishUrl, 0, 'Request failed: unable to verify the first certificate'), 1],
     ['a 429', new ConnectionError(publishUrl, 429, 'Too many requests.'), 4],
     ['a 503', new ConnectionError(publishUrl, 503, 'Service Unavailable'), 4],
-    ['a lock, in the service\'s words', new ConnectionError(publishUrl, 500, 'CustomizationLockException: another solution install is running'), 4],
+    ['a lock, in the service\'s words alone, on a 500 — the wrapped publish carries no code, and a status that says no is final', new ConnectionError(publishUrl, 500, 'CustomizationLockException: another solution install is running'), 1],
     ['a reset of the connection', new ConnectionError(publishUrl, 0, 'Request failed: read ECONNRESET'), 4],
   ];
   for (const table of ['contoso_item', 'contoso_customizationlockexception']) {
@@ -434,6 +444,53 @@ test('halt policy: the real SDK\'s sentence around a failed publish of the defau
       assert.match(halt.cause.message, new RegExp(`^enrichDefaultViews: 2 view\\(s\\) on '${table}' were saved but the publish FAILED, so none of them is live \\(`), `${what}, ${table}: the sentence is the bundle's`);
       assert.strictEqual(isTransientHalt(halt), attempts > 1, `${what}, ${table}`);
       assert.deepStrictEqual(await attemptsFor(halt), { attempts, retried: attempts - 1 }, `${what}, ${table}: how often the real retry loop runs the build`);
+    }
+  }
+});
+
+// The answer a service gives to a READ the real SDK makes — and echoes the table in. The SDK builds its own ConnectionError for it (the status, the url, and the body as its cause), the real views phase raises the halt, and the
+// real retry loop is counted: what runs the build four times is what the service said by status or by code, and never a word of an answer that quotes the maker's table.
+async function viewsReadFailing(answer) {
+  const sdk = createMakerSdk({
+    instanceUrl: ENV,
+    workspaceStorage: createNodeWorkspaceStorage(tempDir('halt-policy-sdk')),
+    httpClient: { get: async () => answer },
+  });
+  await sdk.initWorkspace();
+  return { enrichDefaultViews: sdk.enrichDefaultViews.bind(sdk) };
+}
+async function attemptsOfTheLoop(spec, sdk, phases) {
+  let attempts = 0;
+  const lines = [];
+  try {
+    await buildModelApp(spec, { apply: true, env: ENV, retryDelayMs: 0, appDir: tempDir('halt-policy-app') }, {
+      sdk, provisionSdk: sdk, sleep: async () => {}, log: (m) => lines.push(String(m)), warn: () => {}, verify: async () => ({ ok: true }),
+      discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+      runBuild: async (s, o) => { attempts += 1; return runSdkBuild(s, { ...o, phases }); },
+    });
+  } catch { /* the halt the loop ends with */ }
+  return attempts;
+}
+
+test('halt policy: the real SDK\'s read of a table called like a lock is run once for a 403, a 400 or a 404 that echoes it — and again for a throttle, an unavailable service and a condition the service names by its code', async () => {
+  for (const table of ['contoso_item', 'contoso_customizationlockexception']) {
+    const body = (message, code) => ({ error: { ...(code ? { code } : {}), message } });
+    const CASES = [
+      ['a 403 that names the privilege derived from the table', 403, body(`Principal user is missing prvRead${table} privilege.`), 1],
+      ['a 400 that names the table', 400, body(`The entity '${table}' does not contain the specified attribute 'contoso_missing'.`), 1],
+      ['a 404 that names the segment', 404, body(`Resource not found for the segment '${table}s'.`), 1],
+      ['a 500 whose words say SQL timeout, under the code every SQL failure shares', 500, body('SQL timeout expired.', '0x80044150'), 1],
+      ['a 403 that holds the words of a lock, under the code of a missing privilege', 403, body(`Principal user is missing prvRead${table} privilege. CustomizationLockException: try again later`, '0x80040220'), 1],
+      ['a 429', 429, body('Too many requests.'), 4],
+      ['a 502', 502, body('Bad gateway'), 4],
+      ['a 503', 503, body('Service Unavailable'), 4],
+      ['a 504', 504, body('Gateway timeout'), 4],
+      ['a 500 the service names as a SQL timeout by its code', 500, body('SQL timeout expired.', '0x80044151'), 4],
+      ['a 409 the service names as a customization lock by its code', 409, body('Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.', '0x8004F064'), 4],
+    ];
+    for (const [what, status, answerBody, attempts] of CASES) {
+      const sdk = await viewsReadFailing({ status, headers: {}, body: answerBody });
+      assert.strictEqual(await attemptsOfTheLoop(defaultViewsSpec(table), sdk, ['views']), attempts, `${what}, ${table}`);
     }
   }
 });

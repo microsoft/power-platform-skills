@@ -386,7 +386,9 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   });
   if (styleProblems.length && !flags['page-id']) return emit(false, stylesRefusal(styleProblems));
 
-  const genpage = makeBackend(flags.env);
+  // A throttled page write is waited out for up to five minutes (lib/throttle-budget.js). A wait of more than a few seconds is announced on stderr — stdout carries the JSON result — so that
+  // a command that is silent for minutes is not mistaken for a hung one.
+  const genpage = makeBackend(flags.env, { warn: (message) => process.stderr.write(`WARNING: ${message}\n`) });
   // The backend's workspace is removed BEFORE anything is reported: emitResult calls process.exit, so a cleanup placed after an emit never
   // runs, and that workspace holds the page's source. dispose() answers when the storage calls the backend had under way have settled and the
   // folder is gone — or says, in `{ left }`, which folder is not (a handle a scanner holds), and that is reported with the result: a success that left

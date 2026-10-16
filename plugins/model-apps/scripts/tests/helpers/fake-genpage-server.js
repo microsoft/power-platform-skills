@@ -71,6 +71,8 @@ function batchEnvelope(parts) {
     `Content-ID: ${part.contentId}`,
     '',
     `HTTP/1.1 ${part.status} ${part.status === 204 ? 'No Content' : 'Failed'}`,
+    // The headers a part carries of its own — a refused part's `Retry-After` — come before the OData version, as a service writes them.
+    ...Object.entries(part.headers || {}).map(([name, value]) => `${name}: ${value}`),
     'OData-Version: 4.0',
     '',
     '',
@@ -110,7 +112,8 @@ class FakeGenPageServer {
     // As `PublishXml` last snapshotted each page: what a read WITHOUT `MSCRM.IncludeUnpublished` is served (measured). A later
     // edit changes the draft, not this.
     this.publishedPages = new Map();
-    // Fault injection: `(method, path, batched, headers) => status | undefined`, a status to answer instead of executing.
+    // Fault injection: `(method, path, batched, headers) => status | { status, headers } | undefined`, a status to answer instead of executing. For a request inside a `$batch` change set the part that carries it
+    // is the one the answer reports, and `headers` are the headers of that part (a refused operation's own `Retry-After`).
     this.failOn = undefined;
     // Corrupt what a content upload STORES — for example append the stray CRLF pac's batch writer adds.
     this.mangleContent = undefined;
@@ -341,11 +344,13 @@ class FakeGenPageServer {
         const request = { method, path, headers, body: opBody, batched: true };
         this.requests.push(request);
         const injected = this.failOn ? this.failOn(method, path, true, headers) : undefined;
-        const response = injected !== undefined ? json(injected) : this.execute(staged, request, {});
+        // A status, or `{ status, headers }` for a refused part that carries headers of its own (a throttle's `Retry-After`).
+        const failed = injected === undefined ? undefined : typeof injected === 'object' ? injected : { status: injected };
+        const response = failed ? json(failed.status) : this.execute(staged, request, {});
         if (this.afterRequest) this.afterRequest(request);
         if (response.status < 200 || response.status >= 300) {
           // Rolled back: nothing is committed, and only the failing part is reported.
-          return Promise.resolve(json(200, batchEnvelope([{ contentId, status: response.status }])));
+          return Promise.resolve(json(200, batchEnvelope([{ contentId, status: response.status, headers: failed && failed.headers }])));
         }
         statuses.push({ contentId, status: response.status });
       }

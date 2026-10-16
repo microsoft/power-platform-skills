@@ -8,7 +8,8 @@
 // We must NOT throw on non-2xx — the SDK inspects { status, body } and raises its own typed
 // errors (ensureSuccess / VersionConflictError on 412). We throw only when we cannot obtain a token
 // (ensureToken) or when the underlying transport itself fails — a network/timeout error (res.error)
-// after exhausting retries, or at once for a write that must not be re-sent (see `call`). We never
+// after exhausting retries, or at once for a write that must not be re-sent (see `call`) and for a failure
+// a resend cannot cure, such as a certificate that does not verify (isTransientTransportFailure). We never
 // throw purely on a non-2xx HTTP status.
 const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = require('./dataverse-auth.js');
 
@@ -50,14 +51,16 @@ const RETRY_AFTER_CAP_MS = 60000;
 const RAW_VALUE = /\/\$value(?:\?|$)/;
 
 /**
- * The wait a response asks for in `Retry-After`, in milliseconds, capped at RETRY_AFTER_CAP_MS; 0 when
+ * The wait a response asks for in `Retry-After`, in milliseconds, capped at `cap` (RETRY_AFTER_CAP_MS unless a caller names another); 0 when
  * the header is absent or unreadable. RFC 9110 allows two forms, delay-seconds and an HTTP date:
  *   Retry-After: 20
  *   Retry-After: Wed, 30 Sep 2026 10:00:20 GMT
  * Node lowercases response header names; a test double may not, so the name is matched case-insensitively.
+ * The cap is for this client's own retries, which must not stall a build for minutes per attempt. A caller that has a bound of its own on the whole of what it waits — the page backend, which spends a run's
+ * throttle budget (lib/throttle-budget.js) — passes `Infinity` and gets the service's request as it is, to decide for itself whether it fits.
  * See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after
  */
-function retryAfterMs(headers, now = Date.now()) {
+function retryAfterMs(headers, now = Date.now(), cap = RETRY_AFTER_CAP_MS) {
   if (!headers || typeof headers !== 'object') return 0;
   const key = Object.keys(headers).find((k) => k.toLowerCase() === 'retry-after');
   if (key === undefined) return 0;
@@ -68,7 +71,7 @@ function retryAfterMs(headers, now = Date.now()) {
     const at = Date.parse(raw);
     if (Number.isFinite(at)) ms = at - now;
   }
-  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, RETRY_AFTER_CAP_MS) : 0;
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, cap) : 0;
 }
 
 /**
@@ -249,24 +252,63 @@ function isBatchThrottled(res) {
 
 /**
  * The longest `Retry-After` the throttled operations of a multipart `$batch` answer carry in their OWN
- * headers, in milliseconds (capped as retryAfterMs caps it); 0 when none does. An operation refused
+ * headers, in milliseconds (capped as retryAfterMs caps it, at `cap`); 0 when none does. An operation refused
  * inside a batch is answered with its own status line and headers, which the outer response need not
  * repeat:
  *   HTTP/1.1 429 Too Many Requests
  *   Retry-After: 30
  *   Content-Type: application/json; odata.metadata=minimal
  */
-function batchRetryAfterMs(res, now = Date.now()) {
+function batchRetryAfterMs(res, now = Date.now(), cap = RETRY_AFTER_CAP_MS) {
   const results = batchResults(res);
   if (!results) return 0;
   let longest = 0;
   for (const r of results) {
     if (r.status !== '429') continue;
     const m = /^Retry-After:[ \t]*(\S.*?)[ \t]*$/im.exec(r.text);
-    if (m) longest = Math.max(longest, retryAfterMs({ 'retry-after': m[1] }, now));
+    if (m) longest = Math.max(longest, retryAfterMs({ 'retry-after': m[1] }, now, cap));
   }
   return longest;
 }
+
+/**
+ * The one HTTP status a COMPLETE multipart `$batch` answer reports for every operation it answers — 0 when the answer is not a complete envelope (read as isBatchThrottled reads one: its first line
+ * `--<boundary>`, its last `--<boundary>--`, every part with a status line), has no operation, or its operations do not all say the same. A change set the service refuses AS A WHOLE is answered HTTP 200 with
+ * the single part that failed (abridged):
+ *   --batchresponse_<id>
+ *   Content-Type: multipart/mixed; boundary=changesetresponse_<id>
+ *
+ *   --changesetresponse_<id>
+ *   Content-Type: application/http
+ *   Content-ID: 1
+ *
+ *   HTTP/1.1 403 Forbidden
+ *   Content-Type: application/json; odata.metadata=minimal
+ *   --changesetresponse_<id>--
+ *   --batchresponse_<id>--
+ * so what the SDK sees — one result for twelve operations — is an answer it cannot account for, and the status the part carries is what says why. Which statuses a caller is looking for is its own business:
+ * a change set that succeeded is uniform too (every part 204).
+ */
+function completeBatchStatus(res) {
+  const results = batchResults(res);
+  if (!results || results.length === 0) return 0;
+  return results.every((r) => r.status === results[0].status) ? Number(results[0].status) : 0;
+}
+
+// ---- Which failures of the transport are worth sending a request again for ----------------------------------------------------------------
+// `res.error` is what makeRequest (lib/dataverse-auth.js) reports when the request itself failed: Node's own message for the error, with the code of it only when the message happens to spell it:
+//   read ECONNRESET       write EPIPE       connect ETIMEDOUT 10.0.0.1:443       getaddrinfo EAI_AGAIN contoso.crm.dynamics.com       Request timed out       socket hang up
+//   Response aborted before it completed       Response failed before it completed: aborted       Connection closed before the response completed
+//   Client network socket disconnected before secure TLS connection was established        (a reset in the middle of the TLS handshake: code ECONNRESET)
+// A reset, a timeout, an answer cut off and a TEMPORARY failure of name resolution (EAI_AGAIN) can be gone on the next send, and are what this client sends again, on the throttle schedule. Nothing else is:
+// a failure to VERIFY the server's certificate is a fact about this machine's trust store and the server, the same on every send, and sending the request six times only waited 23 s for the same refusal —
+//   unable to verify the first certificate  (UNABLE_TO_VERIFY_LEAF_SIGNATURE)     certificate has expired  (CERT_HAS_EXPIRED)     self-signed certificate  (DEPTH_ZERO_SELF_SIGNED_CERT)
+//   self-signed certificate in certificate chain  (SELF_SIGNED_CERT_IN_CHAIN)     Hostname/IP does not match certificate's altnames: …  (ERR_TLS_CERT_ALTNAME_INVALID)     …certificate verify failed
+// — and neither is a host that does not exist (ENOTFOUND), a refused connection (ECONNREFUSED) or a message nobody recognises. So it is a list of what IS worth another send, and the rest returns at once.
+// It is the same list lib/retry-policy.js uses to tell the build a failure is a blip (TRANSPORT_WORDS), kept equal by a test: this file is copied into the pcf plugin, which has no policy.
+// See https://nodejs.org/api/errors.html#common-system-errors and https://docs.openssl.org/3.0/man1/openssl-verification-flags/
+const TRANSIENT_TRANSPORT_FAILURE = /\b(?:ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EAI_AGAIN)\b|socket hang up|timed out|Connection closed before the response completed|Response (?:aborted|failed) before it completed|Client network socket disconnected before secure TLS connection was established/i;
+const isTransientTransportFailure = (error) => TRANSIENT_TRANSPORT_FAILURE.test(String(error));
 /**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
@@ -443,7 +485,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         if (res.incompleteResponse && method_ === 'POST') {
           throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Re-run to reconcile.`);
         }
-        if (last || noRetry) throw new Error(`Request failed: ${res.error}`);
+        if (last || noRetry || !isTransientTransportFailure(res.error)) throw new Error(`Request failed: ${res.error}`);
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -537,4 +579,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS };

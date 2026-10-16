@@ -3630,7 +3630,7 @@ test('deploy: the automatic re-run publishes the page another writer published o
 // status, the transport, the SDK's own types. These tests drive the REAL retry loop over the real pages phase, with the name in a path, in a file error's cause, and in a page's name, and count the runs.
 // halt-retry-policy.test.js holds every halt the build can raise against a table; the halts of the pages phase are held here, beside the page doubles.
 const LABEL_503 = 'SQL Timeout 503 try again later';
-async function driveBuild(spec, appDir, { genpage, engine = runBuild, runOpts = {}, sdk: given } = {}) {
+async function driveBuild(spec, appDir, { genpage, engine = runBuild, runOpts = {}, sdk: given, opts = {}, deps = {} } = {}) {
   const { buildModelApp } = require('../build-model-app.js');
   const sdk = given || mockSdk().sdk;
   let attempts = 0;
@@ -3638,13 +3638,14 @@ async function driveBuild(spec, appDir, { genpage, engine = runBuild, runOpts = 
   let halt = null;
   let result = null;
   try {
-    result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0 }, {
+    result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0, ...opts }, {
       sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m), warn: () => {}, verify: async () => ({ ok: true }),
       discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
       runBuild: async (s, o) => { attempts += 1; return engine(s, { ...o, phases: PHASES, ...runOpts }); },
+      ...deps,
     });
   } catch (e) { halt = e; }
-  return { halt, result, attempts, retried: lines.filter((l) => /retrying/.test(l)).length };
+  return { halt, result, attempts, lines, retried: lines.filter((l) => /retrying/.test(l)).length };
 }
 
 test('deploy: the pages lease held by another build stops the build once — in a workspace folder called "SQL Timeout Workspace" as in any other', async () => {
@@ -4184,5 +4185,145 @@ test('deploy: an edited page whose update the service throttles is waited out an
   } finally {
     await healthy.dispose();
     fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// ── What the service asked crosses to the build, and every wait is one budget ───────────────────────────────────────────────────────────────────────
+// The backend waits out a throttled page write between its sends; when its six sends are not enough it hands the build what the last answer asked, as a moment before which nothing may be sent, and the build waits for THAT before
+// it runs the pages phase again — not for its own shorter backoff. All the waiting a throttle costs a run, the backend's and the build's, is one budget of five minutes (lib/throttle-budget.js); a wait that does not fit stops the
+// run with a halt that says what the service asked and that a later run continues. These tests drive the real build, its retry loop, the real backend and the real SDK, with each layer's waits recorded in one list.
+const waitsOf = (events) => events.filter((e) => e.ms !== undefined);
+const totalWait = (events) => waitsOf(events).reduce((sum, e) => sum + e.ms, 0);
+function throttledSetup(name, refuse) {
+  const { appDir, spec } = onePageApp(name);
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const events = [];
+  const warnings = [];
+  server.failBatch = (n) => { events.push({ send: n }); return refuse(n); };
+  const genpage = makeGenpageSdk(PAGE_SERVICE, { httpClient: server.http(), sleep: async (ms) => { events.push({ who: 'backend', ms }); }, random: () => 0 });
+  const drive = () => driveBuild(spec, appDir, {
+    genpage, runOpts: pagesWorkspace(appDir), opts: { retryDelayMs: undefined },
+    deps: { sleep: async (ms) => { events.push({ who: 'build', ms }); }, warn: (m) => warnings.push(m) },
+  });
+  return { appDir, spec, server, events, warnings, genpage, drive };
+}
+
+test('deploy: the wait a throttled page write was asked to take crosses to the build — six refusals asking for 7 s, and the build waits 7 s, not its own 3 s, before the seventh send', async () => {
+  const run = throttledSetup('SQL Timeout Reader', (n) => (n <= 6 ? { status: 429, headers: { 'retry-after': '7' } } : undefined));
+  try {
+    const out = await run.drive();
+    assert.strictEqual(out.halt, null);
+    assert.strictEqual(out.result.ok, true);
+    assert.strictEqual(out.attempts, 2, 'the sixth refusal outlasted the backend\'s sends, and the build ran again');
+    assert.strictEqual(run.server.state.projects.size, 1, 'one page');
+    assert.strictEqual(run.server.batches.length, 7);
+    const sixth = run.events.findIndex((e) => e.send === 6);
+    const seventh = run.events.findIndex((e) => e.send === 7);
+    const between = waitsOf(run.events.slice(sixth + 1, seventh));
+    assert.deepStrictEqual(between.map((e) => [e.who, e.ms]), [['build', 7000]], 'between the sixth send and the seventh the build waited what the service asked, whole');
+    assert.deepStrictEqual(waitsOf(run.events.slice(0, sixth)).map((e) => e.ms), [7000, 7000, 7000, 8000, 8000], 'and before the sixth, the backend: the longer of its schedule and the ask');
+    assert.match(out.lines.join('\n'), /retrying \(attempt 1\/3\) after 7000ms.*the service asked to wait 7 s/);
+  } finally {
+    await run.genpage.dispose();
+    fs.rmSync(run.appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: a service that keeps asking for a minute is waited for five minutes in all, by the backend and the build together — then the build stops with a halt that says what it asked', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const run = throttledSetup('Overview', () => ({ status: 429, headers: { 'retry-after': '60' } }));
+  try {
+    const out = await run.drive();
+    assert.ok(out.halt, 'the build stops');
+    assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+    assert.strictEqual(out.halt.phase, 'pages');
+    assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: nothing is wrong with the build, and a later run can go on');
+    assert.match(out.halt.message, /the service asked to wait 60 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service \(300 s are spent\)/);
+    assert.match(out.halt.message, /run the same command again later, and it continues from here/);
+    assert.strictEqual(out.attempts, 1, 'the run that spent the budget is the only one: a second would only wait again');
+    assert.strictEqual(totalWait(run.events), 300000, 'five waits of a minute, and no more — twenty minutes of silent waiting are not scheduled any more');
+    assert.strictEqual(run.server.batches.length, 6, 'six sends, all refused');
+    assert.strictEqual(run.server.state.projects.size, 0, 'nothing was written');
+    assert.strictEqual(pendingOf(run.spec, run.appDir).size, 0, 'and no creation is left under way');
+    const announced = run.warnings.filter((w) => /^generative page "Overview": the service throttled the write/.test(w));
+    assert.strictEqual(announced.length, 5, 'and each of the waits, which are all longer than a few seconds, was announced on the warn seam (stderr)');
+    assert.ok(announced.every((w) => /^generative page "Overview": the service throttled the write \(HTTP 429\); waiting 60 s before sending it again \(\d+ s of the 5 minutes/.test(w)), announced.join('\n'));
+  } finally {
+    await run.genpage.dispose();
+    fs.rmSync(run.appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: an ask longer than the whole budget stops the run at once — one change set sent, nothing waited for — and a build that finds the service healthy afterwards writes the page once', async () => {
+  const run = throttledSetup('Overview', (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '600' } } : undefined));
+  try {
+    const out = await run.drive();
+    assert.ok(out.halt);
+    assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+    assert.match(out.halt.message, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service \(0 s are spent\)/);
+    assert.strictEqual(out.attempts, 1);
+    assert.deepStrictEqual(waitsOf(run.events), [], 'nothing was waited for');
+    assert.strictEqual(run.server.batches.length, 1);
+    assert.strictEqual(run.server.state.projects.size, 0);
+    // The service lets requests through: the next build, which starts its own budget, creates the page once.
+    const again = await run.drive();
+    assert.strictEqual(again.halt, null);
+    assert.strictEqual(run.server.state.projects.size, 1);
+    assert.strictEqual(run.server.batches.length, 2);
+  } finally {
+    await run.genpage.dispose();
+    fs.rmSync(run.appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: the budget is the run\'s for an update as it is for a create — an edited page whose update is throttled for a minute, in a run that has spent 250 s of its 300, is stopped at once and left as it was', async () => {
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const run = throttledSetup('Overview', () => undefined);
+  try {
+    const created = await run.drive();
+    assert.strictEqual(created.halt, null);
+    const id = created.result.created.pages.p;
+    // The author edits the page; the update's change set is refused, asking for a minute — a wait that fits a budget of its own, and not what is left of the run's.
+    fs.writeFileSync(path.join(run.appDir, 'p.tsx'), PAGE_SOURCE.replace('Page</div>', 'Edited</div>'), 'utf8');
+    const sent = run.server.batches.length;
+    run.server.failBatch = (n) => { run.events.push({ send: n }); return n === sent + 1 ? { status: 429, headers: { 'retry-after': '60' } } : undefined; };
+    const budget = makeThrottleBudget();
+    budget.spend(250000);
+    const waits = [];
+    const out = await driveBuild(run.spec, run.appDir, {
+      genpage: run.genpage, runOpts: pagesWorkspace(run.appDir), opts: { retryDelayMs: undefined },
+      deps: { throttle: budget, sleep: async (ms) => { waits.push(ms); }, warn: () => {} },
+    });
+    assert.ok(out.halt, 'the build stops');
+    assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+    assert.match(out.halt.message, /the service asked to wait 60 s before the next send, which does not fit in what is left of the 5 minutes a run spends in all on waiting out a throttled service \(250 s are spent\)/);
+    assert.strictEqual(out.attempts, 1);
+    assert.strictEqual(run.server.batches.length, sent + 1, 'the update was sent once, and not again');
+    assert.deepStrictEqual([...waitsOf(run.events), ...waits], [], 'and nothing was waited for');
+    assert.strictEqual(run.server.rowText(id, 'src/pages/page.tsx'), PAGE_SOURCE, 'the page is as it was');
+    assert.strictEqual(run.server.messagesOf(id).length, 2, 'and no turn was recorded');
+  } finally {
+    await run.genpage.dispose();
+    fs.rmSync(run.appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: a throttle that never says how long keeps the waits it always had — 1, 2, 4, 8 and 8 s a run, the build\'s 3 s, 6 s and 12 s between — inside the budget, with nothing for the build to stop on', async () => {
+  const run = throttledSetup('Overview', () => 429);
+  try {
+    const out = await run.drive();
+    assert.ok(out.halt);
+    assert.notStrictEqual(out.halt.code, 'throttle-budget-exhausted', 'the retries ran out, not the budget');
+    assert.strictEqual(out.attempts, 4);
+    assert.strictEqual(run.server.batches.length, 24, 'six sends in each of four runs, as ever');
+    const waits = waitsOf(run.events);
+    assert.deepStrictEqual(waits.filter((e) => e.who === 'backend').map((e) => e.ms), [1000, 2000, 4000, 8000, 8000].concat([1000, 2000, 4000, 8000, 8000], [1000, 2000, 4000, 8000, 8000], [1000, 2000, 4000, 8000, 8000]));
+    assert.deepStrictEqual(waits.filter((e) => e.who === 'build').map((e) => Math.floor(e.ms / 1000)), [3, 6, 12]);
+    assert.ok(totalWait(run.events) < 300000);
+    assert.deepStrictEqual(run.warnings.filter((w) => /waiting \d+ s/.test(w)).length, 8, 'the two waits of 8 s in each run are longer than a few seconds, and are announced; the shorter ones are not');
+  } finally {
+    await run.genpage.dispose();
+    fs.rmSync(run.appDir, { recursive: true, force: true });
   }
 });

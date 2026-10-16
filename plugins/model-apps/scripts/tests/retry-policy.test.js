@@ -5,11 +5,11 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
-  RETRY, TRANSIENT_STATUSES, isTransientStatus, refusal, serviceFailure, retryFrom, retryPolicyFor, judgeFailure,
+  RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, isTransientStatus, refusal, serviceFailure, retryFrom, retryPolicyFor, judgeFailure, throttleAskOf,
 } = require('../lib/retry-policy.js');
 const { BuildHalt } = require('../lib/entity-provision.js');
 const { isTransientHalt } = require('../build-model-app.js');
-const { SdkError } = require('../lib/maker-sdk.js');
+const { SdkError, ConnectionError } = require('../lib/maker-sdk.js');
 
 const LABEL = 'SQL Timeout 503 try again later';
 const URL_WITH_LABEL = `https://contoso.crm.dynamics.com/api/data/v9.2/roles?$filter=name eq '${LABEL}'`;
@@ -100,7 +100,8 @@ test('judgeFailure: an SDK error that wraps a failed publish is read by the answ
   assert.strictEqual(wrap('x').code, 'ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', 'the bundle\'s own SdkError, typed as the SDK types it');
   for (const status of [429, 502, 503, 504]) assert.strictEqual(isTransientHalt(wrap(`HTTP ${status} from ${publishUrl}: Service Unavailable`)), true, `${status} in the answer it embeds`);
   for (const status of [400, 403, 404, 500]) assert.strictEqual(isTransientHalt(wrap(`HTTP ${status} from ${publishUrl}: Principal user is missing prvPublishCustomization`)), false, `${status}`);
-  assert.strictEqual(isTransientHalt(wrap(`HTTP 409 from ${publishUrl}: CustomizationLockException: another solution install is running`)), true, 'a lock, in the service\'s words');
+  assert.strictEqual(isTransientHalt(wrap(`HTTP 409 from ${publishUrl}: CustomizationLockException: another solution install is running`)), false, 'a status that says no is final, and the words of an answer that says no are not read');
+  assert.strictEqual(isTransientHalt(wrap(`HTTP 429 from ${publishUrl}: CustomizationLockException: another solution install is running`)), true, 'a lock the service answered with a throttle');
   assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: read ECONNRESET`)), true, 'a reset');
   assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: unable to verify the first certificate`)), false, 'a certificate is not a blip');
   assert.strictEqual(isTransientHalt(wrap(`HTTP 403 from ${publishUrl}: permission denied`, 'contoso_sql_timeout')), false, 'what the sentence quotes is the maker\'s table, and decides nothing');
@@ -113,33 +114,32 @@ test('judgeFailure: an SDK error that wraps a failed publish is read by the answ
 // The SDK's sentence around the answer it embeds names the maker's table, and a table's logical name has no space in it — but it can be a single word the rule looks for: `CustomizationLockException` is one
 // word, matched without word boundaries and ignoring case, and `contoso_customizationlockexception` is a valid logical name. So the sentence is cut away and only the answer inside it is read, as it is
 // where the SDK's own ConnectionError carries it (a status, a url, the service's words).
-test('judgeFailure: the sentence around a failed publish is never read — a table whose logical name holds a word of the rule does not turn a 403 into retries — and the answer it embeds is read as the ConnectionError it came from', () => {
+test('judgeFailure: the sentence around a failed publish is never read — a table whose logical name holds a word of the rule does not turn a 403 into retries — and the status of the answer it embeds is read as the ConnectionError\'s own is', () => {
   const publishUrl = 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml';
   const wrap = (answer, table = 'contoso_task') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
   const NAMES = ['contoso_customizationlockexception', 'contoso_CustomizationLockException', 'cr1a2_customizationlockexception_log'];
   for (const table of NAMES) {
-    // The status decides first, and the service's words are the answer's: "permission denied" has no word of the rule, so no status but the throttle and the gateway's is run again.
+    // The status decides, and the words of the answer decide nothing: a status that is not transient is final, whatever the answer quotes.
     for (const status of [400, 401, 403, 404, 409, 412, 500, 501]) {
       const failure = wrap(`HTTP ${status} from ${publishUrl}: permission denied`, table);
       assert.strictEqual(isTransientHalt(failure), false, `${status} on ${table}`);
-      assert.strictEqual(retryPolicyFor(failure), RETRY.SERVICE, `${status}: it is the service's to say, and what it said is not transient`);
-      assert.strictEqual(judgeFailure(failure).text, 'permission denied', `${status}: the words read are the answer's, and nothing else of the sentence`);
+      assert.strictEqual(retryPolicyFor(failure), RETRY.NEVER, `${status}: what the service answered says no, so no run again can change it`);
+      assert.strictEqual(judgeFailure(failure).text, '', `${status}: and no word of the sentence, the table or the answer is read`);
     }
     assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: unable to verify the first certificate`, table)), false, `a certificate on ${table}`);
     assert.strictEqual(isTransientHalt(new BuildHalt(`enrich default views for ${table} failed`, { phase: 'views', code: 'ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', recoverable: true, cause: wrap(`HTTP 403 from ${publishUrl}: permission denied`, table), retry: RETRY.SERVICE })), false, `through the halt the runner raises, on ${table}`);
     // The controls: what the service really said is run again, for the same name.
     for (const status of [429, 502, 503, 504]) assert.strictEqual(isTransientHalt(wrap(`HTTP ${status} from ${publishUrl}: Service Unavailable`, table)), true, `${status} on ${table}`);
-    assert.strictEqual(isTransientHalt(wrap(`HTTP 500 from ${publishUrl}: CustomizationLockException: another solution install is running`, table)), true, `a lock, in the answer, on ${table}`);
-    assert.strictEqual(isTransientHalt(wrap(`HTTP 409 from ${publishUrl}: Cannot start the requested operation. Please try again later.`, table)), true, `"try again later", in the answer, on ${table}`);
+    assert.strictEqual(isTransientHalt(wrap(`HTTP 429 from ${publishUrl}: CustomizationLockException: another solution install is running`, table)), true, `a lock the service answered with a throttle, on ${table}`);
+    assert.strictEqual(isTransientHalt(wrap(`HTTP 500 from ${publishUrl}: CustomizationLockException: another solution install is running`, table)), false, `a lock named only by its words, on a 500, on ${table}`);
+    assert.strictEqual(isTransientHalt(wrap(`HTTP 409 from ${publishUrl}: Cannot start the requested operation. Please try again later.`, table)), false, `"try again later", on a 409, on ${table}`);
     assert.strictEqual(isTransientHalt(wrap(`Transport failure reaching ${publishUrl}: Request failed: read ECONNRESET`, table)), true, `a reset on ${table}`);
   }
   // A phrase that is only in what the sentence says around the answer is not the service's: neither the table, nor the sentence's own words about the saves.
   assert.strictEqual(isTransientHalt(wrap(`HTTP 403 from ${publishUrl}: permission denied`, 'try_again_later_log')), false);
-  // The url is read no more than the table is: only what follows it is the answer.
+  // The url is read no more than the table is.
   assert.strictEqual(isTransientHalt(wrap('HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.2/CustomizationLockException: permission denied')), false, 'a word of the rule in the url');
-  assert.strictEqual(judgeFailure(wrap(`HTTP 403 from ${publishUrl}: permission denied: please contact your admin`)).text, 'permission denied: please contact your admin', 'the answer is whatever follows the first ": " after the url — its own colons are its own');
-  assert.strictEqual(judgeFailure(wrap(`HTTP 403 from ${publishUrl}: an answer that quotes (Re-publish the entity). Re-publish the entity to make them visible; the saves themselves are unaffected.`)).text, 'an answer that quotes (Re-publish the entity). Re-publish the entity to make them visible; the saves themselves are unaffected.', 'the sentence ends where the SDK ends it, so an answer that repeats its words is read whole');
-  // The words are read for a status the service answered and for nothing else: a transport failure has no words (a reset is decided from its code), a status of 0 is the transport.
+  // The words are read for a failure that carries no status, and for nothing else: a transport failure has no words (a reset is decided from its code), a status of 0 is the transport.
   assert.strictEqual(judgeFailure(wrap(`Transport failure reaching ${publishUrl}: Request failed: unable to verify the first certificate`)).text, '', 'no words for a transport failure');
   // FAIL CLOSED: a sentence this code does not recognise — another wording, another shape of the embedded answer — decides nothing it could be wrong about. It is the refusal every typed error is.
   for (const [what, message] of [
@@ -155,13 +155,16 @@ test('judgeFailure: the sentence around a failed publish is never read — a tab
   }
 });
 
-test('judgeFailure: the service\'s words are read from the answer, never from where the request went — the url holds what the maker named', () => {
+test('judgeFailure: the service\'s words are read only where there is no status — never from where the request went, and never beside a status that says no', () => {
   assert.strictEqual(isTransientHalt(connectionError(500, 'The server is busy', URL_WITH_LABEL)), false, 'SQL Timeout in the url');
-  assert.strictEqual(isTransientHalt(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205', URL_WITH_LABEL)), true, 'a deadlock victim, in the answer');
-  assert.strictEqual(isTransientHalt(connectionError(400, 'the answer says: SQL timeout expired', URL_WITH_LABEL)), true, 'SQL timeout in the answer');
-  assert.strictEqual(isTransientHalt(connectionError(409, 'Another solution install is running', URL_WITH_LABEL)), true, 'a lock, in the answer');
+  assert.strictEqual(isTransientHalt(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205', URL_WITH_LABEL)), false, 'a deadlock victim on a 500: its SQL number is in a message, and the HTTP client and the SDK send it again where that is safe');
+  assert.strictEqual(isTransientHalt(connectionError(400, 'the answer says: SQL timeout expired', URL_WITH_LABEL)), false, 'SQL timeout in the answer of a 400');
+  assert.strictEqual(isTransientHalt(connectionError(409, 'Another solution install is running', URL_WITH_LABEL)), false, 'a lock named by its words, on a 409');
   const mismatched = Object.assign(new Error(`some other lead: ${LABEL}`), { code: 'CONNECTION_ERROR', statusCode: 500, url: URL_WITH_LABEL });
-  assert.strictEqual(isTransientHalt(mismatched), true, 'a message that does not open the way the SDK opens it is read whole: nothing proves what is the url');
+  assert.strictEqual(isTransientHalt(mismatched), false, 'a status says no, whatever the message holds');
+  // A failure that carries no status at all has no structure to read, and its words are the fallback, as they always were.
+  assert.strictEqual(isTransientHalt(new Error('Sql error: Generic SQL error. Sql Number: 1205')), true);
+  assert.strictEqual(isTransientHalt(new Error(`some other lead: ${LABEL}`)), true, 'an error with no status and no code is read whole');
 });
 
 test('judgeFailure: a halt\'s own message is never read — only the failure it wraps, and what it declares', () => {
@@ -203,13 +206,13 @@ test('judgeFailure: the chain is bounded and cycle-safe, and a cause that is not
   assert.strictEqual(isTransientHalt('try again later'), false, 'a thrown string has no message');
 });
 
-test('retryPolicyFor(): never for a failure that says so, for one that is typed, and for no failure at all; the service\'s to say otherwise', () => {
+test('retryPolicyFor(): never for a failure that says so, for one that is typed, for a status that says no, and for no failure at all; the service\'s to say otherwise', () => {
   assert.strictEqual(retryPolicyFor(undefined), RETRY.NEVER);
   assert.strictEqual(retryPolicyFor(refusal('x')), RETRY.NEVER);
   assert.strictEqual(retryPolicyFor(typed('VALIDATION_ERROR')), RETRY.NEVER);
   assert.strictEqual(retryPolicyFor(typed('EACCES')), RETRY.NEVER);
   assert.strictEqual(retryPolicyFor(connectionError(503, 'x')), RETRY.SERVICE);
-  assert.strictEqual(retryPolicyFor(connectionError(403, 'x')), RETRY.SERVICE, 'a 403 is the service\'s answer: its words are read, and they decide');
+  assert.strictEqual(retryPolicyFor(connectionError(403, 'x')), RETRY.NEVER, 'a 403 is the service\'s answer, and it says no: no run again can change it, whatever its words');
   assert.strictEqual(retryPolicyFor(connectionError(0, 'Request failed: read ECONNRESET')), RETRY.SERVICE);
   assert.strictEqual(retryPolicyFor(new Error('try again later')), RETRY.SERVICE);
   assert.strictEqual(retryPolicyFor(Object.assign(typed('APP_X'), { statusCode: 429 })), RETRY.SERVICE, 'a throttle status outranks the type');
@@ -237,4 +240,115 @@ test('BuildHalt: the policy it is raised with is on the halt, never says never t
   assert.strictEqual(service.statusCode, 503);
   assert.strictEqual(new BuildHalt('x', { phase: 'p', code: 'c' }).retry, undefined, 'a halt raised without one still works: it is judged by the failure it wraps, and its own message is never read');
   assert.throws(() => new BuildHalt('x', { retry: 'maybe' }), /retry policy/);
+});
+
+// ── A permanent HTTP status is final, whatever the answer says ──────────────────────────────────────────────────────────────────────────────────────
+// The service's answers echo what the maker named: the table in a "does not contain the attribute" answer, the privilege derived from it in a "missing prvRead…" one, the segment of a url in a 404. A table's logical name
+// is one word and can be any word — `contoso_customizationlockexception` is a valid one — so a rule that finds a transient-sounding word ANYWHERE in the answer runs a build four times for a 403. The status the service
+// answered is the structure; the words are the maker's as much as the service's. These are the SDK's own errors (`ConnectionError`: the status, the url and, as its cause, the answer's body), not stand-ins.
+const API = 'https://contoso.crm.dynamics.com/api/data/v9.2';
+const answerOf = (status, words, code) => new ConnectionError(`${API}/savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_customizationlockexception'`, status, words, { error: { ...(code ? { code } : {}), message: words } });
+const ECHOES = [
+  ['a privilege named after a table called like a lock', 'Principal user is missing prvReadcontoso_customizationlockexception privilege.'],
+  ['a table called like a lock, in an attribute answer', "The entity 'contoso_customizationlockexception' does not contain the specified attribute 'contoso_missing'."],
+  ['a segment called like a lock', "Resource not found for the segment 'contoso_customizationlockexceptions'."],
+  ['a table called like a throttle', 'Principal user is missing prvReadcontoso_throttled privilege.'],
+  ['a column called like a timeout', "Could not find a property named 'contoso_sql_timeout' on type 'contoso_item'."],
+  ['a table called like a retry', "The entity 'contoso_try_again_later' does not contain the specified attribute 'contoso_missing'."],
+  ['a segment called like a solution install', "Resource not found for the segment 'contoso_another_solution_install'."],
+  ['a table called like a concurrent delete', "The entity 'contoso_concurrent_delete' does not contain the specified attribute 'contoso_missing'."],
+  ['a display name that reads as a deadlock', "The value 'Sql Number: 1205' is not valid for 'contoso_name'."],
+  ['the service\'s own transient words, on a status that says no', 'Cannot start the requested operation because there is another EntityCustomization running at this moment. Please try again later. CustomizationLockException'],
+];
+
+test('judgeFailure: a permanent HTTP status is final — whatever the answer holds, a table, a privilege or a column called like a lock, a throttle or a timeout does not run the build again', () => {
+  for (const status of [400, 401, 403, 404, 405, 409, 412, 500, 501]) {
+    for (const [what, words] of ECHOES) {
+      const failure = answerOf(status, words);
+      assert.strictEqual(isTransientHalt(failure), false, `${status}, ${what}`);
+      assert.strictEqual(isTransientHalt({ message: 'views failed', cause: failure }), false, `${status}, ${what}, behind a halt`);
+      assert.strictEqual(retryPolicyFor(failure), RETRY.NEVER, `${status}, ${what}: the policy says so, not only the retry check`);
+      assert.deepStrictEqual([judgeFailure(failure).never, judgeFailure(failure).text], [true, ''], `${status}, ${what}: nothing of the answer is read`);
+    }
+  }
+});
+
+test('judgeFailure: a status the SDK reports for an answer it could not use is a permanent status too — and what its message quotes decides nothing', () => {
+  const unusable = new ConnectionError(`${API}/$batch`, 200, "atomic write of generative page 'c6082ee7-3c26-4bed-8bea-b10c4241ae67' (12 operation(s)) cannot be confirmed: the change set reported 1 result(s) for 12 operation(s)");
+  assert.strictEqual(isTransientHalt(unusable), false);
+  const quoting = new ConnectionError(`${API}/contoso_customizationlockexceptions`, 200, "fetchArtifactList contoso_customizationlockexception: paginated read returned a malformed page — expected an OData 'value' array but got a string");
+  assert.strictEqual(isTransientHalt(quoting), false, 'the label a caller put in front of the SDK\'s sentence');
+  assert.strictEqual(retryPolicyFor(quoting), RETRY.NEVER);
+});
+
+test('judgeFailure: the throttle and the gateway answers are still run again — whatever the answer echoes', () => {
+  for (const status of [429, 502, 503, 504]) {
+    for (const [what, words] of ECHOES) {
+      assert.strictEqual(isTransientHalt(answerOf(status, words)), true, `${status}, ${what}`);
+      assert.strictEqual(retryPolicyFor(answerOf(status, words)), RETRY.SERVICE, `${status}, ${what}`);
+    }
+  }
+});
+
+// A condition that is the service's to name is named by the CODE it returns — the OData `error.code` of the body the SDK keeps as the cause of its ConnectionError — and by nothing in a message. The codes are the ones the
+// platform documents for the conditions the build's retry has always been written for: another customization or solution operation holds the lock (`CustomizationLockEx_*`, `EntityCustomizationLockException`,
+// `SolutionConcurrencyFailure`, `RACCannotAcquireCustomizationLock`), SQL gave up waiting (`unManagedidssqltimeouterror`) and a concurrent request on the same record (`*OperationConcurrentRequested`).
+// See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+const TRANSIENT_CODES = [
+  ['0x80071151', 'SolutionConcurrencyFailure'], ['0x80071154', 'ConcurrentOperationFailure'], ['0x80090412', 'EntityCustomizationLockException'],
+  ['0x8004F061', 'CustomizationLockEx_BothUnknown'], ['0x8004F062', 'CustomizationLockEx_BlockedUnknown'], ['0x8004F063', 'CustomizationLockEx_BothKnownSame'],
+  ['0x8004F064', 'CustomizationLockEx_BothKnownDifferent'], ['0x8004F067', 'CustomizationLockEx_BlockingUnknown'], ['0x8004F077', 'RACCannotAcquireCustomizationLock'],
+  ['0x80044151', 'unManagedidssqltimeouterror'], ['0x80048105', 'CascadeOperationConcurrentRequested'], ['0x80048116', 'POAOperationConcurrentRequested'],
+];
+
+test('judgeFailure: a condition the service names by its error code is run again on any status — the code decides, in any case, and the answer\'s words do not', () => {
+  assert.deepStrictEqual([...TRANSIENT_SERVICE_CODES].sort(), TRANSIENT_CODES.map(([code]) => code.toLowerCase()).sort(), 'the table is the list above, and a code is added to both, with the name the platform documents for it');
+  for (const [code, name] of TRANSIENT_CODES) {
+    for (const status of [400, 409, 412, 500]) {
+      for (const spelled of [code, code.toLowerCase(), code.toUpperCase().replace(/^0X/, '0x')]) {
+        const failure = answerOf(status, 'nothing a rule could read here', spelled);
+        assert.strictEqual(isTransientHalt(failure), true, `${status} ${spelled} (${name})`);
+        assert.strictEqual(retryPolicyFor(failure), RETRY.SERVICE, `${status} ${spelled} (${name})`);
+      }
+    }
+  }
+  // The same answer's WORDS decide nothing: the code is in `error.code` or it is not there.
+  for (const [what, words] of [['the SQL timeout', 'SQL timeout expired.'], ['a lock', 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment. Please try again later.'], ['a concurrent delete', 'More than one concurrent Delete requests detected for an Entity contoso_item and ObjectTypeCode 10001.'], ['another solution', 'The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later.']]) {
+    assert.strictEqual(isTransientHalt(answerOf(500, words)), false, `${what}, no code`);
+    assert.strictEqual(isTransientHalt(answerOf(500, words, '0x80044150')), false, `${what}, under the generic SQL error code every SQL failure shares`);
+    assert.strictEqual(isTransientHalt(answerOf(403, words, '0x80040220')), false, `${what}, under the code of a missing privilege`);
+  }
+  // A code that is only MENTIONED — in the message, in a name — is not the code.
+  assert.strictEqual(isTransientHalt(answerOf(403, 'Principal user is missing prvRead0x80071151 privilege.', '0x80040220')), false, 'a code in a name');
+  assert.strictEqual(isTransientHalt(new ConnectionError(`${API}/x`, 500, '0x80044151', { error: { message: 'SQL timeout expired. 0x80044151' } })), false, 'the answer names a code but holds none');
+  // And it is read from the body the SDK kept: a body that is not an OData error, or whose code is not a string, holds none.
+  for (const body of ['0x80044151', '<html>0x80044151</html>', null, undefined, { error: 'x' }, { error: { code: 0x80044151 } }, { error: { code: ['0x80044151'] } }, { code: '0x80044151' }]) {
+    assert.strictEqual(isTransientHalt(new ConnectionError(`${API}/x`, 500, 'x', body)), false, JSON.stringify(body));
+  }
+});
+
+test('judgeFailure: a failure that carries no HTTP status at all is still judged by the service\'s own words — the fallback is for what has no structure', () => {
+  assert.strictEqual(isTransientHalt(new Error('The service says: try again later.')), true);
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('x'), { retryText: 'SQL timeout expired.' })), true);
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('x'), { retryText: 'SQL timeout expired.', statusCode: 400 })), false, 'a status the service answered decides, whatever words the plugin declares beside it');
+  assert.strictEqual(isTransientHalt(serviceFailure('could not read RequiredLevel', { status: 500, words: 'CustomizationLockException: try again later' })), false);
+  assert.strictEqual(isTransientHalt(serviceFailure('could not read RequiredLevel', { status: 503, words: 'x' })), true);
+});
+
+// ── What a throttled failure asks of the next send ──────────────────────────────────────────────────────────────────────────────────────────────────
+// The page backend sends a throttled page write again up to six times; when that is not enough it raises an error that carries what the last answer asked (`retryAfterMs`) and the moment before which nothing may be sent
+// (`retryNotBefore`, on the clock the backend works to), so the layer that runs the build again waits for it instead of its own, shorter, backoff. This reads them along the chain, as the rest of the policy does.
+test('throttleAskOf: what a throttled failure asks of the next send — the longest ask and the latest not-before along its causes — and whether it is a throttle at all', () => {
+  const NOW = 1800000000000;
+  const asked = Object.assign(new Error('the service throttled all 6 sends'), { retryAfterMs: 7000, retryNotBefore: NOW + 7000, cause: connectionError(429, 'Too many requests.') });
+  assert.deepStrictEqual(throttleAskOf(asked), { throttled: true, askedMs: 7000, notBefore: NOW + 7000 });
+  assert.deepStrictEqual(throttleAskOf({ message: 'pages failed', cause: asked }), { throttled: true, askedMs: 7000, notBefore: NOW + 7000 }, 'behind the halt the runner raises');
+  const two = Object.assign(new Error('outer'), { retryAfterMs: 3000, retryNotBefore: NOW + 9000, cause: Object.assign(new Error('inner'), { retryAfterMs: 5000, retryNotBefore: NOW + 5000 }) });
+  assert.deepStrictEqual(throttleAskOf(two), { throttled: true, askedMs: 5000, notBefore: NOW + 9000 }, 'the longest ask, and the latest moment');
+  assert.deepStrictEqual(throttleAskOf(connectionError(429, 'x')), { throttled: true, askedMs: 0, notBefore: 0 }, 'a throttle that asked for nothing is still a throttle');
+  assert.deepStrictEqual(throttleAskOf(Object.assign(typed('APP_COMPONENT_UNREADABLE'), { statusCode: 429 })), { throttled: true, askedMs: 0, notBefore: 0 });
+  for (const status of [0, 400, 403, 500, 502, 503, 504]) assert.deepStrictEqual(throttleAskOf(connectionError(status, 'x')), { throttled: false, askedMs: 0, notBefore: 0 }, `${status} is not a throttle`);
+  for (const junk of [undefined, null, 'x', 7, {}, { retryNotBefore: 'soon' }, { retryNotBefore: Infinity }, { retryNotBefore: Number.NaN }, { retryAfterMs: -5 }, { retryAfterMs: '7000' }]) {
+    assert.deepStrictEqual(throttleAskOf(junk), { throttled: false, askedMs: 0, notBefore: 0 }, String(junk));
+  }
 });

@@ -488,8 +488,15 @@ test('AGENTS.md says a page write whose outcome is not known is never sent again
   assert.match(agents, /A 429 is the service declining to \*start\* the request, so the atomic change set committed nothing; and sending it again cannot write a page twice: a create's ids are minted before the first send/);
   assert.match(agents, /an update's turn carries one identity from which the SDK derives its messages' ids\. An update's send goes through the SDK's version check again, so a page someone saved during the wait is refused as `VERSION_CONFLICT` and not written over/);
   assert.match(agents, /an update's writes carry `If-Match: \*`, and `lib\/sdk-http-client\.js` re-sends a `\$batch` only when it is made of conditional deletes/);
-  assert.match(agents, /at most six sends in all, and `dispose\(\)` ends a wait that is under way\. A \*\*resumed\*\* create is not sent again this way/);
-  assert.match(agents, /alone among the errors a page write raises — \*\*without\*\* `transient: false` \(`throttledError`\), so the build runs the phase again/);
+  assert.match(agents, /The wait is the schedule that client gives every throttled request \(`throttleBackoffMs`: 1 s, 2 s, 4 s, 8 s, 8 s, plus jitter\) or the answer's `Retry-After` when that asks for longer, \*\*waited whole\*\*/);
+  assert.match(agents, /inside \*\*one budget of five minutes for the waiting a throttled page write costs a build run\*\*/);
+  assert.match(agents, /at most six sends in all, and `dispose\(\)` ends a wait that is under way\. \*\*A change set the service refuses as a whole is answered HTTP 200 with the one part that failed\*\*/);
+  assert.match(agents, /when every part is one 400, 403 or 404 the change set is a known refusal and is sent \*\*once\*\*, create and update/);
+  assert.match(agents, /A mix of statuses, an answer cut off, a 409 or 412 \(the ids of an earlier send that landed\) and a 500 prove nothing about the change set and stay unknown outcomes/);
+  assert.match(agents, /A \*\*resumed\*\* create is not sent again this way/);
+  assert.match(agents, /alone among the errors a page write raises — \*\*without\*\* `transient: false` \(`throttledError`\), carrying `statusCode: 429` and what the last answer asked \(`retryAfterMs`, and `retryNotBefore`: the moment before which nothing may be sent\), so the build runs the phase again/);
+  assert.match(agents, /\*\*waits for what the service asked, not for its own shorter backoff\*\*/);
+  assert.match(agents, /the build stops with `throttle-budget-exhausted` — a transient halt that says the service asked to wait N seconds and that a later run continues\. A wait of more than five seconds is announced on stderr/);
   assert.match(agents, /A 502, 503 or 504 is not waited out as a throttle: an intermediary answered, so the write may have committed and it is \*unknown\*/);
   assert.match(agents, /A write that was throttled and then taken says so in the `warnings` of its result \(which the build prints with the page's name\)/);
   // Every other error is final for the build's own retry of a halt that reads as transient — the page's name and the service's words are what that retry reads.
