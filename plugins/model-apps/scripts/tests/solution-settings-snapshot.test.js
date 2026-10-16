@@ -4,7 +4,8 @@
 //   - the copy is its owner's alone, and not by the grace of the folder it happens to be in: on Windows an access list with the current user as its one entry, whatever the temporary folder grants others
 //     (it is a native Windows check, run with a parent that gives the Users group read access); elsewhere the permission bits 0700 and 0600, whatever the umask;
 //   - when that cannot be established the import is not run through pac at all;
-//   - the copy is removed however the process ends that JavaScript can see — `process.exit`, an uncaught error, SIGINT, SIGTERM and SIGHUP — and the process then ends as it would have.
+//   - the copy is removed however the process ends that JavaScript can see — `process.exit`, an uncaught error, SIGINT, SIGTERM and SIGHUP — and the process then ends as it would have: BY the signal on POSIX, and on
+//     Windows, where a user's Ctrl+C or Ctrl+Break is a console event and not a signal, with the status such an event gives a process that nothing handles (0xC000013A: the run was cancelled, it did not fail).
 // A process that is KILLED (SIGKILL, TerminateProcess) cannot run anything: the copy of such a run stays, in a folder named `solution-settings-<random>`, and is the business of the temporary-workspace sweep.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -15,10 +16,12 @@ const { fork, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
 const ss = require('../solution-settings.js');
 const { createCloud, ORG } = require('./helpers/fake-power-platform.js');
+const { runInConsoles } = require('./helpers/console-event.js');
 
 const SECRET = 'synthetic-snapshot-secret-not-a-real-value';
 const ZIP = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(' a solution package')]);
 const CHILD = path.join(__dirname, 'helpers', 'interrupted-import-child.js');
+const EXIT_CLEANUP_CHILD = path.join(__dirname, 'helpers', 'exit-cleanup-child.js');
 const WORK_FOLDER = /^solution-settings-[A-Za-z0-9]{6}$/;
 const WINDOWS = process.platform === 'win32';
 
@@ -64,22 +67,28 @@ const workFoldersIn = (dir) => fs.readdirSync(dir).filter((name) => name.startsW
 
 const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
 const POWERSHELL = path.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-// The access lists of three paths, as .NET reads them — SDDL text, like `D:PAI(A;OICI;FA;;;S-1-5-21-…)` — and the SID of the user running this process. Written independently of the code under test: it asks the
-// operating system through another route (PowerShell, not icacls).
+// The access lists of three paths, as .NET reads them — SDDL text, like `D:PAI(A;OICI;FA;;;S-1-5-21-…)` — and, for each, the SID of every entry's trustee IN FULL (`GetAccessRules(…, [SecurityIdentifier])`: .NET
+// resolves each entry to its SID itself, whatever alias the SDDL text uses for it), and the SID of the user running this process. Written independently of the code under test: it asks the operating system through
+// another route (PowerShell, not icacls), and compares accounts as the SIDs they are, not as the names SDDL writes them by.
 function accessLists(paths) {
   const quoted = (value) => `'${value.replace(/'/g, "''")}'`;
-  const reads = Object.entries(paths).map(([name, target, kind = /\.[A-Za-z]+$/.test(target) ? 'File' : 'Directory']) => `$r.${name} = [System.IO.${kind}]::GetAccessControl(${quoted(target)}).GetSecurityDescriptorSddlForm('Access')`);
+  const reads = Object.entries(paths).flatMap(([name, target, kind = /\.[A-Za-z]+$/.test(target) ? 'File' : 'Directory']) => {
+    const security = `[System.IO.${kind}]::GetAccessControl(${quoted(target)})`;
+    return [
+      `$r.${name} = ${security}.GetSecurityDescriptorSddlForm('Access')`,
+      `$r.${name}Sids = @(${security}.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value })`,
+    ];
+  });
   const script = ['$ErrorActionPreference = "Stop"', '$r = @{}', '$r.me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value', ...reads, 'ConvertTo-Json -Compress -InputObject $r'].join('; ');
   const run = spawnSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 60000 });
   assert.strictEqual(run.status, 0, run.stderr);
-  return JSON.parse(run.stdout);
+  const lists = JSON.parse(run.stdout);
+  // A list of one entry may come back as the bare string.
+  for (const name of Object.keys(paths)) lists[`${name}Sids`] = [].concat(lists[`${name}Sids`] === undefined ? [] : lists[`${name}Sids`]);
+  return lists;
 }
-// The account each entry of an SDDL access list names: `D:PAI(A;OICI;FA;;;S-1-5-21-…)(A;OICI;0x1200a9;;;BU)` is [that SID, 'BU'].
-const trusteesOf = (sddl) => [...sddl.matchAll(/\(([^)]*)\)/g)].map((entry) => entry[1].split(';').pop());
-// How the access list spells the current user: the SID of an ordinary user in full, but the three service accounts as SY, LS and NS and the machine's own Administrator and Guest (RID 500 and 501) as LA and LG — the
-// administrator account of a CI runner or a virtual machine is the built-in one, renamed.
-const SERVICE_ALIASES = { 'S-1-5-18': 'SY', 'S-1-5-19': 'LS', 'S-1-5-20': 'NS' };
-const nameInAccessList = (sid) => SERVICE_ALIASES[sid] || ({ 500: 'LA', 501: 'LG' })[(/^S-1-5-21-\d+-\d+-\d+-(\d+)$/.exec(sid) || [])[1]] || sid;
+// The SID of the Users group, which the shared temporary folder is made to grant read access.
+const USERS_GROUP = 'S-1-5-32-545';
 
 // Two temporary folders, because Windows hands a new folder its access list in two ways and the code must make either the current user's alone: where the folder's parent has been given inheritable entries (a shared
 // TEMP that grants the Users group read access — what an administrator or a policy sets), the new folder INHERITS them, and `/inheritance:r` removes them; in a plain folder under the user's own temporary folder
@@ -111,10 +120,10 @@ for (const { what, grant } of TEMP_FOLDERS) {
     };
     const result = await importingWithTemp(t, shared, request, pac);
     assert.strictEqual(result.source, 'pac');
-    const me = nameInAccessList(seen.me);
-    if (grant) assert.ok(trusteesOf(seen.parent).includes('BU'), 'fixture control: the temporary folder does grant the Users group read access');
-    assert.deepStrictEqual(trusteesOf(seen.folder), [me], 'the folder: one entry, the current user\'s');
-    assert.deepStrictEqual(trusteesOf(seen.file), [me], 'the copy: one entry, the current user\'s — nothing the folder it is in grants the Users group reaches it');
+    const me = seen.me;
+    if (grant) assert.ok(seen.parentSids.includes(USERS_GROUP), 'fixture control: the temporary folder does grant the Users group read access');
+    assert.deepStrictEqual(seen.folderSids, [me], 'the folder: one entry, the current user\'s — the same SID, whatever alias the list spells it with');
+    assert.deepStrictEqual(seen.fileSids, [me], 'the copy: one entry, the current user\'s — nothing the folder it is in grants the Users group reaches it');
     assert.match(seen.folder, /^D:P/, 'the folder does not inherit from its parent: its access list is protected');
     assert.deepStrictEqual(workFoldersIn(shared), [], 'the folder is gone — its owner can remove it');
   });
@@ -235,6 +244,70 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     const [code, ended] = await run.exited;
     assert.deepStrictEqual([code, ended], [null, signal], 'ended by the signal');
     assert.strictEqual(fs.existsSync(run.copy), false, 'the copy is gone');
+    assert.deepStrictEqual(workFoldersIn(run.temp), [], 'and so is its folder');
+  });
+}
+
+// --- Windows: Ctrl+C and Ctrl+Break, as the console sends them ----------------------------------------------------------------------------------------
+
+// Windows has no signals to deliver, but a user's Ctrl+C reaches the importer all the same: as a console event, which Node turns into SIGINT (Ctrl+Break: SIGBREAK). So the real importer runs in a child with a console of
+// its own (helpers/console-event.js — nothing is ever sent to the console of whoever runs the tests), with a pac that never answers, and is sent the real thing. The copy must be gone afterwards, AND the process must end
+// as Windows ends one that a console event cancels — STATUS_CONTROL_C_EXIT, 0xC000013A, which is how whoever started it can tell a cancelled run from one that failed (status 1). The control of each event is a child that
+// registers nothing of ours: how Windows ends a process that nothing handles, which the importer's must end as.
+// STATUS_CONTROL_C_EXIT is written out here, not taken from the code under test: this is what the test says Windows does.
+// See: https://learn.microsoft.com/openspecs/windows_protocols/ms-erref/596a1078-e883-4972-9bbc-49e60bebca55
+const CONTROL_C_EXIT = 0xC000013A;
+const CONSOLE_EVENTS = [['CTRL_C', 'Ctrl+C'], ['CTRL_BREAK', 'Ctrl+Break']];
+let consoleRuns;
+function importersInConsoles() {
+  if (!consoleRuns) {
+    const base = folder('snapshot-console-');
+    const scenarios = [];
+    const controls = CONSOLE_EVENTS.map(([event]) => {
+      const config = path.join(base, `${event}-control.json`);
+      const ready = path.join(base, `${event}-control.ready`);
+      fs.writeFileSync(config, JSON.stringify({ marker: path.join(base, `${event}-control.cleaned`), ending: 'wait', ready, plain: true }));
+      scenarios.push({ event, script: EXIT_CLEANUP_CHILD, args: [config], ready });
+      return event;
+    });
+    const importers = CONSOLE_EVENTS.map(([event]) => {
+      const dir = path.join(base, event);
+      const temp = path.join(dir, 'tmp');
+      fs.mkdirSync(temp, { recursive: true });
+      const request = importRequest(dir);
+      const ready = path.join(dir, 'ready.json');
+      scenarios.push({
+        event,
+        script: CHILD,
+        args: [request.packagePath, request.settingsPath, 'wait', ready],
+        ready,
+        env: { TEMP: temp, TMP: temp, TMPDIR: temp, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      });
+      return { event, temp, ready };
+    });
+    consoleRuns = runInConsoles(scenarios).then((results) => ({
+      controls: Object.fromEntries(controls.map((event, index) => [event, results[index]])),
+      importers: importers.map((importer, index) => ({ ...importer, result: results[controls.length + index] })),
+    }));
+  }
+  return consoleRuns;
+}
+
+for (const [event, key] of CONSOLE_EVENTS) {
+  test(`the settings copy is removed when ${key} reaches the importer while pac runs — and the process ends with STATUS_CONTROL_C_EXIT, as one that ${key} cancels does, not with the status 1 of a failure`, { skip: !WINDOWS && 'console events are a Windows thing: POSIX has signals, tested above' }, async (t) => {
+    const { controls, importers } = await importersInConsoles();
+    const control = controls[event];
+    if (!control.delivered || !control.exited || control.status !== CONTROL_C_EXIT) {
+      t.skip(`this environment could not deliver ${key} to a console child that registers nothing, so it cannot say how the importer ends (the control: ${JSON.stringify(control)})`);
+      return;
+    }
+    const run = importers.find((importer) => importer.event === event);
+    assert.deepStrictEqual([run.result.delivered, run.result.exited, run.result.error], [true, true, null], JSON.stringify(run.result));
+    const message = JSON.parse(fs.readFileSync(run.ready, 'utf8'));
+    assert.strictEqual(message.kind, 'copy-ready');
+    assert.ok(message.text.includes(SECRET), 'while pac ran the copy held the value');
+    assert.strictEqual(run.result.status, control.status, 'the status of a process that nothing handles — the cancellation — and not 1');
+    assert.strictEqual(fs.existsSync(message.copy), false, 'the copy is gone');
     assert.deepStrictEqual(workFoldersIn(run.temp), [], 'and so is its folder');
   });
 }

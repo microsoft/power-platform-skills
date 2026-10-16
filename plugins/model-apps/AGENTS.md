@@ -1925,8 +1925,8 @@ scripts/
     power-apps-service-client.js ← the HttpClient for the SDK's connection and connector reads: GET only, https only, a host allowlist that is exactly the hosts the SDK's connectivity code calls, redirects never followed, the Azure CLI token for the Power Apps service read only for a request that passed and never in a message, a body, a header or a key the service answers with (it is scrubbed, in whole and by part)
     sdk-first.js               ← the rule `list-connections.js`, `connector.js` and `solution-settings.js` share: read through the SDK, and through `pac` for the SDK's typed refusals (`sdkFirst`, `CONNECTIVITY_REFUSALS`) — an error counts only when it IS the bundle's `SdkError` (an HTTP body that carries a refusal's code does not); any other failure is thrown with the SDK's own code. An environment outside the Public cloud is judged from its host first (`connectivityCloudOf`, pinned to the bundle by a table of hosts) and answered by `pac` at once, with the code the SDK would give. What the SDK could not clean up before it refused (`readCleanupWarnings`: a staged copy of the package it could not delete, with its upload id) is carried across the fallback — as `warnings` on the answer, or attached to the error `pac` throws when it fails — so `solution-settings.js` shows it for `template` and `import` alike (an import's, sanitized once)
     pac-fallback.js            ← runs a `pac` fallback command through `process-runner.js` (`spawnResultTree`) within a fixed time limit (`PAC_READ_TIMEOUT_MS`, 3 minutes; `PAC_IMPORT_TIMEOUT_MS`, 60) — a call that runs out has its whole process tree ended before it is reported, and the message says what the runner confirmed — "`pac` and every process that held its output were stopped" — and, when the pipes did not close, that a process `pac` started may still be running — reads the JSON `pac` prints after its header, and keeps pac's sign-in banner and version lines out of every failure text (`pacErrorText`)
-    private-folder.js          ← a folder, and a file in it, that only the current user can use — the copy of a settings file that `pac solution import` is given: POSIX modes 0700 and 0600, set and read back; Windows an access list with the current user's SID as its ONE entry (`icacls /reset`, `/inheritance:r`, `/grant:r *<SID>:(OI)(CI)F`, read back as SDDL through `icacls /save`, the file's too before a byte is written), `whoami` and `icacls` looked up in the Windows folder's System32 alone through `process-runner.js`; whatever cannot be set or read back is an error with a `reason` (a tool, a step, a number — never a path or a value) and nothing is written
-    exit-cleanup.js            ← a synchronous cleanup that runs if the process ends while a run's work is going — `process.exit`, an uncaught error, SIGINT, SIGTERM, SIGHUP, SIGBREAK — after which the process ends as it would have (the signal is raised again once our listeners are off, unless another listener has it); a KILLED process runs nothing, which is its stated limit
+    private-folder.js          ← a folder, and a file in it, that only the current user can use — the copy of a settings file that `pac solution import` is given: POSIX modes 0700 and 0600, set and read back; Windows an access list with the current user's SID as its ONE entry (`icacls /reset`, `/inheritance:r`, `/grant:r *<SID>:(OI)(CI)F`, read back as SDDL through `icacls /save`, the file's too before a byte is written; the SDDL aliases of the system accounts are compared as the SIDs they stand for, and `LA`/`LG` — the machine's own Administrator and Guest — only when the machine itself writes the user's SID that way, `spellingOf`), `whoami` and `icacls` looked up in the Windows folder's System32 alone through `process-runner.js`; whatever cannot be set or read back is an error with a `reason` (a tool, a step, a number — never a path or a value) and nothing is written
+    exit-cleanup.js            ← a synchronous cleanup that runs if the process ends while a run's work is going — `process.exit`, an uncaught error, SIGINT, SIGTERM, SIGHUP, SIGBREAK — after which the process ends as it would have: BY the signal on POSIX (raised again once our listeners are off), with STATUS_CONTROL_C_EXIT (0xC000013A, 3221225786) on Windows, where a Ctrl+C is a console event and `process.kill` would end it with the status 1 of a failure; a program that has a handler of its own for the signal — one-shot and self-removing ones included — keeps the decision (ours is first in line, so that it sees them all); a KILLED process runs nothing, which is its stated limit
     typescript-compiler.js     ← loads the vendored TypeScript 5.8.3 compiler (vendor/typescript/) for the SDK's page compile: lazily, once, only after its bytes match PROVENANCE.json
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
     lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
@@ -3945,9 +3945,14 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     then `icacls <dir> /reset`, `/inheritance:r` and `/grant:r *<SID>:(OI)(CI)F` — three steps, because a folder made in
     a user's temp folder can hold SYSTEM, Administrators and the user as entries of its OWN, which `/inheritance:r` alone
     leaves) and read back through `icacls /save` as SDDL (`D:PAI(A;OICI;FA;;;<SID>)`): protected, one allow entry, the
-    user's — the SID in full, or the alias SDDL writes for the three service accounts and for the machine's own
-    Administrator and Guest (`SY`, `LS`, `NS`, `LA`, `LG`: a VM's or a CI runner's administrator account is the built-in
-    one, renamed), and an alias only for the account it stands for; the file is created exclusively (`wx`) and EMPTY, its list read back (`D:AI(A;ID;FA;;;<SID>)`), and only then
+    user's — the SID in full, or the alias SDDL writes for it. An alias is compared as the SID it stands for, never by its
+    looks: `SY`, `LS` and `NS` are the same SID on every machine; `LA` and `LG` — the machine's own Administrator and
+    Guest, which is what a VM's or a CI runner's renamed administrator account is — are the RIDs 500 and 501 of the
+    machine's OWN domain, and every other domain has accounts with the same RIDs, which `icacls` writes in full. So `LA`
+    is the user only when the machine itself writes the user's SID as `LA` (`spellingOf`: the SID is granted to a file
+    that holds nothing, in the private folder, and its list is read back — three more `icacls` runs, made only when a
+    list names the user by `LA` or `LG`). The file is created exclusively (`wx`) and EMPTY, its list read back
+    (`D:AI(A;ID;FA;;;<SID>)`), and only then
     are the bytes written. Both tools are `.exe`s in the Windows folder's `System32` and nowhere else, started through
     `lib/process-runner.js` with no shell. On POSIX the folder is set to 0700 and the file created as 0600 and set to it
     (a umask cannot undo that), each read back with its owner and that it is not a link. Anything that cannot be set or
@@ -3972,9 +3977,14 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     the warning says whether that worked. It is removed, too, when the PROCESS ends while the work goes on, in every way
     JavaScript can see (`lib/exit-cleanup.js`): `process.exit`, an error nothing catches (both through the `exit` event),
     and SIGINT, SIGTERM, SIGHUP and SIGBREAK where the platform delivers them — the cleanup runs synchronously, the
-    listeners come off and the signal is raised again, so the process ends BY it, as it would have; a program that has a
-    handler of its own for the signal keeps it and decides (Windows has no signals to raise: `process.kill` there ends the
-    process with status 1). A process that is KILLED (SIGKILL, TerminateProcess) runs nothing, and the folder it made stays —
+    listeners come off (only ours: the program's own are never removed or replaced) and the process ends as it would
+    have: on POSIX the signal is raised again, so it ends BY it; on Windows, where Ctrl+C and Ctrl+Break are console
+    events and `process.kill` is TerminateProcess (status 1, the status of a failure), it ends with STATUS_CONTROL_C_EXIT,
+    0xC000013A (3221225786), the status of a process that a console event cancels and nothing handles — so a caller can
+    tell a cancelled run from a failed one. A program that has a handler of its own for the signal keeps the decision, a
+    one-shot (`process.once`) or self-removing handler as much as a persistent one: ours is first in line
+    (`prependListener`) and counts the others before any has run. A process that is KILLED (SIGKILL, TerminateProcess)
+    runs nothing, and the folder it made stays —
     named `solution-settings-<random>` so that a sweep of the temp folder can find it; the plugin does not sweep for it
     by that prefix itself.
   - **A failure to install the template keeps what the run knew.** `writeTemplate` is the last step of `template`, after the
@@ -4025,13 +4035,21 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     `solution-settings-snapshot.test.js` says what only the operating system can: on Windows, in a temp folder that
     grants the Users group read access and in a plain one under the user's own temp folder (where Windows gives a new
     folder entries of its own for SYSTEM and Administrators), the folder and the copy each have the current user's SID as
-    their ONE access entry (read back through PowerShell, a route independent of the `icacls` the code uses), and when
+    their ONE access entry (read back through PowerShell, a route independent of the `icacls` the code uses, and
+    compared as full SIDs, never by the alias the SDDL text uses), and when
     `icacls` cannot be started the import is not run through `pac`; elsewhere the modes under a hostile umask; and, with
     a real child process that runs the importer, that the copy is gone after `process.exit`, an uncaught error and — on
-    POSIX — SIGINT, SIGTERM and SIGHUP (the child ends BY the signal). `private-folder.test.js` runs the Windows
+    POSIX — SIGINT, SIGTERM and SIGHUP (the child ends BY the signal) and — on Windows — a REAL Ctrl+C and Ctrl+Break
+    (the child ends with 0xC000013A, as one that registers nothing does: `helpers/console-event.js`). `private-folder.test.js` runs the Windows
     sequence over a stand-in for the process runner (the SDDL `icacls /save` writes, the CSV `whoami` prints, the order of
-    the steps, the System32-only lookup, every way to fail closed) and the POSIX one over a stand-in for `fs`;
-    `exit-cleanup.test.js` the signal handling over a stand-in for `process`, and real children for the rest. The two big
+    the steps, the System32-only lookup, every way to fail closed, the question put to the machine about `LA` and `LG`)
+    and the POSIX one over a stand-in for `fs`, and, with the real tools, how this machine writes its own Administrator
+    and Guest (resolved by .NET's SDDL reader, not by the RID);
+    `exit-cleanup.test.js` the signal handling over a stand-in for `process` (both platforms), and real children for the
+    rest — a signal the child raises in itself, so that the status logic runs on every platform, and on Windows real
+    console events. A console event reaches EVERY process on the console it is sent on, so `helpers/console-event.js`
+    starts each child in a console of its own and sends nothing until that console has been listed and holds the child
+    and the sender alone (`console-event.test.js` pins the refusal). The two big
     files above make the copy the plain way (`helpers/plain-private-file.js`: the real one starts `whoami` and `icacls`,
     about half a second a copy, and is pinned in the two files just named), in-process and, through the preload, in a
     child process — unless its configuration says `realPrivateFolder`.

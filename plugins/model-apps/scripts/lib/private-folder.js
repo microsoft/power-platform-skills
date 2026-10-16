@@ -20,6 +20,9 @@
 //                                         the user's temporary folder held SYSTEM, Administrators and the user as entries of its OWN (not marked inherited), which `/inheritance:r` alone leaves in place.
 //   icacls <dir> /inheritance:r           removes every inherited entry and stops the folder inheriting: the list is empty and protected
 //   icacls <dir> /grant:r *<SID>:(OI)(CI)F  full control for the current user, which a file made in the folder inherits (`*` makes icacls read the SID as a SID)
+//   icacls <path> /save <file>            the list read back, as SDDL. Its one entry must be the user's: the SID in full, or an alias of the SAME SID. SY, LS and NS are the same SID everywhere; LA and LG, the
+//                                         machine's own Administrator and Guest, are accepted only when the machine itself writes the user's SID that way — it is asked then, with a file that holds
+//                                         nothing (`spellingOf`) — so another domain's Administrator, which has the same RID, is not taken for it.
 // See: https://learn.microsoft.com/windows-server/administration/windows-commands/icacls and https://learn.microsoft.com/windows-server/administration/windows-commands/whoami
 const fs = require('node:fs');
 const path = require('node:path');
@@ -28,21 +31,29 @@ const { spawnResultSync, envValue } = require('./process-runner.js');
 // How long `whoami` or `icacls` may take. Both answer in milliseconds; this is the bound of a machine that is not answering, not an expected wait.
 const TOOL_TIMEOUT_MS = 20 * 1000;
 
-// What SDDL calls an account: `icacls /save` writes the SID of an ordinary user in full, and a well-known account by a two-letter alias — `SY`, `LS` and `NS` for the three service accounts (a CI agent running as
-// LocalSystem is the current user then), and `LA` and `LG` for the machine's own Administrator and Guest accounts, the ones with the RIDs 500 and 501 under the machine's own domain SID (S-1-5-21-a-b-c-500).
+// What SDDL calls an account: `icacls /save` writes the SID of an ordinary user in full, and a well-known account by a two-letter alias. An alias is compared as the SID it stands for, never by its looks:
+//   SY, LS, NS  the three service accounts (a CI agent running as LocalSystem is the current user then): S-1-5-18, S-1-5-19 and S-1-5-20, the same SID on every machine.
+//   LA, LG      "Local administrator" and "Local guest": the RIDs 500 and 501 under the SID of the machine's OWN account domain (S-1-5-21-a-b-c-500). The machine says what that domain is, and the RID proves
+//               nothing — every domain, and every other machine, has an Administrator with the RID 500 and a Guest with the RID 501, and `icacls` writes those in full. So LA is the current user only
+//               when the machine itself writes the user's SID as LA, which it is asked (`spellingOf`: the SID is granted to a file that holds nothing, and the list of that file is read back).
 // The second kind matters: the administrator account a virtual machine or a CI runner is made with IS the built-in Administrator, renamed, so `whoami /user` answers its SID and the access list reads back `LA`.
-// What is read back is what was granted — the SID set by `/grant:r` — so the SID of a machine's Administrator or Guest and its alias are the same account. (A domain's Administrator, S-1-5-21-<domain>-500, is
-// written in full, which the SID itself covers.)
 // See: https://learn.microsoft.com/windows/win32/secauthz/sid-strings and https://learn.microsoft.com/windows/win32/secauthz/well-known-sids
-const SDDL_SERVICE_ALIASES = Object.freeze({ 'S-1-5-18': 'SY', 'S-1-5-19': 'LS', 'S-1-5-20': 'NS' });
-const SDDL_RID_ALIASES = Object.freeze({ 500: 'LA', 501: 'LG' });
-function sddlNamesOf(sid) {
-  const upper = sid.toUpperCase();
-  const names = [upper];
-  if (SDDL_SERVICE_ALIASES[upper]) names.push(SDDL_SERVICE_ALIASES[upper]);
-  const account = /^S-1-5-21-\d+-\d+-\d+-(\d+)$/.exec(upper);
-  if (account && SDDL_RID_ALIASES[Number(account[1])]) names.push(SDDL_RID_ALIASES[Number(account[1])]);
-  return names;
+const SDDL_SERVICE_ALIASES = Object.freeze({ SY: 'S-1-5-18', LS: 'S-1-5-19', NS: 'S-1-5-20' });
+const SDDL_MACHINE_ALIASES = Object.freeze({ LA: 500, LG: 501 });
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+// Whether `trustee`, as an entry of an access list writes it, is the account `sid`. `machineSpelling(sid)` answers how the machine writes that SID — or null when it cannot be asked, which is a "no".
+function namesUser(trustee, sid, machineSpelling) {
+  const name = trustee.toUpperCase();
+  const user = sid.toUpperCase();
+  if (name === user) return true;
+  if (hasOwn(SDDL_SERVICE_ALIASES, name)) return SDDL_SERVICE_ALIASES[name] === user;
+  if (!hasOwn(SDDL_MACHINE_ALIASES, name)) return false;
+  // Only a RID of that kind can be what LA or LG stands for, and then only the machine can say whether this one is: nothing is asked of it for an account that cannot be.
+  const account = /^S-1-5-21-\d+-\d+-\d+-(\d+)$/.exec(user);
+  if (!account || Number(account[1]) !== SDDL_MACHINE_ALIASES[name]) return false;
+  const written = typeof machineSpelling === 'function' ? machineSpelling(sid) : null;
+  return typeof written === 'string' && written.toUpperCase() === name;
 }
 // `FA` is "file all access", full control; the same right is also spelled as its number.
 const FULL_CONTROL = /^(?:FA|0x1f01ff)$/i;
@@ -68,6 +79,19 @@ function parseUserSid(output) {
 }
 
 /**
+ * The DACL in what `icacls <path> /save <file>` wrote — the flags and the entries, each entry split into its fields — or `{ problem }` when there is none, or it is in a shape this does not read.
+ * The name on the first line can itself begin with `D:` (a path), so a line is the list only when flags and entries follow.
+ */
+function readDacl(text) {
+  const line = String(text == null ? '' : text).split(/\r?\n/).map((l) => l.trim()).find((l) => /^D:[A-Z]*(?:\(|$)/.test(l));
+  if (!line) return { problem: 'is missing' };
+  const list = /^D:([A-Z]*)((?:\([^()]*\))*)$/.exec(line);
+  if (!list) return { problem: 'is in a form this check does not read' };
+  const [, controls, entries] = list;
+  return { controls, aces: [...entries.matchAll(/\(([^()]*)\)/g)].map((entry) => entry[1].split(';')) };
+}
+
+/**
  * Why an access list is not the current user's alone — or null when it is. `text` is what `icacls <path> /save <file>` wrote: the object's name, then its DACL in SDDL (a SID is spelled in full, a well-known
  * account by a two-letter alias):
  *   solution-settings-AbC123
@@ -76,23 +100,20 @@ function parseUserSid(output) {
  * a folder in it inherit it), rights FA (full control), the account. A file made in that folder has `D:AI(A;ID;FA;;;<SID>)`: the same entry, marked ID (inherited), with no flags to hand it down. Both are accepted
  * and nothing else is: another entry (SYSTEM, Administrators, the Users group), another account, less than full control, a deny entry, a folder that is not protected, a list that is missing — which grants
  * everyone access — or one in a shape this does not read (an entry with a condition in it).
+ * The account is the user's SID in full, or an alias of the SID itself (SY, LS, NS) — or LA and LG, which only the machine can say the SID of: they are the user's only when `machineSpelling(sid)`, which
+ * answers how this machine writes the user's SID, gives that alias. Where it cannot be asked an alias of that kind is not accepted.
  * See: https://learn.microsoft.com/windows/win32/secauthz/security-descriptor-string-format and https://learn.microsoft.com/windows/win32/secauthz/ace-strings
- * @param {{ folder: boolean }} what - a folder (its list must be protected, and its entry must be inherited by what is made in it) or a file made in one
+ * @param {{ folder: boolean, machineSpelling?: (sid: string) => (string|null) }} what - a folder (its list must be protected, and its entry must be inherited by what is made in it) or a file made in one
  */
-function ownerOnlyProblem(text, sid, { folder }) {
-  // The name on the first line can itself begin with `D:` (a path), so a line is the list only when flags and entries follow.
-  const line = String(text == null ? '' : text).split(/\r?\n/).map((l) => l.trim()).find((l) => /^D:[A-Z]*(?:\(|$)/.test(l));
-  if (!line) return 'is missing';
-  const list = /^D:([A-Z]*)((?:\([^()]*\))*)$/.exec(line);
-  if (!list) return 'is in a form this check does not read';
-  const [, controls, entries] = list;
-  if (folder && !controls.includes('P')) return 'inherits access from its parent';
-  const aces = [...entries.matchAll(/\(([^()]*)\)/g)].map((entry) => entry[1].split(';'));
-  if (aces.length !== 1) return `has ${aces.length} entries, not one`;
-  const [type, flags, rights, , , trustee = ''] = aces[0];
+function ownerOnlyProblem(text, sid, { folder, machineSpelling }) {
+  const dacl = readDacl(text);
+  if (dacl.problem) return dacl.problem;
+  if (folder && !dacl.controls.includes('P')) return 'inherits access from its parent';
+  if (dacl.aces.length !== 1) return `has ${dacl.aces.length} entries, not one`;
+  const [type, flags, rights, , , trustee = ''] = dacl.aces[0];
   if (type !== 'A') return 'has an entry that is not an allow entry';
   if (!FULL_CONTROL.test(rights)) return 'has an entry that is not full control';
-  if (!sddlNamesOf(sid).includes(trustee.toUpperCase())) return "has an entry that is not the current user's";
+  if (!namesUser(trustee, sid, machineSpelling)) return "has an entry that is not the current user's";
   // The flags are two-letter codes: OI and CI hand an entry to the files and folders made inside, ID marks one that was handed down.
   const marks = flags.match(/../g) || [];
   const fine = folder ? marks.length === 2 && marks.includes('OI') && marks.includes('CI') : marks.every((mark) => mark === 'ID');
@@ -139,17 +160,16 @@ function decodeSaved(raw) {
 }
 
 let saves = 0;
-// The access list of `target`, read back through `icacls /save` into a file in `scratch` (the private folder itself: a file made there inherits its list, and it is removed at once) and checked.
-function verifyWindows(tools, sid, target, scratch, kind) {
+// The access list of `target`, read back through `icacls /save` into a file in `scratch` (the private folder itself: a file made there inherits its list, and it is removed at once). Answers its SDDL text.
+function savedAccessList(tools, target, scratch, what) {
   saves += 1;
   const saved = path.join(scratch, `access-list-${process.pid}-${saves}.tmp`);
   const done = tools('icacls', [target, '/save', saved]);
   if (!done || done.error || done.status !== 0) throw toolFailure('icacls', '/save', done);
-  let text;
   try {
-    text = decodeSaved(fs.readFileSync(saved));
+    return decodeSaved(fs.readFileSync(saved));
   } catch (error) {
-    throw privateError(`the ${kind}'s access list could not be read back: ${error.code || error.name}`);
+    throw privateError(`the ${what}'s access list could not be read back: ${error.code || error.name}`);
   } finally {
     try {
       fs.rmSync(saved, { force: true });
@@ -157,7 +177,60 @@ function verifyWindows(tools, sid, target, scratch, kind) {
       // It holds an access list and nothing else, and goes with the folder.
     }
   }
-  const problem = ownerOnlyProblem(text, sid, { folder: kind === 'folder' });
+}
+
+// The probe's list names the account that was asked about. When that is not the current user — only a caller that asks about another account can have it so; the check itself asks about the user's own — the user has
+// no right to delete the file, though its owner can always rewrite the list: `/reset` gives the file back the list its folder hands down, which is the user's, and then it is removed.
+function removeProbe(tools, probe) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fs.rmSync(probe, { force: true });
+      return;
+    } catch {
+      if (attempt === 0) {
+        try {
+          tools('icacls', [probe, '/reset']);
+        } catch {
+          // The second attempt says whether it worked.
+        }
+      }
+    }
+  }
+  // It holds nothing, and goes with the folder.
+}
+
+// How this machine writes the account `sid` in an access list, or null when what it writes cannot be compared. The machine is asked the way the list that is being checked was made: the SID is granted —
+// `/grant:r *<SID>`, on a list that was reset and stripped so that it holds that one entry — to a file in `scratch` that holds nothing, and the list of that file is read back. What `icacls /save` writes for
+// the one entry is the machine's own spelling of the SID, from the same conversion that wrote the list being checked: `LA` for the SID of this machine's own Administrator, and the SID in full for another
+// domain's, whose Administrator has the same RID. `icacls` refuses a SID that no account of this machine or its domain maps to (exit 1332, "no mapping between account names and security IDs was done", measured),
+// which is the tool's failure like any other: nothing is then known, and the copy is not made. The file goes however this ends; `scratch` is the private folder, so what it briefly holds is seen by nobody else.
+function accountSpelling(tools, sid, scratch) {
+  if (typeof sid !== 'string' || !/^S-1-\d+(?:-\d+)+$/.test(sid)) throw privateError('the account to ask the machine about is not a SID');
+  saves += 1;
+  const probe = path.join(scratch, `access-list-probe-${process.pid}-${saves}.tmp`);
+  try {
+    fs.writeFileSync(probe, '', { flag: 'wx' });
+  } catch (error) {
+    throw privateError(`the probe file could not be made: ${error.code || error.name}`);
+  }
+  try {
+    for (const step of [['/reset'], ['/inheritance:r'], ['/grant:r', `*${sid}:F`]]) {
+      const done = tools('icacls', [probe, ...step]);
+      if (!done || done.error || done.status !== 0) throw toolFailure('icacls', `${step[0]} on the probe`, done);
+    }
+    const dacl = readDacl(savedAccessList(tools, probe, scratch, 'probe'));
+    if (dacl.problem || dacl.aces.length !== 1) return null;
+    const [type, , rights, , , trustee = ''] = dacl.aces[0];
+    return type === 'A' && FULL_CONTROL.test(rights) && trustee ? trustee : null;
+  } finally {
+    removeProbe(tools, probe);
+  }
+}
+
+// The access list of `target`, read back and checked: the current user's alone, or the reason it is not.
+function verifyWindows(tools, sid, target, scratch, kind, machineSpelling) {
+  const text = savedAccessList(tools, target, scratch, kind);
+  const problem = ownerOnlyProblem(text, sid, { folder: kind === 'folder', machineSpelling });
   if (problem) throw privateError(`the ${kind}'s access list ${problem}`);
 }
 
@@ -168,8 +241,14 @@ function lockDownWindows(dir, deps) {
     const done = tools('icacls', [dir, ...step]);
     if (!done || done.error || done.status !== 0) throw toolFailure('icacls', step[0], done);
   }
-  verifyWindows(tools, sid, dir, dir, 'folder');
-  return { verifyFile: (file) => verifyWindows(tools, sid, file, dir, 'file') };
+  // The machine is asked how it writes the user's SID only when a list names the user by LA or LG — and once, whichever of the folder's list and the file's it was.
+  let spelled;
+  const machineSpelling = () => {
+    if (spelled === undefined) spelled = accountSpelling(tools, sid, dir);
+    return spelled;
+  };
+  verifyWindows(tools, sid, dir, dir, 'folder', machineSpelling);
+  return { verifyFile: (file) => verifyWindows(tools, sid, file, dir, 'file', machineSpelling) };
 }
 
 // ---- POSIX ---------------------------------------------------------------------------------------------------------------------------------------------
@@ -239,4 +318,17 @@ function createPrivateFile(dir, name, bytes, deps = {}) {
   return file;
 }
 
-module.exports = { createPrivateFile, lockDownFolder, parseUserSid, ownerOnlyProblem };
+/**
+ * How this machine writes the account `sid` in an access list — `LA` for the SID of its own Administrator, the SID in full for another domain's — which is what the check of a list that names the user by an alias
+ * asks (ownerOnlyProblem's `machineSpelling`). Windows only: the machine is asked through `icacls`, with a file that holds nothing, made in `scratch` — a folder of the caller's — and removed. Null when what it writes
+ * cannot be compared; throws an error with `code` 'PRIVATE_FOLDER' and a `reason` when the machine cannot be asked.
+ * @param {string} sid
+ * @param {string} scratch
+ * @param {object} [deps] - test seams: `run` (the process runner's spawnResultSync), `env`
+ * @returns {string|null}
+ */
+function spellingOf(sid, scratch, deps = {}) {
+  return accountSpelling(windowsTools(deps), sid, scratch);
+}
+
+module.exports = { createPrivateFile, lockDownFolder, parseUserSid, ownerOnlyProblem, spellingOf };
