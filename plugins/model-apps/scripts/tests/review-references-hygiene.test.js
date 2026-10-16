@@ -533,7 +533,10 @@ function lex(text) {
   const quoted = (from, quote) => {
     let j = from + 1;
     while (j < text.length && text[j] !== '\n') {
-      if (text[j] === '\\') j += 2;
+      // A backslash escapes the next character, and a backslash before a line break continues the string on the next line. A CRLF
+      // break is one line terminator of two characters, so the escape consumes both: stopping between them would end the string at
+      // the LF and read its continued line as code.
+      if (text[j] === '\\') j += text[j + 1] === '\r' && text[j + 2] === '\n' ? 3 : 2;
       else if (text[j] === quote) { j += 1; break; } else j += 1;
     }
     return Math.min(j, text.length);
@@ -949,6 +952,11 @@ test('a comment, a test title and a message are read in code, beside strings, te
   // A line that opens like a comment is one in code only: not in a template, not in a string that goes on to the next line.
   assert.deepEqual(names('a.js', 'const doc = `\n# R4 - the retry rule\n * R4 - the retry rule\n`;'), []);
   assert.deepEqual(names('a.js', "const doc = 'one\\\n// (Plan 2)';"), []);
+  // The same continuation over a CRLF line break: the backslash continues the string across the whole "\r\n", so the next line is still data.
+  assert.deepEqual(names('a.js', "const doc = 'one\\\r\n// (Plan 2)';\r\n"), []);
+  assert.deepEqual(names('a.js', 'const doc = "one\\\r\n// (Plan 2)";\r\n'), []);
+  assert.deepEqual(names('a.js', "const doc = 'one\\\r\ntest(\\'Task 12: overview\\', () => {});';\r\n"), []);
+  assert.deepEqual(names('a.js', "const doc = 'one\\\ntest(\\'Task 12: overview\\', () => {});';\n"), []);
   // JSON holds no comment: a string is data, while a comment in a JSON file with comments is read, and so is each line of a file of JSON lines.
   assert.deepEqual(names('f.json', '{ "a": 1 } // (Plan 2)'), ['1:plan-task-in-parens']);
   assert.deepEqual(names('f.json', ['{ "a": 1,', '  "b": "x // (Plan 2)" }'].join('\n')), []);
