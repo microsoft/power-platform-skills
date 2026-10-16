@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('[code-apps] Plugin root is not set; CLI attribution was not applied.'); process.exit(1);} require(path.resolve(root,'hooks','set-cli-origin.js'));\"",
+        "matcher": "bash|powershell",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
