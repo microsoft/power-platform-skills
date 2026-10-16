@@ -137,8 +137,8 @@ npm run bundle:ios
 
 Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
 
-- **Android:** `dist/index.android.bundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-android/` (`manifest.json` + `assets/<fileHash>.<type>`)
-- **iOS:** `dist/main.jsbundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-ios/` (`manifest.json` + `assets/<fileHash>.<type>`)
+- **Android:** `dist/index.android.bundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-android/` (`manifest.json` + `assets/<fileHash>.<type>`, plus `firebase/google-services.json` when the app has its own Firebase client file)
+- **iOS:** `dist/main.jsbundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-ios/` (`manifest.json` + `assets/<fileHash>.<type>`, plus `firebase/GoogleService-Info.plist` when the app has its own Firebase client file)
 
 Both platforms are required — the verification below fails if either bundle or either manifest is missing.
 
@@ -159,6 +159,22 @@ echo "✓ native package + asset manifests present"
 ```
 
 If a native packaging step fails, surface the error and STOP. If the app renders bundled images/fonts, also confirm each `manifest.json` `assets` array is non-empty (an empty array means the app doesn't `require()` any static asset yet).
+
+**Push notifications.** When the app has its own Firebase client files in `firebase/` (added by `/add-native push-notifications`), the packaging step publishes each one in its platform's asset package and pins it in `manifest.json` as `pushNotificationsConfig`, and fails on an incomplete file. The template's placeholder files are never published. The wrap injects the file when push notifications are turned on for that platform in the wrap wizard; makers can upload the file there instead. Report what was packaged — this check only warns and never blocks the deploy:
+
+```bash
+node -e '
+const fs = require("fs");
+const { exp } = require("expo/config").getConfig(process.cwd(), { skipSDKVersionRequirement: true });
+const defaults = { android: "firebase/google-services.json", ios: "firebase/GoogleService-Info.plist" };
+for (const [platform, defaultFile] of Object.entries(defaults)) {
+  const file = exp[platform]?.googleServicesFile ?? defaultFile;
+  if (!fs.existsSync(file) || fs.readFileSync(file, "utf8").includes("google_app_id_tag")) continue;
+  const { pushNotificationsConfig } = JSON.parse(fs.readFileSync(`dist/powerapps-customer-assets-${platform}/manifest.json`, "utf8"));
+  if (pushNotificationsConfig) console.log(`✓ ${platform} Firebase client file packaged for push notifications (${pushNotificationsConfig.path})`);
+  else console.warn(`⚠ ${file} was not packaged for ${platform}: push notifications need @microsoft/power-apps-native-host 0.6.0 or later (then rerun npm run bundle:${platform}), or the file uploaded in the wrap wizard.`);
+}'
+```
 
 ### Step 2.5 — Offline profile coverage gate
 
@@ -281,6 +297,7 @@ Bundle path   : dist/
 
 Local dev:    npm run dev  (writes .powernative logs for /debug-app)
 Re-deploy:    /deploy
+Wrapped app:  re-wrap it (/open-wrap-url) to ship this deploy; installed apps keep the bundle they were wrapped with
 List conns:   /list-connections
 ─────────────────────────────────────────────
 ```

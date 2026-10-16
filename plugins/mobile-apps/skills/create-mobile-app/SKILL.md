@@ -2464,7 +2464,7 @@ Arguments:
   --capability <name>
 ```
 
-Run sequentially. Each writes a single file under `src/native/` and does not touch `package.json` or `app.config.js`, so they could in principle run in parallel — but sequential keeps the orchestration log readable.
+Run sequentially. Each writes a single file under `src/native/` and does not touch `package.json` or `app.config.js`, so they could in principle run in parallel — but sequential keeps the orchestration log readable. `push-notifications` also mounts its hook in `app/(app)/_layout.tsx` and asks for the app's Firebase client files; without them it still wires the app and reports push notifications as not configured. `scheduled-notifications` mounts its session hook there and returns each owner screen's call, which the screen specs carry to the screen builder.
 
 If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
 
@@ -2721,7 +2721,7 @@ Rules:
 
 #### Step 10b.3 — Write outer `app/(app)/_layout.tsx`
 
-Now rewrite only the `return` statement in `app/(app)/_layout.tsx`. Keep every line above the `return` untouched (auth guard, all imports).
+Now rewrite only the `return` statement in `app/(app)/_layout.tsx`. Keep every line above the `return` untouched (auth guard, the notification hook calls Step 9 added, such as `usePushNotifications` and `useScheduledNotificationSession`, all imports).
 
 **How to build the `<Tabs>` block (Tabs / Tabs + Stack pattern):**
 
