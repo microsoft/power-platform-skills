@@ -17,7 +17,12 @@
 //      (an explicitly authored routing description cannot be set aside this way, and halts);
 //   5. a header whose name or description is not plain text (a text per language) is never sent: the PATCH always carries BOTH texts, so
 //      while either is not plain the build makes no header edit at all — the other text's, nor a routing description — and reports each as
-//      not applied (the tests at the end of this file).
+//      not applied (the tests at the end of this file). That whole-header hold is the chosen policy, not a stopgap: the SDK has no partial
+//      header write, so the one field that changed cannot be sent alone (the pin below fails if a re-vendored bundle makes the PATCH partial);
+//   6. the hold is on the workspace copy, and the SDK decides for itself whether the header is written: when its OWN comparison read of the
+//      header fails (503, 403, a thrown error, an empty 200) it writes the copy's header as it is. So the client every SDK is made with refuses a
+//      PATCH of an app module row whose name or description is not a string (lib/app-header-text.js): nothing that is not plain text reaches the
+//      wire, the push fails with APP_HEADER_NOT_PLAIN_TEXT before the navigation is written, and a re-run finishes (the last tests of this file).
 // A re-vendor could change any of them with every plugin test still green, so each is pinned here against the real bundle over a
 // fake Dataverse, the way app-ai-description-real-bundle.test.js pins the routing description.
 const test = require('node:test');
@@ -27,9 +32,11 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { appDef, applyAppHeader, applyAppHeaderText, applyAppAiDescription, pushAppHeader, runSdkBuild } = require('../lib/sdk-build.js');
 const { requireSuccessfulPush } = require('../lib/entity-provision.js');
+const { SdkError } = require('../lib/maker-sdk.js');
+const { isTransientHalt } = require('../build-model-app.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
-const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
+const NOT_PLAIN = 'APP_HEADER_NOT_PLAIN_TEXT';
 const APP_ID = '11111111-1111-1111-1111-111111111111';
 const APP_UNIQUE = 'new_probeapp';
 const APP_IDUNIQUE = '33333333-3333-3333-3333-333333333333';
@@ -46,17 +53,29 @@ test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, for
 
 // A real SDK over a fake Dataverse holding one app. `headerStatus` is the status the appmodule PATCH answers (400 is how Dataverse
 // refuses a header write on a never-published appmodule); `state` is read on every call, so a test can change the server under the SDK.
-async function freshSdk({ name = 'Probe', description = 'Tickets', headerStatus = 204 } = {}) {
-  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+// The SDK is made through lib/maker-sdk.js, as every script makes its SDK: the client it is handed is the one the plugin's scripts get, with the
+// header guard of lib/app-header-text.js. `state.fault` fails the SDK's own comparison read of the header (failComparisonRead).
+async function freshSdk({ name = 'Probe', description = 'Tickets', headerStatus = 204, existingIcon = false } = {}) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-header-text-'));
   tempDirs.push(dir);
   const writes = [];
   // `refused` collects every header PATCH that carried a `name` or `description` that is not a string (see the PATCH handler below).
-  const state = { name, description, headerStatus, etag: 'W/"1"', ai: undefined, refused: [] };
+  const state = { name, description, headerStatus, etag: 'W/"1"', ai: undefined, refused: [], fault: null };
   const appRow = () => ({ appmoduleid: APP_ID, appmoduleidunique: APP_IDUNIQUE, name: state.name, uniquename: APP_UNIQUE, description: state.description, componentstate: 0, ...(state.ai !== undefined ? { aiappdescription: state.ai } : {}), '@odata.etag': state.etag });
   const sitemapRow = () => ({ sitemapid: SITEMAP_ID, sitemapnameunique: APP_UNIQUE, sitemapxml: SITEMAP_XML, '@odata.etag': state.etag });
   const httpClient = {
     get: async (url) => {
+      // The SDK's own comparison read of the header: the one read of the app module row that selects the routing description, made inside its push of an app.
+      const fault = state.fault;
+      if (fault && fault.armed && fault.reads.length === 0 && /\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/i.test(url) && /aiappdescription/.test(url)) {
+        fault.reads.push(String(url));
+        if (fault.kind === 'throw') throw new Error('the comparison read of the header failed');
+        if (fault.kind === 'empty') return { status: 200, headers: {}, body: {} };
+        return { status: Number(fault.kind), headers: {}, body: { error: { message: 'the comparison read of the header was refused' } } };
+      }
+      // An app that already has its icon: the build then creates no web resource for one (a first build does, and publishes it).
+      if (existingIcon && /\/webresources(?:et)?(?:\?|$)/.test(url)) return { status: 200, headers: {}, body: { value: [{ webresourceid: '66666666-6666-6666-6666-666666666666', webresourcetype: 11 }] } };
       const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
       if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
       if (/\/appmodulecomponents/.test(url)) {
@@ -326,11 +345,13 @@ test('REAL BUNDLE: a localized header with a changed name is left alone as well,
   }
 });
 
-// WHY a header is held WHOLE. The SDK writes the artifact's `name` AND `description` in every header PATCH — whichever of them an edit
-// changed, and for an edit of the routing description alone — because it writes the copy, not the edit. So a text that is not plain
-// beside an edit of its sibling would be sent with it: a map in a String column, or a scalar over a text that carries translations. This
-// is the fact the build's guard (applyAppHeader) rests on; if a re-vendored bundle sends only what changed, this fails, and the guard
-// can be narrowed to the one field.
+// WHY a header is held WHOLE — the chosen policy, and the SDK is the reason. The SDK writes the artifact's `name` AND `description` in every
+// header PATCH — whichever of them an edit changed, and for an edit of the routing description alone — because it writes the copy, not the edit,
+// and it has no partial header write: the row token that conditions the PATCH is private to it, and a PATCH of the plugin's own would need a
+// freshly read one (a blind overwrite). So a text that is not plain beside an edit of its sibling would be sent with it: a map in a String column,
+// or a scalar over a text that carries translations. This is the fact the build's hold (applyAppHeader) rests on; if a re-vendored bundle sends
+// only what changed, this fails, and the hold can be narrowed to the one field. Writing only the changed field with this SDK needs a new SDK
+// operation: a follow-up, not something the plugin can do around it.
 test('REAL BUNDLE: a header PATCH always carries the name AND the description — an edit of one sends the other, and a routing edit sends both', async () => {
   const text = await freshSdk();
   await rebuild(text.sdk, spec({ description: 'Changed' }));
@@ -442,4 +463,151 @@ test('REAL BUNDLE: a complete rebuild over a header that is not plain text finis
   const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, name: 'Help Desk', description: 'Changed' }), { sdk, apply: true, publish: true, genpage: fakeGenpage(), phases: ['app-shell', 'publish'] });
   assert.strictEqual(built.ok, true);
   assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), [{ name: 'Help Desk', description: 'Changed' }]);
+});
+
+// --- the SDK's OWN comparison read fails: the client is the last line of defence ----------------------------------------------------------------------------
+//
+// Everything above holds the header on the workspace COPY. But the SDK's push of an app decides for itself whether the header is written: it reads the header and compares it with the
+// copy's, and its "write needed" flag starts true and only a 2xx answer sets it — so a read that cannot be made (HTTP 503 or 403, a transport that throws) leaves the flag true, and a 200 with no row
+// is compared with an empty header, which differs: the header is written from the copy as it is, a text that is not plain included, even when the build edited nothing at all. Pinned here with a fault in the fake server. The client the SDK is made
+// with (lib/app-header-text.js, wired in lib/maker-sdk.js, the one way a script makes an SDK) refuses that PATCH before any byte is sent: the push fails with the typed error, and since the
+// SDK writes the header first, it wrote nothing of its navigation either.
+
+// Fails that read once, inside a push of an app: `kind` is an HTTP status ('503', '403'), 'throw' (the transport throws) or 'empty' (HTTP 200 with no row). Armed only inside the push of an
+// app: the build's own reads of the app select the same columns and must answer — its recovery reads the app again.
+function failComparisonRead({ sdk, state }, kind) {
+  state.fault = { kind, armed: false, reads: [] };
+  const push = sdk.pushArtifact.bind(sdk);
+  sdk.pushArtifact = async (...args) => {
+    state.fault.armed = args[0] === 'app';
+    try {
+      return await push(...args);
+    } finally {
+      state.fault.armed = false;
+    }
+  };
+  return state.fault;
+}
+
+function workspaceDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-header-workspace-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+const COMPARISON_FAULTS = [['HTTP 503', '503'], ['HTTP 403', '403'], ['a thrown error', 'throw'], ['an empty HTTP 200', 'empty']];
+const PROTECTED_NAMES = [
+  ['a localized name', localizedText('Probe', 'Sonde'), /the app's name is localized \(2 languages: 1033, 1036\)\. Nothing was sent/],
+  ['an array-valued name', ['Probe'], /the app's name could not be read as plain text \(it came back as a list\)\. Nothing was sent/],
+];
+const PUSH_SITES = [['app-shell + publish', false], ['app-shell + pages + publish', true]];
+
+for (const [faultWhat, fault] of COMPARISON_FAULTS) {
+  for (const [shapeWhat, shape, described] of PROTECTED_NAMES) {
+    for (const [siteWhat, pages] of PUSH_SITES) {
+      test(`REAL BUNDLE: ${faultWhat} on the SDK's own comparison read, over ${shapeWhat}, ${siteWhat} — the header write is refused before a byte is sent, nothing is written, and the re-run finishes`, async () => {
+        const f = await freshSdk({ name: shape, existingIcon: true });
+        const injected = failComparisonRead(f, fault);
+        const warnings = [];
+        const phase = pages ? 'pages' : 'app-shell';
+        const genpage = fakeGenpage();
+        const workspace = workspaceDir();
+        // A changed description beside the protected name: the build holds it back (and says so), and the SDK is then asked to push the copy.
+        const run = () => runSdkBuild(spec({ uniqueName: APP_UNIQUE, description: 'Changed' }), {
+          sdk: f.sdk, apply: true, publish: true, genpage, workspaceDir: workspace, env: 'https://contoso.crm.dynamics.com',
+          phases: pages ? ['app-shell', 'pages', 'publish'] : ['app-shell', 'publish'], warn: (m) => warnings.push(m),
+        });
+        await assert.rejects(run(), (halt) => {
+          assert.strictEqual(halt.name, 'BuildHalt');
+          assert.strictEqual(halt.code, NOT_PLAIN, 'the halt carries the typed code');
+          assert.strictEqual(halt.phase, phase);
+          assert.match(halt.message, new RegExp(`^${phase} failed: Refused before anything was sent: the write of app ${APP_ID}'s header would have carried a text that is not plain — `));
+          assert.match(halt.message, described);
+          assert.match(halt.message, /Nothing was sent, so the app is as it was, and the push stopped before it wrote the app's navigation\. /);
+          assert.match(halt.message, /Run it again: a re-run normally succeeds\. If the same refusal comes back, make the app's name and description plain text in Power Apps\.$/);
+          assert.ok(halt.cause instanceof SdkError, 'the SDK rethrew the client\'s error as it is');
+          assert.strictEqual(halt.cause.code, NOT_PLAIN);
+          assert.strictEqual(halt.cause.transient, false);
+          assert.strictEqual(isTransientHalt(halt), false, 'the build does not run the phase again on its own');
+          return true;
+        });
+        assert.strictEqual(injected.reads.length, 1, 'the fault reached the SDK\'s one comparison read of the header');
+        assert.deepStrictEqual(headerWrites(f.writes), [], 'no PATCH of the appmodule was sent');
+        assert.deepStrictEqual(f.state.refused, [], 'so nothing a String column cannot take reached the server');
+        assert.deepStrictEqual(sitemapWrites(f.writes), [], 'and the navigation was not written: the SDK writes the header first');
+        // No PATCH of anything, and nothing published. (What a rebuild does before its push — the app's solution membership, an idempotent add — is not the push's.)
+        assert.deepStrictEqual(f.writes.filter((w) => w.verb === 'patch' || /\/PublishXml/.test(w.url)), []);
+        assert.deepStrictEqual([f.state.name, f.state.description], [shape, 'Tickets'], 'the app is as it was');
+        assert.strictEqual(warnings.filter((w) => /^app "Probe": its description was not applied: the app's name /.test(w)).length, 1, `the held-back description is still reported, once: ${JSON.stringify(warnings)}`);
+
+        // A re-run — the read answers now — finds the copy equal to the row, sends no header, and writes the navigation. (It also shows the failed push left the workspace copy as the
+        // server has it: a copy holding the refused run's edits would be refused as unpushed.)
+        const rerun = await run();
+        assert.strictEqual(rerun.ok, true);
+        assert.deepStrictEqual(headerWrites(f.writes), [], 're-run: still no header PATCH');
+        assert.deepStrictEqual(f.state.refused, [], 're-run: nothing that is not plain text was sent');
+        assert.strictEqual(sitemapWrites(f.writes).length, 1, 're-run: the navigation is written, once');
+        const published = f.writes.filter((w) => /\/PublishXml/.test(w.url) && /<appmodule>/.test((w.body || {}).ParameterXml || ''));
+        assert.ok(published.length > 0 && f.writes.indexOf(published[0]) > f.writes.indexOf(sitemapWrites(f.writes)[0]), 're-run: the app is published after its navigation');
+        assert.deepStrictEqual([f.state.name, f.state.description], [shape, 'Tickets'], 're-run: the header is still the maker\'s');
+      });
+    }
+  }
+}
+
+// The same fault one level down, with nothing edited at all (`changed: false`) — the case a hold on the workspace copy cannot see: the SDK is still asked to push the copy, and writes its header.
+// The description is judged exactly as the name is, and both together are named together.
+const PROTECTED_HEADERS = [
+  ...PROTECTED_NAMES.map(([what, name, described]) => [what, { name }, described, { name }]),
+  ['a localized description', { description: localizedText('Tickets', 'Billets') }, /the app's description is localized \(2 languages: 1033, 1036\)\. Nothing was sent/, { description: localizedText('Tickets', 'Billets') }],
+  ['a list for the description', { description: ['Tickets'] }, /the app's description could not be read as plain text \(it came back as a list\)\. Nothing was sent/, { description: ['Tickets'] }],
+  ['a localized name and description', { name: localizedText('Probe', 'Sonde'), description: localizedText('Tickets', 'Billets') },
+    /the app's name is localized \(2 languages: 1033, 1036\) and its description is localized \(2 languages: 1033, 1036\)\. Nothing was sent/, { name: localizedText('Probe', 'Sonde'), description: localizedText('Tickets', 'Billets') }],
+];
+for (const [faultWhat, fault] of COMPARISON_FAULTS) {
+  for (const [shapeWhat, initial, described, held] of PROTECTED_HEADERS) {
+    test(`REAL BUNDLE: ${faultWhat} on the comparison read, over ${shapeWhat} and an edit of nothing — the push of the copy is refused with the typed error, and the copy is put back as the server has it`, async () => {
+      const f = await freshSdk(initial);
+      await f.sdk.fetchArtifact('app', APP_ID);
+      const header = await applyAppHeader(f.sdk, spec(), APP_ID, { warn: () => {} });
+      assert.deepStrictEqual(header, { changed: false, routing: false, replaced: {} }, 'the build edited nothing (an array-valued or number text is reported as not applied; a localized one that holds the spec\'s text, or one the spec does not set, is silent)');
+      const injected = failComparisonRead(f, fault);
+      await assert.rejects(pushAppHeader(f.sdk, APP_ID, 'Probe', header), (e) => {
+        assert.ok(e instanceof SdkError);
+        assert.strictEqual(e.code, NOT_PLAIN);
+        assert.match(e.message, described);
+        return true;
+      });
+      assert.strictEqual(injected.reads.length, 1);
+      assert.deepStrictEqual([headerWrites(f.writes), f.state.refused, sitemapWrites(f.writes)], [[], [], []]);
+      const kept = await f.sdk.getArtifact('app', APP_ID);
+      assert.deepStrictEqual([kept.name, kept.description], [held.name || 'Probe', held.description || 'Tickets'], 'the copy holds what the server holds');
+    });
+  }
+}
+
+// What must NOT change: the guard looks at what would be SENT, not at why. A header that is plain text still has the SDK write it from the copy when the comparison read cannot be made —
+// the same text the row holds, on the row's token, as it always did — and the rest of the push goes on.
+test('REAL BUNDLE: a failed comparison read over a PLAIN header still has the header written from the copy, as the SDK always did — and the navigation after it', async () => {
+  for (const [what, fault] of COMPARISON_FAULTS) {
+    const f = await freshSdk();
+    const injected = failComparisonRead(f, fault);
+    const { changed, pushed } = await rebuild(f.sdk, spec());
+    assert.strictEqual(changed.changed, false, what);
+    assert.strictEqual(pushed.saved, true, `${what}: ${JSON.stringify(pushed.error && pushed.error.message)}`);
+    assert.strictEqual(injected.reads.length, 1, what);
+    assert.deepStrictEqual(headerWrites(f.writes).map((w) => w.body), [{ name: 'Probe', description: 'Tickets' }], `${what}: the copy's own text`);
+    assert.strictEqual(headerWrites(f.writes)[0].ifMatch, 'W/"1"', `${what}: on the row's token`);
+    assert.strictEqual(sitemapWrites(f.writes).length, 1, `${what}: and the navigation is written`);
+    assert.deepStrictEqual(f.state.refused, [], what);
+  }
+});
+
+test('REAL BUNDLE: a header edit that needs no refusal is untouched by the guard — a plain edit, written once, on the token the fetch read', async () => {
+  const f = await freshSdk();
+  const { changed, pushed } = await rebuild(f.sdk, spec({ name: 'Help Desk', description: 'Track tickets.', aiDescription: ROUTING }));
+  assert.strictEqual(changed.changed, true);
+  assert.strictEqual(pushed.saved, true);
+  assert.deepStrictEqual(headerWrites(f.writes).map((w) => [w.body, w.ifMatch]), [[{ name: 'Help Desk', description: 'Track tickets.', aiappdescription: ROUTING }, 'W/"1"']]);
+  assert.deepStrictEqual(f.state.refused, []);
 });

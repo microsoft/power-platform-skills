@@ -140,6 +140,7 @@ const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSaved
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { navigationEntryKind, navigationVerdict } = require('./app-navigation.js');
+const { isAppTextMap, appTextKind, localizedAppText, describeHeldAppText } = require('./app-header-text.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -1358,6 +1359,18 @@ async function applyAppAiDescription(provision, spec, appId) {
 //     is not plain NO header edit is made at all — the other text's, and the routing description's (applyAppHeader) — and each edit the
 //     spec asked for is reported as not applied, with the reason. A localized value the spec's text already equals (the
 //     unchanged-name, changed-description case) needs no edit of its own and no word.
+//   * THAT WHOLE-HEADER HOLD IS THE CHOSEN POLICY, not a stopgap — and the SDK is the reason. It has no partial header write: its PATCH is
+//     built from the whole workspace copy, `{ name, description[, aiappdescription] }` (pinned in app-header-text-real-bundle.test.js, which fails
+//     if a re-vendored bundle makes it partial), and the row token it is conditioned on is private to it. So the one plain field that changed
+//     cannot be sent alone. A PATCH of the plugin's own would need a row token read afresh, which is a blind overwrite of whatever changed since
+//     the fetch. Taking the text that is not plain off the copy, for the SDK to leave out of its request, would lean on an SDK internal (the
+//     serializer dropping `undefined`) whose failure mode — a re-vendor that writes `name: ''` — blanks an app's name. Neither is done: a plain
+//     edit beside a text that is not plain is a warning and a navigation-only push. Writing only the changed field would need an SDK operation
+//     (a partial header write), which is a follow-up; the hold could then be narrowed to the one field.
+//   * The hold is on the workspace COPY, and the SDK decides for itself whether the header is written: when its own comparison read of the
+//     header cannot be made it writes the copy's header as it is, so "no header edit" is not "no header PATCH". The client every SDK is made
+//     with refuses that write (lib/app-header-text.js, APP_HEADER_NOT_PLAIN_TEXT, wired in lib/maker-sdk.js): a text that is not plain never
+//     reaches the wire, whatever the copy holds, and the push fails before its navigation is written (pushAppHeader).
 // name holds at most 100 characters and description 2,000 (validateDescription).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
 async function applyAppHeaderText(provision, spec, appId, warn) {
@@ -1387,19 +1400,8 @@ async function editAppHeaderText(provision, spec, appId, warn) {
   return { replaced, held };
 }
 
-// How a header text that is not plain reads in a warning: "localized (2 languages: 1033, 1036)" for a text per language, an LCID map; otherwise
-// what came back, as a kind.
-const isAppTextMap = (have) => have !== null && typeof have === 'object' && !Array.isArray(have);
-const appTextKind = (have) => (have === null ? 'null' : have === undefined ? 'no value' : Array.isArray(have) ? 'a list' : `a ${typeof have}`);
-const localizedAppText = (have) => {
-  const languages = Object.keys(have);
-  return `localized (${languages.length} language${languages.length === 1 ? '' : 's'}: ${languages.join(', ')})`;
-};
-// The header's texts that are not plain, as the start of a sentence: "the app's name is localized (2 languages: 1033, 1036) and its
-// description could not be read as plain text (it came back as a list)".
-function describeHeldAppText(held) {
-  return held.map(({ key, have }, i) => `${i === 0 ? 'the app\'s' : 'its'} ${key} ${isAppTextMap(have) ? `is ${localizedAppText(have)}` : `could not be read as plain text (it came back as ${appTextKind(have)})`}`).join(' and ');
-}
+// How a header text that is not plain reads in a warning (isAppTextMap, localizedAppText, appTextKind, describeHeldAppText) is lib/app-header-text.js's:
+// the client refuses a write of such a text in the same words.
 
 // Why an app's name or description (`have`, as fetched) is NOT written over with the spec's text (`want`) — or `undefined` when it is
 // plain text and nothing else holds it back. `''` means the spec asks for nothing the header does not already say, so there is nothing to
@@ -1525,6 +1527,13 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
 // that cannot be honoured — it halts, as it always did), a 412 (a concurrent edit), any other failure, and a refusal that comes back
 // with the header already put back (halted on, never looped on). A header that cannot be put back halts too: pushing a copy that
 // still holds the edit would be refused again.
+//
+// ANOTHER refusal comes from the HTTP client, not from the SDK, and it is not recovered from either: the SDK writes the copy's header whenever its own
+// comparison read of the header cannot be made, and a name or description that is not plain text never leaves the process (APP_HEADER_NOT_PLAIN_TEXT,
+// lib/app-header-text.js) — whether or not this run edited the header at all. It is thrown before the header or the navigation is written, so the generic
+// path below is the right one: the copy, which this push never recorded, is reset to the server's, and the typed error is thrown as it is. Its message says a
+// re-run normally succeeds, and `transient: false` keeps the build from running the phase again on its own: whether the read answers next time is for that
+// re-run to find out, and a retry of the same push here would hide the one thing the message tells.
 async function pushAppHeader(provision, appId, name, header, mainFormsByTable, warn) {
   const { routing, replaced } = header !== null && typeof header === 'object' ? header : { routing: header === true, replaced: {} };
   const textKeys = Object.keys(replaced || {});

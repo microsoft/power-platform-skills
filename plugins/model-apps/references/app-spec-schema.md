@@ -87,7 +87,10 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   language), which a rebuild never replaces with one text: change it in Power Apps. The SDK writes the name and the
   description in one request, so while either is localized (or is any other value that is not plain text) the app's
   header is **not edited at all**: a changed plain text beside it, and an `app.aiDescription`, are reported as not
-  applied too, with the reason — a warning, never a halt; the navigation is written as ever.
+  applied too, with the reason — a warning, never a halt; the navigation is written as ever. (The SDK has no partial
+  header write, so the one plain field that changed cannot be sent alone; that would need a new SDK operation.) And if the
+  SDK's own read of the header fails while a text is not plain, the build stops with `APP_HEADER_NOT_PLAIN_TEXT` before
+  anything is sent or written — the SDK writes the header it holds when that read fails — and a re-run normally succeeds.
 - **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
   Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
   **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
