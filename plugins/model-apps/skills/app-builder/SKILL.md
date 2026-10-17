@@ -110,10 +110,10 @@ Rules:
 - A **traditional `dashboards[]`** is emitted **only on explicit request** (e.g. "use a classic dashboard").
 - A generative page is authored as a **design intent** (`source: { kind: "intent" }`,
   `schemaVersion: 2`) during Phase 1 — its `.tsx` is written in **Phase 1.5 — Generate pages**, after
-  plan approval and after the data pre-build creates the tables so `pac model genpage generate-types`
+  plan approval and after the data pre-build creates the tables so `genpage.js types`
   can emit `RuntimeTypes.ts`. See [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Pages*.
-- The build's `pages` phase uploads each page via `pac model genpage upload` **without
-  `--add-to-sitemap`** — the SDK is the **single sitemap writer**, so a page's nav entry comes from a
+- The build's `pages` phase writes each page through the SDK and never places it in the sitemap
+  itself — the SDK is the **single sitemap writer**, so a page's nav entry comes from a
   `page` subarea in `appShell` (referenced by the page's **`key`**). See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `pages[]`.
 - **Every page in `pages[]` must be sitemap-placed** — validation rejects any page absent from the
@@ -128,8 +128,8 @@ Rules:
   reads a key nothing ever sets.
 - **Three-authority page identity** (build + download + verify all follow this): (1) **IDENTITY** —
   the durable `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own `pages[].pageId`
-  outranks it for that rebuild. (2) **EXISTENCE** — env-wide `pac model genpage list` (crash-safe;
-  decides create-vs-reuse). (3) **MEMBERSHIP** — the app's sitemap `GenPageId` set (placement,
+  outranks it for that rebuild. (2) **EXISTENCE** — the env-wide page list read through the SDK, drafts
+  included (crash-safe; decides create-vs-reuse). (3) **MEMBERSHIP** — the app's sitemap `GenPageId` set (placement,
   download enumeration, verify coverage). All matching is by id — never by display name.
 - **Multi-page navigation uses `PAGEREF_<key>`** (the stable `pages[].key`) as the `pageId`
   placeholder; the build resolves each to the real page GUID in a run-scoped staging copy (the
@@ -186,8 +186,11 @@ unless destructive authority was supplied independently.
 2. **Environment (PAC)** — `pac auth list`. If exactly one / an active profile, **confirm it
    (FYI), don't ask**. If several and none active, **ask** which to use. If none, ask the user
    to `pac auth create`. Capture the org URL (`pac org who`).
-3. **Detect existing** — `pac model list-tables --search …` (exact-match) and `pac model list`
-   to find tables/apps already present; build *around* them.
+3. **Detect existing** — `scripts/list-tables.js --env <envUrl> --search … --exact` and
+   `scripts/apps.js list --env <envUrl>` (`<envUrl>` is the org URL from step 2) to find
+   tables/apps already present; build *around* them. `--exact` keeps only the tables whose
+   logical name is a search term and lists the terms with none in `missing`. A failed read
+   (exit 1) is reported and ends the step — never read it as "nothing exists".
 4. **Levelled authoring** — **first read the App Spec format** so you author to the exact
    shape (do this once; don't go spelunking through scripts):
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
@@ -265,7 +268,7 @@ unless destructive authority was supplied independently.
 
 After plan-mode approval (before the full build):
 
-1. **Data pre-build** — schema-only build so `generate-types` can resolve real column names:
+1. **Data pre-build** — schema-only build so `genpage.js types` can resolve real column names:
    ```bash
    node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
      --env <envUrl> --spec @<working-dir>/app-spec.json --stage data --apply
@@ -276,10 +279,12 @@ After plan-mode approval (before the full build):
 
 2. **Types** — generate Dataverse type bindings for the entities the pages read:
    ```bash
-   pac model genpage generate-types --data-sources "<entity1,entity2,…>" --output-file <working-dir>/RuntimeTypes.ts
+   node "${PLUGIN_ROOT}/scripts/genpage.js" types --env <envUrl> --data-sources "<entity1,entity2,…>" --output-file <working-dir>/RuntimeTypes.ts
    ```
    `--data-sources` is the union of every intent page's `dataSources`. Skip this step entirely when
-   every intent page is mock-only. On Windows use forward slashes in the path.
+   every intent page is mock-only. On Windows use forward slashes in the path. The script prints
+   `{ "ok": true, "outputFile", "dataSources", "detail", "bytes" }`; a failure (exit 1, `"ok": false`)
+   stops the step — report why, since the page workers must not guess column names.
 
 3. **Page plan (adapter)** — the page worker's input contract is a *plan document*, not an App Spec,
    so project the spec into one. This also echoes the per-page dispatch parameters:
@@ -429,9 +434,31 @@ The App Spec field `languageCode` pins the same value across runs. It now covers
 data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
 1033 take the authoring language as an option.
 
-Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout, a SQL
-deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
-retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
+**Verify with the same flag.** A build run with `--language-code <lcid>` writes a form's tab and section
+captions in that language, so run the standalone verifier with the **same** `--language-code <lcid>` (or pin
+`languageCode` in the spec): without it, `--verify` looks for the captions in the organization's base language and
+cannot confirm a correctly published form's captions (it lists them as unverified or reports them missing). The
+build's own `--verify` is told the language automatically. If verify cannot establish the language at all (the
+organization cannot be read), it lists those captions as **unverified** — neither passed nor failed — with the
+reason: re-run it with the flag.
+
+**A language the environment's form read does not show.** The platform decides which languages' labels the form's
+FormXML carries, and it can return fewer than the form stores: a form built with Spanish (`3082`) captions in an
+English-language organization reads back, with the Spanish captions stored, with its labels in English only. Verify
+never calls a caption missing in a language the read does not carry, as long as the read carries labels in other
+languages — it lists the labels compared in that language as
+**unverified** (neither passed nor failed; the run's result and exit status are unchanged), naming the languages the
+read does carry, and for a `{ "1033": …, "3082": … }` label map it compares the languages the read carries and lists
+the others. Say so, and ask the user to check those captions in Power Apps with that language; do not rebuild to
+"fix" them. A language the read does carry is still compared strictly: a stale caption in it fails. A form whose read
+carries no label at all is not such a case: the captions the spec declares for it are missing, and fail.
+
+Narrate progress as it runs. Transient env errors (a 429 or 503, a customization lock, a concurrent-operation
+guard or a SQL timeout the service names by its error code, a timeout or reset of the connection) are
+**auto-retried** with backoff on `--apply` (the build is idempotent, so a retry reuses what's already created).
+A throttled service is waited for as long as it asks (`Retry-After`) — by the page writes and by the build's own re-runs of a phase — inside one budget of five minutes per run for the waiting
+the build itself adds: when the next wait does not fit, the build stops with a `throttle-budget-exhausted`
+halt that says what the service asked — run it again later and it continues. (The HTTP client's own re-sends of a throttled read or publish keep their own, shorter schedule and are not counted in it.) If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
 gates the final *bulk* publish**, which also carries the edits made to existing views and forms.
@@ -462,9 +489,28 @@ hold page-ownership receipts and the baseline) and run again. The same environme
 (`<org>.api.crm…` against `<org>.crm…`) also halts: re-run with the host the halt names. The standalone verifier
 never opens that workspace either, so it verifies any environment the app is deployed to.
 
-With `--publish`, the edits a build makes to existing views and forms go live in one publish of their tables, made
-before the build publishes the app, and the final publish covers them again.
-A build that **halts with an error** publishes what it had already saved before it stops (best effort).
+With `--publish`, the tables the build changed, and the tables whose forms or charts the app holds or is about to hold, are published in one
+request before the build writes or publishes the app: the tables whose existing views and forms the build edited, the tables of the
+charts it wrote, the navigation's tables whenever the build pushes the app (the SDK adds their active Main forms to it on every push the build
+makes, so a form that is live with a label saved and not published would otherwise be pinned and published with the app before its table was:
+the first build and the build that pins a form are covered the same way; a changed-only re-upload of a page that has to pin a default view
+the app lost pushes and publishes the app through the page backend, whose push adds the view it pins and no form, so it names no table of
+the navigation), and — for an app that already exists — the tables of the form and
+chart components its saved component list names, whether or not the spec names the table (a form a maker added to it, say, one never
+published included). A label someone saved and did not publish on a form of one of them would otherwise stay unpublished once the app
+is published. A table the app is not known to hold a form or chart of is not published by it, so what a maker left unfinished there
+stays unfinished: a table only declared in `entities` (the target of a lookup column, say), one that only a page reads, or one that
+only `app.tables` pins. If the app's components cannot be read completely, or a read of them is ambiguous (a row of the component
+list that cannot be placed included), the build publishes only the tables it changed and the navigation's, and says which read failed; run it again once the cause is cleared. That is one more
+publish for a build that edits no existing view or form (a first build included); the final publish covers the tables the build has
+artifacts of.
+If that request is refused the build goes on, and says so: it names what it saved on those tables, the forms the app holds
+there, or its write adds, whose labels someone else may have saved, and what the app's publish may leave out as a result.
+A build that **halts with an error** publishes the views and forms it had deferred (best effort), then — when it stopped
+before the publish phase — lists the forms, views and charts of the spec's tables (the tables its pages read included) that
+are still saved but not published, what it created and anything anyone saved there, or says it could not read them and names
+the tables to publish. Columns and other kinds of change are not in that list. A halt after the publish phase says nothing of
+the kind.
 One that is **killed** — Ctrl-C, a crash, a closed terminal — after those edits are saved but before
 that publish cannot, so they stay saved but not live until the next build. Run the same full build
 again: it publishes them without writing them again.
@@ -477,8 +523,14 @@ Maker change, without rebuilding — run the standalone read-only verifier (enti
 forms and sitemap subareas + icons; exits non-zero and lists anything missing):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
+node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json [--language-code <lcid>]
 ```
+
+Pass `--language-code` only if the build was run with it. A line starting `⊘` under the verdict is a check verify
+could **not decide** (it is in the JSON result's `unverified` list): it is neither a pass nor a failure, so say what it
+was and what settles it — the language of the captions, which `--language-code` gives, or a language the environment's
+form read does not carry, whose captions only Power Apps can show — never report the run as "everything deployed" while
+one is listed.
 
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
@@ -500,8 +552,10 @@ choices** — a download sets it on every one it recovers, so tearing down a dow
 a lookup column from a retained table or deletes a shared option set. Dashboards are found by name, so
 teardown deletes only those the app's solution holds, never another app's namesake — and none when the spec
 has no real solution to ask (the `Default` a download may leave); it keeps the solution itself while any step
-failed, so a re-run can still tell, and keeps the page manifest while the generative-pages step failed, so a
-re-run still finds the pages the app authored. **Dry-run by default**; add `--apply
+failed, so a re-run can still tell, keeps the page manifest while the generative-pages step failed, so a
+re-run still finds the pages the app authored, and keeps a table while a business rule on it could not be
+deleted (the rule's activated copy can never be deleted once its table is gone), so a re-run deletes the rule
+first, then the table. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.
@@ -533,7 +587,11 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
   - `pages-removed` — a live page was dropped from the spec. Re-add it, or pass `--allow-destructive`
     to detach it from the nav (the page record stays deployed; rebuild finalizes the sitemap).
   - `pages-shared-across-apps` — the page appears in another app's sitemap, published or only saved (not yet
-    published — an app that was never published counts). Detach it in Maker. `--allow-destructive` does **not** bypass this halt.
+    published — an app that was never published counts). Detach it from that app — ask the user first, since this
+    changes another app. The halt names the app and prints the command with the app's `id` filled in (`<id of app …>` stands where the id could not be read, and
+    `scripts/apps.js list --env <envUrl> --search <name>` gives it); `node "${PLUGIN_ROOT}/scripts/genpage.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>`
+    takes the page out of that app's navigation and publishes that app (everything it has saved goes live with
+    it; the page itself stays). Or detach it in Maker. `--allow-destructive` does **not** bypass this halt.
     The build checks again right before it updates pages in place, so a page another app takes in while the build runs halts it
     there too ("became shared across apps while this build ran"); one taken in while the pages upload is reported after them as a
     warning naming the app, since it is written by then.
@@ -612,8 +670,8 @@ matches more than one app is refused, listing the candidate unique names rather 
 
 This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
 not everything:**
-- **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (via
-  `pac model genpage download`; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
+- **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (read
+  through the SDK; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
   are included, and each keeps its own name and model) into `pages[]` + their `.tsx`, the referenced
   entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
   carrying the deployed view/chart ids), the icon web resources, and the solution.
@@ -625,7 +683,15 @@ Then:
 
 1. **Always pull fresh at the start of an edit session** — someone may have changed the app in Maker. The
    build reads an etag when it hydrates, so a write against an artifact changed since the pull throws a
-   version conflict → **re-pull and retry**, never clobber.
+   version conflict → **re-pull and retry**, never clobber. Pull into the **same `<working-dir>`** every time:
+   a page keeps the `key` its earlier download gave it (read from the `app-spec.json` already there, when that
+   file names this app in `app.uniqueName`; matched by the page's id), and a copy of the spec deployed to
+   another environment is bound to the pages it built there by those keys — a key that changed would update a
+   different page. A new folder mints keys again. If the pull answers `"code": "page-keys-ambiguous"`, the
+   earlier `app-spec.json` gives one key to two pages (or one page two keys) and **nothing was written**: show
+   the user the message, which names the pages and keys, and either correct the file and pull again or —
+   only when the user says so, because fresh keys can make a copy deployed elsewhere update the wrong
+   pages — pull again with `--reset-page-keys`, which re-keys exactly those pages.
 2. Edit `app-spec.json` (and any page `.tsx`) for the requested change. A page you edit by hand is
    checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx>`
    on it before you rebuild (the rule and the ten shorthands are in Phase 1.5, step 5) and fix what it
@@ -672,7 +738,7 @@ authored stages and activated — this goes through the SDK's generic artifact s
 `workflows` row, so it is NOT subject to the bound-member gate above) →
 **command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
-the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
+the build writes each `pages[]` page through the SDK, without placing it; then
 the SDK rewrites the sitemap once to add the `GenPage` subareas) → **AI features** (opt-in) →
 **security** (one role per `personas[]` entry, sized from its jobs' declared access; injects an
 app-module read privilege and associates the app to each role so it opens for that persona) →
@@ -690,9 +756,20 @@ child view id. Each step emits `[n/total]`.
   the Web API using an `az`-token HttpClient. No relay, no designer tab.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
   *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
-  app). With `--publish` that one publish also carries the default-view enrichment, and the tables touched
-  by the reconcile of an existing form or view, form events and quick-view placement are published
-  together once more, before the app is, so none of them publishes on its own. It
+  app). With `--publish` that one publish also carries the default-view enrichment, and the tables the build
+  changed, with the tables whose forms or charts the app holds or is about to hold, are published together once
+  more, in one request before the app is: the tables touched by the reconcile of an existing form or view, form
+  events and quick-view placement, so none of them publishes on its own, the tables of the charts the build wrote
+  (a chart's description is saved on the unpublished layer), the navigation's tables whenever the build pushes the
+  app (the SDK adds their active Main forms to it, and a form that is live with a label saved and not published
+  would otherwise be pinned and published with the app before its table was; a table whose `app.mainForms` list
+  keeps no form adds none; a changed-only re-upload of a page that has to pin a default view the app lost is
+  covered too — its push adds the view and no form, so what it publishes ahead of the app is the tables of the forms and charts the app holds — and one that has nothing to pin publishes nothing), and — for an app that already exists — the tables of the form and chart components
+  its saved component list names, a form a maker added to it and never published included, so a label saved and
+  not published there is not held back by the app's publish. A table the app is not known to hold a form or chart
+  of is not named (declared only, a lookup column's target, read only by a page, or only pinned in `app.tables`):
+  a table's publish ships everything saved on it, whoever saved it. If the app's components cannot be read
+  completely the build publishes only what it changed and what its write adds, and says which read failed. It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
   takes effect: without `--publish`, reconciling an existing form or view, wiring form events and
   placing quick-views each publish that one artifact, and with or without it, re-syncing an existing
@@ -708,7 +785,16 @@ child view id. Each step emits `[n/total]`.
   pruned — see `prune: false` below), column counts and spans. A **view** only *adds* columns: a
   column removed from the spec, or a new column order, does **not** apply, and neither do its filters
   or sort. A changed column type, and an edited command or dashboard, are not re-applied at all; an
-  existing chart takes only a changed description.
+  existing chart takes only a changed description, an existing app takes a changed name and description
+  (an app that was never published keeps its text and the build warns it was not applied, and so does one whose name or
+  description is localized — the SDK writes the two together, so while either is localized the header is not edited at
+  all, a routing description included, and if the SDK's own read of the header fails while one is, the build stops with
+  `APP_HEADER_NOT_PLAIN_TEXT` before anything is sent or written: re-run it; the icon is set when the app is created: a
+  different `app.icon` is reported as not applied), and an existing
+  business process flow takes the stage and step edits that cannot move a record — a stage added or renamed,
+  a step added, renamed, rebound or moved — and refuses, saying why, one that would remove a stage or a step
+  or reorder the stages (no stage or step edit is then applied; the requested Active/Draft state is handled
+  independently).
   **To apply one of those edits, change it in Maker, or `teardown --apply` then rebuild fresh.**
   `--verify` catches what is **missing** — a spec view column, filter condition or sort key (authored
   sort keys must also keep their order), a relationship, command or dashboard — as a loud
@@ -751,8 +837,8 @@ child view id. Each step emits `[n/total]`.
   object model and activated; see the environment gate above); **security roles** (`personas[]` — one role per
   persona sized from its jobs-to-be-done, with app access so the app opens for non-admins);
   **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
-  placement**; **generative pages** (`pages[]` — the genpage-first default, uploaded via
-  `pac model genpage upload` and surfaced as `GenPage` sitemap subareas; full **create + edit**
+  placement**; **generative pages** (`pages[]` — the genpage-first default, written through the SDK
+  and surfaced as `GenPage` sitemap subareas; full **create + edit**
   round-trip via `download-model-app.js`); **modern command-bar buttons** (`commands[]`) incl.
   **flyout / split-button menus**; **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`);
   **custom grid rendering** (`entities[].columns[].visualization` — radial dial / line chart /

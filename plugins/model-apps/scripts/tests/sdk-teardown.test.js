@@ -385,7 +385,7 @@ test('planTeardown SKIPS an external:true web resource (a re-declared shared/ref
   assert.ok(!wrNames.includes('new_navicon.svg'), 'an external:true web resource is NOT deleted (fail-safe against a shared resource)');
 });
 
-test('planTeardown does NOT schedule the derived generated-app-icon delete when its name collides with an external declared WR (Sol: derived cleanup must honor the external skip)', () => {
+test('planTeardown does NOT schedule the derived generated-app-icon delete when its name collides with an external declared WR (derived cleanup must honor the external skip)', () => {
   const spec = {
     solution: { uniqueName: 'IconSln4', publisherPrefix: 'new' },
     app: { name: 'IconApp4' }, // no app.icon → the generated-icon branch runs
@@ -1320,6 +1320,355 @@ test('business-rule teardown reports a failure when the activated copy still can
   assert.ok(res.errors.some((e) => /business rule "Gate"/.test(e.step) && /not supported/.test(e.message)), 'the failure names the business-rule step and platform reason');
 });
 
+// --- a business rule that could not be deleted keeps its table ------------------------------------
+//
+// LIVE-MEASURED: a rule definition's delete answered HTTP 500 "There is no active transaction.". Teardown
+// recorded the failure and went on — it dropped the rule's table and everything else, and kept only the
+// solution. The rule's activated copy (type 2) was then undeletable for good: once its table is gone the
+// platform cannot resolve the entity the copy points at (400 0x80041102 "... ObjectTypeCode = N was not found
+// in the MetadataCache"), and the re-run reported success because that answer reads as "not found". So a
+// table whose rule step failed is KEPT, and the re-run deletes the rule first, then the table.
+//
+// The environment below is ONE state, so the assertions can be about what is LEFT when the run ends (no
+// activated copy without its table), not only about which calls were made. It models just the platform facts
+// the business-rule handler's own comments cite:
+//   * the activated copy cannot be deleted while its definition exists (405, workflow_active_workflow);
+//   * deleting the definition leaves the copy behind, unreferenced;
+//   * a copy whose table is gone can never be deleted (400 0x80041102) — it is "stranded".
+// `failNextDelete` lists the workflow ids whose next delete answers 500 and leaves the row as it was (a 500 does
+// not prove the delete did not run; the engine must not depend on which, which is why it never sends one twice);
+// `failQueryFor` lists the rule names whose rows cannot even be read.
+function ruleEnvironment({ rules, failNextDelete = [], failQueryFor = [], ...state }) {
+  const sdk = mockSdk({ solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } }, ...state });
+  const rows = new Map(rules.map((r) => [r.workflowid, { category: 2, ...r }]));
+  const failing = new Set(failNextDelete);
+  const httpError = (statusCode, message) => Object.assign(new Error(`HTTP ${statusCode}: ${message}`), { statusCode });
+  const readOtherTables = sdk.queryRecords;
+  sdk.queryRecords = async (entitySet, opts = {}) => {
+    if (entitySet !== 'workflow') return readOtherTables(entitySet, opts);
+    const filter = String(opts.filter || '');
+    sdk.calls.push({ method: 'queryRecords', entitySet, filter });
+    if (failQueryFor.some((name) => filter.includes(`name eq '${name}'`))) throw httpError(500, 'There is no active transaction.');
+    return [...rows.values()]
+      .filter((r) => filter.includes(`category eq ${r.category} `) && filter.includes(`type eq ${r.type}`)
+        && filter.includes(`name eq '${r.name}'`) && filter.includes(`primaryentity eq '${r.primaryentity}'`))
+      .map((r) => ({ ...r }));
+  };
+  sdk.updateRecord = async (entitySet, id, data) => {
+    sdk.calls.push({ method: 'updateRecord', entitySet, id, data });
+    const row = rows.get(String(id));
+    if (!row) throw httpError(404, `workflow ${id} not found`);
+    Object.assign(row, data);
+    // Deactivating a definition flips its activated copy to Draft with it (live-measured).
+    for (const copy of rows.values()) if (copy._parentworkflowid_value === row.workflowid) Object.assign(copy, data);
+  };
+  sdk.deleteRecord = async (entitySet, id) => {
+    sdk.calls.push({ method: 'deleteRecord', entitySet, id });
+    const row = rows.get(String(id));
+    if (failing.delete(String(id))) throw httpError(500, 'There is no active transaction.');
+    if (!row) throw httpError(404, `workflow ${id} not found`);
+    if (row.type === 2 && !sdk.db.tables.has(row.primaryentity)) {
+      throw httpError(400, '0x80041102 The entity with ObjectTypeCode = 10001 was not found in the MetadataCache.');
+    }
+    if (row.type === 2 && rows.has(row._parentworkflowid_value)) {
+      throw httpError(405, 'Cascade Delete failed due to cascade restrict relation. Restricting entity Workflow is collected by Relationship with name: workflow_active_workflow.');
+    }
+    rows.delete(String(id));
+  };
+  sdk.workflowIds = () => [...rows.keys()];
+  // An activated copy whose table is gone: undeletable, so it is what a teardown must never leave behind.
+  sdk.stranded = () => [...rows.values()].filter((r) => r.type === 2 && !sdk.db.tables.has(r.primaryentity)).map((r) => r.workflowid);
+  return sdk;
+}
+
+const ruleRows = (name, entity, id) => [
+  { workflowid: `${id}-def`, name, primaryentity: entity, type: 1, statecode: 1 },
+  { workflowid: `${id}-copy`, name, primaryentity: entity, type: 2, statecode: 1, _parentworkflowid_value: `${id}-def` },
+];
+const ruleSpec = (over = {}) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [
+    { schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } },
+    { schemaName: 'new_customer', primaryAttribute: { schemaName: 'new_name' } },
+  ],
+  views: [{ entity: 'new_ticket', name: 'Open tickets' }],
+  webResources: [{ name: 'new_ticket.js', type: 'js', content: '' }],
+  businessRules: [{ entity: 'new_ticket', name: 'Gate' }, { entity: 'new_customer', name: 'Lock' }],
+  ...over,
+});
+const ruleWorld = (over = {}) => ruleEnvironment({
+  tables: ['new_ticket', 'new_customer'],
+  views: { 'new_ticket:Open tickets': { savedqueryid: 'view-1', name: 'Open tickets' } },
+  webresources: { 'new_ticket.js': { webresourceid: 'wr-1', name: 'new_ticket.js' } },
+  rules: [...ruleRows('Gate', 'new_ticket', 'gate'), ...ruleRows('Lock', 'new_customer', 'lock')],
+  ...over,
+});
+const keptTableLabel = (table, ruleNames) => `table ${table} (kept — business rule(s) on it could not be deleted (${ruleNames.map((n) => JSON.stringify(n)).join(', ')}), and once the table is gone a rule's activated copy can never be deleted; a re-run deletes the rule(s) first, then the table)`;
+// Every SDK call of a run as one line each, in order — the request sequence the assertions compare.
+const ruleRequests = (sdk, from = 0) => sdk.calls.slice(from).map((c) => [c.method, c.entitySet, c.kind, c.type, c.query, c.logical, c.id, c.data && JSON.stringify(c.data)].filter(Boolean).join(' '));
+const ruleWrites = (sdk, from = 0) => ruleRequests(sdk, from).filter((line) => /^(updateRecord|deleteRecord|deleteTable|deleteSolution|deleteRemoteArtifact|deleteWebResource) /.test(line));
+
+test('a business rule whose definition cannot be deleted keeps ITS table (and the solution); everything else is deleted as before', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
+  const events = [];
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: (e) => events.push(e) });
+
+  // The failure is reported as it always was: one failed step, named, with the platform's own words.
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  assert.match(res.errors[0].message, /There is no active transaction/);
+
+  // The table is kept, on purpose and said so — as a skip the summary counts as "kept", not as "not found".
+  const label = keptTableLabel('new_ticket', ['Gate']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [label]);
+  assert.ok(events.some((e) => e.phase === 'tables' && e.status === 'skip' && e.skip === 'kept' && e.label === label), JSON.stringify(events.filter((e) => e.phase === 'tables')));
+  assert.ok(!events.some((e) => e.status === 'ok' && /^table new_ticket/.test(e.label)), 'the kept table is never reported as deleted');
+  assert.deepStrictEqual(res.deleted.table, ['new_customer']);
+
+  // What the environment holds afterwards: the rule and its table, together, so a re-run can still finish.
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket'], 'the other table goes as before; this one stays');
+  assert.deepStrictEqual(sdk.workflowIds(), ['gate-def', 'gate-copy'], 'the failed delete changed nothing, and the other rule is gone');
+  assert.deepStrictEqual(sdk.stranded(), [], 'no activated copy outlives its table');
+  assert.deepStrictEqual(Object.keys(sdk.db.views), [], 'the table\'s view is deleted as before');
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), [], 'the web resource is deleted as before');
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S'], 'the solution is kept, as for any earlier failure');
+  assert.ok(res.skipped.some((s) => /^solution S \(kept — 1 earlier step\(s\) failed/.test(s)), JSON.stringify(res.skipped));
+
+  // The failed delete was sent ONCE. A 500 does not prove it did not run, and nothing here re-sends it.
+  assert.strictEqual(sdk.calls.filter((c) => c.method === 'deleteRecord' && c.id === 'gate-def').length, 1);
+  assert.deepStrictEqual(ruleRequests(sdk), [
+    'queryRecords workflow',
+    'updateRecord workflow gate-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow gate-def',
+    'queryRecords workflow',
+    'updateRecord workflow lock-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow lock-def',
+    'deleteRecord workflow lock-copy',
+    'resolveArtifact view',
+    'deleteRemoteArtifact view view-1',
+    'findTables new_customer',
+    'deleteTable new_customer',
+    'findTables new_ticket',
+    'resolveArtifact webResource',
+    'deleteWebResource wr-1',
+  ]);
+});
+
+test('the re-run after a failed rule delete removes the definition, then the copy, then the table, then the solution', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
+  const failed = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(failed.ok, false);
+
+  const from = sdk.calls.length;
+  const again = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(again.ok, true, JSON.stringify(again.errors));
+  assert.deepStrictEqual(again.skipped.filter((s) => /kept/.test(s)), [], 'nothing is kept once the rule is deletable');
+  assert.deepStrictEqual(ruleWrites(sdk, from), [
+    'deleteRecord workflow gate-def',
+    'deleteRecord workflow gate-copy',
+    'deleteTable new_customer', // gone already: the table delete's tolerated not-found
+    'deleteTable new_ticket',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), []);
+});
+
+test('an activated copy that cannot be deleted (its definition already is) keeps the table too, and the re-run finishes the copy', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-copy'] });
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_ticket', ['Gate'])]);
+  assert.deepStrictEqual(sdk.workflowIds(), ['gate-copy'], 'the definition went; the copy is what is left');
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S']);
+
+  const from = sdk.calls.length;
+  const again = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(again.ok, true, JSON.stringify(again.errors));
+  assert.deepStrictEqual(ruleWrites(sdk, from), [
+    'deleteRecord workflow gate-copy',
+    'deleteTable new_customer',
+    'deleteTable new_ticket',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+});
+
+test('a failed business rule keeps only ITS OWN table — a rule on another table does not hold this one', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['lock-def'] });
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Lock" (new_customer)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_customer', ['Lock'])]);
+  assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+  assert.deepStrictEqual([...sdk.db.tables], ['new_customer']);
+  assert.deepStrictEqual(sdk.workflowIds(), ['lock-def', 'lock-copy'], 'the other table\'s rule was deleted whole');
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('the kept label names every rule that failed on the table, and only those', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: [...ruleRows('Gate', 'new_ticket', 'gate'), ...ruleRows('Notify', 'new_ticket', 'notify'), ...ruleRows('Audit', 'new_ticket', 'audit')],
+    failNextDelete: ['gate-def', 'notify-copy'],
+  });
+  const spec = ruleSpec({
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    views: [],
+    webResources: [],
+    businessRules: ['Gate', 'Notify', 'Audit'].map((name) => ({ entity: 'new_ticket', name })),
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)', 'business rule "Notify" (new_ticket)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_ticket', ['Gate', 'Notify'])]);
+  assert.deepStrictEqual(sdk.workflowIds().sort(), ['gate-copy', 'gate-def', 'notify-copy'], 'the rule that went cleanly is gone');
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('the table is matched to its failed rule by logical name, in any letter case', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: ruleRows('Gate', 'new_ticket', 'gate'),
+    failNextDelete: ['gate-def'],
+  });
+  const spec = ruleSpec({
+    entities: [{ schemaName: 'new_TICKET', primaryAttribute: { schemaName: 'new_name' } }],
+    views: [],
+    webResources: [],
+    businessRules: [{ entity: 'New_Ticket', name: 'Gate' }],
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_TICKET', ['Gate'])]);
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('a rule whose rows cannot even be read keeps its table too (whether it has an activated copy is not known)', async () => {
+  const sdk = ruleWorld({ failQueryFor: ['Gate'] });
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  assert.match(res.errors[0].message, /There is no active transaction/);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [keptTableLabel('new_ticket', ['Gate'])]);
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('a reused or system table keeps its OWN skip reason when a rule on it failed — it was never going to be deleted', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_shared'],
+    systemTables: ['account'],
+    rules: [...ruleRows('Gate', 'new_shared', 'gate'), ...ruleRows('Lock', 'account', 'lock')],
+    failNextDelete: ['gate-def', 'lock-def'],
+  });
+  const spec = ruleSpec({
+    entities: [
+      { schemaName: 'new_shared', existing: true, primaryAttribute: { schemaName: 'new_name' } },
+      { schemaName: 'account', primaryAttribute: { schemaName: 'name' } },
+    ],
+    views: [],
+    webResources: [],
+    businessRules: [{ entity: 'new_shared', name: 'Gate' }, { entity: 'account', name: 'Lock' }],
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_shared)', 'business rule "Lock" (account)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), [
+    'table account (system table — not created by this build)',
+    'table new_shared (reused table (existing: true) — not created by this build)',
+  ]);
+  assert.ok(!sdk.calls.some((c) => c.method === 'deleteTable'), 'neither table is deleted, with or without the failed rule');
+});
+
+// The control for all of the above: with no failed rule the request sequence is exactly what it was before
+// the keep existed — every read and write, in order.
+test('with no failed rule the whole run is unchanged: the same requests in the same order, nothing kept', async () => {
+  const sdk = ruleWorld();
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.deepStrictEqual(res.skipped, []);
+  assert.deepStrictEqual(res.deleted.table, ['new_customer', 'new_ticket']);
+  assert.deepStrictEqual(ruleRequests(sdk), [
+    'queryRecords workflow',
+    'updateRecord workflow gate-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow gate-def',
+    'deleteRecord workflow gate-copy',
+    'queryRecords workflow',
+    'updateRecord workflow lock-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow lock-def',
+    'deleteRecord workflow lock-copy',
+    'resolveArtifact view',
+    'deleteRemoteArtifact view view-1',
+    'findTables new_customer',
+    'deleteTable new_customer',
+    'findTables new_ticket',
+    'deleteTable new_ticket',
+    'resolveArtifact webResource',
+    'deleteWebResource wr-1',
+    'resolveArtifact solution',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual(sdk.stranded(), []);
+});
+
+test('a failure in a step that is NOT a business rule keeps no table — only the solution, as before', async () => {
+  const sdk = ruleWorld();
+  sdk.deleteRemoteArtifact = async () => { throw new Error('HTTP 500 view delete failed'); };
+  const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['view "Open tickets" (new_ticket)']);
+  assert.deepStrictEqual([...sdk.db.tables], [], 'the rules went cleanly, so nothing needs a table kept');
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S']);
+  assert.ok(res.skipped.some((s) => /^solution S \(kept — 1 earlier step\(s\) failed/.test(s)), JSON.stringify(res.skipped));
+});
+
+// The keep is scoped to business rules, deliberately. A business process flow is a `workflow` row too, but its
+// handler's own notes say the platform removes the flow's activated copy WITH the flow, and nothing measured
+// says a flow becomes undeletable when its table is dropped — so a failed flow delete behaves as it always did.
+test('a failed business PROCESS FLOW keeps no table — the keep is scoped to business rules', async () => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: [{ workflowid: 'flow-def', name: 'Flow', primaryentity: 'new_ticket', category: 4, type: 1, statecode: 0 }],
+    failNextDelete: ['flow-def'],
+  });
+  const spec = ruleSpec({
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    views: [],
+    webResources: [],
+    businessRules: [],
+    businessProcessFlows: [{ entity: 'new_ticket', name: 'Flow' }],
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business process flow "Flow" (new_ticket)']);
+  assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), []);
+  assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+});
+
+test('a dry run is unchanged: the same plan, nothing read or written, nothing kept', async () => {
+  const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
+  const res = await runTeardown(ruleSpec(), { apply: false }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res, {
+    ok: true,
+    dryRun: true,
+    plan: [
+      'business rule "Gate" (new_ticket)',
+      'business rule "Lock" (new_customer)',
+      'view "Open tickets" (new_ticket)',
+      'table new_customer',
+      'table new_ticket',
+      'web resource new_ticket.js',
+      'solution S',
+    ],
+  });
+  assert.deepStrictEqual(sdk.calls, []);
+});
+
 // --- helpers ----------------------------------------------------------------------------
 
 test('odataStr doubles single quotes (OData literal escaping)', () => {
@@ -1327,7 +1676,7 @@ test('odataStr doubles single quotes (OData literal escaping)', () => {
   assert.strictEqual(odataStr(null), '');
 });
 
-test('the page manifest web resource is ALWAYS torn down (even when the spec no longer declares pages, I5)', () => {
+test('the page manifest web resource is ALWAYS torn down (even when the spec no longer declares pages)', () => {
   const base = { solution: { uniqueName: 'PgSln', publisherPrefix: 'new' }, app: { name: 'Pages App' },
     entities: [{ schemaName: 'new_widget', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
     appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_widget' }] }] }] } };
@@ -1348,7 +1697,7 @@ test('deleteStep tolerates a not-found error for non-tolerateNotFound kinds', as
   assert.deepStrictEqual(deletedIds, ['wr-1']);
 });
 
-// --- Task 22: aiSummary teardown --------------------------------------------------------
+// --- aiSummary teardown --------------------------------------------------------
 
 test('teardown plans an ai-summaries step (before tables) for each candidate and calls removeRowSummary', async () => {
   // Spec with one content entity (has a Memo col) + spec.ai.summaries = { default:'auto' }
@@ -1474,7 +1823,7 @@ test('teardown still deletes a real (non-restricted) solution — regression', a
   assert.ok(res.deleted.solution && res.deleted.solution.includes('sol-real'));
 });
 
-// --- Security persona roles (Group N P1) ---------------------------------------------------
+// --- Security persona roles ---------------------------------------------------
 
 test('planTeardown orders persona roles AFTER forms and before the data model', () => {
   const spec = Object.assign(fullSpec(), { personas: [
@@ -1590,10 +1939,10 @@ test('planTeardown trims the persona name in the role step (matches the SDK-crea
 // ---------------------------------------------------------------------------------------------
 
 // A minimal SDK stand-in for the genpage handler: the page manifest (in a web resource) that says
-// which pages this build authored, and the live `uxagentproject` rows used to skip ones already
-// gone. The `uxagentprojectfile` branch exists ONLY so tests can prove the handler never touches
-// it — deleting the project cascades to its files, and deleting them ourselves would gut a page
-// the platform is about to refuse to delete.
+// which pages this build authored, and the live pages (their rows in the SAVED layer, which is what
+// teardown reads) used to skip ones already gone. The `uxagentprojectfile` branch exists ONLY so tests
+// can prove the handler never touches it — deleting the project cascades to its files, and deleting
+// them ourselves would gut a page the platform is about to refuse to delete.
 function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
   const deleted = [];
   const queried = [];
@@ -1605,17 +1954,23 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
       if (entity === 'webresource') {
         return [{ content: Buffer.from(manifestJson, 'utf8').toString('base64') }];
       }
-      if (entity === 'uxagentproject') {
-        return livePages.filter((id) => filter.toLowerCase().includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id, name: id === PAGE_1 ? 'Overview' : 'Contoso Other' }));
-      }
       if (entity === 'uxagentprojectfile') {
         const owner = (/_uxagentprojectid_value eq ([0-9a-f-]+)/i.exec(filter) || [])[1] || '';
         return (files[owner.toLowerCase()] || []).map((id) => ({ uxagentprojectfileid: id }));
       }
       return [];
     },
-    async deleteRecord(entity, id) {
-      deleted.push(`${entity}:${id}`);
+    // The saved layer of the page table: { value: [{ uxagentprojectid, name, componentstate }] }. Any other read is refused, as it is when no Dataverse client is there.
+    dataverse: {
+      async get(url) {
+        if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
+        queried.push('uxagentproject (saved layer)');
+        const asked = (url.match(/uxagentprojectid eq [0-9a-f-]{36}/gi) || []).map((clause) => clause.slice('uxagentprojectid eq '.length).toLowerCase());
+        return { status: 200, body: { value: livePages.filter((id) => asked.includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id, name: id === PAGE_1 ? 'Overview' : 'Contoso Other', componentstate: 0 })) } };
+      },
+    },
+    async deleteRemoteArtifact(type, id) {
+      deleted.push(`${type}:${id}`);
     },
   };
   return { sdk, deleted, queried };
@@ -1636,11 +1991,31 @@ test('genpage resolve keeps a matching-name manifest candidate without navigatio
 // Deleting the project cascades to its files (the uxagentproject -> uxagentprojectfile
 // relationship is CascadeConfiguration Delete=Cascade), so ONE delete is both necessary and
 // sufficient. Deleting files ourselves first would be destructive — see the skip test below.
-test('genpage del deletes ONLY the project row and never touches its files', async () => {
+// The delete is the SDK's own (`deleteRemoteArtifact('genPage')`): it removes the project row and then the conversation
+// messages that point at the page, which a raw row delete left behind.
+test('genpage del goes through the SDK\'s own page delete and never touches the page\'s files itself', async () => {
   const { sdk, deleted, queried } = genpageSdk({ files: { [PAGE_1.toLowerCase()]: ['f1', 'f2'] } });
   await KIND_HANDLERS.genpage.del(sdk, { id: PAGE_1, name: 'Overview' });
-  assert.deepStrictEqual(deleted, [`uxagentproject:${PAGE_1}`]);
+  assert.deepStrictEqual(deleted, [`genPage:${PAGE_1}`]);
   assert.ok(!queried.includes('uxagentprojectfile'), 'must not enumerate the page files');
+});
+
+// The SDK deletes the page FIRST and its conversation history after it. When only the history could not be fully removed, the page is
+// gone and nothing points at those rows any more — a re-run finds no page and cannot retry them — so it is a warning that names them,
+// not a failed step (which would keep the manifest and the solution for a re-run with nothing left to do).
+test('genpage del: a page deleted whose conversation history was not fully removed is a WARNING, and the page counts as deleted', async () => {
+  const history = Object.assign(new Error(`Generative page '${PAGE_1}' was deleted, but its conversation history was not fully removed — 1 of 2 message(s) could not be (m1)`), { code: 'GENPAGE_HISTORY_NOT_DELETED' });
+  const sdk = { async deleteRemoteArtifact() { throw history; } };
+  const ctx = { warnings: [], warn: (m) => ctx.heard.push(m), heard: [] };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }], ctx);
+  assert.deepStrictEqual(r.deletedIds, [PAGE_1], 'the page is gone');
+  assert.deepStrictEqual(r.skippedIds, []);
+  assert.strictEqual(ctx.warnings.length, 1);
+  assert.match(ctx.warnings[0], new RegExp(`page ${PAGE_1} was deleted, but its conversation history was not fully removed: .*m1`));
+  assert.deepStrictEqual(ctx.heard, ctx.warnings, 'and the caller hears it');
+  // Any other failure of the delete is still a failure.
+  const refused = { async deleteRemoteArtifact() { throw Object.assign(new Error('HTTP 500'), { code: 'CONNECTION_ERROR', statusCode: 500 }); } };
+  await assert.rejects(() => deleteStep(refused, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }], ctx), /HTTP 500/);
 });
 
 // Dataverse is the authority on whether a page is still in use: saving an app that surfaces a page
@@ -1652,7 +2027,7 @@ test('genpage records a still-referenced page as SKIPPED, not a failure', async 
   const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
   const sdk = {
     async queryRecords() { return []; },
-    async deleteRecord() { throw err; },
+    async deleteRemoteArtifact() { throw err; },
   };
   const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
   assert.deepStrictEqual(r.deletedIds, []);
@@ -1666,7 +2041,7 @@ test('a dependency block reports as "still referenced", never "undeletable"', as
   const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
   const sdk = {
     async queryRecords() { return []; },
-    async deleteRecord() { throw err; },
+    async deleteRemoteArtifact() { throw err; },
   };
   const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
   assert.deepStrictEqual(r.skipped, [{ id: PAGE_1, reason: 'referenced' }]);
@@ -1701,9 +2076,9 @@ test('a still-referenced page is SKIPPED with its files left completely intact',
         ? [{ uxagentprojectfileid: 'f1' }, { uxagentprojectfileid: 'f2' }]
         : [];
     },
-    async deleteRecord(entity, id) {
-      deleted.push(`${entity}:${id}`);
-      if (entity === 'uxagentproject') throw err;
+    async deleteRemoteArtifact(type, id) {
+      deleted.push(`${type}:${id}`);
+      if (type === 'genPage') throw err;
     },
   };
   const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
@@ -1711,7 +2086,7 @@ test('a still-referenced page is SKIPPED with its files left completely intact',
   assert.deepStrictEqual(r.deletedIds, []);
   assert.deepStrictEqual(
     deleted,
-    [`uxagentproject:${PAGE_1}`],
+    [`genPage:${PAGE_1}`],
     'the page delete must be the ONLY write attempted — its files must survive the skip'
   );
 });
@@ -1731,7 +2106,8 @@ test('genpage deletes nothing when the live-existence query fails, and FAILS the
       if (entity === 'webresource') return [{ content: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }] }), 'utf8').toString('base64') }];
       throw new Error('uxagentproject query failed');
     },
-    async deleteRecord() { throw new Error('nothing may be deleted'); },
+    dataverse: { async get() { throw new Error('uxagentproject query failed'); } },
+    async deleteRemoteArtifact() { throw new Error('nothing may be deleted'); },
   };
   // Not an empty resolution: "none of them" would let the same run delete the manifest naming them.
   await assert.rejects(() => KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' }), (err) => {
@@ -1800,17 +2176,21 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
         if (manifestRead) manifestRead();
         return state.resources.has(manifestName.toLowerCase()) ? [{ content: manifest }] : [];
       }
-      if (entity === 'uxagentproject') {
-        if (liveQuery) liveQuery();
-        return [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview' }));
-      }
       if (entity === 'appmodule') return state.app ? [{ appmoduleid: 'app-1', appmoduleidunique: 'app-u-1' }] : [];
       if (entity === 'appmodulecomponent') return [{ objectid: 'sitemap-1', componenttype: 62 }];
-      if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><SubArea GenPageId="${PAGE_1}" /></SiteMap>` }];
+      if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><Area><Group><SubArea GenPageId="${PAGE_1}" /></Group></Area></SiteMap>` }];
       return [];
     },
-    deleteRecord: async (entity, id) => {
-      assert.strictEqual(entity, 'uxagentproject');
+    // The pages in their saved layer, which is where teardown looks for them.
+    dataverse: {
+      get: async (url) => {
+        if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
+        if (liveQuery) liveQuery();
+        return { status: 200, body: { value: [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview', componentstate: 0 })) } };
+      },
+    },
+    deleteRemoteArtifact: async (type, id) => {
+      assert.strictEqual(type, 'genPage');
       if (pageDelete) pageDelete();
       state.deletes.push(`page:${id}`);
       state.pages.delete(id);

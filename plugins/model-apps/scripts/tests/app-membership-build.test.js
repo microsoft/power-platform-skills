@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild, appDef } = require('../lib/sdk-build.js');
 const { membershipSpec, membershipSdk, FORM_A, FORM_B, DASHBOARD, META, APP } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 test('appDef carries resolved Main ids and excludes the conflicting created Main pin by id', () => {
   const result = { forms: { contoso_item: FORM_B, contact: DASHBOARD }, views: {}, charts: {} };
@@ -25,9 +26,19 @@ for (const publish of [false, true]) {
     assert.deepEqual(fake.pushes[0].components.mainFormsByTable, { contoso_item: [FORM_A] });
     const firstPush = fake.events.findIndex(([event]) => event === 'push');
     const pin = fake.events.findIndex(([event, action]) => event === 'post' && action === '/AddAppComponents');
-    const republish = fake.events.findIndex(([event, action]) => event === 'post' && action === '/PublishXml');
+    // The PublishXml that names the app: with --publish the build first publishes the tables it changed, those whose Main forms its own write of the app adds,
+    // and those the app is proven to hold forms or charts of.
+    const republish = fake.events.findIndex(([event, action, body]) => event === 'post' && action === '/PublishXml' && /<appmodule>/.test(body.ParameterXml));
     assert.ok(pin > firstPush, JSON.stringify(fake.events));
     assert.ok(republish > pin, 'a fresh create already published before pinning; its hidden tables must not be left pending');
+    // This build changes no table and the app does not exist yet, so with --publish the one table it publishes before the app is created is the navigation's:
+    // the SDK adds its active Main forms when it creates the app. The table the spec only pins in `app.tables` is a table component, which the SDK expands no
+    // form of, so it is not named. Without --publish nothing is published ahead of the app.
+    const tableEvents = fake.events.filter(([event, action, body]) => event === 'post' && action === '/PublishXml' && !/<appmodule>/.test(body.ParameterXml));
+    assert.deepEqual(tableEvents.map(([, , body]) => body.ParameterXml), publish ? ['<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>'] : []);
+    if (publish) {
+      assert.ok(fake.events.indexOf(tableEvents[0]) < fake.events.findIndex(([event]) => event === 'create'), 'and it is published before the app is created');
+    }
     assert.equal(fake.pending, false);
     assert.equal(fake.events.filter(([event, url]) => event === 'get' && url.includes("objecttypecode eq 'contoso_item'")).length, 1,
       'resolve the directive once per run, even across a fetch and finalizer push');
@@ -127,7 +138,7 @@ for (const publish of [false, true]) {
     const fake = membershipSdk({ existing: true });
     await runSdkBuild(membershipSpec(), {
       sdk: fake.sdk, apply: true, phases: ['app-shell', 'pages', 'publish'], publish, appDir: dir,
-      genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }) },
+      genpage: fakeGenpage(),
     });
     assert.equal(fake.pushes.length, 1, 'existing-app app-shell defers its push to the pages finalizer');
     assert.deepEqual(fake.pushes[0].components.mainFormsByTable, { contoso_item: [FORM_A] });

@@ -768,9 +768,9 @@ test('#544 an unknown $parent.lookup names the valid ones', () => {
   );
 });
 
-// --- provisionSampleData: F9 keyless-seeding warning ------------------------------------------
+// --- provisionSampleData: keyless-seeding warning ------------------------------------------
 function runSample(spec) {
-  // The F9 warning goes to stderr (non-fatal), so capture stderr for the duration of the run.
+  // The keyless-seeding warning goes to stderr (non-fatal), so capture stderr for the duration of the run.
   const origWrite = process.stderr.write.bind(process.stderr);
   const warnings = [];
   process.stderr.write = (s) => { warnings.push(String(s)); return true; };
@@ -782,7 +782,7 @@ function runSample(spec) {
     .finally(() => { process.stderr.write = origWrite; });
 }
 
-test('provisionSampleData WARNS in the op label when a group has no idempotency key — a re-run would duplicate (F9)', async () => {
+test('provisionSampleData WARNS in the op label when a group has no idempotency key — a re-run would duplicate', async () => {
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     entities: [{ schemaName: 'new_log', displayName: 'Log', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
@@ -793,7 +793,7 @@ test('provisionSampleData WARNS in the op label when a group has no idempotency 
   assert.ok(labels.some((l) => /no idempotency key/.test(l)), `expected a keyless-seeding warning; got ${JSON.stringify(labels)}`);
 });
 
-test('provisionSampleData does NOT warn when the primary name gives a stable key (F9)', async () => {
+test('provisionSampleData does NOT warn when the primary name gives a stable key', async () => {
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     entities: [{ schemaName: 'new_log', displayName: 'Log', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
@@ -804,7 +804,7 @@ test('provisionSampleData does NOT warn when the primary name gives a stable key
   assert.ok(!labels.some((l) => /no idempotency key/.test(l)), 'a keyed spec must not warn');
 });
 
-test('provisionSolution ESCAPES the solution uniquename in the OData filter (F12 — no injection/break)', async () => {
+test('provisionSolution ESCAPES the solution uniquename in the OData filter (no injection/break)', async () => {
   const calls = [];
   const provision = { queryRecords: async (set, opts) => { calls.push({ set, filter: opts.filter }); return set === 'solution' ? [{ solutionid: 's' }] : []; } };
   const runner = makeRunner({ emit: () => {}, total: 1 });
@@ -1016,7 +1016,7 @@ test('requireSuccessfulPush distinguishes an already-exists collision from a ver
     (e) => {
       assert.strictEqual(e.name, 'BuildHalt');
       assert.strictEqual(e.code, 'already-exists');
-      assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run the build to adopt the existing row\./, 'the halt must name the step that clears it, keeping the baseline and the approval record');
+      assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run the build to adopt the existing row\./, 'the halt must name the step that clears it, keeping the baseline, the approval record and the page records');
       assert.match(e.message, /halts here again/, 'and say why a plain re-run does not');
       assert.doesNotMatch(e.message, /re-download the app/);
       assert.doesNotMatch(e.message, /adopt it \(fetchArtifact\)/, 'a plain fetch adopts nothing here — it must not be prescribed');
@@ -1424,6 +1424,29 @@ test('a 429 while identifying an already-exists holder stays transient', async (
   );
 });
 
+// The read that would identify the holder is the engine's own request (lib/relationship-metadata.js), and the halt around it is the engine's error, which carries the OData error of that
+// answer (serviceFailure's `answered`): a condition the service names by its code is run again on any status, as when the SDK reads the answer; another code on a status that says no is final.
+test('a condition the service names by its code, while identifying an already-exists holder, is run again on any status — another code is final, whatever the words', async () => {
+  for (const [what, status, error, transient] of [
+    ['SQL giving up waiting (500, 0x80044151)', 500, { code: '0x80044151', message: 'SQL timeout expired.' }, true],
+    ['a customization lock (409, 0x8004F064)', 409, { code: '0x8004F064', message: 'Cannot start the requested operation [Update] because there is another [EntityCustomization] running at this moment.' }, true],
+    ['a 500 under another code, whose words name a timeout', 500, { code: '0x80040216', message: 'SQL timeout expired. Please try again later.' }, false],
+  ]) {
+    const m = mockSdk();
+    m.sdk.createRelationship = async () => alreadyExists(409);
+    m.provision.dataverse = metadataClient((p) => (p.startsWith('/RelationshipDefinitions(') ? { status, body: { error } } : { status: 200, body: { value: [] } }));
+    const runner = makeRunner({ emit: () => {}, total: 8 });
+    await assert.rejects(
+      () => provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: collisionSpec([ONE_TO_MANY]), apply: true }),
+      (e) => {
+        assert.match(e.message, /could not identify/, what);
+        assert.strictEqual(isTransientHalt(e), transient, what);
+        return true;
+      },
+    );
+  }
+});
+
 test('a same-type probe that finds the name on different endpoints halts before create', async () => {
   const m = mockSdk();
   let created = 0;
@@ -1437,7 +1460,13 @@ test('a same-type probe that finds the name on different endpoints halts before 
   const runner = makeRunner({ emit: () => {}, total: 8 });
   await assert.rejects(
     () => provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: collisionSpec([ONE_TO_MANY]), apply: true }),
-    /already used by 1:N contoso_project -> contoso_task \(lookup contoso_ownerid\)/,
+    (e) => {
+      assert.match(e.message, /already used by 1:N contoso_project -> contoso_task \(lookup contoso_ownerid\)/);
+      // A name held by another relationship is the spec's to fix: a run again finds it held, so the halt is never run again (halt-retry-policy.test.js holds its table row).
+      assert.strictEqual(e.code, 'relationship-name-taken');
+      assert.strictEqual(isTransientHalt(e), false);
+      return true;
+    },
   );
   assert.strictEqual(created, 0, 'a name held by a different lookup must not be created under that name');
 });

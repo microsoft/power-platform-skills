@@ -16,6 +16,7 @@ const { main: downloadMain, runDownload } = require('../download-model-app.js');
 const { readerFor } = require('../verify-model-app.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { loadCli } = require('./helpers/cli-harness.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 const KEEP = 'KEEP-OUTSIDE\n';
 const dirs = [];
@@ -479,7 +480,7 @@ function pageSdk(fetchCalls) {
   };
 }
 
-test('download refuses a junction pages root before pac download and leaves the outside directory', async () => {
+test('download refuses a junction pages root before any page is read, and leaves the outside directory', async () => {
   const base = tmp();
   const out = path.join(base, 'out');
   const outside = path.join(base, 'outside-pages');
@@ -488,21 +489,17 @@ test('download refuses a junction pages root before pac download and leaves the 
   fs.writeFileSync(path.join(outside, 'marker'), KEEP);
   const pagesRoot = path.join(out, 'pages');
   fs.symlinkSync(outside, pagesRoot, 'junction');
-  let downloads = 0;
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, pages: [{ pageId: PAGE, name: 'Overview' }] }),
-    download: async () => { downloads += 1; return true; },
-  };
+  const genpage = fakeGenpage({ pages: [{ pageId: PAGE, name: 'Overview' }] });
   await assert.rejects(
-    () => runDownload({ sdk: pageSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
+    () => runDownload({ sdk: pageSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
     /symbolic link or junction/,
   );
-  assert.equal(downloads, 0, 'pac download must not run');
+  assert.deepEqual(genpage.of('read'), [], 'no page is read');
   assert.equal(fs.readFileSync(path.join(outside, 'marker'), 'utf8'), KEEP);
   assert.equal(fs.lstatSync(pagesRoot).isSymbolicLink(), true, 'the junction is left in place');
 });
 
-test('download refuses a symlink pages root before pac download', async (t) => {
+test('download refuses a symlink pages root before any page is read', async (t) => {
   const base = tmp();
   const out = path.join(base, 'out');
   const outside = path.join(base, 'outside-pages');
@@ -511,21 +508,18 @@ test('download refuses a symlink pages root before pac download', async (t) => {
   fs.writeFileSync(path.join(outside, 'marker'), KEEP);
   const pagesRoot = path.join(out, 'pages');
   if (!tryLink(t, outside, pagesRoot, 'dir')) return;
-  let downloads = 0;
+  const genpage = fakeGenpage({ pages: [{ pageId: PAGE, name: 'Overview' }] });
   await assert.rejects(
     () => runDownload({
       sdk: pageSdk(),
-      genpageCli: {
-        enumerateEnv: async () => ({ ok: true, pages: [] }),
-        download: async () => { downloads += 1; },
-      },
+      genpage,
       outDir: out,
       appId: APP_ID,
       appUnique: APP_UNIQUE,
     }),
     /symbolic link or junction/,
   );
-  assert.equal(downloads, 0);
+  assert.deepEqual(genpage.of('read'), []);
   assert.equal(fs.readFileSync(path.join(outside, 'marker'), 'utf8'), KEEP);
 });
 
@@ -536,19 +530,12 @@ async function rewriteThrough(t, plant) {
   fs.mkdirSync(destDir, { recursive: true });
   const outside = outsideFile(base, 'outside-page.tsx');
   fs.writeFileSync(outside, navSource(PAGE));
-  // The link is at the destination name. pac writes a private copy; the install must not follow this.
+  // The link is at the destination name. The plugin writes the page files itself (the SDK writes nothing to disk), so it is the plugin
+  // that must not follow this.
   if (!plant(t, outside, path.join(destDir, 'page.tsx'))) return false;
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, pages: [{ pageId: PAGE, name: 'Overview' }] }),
-    download: async ({ outputDir }) => {
-      const dir = path.join(outputDir, PAGE);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'page.tsx'), navSource(PAGE), 'utf8');
-      fs.writeFileSync(path.join(dir, 'config.json'), '{"dataSources":[]}', 'utf8');
-    },
-  };
+  const genpage = fakeGenpage({ pages: [{ pageId: PAGE, name: 'Overview', source: navSource(PAGE), dataSources: [] }] });
   await assert.rejects(
-    () => runDownload({ sdk: pageSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
+    () => runDownload({ sdk: pageSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
     /refusing to write|symbolic link or junction|hard link/,
   );
   assert.equal(fs.readFileSync(outside, 'utf8'), navSource(PAGE));
@@ -567,17 +554,9 @@ test('download refuses a hard link at the page file and leaves the outside file'
   const outside = path.join(base, 'outside-hard.tsx');
   fs.writeFileSync(outside, navSource(PAGE));
   if (!tryHardLink(t, outside, path.join(destDir, 'page.tsx'))) return;
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, pages: [{ pageId: PAGE, name: 'Overview' }] }),
-    download: async ({ outputDir }) => {
-      const dir = path.join(outputDir, PAGE);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'page.tsx'), navSource(PAGE), 'utf8');
-      fs.writeFileSync(path.join(dir, 'config.json'), '{"dataSources":[]}', 'utf8');
-    },
-  };
+  const genpage = fakeGenpage({ pages: [{ pageId: PAGE, name: 'Overview', source: navSource(PAGE), dataSources: [] }] });
   await assert.rejects(
-    () => runDownload({ sdk: pageSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
+    () => runDownload({ sdk: pageSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
     /hard link/,
   );
   assert.equal(fs.readFileSync(outside, 'utf8'), navSource(PAGE));
@@ -593,17 +572,9 @@ test('download refuses a junction at the page file name and leaves the outside d
   fs.mkdirSync(outside);
   fs.writeFileSync(path.join(outside, 'marker'), KEEP);
   fs.symlinkSync(outside, path.join(destDir, 'page.tsx'), 'junction');
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, pages: [{ pageId: PAGE, name: 'Overview' }] }),
-    download: async ({ outputDir }) => {
-      const dir = path.join(outputDir, PAGE);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'page.tsx'), navSource(PAGE), 'utf8');
-      fs.writeFileSync(path.join(dir, 'config.json'), '{"dataSources":[]}', 'utf8');
-    },
-  };
+  const genpage = fakeGenpage({ pages: [{ pageId: PAGE, name: 'Overview', source: navSource(PAGE), dataSources: [] }] });
   await assert.rejects(
-    () => runDownload({ sdk: pageSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
+    () => runDownload({ sdk: pageSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }),
     /refusing to write|junction|not a regular file|symbolic link/,
   );
   assert.equal(fs.readFileSync(path.join(outside, 'marker'), 'utf8'), KEEP);
@@ -613,17 +584,8 @@ test('download refuses a junction at the page file name and leaves the outside d
 test('download still rewrites a page file in a normal folder', async () => {
   const out = tmp('dl-page-ok');
   fs.mkdirSync(out);
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, pages: [{ pageId: PAGE, name: 'Overview' }] }),
-    download: async ({ outputDir }) => {
-      const dir = path.join(outputDir, PAGE);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'page.tsx'), navSource(PAGE), 'utf8');
-      fs.writeFileSync(path.join(dir, 'config.json'), '{"dataSources":[]}', 'utf8');
-      return true;
-    },
-  };
-  const res = await runDownload({ sdk: pageSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+  const genpage = fakeGenpage({ pages: [{ pageId: PAGE, name: 'Overview', source: navSource(PAGE), dataSources: [] }] });
+  const res = await runDownload({ sdk: pageSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
   assert.equal(res.ok, true, JSON.stringify(res));
   const written = fs.readFileSync(path.join(out, 'pages', PAGE, 'page.tsx'), 'utf8');
   assert.match(written, /PAGEREF_/);
@@ -686,7 +648,7 @@ function loadBuild(argv, factory) {
           throw err;
         },
       },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: (...args) => factory(args[0]),
         createNodeWorkspaceStorage: (dir) => ({ dir }),
       },
@@ -787,7 +749,7 @@ test('verify refuses a junction workspace before the SDK factory is called', asy
           throw err;
         },
       },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: () => { factoryCalls += 1; return { initWorkspace: async () => {} }; },
         createNodeWorkspaceStorage: () => ({}),
       },
@@ -910,7 +872,9 @@ test('assertPlainFileTarget refuses a hard link without writing, even if the oth
   assert.deepEqual(writes, [], 'a refusal must not open or write');
 });
 
-test('verify page download leaves a junction at verify-pages and its target untouched', async () => {
+// Verify reads a page's source through the SDK and writes nothing at all — it once downloaded into a private temp folder because pac
+// followed a link left at a fixed name under the workspace (`verify-pages/<id>`). A link left there is now simply never touched.
+test('verify reads a page without writing anything: a junction at verify-pages and its target are untouched', async () => {
   const base = tmp();
   const ws = path.join(base, 'ws');
   const outside = path.join(base, 'outside-pages');
@@ -919,44 +883,27 @@ test('verify page download leaves a junction at verify-pages and its target unto
   fs.writeFileSync(path.join(outside, 'marker'), KEEP);
   const planted = path.join(ws, 'verify-pages');
   fs.symlinkSync(outside, planted, 'junction');
-  let outputDir;
   const pageId = 'aaaaaaaa-0000-4000-8000-000000000001';
-  const genpageCli = {
-    download: async ({ outputDir: dir, pageIds }) => {
-      outputDir = dir;
-      fs.mkdirSync(path.join(dir, pageIds[0]), { recursive: true });
-      fs.writeFileSync(path.join(dir, pageIds[0], 'page.tsx'), 'export const n = 1;\n', 'utf8');
-    },
-  };
+  const genpage = fakeGenpage({ pages: [{ pageId, name: 'Overview', source: 'export const n = 1;\n' }] });
   const sdk = { queryRecords: async () => [{ appmoduleid: 'app-1' }] };
-  const reader = readerFor(sdk, 'contoso_app', { genpageCli, workspaceDir: ws });
+  const reader = readerFor(sdk, 'contoso_app', { genpage, workspaceDir: ws });
   const code = await reader.pageCode(pageId);
   assert.equal(code, 'export const n = 1;\n');
   assert.equal(fs.readFileSync(path.join(outside, 'marker'), 'utf8'), KEEP);
-  assert.equal(fs.existsSync(path.join(outside, pageId)), false, 'the junction target gained no page directory');
+  assert.deepEqual(fs.readdirSync(outside), ['marker'], 'the junction target gained nothing');
   assert.equal(fs.lstatSync(planted).isSymbolicLink(), true);
-  assert.ok(outputDir && !outputDir.toLowerCase().includes('verify-pages'), outputDir);
-  assert.equal(fs.existsSync(outputDir), false, 'the private download directory is removed');
+  assert.deepEqual(fs.readdirSync(ws), ['verify-pages'], 'and the workspace gained nothing');
 });
 
-test('download installs pac bytes unchanged, and refuses a link at the destination page', async (t) => {
+test('download writes the page files exactly as the SDK read them — no BOM or CRLF is added — and refuses a link at the destination page', async (t) => {
   const base = tmp();
   const out = path.join(base, 'out');
   fs.mkdirSync(out);
   const pageId = 'aaaaaaaa-0000-4000-8000-000000000001';
-  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
   const tsx = Buffer.from('export const n = 1;\r\n', 'utf8');
-  const config = Buffer.concat([bom, Buffer.from('{"dataSources":[]}\r\n', 'utf8')]);
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, pages: [{ pageId, name: 'Overview' }] }),
-    download: async ({ outputDir }) => {
-      const dir = path.join(outputDir, pageId);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'page.tsx'), tsx);
-      fs.writeFileSync(path.join(dir, 'config.json'), config);
-    },
-  };
-  const res = await runDownload({ sdk: pageSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+  const config = Buffer.from('{"dataSources":[]}', 'utf8');
+  const genpage = fakeGenpage({ pages: [{ pageId, name: 'Overview', source: tsx.toString('utf8'), dataSources: [] }] });
+  const res = await runDownload({ sdk: pageSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(fs.readFileSync(path.join(out, 'pages', pageId, 'page.tsx')), tsx);
   assert.deepEqual(fs.readFileSync(path.join(out, 'pages', pageId, 'config.json')), config);
@@ -968,7 +915,7 @@ test('download installs pac bytes unchanged, and refuses a link at the destinati
   fs.writeFileSync(path.join(outsideDir, 'marker'), KEEP);
   fs.symlinkSync(outsideDir, path.join(linked, 'pages', pageId), 'junction');
   await assert.rejects(
-    () => runDownload({ sdk: pageSdk(), genpageCli, outDir: linked, appId: APP_ID, appUnique: APP_UNIQUE }),
+    () => runDownload({ sdk: pageSdk(), genpage, outDir: linked, appId: APP_ID, appUnique: APP_UNIQUE }),
     /symbolic link or junction/,
   );
   assert.equal(fs.readFileSync(path.join(outsideDir, 'marker'), 'utf8'), KEEP);
@@ -981,7 +928,7 @@ test('download installs pac bytes unchanged, and refuses a link at the destinati
   const planted = path.join(fileOut, 'pages', pageId, 'page.tsx');
   if (!tryLink(t, outsideFilePath, planted, 'file')) return;
   await assert.rejects(
-    () => runDownload({ sdk: pageSdk(), genpageCli, outDir: fileOut, appId: APP_ID, appUnique: APP_UNIQUE }),
+    () => runDownload({ sdk: pageSdk(), genpage, outDir: fileOut, appId: APP_ID, appUnique: APP_UNIQUE }),
     /symbolic link or junction|refusing to write/,
   );
   assert.equal(fs.readFileSync(outsideFilePath, 'utf8'), KEEP);
@@ -1008,7 +955,7 @@ test('a folder at build-log.jsonl is the journal\'s best-effort case, not a refu
           throw err;
         },
       },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: () => { factoryCalls += 1; throw new Error('stop after the preflight'); },
         createNodeWorkspaceStorage: (dir) => ({ dir }),
       },

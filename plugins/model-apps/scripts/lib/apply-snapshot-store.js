@@ -7,9 +7,11 @@
 //   · Atomic write (temp→fsync→rename) so a crash never leaves a truncated, half-trusted snapshot.
 //   · Generation CAS so a concurrent build that re-wrote the snapshot between our read and our write is
 //     detected and the loser's write is REFUSED (never a lost update).
-// The lease is an OPTIMIZATION that reduces contention around the read-modify-write; unlike the pages
-// lease (sdk-build.js acquireAppPagesLease, which must NOT steal because duplicate CREATE isn't CAS-
-// guarded), this lease MAY reclaim a stale holder. That is only as safe as the lease is exclusive in
+// The lease is an OPTIMIZATION that reduces contention around the read-modify-write. It MAY reclaim a
+// stale holder, and so may the pages lock of sdk-build.js (acquireAppPagesLease), which is taken through
+// acquireLease too, on a file of its own and by a stricter rule for "stale" (`deps.isStale`): duplicate
+// CREATE isn't CAS-guarded, so that lock is taken only from a holder PROVEN gone (lib/process-owner.js),
+// never by age and never on a doubt. Reclaiming is only as safe as the lease is exclusive in
 // practice, because every write here — the CAS write included — compares and then writes as two steps
 // under it: a holder paused past LEASE_STALE_MS between them can still overwrite. So reclaim is limited
 // to a holder that is dead or past LEASE_STALE_MS (minutes, against writes of milliseconds), a token
@@ -21,6 +23,8 @@ const path = require('node:path');
 const {
   parseEnvelope, serializeEnvelope, makeEnvelope, markIneligible, tombstone, generationMatches, newGeneration, bumpGeneration,
 } = require('./apply-snapshot.js');
+// The one liveness check, shared with the pages lock and the temporary workspaces (lib/process-owner.js); re-exported below as it always was.
+const { processAlive } = require('./process-owner.js');
 
 const SNAPSHOT_FILE = 'apply-snapshot.json';
 const LEASE_FILE = 'apply-snapshot.lock';
@@ -104,28 +108,31 @@ function createExclusive(file, text) {
   }
 }
 
-// Is `pid` a live process? Best-effort: process.kill(pid, 0) throws ESRCH when the pid is gone, EPERM when
-// it exists but we lack permission (still alive). pid reuse can FALSELY report a dead holder alive, which
-// keeps its lease held (see acquireLease): every write then fails closed, never unsafely.
-function processAlive(pid) {
-  if (!pid || typeof pid !== 'number') return false;
-  try { process.kill(pid, 0); return true; }
-  catch (e) { return e && e.code === 'EPERM'; }
-}
-
-// Acquire the workspace snapshot lease. Exclusive create ('wx') picks one winner atomically. If the lease
-// is already held, reclaim it ONLY when stale — its holder's pid is dead, or, for a lock with no readable
-// token, the lock file is older than staleMs; a live holder blocks (returns { ok:false }), however old. Returns a handle whose token is written into the lock so
-// release is OWNER-CHECKED (never remove a lock a different build now holds). `deps` seams now()/pid/alive
-// for tests.
+// Acquire a lease on a workspace: by default the snapshot lease (`apply-snapshot.lock`). Exclusive create ('wx')
+// picks one winner atomically. If the lease is already held, reclaim it ONLY when stale — its holder's pid is dead,
+// or, for a lock with no readable token, the lock file is older than staleMs; a live holder blocks (returns
+// { ok:false }), however old. Returns a handle whose token is written into the lock so release is OWNER-CHECKED
+// (never remove a lock a different build now holds). `deps` seams now()/pid/alive for tests.
+//
+// `deps` also lets another lock use this one protocol — the pages lock (sdk-build.js acquireAppPagesLease) is one — with
+// everything that makes it safe (the exclusive create, the claim file, the read-back) kept in one place:
+//   file     the lock's file name in the workspace, instead of `apply-snapshot.lock`
+//   stamp    what the token holds, instead of { pid, at }: the owner record of lib/process-owner.js, which says who may
+//            be proven gone later (the token always gets a `rnd` of its own besides)
+//   isStale  (held, heldRaw) => boolean, the caller's own rule for "abandoned", instead of the one above. `held` is what the
+//            lock holds as JSON (null when it is not), `heldRaw` its text. A rule that answers true only for a holder it can
+//            PROVE is gone also stops the age rule above: a lock with no readable token is never old enough.
+// A result that is not ok because the create failed for another reason than the lock being there carries that `error`;
+// one that is not ok after the lock was judged stale — the reclaim lost a race or failed — says `stale: true`; a reclaim
+// that succeeded carries the lock it replaced as `previous` (what `held` was).
 function acquireLease(workspaceDir, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const pid = deps.pid != null ? deps.pid : process.pid;
   const isAlive = typeof deps.processAlive === 'function' ? deps.processAlive : processAlive;
   const staleMs = deps.staleMs != null ? deps.staleMs : LEASE_STALE_MS;
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const lp = leasePath(workspaceDir);
-  const token = JSON.stringify({ pid, at: now(), rnd: Math.random().toString(36).slice(2) });
+  const lp = deps.file ? path.join(workspaceDir, deps.file) : leasePath(workspaceDir);
+  const token = JSON.stringify({ ...(deps.stamp || { pid, at: now() }), rnd: Math.random().toString(36).slice(2) });
   const tryCreate = () => {
     // Not createExclusive: a write that fails after the create leaves a tokenless lock, which ages into a
     // reclaimable one (below) — removing it instead could delete a lock another writer has since reclaimed.
@@ -134,7 +141,7 @@ function acquireLease(workspaceDir, deps = {}) {
   };
   let r = tryCreate();
   if (r.ok) return r;
-  if (r.code !== 'EEXIST') return { ok: false, reason: `lease create failed: ${r.error && r.error.message}` };
+  if (r.code !== 'EEXIST') return { ok: false, reason: `lease create failed: ${r.error && r.error.message}`, error: r.error };
   // Held — decide staleness. The raw content is kept: a reclaim replaces the lock only while it still holds
   // exactly what was judged stale here.
   let held = null;
@@ -158,7 +165,7 @@ function acquireLease(workspaceDir, deps = {}) {
     // exclusive way as a fresh lock. Overwriting it let a writer that created it meanwhile hold it too.
     r = tryCreate();
     if (r.ok) return r;
-    return { ok: false, reason: r.code === 'EEXIST' ? 'lease taken by another writer just now' : `lease create failed: ${r.error && r.error.message}` };
+    return { ok: false, reason: r.code === 'EEXIST' ? 'lease taken by another writer just now' : `lease create failed: ${r.error && r.error.message}`, ...(r.code === 'EEXIST' ? {} : { error: r.error }) };
   }
   // A lease that names its holder is stale only when that holder is DEAD, however old it is. A live holder
   // may be paused mid-write — a machine asleep, a debugger — and reclaiming from under it let it resume and
@@ -168,7 +175,10 @@ function acquireLease(workspaceDir, deps = {}) {
   // it, or one that crashed there): with no pid to test, only age can say it was abandoned. The cost is a
   // holder that crashed and whose pid a live process now has: its lock is never reclaimed and every write
   // fails closed, so an old one says which file to delete.
-  const stale = heldToken !== null ? !isAlive(heldToken.pid) : age > staleMs;
+  //
+  // A caller with a rule of its own (`deps.isStale`) replaces all of that, the age rule too: the pages lock is
+  // reclaimed only from a holder proven gone, and a token that cannot be read proves nothing however old it is.
+  const stale = typeof deps.isStale === 'function' ? !!deps.isStale(held, heldRaw) : (heldToken !== null ? !isAlive(heldToken.pid) : age > staleMs);
   if (!stale) {
     const old = age > staleMs ? ` — held for ${Math.round(age / 60000)} min; if no build or teardown of this workspace is running, delete ${lp} and re-run` : '';
     return { ok: false, reason: `lease held by pid ${held && held.pid} (age ${age}ms)${old}`, heldBy: held };
@@ -179,7 +189,7 @@ function acquireLease(workspaceDir, deps = {}) {
   // other's write landed, and both held the lease.
   const claim = `${lp}.reclaim`;
   try { createExclusive(claim, token); } catch (e) {
-    if (!(e && e.code === 'EEXIST')) return { ok: false, reason: `stale lease reclaim failed: ${e && e.message}` };
+    if (!(e && e.code === 'EEXIST')) return { ok: false, reason: `stale lease reclaim failed: ${e && e.message}`, stale: true };
     // Another writer is reclaiming right now — or crashed doing so. A claim is abandoned by the rule the lock
     // itself follows (above): once its claimer's pid is dead, or, for one with no readable token, once it is
     // older than the staleness window. Age alone let a claimer paused mid-reclaim lose its claim to a second
@@ -204,22 +214,22 @@ function acquireLease(workspaceDir, deps = {}) {
       if (abandoned) hint = ` — the reclaim was abandoned (${named ? `its claimer, pid ${owner.pid}, is gone` : 'its claim is older than the staleness window'}); ${remedy}`;
       else if (claimAge > staleMs) hint = ` — claimed for ${Math.round(claimAge / 60000)} min; ${remedy}`;
     } catch { /* best-effort: a claim that vanished meanwhile needs no hint */ }
-    return { ok: false, reason: `lease being reclaimed by another writer${hint}` };
+    return { ok: false, reason: `lease being reclaimed by another writer${hint}`, stale: true };
   }
   try {
     let nowRaw = null;
     try { nowRaw = fs.readFileSync(lp, 'utf8'); } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; }
-    if (nowRaw !== heldRaw) return { ok: false, reason: 'lease changed while it was being reclaimed' };
+    if (nowRaw !== heldRaw) return { ok: false, reason: 'lease changed while it was being reclaimed', stale: true };
     fs.writeFileSync(lp, token);
     // Read back as well: a writer that ignored the claim protocol still cannot make two holders silently.
-    if (fs.readFileSync(lp, 'utf8') !== token) return { ok: false, reason: 'lease reclaimed by another writer just now' };
-    return { ok: true, path: lp, token, reclaimed: true };
+    if (fs.readFileSync(lp, 'utf8') !== token) return { ok: false, reason: 'lease reclaimed by another writer just now', stale: true };
+    return { ok: true, path: lp, token, reclaimed: true, previous: held };
   } catch (e) {
     // The write may have landed before what failed (the read-back, say). A lock left holding OUR token is one
     // no other writer would reclaim — its pid is alive: ours — so it is released here, owner-checked; if even
     // that fails, it frees once this process exits.
     try { if (fs.readFileSync(lp, 'utf8') === token) fs.rmSync(lp, { force: true }); } catch { /* best-effort */ }
-    return { ok: false, reason: `stale lease reclaim failed: ${e.message}` };
+    return { ok: false, reason: `stale lease reclaim failed: ${e.message}`, stale: true };
   } finally {
     // Ours: only the writer that created a claim removes it. One left behind names itself as the file to delete (above).
     try { fs.rmSync(claim, { force: true }); } catch { /* best-effort */ }
@@ -263,8 +273,8 @@ function casWriteSnapshot(workspaceDir, envelope, expectedGeneration, deps = {})
 }
 
 // INVALIDATE-before-write: force eligible:false and persist, under the lease, ROTATING the generation so a
-// concurrent reader that captured the pre-invalidate generation can no longer win the re-bless CAS (Sol #6
-// fencing — invalidate/apply/re-bless without a long-held lease). Returns { ok, generation } where
+// concurrent reader that captured the pre-invalidate generation can no longer win the re-bless CAS —
+// fencing: invalidate/apply/re-bless without a long-held lease. Returns { ok, generation } where
 // `generation` is the new post-invalidate token the caller must pass as the CAS `expected` on its re-bless.
 // Fail-closed callers (the fast-path apply) MUST abort if this returns { ok:false }. A missing snapshot is
 // already-safe (nothing can fast-path) ⇒ ok:true with generation:null.

@@ -29,6 +29,7 @@ const APP_IDUNIQUE = '33333333-3333-3333-3333-333333333333';
 const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
 const SITEMAP_ID = '55555555-5555-5555-5555-555555555555';
 const DASH = '280948ec-7bbb-5279-b106-2bdd09451a3a';
+const PAGE_ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
 // The designer-made entry, with the formatting Dataverse really uses: a braced upper-case GUID and a
 // second-language title the App Spec cannot express.
@@ -69,6 +70,8 @@ async function freshSdk(xml) {
         return { status: 200, headers: { etag: 'W/"1"' }, body: multi ? { value: [appRow()] } : appRow() };
       }
       if (/\/roles/.test(url)) return { status: 200, headers: {}, body: { value: [{ roleid: '66666666-6666-6666-6666-666666666666' }] } };
+      // The SDK checks that every generative page a sitemap names exists before it pushes the app (`RetrieveUnpublishedMultiple` of the page rows): the one page these tests use does.
+      if (/\/uxagentprojects\//.test(url)) return { status: 200, headers: {}, body: { value: [{ uxagentprojectid: PAGE_ID }] } };
       return { status: 200, headers: {}, body: { value: [] } };
     },
     post: async (url, body) => {
@@ -99,11 +102,11 @@ const specFor = ({ dashTitle = 'Event operations', feedbackIcon } = {}) => ({
 const CREATED = { dashboards: { 'Command Center - Event operations': DASH } };
 
 /** What the build does for an existing app: fetch, appDef, re-attach, write, push. */
-async function rebuild(xml, spec, opts = {}) {
+async function rebuild(xml, spec, opts = {}, created = CREATED) {
   const { sdk, lastXml } = await freshSdk(xml);
   await sdk.fetchArtifact('app', APP_ID);
   const live = await sdk.getArtifact('app', APP_ID);
-  const { siteMap, notes } = adoptLiveSitemap(appDef(spec, CREATED).siteMap, live.siteMap, opts);
+  const { siteMap, notes } = adoptLiveSitemap(appDef(spec, created).siteMap, live.siteMap, opts);
   await sdk.updateElement('app', APP_ID, '/siteMap', siteMap);
   await sdk.pushArtifact('app', APP_ID);
   return { xml: lastXml(), notes };
@@ -248,4 +251,61 @@ test('REAL BUNDLE: removing a group\u2019s title leaves its description ahead of
   const group = out.xml.slice(out.xml.indexOf('<Group'), out.xml.indexOf('</Group>'));
   assert.match(group, /^<Group Id="group_0_0"><Descriptions><Description LCID="1033" Description="Day-to-day work" \/><\/Descriptions><SubArea Id="ops_dashboard"/, group);
   assert.doesNotMatch(group, /<Titles><Title LCID="1033" Title="Main"/, 'the removed title is gone');
+});
+
+// A generative page entry the spec gives no icon holds the page icon the platform gives it — the SDK writes it, as the app designer does — so a rebuild finds an icon live that neither the spec nor its
+// baseline named, and used to say, on every rebuild of every app with a page, that it had KEPT the environment's icon, "changed there after this spec was last applied". That is not a change made in the
+// designer. These tests ask the real bundle which icon that is, and hold the rebuild to saying nothing for it and still saying so for an icon a maker chose.
+const { GENPAGE_DEFAULT_VECTOR_ICON } = require('../lib/genpage-subarea.js');
+const PAGE_DEFAULT_ICON = '/_imgs/TableIconsFluentV9/document_one_page_sparkle.svg';
+const CREATED_PAGE = { pages: { home: PAGE_ID } };
+const pageSpec = (icon) => ({
+  solution: { uniqueName: 'EventCenter', publisherPrefix: 'new' },
+  app: { name: 'Event Center', uniqueName: APP_UNIQUE },
+  pages: [{ key: 'home', name: 'Home' }],
+  appShell: { areas: [{ label: 'Operations', groups: [{ label: 'Main', subAreas: [{ page: 'home', title: 'Home', ...(icon ? { vectorIcon: icon } : {}) }] }] }] },
+});
+// What an app the build made holds for the page entry: written by the SDK from the spec, no icon in it.
+async function appWithPageEntry() {
+  const { sdk, lastXml } = await freshSdk('<SiteMap></SiteMap>');
+  const art = await sdk.createArtifact('app', appDef(pageSpec(), CREATED_PAGE, { iconWebResourceId: '77777777-7777-7777-7777-777777777777' }));
+  await sdk.pushArtifact('app', art.id);
+  return lastXml();
+}
+const pageTag = (xml) => tagOf(xml, /GenPageId=/);
+
+test('REAL BUNDLE: a rebuild says nothing about the icon the platform gave a page entry that names none', async () => {
+  const written = await appWithPageEntry();
+  assert.match(pageTag(written), /VectorIcon="\/_imgs\/TableIconsFluentV9\/document_one_page_sparkle\.svg"/, 'the SDK wrote the default page icon on an entry whose spec names none');
+  // The build's next run: the spec still names no icon, and its baseline (the spec as last applied) never did.
+  for (const [what, opts] of [['with the baseline of the last apply', { baseChrome: chromeByTargetKey(pageSpec(), CREATED_PAGE) }], ['with no baseline', {}]]) {
+    const { xml, notes } = await rebuild(written, pageSpec(), opts, CREATED_PAGE);
+    assert.deepStrictEqual(describeSitemapNotes(notes), [], `${what}: nothing is said about the page icon`);
+    assert.deepStrictEqual(notes, [], what);
+    assert.strictEqual(pageTag(xml), pageTag(written), `${what}: and the entry is written exactly as it was`);
+  }
+});
+
+// The plugin has to know which icon is the platform's, and nothing in the SDK's public surface says: it is a constant inside the bundle. So the one the plugin knows is held to what the real bundle writes, and a
+// bundle that changes its default fails here instead of printing the warning again.
+test('REAL BUNDLE: the default page icon the plugin knows is the one the SDK writes for a page entry that names none', async () => {
+  const written = await appWithPageEntry();
+  assert.strictEqual(GENPAGE_DEFAULT_VECTOR_ICON, /VectorIcon="([^"]*)"/.exec(pageTag(written))[1]);
+  assert.strictEqual(GENPAGE_DEFAULT_VECTOR_ICON, PAGE_DEFAULT_ICON);
+});
+
+test('REAL BUNDLE: an icon a maker gave the page entry is kept, and the rebuild says so — and the default is written over by an icon the spec names', async () => {
+  const written = await appWithPageEntry();
+  const custom = '$webresource:contoso_home.svg';
+  const designed = written.replace(PAGE_DEFAULT_ICON, custom);
+  assert.notStrictEqual(designed, written, 'precondition: the designer changed the icon');
+  const kept = await rebuild(designed, pageSpec(), { baseChrome: chromeByTargetKey(pageSpec(), CREATED_PAGE) }, CREATED_PAGE);
+  assert.match(pageTag(kept.xml), /VectorIcon="\$webresource:contoso_home\.svg"/, 'the maker\u2019s icon survives the rebuild');
+  const lines = describeSitemapNotes(kept.notes);
+  assert.strictEqual(lines.length, 1, JSON.stringify(lines));
+  assert.match(lines[0], /^nav entry "Home": kept the environment's vectorIcon '\$webresource:contoso_home\.svg' — it changed there after this spec was last applied or downloaded, and the spec still has \(none\)\./);
+  // The spec names an icon: it replaces the default, and the edit the author made is not repeated back.
+  const named = await rebuild(written, pageSpec('$webresource:contoso_new.svg'), { baseChrome: chromeByTargetKey(pageSpec(), CREATED_PAGE) }, CREATED_PAGE);
+  assert.match(pageTag(named.xml), /VectorIcon="\$webresource:contoso_new\.svg"/);
+  assert.deepStrictEqual(describeSitemapNotes(named.notes), []);
 });

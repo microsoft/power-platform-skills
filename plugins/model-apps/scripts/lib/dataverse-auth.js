@@ -116,6 +116,15 @@ const noteTokenFailure = (resource, error) => tokenFailures.set(resource, cliFai
 function getAuthToken(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return null;
+  return readAzToken(resource, opts);
+}
+
+// The Azure CLI read behind every token this plugin uses — a Dataverse environment's (getAuthToken, above) and the Power Apps
+// service's (getPowerAppsToken, below) — so both share one memo, one failure record and one budget. `resource` is the `--resource` of
+// `az account get-access-token`; the callers decide which resources are allowed (a Dataverse origin is checked by dataverseOrigin, the
+// Power Apps one is a constant), so nothing here accepts a caller's text as a resource.
+// See: https://learn.microsoft.com/cli/azure/account#az-account-get-access-token
+function readAzToken(resource, opts = {}) {
   const exec = opts.exec || runSync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return authTokenMemo.get(resource);
@@ -151,6 +160,11 @@ function getAuthToken(envUrl, opts = {}) {
 function getAuthTokenAsync(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return Promise.resolve(null);
+  return readAzTokenAsync(resource, opts);
+}
+
+// The asynchronous twin of readAzToken, with the same memo and failure record.
+function readAzTokenAsync(resource, opts = {}) {
   const exec = opts.execFile || execFileAsync;
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return Promise.resolve(authTokenMemo.get(resource));
@@ -212,6 +226,35 @@ function tokenFailureMessage(envUrl, fallback) {
   if (kind === 'timeout') return `Could not get an Azure CLI token for ${origin}: ${azTimeoutAdvice('az account get-access-token')}`;
   if (kind === 'missing') return `Could not get an Azure CLI token for ${origin}: Azure CLI (\`az\`) is not on PATH. Install it from https://aka.ms/azure-cli and run \`az login\`.`;
   return fallback;
+}
+
+// The audience of the Power Apps service — the Business Application Platform API that names an environment's runtime endpoint, and the
+// classic Power Apps API behind it, which lists connections and serves a connector's definition. It is not a Dataverse origin, so it
+// cannot go through getAuthToken (which refuses anything but one); it is a fixed constant here so no caller's text is ever a `--resource`.
+// Only lib/power-apps-service-client.js uses the token, and sends it only to the hosts it allows.
+const POWER_APPS_RESOURCE = 'https://service.powerapps.com/';
+
+/** The Azure CLI token for the Power Apps service, or null — `az` missing, slow or signed out. Same memo and `opts` as getAuthToken. */
+function getPowerAppsToken(opts = {}) {
+  return readAzToken(POWER_APPS_RESOURCE, opts);
+}
+
+/** getPowerAppsToken without blocking the event loop, so it can run beside the Dataverse token's own read. */
+function getPowerAppsTokenAsync(opts = {}) {
+  return readAzTokenAsync(POWER_APPS_RESOURCE, opts);
+}
+
+/** Why the last Power Apps token read failed — 'timeout' | 'missing' | 'failed' — or null when it did not (or none was made). */
+function powerAppsTokenFailureKind() {
+  return tokenFailures.get(POWER_APPS_RESOURCE) || null;
+}
+
+/** The sentence to say when no Power Apps token could be had: a slow or missing Azure CLI is said as such, anything else is a sign-in problem. */
+function powerAppsTokenFailureMessage() {
+  const kind = powerAppsTokenFailureKind();
+  if (kind === 'timeout') return `Could not get an Azure CLI token for the Power Apps service: ${azTimeoutAdvice('az account get-access-token')}`;
+  if (kind === 'missing') return 'Could not get an Azure CLI token for the Power Apps service: Azure CLI (`az`) is not on PATH. Install it from https://aka.ms/azure-cli and run `az login`.';
+  return `Could not get an Azure CLI token for the Power Apps service (${POWER_APPS_RESOURCE}). Run \`az login\` first.`;
 }
 
 /**
@@ -374,9 +417,11 @@ async function preflightAuth(envUrl, deps = {}) {
  * @param {string} [options.body=null]
  * @param {boolean} [options.includeHeaders=false]
  * @param {number} [options.timeout=60000]
- * @returns {Promise<{statusCode: number, body: string, headers?: object} | {error: string}>}
+ * @param {boolean} [options.binary=false] - resolve the body as the Buffer it arrived as, never decoded: a file's content (a
+ *   generative page's rows, an image) is bytes, and decoding it as UTF-8 would corrupt anything that is not valid UTF-8
+ * @returns {Promise<{statusCode: number, body: string|Buffer, headers?: object} | {error: string, code?: string, incompleteResponse?: boolean, statusCode?: number}>}
  */
-function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000 }) {
+function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000, binary = false }) {
   return new Promise((resolve) => {
     const https = require('https');
     const http = require('http');
@@ -388,9 +433,16 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
     // sdk-http-client). That includes a timeout or a socket error that fires while the body is still
     // streaming — they are delivered on the request, not the response, but the answer had arrived.
     let answeredStatus = null;
-    const fail = (error) => resolve(answeredStatus === null
-      ? { error }
-      : { error, incompleteResponse: true, statusCode: answeredStatus });
+    // `code` is Node's own code for a failure of the request itself — `ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `ERR_TLS_CERT_ALTNAME_INVALID` — and is reported beside the message
+    // only when Node gave one (`req.on('error')` below). The message cannot say what the failure was: a certificate that does not verify quotes the host and the certificate's names, and a name can spell anything
+    // (`DNS:ECONNRESET.example.com` is a valid one), so a caller that decides whether the request is worth sending again (lib/sdk-http-client.js, isTransientTransportFailure) reads the code. The failures this function words
+    // itself — a timeout, a response cut off — have none, and are read by their words.
+    // See https://nodejs.org/api/errors.html#common-system-errors and https://nodejs.org/api/tls.html#x509-certificate-error-codes
+    const fail = (error, code) => resolve({
+      error,
+      ...(typeof code === 'string' && code ? { code } : {}),
+      ...(answeredStatus === null ? {} : { incompleteResponse: true, statusCode: answeredStatus }),
+    });
     const req = mod.request(
       {
         method,
@@ -405,8 +457,8 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         const chunks = [];
         res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         res.on('end', () => {
-          const data = Buffer.concat(chunks).toString('utf8');
-          const result = { statusCode: res.statusCode, body: data };
+          const bytes = Buffer.concat(chunks);
+          const result = { statusCode: res.statusCode, body: binary ? bytes : bytes.toString('utf8') };
           if (includeHeaders) result.headers = res.headers;
           resolve(result);
         });
@@ -422,7 +474,7 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         });
       }
     );
-    req.on('error', (e) => fail(e.message));
+    req.on('error', (e) => fail(e.message, e.code));
     req.on('timeout', () => {
       req.destroy();
       fail(answeredStatus === null ? 'Request timed out' : 'Request timed out before the response completed');
@@ -473,8 +525,19 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     throw new Error(tokenFailureMessage(cleanUrl, `Failed to get Azure CLI token for ${cleanUrl}. Run 'az login' first.`));
   }
 
+  // What this call hands back or throws is what its callers print when it fails — `ensureOk` quotes `data.error.message`, and list-connections.js prints the failure of its connection-references read — and
+  // an authorization layer, or a gateway, that rejects a token may repeat it in the answer: whole, or one part of it, in the body or in a header. The text of a transport failure can repeat the request it was
+  // sending, too. So every token this call sent (the one a 401 replaced as well: a service may repeat either) is taken out of an answer that is NOT a success, and out of that text, by the scrubber the
+  // plugin's Dataverse HttpClient uses — the one scrubber, in lib/sdk-http-client.js; it is required here, and not at the top of the file, because that module requires this one when it loads. A success is
+  // the caller's data and is returned exactly as it came, whatever it holds. A value shorter than MIN_SCRUBBED_TOKEN_LENGTH is no access token and is never taken out (a test's stand-in token is one).
+  const { scrub, scrubAnswer, MIN_SCRUBBED_TOKEN_LENGTH } = require('./sdk-http-client.js');
+  const tokensSent = new Set();
+  const scrubText = (text) => [...tokensSent].reduce((out, sent) => scrub(out, sent), String(text));
+  const scrubValue = (value) => [...tokensSent].reduce((out, sent) => scrubAnswer(out, sent), value);
+
   const maxRetries = 2;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (token.length >= MIN_SCRUBBED_TOKEN_LENGTH) tokensSent.add(token);
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',
@@ -491,10 +554,10 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
       // creates or runs something, so it may already have been applied; re-sending it can create a
       // second row. Report the uncertain outcome instead — reads and idempotent methods still retry.
       if (res.incompleteResponse && String(method).toUpperCase() === 'POST') {
-        throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Check the result before running it again.`);
+        throw new Error(`Request failed: ${scrubText(res.error)} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Check the result before running it again.`);
       }
       if (attempt < maxRetries) continue;
-      throw new Error(`Request failed: ${res.error}`);
+      throw new Error(`Request failed: ${scrubText(res.error)}`);
     }
 
     if (res.statusCode === 401 && refreshOn401 && attempt < maxRetries) {
@@ -512,8 +575,10 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     if (res.body) {
       try { data = JSON.parse(res.body); } catch { data = res.body; }
     }
-    const out = { status: res.statusCode, data };
-    if (includeHeaders) out.headers = res.headers;
+    // Only an answer that is not a success is cleaned (see the scrubber above): a 2xx is the caller's data.
+    const success = res.statusCode >= 200 && res.statusCode < 300;
+    const out = { status: res.statusCode, data: success ? data : scrubValue(data) };
+    if (includeHeaders) out.headers = success ? res.headers : scrubValue(res.headers);
     return out;
   }
   throw new Error('Unreachable retry loop');
@@ -797,6 +862,20 @@ function readAliasedFlag(flags, kebab, camel) {
   return a !== undefined ? a : b;
 }
 
+/**
+ * The `--language-code` / `--languageCode` flag as an LCID: `undefined` when neither is given, otherwise a positive integer up to 65535.
+ * Reads the pair the way the build does (a conflicting pair is refused, not resolved by guessing) and holds the value to the same
+ * rule as the App Spec's `languageCode` (`normalizeLanguageCode`), so the flag means the same thing to every script that takes it. Throws,
+ * naming the flag, for a value that is not an LCID.
+ */
+function readLanguageCodeFlag(flags) {
+  const raw = readAliasedFlag(flags, 'language-code', 'languageCode');
+  if (raw === undefined) return undefined;
+  const lcid = normalizeLanguageCode(raw);
+  if (lcid === null) throw new Error(`--language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${raw}')`);
+  return lcid;
+}
+
 /** Reads a JSON value either inline or from a file via @path syntax. */
 function readJsonArg(raw) {
   if (raw == null) return null;
@@ -869,6 +948,11 @@ module.exports = {
   azIdentity,
   getAuthToken,
   getAuthTokenAsync,
+  getPowerAppsToken,
+  getPowerAppsTokenAsync,
+  powerAppsTokenFailureKind,
+  powerAppsTokenFailureMessage,
+  POWER_APPS_RESOURCE,
   tokenFailureKind,
   tokenFailureMessage,
   makeRequest,
@@ -881,6 +965,7 @@ module.exports = {
   parseArgs,
   validateFlags,
   readAliasedFlag,
+  readLanguageCodeFlag,
   readJsonArg,
   emitResult,
 };

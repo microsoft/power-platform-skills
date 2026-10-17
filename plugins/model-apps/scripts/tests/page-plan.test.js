@@ -1,5 +1,5 @@
 'use strict';
-// Coverage for the App Spec -> genpage-plan.md adapter (H4: /app-builder Phase 1.5 had no
+// Coverage for the App Spec -> genpage-plan.md adapter (/app-builder Phase 1.5 had no
 // executable page-worker contract). The worker's contract is references/plan-schema.md, so these
 // tests assert the projection is schema-faithful — every required section, in order, and every
 // required per-page field — plus the identity convergence that keeps PAGEREF resolution consistent.
@@ -9,6 +9,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
   buildPagePlan, REQUIRED_PAGE_FIELDS, pageFile, pageEntities, pageDataMode, needsCaching, navTargets,
 } = require('../lib/page-plan.js');
@@ -581,7 +582,7 @@ test('the projection does NOT default to genpage-plan.md — that filename belon
   // stems), so writing there would let a later /genpage run consume an app-builder plan and emit
   // wrong PAGEREF tokens. The worker gets the plan PATH explicitly, so the name is free to differ.
   const cli = path.join(__dirname, '..', 'write-page-plan.js');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-collision-'));
+  const dir = makeTempDir('plan-collision-');
   const specPath = path.join(dir, 'app-spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
   const run = () => spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', dir], { encoding: 'utf8' });

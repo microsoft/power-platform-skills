@@ -70,7 +70,7 @@ function customApiGateProblems(fixture) {
   }
   if (bindings.length && !calls.some((call) => isGate(call.command))) problems.push('Custom API table has no applicable feature gate');
   if (fixture.manifest?.expectedOutcome === 'refused') {
-    if (latest === 'enabled' || !bindings.length || (fixture.files || []).length || calls.some((call) => isGeneration(call.command) || isMutation(call.command))) {
+    if (latest === 'enabled' || !bindings.length || (fixture.files || []).length || calls.some((call) => isGeneration(call.command) || isMutation(call))) {
       problems.push('Custom API refusal must have a blocked gate and zero generation or mutations');
     }
     if (!/\bhalt(?:ed)?\b|\bneeds_input\b/i.test(fixture.workflowLog || '')) problems.push('Custom API gate refusal did not surface a halt');

@@ -10,18 +10,20 @@
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
-const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
+const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
-const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
+const { resolveAuthoringLanguage, BuildHalt } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
+const { judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
+const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -32,17 +34,20 @@ const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('.
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
+const { navigationHolds } = require('./lib/app-navigation.js');
 // Unattended-mode detection lives in one module so /app-builder and /genpage cannot drift apart
 // on what "unattended" means. Re-exported from here because callers and tests already import it
 // from this file.
 const { envTruthy } = require('./lib/interaction-mode.js');
-// R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
+// Auto-verify: after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
-const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
+const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
 // missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
@@ -76,9 +81,9 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
   assertWorkspaceDir(workspaceDir, { create: persistent });
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const httpClient = createAzHttpClient(env);
-  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
+  const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
@@ -237,9 +242,11 @@ async function discoverOpDiffState(spec, provision) {
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
     forms.push({ formId: id, label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
   }
-  // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap).
+  // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap) and the build will write a navigation. A spec
+  // whose appShell has no `areas` array is refused by the navigation check before anything is written (lib/app-navigation.js: `appDef` has nothing to
+  // build a sitemap from), so listing every live entry as dropped would ask the maker to authorize a removal the build is then going to refuse.
   let sitemap = null;
-  if (spec.appShell && collision.appExists) {
+  if (navigationHolds(spec).declared && collision.appExists) {
     const appId = await provision.findArtifact('app', { uniqueName: collision.appUnique });
     if (appId) {
       await provision.fetchArtifact('app', appId);
@@ -410,6 +417,12 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+  // One budget for the waiting the BUILD'S OWN retry layers add when a service throttles — the page backend's waits between the sends of a page write (a `$batch` the HTTP client never re-sends) and this loop's own waits before it runs
+  // a phase again — so the run can neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js). It is NOT a bound on all the waiting a run does:
+  // the production HTTP client re-sends a throttled read, publish, delete or column create on a schedule of its own (at most five re-sends, honouring a `Retry-After` of up to a minute), exactly as it did before there was a budget, and
+  // that is not charged to it — a throttled build that succeeds today would otherwise halt. `now` is the clock the page backend stamps the moment before which nothing may be sent on (`retryNotBefore`): a test seam, with `sleep`.
+  const throttle = deps.throttle || makeThrottleBudget({ warn: deps.warn });
+  const now = deps.now || Date.now;
   let authorizedFormRemovals;
   let authorizedSitemapRemovals;
   let currentDestructiveApproval;
@@ -456,7 +469,7 @@ async function buildModelApp(spec, opts, deps) {
   const runsRemovalPhases = (opts.phases || PHASES).includes('forms') && (opts.phases || PHASES).includes('app-shell')
     && !(opts.changedOnly && opts.changedOnly.fastApply);
 
-  // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
+  // Partial-apply guard: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
   // (solution+data-model+sample-data). Every other partial range (--from/--to/--only/--skip, or any other
   // --stage) is dry-run-only (design §14): its range is not dependency-closed and the app id is not carried
   // across runs, so applying it would run phases against an incomplete result map. Recovery from a halt is
@@ -464,10 +477,10 @@ async function buildModelApp(spec, opts, deps) {
   if (opts.apply) {
     const active = opts.phases || PHASES;
     const sameSet = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
-    // I1 exception: a `--changed-only` pages-only FAST apply is the ONE sanctioned partial range. It is
+    // Exception: a `--changed-only` pages-only FAST apply is the ONE sanctioned partial range. It is
     // pre-gated by the changed-only flow (snapshot eligibility + identity match + classify proved every
     // change is a pure page-content re-upload) and self-hydrates the app id via
-    // opts.changedOnly.resolvedAppId (the sdk-build seam), so it does NOT hit the cross-phase-id hazard I1
+    // opts.changedOnly.resolvedAppId (the sdk-build seam), so it does NOT hit the cross-phase-id hazard this guard
     // guards against. Any other partial range on --apply is still refused.
     const isChangedOnlyPages = !!(opts.changedOnly && opts.changedOnly.fastApply) && sameSet(active, ['pages']);
     if (!isChangedOnlyPages && !sameSet(active, PHASES) && !sameSet(active, STAGES.data)) {
@@ -487,7 +500,7 @@ async function buildModelApp(spec, opts, deps) {
   // #changed-only EXEMPTION: a pages-only fast apply is pre-gated by the changed-only flow (snapshot
   // eligibility + live identity match + classify proved every change is a pure page-content re-upload) and
   // touches NO data model, so the collision/destructive preflight does not apply. Running it would (a) HARD-
-  // STOP the fast path in --non-interactive because the app always exists (Opus H3), and (b) do slow full
+  // STOP the fast path in --non-interactive because the app always exists, and (b) do slow full
   // form/sitemap reads for nothing. The pages phase keeps its own removal/shared/membership safety gates.
   const isFastApply = !!(opts.changedOnly && opts.changedOnly.fastApply);
   if (opts.apply && !isFastApply && (deps.discoverOpDiffState || (deps.provisionSdk && opts.checkCollisions !== false))) {
@@ -629,6 +642,11 @@ async function buildModelApp(spec, opts, deps) {
   // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
   // (`owedPaid`), and the final halt settles the rest.
   const owedAcrossAttempts = new Map();
+  // What failed attempts still owe for the primary name column of a table they created and did not finish setting the length of
+  // (sdk-build.js: `owedLengths` on the halt, the records the data-model phase keeps). Handed to every attempt, which pays what it can
+  // at the end of its own data-model phase; what a halt carries replaces it, being everything that is still owed. A halt that carries
+  // no list (one thrown before the engine, or by a stand-in for it) leaves it as it was.
+  let owedLengths = [];
   let r;
   for (let attempt = 1; ; attempt++) {
     counts.ok = counts.skip = counts.error = 0; // summary reflects the final (successful) attempt
@@ -636,13 +654,14 @@ async function buildModelApp(spec, opts, deps) {
       r = await runBuild(spec, {
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
+        owedLengths,
         apply: opts.apply,
         sampleData: opts.sampleData,
         publish: opts.publish,
         livePlan: opts.livePlan,
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
-        env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        env: opts.env, // for the pages phase (its page backend is made for this environment)
         languageCode: opts.languageCode,
         // Forwarded explicitly because this is a fresh literal, not a spread of `opts`: without it
         // the data-model phase re-resolves, and on a transient org-read failure that fallback lands
@@ -652,38 +671,63 @@ async function buildModelApp(spec, opts, deps) {
         // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
         provisionedLanguages: deps.provisionedLanguages,
         warn: deps.warn,
-        genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
+        genpage: deps.genpage, // injectable seam for tests (lib/genpage-sdk.js's shape); else made from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         authorizedFormRemovals,
         authorizedSitemapRemovals,
-        allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
+        allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
         // rewrite keep a nav change made in the designer since then instead of reverting it.
         baselineSpec: opts.baselineSpec,
+        // The budget of waiting the page backend spends from, one for every attempt of this run.
+        throttle,
         emit,
       });
       break;
     } catch (err) {
       if (err && err.owedPaid) owedAcrossAttempts.clear();
       collectOwedPublishes(owedAcrossAttempts, err && err.owedPublishes);
+      if (err && Array.isArray(err.owedLengths)) owedLengths = err.owedLengths;
+      let halted = err;
       if (attempt <= maxRetries && isTransientHalt(err, { spec })) {
-        const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
-        if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
-        log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms…`);
-        await sleep(delay);
-        continue;
+        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
+        // What the service asked of the next send, carried across the layers (retry-policy.js, throttleAskOf): when the page backend's sends ran out it handed over the moment before which nothing may be
+        // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
+        const ask = throttleAskOf(err);
+        const asked = ask.notBefore > 0 ? Math.ceil(Math.min(ask.askedMs || Infinity, Math.max(0, ask.notBefore - now())) / 1000) * 1000 : 0;
+        const delay = Math.max(backoff, asked);
+        if (ask.throttled && !throttle.fits(delay)) {
+          // The wait does not fit what is left of the run's budget: stop, and say what the service asked. The build is idempotent, so a later run goes on from here.
+          halted = new BuildHalt(`${err && err.phase ? `${err.phase} stopped` : 'the build stopped'}: ${waitDoesNotFit(throttle, { askedMs: ask.askedMs || asked, waitMs: delay })}`, {
+            phase: err && err.phase, code: 'throttle-budget-exhausted', recoverable: true, cause: err, retry: retryPolicyFor(err), statusCode: 429,
+          });
+        } else {
+          if (ask.throttled) throttle.spend(delay);
+          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
+          const askNote = asked > 0 ? ` (the service asked to wait ${Math.ceil((ask.askedMs || asked) / 1000)} s)` : '';
+          log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms${askNote}…`);
+          await sleep(delay);
+          continue;
+        }
       }
-      // A non-transient (or retries-exhausted) halt — journal where/why it stopped, then propagate.
+      // A non-transient (or retries-exhausted, or out-of-budget) halt — journal where/why it stopped, then propagate.
       // Resume by re-running the same command (idempotent): a partial range (--from and the like) is
       // refused on --apply.
       //
       // First publish the views and forms this build's attempts had saved and no publish phase paid: no
       // retry follows now (see settleOwedPublishes, sdk-build.js). Best-effort, so the halt below is still
-      // what this run reports.
-      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn);
-      if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
-      throw err;
+      // what this run reports. The spec's tables ride along so the settle can say what they still hold saved and
+      // not published — but only for a build that stopped BEFORE a publish phase it has: an apply with --publish
+      // and the phase in its range, not a halt before anything was written, and not one after the phase completed
+      // (`owedPaid`: the halt of a step that runs after it, the AI features' re-confirmation, say). What the phase
+      // published is live, and a line that says the build stopped before it would be false.
+      const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight') && !(err && err.owedPaid);
+      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
+      // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
+      await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
+      if (journal) journal.close({ status: 'halt', phase: halted && halted.phase, code: halted && halted.code, recoverable: !!(halted && halted.recoverable), message: String((halted && halted.message) || halted), ...counts });
+      throw halted;
     }
   }
   // #559: a dry run's whole purpose is to say what an apply would DO, so summarise the decision
@@ -700,22 +744,25 @@ async function buildModelApp(spec, opts, deps) {
     if (unreadable) parts.push(`${unreadable} could not be read`);
     if (wouldHalt) parts.push(`${wouldHalt} would stop the build`);
     if (unprobed) parts.push(`${unprobed} not probed`);
+    // A dry run that says a step would stop the build must not then tell the maker to run it. The spec-only summary counts those steps too: with no live
+    // probe the navigation check can still refuse a spec on its own, and it marks the app step the same way.
+    const closing = wouldHalt ? 'Fix the steps marked ? above, then re-run with --apply to execute.' : 'Re-run with --apply to execute.';
     log(r.livePlan
-      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). Re-run with --apply to execute.`
-      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan). Re-run with --apply to execute.`);
+      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). ${closing}`
+      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan)${wouldHalt ? `, ${wouldHalt} would stop the build` : ''}. ${closing}`);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
-    // R3 — auto-verify: reconcile the spec against what actually deployed so a silent partial build
+    // Auto-verify: reconcile the spec against what actually deployed so a silent partial build
     // (an artifact created but not wired, or a phase that quietly produced nothing) surfaces now
     // instead of only when the user opens the app. Read-only; injected (deps.verify) so tests drive it.
     // A verify failure does NOT undo the build (it already ran) — it is reported and returned in
     // r.verify so the CLI can exit non-zero.
     //
-    // MANDATORY + FAIL-CLOSED for page-bearing specs (design §13.1, C6):
+    // MANDATORY + FAIL-CLOSED for page-bearing specs (design §13.1):
     //   - Page verify runs even without --verify when the spec has implemented pages AND the pages
     //     phase was applied (appliedPagesPhase). A --stage data apply (pages NOT selected) must NOT
-    //     trigger mandatory verify (RECONCILIATION 2).
+    //     trigger mandatory verify.
     //   - A verify that CANNOT run (no verifier wired, or verifySpec throws) yields
     //     r.verify={ok:false,unableToRun:true} → non-zero exit. An unverifiable page set never passes
     //     silently — distinguish reader-incapacity (unableToRun) from ordinary miss (ok:false only).
@@ -744,7 +791,10 @@ async function buildModelApp(spec, opts, deps) {
           // written and every later run would fall back to a full build. Without the second, the
           // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
           // at all) fails the same way on every run after the first.
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec });
+          // The language the build wrote its labels in goes too: the flag it was given and what its SDK was made for. A build run with
+          // `--language-code` in an organization whose base language is another one publishes its captions in the flag's language, and a
+          // verify that does not know it holds them to the organization's and reports the captions it was just given as missing.
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as
@@ -758,13 +808,19 @@ async function buildModelApp(spec, opts, deps) {
           if (vr.phaseSkipped && vr.phaseSkipped.length) {
             log(`  ⊘ ${vr.phaseSkipped.length} check(s) not verified because their phase did not run in this build: ${vr.phaseSkipped.join(', ')}`);
           }
+          // A check verify could not DECIDE is neither of those and neither a pass nor a failure: named beside the PASS, with its reason, so a
+          // green verify never reads as "everything the spec declares is deployed" while a label was not compared.
+          if (vr.unverified && vr.unverified.length) {
+            log(`  ⊘ ${vr.unverified.length} check${vr.unverified.length === 1 ? '' : 's'} could not be verified — ${vr.unverified.length === 1 ? 'it is' : 'they are'} neither passed nor failed:`);
+            for (const u of vr.unverified) log(`      ⊘ ${u}`);
+          }
           // Include `detail` on a failure so a READ that failed (throttling, auth expiry, a 5xx) is
           // not reported identically to an artifact that is genuinely absent.
           if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
-          // Propagate unableToRun from verifySpec (RECONCILIATION 1): verifySpec itself sets
+          // Propagate unableToRun from verifySpec: verifySpec itself sets
           // unableToRun when the reader lacks pages/pageCode methods. Only include the property
           // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
-          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}) };
+          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}), ...(vr.unverified && vr.unverified.length ? { unverified: vr.unverified } : {}) };
           if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
         } catch (e) {
           if (mustVerifyPages) {
@@ -823,47 +879,48 @@ async function buildModelApp(spec, opts, deps) {
   return r;
 }
 
-// A halt is transient (safe to auto-retry, since the build is idempotent) when the underlying HTTP
-// status is 429/503, or the message names a known transient server condition (customization lock,
-// concurrent-op guard, SQL timeout, "try again later"). NOTE: the engine's `recoverable` flag means
-// "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
+// A failure is transient (safe to auto-retry, since the build is idempotent) when the SERVICE said so, by the
+// structure of its answer: the HTTP status it answered (429, 502, 503, 504), a timeout or a reset of the
+// transport, or a condition it names by the `error.code` of its answer (a customization or solution lock, SQL
+// giving up waiting, a concurrent request on the same record, a SQL deadlock victim — the generic SQL error code
+// with the platform's deadlock signature in the service's own answer — the lag of a column the spec creates). A
+// status that is not one of those — a 403, a 404, a 400, a 500 — is final, whatever the answer says: an answer
+// echoes what the maker named, and "SQL Timeout Reader" is a legal name for a view, a role, a persona, a flow,
+// a page, and — `contoso_customizationlockexception` — a table. Only a failure that carries no HTTP status at
+// all (a plain error, the words a helper reported by value) is read by the service's own words as a fallback:
+// customization lock, concurrent-op guard, SQL timeout, "try again later". What the build or the maker named
+// is never read: a halt's message quotes views, roles, personas, flows, pages, paths and the workspace's
+// folder. So the decision is made from the STRUCTURE of the failure first, and the plugin's own text is out of
+// it — lib/retry-policy.js holds the rule (`judgeFailure`), and tests/halt-retry-policy.test.js holds every
+// halt the build raises to a policy of its own. A failure that says it must not be retried (`transient: false`
+// anywhere along its causes) or that the SDK or the plugin types as a refusal (VALIDATION_ERROR,
+// VERSION_CONFLICT, a file system error) is never retried, whatever it quotes.
+// NOTE: the engine's `recoverable` flag means "re-runnable phase", NOT "transient error", so it is
+// deliberately NOT used here.
 //
-// `spec` (optional) enables the one clause that depends on what the build itself creates — see
-// MISSING_DECLARED_ATTRIBUTE below. Without it that clause never fires, so a caller that passes no spec gets
-// exactly the classification it always had.
+// `spec` (optional) enables the one condition that depends on what the build itself creates — the lag of a
+// column the spec declares (see MISSING_ATTRIBUTE_CODES in lib/retry-policy.js). Without it that condition never
+// fires, so a caller that passes no spec gets exactly the classification it always had.
 function isTransientHalt(err, { spec } = {}) {
   if (!err) return false;
-  // An error that says it must not be retried wins over any status or text it carries. A dashboard
-  // the build could neither add to its solution nor remove again is one (sdk-build.js): its message
-  // quotes the causes verbatim — a customization lock, "try again later" — but a retry would find the
-  // dashboard as a lone name match and reuse it outside the solution, the state the undo exists to
-  // prevent.
-  if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
-  const status = (err.cause && err.cause.statusCode) || err.statusCode;
-  const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
-  const missing = spec ? MISSING_DECLARED_ATTRIBUTE.exec(msg) : null;
+  // A dashboard the build could neither add to its solution nor remove again says `transient: false`
+  // (sdk-build.js): its message quotes the causes verbatim — a customization lock, "try again later" —
+  // but a retry would find the dashboard as a lone name match and reuse it outside the solution, the
+  // state the undo exists to prevent. `never` is that, and the typed refusals, and a status that says no.
+  const judgement = judgeFailure(err, spec ? { declares: (table, column) => specDeclaresAttribute(spec, table, column) } : {});
+  if (judgement.never) return false;
+  if (judgement.transient) return true;
+  // Here the failure carries no HTTP status at all. `text` is only what the service said — a halt's own
+  // message, and what an error says of its url, are not in it — unless an error declares its own words
+  // (`retryText`), and then those alone are.
+  const msg = judgement.text;
   return (
-    status === 429 ||
-    status === 503 ||
     /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg) ||
     // A SQL deadlock victim was rolled back, so the idempotent build can simply run again — the same
     // footing as the "SQL timeout" above, with a less ambiguous outcome (see SQL_DEADLOCK_VICTIM).
-    SQL_DEADLOCK_VICTIM.test(msg) ||
-    Boolean(missing && specDeclaresAttribute(spec, missing[1], missing[2]))
+    SQL_DEADLOCK_VICTIM.test(msg)
   );
 }
-
-// Dataverse rejects a view (or other fetch) naming a column it cannot see yet. Live-captured, from a view
-// pushed moments after this build created the relationship that adds the lookup:
-//   HTTP 400 from https://<org>/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has
-//   invalid fetch.  Error : 'contoso_task' entity doesn't contain attribute with Name = 'contoso_projectid'
-//   and NameMapping = 'Logical' (look up …
-// The metadata change had not yet reached the server validating the fetch, and re-running the same build
-// succeeded — so for a column the SPEC creates this is the same lag a retry rides out. Only for that column:
-// the lag explanation cannot apply to a column nobody declared, which is an authoring error and must halt at
-// once instead of spending three backoffs first. Group 1 is the table, group 2 the column (both logical).
-// `doesn.t` also accepts a typographic apostrophe, so a localized or reformatted rendering still matches.
-const MISSING_DECLARED_ATTRIBUTE = /'([^']+)' entity doesn.t contain attribute with Name\s*=\s*'([^']+)'/i;
 
 // Exponential backoff with jitter: ~3s, 6s, 12s (capped at 30s).
 function backoffMs(attempt) {
@@ -892,7 +949,7 @@ function parseLanguageCode(value) {
 // Refuse to mutate unless the changed-only snapshot was demonstrably invalidated (#587 item 3).
 //
 // Extracted from main() so it can be tested by BEHAVIOUR. The first version of this guard was
-// covered only by a source-level test, and an adversarial review proved that test worthless: both
+// covered only by a source-level test, which proved worthless: both
 // `if (false && …)` and a catch that manufactures `{ ok: true }` passed the whole file. A guard
 // whose test survives its own removal is not a guard.
 //
@@ -923,7 +980,7 @@ function assertSnapshotInvalidated(store, workspaceDir) {
 // state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
 // re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
 // the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
-// found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort:
+// found a silent partial must NOT record its spec as the deployed baseline. Best-effort:
 // returns whether the baseline was written, and never throws.
 //
 // The spec is persisted ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
@@ -1143,7 +1200,7 @@ async function main() {
   }
   let r;
   try {
-    // deps.verify (R3): the real reconcile, wired to the live provision SDK. Only invoked when
+    // deps.verify: the real reconcile, wired to the live provision SDK. Only invoked when
     // opts.verify AND the build applied successfully. Constructed here (not in buildModelApp) so the
     // core stays free of SDK-reader wiring and fully injectable for tests.
     const deps = {
@@ -1156,7 +1213,19 @@ async function main() {
       // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
       // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
-      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, isolatedReader }), verifyOpts),
+      verify: async (s, verifyOpts) => {
+        // The page reads go through a backend of their own, in a throwaway workspace — not the app folder's `.maker-workspace`, which
+        // would be left holding a copy of every page read — removed as soon as this verify ends.
+        const genpage = makeGenpageSdk(env);
+        try {
+          return await verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir, isolatedReader }), verifyOpts);
+        } finally {
+          // Awaited: a read the pass gave up on can still be running, and the workspace is removed only once the storage calls it had under way have settled. A folder it could not
+          // remove holds page source, so it is a warning: the verify result is not changed by it.
+          const leftOnDisk = leftOnDiskWarning(await genpage.dispose());
+          if (leftOnDisk) deps.warn(leftOnDisk);
+        }
+      },
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),
@@ -1200,7 +1269,7 @@ async function main() {
   }
   persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity });
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
-  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists
+  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal auto-verify exists
   // to raise), while r still carries the full build + verify detail.
   const ok = r.ok && (!r.verify || r.verify.ok);
   emitResult(ok, r);

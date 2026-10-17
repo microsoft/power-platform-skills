@@ -5,14 +5,14 @@
 //
 // Usage:
 //   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]
-const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, relationshipsInCreateOrder } = require('./lib/entity-provision.js');
-const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength } = require('./lib/app-spec.js');
+const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength, keyWaitsForNameLength } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -20,10 +20,10 @@ const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, read
 //   provision    — header-less; used for discovery reads (findTables/findColumns/
 //                  fetchEntityMetadata/queryRecords).
 async function makeSdk(env, input) {
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const httpClient = createAzHttpClient(env);
-  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
-  const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
+  const sdkTempDir = makeTempWorkspace('provision-');
+  const provisionTempDir = makeTempWorkspace('provision-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });
@@ -111,7 +111,7 @@ function buildPlan(input, opts) {
       plan.push(`status reason ${e.schemaName}: ${sr.label}`);
     }
     for (const k of e.alternateKeys || []) {
-      plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+      if (!keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
     }
   }
   
@@ -128,6 +128,14 @@ function buildPlan(input, opts) {
   // After the relationships: where provisionDataModel sets the length of a table it creates (computeTotal counts the step too).
   for (const e of input.entities || []) {
     if (askedPrimaryNameLength(e) !== undefined) plan.push(`primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}`);
+  }
+  // Then the alternate keys over a name column whose length is set: the apply makes such a key once that length is right
+  // (keyWaitsForNameLength, which depends on what the key's label is sent as and not on the language), where a table it creates has it.
+  // computeTotal counts them with the other keys.
+  for (const e of input.entities || []) {
+    for (const k of e.alternateKeys || []) {
+      if (keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+    }
   }
 
   if (opts.sampleData && input.sampleData) {

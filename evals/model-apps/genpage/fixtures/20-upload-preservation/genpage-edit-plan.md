@@ -17,4 +17,4 @@ None. Omit --connectors.
 None. Omit --actions.
 
 ## Changes
-Local sorting only. Omit name-file and model; the wrapper reads and re-sends the current values.
+Local sorting only. Omit name-file, model, data sources and the binding files: the page keeps its own.

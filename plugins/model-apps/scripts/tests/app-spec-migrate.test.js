@@ -175,7 +175,7 @@ test('#545: a present-but-malformed key is preserved verbatim for validation to 
   assert.strictEqual(migrateAppSpec(s).pages[0].key, 'orders');
 });
 
-// IMPORTANT #2 regression: a navigatesTo name-ref whose target name collides with a minted key
+// Regression: a navigatesTo name-ref whose target name collides with a minted key
 // for a DIFFERENT page must resolve to the correct (first) page and not be double-rewritten.
 //
 // Scenario: page "Detail" (key: "detail") and page "detail" (key: "detail-2", because "detail"

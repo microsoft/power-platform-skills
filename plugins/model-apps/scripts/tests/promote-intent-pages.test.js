@@ -9,9 +9,9 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 const CLI = path.join(__dirname, '..', 'promote-intent-pages.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
@@ -19,7 +19,7 @@ const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_
 const GOOD = 'export default function P() { return <div>ok</div>; }\n';
 
 function makeWorkspace(spec, files) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-'));
+  const dir = makeTempDir('promote-');
   fs.writeFileSync(path.join(dir, 'app-spec.json'), JSON.stringify(spec, null, 2), 'utf8');
   for (const [name, code] of Object.entries(files || {})) fs.writeFileSync(path.join(dir, name), code, 'utf8');
   return dir;
@@ -384,7 +384,10 @@ test('validatePage refuses a codeFile that escapes the working directory', () =>
   // (which promotion skips), but codeFile is author-editable and download-derived, so the check
   // lives with the read rather than relying on that invariant holding forever.
   const { validatePage } = require('../promote-intent-pages.js');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-esc-'));
+  // The working directory is a folder inside this test's own temporary folder, so the file "outside" it is
+  // still inside a folder the test removes (it used to be written straight into the OS temp folder).
+  const dir = path.join(makeTempDir('promote-esc-'), 'work');
+  fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, '..', 'outside.tsx'), GOOD, 'utf8');
   for (const codeFile of ['../outside.tsx', path.join(dir, '..', 'outside.tsx')]) {
     const r = validatePage({ key: 'evil', name: 'Evil', source: { kind: 'tsx', codeFile } }, dir);
@@ -394,7 +397,7 @@ test('validatePage refuses a codeFile that escapes the working directory', () =>
 });
 
 test('a malformed or missing spec fails closed with the same exit contract', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-bad-'));
+  const dir = makeTempDir('promote-bad-');
   let r = run(dir);
   assert.equal(r.code, 3, 'missing spec');
   assert.match(r.stderr, /cannot read app spec/);

@@ -4,21 +4,27 @@
 // editable app-spec + page codeFiles. The vendored appApi.get uses RetrieveUnpublishedMultiple for
 // both header and sitemap, so membership must use that same current state, not the published layer.
 // Reconstructs the app (sitemap -> appShell), ALL its generative
-// pages (via pac list+download, incl. Maker-authored), its entities (minimal — the build reuses
+// pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys]
+//
+// A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
+// earlier download of the SAME app gave it (the app-spec.json already in --out, when its app.uniqueName is this app's). If that earlier spec gives a page keys that
+// cannot be told apart — one key to two pages, or two keys to one page — and the manifest does not bind the page, the download stops without writing anything:
+// `{ ok: false, code: 'page-keys-ambiguous', error, pages }`. Correct the file and download again, or pass --reset-page-keys to give exactly those pages fresh
+// keys (minted in page-id order; every other page keeps its key). The switch is a decision about every environment that holds a copy of the earlier spec: it
+// binds each key to the page it built there, so a fresh key can make that copy update another page.
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
-const { makeGenpageCli, unescapePacName } = require('./lib/genpage-cli.js');
-const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
+const { makeGenpageSdk, unescapePacName, pageFolderFiles } = require('./lib/genpage-sdk.js');
+const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR } = require('./lib/page-manifest.js');
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
@@ -27,9 +33,49 @@ const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
 const { mapLimit } = require('./lib/entity-provision.js');
+const { compareText } = require('./lib/compare-text.js');
+const { appUniqueName } = require('./lib/sdk-build.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
+
+// How a download orders every list it writes. Dataverse promises no order for a query that has no `$orderby`, and a directory
+// listing (`fs.readdirSync`) is in the file system's order — name order on NTFS, hash order on ext4 — so a list written in the
+// order it arrived made two downloads of one app differ only in order. Every list is ordered with `compareText`
+// (lib/compare-text.js): by code units, never by the host's locale, so the order is a function of the strings alone and is the
+// same on every machine. The ORDER a list is written in decides nothing else: in particular no page key (see assignPageKeys).
+
+// Pages, as they are written: by name, then by id. The name is the page's own — what the maker called it, which a second download
+// of the app reads the same — so the order does not hang on ids, which differ between environments. Two pages that share a name are
+// told apart by id, the only thing that does. This is the order of `pages[]` and of what is reported about pages; the keys are
+// minted in another (comparePageIds).
+function comparePages(a, b) {
+  return compareText(a && a.name, b && b.name) || compareText(a && a.pageId, b && b.pageId);
+}
+
+// Pages by id alone: the order NEW pages are minted keys in (assignPageKeys). A page's id is its own and never changes, while its
+// name can be changed in Maker, can make the same slug as another page's, and sorts into another place under another comparison —
+// a key decided by that order moves with it. By id it is also the order a file system that lists names in order (NTFS, HFS+: the
+// folders are named by GUID) gave the page folders, which is the order earlier releases minted in: a spec they wrote, and that was
+// deployed to another environment, keeps the keys it was built with.
+function comparePageIds(a, b) {
+  return compareText(a && a.pageId, b && b.pageId);
+}
+
+// A deployed artifact the download inventories ({ id, name, entity }): by table, then name, then id.
+function compareArtifacts(a, b) {
+  return compareText(a && a.entity, b && b.entity) || compareText(a && a.name, b && b.name) || compareText(a && a.id, b && b.id);
+}
+
+// An app-membership note ({ kind, table?, id?, name?, reason }): by what it is about, then by what it says.
+function compareNotes(a, b) {
+  for (const key of ['kind', 'table', 'id', 'name', 'reason']) {
+    const order = compareText(a && a[key], b && b[key]);
+    if (order) return order;
+  }
+  return 0;
+}
 
 // Reconstruct the app's dashboards (declared as DashBoard sitemap subareas) into app-spec
 // dashboards[] entries. Each tile is reconstructed with ID PASSTHROUGH — it carries the deployed
@@ -392,8 +438,8 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
   // Deterministic order: the metadata endpoints carry no ordering guarantee, and this block is
   // written to a file that operators diff between runs, so an unstable order reads as a change that
   // did not happen.
-  relationships.sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)));
-  skipped.sort((x, y) => (x.entity + x.name).localeCompare(y.entity + y.name));
+  relationships.sort((x, y) => compareText(JSON.stringify(x), JSON.stringify(y)));
+  skipped.sort((x, y) => compareText(x.entity + x.name, y.entity + y.name) || compareText(x.reason, y.reason));
   return { relationships, skipped };
 }
 
@@ -428,12 +474,12 @@ function relationshipsSkippedWarning(skipped) {
 // and the caller's `finally` is not reachable until this function returns (as in build-model-app.js).
 // `deps` is a test seam: the bundle's factories, the HTTP client, and the temp-directory calls.
 async function makeDownloadSdk(env, deps = {}) {
-  const workspaceDir = (deps.mkdtempSync || fs.mkdtempSync)(path.join(os.tmpdir(), 'model-app-download-'));
+  const workspaceDir = makeTempWorkspace('model-app-download-', { mkdtempSync: deps.mkdtempSync });
   const cleanup = () => (deps.rmSync || fs.rmSync)(workspaceDir, { recursive: true, force: true });
   try {
     const { createMakerSdk, createNodeWorkspaceStorage } = (deps.createMakerSdk && deps.createNodeWorkspaceStorage)
       ? deps
-      : require('./vendor/cds-maker-sdk.cjs');
+      : require('./lib/maker-sdk.js');
     const httpClient = deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env);
     const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
     await sdk.initWorkspace();
@@ -782,11 +828,18 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
     fail('globalChoices', err);
   }
 
+  // Ordered here, once, for everything that reads the inventory — the spec's `descriptionInventory`, the not-round-tripped report
+  // and the role-restriction warning. The rows are in the order Dataverse answered, which differs between two reads of one app; by
+  // table, then name, then id (compareArtifacts) they do not.
+  for (const key of ['views', 'charts', 'forms', 'businessRules', 'roleRestrictedForms']) inventory[key].sort(compareArtifacts);
+  inventory.globalChoices.sort((a, b) => compareText(a.name, b.name));
+  inventory.incomplete.sort((a, b) => compareText(a.kind, b.kind) || compareText(a.reason, b.reason));
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
 }
 
-// Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
-// pages[] entries with codeFile paths relative to `outDir`.
+// Read the page tree a download writes (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
+// pages[] entries with codeFile paths relative to `outDir`. The same layout is what scripts/genpage.js download writes (both through
+// lib/genpage-sdk.js `pageFolderFiles`) and what an earlier release's `pac model genpage download` wrote, so a folder downloaded by either is read the same way.
 //
 // `unreadable` collects pages whose config.json EXISTS but could not be parsed. That distinction is
 // load-bearing: a MISSING config is genuinely optional, but a present-and-unparseable one means the
@@ -799,7 +852,15 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels) {
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
-  for (const entry of fs.readdirSync(pagesRoot)) {
+  // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
+  // not the same on every machine, and this loop decides the order of `pages[]` in the spec and of the unreadable-config and
+  // unkept-model reports. It decides no page key: assignPageKeys mints in the order of the pages' ids, whatever order it is given.
+  const nameOf = (entry) => (nameById && nameById.get(String(entry).toLowerCase())) || entry;
+  const entries = fs.readdirSync(pagesRoot)
+    .map((entry) => ({ pageId: entry, name: nameOf(entry) }))
+    .sort(comparePages)
+    .map((page) => page.pageId);
+  for (const entry of entries) {
     const dir = path.join(pagesRoot, entry);
     if (!fs.statSync(dir).isDirectory()) continue;
     const tsx = path.join(dir, 'page.tsx');
@@ -812,7 +873,8 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     // bindings and never recorded as unreadable, so it slipped past the --allow-lossy-download gate
     // this very function exists to feed.
     try {
-      // MEASURED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+      // MEASURED: the config.json an earlier release's `pac model genpage download` wrote starts `ef bb bf` (this release's downloads write none — the SDK keeps the stored
+      // text — but a folder downloaded then is still read). Node's
       // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
       // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
@@ -842,14 +904,15 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
     // The model that generated the page, as config.json records it. It has to come back with the page:
-    // pac stores whatever `--model` an upload sends, so a rebuild that re-uploads without it wiped a
-    // deployed model id to "" (live-measured). Only an id the spec can hold is carried (see above).
+    // a rebuild that re-uploads a page without its model must not lose the one the page was generated with (an
+    // upload through `pac` (what an earlier release used) stored whatever `--model` it was sent, so one without it wiped the id to "" — live-measured).
+    // Only an id the spec can hold is carried (see above).
     const recordedModel = typeof config.model === 'string' ? config.model.trim() : '';
     const model = PAGE_MODEL_RE.test(recordedModel) ? recordedModel : undefined;
     if (recordedModel && !model && Array.isArray(unkeptModels)) unkeptModels.push({ pageId: entry, model: recordedModel });
     pages.push({
       pageId: entry,
-      name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,
+      name: nameOf(entry),
       dataSources: Object.prototype.hasOwnProperty.call(config, 'dataSources') ? config.dataSources : [],
       ...(model ? { model } : {}),
       prompt,
@@ -859,13 +922,129 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
   return pages;
 }
 
-// Assign a STABLE key to every downloaded page + carry the manifest's v2 semantics. `keyToId` (from
-// reconcilePageIds — the authority: manifest-confirmed-live id → unique live-name, ambiguous already
-// HALTed upstream) binds manifest keys to live ids; a page bound there reuses that key + purpose/
-// navigatesTo/pageInput/dataSources. A page with NO binding (legacy app / Maker-authored) gets a FRESH
-// unique slug key (design §7.3 — NOT the old name shape, which drifted on rename). Returns idToKey for
-// reverse-normalizing nav literals. Mutates pages. This uses reconcilePageIds, NOT a name-collapsing Map.
-function assignPageKeys(pages, manifest, keyToId) {
+// The page keys an earlier download of this app left in the output folder: { keys, conflicts, problem, unidentified }, read from the app-spec.json this
+// download is about to replace (the working folder of an edit session holds it). A key is a page's identity in a rebuild — a copy of that spec deployed to
+// another environment binds each key to the page it created there — so a page whose id is read again keeps the key it had, whatever it is called now or
+// however the names sort, instead of being given one afresh (assignPageKeys).
+//
+// What is read of the file is each page's `pageId` and `key`, and `app.uniqueName` to tell this app's spec from any other:
+//   { "app": { "uniqueName": "contoso_app" }, "pages": [ { "key": "work-order", "pageId": "10000000-0000-4000-8000-000000000001", ... }, ... ] }
+// A page id does not say which app a key belongs to — a page can be in several apps, each with its own page manifest and so its own keys — so the file is
+// this app's only when it SAYS so: `app.uniqueName` is a text and is this app's unique name. The name is read as the build reads an app's identity
+// (appUniqueName, lib/sdk-build.js) and compared without case, as Dataverse compares unique names (lib/deployed-baseline.js readBaseline does the same).
+// A gap is never a wildcard. A spec that names another app is skipped. One that names none is skipped too — an authored spec derives its identity from its
+// publisher prefix and name and writes none, and a hand edit can leave a null, a blank or a number — and is reported (`unidentified`) when it held keys that
+// could have been used. (The identity appUniqueName derives for such a spec is a guess at what the build would create, not something the file says.)
+//
+// `keys` (Map<lower-cased page id, key>) holds the entries that are clear. An entry with no id or no key, or a key outside the key grammar, is skipped.
+// A key given to two pages, or a page given two keys, is ambiguous — the file was edited by hand — and is kept for none of them; each such group is in
+// `conflicts` as { keys, pageIds }: one page and the keys it is given, or one key and the pages it is given to. With `livePageIds`, only the rows of those
+// pages are read at all: a row of a page the app no longer has says nothing about a page it has, so it neither voids a clear key nor makes a conflict.
+//
+// Best-effort, like the other things read back from this file (preserveAuthoredLanguageCode): a missing file keeps nothing and says nothing; one that
+// cannot be read keeps nothing and says so (`problem`), because the keys are then minted afresh and may differ from the ones a deployed copy was built
+// with. `problem` never quotes the file: a parse error carries a piece of the text, and a link planted at this name could point at any file.
+function readPreviousPageKeys(specPath, appUnique, { livePageIds } = {}) {
+  const none = (extra = {}) => ({ keys: new Map(), conflicts: [], problem: null, unidentified: false, ...extra });
+  let prior;
+  try {
+    assertPlainFileTarget(specPath); // a missing file passes; a link, a folder or a hard link is refused, unread
+    prior = JSON.parse(fs.readFileSync(specPath, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return none();
+    if (error && error.code === 'UNSAFE_OUTPUT') return none({ problem: `it is not a regular file with one name (${error.reason})` });
+    return none({ problem: error instanceof SyntaxError ? 'it is not valid JSON' : String((error && error.code) || (error && error.message) || error) });
+  }
+  if (!prior || typeof prior !== 'object' || !Array.isArray(prior.pages)) return none();
+  const live = livePageIds ? new Set(Array.from(livePageIds, (id) => String(id).trim().toLowerCase())) : null;
+  const rows = [];
+  for (const page of prior.pages) {
+    if (!page || typeof page.key !== 'string' || !KEY_GRAMMAR.test(page.key) || typeof page.pageId !== 'string' || !page.pageId.trim()) continue;
+    const id = page.pageId.trim().toLowerCase();
+    if (!live || live.has(id)) rows.push({ id, key: page.key });
+  }
+  const ours = typeof appUnique === 'string' ? appUnique.trim().toLowerCase() : '';
+  if (!ours) return none();
+  const said = prior.app && typeof prior.app.uniqueName === 'string' && prior.app.uniqueName.trim() ? appUniqueName(prior).trim().toLowerCase() : '';
+  if (!said) return none({ unidentified: rows.length > 0 });
+  if (said !== ours) return none();
+  const idsOfKey = new Map();
+  const keysOfId = new Map();
+  const add = (map, from, to) => { if (!map.has(from)) map.set(from, new Set()); map.get(from).add(to); };
+  for (const { id, key } of rows) {
+    add(idsOfKey, key, id);
+    add(keysOfId, id, key);
+  }
+  const keys = new Map();
+  const ofSeveralKeys = [];
+  const ofSeveralPages = [];
+  for (const [id, own] of keysOfId) {
+    const [key] = own;
+    if (own.size === 1 && idsOfKey.get(key).size === 1) keys.set(id, key);
+    if (own.size > 1) ofSeveralKeys.push({ keys: [...own].sort(compareText), pageIds: [id] });
+  }
+  for (const [key, owners] of idsOfKey) {
+    if (owners.size > 1) ofSeveralPages.push({ keys: [key], pageIds: [...owners].sort(compareText) });
+  }
+  // In an order of their own, not the file's: pages given several keys by page id, then keys given to several pages by key.
+  ofSeveralKeys.sort((a, b) => compareText(a.pageIds[0], b.pageIds[0]));
+  ofSeveralPages.sort((a, b) => compareText(a.keys[0], b.keys[0]));
+  return { keys, conflicts: [...ofSeveralKeys, ...ofSeveralPages], problem: null, unidentified: false };
+}
+
+// The pages the earlier spec's keys leave undecided, and what is wrong with them: `conflicts` is what readPreviousPageKeys found (about the pages of this download
+// only) and `keyToId` the keys the page manifest binds (key -> id). A page the manifest binds is not undecided, whatever the file says of it: the manifest is the
+// authority, and its key is used. Of every other page in a conflict the file cannot say which key a deployed copy was built with. Returns the pages (by name, then
+// id, as { pageId, name }) and the conflicts that concern one of them, or null when there are none.
+function undecidedPageKeys(conflicts, keyToId, nameById) {
+  const bound = new Set(Array.from((keyToId || new Map()).values(), (id) => String(id).toLowerCase()));
+  const undecided = new Map();
+  const concerning = [];
+  for (const conflict of conflicts || []) {
+    const open = conflict.pageIds.filter((id) => !bound.has(id));
+    if (!open.length) continue;
+    concerning.push(conflict);
+    for (const id of open) undecided.set(id, (nameById && nameById.get(id)) || id);
+  }
+  if (!undecided.size) return null;
+  return { pages: [...undecided].map(([pageId, name]) => ({ pageId, name })).sort(comparePages), conflicts: concerning };
+}
+
+// The refusal of a download whose earlier spec leaves page keys undecided (undecidedPageKeys). It names each page with its id and each key, says why guessing is
+// not safe and what the two ways on are. It is the only thing the download answers then: nothing has been written.
+function pageKeysRefusal(specPath, undecided, nameById) {
+  const quoted = (list) => list.map((key) => `'${key}'`).join(', ');
+  const named = (id) => ({ pageId: id, name: (nameById && nameById.get(id)) || id });
+  const describe = (pages) => pages.map((p) => `${JSON.stringify(p.name)} (${p.pageId})`).join(', ');
+  const found = undecided.conflicts.map((c) => (c.pageIds.length > 1
+    ? `the key ${quoted(c.keys)} is given to ${c.pageIds.length} pages: ${describe(c.pageIds.map(named).sort(comparePages))}`
+    : `${describe(c.pageIds.map(named))} is given ${c.keys.length} keys: ${quoted(c.keys)}`));
+  return {
+    ok: false,
+    code: 'page-keys-ambiguous',
+    error: `the page keys in ${specPath} cannot be told apart for ${undecided.pages.length} page(s) that the app's page manifest does not bind: ${found.join('; ')}. `
+      + 'A page\'s key is its identity in a rebuild: a copy of an earlier spec that was deployed to another environment has each key bound to the page it built there, '
+      + 'so giving these pages fresh keys could make that copy update the wrong pages. Nothing was written. Correct the file so that each page has one key and each key one page '
+      + '(the keys an earlier download wrote are the ones a deployed copy was built with) and download again; or download again with --reset-page-keys to give exactly these pages '
+      + 'fresh keys, minted in page-id order (every other page keeps its key), and check each key against every environment that holds a copy of the earlier spec before you deploy this spec there.',
+    pages: undecided.pages,
+    conflicts: undecided.conflicts,
+  };
+}
+
+// Assign a STABLE key to every downloaded page + carry the manifest's v2 semantics. A page's key is its identity in a rebuild (a spec
+// deployed to another environment holds no page ids, so that environment binds each key to the page it created there): once a page has
+// one it keeps it, and a key never depends on the order pages are read or written in. It comes from, in this order:
+//   1. the manifest: `keyToId` (from reconcilePageIds — the authority: manifest-confirmed-live id → unique live-name, ambiguous already
+//      HALTed upstream) binds manifest keys to live ids; a page bound there reuses that key + purpose/navigatesTo/pageInput/dataSources;
+//   2. `previousKeys` (Map<lower-cased page id, key>, readPreviousPageKeys): the key an earlier download of this app gave the page,
+//      matched by the page's id — unless the manifest already gave that key to another page;
+//   3. a FRESH unique slug of the page's name, for a page with neither (legacy app / Maker-authored; design §7.3 — NOT the old name
+//      shape, which drifted on rename). Only these are minted, after every key above is taken, and in the order of the pages' IDS: when two
+//      names make one slug, the lower id gets the plain slug and the next `-2`. Never by name, which is not stable, never by the order
+//      the pages arrive in. (It is the order earlier releases minted in on a file system that lists its folders by name.)
+// Returns idToKey for reverse-normalizing nav literals. Mutates pages. This uses reconcilePageIds, NOT a name-collapsing Map.
+function assignPageKeys(pages, manifest, keyToId, previousKeys) {
   const idToKey = new Map();
   const used = new Set();
   const manifestByKey = new Map(((manifest && manifest.pages) || []).map((m) => [m.key, m]));
@@ -892,22 +1071,35 @@ function assignPageKeys(pages, manifest, keyToId) {
       if (m.purpose !== undefined) p.purpose = m.purpose;
       if (m.navigatesTo) p.navigatesTo = m.navigatesTo;
       if (m.pageInput !== undefined) p.pageInput = m.pageInput;
-      // Only copy manifest dataSources when the download gave us nothing (pac may include them).
+      // Only copy manifest dataSources when the download gave us nothing (the page's own config normally carries them).
       if (m.dataSources && !(p.dataSources || []).length) p.dataSources = m.dataSources;
     }
   }
-  // Second pass: pages that had no binding get a fresh unique slug key.
-  for (const p of pages) {
-    if (!p.key) {
-      p.key = mint(p.name);
-      idToKey.set(String(p.pageId).toLowerCase(), p.key);
-    }
+  // Second pass: a page the manifest does not bind keeps the key an earlier download of this app gave it. Taken in id order, so that even
+  // a map that gives one key to two pages has one answer; a key the manifest bound to another page is not taken twice (it stays with the
+  // manifest's page, and this one is minted below).
+  const unkeyed = () => pages.filter((q) => !q.key).sort(comparePageIds);
+  for (const p of unkeyed()) {
+    const id = String(p.pageId).toLowerCase();
+    const kept = previousKeys && previousKeys.get(id);
+    if (!kept || used.has(kept)) continue;
+    p.key = kept;
+    used.add(kept);
+    idToKey.set(id, kept);
+  }
+  // Third pass: the pages that are new get a fresh unique slug key, minted in the order of their ids (comparePageIds) after every key above
+  // is reserved: a new page cannot take a key an existing page holds, and the page that gets the plain slug of a shared one does not depend
+  // on the order of `pages`, which is the order they are written in (name, then id), nor on how the names compare. Minted in arrival or
+  // name order, an app downloaded again could swap two pages' keys, and a deployed copy of the spec would swap what the pages hold.
+  for (const p of unkeyed()) {
+    p.key = mint(p.name);
+    idToKey.set(String(p.pageId).toLowerCase(), p.key);
   }
   return idToKey;
 }
 
 // Entries of `a` whose pageId is absent from `b`. Used BOTH directions to require exact enumerated<->
-// downloaded id equality (I3). A gap either way means pac downloaded a different set than exists —
+// downloaded id equality. A gap either way means the download read a different set than exists —
 // rebuilding from this spec would silently drop/add pages, so download FAILS instead.
 function missingDownloads(a, b) {
   const have = new Set((b || []).map((p) => String(p.pageId).toLowerCase()));
@@ -1184,7 +1376,7 @@ function notRoundTrippedSummary(inventory) {
     if (!rows.length) continue;
     classes.push({ kind: key, count: rows.length, label });
     if (!entityScoped) {
-      orgScoped.push({ kind: key, label, names: rows.map((r) => String(r.name)).sort((a, b) => a.localeCompare(b)) });
+      orgScoped.push({ kind: key, label, names: rows.map((r) => String(r.name)).sort(compareText) });
       continue;
     }
     for (const r of rows) {
@@ -1200,23 +1392,24 @@ function notRoundTrippedSummary(inventory) {
   const incomplete = (inventory && Array.isArray(inventory.incomplete) ? inventory.incomplete : [])
     .filter((i) => i && i.kind)
     .map((i) => ({ kind: i.kind, reason: i.reason || 'read failed' }))
-    .sort((a, b) => a.kind.localeCompare(b.kind));
+    .sort((a, b) => compareText(a.kind, b.kind) || compareText(a.reason, b.reason));
   if (!classes.length && !incomplete.length) return null;
   // Sorted at EVERY level, not just the table one. The rows arrive from `queryRecords`, i.e. in
   // whatever order Dataverse returned them, which carries no ordering guarantee — so two downloads
   // of an unchanged app could emit the same artifacts in a different order. This block is written
   // into the operator's output and compared between runs, so an unstable order reads as a change
   // that did not happen, which is the opposite of the point: the report exists to make a real
-  // difference visible. `classes` is already deterministic (built from the fixed CLASSES list).
+  // difference visible. `classes` is already deterministic (built from the fixed CLASSES list). The order is compareText's — by
+  // code units, not the host's collation — so the report reads the same on every machine.
   const entityKeys = CLASSES.filter((c) => c.entityScoped).map((c) => c.key);
   return {
     classes,
     total: classes.reduce((n, c) => n + c.count, 0),
     entities: [...byEntity.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => compareText(a, b))
       .map(([entity, v]) => ({
         entity,
-        ...Object.fromEntries(entityKeys.map((k) => [k, [...(v[k] || [])].sort((a, b) => String(a).localeCompare(String(b)))])),
+        ...Object.fromEntries(entityKeys.map((k) => [k, [...(v[k] || [])].sort(compareText)])),
       })),
     ...(orgScoped.length ? { orgScoped } : {}),
     ...(incomplete.length ? { incomplete } : {}),
@@ -1875,7 +2068,7 @@ async function recoverAppSolution(sdk, appId) {
     // Sorted so the candidates — and everything derived from them — are order-independent.
     real = sols
       .filter((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename))
-      .sort((a, b) => String(a.uniquename).localeCompare(String(b.uniquename)));
+      .sort((a, b) => compareText(a.uniquename, b.uniquename));
   } catch (e) {
     return { unreadable: (e && e.message) ? String(e.message).slice(0, 200) : 'read failed' };
   }
@@ -1911,13 +2104,15 @@ async function recoverAppSolution(sdk, appId) {
 
 // Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
 // `sdk`        — the MakerSDK (fetchArtifact, queryRecords, fetchEntityMetadata)
-// `genpageCli` — the genpage CLI wrapper (enumerateEnv, download)
+// `genpage`    — the page backend (lib/genpage-sdk.js: enumerateEnv, read)
 // `outDir`     — output directory root
 // `appId`      — the app's GUID (used for download + solution lookup)
 // `appUnique`  — the app's unique name (for fetchSitemap + manifest lookup); may be undefined for
 //                apps not found by unique name, in which case the sitemap read fails gracefully.
+// `resetPageKeys` — the maker's decision to give the pages whose earlier keys cannot be told apart fresh keys instead of stopping (see the header of this file)
 // Returns { ok:true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails,
-// dashboardReconstructionError } or { ok:false, error }.
+// dashboardReconstructionError } or { ok:false, error } — and, when the earlier spec's page keys cannot be told apart, { ok:false, code:'page-keys-ambiguous',
+// error, pages, conflicts }, answered before anything is written.
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 // A link already under pages/ must be refused before the tree is replaced. rm of a real
@@ -1946,29 +2141,39 @@ function assertNoPlantedPageLinks(pagesRoot) {
   }
 }
 
-// pac writes the page tree itself and follows a link left at the destination name. The
-// download therefore lands in a private directory; each file is then copied, raw, into the
-// directory the caller named. A link at pages/<id> or at a file under it is refused first.
-function installDownloadedPages(stagingRoot, pagesRoot) {
+// The page folders a download writes, from the pages as the backend read them: pages/<pageId>/{page.tsx,config.json,prompt.txt}, the
+// layout parseDownloadedPages reads back. The tree is replaced as a whole, so a page deleted since the last download does not linger.
+//
+// The SDK writes nothing to disk itself, so this is the one place that must not follow a link planted in the output folder: one already
+// under pages/ is refused first (assertNoPlantedPageLinks), a folder is made only after the name is checked (assertSafeOutputDir), and
+// every file is written by writeFileSafe, which refuses a link at the file's own name. A page id reaches here only after the backend has
+// read it, and the backend reads a GUID and nothing else, so no id can hold a path separator.
+function writePageTree(pagesRoot, pages) {
   assertSafeOutputDir(pagesRoot, { create: true });
   assertNoPlantedPageLinks(pagesRoot);
   fs.rmSync(pagesRoot, { recursive: true, force: true });
   assertSafeOutputDir(pagesRoot, { create: true });
-  for (const entry of fs.readdirSync(stagingRoot)) {
-    const srcDir = path.join(stagingRoot, entry);
-    if (!fs.statSync(srcDir).isDirectory()) continue;
-    const destDir = path.join(pagesRoot, entry);
+  for (const { pageId, files } of pages) {
+    const destDir = path.join(pagesRoot, pageId);
     assertSafeOutputDir(destDir, { create: true });
-    for (const name of fs.readdirSync(srcDir)) {
-      const srcFile = path.join(srcDir, name);
-      if (!fs.statSync(srcFile).isFile()) continue;
-      // Raw bytes: pac's BOM and CRLF are content, not something to re-encode.
-      writeFileSafe(path.join(destDir, name), fs.readFileSync(srcFile));
-    }
+    for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8' });
   }
 }
 
-async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false, concurrency }) {
+// Reads every page the sitemap names, by id — so nothing outside this app is read — a few at a time, and answers
+// { ok: true, pages: [{ pageId, files }] } in the sitemap's order, or { ok: false, errors } naming each page that could not be read. A page that
+// cannot be read is a page the spec would drop: the caller refuses to write one rather than report it as an app without that page. That includes
+// a page the SDK holds as raw files, which has no source to put in a folder (the backend throws for it).
+async function readSitemapPages(genpage, ids, concurrency) {
+  const results = await mapLimit(ids, concurrency, async (id) => {
+    try { return { id, page: await genpage.read(id) }; } catch (error) { return { id, error }; }
+  }, { firstInOrder: true });
+  const failed = results.filter((r) => r.error);
+  if (failed.length) return { ok: false, errors: failed.map((r) => `${r.id}: ${(r.error && r.error.message) || r.error}`) };
+  return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
+}
+
+async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -2001,7 +2206,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const componentInventory = await readAppComponentInventory(sdk, appId);
 
   // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,
-  // discriminated). The app-scoped `pac genpage list --app-id` is sitemap-scoped anyway but returns
+  // discriminated). A page list scoped to the app is sitemap-scoped anyway but carries
   // SITEMAP TITLES (not page names), misses headless nav-target pages, and cannot be trusted as the
   // "real names" source. The raw sitemap XML is the single authoritative membership record.
   const smResult = await fetchSitemap(sdk, appUnique, { currentLayer: componentInventory.layer });
@@ -2031,11 +2236,11 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       if (rows && rows[0] && rows[0].content) manifest = parseManifestBase64(rows[0].content);
     }
 
-    // Real names from the ENV-WIDE list (addenda new-1: env names ≠ sitemap titles). The env-wide
-    // `pac genpage list` returns each page's actual configured name; the sitemap title is what the
+    // Real names from the ENV-WIDE list (env names ≠ sitemap titles). The env-wide
+    // list holds each page's actual configured name; the sitemap title is what the
     // Maker chose for the subarea label, which can differ. Using the sitemap title as the page name
-    // was the root of the name-vs-title mismatch (live-confirmed; see Plan-5 §Background).
-    const envResult = await genpageCli.enumerateEnv();
+    // was the root of the name-vs-title mismatch (live-confirmed).
+    const envResult = await genpage.enumerateEnv();
     if (!envResult.ok) {
       return { ok: false, error: `page enumeration failed during download: ${envResult.error}` };
     }
@@ -2044,7 +2249,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
         .map((p) => [String(p.pageId).toLowerCase(), p.name])
     );
 
-    // Download EXACTLY the sitemap's pages (by id — headless-free, no env-wide over-pull). The
+    // Read EXACTLY the sitemap's pages (by id — headless-free, no env-wide over-pull). The
     // sitemap is the MEMBERSHIP authority: we pull precisely this app's pages, no more, no less.
     const pagesRoot = path.join(outDir, 'pages');
     // Refuse a link already at pages/ before removing it or creating children through it.
@@ -2056,36 +2261,60 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       if (!(e && e.code === 'ENOENT')) throw e;
     }
     const sitemapIds = smPages.map((p) => p.pageId);
-    // pac follows a link at the output name. Stage in a private directory, then copy.
-    const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-download-pages-'));
-    try {
-      try {
-        await genpageCli.download({ appId, outputDir: stagingRoot, pageIds: sitemapIds });
-      } catch (e) {
-        return { ok: false, error: `pac genpage download failed: ${e.message}` };
-      }
-      installDownloadedPages(stagingRoot, pagesRoot);
-    } finally {
-      try { fs.rmSync(stagingRoot, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
-    }
 
     // Name resolver: env-wide name (real, stable) primary; sitemap title (XML-entity-decoded) as
     // fallback when the env-wide list doesn't cover an id (shouldn't happen in practice — env-wide
     // lists all pages — but guards against an eventual stale or truncated listing). Either one may hold
-    // pac's `\"` for a `"` (the row name always does; a title does when pac wrote it), and the spec's
-    // name is what a rebuild sends to pac — which would escape it again, adding a backslash every
-    // round trip. So the spec gets the name pac was given (`unescapePacName`).
+    // the `\"` an earlier release's `pac` stored for a `"` (the page's own name always did; a navigation title did when
+    // pac wrote it), and the spec's name is what a rebuild sends back — which must not gain a backslash every
+    // round trip. So the spec gets the name the page was given (`unescapePacName`).
     const nameById = new Map(smPages.map((p) => {
       const id = String(p.pageId).toLowerCase();
       return [id, unescapePacName(envNameById.get(id) || p.title || p.pageId)];
     }));
+
+    // Reconcile by MEMBERSHIP. For download, existence AND membership are both the sitemap ids
+    // (the pages we are about to pull — a page of the sitemap that cannot be pulled fails the download below). This differs from the build path, which
+    // uses the env-wide EXISTENCE set (because a build must find crash-orphaned pages that are not yet in the sitemap). It needs no page content, so it
+    // is done first: the keys below are judged before anything is read or written.
+    const { keyToId, conflicts } = reconcilePageIds(
+      (manifest && manifest.pages) || [],
+      manifest,
+      sitemapIds, // existenceIds: confirmed present (the sitemap names them)
+      sitemapIds  // sitemapIds: membership = same set as existence for the download path
+    );
+    if (conflicts.length) {
+      return { ok: false, error: `page identity conflict during download: ${conflicts.map((c) => c.pageId || c.key).join(', ')} — cannot safely reconstruct` };
+    }
+
+    // The keys an earlier download of this app gave these pages are read, and judged, BEFORE a page is read from the backend or anything is written, so that a
+    // refusal leaves the working folder exactly as it was: the file is the maker's only record of those keys, and the page folders may hold edits. Only the rows of
+    // the pages this app has now count: a row of a page that is gone says nothing about a page that is here.
+    const priorSpecPath = path.join(outDir, 'app-spec.json');
+    const previous = readPreviousPageKeys(priorSpecPath, appUnique, { livePageIds: sitemapIds });
+    if (previous.problem) {
+      process.stderr.write(`WARNING: the app-spec.json in ${outDir} could not be read (${previous.problem}), so the page keys of an earlier download were not kept: a page that the page manifest does not bind is given a fresh key, which can differ from the one a copy of that spec already deployed to another environment was built with.\n`);
+    }
+    if (previous.unidentified) {
+      process.stderr.write(`WARNING: the app-spec.json in ${outDir} does not say which app it describes (its app.uniqueName is missing, blank or not a text), so its page keys were not used as the earlier keys of this app: a page that the page manifest does not bind is given a fresh key, which can differ from the one a copy of that spec already deployed to another environment was built with. A spec an earlier download of this app wrote names the app in app.uniqueName.\n`);
+    }
+    // Keys that cannot be told apart for a page the manifest does not bind are not minted afresh behind the maker's back — that is how two pages of a
+    // deployed copy swap what they hold — unless the maker has said to (--reset-page-keys).
+    const undecided = undecidedPageKeys(previous.conflicts, keyToId, nameById);
+    if (undecided && !resetPageKeys) return pageKeysRefusal(priorSpecPath, undecided, nameById);
+
+    const read = await readSitemapPages(genpage, sitemapIds, concurrency);
+    if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
+    writePageTree(pagesRoot, read.pages);
+
     const unreadableConfigs = [];
     const unkeptModels = [];
     pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels);
-    // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the
-    // spec carried models — the model is stored empty.
+    // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
+    // update leaves the model the page already has as it is (the SDK writes only what a spec names), and a page the rebuild creates
+    // gets none.
     if (unkeptModels.length) {
-      process.stderr.write(`WARNING: ${unkeptModels.length} page model id(s) the App Spec cannot hold were left out, so a rebuild stores them empty: ${unkeptModels.map((u) => `${u.pageId} (${JSON.stringify(u.model)})`).join(', ')}\n`);
+      process.stderr.write(`WARNING: ${unkeptModels.length} page model id(s) the App Spec cannot hold were left out, so a rebuild keeps the model of a page that exists as it is and stores none on a page it creates: ${unkeptModels.map((u) => `${u.pageId} (${JSON.stringify(u.model)})`).join(', ')}\n`);
     }
     // A page whose config.json could not be read has UNKNOWN data sources, and the spec would claim
     // it has none — rebuilding it with no table bindings while its source still queries the table.
@@ -2098,8 +2327,8 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       process.stderr.write(`WARNING: ${unreadableConfigs.length} page config(s) unreadable; their data-source bindings are DROPPED: ${detail}\n`);
     }
 
-    // Bidirectional exact equality: sitemap ids ↔ downloaded ids (I3). A gap either way means pac
-    // fetched a different set than the sitemap declares — rebuilding from this spec would silently
+    // Bidirectional exact equality: sitemap ids ↔ downloaded ids. A gap either way means the download
+    // read a different set than the sitemap declares — rebuilding from this spec would silently
     // drop or add pages, so download FAILS instead.
     const missing = missingDownloads(smPages, pages);
     if (missing.length) {
@@ -2110,24 +2339,21 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       return { ok: false, error: `downloaded page(s) not in the sitemap: ${extra.map((p) => p.pageId).join(', ')} — inconsistent page set` };
     }
 
-    // Reconcile by MEMBERSHIP. For download, existence AND membership are both the sitemap ids
-    // (the pages we just pulled — if they were downloaded they exist; if not we already aborted
-    // above). This differs from the build path, which uses the env-wide EXISTENCE set (because a
-    // build must find crash-orphaned pages that are not yet in the sitemap).
-    const { keyToId, conflicts } = reconcilePageIds(
-      (manifest && manifest.pages) || [],
-      manifest,
-      sitemapIds, // existenceIds: confirmed present (we just downloaded them)
-      sitemapIds  // sitemapIds: membership = same set as existence for the download path
-    );
-    if (conflicts.length) {
-      return { ok: false, error: `page identity conflict during download: ${conflicts.map((c) => c.pageId || c.key).join(', ')} — cannot safely reconstruct` };
-    }
-
     // Assign stable keys + carry v2 semantics (navigatesTo/purpose/pageInput) from the manifest.
-    // Pages bound to manifest keys reuse their key and semantics; Maker-added pages (not in the
-    // manifest) get a fresh slug key minted from their env-wide name.
-    const idToKey = assignPageKeys(pages, manifest, keyToId);
+    // Pages bound to manifest keys reuse their key and semantics; the other pages keep the key an earlier download of this app
+    // gave them (the app-spec.json this download replaces); only pages with neither (Maker-added, not in the manifest) get a
+    // fresh slug key minted from their env-wide name — and so do the pages whose earlier keys cannot be told apart, when the maker said to (--reset-page-keys).
+    const idToKey = assignPageKeys(pages, manifest, keyToId, previous.keys);
+    if (undecided) {
+      const keyOf = new Map(pages.map((p) => [String(p.pageId).toLowerCase(), p.key]));
+      process.stderr.write(`WARNING: --reset-page-keys: ${undecided.pages.length} page(s) were given a fresh key because the app-spec.json in ${outDir} gave them keys that cannot be told apart (${undecided.pages.map((p) => `${JSON.stringify(p.name)} (${keyOf.get(p.pageId)})`).join(', ')}). A key is a page's identity in a rebuild: another environment that holds a copy of the earlier spec has the earlier keys bound to its pages, so deploying this spec there could update a different page than the earlier one did. Check each key against that environment before you deploy this spec there.\n`);
+    }
+    // A key that is not the earlier one was given by the manifest (it outranks the file, and it holds a key for a page, or a page for a key,
+    // that the file says otherwise of). Say so: a copy of the earlier spec deployed to another environment binds the earlier keys there.
+    const moved = pages.filter((p) => previous.keys.has(String(p.pageId).toLowerCase()) && previous.keys.get(String(p.pageId).toLowerCase()) !== p.key);
+    if (moved.length) {
+      process.stderr.write(`WARNING: ${moved.length} page(s) have a different key than in the app-spec.json this download replaces (${moved.map((p) => `${JSON.stringify(p.name)} (${previous.keys.get(String(p.pageId).toLowerCase())} -> ${p.key})`).join(', ')}) because the app's page manifest binds them differently. A key is a page's identity in a rebuild: another environment that holds a copy of the earlier spec has the earlier keys bound to its pages, so deploying this spec there would update a different page than the earlier one did. Check each key against that environment before you deploy this spec there, or give each page its earlier key again (in app-spec.json, in navigatesTo and in the PAGEREF_ tokens of the page source).\n`);
+    }
 
     // Reverse-resolve nav pageId literals → symbolic PAGEREF_<key> tokens (structural, oracle-safe). Only a double-quoted literal before any
     // place the lexer reads by guess is turned back, and only if the build would take the page written that way (see
@@ -2176,7 +2402,9 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     if (table && !sitemapSet.has(logical)) return table.isCustomEntity === true;
     return assetTables.has(logical) || (table && table.isCustomEntity === true);
   });
-  const allLogicals = [...new Set([...entityLogicals, ...schemaComponents])];
+  // The navigation's tables keep the navigation's order, which is the app's own. The ones the app holds beyond it arrive in the
+  // order of its component rows, which Dataverse does not fix, so they follow by name.
+  const allLogicals = [...new Set([...entityLogicals, ...schemaComponents.sort(compareText)])];
   for (const logical of appTables) {
     if (typeof componentInventory.tables.get(logical).isCustomEntity !== 'boolean') {
       componentInventory.notes.push({ kind: 'tables', table: logical,
@@ -2252,7 +2480,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // degrading there is the same shape as the bug this feature fixes, so say so. Not a gate: an
   // English-only spec is still a usable spec, and failing a read-only command over it would be worse.
   if (labelReadFailures.size) {
-    const detail = [...labelReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
+    const detail = [...labelReadFailures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
     process.stderr.write(`WARNING: a label read failed for ${labelReadFailures.size} table(s) (${detail}). The table AND COLUMN labels for those tables fall back to ONE language, so anything labelled in several languages downloads as single-language and a rebuild would recreate it that way. That read also carries the flags that identify a lookup's synthetic '<lookup>name' column, so those tables may additionally have captured one as a real Text column — delete any you see before a cross-environment rebuild. Re-run the download to recover both.\n`);
   }
   // #564: the option-set read is the ONLY source of a Choice/MultiChoice column's type. When it
@@ -2261,7 +2489,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // with the reason, and separately from the untyped list below, because "we could not look" is a
   // different fact from "this column has no substantiated type", and only the first is re-runnable.
   if (optionSetReadFailures.size) {
-    const detail = [...optionSetReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
+    const detail = [...optionSetReadFailures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
     process.stderr.write(`WARNING: the Choice/MultiChoice option-set read failed for ${optionSetReadFailures.size} table(s) (${detail}). Any choice column on those tables is captured WITHOUT its type or options, so rebuilding into a FRESH environment would create it as single-line Text. Re-run the download to recover them before a cross-environment rebuild.\n`);
   }
   // A column whose App Spec type could not be substantiated: a Choice/MultiChoice whose option set
@@ -2460,7 +2688,8 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // report whose job is naming them.
   const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
   let notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
-  const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes];
+  // The notes come in the order the component rows were read, which Dataverse does not fix (compareNotes).
+  const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes].sort(compareNotes);
   if (membershipNotes.length) {
     notRoundTripped = { ...(notRoundTripped || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
   }
@@ -2474,7 +2703,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
 async function main(deps = {}) {
   const argv = deps.argv || process.argv.slice(2);
   // Test seam: every side effect of main() — the process streams and exit, the result printer, the
-  // auth probe, and the helpers that reach Dataverse or pac — can be replaced. Each call still names the
+  // auth probe, and the helpers that reach Dataverse — can be replaced. Each call still names the
   // real function (`io.emitResult(...)`), so a reader, and the source-level contract tests, see which runs.
   const io = {
     stderr: deps.stderr || process.stderr,
@@ -2482,16 +2711,16 @@ async function main(deps = {}) {
     emitResult: deps.emitResult || emitResult,
     preflightAuth: deps.preflightAuth || preflightAuth,
     makeDownloadSdk: deps.makeDownloadSdk || makeDownloadSdk,
-    makeGenpageCli: deps.makeGenpageCli || makeGenpageCli,
+    makeGenpageSdk: deps.makeGenpageSdk || makeGenpageSdk,
     runDownload: deps.runDownload || runDownload,
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]';
-  // `--allow-lossy-download` is a real boolean switch, so it stays out of needValue; everything else
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys]';
+  // `--allow-lossy-download` and `--reset-page-keys` are real boolean switches, so they stay out of needValue; everything else
   // feeds a URL, an app id, or a path and must not receive `true`.
   const flagError = validateFlags(argv, {
-    known: ['env', 'app', 'out', 'output', 'allow-lossy-download'],
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys'],
     needValue: ['env', 'app', 'out', 'output'],
   });
   if (flagError) {
@@ -2503,6 +2732,8 @@ async function main(deps = {}) {
   const appArg = flags.app || positional[0];
   const outArg = flags.out || flags.output;
   const allowLossyDownload = flags['allow-lossy-download'] === true;
+  // Off unless it is given: it is a decision about every environment that holds a copy of the earlier spec (see the header), never a default.
+  const resetPageKeys = flags['reset-page-keys'] === true;
   if (!env || !appArg) {
     io.stderr.write(USAGE + '\n');
     io.exit(1);
@@ -2550,9 +2781,10 @@ async function main(deps = {}) {
     // Resolve the app's unique name early — needed for fetchSitemap (MEMBERSHIP) + manifest lookup.
     const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });
     const appUnique = appRows && appRows[0] && appRows[0].uniquename;
-    const genpageCli = io.makeGenpageCli(env);
+    // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
+    const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys });
     if (!result.ok) { finish(false, result); return; }
 
     const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft } = result;
@@ -2669,4 +2901,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, main };
+module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

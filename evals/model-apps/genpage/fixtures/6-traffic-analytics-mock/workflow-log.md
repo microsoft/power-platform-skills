@@ -28,7 +28,7 @@ associated result, in order, in `tool-results.json`.
 
 ### Requirements (orchestrator asks; genpage-planner runs discovery headless)
 - AskUserQuestion: Create new page(s) or edit an existing one? → Create new page(s)
-- `pac model list-languages` → 1033 English en-US, RTL: No (English only, no localization)
+- `node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'` → 1033 English en-US, RTL: No (English only, no localization)
 - Data source question skipped: $ARGUMENTS already states "with mock data" → Mock data
 - AskUserQuestion: Any specific requirements? → Clean and minimal design
 - Entity detection not needed (mock data — no Dataverse tables requested)
@@ -36,7 +36,7 @@ associated result, in order, in `tool-results.json`.
 - Custom API discovery not needed: no server-side operation; contract stays `No custom API bindings.`
 
 ### App selection
-- `pac model list` → 2 apps: Contoso Marketing Hub (11111111-2222-4333-8444-555555555555), Field Service Lite (99999999-8888-4777-8666-555555555555)
+- `node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'` → 2 apps: Contoso Marketing Hub (11111111-2222-4333-8444-555555555555), Field Service Lite (99999999-8888-4777-8666-555555555555); both published, neither with unpublished changes
 - AskUserQuestion: Which model-driven app should host the page? → Contoso Marketing Hub (11111111-2222-4333-8444-555555555555)
 
 ### Solution selection

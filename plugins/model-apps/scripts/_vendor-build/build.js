@@ -67,9 +67,6 @@ if (!fs.existsSync(SDK_NODE_ENTRY)) {
  * that means, and it REFUSES unless --allow-unreproducible is passed, because a source that cannot
  * be identified cannot be audited.
  */
-/* Strip merge-tool prefixes from an upstream commit subject before it is committed here.
- * See ./sanitize-subject.js for why, and why it lives in its own module. */
-const { sanitizeSubject } = require('./sanitize-subject.js');
 
 function sdkProvenance(root) {
   const git = (args) => {
@@ -111,9 +108,11 @@ function sdkProvenance(root) {
     }
   };
   try { walk(srcDir); } catch { /* no src tree: an export-based build, nothing to compare */ }
+  // The record has no commit subject, on purpose: the SHA is what identifies the source. The subject of the commit the build ran on is
+  // normally the monorepo's HEAD, a change that is usually not about the SDK at all, so in a public file it names unrelated work and
+  // tells a reader nothing.
   return {
     commit,
-    subject: sanitizeSubject(git(['log', '-1', '--format=%s'])),
     // null = could not determine (see above); a number = that many modified paths.
     dirtySdkPackage: dirtyRaw === null ? null : dirtyRaw.split('\n').filter(Boolean).length,
     libBuiltAt: entryMtime,
@@ -233,10 +232,10 @@ esbuild
     // The SDK compiles generative pages with a TypeScript compiler its HOST supplies
     // (`MakerSdkOptions.typescript`); its `/node` entry offers `loadNodeTypeScript`, which loads
     // `typescript` with a dynamic import. esbuild follows that import and inlined the whole compiler:
-    // 3.5 MB of a 4.4 MB bundle, measured with a metafile. The plugin supplies no compiler, since it
-    // still deploys pages through `pac`, so nothing ever calls that loader. Left external, the import
-    // stays a lazy runtime require, and a caller of `loadNodeTypeScript` gets "Cannot find module
-    // 'typescript'" instead of a compiler nobody asked for.
+    // 3.5 MB of a 4.4 MB bundle, measured with a metafile. The plugin passes its own compiler (the
+    // vendored one: lib/maker-sdk.js, lib/typescript-compiler.js), so nothing ever calls that loader.
+    // Left external, the import stays a lazy runtime require, and a caller of `loadNodeTypeScript`
+    // gets "Cannot find module 'typescript'" instead of a second copy of the compiler inside the bundle.
     external: ['typescript'],
     // The bundle is entirely Microsoft's cds-maker-sdk + its designer packages; esbuild's extracted
     // legal comments were 100% redundant Microsoft copyright headers (no third-party notices — the

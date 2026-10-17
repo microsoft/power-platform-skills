@@ -36,8 +36,8 @@ function noAppSdk() {
 
 test('readerFor.existenceIds() calls enumerateEnv(), memoized to one call, throws on failure', async () => {
   let calls = 0;
-  const genpageCli = { enumerateEnv: async () => { calls++; return { ok: true, ids: [GP_OVERVIEW, GP_DETAIL] }; } };
-  const reader = readerFor(stubSdk(), 'contoso_app', { genpageCli, workspaceDir: os.tmpdir() });
+  const genpage = { enumerateEnv: async () => { calls++; return { ok: true, ids: [GP_OVERVIEW, GP_DETAIL] }; } };
+  const reader = readerFor(stubSdk(), 'contoso_app', { genpage, workspaceDir: os.tmpdir() });
 
   const ids = await reader.existenceIds();
   assert.deepStrictEqual(ids, [GP_OVERVIEW, GP_DETAIL]);
@@ -46,7 +46,7 @@ test('readerFor.existenceIds() calls enumerateEnv(), memoized to one call, throw
 
   // Failure path: enumerateEnv !ok → existenceIds must throw (fail-closed — unknown env means cannot verify).
   const failing = readerFor(stubSdk(), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: false, error: 'auth expired' }) },
+    genpage: { enumerateEnv: async () => ({ ok: false, error: 'auth expired' }) },
     workspaceDir: os.tmpdir(),
   });
   await assert.rejects(failing.existenceIds(), /auth expired/i);
@@ -55,7 +55,7 @@ test('readerFor.existenceIds() calls enumerateEnv(), memoized to one call, throw
 test('readerFor.sitemapPageIds() returns page ids from fetchSitemap; throws when sitemap unreadable', async () => {
   const xml = `<SiteMap><Area><Group><SubArea GenPageId="${GP_OVERVIEW}"/><SubArea GenPageId="${GP_DETAIL}"/></Group></Area></SiteMap>`;
   const reader = readerFor(stubSdk({ sitemap: xml }), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   const ids = await reader.sitemapPageIds();
@@ -64,7 +64,7 @@ test('readerFor.sitemapPageIds() returns page ids from fetchSitemap; throws when
 
   // Failure: fetchSitemap returns !ok (app-not-found) → sitemapPageIds must throw (fail-closed).
   const failing = readerFor(noAppSdk(), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   await assert.rejects(failing.sitemapPageIds(), /could not read the app sitemap/i);
@@ -73,7 +73,7 @@ test('readerFor.sitemapPageIds() returns page ids from fetchSitemap; throws when
 test('readerFor.manifest() returns null when webresource absent; parsed manifest when valid; null when corrupt', async () => {
   // Absent: no webresource row → manifest() returns null (verifySpec will set unableToRun on a page-bearing spec).
   const readAbsent = readerFor(stubSdk(), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   assert.strictEqual(await readAbsent.manifest(), null, 'manifest null when webresource absent');
@@ -82,7 +82,7 @@ test('readerFor.manifest() returns null when webresource absent; parsed manifest
   const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_OVERVIEW }] };
   const b64 = Buffer.from(JSON.stringify(manifest)).toString('base64');
   const readPresent = readerFor(stubSdk({ webresource: [{ content: b64 }] }), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   const m = await readPresent.manifest();
@@ -91,55 +91,50 @@ test('readerFor.manifest() returns null when webresource absent; parsed manifest
   // Corrupt: base64 of non-JSON → parseManifestBase64 returns null → manifest() returns null.
   const corruptB64 = Buffer.from('this is not valid json!').toString('base64');
   const readCorrupt = readerFor(stubSdk({ webresource: [{ content: corruptB64 }] }), 'contoso_app', {
-    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    genpage: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
     workspaceDir: os.tmpdir(),
   });
   assert.strictEqual(await readCorrupt.manifest(), null, 'manifest null when webresource is corrupt JSON');
 });
 
-test('readerFor.pageCode(id) downloads by id (pageIds:[id]), caches per id, throws on download failure', async () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'vf-'));
-  let downloads = 0;
-  const genpageCli = {
+test('readerFor.pageCode(id) reads the page by id, caches per id, throws on read failure', async () => {
+  let reads = 0;
+  const genpage = {
     enumerateEnv: async () => ({ ok: true, ids: [] }),
-    // Simulate pac writing <outDir>/<pageId>/page.tsx (the per-id output layout).
-    download: async ({ outputDir, pageIds }) => {
-      downloads += 1;
-      const id = pageIds[0];
-      fs.mkdirSync(path.join(outputDir, id), { recursive: true });
-      fs.writeFileSync(path.join(outputDir, id, 'page.tsx'), `// code for ${id}`, 'utf8');
-      return true;
+    read: async (id) => {
+      reads += 1;
+      return { id, name: 'Page', source: `// code for ${id}` };
     },
   };
-  const reader = readerFor(stubSdk(), 'contoso_app', { genpageCli, workspaceDir: ws });
+  const reader = readerFor(stubSdk(), 'contoso_app', { genpage, workspaceDir: os.tmpdir() });
 
   const code = await reader.pageCode(GP_OVERVIEW);
   assert.ok(code.includes(GP_OVERVIEW), 'returned the page code for the requested id');
 
-  await reader.pageCode(GP_OVERVIEW); // second call — same id — must NOT re-download
-  assert.strictEqual(downloads, 1, 'download runs once per id (cached)');
+  await reader.pageCode(GP_OVERVIEW); // second call — same id — must NOT re-read
+  assert.strictEqual(reads, 1, 'the page is read once per id (cached)');
 
-  await reader.pageCode(GP_DETAIL); // different id → exactly one more download (per-id, not all-pages)
-  assert.strictEqual(downloads, 2, 'each distinct id downloaded separately');
+  await reader.pageCode(GP_DETAIL); // different id → exactly one more read (per-id, not all-pages)
+  assert.strictEqual(reads, 2, 'each distinct id is read separately');
 
-  // Download failure → throws so the build gate gets an error (fail-closed).
+  // Read failure → throws so the build gate gets an error (fail-closed).
   const failing = readerFor(stubSdk(), 'contoso_app', {
-    genpageCli: {
+    genpage: {
       enumerateEnv: async () => ({ ok: true, ids: [] }),
-      download: async () => { throw new Error('pac download failed'); },
+      read: async () => { throw new Error('page read failed'); },
     },
-    workspaceDir: fs.mkdtempSync(path.join(os.tmpdir(), 'vf-')),
+    workspaceDir: os.tmpdir(),
   });
-  await assert.rejects(failing.pageCode(GP_OVERVIEW), /pac download failed/i);
+  await assert.rejects(failing.pageCode(GP_OVERVIEW), /page read failed/i);
 });
 
-test('readerFor WITHOUT a genpageCli has no sitemapPageIds/existenceIds/manifest/pageCode — verifySpec fails closed (Imp7/C6)', () => {
+test('readerFor WITHOUT a page backend has no sitemapPageIds/existenceIds/manifest/pageCode — verifySpec fails closed', () => {
   const reader = readerFor(stubSdk(), 'contoso_app', {});
-  // No genpageCli → page-authority methods absent → verifySpec detects reader-incapacity → unableToRun.
-  assert.strictEqual(typeof reader.sitemapPageIds, 'undefined', 'no sitemapPageIds when no genpageCli');
-  assert.strictEqual(typeof reader.existenceIds, 'undefined', 'no existenceIds when no genpageCli');
-  assert.strictEqual(typeof reader.manifest, 'undefined', 'no manifest when no genpageCli');
-  assert.strictEqual(typeof reader.pageCode, 'undefined', 'no pageCode when no genpageCli');
+  // No page backend → page-authority methods absent → verifySpec detects reader-incapacity → unableToRun.
+  assert.strictEqual(typeof reader.sitemapPageIds, 'undefined', 'no sitemapPageIds when no page backend');
+  assert.strictEqual(typeof reader.existenceIds, 'undefined', 'no existenceIds when no page backend');
+  assert.strictEqual(typeof reader.manifest, 'undefined', 'no manifest when no page backend');
+  assert.strictEqual(typeof reader.pageCode, 'undefined', 'no pageCode when no page backend');
 });
 
 test('readerFor base readers normalize exact identities for tables, relationships, commands, and settings', async () => {
@@ -294,7 +289,7 @@ test('readerFor.appRoleIds fails closed when the association rows cannot be read
   assert.match(res.reason, /403/);
 });
 
-function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false, specObject = null, realGates = false, sdkFactory = null }) {
+function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false, specObject = null, realGates = false, sdkFactory = null, disposeOutcome }) {
   const scriptPath = path.join(__dirname, '..', 'verify-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
   const events = [];
@@ -327,6 +322,9 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
   const customRequire = (id) => {
     if (id === 'node:fs') return fakeFs;
     if (id === 'node:path') return path;
+    // The throwaway workspaces are made by the plugin's one maker of them (lib/temp-workspace.js), which works on the real file system: the harness stands
+    // in for it with the very call the script made before it existed, so what this test pins — each is made under the OS temp folder, by name, and removed — is as it was.
+    if (id === './lib/temp-workspace.js') return { makeTempWorkspace: (prefix) => fakeFs.mkdtempSync(path.join(os.tmpdir(), prefix)) };
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,
@@ -338,15 +336,18 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
         // Pure, so the real one — the CLI uses it to identify the environment's baseline.
         dataverseOrigin: require('../lib/dataverse-auth.js').dataverseOrigin,
+        // Pure as well: the `--language-code` flag, read the way the build reads it.
+        readLanguageCodeFlag: require('../lib/dataverse-auth.js').readLanguageCodeFlag,
       };
     }
     if (id === './lib/sdk-http-client.js') {
-      return { createAzHttpClient: (env) => ({ env }) };
+      // One client is made for the run; the page backend must be given that same one (its token is shared), so each is recorded.
+      return { createAzHttpClient: (env) => { const client = { env }; events.push({ type: 'createAzHttpClient', client }); return client; } };
     }
     if (!realGates && id === './lib/verify-spec.js') {
       return {
-        verifySpec: async (spec, read) => {
-          events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function' });
+        verifySpec: async (spec, read, opts) => {
+          events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function', opts });
           return verifyResult;
         },
       };
@@ -366,8 +367,15 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/odata.js') {
       return { odataLit: (value) => String(value).replace(/'/g, "''") };
     }
-    if (id === './lib/genpage-cli.js') {
-      return { makeGenpageCli: (env) => { events.push({ type: 'makeGenpageCli', env }); return { env }; } };
+    if (id === './lib/genpage-sdk.js') {
+      // The page backend the CLI makes: what it was made for and what it was given are recorded, so a test can tell that it works in a workspace of its
+      // own (it is lent no SDK) through the run's own HTTP client, and that it is disposed before the result is printed.
+      return {
+        makeGenpageSdk: (env, deps) => {
+          events.push({ type: 'makeGenpageSdk', env, deps });
+          return { env, dispose: async (options) => { events.push({ type: 'genpageDispose', options }); return disposeOutcome; } };
+        },
+      };
     }
     if (id === './lib/sitemap-pages.js') {
       return {
@@ -381,7 +389,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         parseManifestBase64: () => null,
       };
     }
-    if (id === './vendor/cds-maker-sdk.cjs') {
+    if (id === './lib/maker-sdk.js') {
         return {
           // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
           // must expose it too. The marker carries the root so the assertions below can still
@@ -493,6 +501,204 @@ test('verify CLI prints per-check status and aliases missing checks into emitRes
   const removed = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === sdkRoot);
   assert.ok(removed > -1, 'the throwaway workspace is removed');
   assert.ok(removed < harness.events.findIndex((e) => e.type === 'emitResult'), 'before emitResult ends the process');
+});
+
+// A build run with `--language-code` publishes its tab and section captions in that language, which may not be the organization's, and verify
+// can only hold them to the right one when it is told: it takes the flag the build takes, spelled either way, and hands it to the verification.
+const SPEC_FLAGS = { env: 'https://org.example', spec: '@app-spec.json' };
+const verifyCall = (harness) => harness.events.find((e) => e.type === 'verifySpec');
+
+test('verify CLI takes the build\'s --language-code (or --languageCode) and hands the language to the verification', async () => {
+  for (const flags of [{ 'language-code': '1036' }, { languageCode: '1036' }, { 'language-code': ' 1036 ', languageCode: '1036' }]) {
+    const harness = loadVerifyCli({ parseResult: { positional: [], flags: { ...SPEC_FLAGS, ...flags } } });
+    await harness.main();
+    assert.strictEqual(verifyCall(harness).opts.languageCode, 1036, JSON.stringify(flags));
+    assert.ok('baselineSpec' in verifyCall(harness).opts, 'the baseline is still handed over');
+  }
+  // Without the flag verify is told nothing — the spec's language, then the organization's, decide, as for a build with no flag.
+  const plain = loadVerifyCli({ parseResult: { positional: [], flags: SPEC_FLAGS } });
+  await plain.main();
+  assert.strictEqual(verifyCall(plain).opts.languageCode, undefined);
+});
+
+test('verify CLI refuses a --language-code that is no LCID, a pair that disagrees, and a bare flag, before it opens an SDK', async () => {
+  for (const [what, flags, message] of [
+    ['a language tag', { 'language-code': 'de-DE' }, /--language-code \/ --languageCode must be digits only, a positive integer LCID up to 65535 \(got 'de-DE'\)/],
+    ['zero', { languageCode: '0' }, /must be digits only/],
+    ['too large', { 'language-code': '65536' }, /must be digits only/],
+    ['two flags that disagree', { 'language-code': '1031', languageCode: '1036' }, /--language-code '1031' and --languageCode '1036' disagree — pass only one/],
+    ['a flag with no value', { 'language-code': true }, /--language-code/],
+    ['a flag with an empty value', { languageCode: '' }, /--languageCode/],
+  ]) {
+    const harness = loadVerifyCli({ parseResult: { positional: [], flags: { ...SPEC_FLAGS, ...flags } } });
+    await assert.rejects(harness.main(), (err) => err.exitCode === 1, what);
+    assert.match(harness.stderr.join(''), message, what);
+    assert.match(harness.stderr.join(''), /Usage: node verify-model-app\.js .*\[--language-code\|--languageCode <lcid>\]/, `${what}: the usage names the flag`);
+    assert.ok(!harness.events.some((e) => e.type === 'createMakerSdk' || e.type === 'verifySpec'), `${what}: nothing was opened or read`);
+  }
+});
+
+// A check verify could not decide is neither a pass nor a failure. It is listed — on stderr, and in the JSON result a skill reads — so a green
+// run never reads as "everything the spec declares is deployed" while a label was not compared.
+test('verify CLI lists what it could not verify, beside the PASS, in the output and the result — and says nothing when there is none', async () => {
+  const unverified = ['form-labels:new_ticket.Ticket Main (the label of tab \'tab_overview\' was not compared: the language the build wrote it in could not be established (the organization read failed: 503). Pass --language-code <lcid> (the one the build was run with) or set "languageCode" in the spec to compare them)'];
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: SPEC_FLAGS },
+    verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [], unverified },
+  });
+  await harness.main();
+  const stderr = harness.stderr.join('');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.match(stderr, /✓ verify PASS \(1\/1 present\)/, 'the verdict on what was checked is unchanged');
+  assert.ok(stderr.includes(`⊘ ${unverified[0]}`), `the unverified check is named, with its reason: ${stderr}`);
+  assert.match(stderr, /⊘ 1 check could not be verified — it is neither passed nor failed/);
+  assert.strictEqual(emitted.ok, true, 'it does not fail the run');
+  assert.deepStrictEqual(emitted.payload.unverified, unverified, 'the machine channel carries it');
+  assert.deepStrictEqual(emitted.payload.missing, []);
+
+  const none = loadVerifyCli({ parseResult: { positional: [], flags: SPEC_FLAGS } });
+  await none.main();
+  assert.doesNotMatch(none.stderr.join(''), /⊘/);
+  assert.ok(!('unverified' in none.events.find((e) => e.type === 'emitResult').payload), 'the result keeps its shape when nothing was left unverified');
+});
+
+// A form built in a language the environment's form read does not show: live, Spanish (3082) captions in an organization whose base language is English
+// (1033), read back with the form's labels in English only. Run as the CLI runs — the real verification over a reader built on an SDK that answers what the
+// platform answered — a verify told the language by either spelling of the flag, or by a pin in the spec, compares nothing it cannot read back: the
+// captions are listed unverified, the rest of the layout is checked, and the run ends clean.
+const SPANISH_FORM_ID = '00000000-0000-4000-8000-000000000001';
+const spanishFormSpec = (over = {}) => ({
+  solution: { uniqueName: 'FormProbe', displayName: 'Form Probe', publisherPrefix: 'new' },
+  app: { name: 'Form Probe', uniqueName: 'new_formprobe' },
+  entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', existing: true, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+  forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', layout: 'explicit', prune: false, notes: false,
+    tabs: [{ name: 'tab_main', label: 'Resumen', sections: [{ name: 'sec_main', label: 'Detalles', columns: 1, fields: ['new_name'] }] }] }],
+  ...over,
+});
+// The published form as a read returns it, with the captions `tab` and `section` (each `<label …/>` markup).
+const spanishFormXml = ({ tab, section }) => `<form><tabs><tab id="{1}" name="tab_main" expanded="true" visible="true"><labels>${tab}</labels><columns><column width="100%"><sections>`
+  + `<section id="{2}" name="sec_main" showlabel="true" visible="true" columns="1"><labels>${section}</labels><rows><row><cell id="{3}"><control id="new_name" classid="{4273EDBD-AC1D-40D3-9FB2-095C621B552D}" datafieldname="new_name" /></cell></row></rows></section>`
+  + '</sections></column></columns></tab></tabs><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+const englishLabels = { tab: '<label description="Overview" languagecode="1033" />', section: '<label description="Basics" languagecode="1033" />' };
+const formSdk = (formxml) => () => ({
+  initWorkspace: async () => {},
+  findTables: async () => [{ logicalName: 'new_ticket' }],
+  findColumns: async () => [{ logicalName: 'new_name' }],
+  queryRecords: async (set) => (set === 'systemform' ? [{ formid: SPANISH_FORM_ID, name: 'Main', objecttypecode: 'new_ticket', type: 2, isdefault: true, formxml }] : []),
+  fetchEntityMetadata: async () => ({ Relationships: [] }),
+  resolveArtifact: async () => [],
+  retrieveSetting: async () => null,
+  dataverse: {
+    get: async (p) => {
+      if (/WhoAmI/.test(String(p))) return { status: 200, body: { UserId: '11111111-2222-3333-4444-555555555555' } };
+      if (/RetrieveFilteredForms/.test(String(p))) return { status: 200, body: { value: [{ formid: SPANISH_FORM_ID }] } };
+      return { status: 200, body: { value: [] } };
+    },
+  },
+});
+const runSpanishVerify = async (flags, { spec = spanishFormSpec(), labels = englishLabels } = {}) => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { ...SPEC_FLAGS, ...flags } },
+    realGates: true,
+    specObject: spec,
+    sdkFactory: formSdk(spanishFormXml(labels)),
+  });
+  await harness.main();
+  return { harness, emitted: harness.events.find((e) => e.type === 'emitResult') };
+};
+
+test('verify CLI over a form read that carries only English — --language-code 3082, --languageCode 3082 and a spec pin — lists the Spanish captions unverified and exits clean', async () => {
+  for (const [what, flags, spec] of [
+    ['--language-code 3082', { 'language-code': '3082' }, spanishFormSpec()],
+    ['--languageCode 3082', { languageCode: '3082' }, spanishFormSpec()],
+    ['both spellings', { 'language-code': '3082', languageCode: '3082' }, spanishFormSpec()],
+    ['languageCode pinned in the spec', {}, spanishFormSpec({ languageCode: 3082 })],
+  ]) {
+    const { harness, emitted } = await runSpanishVerify(flags, { spec });
+    const stderr = harness.stderr.join('');
+    assert.strictEqual(emitted.ok, true, `${what}: the exit status is the verdict on what was compared — ${JSON.stringify(emitted.payload)}`);
+    assert.deepStrictEqual(emitted.payload.missing, [], `${what}: no caption is reported missing`);
+    assert.strictEqual(emitted.payload.present, emitted.payload.total, what);
+    assert.strictEqual(emitted.payload.unverified.length, 1, `${what}: ${JSON.stringify(emitted.payload.unverified)}`);
+    assert.match(emitted.payload.unverified[0], /^form-labels:new_ticket\.Main \(the labels of tab 'tab_main', section 'sec_main' in language 3082 were not compared: the environment's form read returns labels only in 1033, so labels written in 3082 cannot be read back from it\. Check them in Power Apps with that language, or verify in a language the read carries\)$/, what);
+    assert.match(stderr, /✓ verify PASS/, what);
+    assert.match(stderr, /⊘ 1 check could not be verified — it is neither passed nor failed/, what);
+    assert.ok(stderr.includes(`⊘ ${emitted.payload.unverified[0]}`), `${what}: the entry is named, with its reason`);
+  }
+});
+
+test('verify CLI compares the Spanish captions strictly when the read carries them — a stale one still fails the run', async () => {
+  const spanishToo = (tab) => ({
+    tab: `<label description="Overview" languagecode="1033" /><label description="${tab}" languagecode="3082" />`,
+    section: '<label description="Basics" languagecode="1033" /><label description="Detalles" languagecode="3082" />',
+  });
+  const right = await runSpanishVerify({ 'language-code': '3082' }, { labels: spanishToo('Resumen') });
+  assert.strictEqual(right.emitted.ok, true, JSON.stringify(right.emitted.payload));
+  assert.ok(!('unverified' in right.emitted.payload), 'the read shows Spanish: nothing is left it cannot tell');
+  const stale = await runSpanishVerify({ 'language-code': '3082' }, { labels: spanishToo('Antiguo') });
+  assert.strictEqual(stale.emitted.ok, false, 'a stale caption in a language the read carries fails, as ever');
+  assert.match(stale.emitted.payload.missing[0], /^form-topology:new_ticket\.Main \(deployed layout does not match the authored one — tab 'tab_main' is deployed with label "Antiguo" in language 3082, the spec declares label: "Resumen" in language 3082\)$/);
+  assert.ok(!('unverified' in stale.emitted.payload));
+  assert.match(stale.harness.stderr.join(''), /✗ verify FAIL — 1 missing/);
+});
+
+// The page reads a pass gave up on can still be running when it ends, and only a workspace the backend made itself is one it can close — so it is not
+// lent the run's SDK (whose folder the run removes). It is made lazily, when the first page is read, and disposed (closed, then removed) before the result is
+// printed: emitResult ends the process, so a cleanup placed after it never runs.
+test('verify CLI gives the page backend a workspace of its own and the run\'s HTTP client, and disposes it before the run\'s own workspace goes and the result is printed', async () => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json' } },
+    verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [] },
+    sdkFactory: () => ({
+      initWorkspace: () => {},
+      findTables: async () => [],
+      findColumns: async () => [],
+      queryRecords: async () => [],
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+      marker: 'the-run-sdk',
+    }),
+  });
+  await harness.main();
+  const made = harness.events.filter((e) => e.type === 'makeGenpageSdk');
+  assert.strictEqual(made.length, 1, 'one page backend per run');
+  assert.strictEqual(made[0].env, 'https://org.example');
+  assert.strictEqual(made[0].deps.sdk, undefined, 'it is not lent the SDK the run\'s other reads use: its workspace is its own to close');
+  const clients = harness.events.filter((e) => e.type === 'createAzHttpClient');
+  assert.strictEqual(clients.length, 1, 'one HTTP client for the run');
+  assert.strictEqual(made[0].deps.httpClient, clients[0].client, 'which the page backend shares, and so the Azure CLI token');
+  assert.strictEqual(harness.events.filter((e) => e.type === 'createMakerSdk').length, 1, 'the run\'s SDK is the only one the CLI makes itself: the backend makes its own when a page is read');
+  const sdkRoot = harness.events.find((e) => e.type === 'createMakerSdk').cfg.workspaceStorage.__mockWorkspaceRoot;
+  const order = (type, match = () => true) => harness.events.findIndex((e) => e.type === type && match(e));
+  assert.ok(order('genpageDispose') > -1, 'the backend is disposed');
+  assert.ok(order('genpageDispose') < order('rmSync', (e) => e.dir === sdkRoot), 'before the run\'s workspace is removed');
+  assert.ok(order('rmSync', (e) => e.dir === sdkRoot) < order('emitResult'), 'and both before emitResult ends the process');
+});
+
+// The final dispose is the last thing between the page's source and the end of the process. dispose() joins whatever cleanup the pass's ending of its reads
+// left draining, so it can take as long as a storage call that never settles: the CLI bounds it, and says so when a workspace is still on disk — it is never
+// reported as done while one is.
+test('verify CLI bounds the final dispose of the page backend, and warns — instead of reporting done — when a workspace could not be removed', async () => {
+  const run = async (disposeOutcome) => {
+    const harness = loadVerifyCli({
+      parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json' } },
+      verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [] },
+      disposeOutcome,
+    });
+    await harness.main();
+    return harness;
+  };
+  const clean = await run({ left: [] });
+  const dispose = clean.events.find((e) => e.type === 'genpageDispose');
+  assert.ok(dispose, 'the backend is disposed');
+  assert.strictEqual(dispose.options.waitMs, 10000, 'within a bound: a backend that cannot answer does not hold the process for ever');
+  assert.doesNotMatch(clean.stderr.join(''), /could not be removed/, 'nothing is said when every workspace is gone');
+
+  const stuck = await run({ left: ['C:\\temp\\genpage-x1y2z3'] });
+  assert.match(stuck.stderr.join(''), /WARNING: the page workspace could not be removed, so page source may be left on disk: C:\\temp\\genpage-x1y2z3/);
+  assert.ok(stuck.events.some((e) => e.type === 'emitResult'), 'the result is still printed');
+  assert.ok(stuck.events.findIndex((e) => e.type === 'genpageDispose') < stuck.events.findIndex((e) => e.type === 'emitResult'), 'after the backend answered, not before');
 });
 
 test('verify CLI accepts a positional spec, leaves the default workspace alone, and prints PASS', async () => {
@@ -929,6 +1135,237 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
   assert.strictEqual(disposed, 1, 'the throwaway workspace is disposed after the read');
 });
 
+// ── A dashboard's two layers in an organization with a second language ───────────────────────────────────────────────────────────
+// Live, in an organization whose base language is 1033 and which has Spanish (3082) provisioned too, verify called a dashboard
+// that nothing had written since its build created and published it "has changes that are not published", and failed the job
+// whose surface it is with it. The two reads it compares answered, cell by cell:
+//   published (a plain read of the systemform row)  <cell …><labels><label description="By Priority" languagecode="1033" /></labels><control …
+//   saved (RetrieveUnpublished)                      <cell …><labels><label description="By Priority" languagecode="1033" /><label description="…" languagecode="3082" /></labels><control …
+// and nothing else: without its four 3082 labels the saved read IS the published FormXML. These fixtures are that shape, with
+// the ids and the names replaced.
+const DASH_TILE_CLASS = '{E7A81278-8635-4D9E-8D4D-59480B391C5B}';
+const dashId = (n) => `{aaaaaaaa-0000-4000-8000-${String(n).padStart(12, '0')}}`;
+const DASH_VIEW_OPEN = '11111111-0000-4000-8000-000000000001';
+const DASH_VIEW_CRITICAL = '11111111-0000-4000-8000-000000000002';
+const DASH_VIEW_GOLD = '11111111-0000-4000-8000-000000000003';
+const DASH_CHART_PRIORITY = '22222222-0000-4000-8000-000000000001';
+const DASH_CHART_STATUS = '22222222-0000-4000-8000-000000000002';
+const dashChartCell = (n, caption, table, view, chart) => `<cell id="${dashId(n)}" colspan="1" rowspan="1" showlabel="true"><labels><label description="${caption}" languagecode="1033" /></labels>`
+  + `<control id="${dashId(n + 100)}" classid="${DASH_TILE_CLASS}"><parameters><TargetEntityType>${table}</TargetEntityType><ViewId>${view}</ViewId>`
+  + `<VisualizationId>${chart}</VisualizationId><ChartGridMode>Chart</ChartGridMode></parameters></control></cell>`;
+const dashListCell = (n, caption, table, view) => `<cell id="${dashId(n)}" colspan="1" rowspan="1" showlabel="true"><labels><label description="${caption}" languagecode="1033" /></labels>`
+  + `<control id="${dashId(n + 100)}" classid="${DASH_TILE_CLASS}"><parameters><TargetEntityType>${table}</TargetEntityType><ViewId>${view}</ViewId>`
+  + '<IsUserView>false</IsUserView><ChartGridMode>Grid</ChartGridMode><RecordsPerPage>10</RecordsPerPage></parameters></control></cell>';
+const dashboardXml = (rows) => `<form><tabs><tab id="${dashId(90)}" name="General" showlabel="true" expanded="true" verticallayout="true"><labels><label description="" languagecode="1033" /></labels>`
+  + `<columns><column width="100%"><sections><section id="${dashId(91)}" name="Section 1" showlabel="false" columns="2"><labels><label description="" languagecode="1033" /></labels><rows>`
+  + rows.map((cells) => `<row>${cells.join('')}</row>`).join('')
+  + '</rows></section></sections></column></columns></tab></tabs></form>';
+const DASH_CELLS = {
+  priority: dashChartCell(1, 'By Priority', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_PRIORITY),
+  status: dashChartCell(2, 'By Status', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_STATUS),
+  critical: dashListCell(3, 'Critical Queue', 'new_workorder', DASH_VIEW_CRITICAL),
+  gold: dashListCell(4, 'Gold Customers', 'new_customer', DASH_VIEW_GOLD),
+};
+const PUBLISHED_DASHBOARD = dashboardXml([[DASH_CELLS.priority, DASH_CELLS.status], [DASH_CELLS.critical, DASH_CELLS.gold]]);
+// The saved read of the same dashboard: a label in `lcid` after each cell's captions (live, the platform's 3082 one said the same for every cell).
+// A cell is where a `</labels>` is followed by the tile's `<control>`.
+const withCellCaptionsIn = (xml, lcid = 3082, text = 'Órdenes de trabajo') => xml.replace(/<\/labels><control /g, `<label description="${text}" languagecode="${lcid}" /></labels><control `);
+// The tiles the SDK's deserializer reads out of it (the chart tiles are what the dashboard check proves).
+const DASH_TILES = [
+  { type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_workorder', ViewId: DASH_VIEW_OPEN, VisualizationId: DASH_CHART_PRIORITY } },
+  { type: 'chart', name: 'By Status', parameters: { TargetEntityType: 'new_workorder', ViewId: DASH_VIEW_OPEN, VisualizationId: DASH_CHART_STATUS } },
+  { type: 'list', name: 'Critical Queue', parameters: { TargetEntityType: 'new_workorder', ViewId: DASH_VIEW_CRITICAL } },
+  { type: 'list', name: 'Gold Customers', parameters: { TargetEntityType: 'new_customer', ViewId: DASH_VIEW_GOLD } },
+];
+// The dashboard is the surface of a persona's job, as the live app's was, so a dashboard that fails takes the job with it.
+const DASH_SPEC = { solution: { publisherPrefix: 'new' }, app: { name: 'Field Ops', uniqueName: 'new_fieldops' }, entities: [], appShell: { areas: [] },
+  dashboards: [{ name: 'Field Ops Overview', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_workorder', viewId: 'v', visualizationId: 'c' }] }],
+  personas: [{ persona: 'Dispatcher', jobs: [{ name: 'Watch the field', surfaces: ['Field Ops Overview'] }] }] };
+// An SDK whose published read of the dashboard answers `published` and whose saved read answers `draft` — or, from the third read on
+// (the bracket's second pair), `laterPublished` / `laterDraft` / `laterVersion` when given. `chartOwner` is the table a tile's chart
+// belongs to. `owners` records each read of a tile's chart and view, which is the tile check running.
+function dashboardLayers({ published, draft, laterPublished, laterDraft, laterVersion, chartOwner = 'new_workorder' }) {
+  let reads = 0;
+  const owners = [];
+  const fetches = [];
+  return {
+    owners,
+    fetches,
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, o) => {
+      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) {
+        reads += 1;
+        return [{ formid: 'dash-1', formxml: laterPublished !== undefined && reads > 2 ? laterPublished : published }];
+      }
+      if (set === 'systemform') return [{ formid: 'dash-1', name: 'Field Ops Overview' }];
+      if (set === 'savedqueryvisualization') { owners.push(set); return [{ primaryentitytypecode: chartOwner }]; }
+      if (set === 'savedquery') { owners.push(set); return [{ returnedtypecode: 'new_workorder' }]; }
+      return [];
+    },
+    listArtifacts: async () => [],
+    dataverse: { get: async (url) => {
+      assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
+      reads += 1;
+      const later = reads > 2;
+      return { status: 200, body: { formxml: later && laterDraft !== undefined ? laterDraft : draft, '@odata.etag': later && laterVersion ? laterVersion : 'W/"1"' } };
+    } },
+    fetchArtifact: async (type, id) => { fetches.push([type, id]); },
+    getArtifact: async () => ({ components: DASH_TILES }),
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+}
+const dashboardVerify = async (layers) => {
+  const r = await verifySpec(DASH_SPEC, readerFor(dashboardLayers(layers), 'new_fieldops', {}));
+  return { check: r.checks.find((c) => c.kind === 'dashboard'), jobs: r.checks.filter((c) => c.kind === 'job-surface') };
+};
+const NOT_PUBLISHED = /its tiles could not be read \(dashboard dash-1 has changes that are not published — publish it, then verify\) — unverified, not proven correct/;
+
+test('readerFor + verifySpec: a published dashboard whose saved read carries a second language\u2019s captions too verifies — its tiles are checked, and its job passes with it', async () => {
+  const draft = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  assert.strictEqual(draft.split('languagecode="3082"').length - 1, 4, 'the live shape: a 3082 caption in each of the four cells');
+  assert.strictEqual(draft.replace(/<label description="Órdenes de trabajo" languagecode="3082" \/>/g, ''), PUBLISHED_DASHBOARD, 'and nothing else');
+  const sdk = dashboardLayers({ published: PUBLISHED_DASHBOARD, draft });
+  const r = await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}));
+  const check = r.checks.find((c) => c.kind === 'dashboard');
+  assert.deepStrictEqual([check.present, check.detail], [true, '']);
+  assert.deepStrictEqual(sdk.fetches, [['dashboard', 'dash-1']], 'the tiles were read');
+  assert.deepStrictEqual(sdk.owners, ['savedqueryvisualization', 'savedquery', 'savedqueryvisualization', 'savedquery'], 'and each chart tile\u2019s chart and view were checked');
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind === 'job-surface'), [], 'the job whose surface the dashboard is passes with it');
+  // It is the tiles that decide: a chart tile cross-wired to another table still fails over the same two reads.
+  const crossed = await dashboardVerify({ published: PUBLISHED_DASHBOARD, draft, chartOwner: 'new_customer' });
+  assert.strictEqual(crossed.check.present, false);
+  assert.match(crossed.check.detail, /chart tile 'By Priority' shows new_workorder, but its chart belongs to new_customer/);
+  assert.match(crossed.jobs[0] && crossed.jobs[0].detail, /surface "Field Ops Overview" is not deployed \(Field Ops Overview\)/);
+  // A language the published read does not carry is set aside whichever it is, and however many: a read in 1033 and 3082, a saved one with 1036 too.
+  const bilingual = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const trilingual = await dashboardVerify({ published: bilingual, draft: withCellCaptionsIn(bilingual, 1036, 'Ordres de travail') });
+  assert.deepStrictEqual([trilingual.check.present, trilingual.check.detail], [true, '']);
+});
+
+test('readerFor + verifySpec: a saved dashboard that differs from the published one in more than another language\u2019s captions is still not published', async () => {
+  const changes = [
+    ['a tile moved', dashboardXml([[DASH_CELLS.status, DASH_CELLS.priority], [DASH_CELLS.critical, DASH_CELLS.gold]])],
+    ['a tile added', dashboardXml([[DASH_CELLS.priority, DASH_CELLS.status], [DASH_CELLS.critical, DASH_CELLS.gold], [dashChartCell(5, 'By Region', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_STATUS)]])],
+    ['a tile removed', dashboardXml([[DASH_CELLS.priority, DASH_CELLS.status], [DASH_CELLS.critical]])],
+    ['a caption changed in the base language', PUBLISHED_DASHBOARD.replace('description="By Priority" languagecode="1033"', 'description="By Owner" languagecode="1033"')],
+    ['a base-language caption removed', PUBLISHED_DASHBOARD.replace('<label description="By Status" languagecode="1033" />', '')],
+    ['an attribute changed', PUBLISHED_DASHBOARD.replace(`<cell id="${dashId(1)}" colspan="1"`, `<cell id="${dashId(1)}" colspan="2"`)],
+    ['an attribute added', PUBLISHED_DASHBOARD.replace('name="Section 1" showlabel="false"', 'name="Section 1" showlabel="false" visible="false"')],
+    ['a tile\u2019s view changed', PUBLISHED_DASHBOARD.replace(`<ViewId>${DASH_VIEW_CRITICAL}</ViewId>`, `<ViewId>${DASH_VIEW_GOLD}</ViewId>`)],
+    ['a tile\u2019s table changed', PUBLISHED_DASHBOARD.replace('<TargetEntityType>new_customer</TargetEntityType>', '<TargetEntityType>new_workorder</TargetEntityType>')],
+  ];
+  for (const [what, saved] of changes) {
+    assert.notStrictEqual(saved, PUBLISHED_DASHBOARD, what);
+    // Each saved read also carries the second language, as live: it is the comparison without those captions that must still find the change.
+    const { check, jobs } = await dashboardVerify({ published: PUBLISHED_DASHBOARD, draft: withCellCaptionsIn(saved) });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+    assert.strictEqual(jobs.length, 1, `${what}: the job fails with its dashboard`);
+  }
+});
+
+test('readerFor + verifySpec: a caption changed in a language the published read carries is a change, however many languages it carries', async () => {
+  const bilingual = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const once = (xml, from, to) => { const i = xml.indexOf(from); assert.ok(i >= 0, from); return xml.slice(0, i) + to + xml.slice(i + from.length); };
+  for (const [what, draft] of [
+    ['a 3082 caption', once(bilingual, 'description="Órdenes de trabajo" languagecode="3082"', 'description="Pedidos" languagecode="3082"')],
+    ['a 3082 caption removed', once(bilingual, '<label description="Órdenes de trabajo" languagecode="3082" />', '')],
+    ['a 1033 caption', once(bilingual, 'description="Critical Queue" languagecode="1033"', 'description="Urgent Queue" languagecode="1033"')],
+  ]) {
+    const { check } = await dashboardVerify({ published: bilingual, draft });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+  }
+});
+
+test('readerFor + verifySpec: a FormXML that is not one well-formed XML document, on either side, is refused as before — never passed', async () => {
+  const draft = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const cutShort = PUBLISHED_DASHBOARD.slice(0, -'</form>'.length);
+  for (const [what, published, saved] of [
+    ['a saved read with a label left open', PUBLISHED_DASHBOARD, draft.replace('languagecode="3082" />', 'languagecode="3082">')],
+    ['a saved read with a bare "&" in a caption of the other language', PUBLISHED_DASHBOARD, draft.replace('Órdenes de trabajo', 'Órdenes & trabajo')],
+    ['a saved read with a second root element', PUBLISHED_DASHBOARD, `${draft}<form/>`],
+    ['a published read cut short', cutShort, withCellCaptionsIn(cutShort)],
+    ['a published read with a closing tag missing', PUBLISHED_DASHBOARD.replace('</rows>', ''), withCellCaptionsIn(PUBLISHED_DASHBOARD.replace('</rows>', ''))],
+    ['a published read that is no XML', 'not xml', draft],
+  ]) {
+    const sdk = dashboardLayers({ published, draft: saved });
+    const check = (await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}))).checks.find((c) => c.kind === 'dashboard');
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+    assert.deepStrictEqual(sdk.fetches, [], `${what}: no tile is read`);
+  }
+});
+
+test('readerFor + verifySpec: on two layers in two languages, a dashboard that changes while its tiles are read is still caught', async () => {
+  const draft = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const moved = dashboardXml([[DASH_CELLS.status, DASH_CELLS.priority], [DASH_CELLS.critical, DASH_CELLS.gold]]);
+  for (const [what, later] of [
+    ['published again with a tile moved', { laterPublished: moved, laterDraft: withCellCaptionsIn(moved) }],
+    ['a draft saved and put back', { laterVersion: 'W/"3"' }],
+  ]) {
+    const { check } = await dashboardVerify({ published: PUBLISHED_DASHBOARD, draft, ...later });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, /dashboard dash-1 changed while it was being read — verify again/, what);
+  }
+});
+
+// The same two reads through the REAL bundle: the reader's own reads and the SDK's deserializer, over a stub of the HTTP client. What
+// the reader hands verify is the tiles the SDK reads out of the saved layer — here the live shape, a 3082 caption in every cell.
+test('readerFor REAL BUNDLE: the tiles of a published dashboard whose saved read carries a second language are read, and a real change is refused', async (t) => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const id = '33333333-0000-4000-8000-000000000001';
+  const run = async (published, draft) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dash-layers-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const reads = [];
+    const ok = (body) => ({ status: 200, headers: {}, body });
+    const httpClient = {
+      get: async (url) => {
+        const u = decodeURIComponent(url);
+        if (/EntityDefinitions\(LogicalName='systemform'\)/.test(u)) return ok({ EntitySetName: 'systemforms' });
+        if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`) && !u.includes(',')) {
+          reads.push('saved formxml');
+          return ok({ formxml: draft, '@odata.etag': 'W/"7"' });
+        }
+        if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()`)) {
+          reads.push('the SDK\u2019s fetch');
+          return ok({ formid: id, name: 'Field Ops Overview', description: null, formxml: draft, type: 0, objecttypecode: 'none', componentstate: 1, '@odata.etag': 'W/"7"' });
+        }
+        if (/\/systemforms\?/.test(u) && u.includes(`formid eq ${id}`)) {
+          reads.push('published formxml');
+          return ok({ value: [{ formid: id, formxml: published }] });
+        }
+        assert.fail(`unexpected GET ${u}`);
+      },
+      post: async (url) => assert.fail(`unexpected POST ${url}`),
+      patch: async (url) => assert.fail(`unexpected PATCH ${url}`),
+      put: async (url) => assert.fail(`unexpected PUT ${url}`),
+      delete: async (url) => assert.fail(`unexpected DELETE ${url}`),
+    };
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+    await sdk.initWorkspace();
+    const settled = await readerFor(sdk, 'new_fieldops', {}).dashboardComponents(id).then((tiles) => ({ tiles }), (error) => ({ error }));
+    return { ...settled, reads };
+  };
+  const live = await run(PUBLISHED_DASHBOARD, withCellCaptionsIn(PUBLISHED_DASHBOARD));
+  assert.ifError(live.error);
+  assert.deepStrictEqual(live.tiles.map((c) => [c.type, c.name, c.parameters.TargetEntityType, c.parameters.ViewId, c.parameters.VisualizationId]), [
+    ['chart', 'By Priority', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_PRIORITY],
+    ['chart', 'By Status', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_STATUS],
+    ['list', 'Critical Queue', 'new_workorder', DASH_VIEW_CRITICAL, undefined],
+    ['list', 'Gold Customers', 'new_customer', DASH_VIEW_GOLD, undefined],
+  ]);
+  assert.deepStrictEqual(live.reads, ['published formxml', 'saved formxml', 'the SDK\u2019s fetch', 'published formxml', 'saved formxml'], 'the tiles are read between the two checks');
+  // A tile moved in the saved layer, over the same second language: refused before the SDK reads anything.
+  const moved = await run(PUBLISHED_DASHBOARD, withCellCaptionsIn(dashboardXml([[DASH_CELLS.status, DASH_CELLS.priority], [DASH_CELLS.critical, DASH_CELLS.gold]])));
+  assert.match(moved.error && moved.error.message, /^dashboard 33333333-0000-4000-8000-000000000001 has changes that are not published — publish it, then verify$/);
+  assert.deepStrictEqual(moved.reads, ['published formxml', 'saved formxml']);
+});
+
 // A client per isolated read ran `az account get-access-token` once per dashboard. One client serves every read of a
 // run — the run's own when it is given — while each read still gets a fresh SDK in its own throwaway workspace.
 test('isolatedReaderFor shares one HTTP client across reads, each with a fresh SDK', async () => {
@@ -983,7 +1420,9 @@ test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify th
 
 test('readerFor + verifySpec reads isdefault and formxml once per verify, and re-reads on the next', async () => {
   const calls = [];
-  const xml = '<form><tabs><tab name="tab_main"><columns><column width="100%"><sections><section name="sec_main"><rows><row><cell><control datafieldname="contoso_name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>';
+  // The tab and the section carry the captions the spec declares, as the build writes them: verify holds a label the spec authors.
+  const labels = '<labels><label description="Main" languagecode="1033" /></labels>';
+  const xml = `<form><tabs><tab name="tab_main">${labels}<columns><column width="100%"><sections><section name="sec_main">${labels}<rows><row><cell><control datafieldname="contoso_name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>`;
   const sdk = {
     findTables: async () => [{ logicalName: 'contoso_task' }],
     findColumns: async () => [{ logicalName: 'contoso_name' }],

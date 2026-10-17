@@ -4,6 +4,8 @@
 // `--with-sdk <ppux-path>`, the vendored SDK's Jest suite under Node 20 (the canvas native module
 // is built for the Node-20 ABI; the default Node fails to load it). Prints a combined PASS/FAIL and
 // exits non-zero on any failure — the "did I break anything?" gate to run before every commit.
+// The plugin suite runs in a temporary folder of its own, and the run also fails when a test leaves
+// a file or folder in it (runPluginSuite, below).
 //
 // Usage:
 //   node scripts/run-tests.js                       # plugin suite only
@@ -13,6 +15,7 @@
 const { spawnSync } = require('node:child_process');
 const { spawnResultSync, withPathFirst } = require('./lib/process-runner.js');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 // Node-20 bin dir for the SDK Jest suite (its canvas native module is built for the Node-20 ABI).
@@ -53,6 +56,40 @@ function sdkTestSpec(sdkPath, node20Bin) {
   };
 }
 
+// The plugin suite runs in a temporary folder of its own: TEMP, TMP and TMPDIR point into it, so os.tmpdir() does too,
+// in every test file and in every process a test starts. Whatever is still in it when the suite ends was left by a test
+// that did not clean up after itself, so the run names it and fails. A full run used to leave about 260 folders in the
+// developer's own temp folder, which grew by hundreds of thousands of entries; tests/helpers/temp-dirs.js is the shared
+// way to clean up. The private folder is removed either way, so a leak never reaches the developer's temp folder.
+function runPluginSuite(files, { cwd, stdio = 'inherit', tempParent = os.tmpdir() } = {}) {
+  const tempDir = fs.mkdtempSync(path.join(tempParent, 'model-apps-tests-'));
+  try {
+    // A process a test runner starts inherits NODE_TEST_CONTEXT, and a `node --test` that has it acts as that runner's
+    // child: given these files, it ran none of them and exited 0 (measured: a test that makes a folder made none). The
+    // suite must run as a runner of its own, whoever starts this script (this script's own tests do).
+    const env = withTempDir(process.env, tempDir);
+    delete env.NODE_TEST_CONTEXT;
+    const run = spawnSync(process.execPath, ['--test', ...files], { cwd, stdio, env });
+    return { status: run.status, left: fs.readdirSync(tempDir).sort() };
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (error) {
+      // A process a test left running can still hold a file in it. Say where the folder is, rather than lose the summary.
+      process.stderr.write(`could not remove the suite's temporary folder ${tempDir}: ${error.message}\n`);
+    }
+  }
+}
+
+// os.tmpdir() reads TEMP, then TMP, on Windows, and TMPDIR on macOS and Linux. Windows names are case-insensitive, so every
+// spelling already in the environment is dropped first: a child handed both `Temp` and `TEMP` would see only one of them,
+// and not necessarily ours.
+function withTempDir(env, dir) {
+  const rest = {};
+  for (const [name, value] of Object.entries(env)) if (!/^(TEMP|TMP|TMPDIR)$/i.test(name)) rest[name] = value;
+  return { ...rest, TEMP: dir, TMP: dir, TMPDIR: dir };
+}
+
 function main(argv) {
   const args = argv.slice(2);
   const sdkIdx = args.indexOf('--with-sdk');
@@ -69,8 +106,15 @@ function main(argv) {
   // 1) Plugin suite (current Node).
   const files = pluginTestFiles(path.join(__dirname, 'tests'));
   process.stdout.write(`\n=== plugin node:test (${files.length} files) ===\n`);
-  const plugin = spawnSync(process.execPath, ['--test', ...files], { cwd: pluginRoot, stdio: 'inherit' });
+  const plugin = runPluginSuite(files, { cwd: pluginRoot });
   results.push({ name: 'plugin node:test', ok: plugin.status === 0 });
+  if (plugin.left.length) {
+    process.stdout.write(`\n${plugin.left.length} file(s) or folder(s) left in the suite's temporary folder:\n`);
+    for (const name of plugin.left.slice(0, 50)) process.stdout.write(`  ${name}\n`);
+    if (plugin.left.length > 50) process.stdout.write(`  ... and ${plugin.left.length - 50} more\n`);
+    process.stdout.write('A test must remove every file and folder it makes (scripts/tests/helpers/temp-dirs.js).\n');
+  }
+  results.push({ name: 'nothing left in the temporary folder', ok: plugin.left.length === 0 });
 
   // 2) SDK Jest suite (opt-in, Node 20).
   if (sdkPath) {
@@ -113,4 +157,4 @@ if (require.main === module) {
   process.exit(main(process.argv));
 }
 
-module.exports = { pluginTestFiles, sdkTestSpec, summarize, main };
+module.exports = { pluginTestFiles, sdkTestSpec, summarize, runPluginSuite, withTempDir, main };

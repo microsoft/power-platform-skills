@@ -327,13 +327,17 @@ function provisionHarness({ initThrows = null, constructThrows = null, provision
         seen.removed.push({ dir, opts });
       },
     },
+    // The throwaway workspaces are made by the plugin's one maker of them (lib/temp-workspace.js), which works on the real file system: the harness stands
+    // in for it with the very call the script made before it existed, so what this test pins — both are made, and both removed before the result is
+    // printed — is as it was.
+    './lib/temp-workspace.js': { makeTempWorkspace: (prefix) => requires['node:fs'].mkdtempSync(path.join(os.tmpdir(), prefix)) },
     './lib/sdk-http-client.js': {
       createAzHttpClient: (env) => {
         seen.http.push(env);
         return { env };
       },
     },
-    './vendor/cds-maker-sdk.cjs': {
+    './lib/maker-sdk.js': {
       createNodeWorkspaceStorage: (root) => ({ root }),
       createMakerSdk: (opts) => {
         seen.envs.push(opts.instanceUrl);
@@ -574,5 +578,75 @@ test('primary column length: the step is planned AND counted, so [n/total] never
     assert.match(done[done.length - 1].label, /^primary column length cr_candidate\.cr_name/, `${what}: and it is the last step, after the relationship`);
     assert.ok(done.findIndex((e) => /^relationship /.test(e.label)) < done.length - 1, `${what}: the relationship came before it`);
     assert.deepStrictEqual(updates, read === 120 ? [] : [['cr_candidate', 'cr_name', { maxLength: 120 }]], what);
+  }
+});
+
+test('a key over the name column of a table whose length is set waits for it: the plan lists it after the length step, the apply makes it there, and n never passes total', async () => {
+  const keyed = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [{
+      schemaName: 'cr_candidate', displayName: 'Candidate', primaryAttribute: { schemaName: 'cr_name', maxLength: 120 }, columns: [{ schemaName: 'cr_code', type: 'Text' }],
+      alternateKeys: [{ schemaName: 'cr_code_key', columns: ['cr_code'] }, { schemaName: 'cr_name_key', columns: ['cr_name'] }],
+    }],
+    relationships: [],
+  };
+  const dry = await provisionEntities(keyed, { apply: false }, mockDeps());
+  assert.deepStrictEqual(dry.plan, [
+    'solution Default', 'table cr_candidate', 'column cr_candidate.cr_code (Text)', 'alt key cr_candidate.cr_code_key', 'primary column length cr_candidate.cr_name', 'alt key cr_candidate.cr_name_key',
+  ]);
+
+  const d = mockDeps();
+  const order = [];
+  d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: 850 } } : { status: 404, body: null }) };
+  d.sdk.updateColumn = async () => { order.push('updateColumn'); return {}; };
+  d.sdk.createAlternateKey = async (table, options) => { order.push(`createAlternateKey ${options.schemaName}`); return {}; };
+  const events = [];
+  const r = await provisionEntities(keyed, { apply: true }, { sdk: d.sdk, provision: d.provision, emit: (e) => events.push(e), warn: () => {} });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(order, ['createAlternateKey cr_code_key', 'updateColumn', 'createAlternateKey cr_name_key'], 'the key over the name column is made once its length is set');
+  const done = events.filter((e) => e.status !== 'start');
+  assert.ok(events.every((e) => e.n <= e.total), 'no step emits n > total');
+  assert.strictEqual(done[done.length - 1].n, done[0].total, 'the last step is the total');
+  assert.strictEqual(done[done.length - 1].label, 'alt key cr_candidate.cr_name_key');
+});
+
+test('a key over the name column whose label goes out in one language waits like a string, whichever language that is; one labelled in several languages keeps its place', async () => {
+  const keyed = (displayName, languageCode) => ({
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    ...(languageCode ? { languageCode } : {}),
+    entities: [{
+      schemaName: 'cr_candidate', displayName: 'Candidate', primaryAttribute: { schemaName: 'cr_name', maxLength: 120 }, columns: [],
+      alternateKeys: [{ schemaName: 'cr_name_key', columns: ['cr_name'], displayName }],
+    }],
+    relationships: [],
+  });
+  const waits = ['solution Default', 'table cr_candidate', 'primary column length cr_candidate.cr_name', 'alt key cr_candidate.cr_name_key'];
+  const keeps = ['solution Default', 'table cr_candidate', 'alt key cr_candidate.cr_name_key', 'primary column length cr_candidate.cr_name'];
+  const rows = [
+    ['a string', keyed('Name Key'), {}, waits],
+    ['a map of one language where no language is named', keyed({ 1033: 'Name Key' }), {}, waits],
+    ['a map of the spec\'s language', keyed({ 3082: 'Clave' }, 3082), {}, waits],
+    ['a map of the language the command line names', keyed({ 3082: 'Clave' }), { languageCode: 3082 }, waits],
+    ['a map of another language than the spec\'s: it is one label all the same', keyed({ 1033: 'Name Key' }, 3082), {}, waits],
+    ['a map of another language than the command line\'s', keyed({ 3082: 'Clave' }, 3082), { languageCode: 1033 }, waits],
+    ['a map of the base language under another language on the command line', keyed({ 1033: 'Name Key' }), { languageCode: 3082 }, waits],
+    ['a map of several languages', keyed({ 1033: 'Name Key', 3082: 'Clave' }, 1033), {}, keeps],
+    ['a map of several languages, whatever the command line names', keyed({ 1033: 'Name Key', 3082: 'Clave' }, 1033), { languageCode: 3082 }, keeps],
+  ];
+  for (const [what, spec, opts, expected] of rows) {
+    const dry = await provisionEntities(spec, { apply: false, ...opts }, mockDeps());
+    assert.deepStrictEqual(dry.plan, expected, what);
+  }
+
+  // The apply orders each of them the way the plan does: the length is set and then the key is made — or, for a label in several languages, the key and then the length.
+  for (const [what, spec, opts, expected] of rows) {
+    const d = mockDeps();
+    const order = [];
+    d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: 850 } } : { status: 404, body: null }) };
+    d.sdk.updateColumn = async () => { order.push('updateColumn'); return {}; };
+    d.sdk.createAlternateKey = async (table, options) => { order.push(`createAlternateKey ${options.schemaName}`); return {}; };
+    const r = await provisionEntities(spec, { apply: true, ...opts }, { sdk: d.sdk, provision: d.provision, emit: () => {}, warn: () => {} });
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r)}`);
+    assert.deepStrictEqual(order, expected === waits ? ['updateColumn', 'createAlternateKey cr_name_key'] : ['createAlternateKey cr_name_key', 'updateColumn'], what);
   }
 });

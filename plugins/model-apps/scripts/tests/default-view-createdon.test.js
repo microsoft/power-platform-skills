@@ -1,5 +1,5 @@
 'use strict';
-// #7 (2026-07-15 review): enriched default views must ship WITHOUT the stock "Created On" column.
+// Enriched default views must ship WITHOUT the stock "Created On" column.
 // This is a REAL-BUNDLE integration test — it drives the vendored cds-maker-sdk exactly as
 // enrichDefaultViews does (fetch the live default view -> updateElement('/columns', ourCols) ->
 // push) and asserts the serialized wire payload drops createdon from BOTH the fetchxml and the

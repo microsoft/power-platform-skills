@@ -19,6 +19,7 @@
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth');
 const { createAzHttpClient } = require('./lib/sdk-http-client');
 const { odataLit } = require('./lib/odata.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 
 /**
  * Finds the publisher to use for the solution:
@@ -148,12 +149,12 @@ async function main() {
   }
   const [envUrl, uniqueName, friendlyName] = positional;
 
-  const sdkTempDir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'provision-solution-'));
+  const sdkTempDir = makeTempWorkspace('provision-solution-');
 
   let result;
   let error;
   try {
-    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
     const httpClient = createAzHttpClient(envUrl);
     const sdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused workspace (no metadata persistence needed)

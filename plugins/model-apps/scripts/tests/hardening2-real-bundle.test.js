@@ -22,7 +22,7 @@ const tempDirs = [];
 test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // A real SDK bound to a capturing httpClient. `meta` maps a logical entity name -> attribute-type map
-// so the adapter's push-time metadata defaulting (T4) resolves a field's control classId.
+// so the adapter's push-time metadata defaulting resolves a field's control classId.
 async function freshSdk(capture, meta) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h2-real-'));
@@ -139,7 +139,7 @@ test('#8 authored column width: a synthesized form column with NO explicit width
   assert.match(formxml, /<column\b[^>]*width="100%"/, 'the SDK-defaulted width is 100%');
 });
 
-test('metadata-derived control types: passing only fieldName lets the adapter classId a Lookup vs a text field (T4)', async () => {
+test('metadata-derived control types: passing only fieldName lets the adapter classId a Lookup vs a text field', async () => {
   // The adapter fetches attribute metadata on push and derives each bound field's control classId from
   // its Dataverse AttributeType — the plugin never precomputes classId. Stub two attribute types.
   const meta = { new_customer: { new_name: 'String', new_ownerid: 'Lookup' } };

@@ -1,18 +1,38 @@
 'use strict';
 
 const { parsePacConnectionList } = require('../../../../plugins/model-apps/scripts/list-connections.js');
-const { commandInfo } = require('./evidence-utils.js');
+const { commandInfo, scriptRuns } = require('./evidence-utils.js');
 const { planSection } = require('./plan-evidence.js');
+
+// Grades what a run DID from the commands it recorded, read as text (evidence-utils.js, "How the graders read a recorded command"): which calls are mutations, whether each had the latest
+// successful auth gate, whether a refusal held, and whether every logged command has its result event.
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const currentContract = (fixture) => (fixture.contractVersion || fixture.manifest?.contractVersion || 1) >= 2;
 const isUpload = (command) => /\bgenpage-upload\.js\b|\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+upload\b/i.test(command);
 const isAuth = (command) => /\bcheck-auth\.js\b/.test(command);
 const isDiscovery = (command) => /\blist-connections\.js\b/.test(command);
-const isMutation = (command) => isUpload(command)
-  || /\b(?:provision-entities|create-table|add-column|create-relationship|create-record|create-connection-reference|add-page-to-solution|provision-solution)\.js\b/.test(command)
-  || /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b|\b(?:create-connection|auth-switch)\b/.test(command)
-  || /\b(?:Task|Dispatched)\s+genpage-entity-builder\b|\bgenpage-entity-builder\s+invoked\b/i.test(command);
+// What each of the plugin's scripts that takes a verb writes with: apps.js creates an app; genpage.js changes an app or deletes a page (`list`, `download` and `types` only read, and write local
+// files); solution-settings.js imports a solution package into the environment (`template` only writes a settings file). The verb is read the way the script reads its argv — its flags may come
+// first (`apps.js --env <url> create …`) — from EVERY run of the script in the call, because a call that reads and then writes (`apps.js list …; apps.js create …`) is a write, and the first
+// run alone would hide it.
+const WRITE_VERBS = {
+  'apps.js': new Set(['create']),
+  'genpage.js': new Set(['add-to-app', 'remove-from-app', 'delete']),
+  'solution-settings.js': new Set(['import']),
+};
+const writesByVerb = (call) => Object.entries(WRITE_VERBS).some(([script, writes]) => scriptRuns(call, script).some((run) => writes.has(run.verb)));
+// `call` is a recorded call — `{ command, argv? }` — or its command text. The names that only write are found anywhere in the text; the verbs of the scripts above, in the text and the argv.
+const isMutation = (call) => {
+  const command = typeof call === 'string' ? call : String(call?.command ?? '');
+  return isUpload(command)
+    || /\b(?:provision-entities|create-table|add-column|create-relationship|create-record|create-connection-reference|add-page-to-solution|provision-solution)\.js\b/.test(command)
+    || /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b|\b(?:create-connection|auth-switch)\b/.test(command)
+    // The import `solution-settings.js import` falls back to, which an older capture records on its own.
+    || /\bpac(?:\.exe|\.cmd)?\s+solution\s+import\b/i.test(command)
+    || writesByVerb(call)
+    || /\b(?:Task|Dispatched)\s+genpage-entity-builder\b|\bgenpage-entity-builder\s+invoked\b/i.test(command);
+};
 const isGeneration = (command) => /\b(?:Task|Write|Edit|Generate)\b[^\n]*(?:genpage-page-builder|\.tsx\b)/i.test(command);
 
 function resultObject(call) {
@@ -79,10 +99,14 @@ function workflowCalls(fixture) {
 
 function unassociatedCallProblems(fixture) {
   if (!currentContract(fixture) || !Array.isArray(fixture.events)) return [];
-  const operation = (command) => /\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+upload\b/.test(command)
-    ? 'raw-pac-upload' : command.match(/\b([\w-]+)\.js\b/)?.[1]
+  const operation = (command) => {
+    if (/\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+upload\b/.test(command)) return 'raw-pac-upload';
+    // A logged line carries prose after the command and an event does not, so the pac import is named by what it is, not by its text.
+    if (/\bpac(?:\.exe|\.cmd)?\s+solution\s+import\b/i.test(command)) return 'pac-solution-import';
+    return command.match(/\b([\w-]+)\.js\b/)?.[1]
       || command.match(/\b(?:create-connection|auth-switch|genpage-entity-builder)\b/)?.[0] || command;
-  const risky = (call) => isAuth(call.command) || isDiscovery(call.command) || isMutation(call.command) || isGeneration(call.command);
+  };
+  const risky = (call) => isAuth(call.command) || isDiscovery(call.command) || isMutation(call) || isGeneration(call.command);
   const counts = (calls) => {
     const map = new Map();
     for (const call of calls.filter(risky)) {
@@ -151,7 +175,7 @@ function authGateProblems(fixture, { required = false } = {}) {
           timeoutAttempts = 0;
         }
       }
-    } else if (isMutation(call.command)) {
+    } else if (isMutation(call)) {
       if (!latest || latest.result?.ok !== true || latest.result.blocker != null) {
         problems.push(`${call.command}: mutation attempted without the latest successful auth gate`);
       } else if (strict) {
@@ -234,7 +258,7 @@ function refusalProblems(fixture) {
   const stage = fixture.manifest.refusal?.stage;
   const calls = workflowCalls(fixture);
   const problems = [];
-  if ((fixture.files || []).length || calls.some((call) => isGeneration(call.command) || isMutation(call.command))) {
+  if ((fixture.files || []).length || calls.some((call) => isGeneration(call.command) || isMutation(call))) {
     problems.push('refused workflow generated a page or attempted a mutation');
   }
   if (stage === 'custom-api') {

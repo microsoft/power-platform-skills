@@ -33,8 +33,8 @@ const { sha256 } = require('./lib/hash.js');
 //            `- **File:** <guid>/page.tsx` in the preview's `### Current State`.
 // Returns { kind, targets } or null when the document names neither.
 //
-// Both GUID patterns are bounded by `[\w-]` on the side that could run on, exactly as the upload
-// parser bounds pac's `Page ID:` (lib/genpage-cli.js parsePageId): an overlong `<guid>deadbeef` was
+// Both GUID patterns are bounded by `[\w-]` on the side that could run on, as the id read from `pac`'s
+// upload output once was (`Page ID: <guid>`): an overlong `<guid>deadbeef` was
 // truncated to its first 36 characters and certified.
 //
 // The written edit plan states the id ONCE, structurally, in `## File Being Edited`

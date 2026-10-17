@@ -1,24 +1,46 @@
 #!/usr/bin/env node
 
 // Lists maker connections and Dataverse connection references for connector
-// binding. Connections come from PAC because the Power Platform connection APIs
-// are outside Dataverse; connectionreferences come from Dataverse because the
-// GenPage runtime binds config.json connectorBindings[].logicalName to those rows.
+// binding. Connections are not Dataverse rows: they come from the Power Apps
+// connections API, which the bundled SDK reads first (`listConnections`, through the
+// Business Application Platform, with an Azure CLI token for the Power Apps service)
+// for an environment in the Public cloud. Where the SDK has no route — an environment in
+// the Test cloud or any other (the plugin decides this from the host before asking the SDK,
+// and asks PAC at once: lib/sdk-first.js says why the SDK is given no client for the
+// Test cloud), a service that has been switched off (HTTP 410), a token the service
+// refused (401 or 403), no Power Apps token to be had — the connections come from PAC
+// instead (`pac connection list --environment <envUrl>`, parsed below) and the output
+// says so; lib/sdk-first.js holds the rule and its codes. Any other
+// failure of the SDK's read is a failure of this script, never answered by PAC.
+// connectionreferences come from Dataverse because the GenPage runtime binds
+// config.json connectorBindings[].logicalName to those rows.
 //
 // Usage:
 //   node list-connections.js <envUrl>
 //
 // Output:
-//   { "ok": true, "connections": [...], "connectionReferences": [...] }
+//   { "ok": true, "connections": [...], "connectionReferences": [...],
+//     "connectionsSource": "sdk" | "pac" }
+// and, when PAC answered because the SDK refused,
+//     "connectionsFallback": { "code": "<the SDK's code>", "message": "..." }
+// A failure — of the SDK's read (a route that serves and fails, an answer it cannot read), of PAC, of the connection references, an origin that is not a
+// Dataverse one — exits 1 and prints one pure-ASCII line on stdout, and the message on stderr, as connector.js and solution-settings.js do:
+//     { "ok": false, "error": "<message>", "code": "<the error's code, when it has one>" }
+// (an SDK error has its code; a PAC failure, a bad origin and a refused read of the connection references have none), and — when PAC was asked because the SDK refused and then failed
+// itself — the same "connectionsFallback" a PAC listing that worked has, so a failure of PAC is never read without the reason PAC was asked at all. A usage error — an unknown flag, no
+// environment URL — is the exception: the problem and the usage on stderr alone, stdout empty, exit 1, before anything is read.
 
-const { spawnResultSync } = require('./lib/process-runner.js');
+const { spawnResultTree } = require('./lib/process-runner.js');
 const {
   dataverseRequest,
   ensureOk,
   parseArgs,
   validateFlags,
   emitResult,
+  requireDataverseOrigin,
 } = require('./lib/dataverse-auth');
+const { sdkFirst, connectivity } = require('./lib/sdk-first.js');
+const { PAC_READ_TIMEOUT_MS, PAC_BANNER, LINE_BREAK, LEFTOVER_ADVICE, pacErrorText, stopClaim } = require('./lib/pac-fallback.js');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -117,12 +139,8 @@ function parseJsonConnections(raw) {
   return usableConnectionRows(rows.map(mapConnectionRow), 'JSON');
 }
 
-// PAC's auth banner, printed before any listing:
-//   Connected as maker@contoso.onmicrosoft.com       (the form most PAC commands print)
-//   Connected as [maker001]                          (the form `pac connection list` printed in a live capture)
-// It is recognised by its exact shape and nothing broader: a WHOLE line — `Connected as`, then one word or one bracketed alias (a word that opens a bracket must
-// close it), and nothing after it — because a prefix test swallowed a diagnostic joined to it:
-//   Connected as [maker001] Warning: failed to retrieve connections.
+// PAC's auth banner (`Connected as maker@contoso.onmicrosoft.com`, `Connected as [maker001]`) is recognised by the one definition every pac fallback shares —
+// PAC_BANNER, with the line splitting that goes with it, in lib/pac-fallback.js: the exact shape of a WHOLE line, so that a diagnostic joined to it is not swallowed.
 //
 // There is NO "nothing to list" sentence in this parser, on purpose. `pac connection list` says an environment has no connections by printing the grid's header with
 // no rows under it (see PAC_GRID_HEADER), never a sentence. PAC's resources do hold one — `ConnectionNotFound`, "No connections were found in the passed
@@ -131,10 +149,6 @@ function parseJsonConnections(raw) {
 // read "No connections could be found because the request failed." that way — and that answer sends connection setup on to create a duplicate of a connection the
 // maker already has. A sentence PAC never prints cannot be one that is needed, so a build that does print one is refused as unreadable, which costs a re-run, until a
 // capture shows its exact wording.
-const PAC_BANNER = /^connected as (?:[^\s[]\S*|\[[^\]\r\n]+\])$/i;
-// A line ends at CRLF, a bare CR or LF, and PAC's output is split on all three everywhere. Deleting the CRs instead joined the line a bare
-// CR ended to the next one: `Connected as [maker001]\rWarning: …` became a single line that began like the banner.
-const LINE_BREAK = /\r\n|\r|\n/;
 
 // What a table cell must look like to be an id. A table is text: a diagnostic cut on its column gaps —
 //   Warning: failed | to retrieve connections.
@@ -361,15 +375,80 @@ function sortReadyToBindFirst(connections, connectionReferences) {
 
 function pacFailureMessage(pac) {
   // spawnSync signals a failure to LAUNCH the process (e.g. `pac` not on PATH →
-  // ENOENT) via `pac.error`, leaving `status` null. A process that ran but exited
-  // non-zero has a numeric `status` (and maybe a `signal`). Distinguish the two so
-  // a missing PAC install produces an actionable message instead of "exit null".
+  // ENOENT) or to finish in time (ETIMEDOUT) via `pac.error`, leaving `status` null. A process that ran but exited
+  // non-zero has a numeric `status` (and maybe a `signal`). Distinguish them so
+  // a missing PAC install produces an actionable message instead of "exit null", and a
+  // slow or stalled pac is never reported as a missing one.
+  if (pac.error && pac.error.code === 'ETIMEDOUT') {
+    // What the call may claim about pac is what the runner confirmed (lib/pac-fallback.js stopClaim): a process pac started that still holds its output is not "stopped".
+    const { stopped, claim } = stopClaim(pac.error);
+    return `pac connection list did not finish within ${PAC_READ_TIMEOUT_MS / 1000} s; ${claim}.${stopped ? '' : LEFTOVER_ADVICE} A stalled call is usually transient, or pac is waiting for a sign-in (\`pac auth list\` shows the profile it uses): run it again.`;
+  }
   if (pac.error) {
     return `pac connection list could not run: ${pac.error.message}. Ensure the PAC CLI is installed and on PATH (dotnet tool install -g Microsoft.PowerApps.CLI.Tool).`;
   }
-  const detail = String(pac.stderr || pac.stdout || '').trim();
+  const detail = pacErrorText(String(pac.stderr || pac.stdout || ''));
   const signal = pac.signal ? `, signal ${pac.signal}` : '';
   return `pac connection list failed (exit ${pac.status}${signal})${detail ? `: ${detail}` : ''}`;
+}
+
+// The connections as `pac connection list` shows them: the path this script has always had — run PAC, refuse output it cannot read, parse what
+// it can. It is the FALLBACK now, reached only when the SDK's read is refused in a way lib/sdk-first.js names (see main).
+//
+// `--environment` pins the listing to the environment this script was asked about. Without it pac answers for the ACTIVE organization of its auth profile, which is
+// not necessarily that one: measured, a pac whose active organization was another environment listed that environment's connections, and the script printed them as
+// the connections of `env` (an import that bound one of them then failed in the platform, which could not find the connection in the environment it was imported into).
+//
+// `refusal` is why PAC is asked at all — the SDK's `{ code, message }` (lib/sdk-first.js). A failure of PAC keeps it on the error, as connector.js and solution-settings.js keep theirs, and
+// `failureLine` prints it: PAC read alone would send a maker to repair a PAC they never chose to depend on, for a route (a Test-cloud environment, a token the service refused) that is the
+// real reason.
+async function listConnectionsWithPac(env, refusal = null) {
+  try {
+    const pac = await spawnResultTree('pac', ['connection', 'list', '--environment', env], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Bounded like every other pac fallback (lib/pac-fallback.js): a pac that is stalled, or waiting for a sign-in, would otherwise hold discovery
+      // for ever — and one that runs out of time has its whole process tree ended (on Windows `pac.cmd` can be cmd.exe running pac).
+      timeout: PAC_READ_TIMEOUT_MS,
+    });
+    if (pac.error || pac.status !== 0) {
+      throw new Error(pacFailureMessage(pac));
+    }
+    requireQuietStderr(pac.stderr);
+    return parsePacConnectionList(pac.stdout);
+  } catch (error) {
+    // Only an object can carry it, and the error is the one PAC raised — its message and cause stay what they were.
+    if (refusal && error !== null && typeof error === 'object') error.fallback = refusal;
+    throw error;
+  }
+}
+
+// A connection of the SDK as a row of this script's output: the three fields PAC's row has (its Id, API Id and Name columns, which the
+// parsers above read into connectionId, connectorId and displayName). The row goes through the same mapper as a PAC row, so a name is
+// trimmed and an empty one falls back to the connector's id exactly as it does there — the two sources give the same row for the same
+// connection (measured on a Public environment: the same ids, API ids and names). The SDK's `statuses` and `connectorName` are not
+// part of the row PAC gives, so they are not part of this one.
+function connectionRowFromSdk(connection) {
+  return mapConnectionRow({
+    connectionId: connection.connectionId,
+    connectorId: connection.connectorId,
+    displayName: connection.displayName,
+  });
+}
+
+// What a failure prints: one `ok: false` line — `error`, and the error's `code` when it has one — and `emitResult` writes the message on stderr as well. An SDK error always has a code
+// (CONNECTION_ERROR for an HTTP status, CONNECTIVITY_RESPONSE_UNREADABLE for an answer it cannot read, …), and lib/sdk-first.js throws it unchanged; a `pac` failure, an origin that is not a
+// Dataverse one and a refused read of the connection references are plain errors, which say what failed in their message and have none. The code is the error's own property, never
+// read out of a message. A failure of `pac` carries, as `connectionsFallback` — the key a listing `pac` gave uses — the SDK's reason for asking `pac` (listConnectionsWithPac), when it has one.
+function failureLine(error) {
+  const code = error && typeof error.code === 'string' && error.code !== '' ? error.code : undefined;
+  const fallback = error && error.fallback ? error.fallback : undefined;
+  return {
+    ok: false,
+    error: String((error && error.message) || error),
+    ...(code ? { code } : {}),
+    ...(fallback ? { connectionsFallback: fallback } : {}),
+  };
 }
 
 async function main() {
@@ -392,20 +471,20 @@ async function main() {
   const [envUrl] = positional;
 
   try {
-    const pac = spawnResultSync('pac', ['connection', 'list'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
+    // The validated origin, not the caller's text, is what every read below is made for. A URL that is not a Dataverse origin is refused
+    // here, before the Azure CLI or PAC is started (PAC used to run first, and the text was refused only by the query after it).
+    const env = requireDataverseOrigin(envUrl);
+    const listed = await sdkFirst(env, {
+      ...connectivity,
+      fromSdk: async (sdk) => (await sdk.listConnections()).map(connectionRowFromSdk),
+      fromPac: async (refusal) => listConnectionsWithPac(env, refusal),
     });
-    if (pac.error || pac.status !== 0) {
-      throw new Error(pacFailureMessage(pac));
-    }
-    requireQuietStderr(pac.stderr);
-    const connections = parsePacConnectionList(pac.stdout);
+    const connections = listed.value;
 
     // NB: on `connectionreference`, `connectionid` is a plain String attribute (not a Dataverse
     // lookup), so it's selected as `connectionid` — `_connectionid_value` does not exist and 400s.
     const refsRes = await dataverseRequest(
-      envUrl,
+      env,
       'GET',
       'connectionreferences?$select=connectionreferencelogicalname,connectorid,connectionid'
     );
@@ -423,9 +502,16 @@ async function main() {
       ok: true,
       connections: sortReadyToBindFirst(connections, connectionReferences),
       connectionReferences,
+      // Which source answered, so a reader who sees the PAC grid's quirks (or none) knows where the list came from, and why PAC was asked.
+      connectionsSource: listed.source,
+      ...(listed.fallback ? { connectionsFallback: listed.fallback } : {}),
     });
   } catch (e) {
-    emitResult(false, e);
+    // Every failure past the argument checks prints the same: one pure-ASCII `ok: false` line (a raw non-ASCII character is garbled by the code page of the console that
+    // captures stdout) and the message on stderr — the way connector.js and solution-settings.js print theirs — whether the SDK's read failed, `pac` did, the origin is not a
+    // Dataverse one or the connection references could not be read. A caller that reads stdout alone then finds one line to parse for every outcome that got past the arguments.
+    // A usage error (an unknown flag, no environment URL) is stderr alone, above, as it is in the other scripts: it is the caller's mistake, not a result.
+    emitResult(false, failureLine(e), { ascii: true });
   }
 }
 
@@ -440,6 +526,9 @@ module.exports = {
   refsForConnection,
   sortReadyToBindFirst,
   pacFailureMessage,
+  failureLine,
+  connectionRowFromSdk,
+  listConnectionsWithPac,
   // The `pac connection list` parsers are exported for unit tests. They consume loosely
   // structured CLI output whose shape varies across PAC builds (JSON, fixed-width table,
   // whitespace table), which is exactly the code most likely to break silently on a CLI

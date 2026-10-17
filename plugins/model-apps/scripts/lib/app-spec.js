@@ -34,8 +34,8 @@ function formIdentityKey(f) {
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, because the
-// build hands it to pac as one command-line value. Shared with download, which carries only a model the spec can hold.
+// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, stored as the page's
+// `model` in its config.json. Shared with download, which carries only a model the spec can hold.
 const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 
 // Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
@@ -877,6 +877,49 @@ function primaryNameLengthProblem(length) {
 function askedPrimaryNameLength(entity) {
   const asked = entity && entity.primaryAttribute && entity.primaryAttribute.maxLength;
   return asked === undefined || asked === null ? undefined : asked;
+}
+
+// Whether an alternate key is over its table's primary name column while the spec asks that column for a length (askedPrimaryNameLength):
+// the key is then in the way of the length. The platform validates a key when it is created, and a key may hold at most 900 bytes — 2 for
+// each character of a text column.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+// A new table's name column is created asking for a length, but some environments make it 850 characters (1,700 bytes) whatever is
+// asked (DEFAULT_PRIMARY_NAME_LENGTH, lib/entity-provision.js), so a key over it can be created only once the build has set the
+// length the spec asks for. Matched case-insensitively: a column's logical name is its schema name in lower case.
+function keyNeedsNameLength(entity, key) {
+  if (askedPrimaryNameLength(entity) === undefined || !key || !Array.isArray(key.columns)) return false;
+  const name = String(entity.primaryAttribute.schemaName || '').toLowerCase();
+  return name !== '' && key.columns.some((column) => String(column).toLowerCase() === name);
+}
+
+// Whether a label goes out in ONE language: what the SDK sends for it is a single `LocalizedLabels` entry. The SDK writes a plain string as one
+// entry in the language the build writes in, and a language map as one entry per language it names, so a string and a map that names one
+// language are the same request, byte for byte, whichever language that is. What decides is what is sent — not the shape of the value, and not
+// the language the build is authored in, which a map does not use (it names its own) and a string takes: the same request is the same label
+// under every authoring language, so where its key is made cannot depend on it. A map that names several languages or none, or a name that is
+// not an LCID, is not one label.
+function labelGoesOutInOneLanguage(value) {
+  if (!isLocalizedLabelMap(value)) return true;
+  const languages = Object.keys(value);
+  return languages.length === 1 && /^[1-9]\d*$/.test(languages[0]);
+}
+
+// Whether an alternate key must wait for its table's primary name column to get the length the spec asks for. The one rule behind the
+// data-model phase and both plans, so that they cannot disagree about where such a key is made: true when the key needs the length
+// (keyNeedsNameLength) and its label goes out in ONE language (labelGoesOutInOneLanguage).
+//
+// The build sets the length LAST in the phase: the SDK's update reads the column with its labels, and a read that carries labels ahead of
+// a create that carries several languages is what makes Dataverse keep only the base one. A key with one label has nothing for such a read
+// to strip, so it may follow the step; a key labelled in several languages keeps the place it has always had, ahead of it — and where the
+// platform then refuses it for the length of its column, the build says so (alternateKeyAheadOfLength, lib/entity-provision.js).
+//
+// It does not depend on the language the build writes in, so the dry run and the apply cannot disagree about it however either is given one.
+//
+// This is the half of the rule the spec decides. The other half is the build's: a table that already existed is never written to, so
+// its keys are made where they always were, and only a table whose length is still to be set (one this build created, or one a failed
+// attempt of the same build left unset) makes its keys wait.
+function keyWaitsForNameLength(entity, key) {
+  return keyNeedsNameLength(entity, key) && labelGoesOutInOneLanguage(key.displayName);
 }
 
 // The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
@@ -3243,13 +3286,13 @@ function validateAppSpec(spec, opts = {}) {
   // slugify (:686) which always conforms; a hand-authored v2 key must too, since the key is the
   // cross-reference identity (navigatesTo.targetKey, PAGEREF_<key>, appShell page subareas).
   const PAGE_KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse / PAC CLI.
+  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse or by the SDK on a page create.
   // A spec page carrying this field is an EDIT-SNAPSHOT (env-specific, downloaded from a live app);
   // a portable fresh-authored spec omits it. When present it must be exactly this shape so
   // reconcilePageIds can use it as the highest identity authority without silently accepting garbage
-  // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
+  // (e.g. a cross-env GUID that happens to match an unrelated page).
   const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
+  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
@@ -3257,13 +3300,13 @@ function validateAppSpec(spec, opts = {}) {
     // (see "page-name uniqueness" below) so it can distinguish a NEW page from a PRE-EXISTING one.
     // A page MAY carry its own deployed `pageId` (edit-snapshot marker). A portable fresh-authored spec
     // omits it — absence is never an error. When present it MUST be a valid 36-char GUID: the
-    // reconcilePageIds authority logic (addenda Task 4 / C3) consumes it as the HIGHEST identity source,
+    // reconcilePageIds authority logic consumes it as the HIGHEST identity source,
     // so silently accepting a malformed / empty value would cause reconcile to bind the wrong page.
     if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
       errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
     }
-    // The id of the model that generated the page — what `pac model genpage upload --model` records, and
-    // what a download writes back. A short token (e.g. `gpt-4.1`); it travels as a command-line value.
+    // The id of the model that generated the page — what the page's config.json records as `model`, and
+    // what a download writes back. A short token (e.g. `gpt-4.1`).
     if (p.model !== undefined && (typeof p.model !== 'string' || !PAGE_MODEL_RE.test(p.model))) {
       errors.push(`page '${p.key || p.name}': model must be a model id such as 'gpt-4.1' (letters, digits and . _ : / @ + -, at most 100 characters)`);
     }
@@ -3289,10 +3332,10 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
       }
     }
-    // codeFile confinement + path-uniqueness (Critical 4). Only checked for implemented tsx pages
+    // codeFile confinement + path-uniqueness. Only checked for implemented tsx pages
     // (intent pages have no codeFile; the codeFile presence was already validated above). Normalize
     // the path before checking so that 'pages/./x.tsx' and 'pages/../pages/x.tsx' are detected as
-    // duplicates of 'pages/x.tsx' (addendum Crit 4). Replace backslashes with forward slashes before
+    // duplicates of 'pages/x.tsx'. Replace backslashes with forward slashes before
     // lowercasing for cross-platform-safe comparison in the set.
     if (src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile) {
       if (!isAppSourcePath(src.codeFile)) {
@@ -3317,7 +3360,7 @@ function validateAppSpec(spec, opts = {}) {
   // edit-snapshot can legitimately carry a PRE-EXISTING duplicate the run did NOT create (two pages
   // authored by different people/tools), and blocking every build — even an unrelated form edit that
   // never touches pages — on a dupe the run is not changing is wrong (the pages phase matches by id/key,
-  // never by name: genpage-cli.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
+  // never by name: lib/genpage-sdk.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
   // with a -N suffix, so distinct-id same-name pages build fine). Signal: a page carrying a deployed
   // `pageId` is PRE-EXISTING (an edit-snapshot marker); a page WITHOUT one is NEW (authored this run).
   //   - collision involving a NEW page  → ERROR  (prevent authoring/adding a duplicate)
@@ -3490,7 +3533,7 @@ function validateAppSpec(spec, opts = {}) {
         checkPortableIconRef(sa.icon, `sitemap subArea "${sa.title || ''}"`);
         checkPortableIconRef(sa.vectorIcon, `sitemap subArea "${sa.title || ''}"`);
         validateIconDescription(sa.iconDescription, `sitemap subArea "${sa.title || ''}"`, errors);
-        // Ask 3: don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
+        // Don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
         // (emitted by the build); a BARE token can't be emitted on an entity subarea (it breaks the
         // modern app-designer), so surface it as a warning at author time rather than a silent drop.
         if (sa.entity && sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
@@ -3512,7 +3555,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
-  // MEMBERSHIP invariant (Plan 5 v2 / Task 3): every generative page MUST appear as a sitemap subarea.
+  // MEMBERSHIP invariant: every generative page MUST appear as a sitemap subarea.
   // A model-driven app's membership IS sitemap presence — there is no hidden-but-navigable subarea.
   // A page that is only a navigatesTo target (no subarea) is NOT owned by the app's navigation: build
   // will create it, but download enumeration (membership = sitemap) and verify (membership check) will
@@ -4230,6 +4273,8 @@ module.exports = {
   PRIMARY_NAME_MAX_LENGTH,
   primaryNameLengthProblem,
   askedPrimaryNameLength,
+  keyNeedsNameLength,
+  keyWaitsForNameLength,
   validateSampleDataRows,
   normalizePageSource,
   normalizeLanguageCode,

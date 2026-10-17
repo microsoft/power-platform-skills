@@ -48,6 +48,16 @@ function errorMessage(res) {
   return `HTTP ${res && res.status}`;
 }
 
+// A failed read is reported by value — `{ ok: false, status, error }`, `{ found: null, status, error }` — and the halt the relationship step raises around it (lib/entity-provision.js) hands the
+// service's code to the build's retry, as the SDK's ConnectionError does (lib/retry-policy.js, serviceFailure's `answered`). So the OData `error` of the answer rides along:
+//   HTTP 500  { "error": { "code": "0x80044151", "message": "SQL timeout expired." } }
+// on the result as `answered`, NOT enumerable, so a result prints, caches and compares as it did; only an `error` that is an object is one, and the rule reads nothing of it but its code and message.
+function withAnswer(result, answered) {
+  if (answered && typeof answered === 'object' && !Array.isArray(answered)) Object.defineProperty(result, 'answered', { value: answered, enumerable: false });
+  return result;
+}
+const answeredOf = (res) => (res && res.body && typeof res.body === 'object' ? res.body.error : undefined);
+
 async function get(client, path) {
   if (!client || typeof client.get !== 'function') {
     return { status: 0, body: null, thrown: new Error('no metadata client') };
@@ -106,7 +116,7 @@ async function readRelationshipsOf(client, entityLogical, kind, cache) {
   };
   if (res.status === 404) return finish({ ok: true, rows: [], tableMissing: true });
   if (!res.status || res.status < 200 || res.status >= 300) {
-    return finish({ ok: false, status: res.status, error: errorMessage(res) });
+    return finish(withAnswer({ ok: false, status: res.status, error: errorMessage(res) }, answeredOf(res)));
   }
   // A collection read is `{ "value": [ ... ] }`, and an empty collection is `"value": []`. A 200
   // whose body is not that shape (a table read that happened to share the URL prefix, a truncated
@@ -148,7 +158,7 @@ async function readExact(client, schemaName) {
   const base = await get(client, `${key}?$select=SchemaName,RelationshipType`);
   if (base.status === 404) return { found: false };
   if (!base.status || base.status < 200 || base.status >= 300) {
-    return { found: null, status: base.status, error: errorMessage(base) };
+    return withAnswer({ found: null, status: base.status, error: errorMessage(base) }, answeredOf(base));
   }
   const kind = castKind(base.body);
   if (!kind) return { found: null, status: base.status, error: 'relationship type was not in the base read' };
@@ -160,7 +170,7 @@ async function readExact(client, schemaName) {
   if (!cast.status || cast.status < 200 || cast.status >= 300) {
     // The name exists (the base read succeeded). A failed cast means we could not read the
     // endpoints, not that the name is free — do not report found:false.
-    return { found: null, status: cast.status, error: errorMessage(cast) };
+    return withAnswer({ found: null, status: cast.status, error: errorMessage(cast) }, answeredOf(cast));
   }
   return { found: true, holder: holderFromCast(cast.body, kind) };
 }
@@ -195,7 +205,7 @@ async function findRelationshipHolder(client, schemaName, opts) {
       if (hit) return { found: true, holder: hit };
     }
   }
-  if (failed) return { found: null, status: failed.status, error: failed.error };
+  if (failed) return withAnswer({ found: null, status: failed.status, error: failed.error }, failed.answered);
   return { found: false };
 }
 

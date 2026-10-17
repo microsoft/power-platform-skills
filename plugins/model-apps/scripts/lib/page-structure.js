@@ -9,8 +9,9 @@
 // the elision-marker check and the fence check on BLANKED source were added to one gate and had to be
 // found missing from the other. A page one gate refuses, the other now refuses too, with the same words.
 //
-// Deliberately NOT a type check: the plugin ships with no dependencies, so there is no TypeScript
-// parser to call, and type checking is the deploy's job. This catches the realistic worker failures —
+// Deliberately NOT a type check. The plugin does ship the TypeScript compiler, but for the SDK's page compile alone, which loads it
+// lazily (~0.2 s: lib/typescript-compiler.js) — more than a gate on one page file should pay — and that compile is a transpile, not
+// a type check, so a type error is not caught at deploy either. This catches the realistic worker failures —
 // an empty file, a truncated write, prose instead of code, elided code.
 //
 // Every check runs over literal-blanked source (see source-literals.js). A substring search, even over

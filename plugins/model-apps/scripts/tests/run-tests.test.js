@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { pluginTestFiles, sdkTestSpec, summarize } = require('../run-tests.js');
+const { pluginTestFiles, sdkTestSpec, summarize, runPluginSuite, withTempDir } = require('../run-tests.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 test('pluginTestFiles discovers every *.test.js as a scripts/tests path, sorted', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtests-'));
@@ -69,6 +70,56 @@ test('summarize fails the run when any non-skipped suite failed', () => {
   ]);
   assert.strictEqual(exitCode, 1);
   assert.ok(lines.some((l) => /FAIL\s+plugin node:test/.test(l)));
+});
+
+// --- Nothing left behind ----------------------------------------------------------------------
+// The suite runs in a temporary folder of its own, and the run fails when a test leaves anything in it. A full run
+// used to leave about 260 folders in the developer's temp folder; these tests hold the check to catching a leak, to
+// passing a clean run, and to never leaving its own folder behind.
+test('runPluginSuite runs the suite in a temporary folder of its own, names what a test left there, and removes it', () => {
+  const root = makeTempDir('runtests-guard-');
+  const work = path.join(root, 'work');
+  const parent = path.join(root, 'temp');
+  fs.mkdirSync(work);
+  fs.mkdirSync(parent);
+  fs.writeFileSync(path.join(work, 'clean.test.js'), "const test = require('node:test');\ntest('makes nothing', () => {});\n");
+  fs.writeFileSync(path.join(work, 'leaky.test.js'), [
+    "const test = require('node:test');",
+    "const fs = require('node:fs');",
+    "const os = require('node:os');",
+    "const path = require('node:path');",
+    "test('leaves a folder behind', () => { fs.mkdtempSync(path.join(os.tmpdir(), 'leaked-')); });",
+    '',
+  ].join('\n'));
+
+  assert.deepStrictEqual(runPluginSuite(['clean.test.js'], { cwd: work, stdio: 'pipe', tempParent: parent }), { status: 0, left: [] });
+  const leaky = runPluginSuite(['leaky.test.js'], { cwd: work, stdio: 'pipe', tempParent: parent });
+  assert.strictEqual(leaky.status, 0, 'the leaking test itself passes: only the check catches it');
+  assert.strictEqual(leaky.left.length, 1, leaky.left.join(', '));
+  assert.match(leaky.left[0], /^leaked-/);
+  assert.deepStrictEqual(fs.readdirSync(parent), [], "the suite's temporary folder is removed either way");
+});
+
+test('withTempDir points TEMP, TMP and TMPDIR at the folder whatever their spelling, and keeps the rest', () => {
+  const env = withTempDir({ Temp: 'C:\\old', tmp: 'C:\\old', TMPDIR: '/old', PATH: 'p', Other: 'x' }, 'D:\\suite');
+  assert.deepStrictEqual(env, { PATH: 'p', Other: 'x', TEMP: 'D:\\suite', TMP: 'D:\\suite', TMPDIR: 'D:\\suite' });
+});
+
+test('summarize fails the run when the suite left something in its temporary folder', () => {
+  const { lines, exitCode } = summarize([
+    { name: 'plugin node:test', ok: true },
+    { name: 'nothing left in the temporary folder', ok: false },
+  ]);
+  assert.strictEqual(exitCode, 1);
+  assert.ok(lines.some((l) => /FAIL\s+nothing left in the temporary folder/.test(l)));
+});
+
+// main() is the gate CI runs, and it is not run here (it runs this whole suite), so its wiring is read from the source:
+// the suite goes through runPluginSuite and what it left decides a result of its own.
+test('the regression gate runs the plugin suite through runPluginSuite and fails on what it left behind', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'run-tests.js'), 'utf8');
+  assert.match(source, /const plugin = runPluginSuite\(files, \{ cwd: pluginRoot \}\);/);
+  assert.match(source, /results\.push\(\{ name: 'nothing left in the temporary folder', ok: plugin\.left\.length === 0 \}\);/);
 });
 
 // --- CI workflow scoping ---------------------------------------------------------------------

@@ -15,18 +15,22 @@ const agentMessage = 'Created the approved summary.\n';
 const connector = { logicalName: 'cnt_docs', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', dataset: 'https://contoso.sharepoint.com/sites/team', tables: ['77777777-7777-4777-8777-777777777777'] };
 const action = { name: 'cnt_ApproveOrder', isFunction: false, boundEntityLogicalName: 'salesorder', displayName: 'Approve Order', parameterKinds: { Comment: 'String' } };
 
-function uploadFixture(edit = false) {
+function uploadFixture(edit = false, { appless = false } = {}) {
   const beforeConfig = { model: 'gpt-4.1', dataSources: ['account'], connectorBindings: [connector], actionBindings: [action] };
   const beforePage = { pageId: PAGE, appId: APP, name: edit ? 'Renamed Revenue' : name, navigationTitle: edit ? 'Original Dashboard' : name };
+  // A create with no app is the first page of a new app: the app is built from it afterwards, so it has no --app-id and nothing to place it in.
+  const afterPage = appless ? { pageId: PAGE, name } : beforePage;
   const text = edit ? 'Add sorting only.\n' : prompt;
   const call = {
     id: 'upload',
-    command: `node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id ${APP} --code-file page.tsx --prompt-file prompt.txt --agent-message-file agent-message.txt `
-      + (edit ? `--page-id ${PAGE}` : '--name-file page-name.txt --model gpt-4.1 --add-to-sitemap'),
-    result: { ok: true, pageId: PAGE, appId: APP, updated: edit },
-    pacExecutable: 'pac.exe', pacWrites: 1,
-    forwarded: { appId: APP, ...(edit && { pageId: PAGE }), name: beforePage.name, model: 'gpt-4.1', prompt: text, agentMessage, dataSources: edit ? ['account'] : [] },
-    ...(edit && { reads: { name: { ok: true, value: beforePage.name }, config: { ok: true, artifact: 'before/config.json' } } }),
+    command: `node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com ${appless ? '' : `--app-id ${APP} `}--code-file page.tsx --prompt-file prompt.txt --agent-message-file agent-message.txt `
+      + (edit ? `--page-id ${PAGE}` : `--name-file page-name.txt --model gpt-4.1${appless ? '' : ' --add-to-sitemap'}`),
+    result: { ok: true, pageId: PAGE, ...(!appless && { appId: APP }), updated: edit },
+    writes: 1,
+    // What genpage-upload.js hands the page backend: a flag that was omitted is absent, so an update that renames nothing sends no name, model or data sources.
+    forwarded: edit
+      ? { appId: APP, pageId: PAGE, prompt: text, agentMessage }
+      : { name: beforePage.name, model: 'gpt-4.1', prompt: text, agentMessage },
   };
   return {
     contractVersion: 2,
@@ -43,7 +47,7 @@ function uploadFixture(edit = false) {
       'prompt.txt': text, 'agent-message.txt': agentMessage, 'page-name.txt': name + '\n',
       'before/config.json': JSON.stringify(beforeConfig), 'before/page.json': JSON.stringify(beforePage),
       'after/config.json': JSON.stringify(edit ? beforeConfig : { model: 'gpt-4.1', dataSources: [], connectorBindings: [], actionBindings: [] }),
-      'after/page.json': JSON.stringify(beforePage),
+      'after/page.json': JSON.stringify(afterPage),
     },
   };
 }
@@ -82,6 +86,31 @@ test('create uses name-file without rewriting approved text', () => {
   assert.equal(PHASE_EXPECTATIONS.get(CREATE)({ fixture: good }).status, 'pass');
 });
 
+test('a create needs no app: the first page of a new app has no --app-id and no --add-to-sitemap, and a create that names an app places its page', () => {
+  const first = uploadFixture(false, { appless: true });
+  assert.equal(score(first).status, 'pass', 'an app-less create is the first page of a new app');
+  assert.equal(PHASE_EXPECTATIONS.get(CREATE)({ fixture: first }).status, 'pass');
+  for (const [mutate, reason] of [
+    [(fixture) => { fixture.events[0].command += ' --add-to-sitemap'; }, /--add-to-sitemap needs --app-id/],
+    [(fixture) => { fixture.events[0].result.appId = APP; }, /does not preserve the requested app\/page identity/],
+  ]) {
+    const fixture = uploadFixture(false, { appless: true });
+    mutate(fixture);
+    const result = score(fixture);
+    assert.equal(result.status, 'fail');
+    assert.match(result.reason, reason);
+  }
+  // Naming an app places the page in it; a create that names one and leaves the page out of its navigation is not the skill's create.
+  const unplaced = uploadFixture();
+  unplaced.events[0].command = unplaced.events[0].command.replace(' --add-to-sitemap', '');
+  const placed = score(unplaced);
+  assert.equal(placed.status, 'fail');
+  assert.match(placed.reason, /a create that names an app must include --add-to-sitemap/);
+  const notAGuid = uploadFixture();
+  notAGuid.events[0].command = notAGuid.events[0].command.replace(`--app-id ${APP}`, '--app-id not-a-guid');
+  assert.match(score(notAGuid).reason, /upload app-id is not a GUID/);
+});
+
 test('edit keeps name model and untouched bindings', () => {
   const good = uploadFixture(true);
   assert.equal(score(good).status, 'pass');
@@ -91,10 +120,14 @@ test('edit keeps name model and untouched bindings', () => {
     (fixture) => { changeArtifact(fixture, 'after/config.json', (config) => { config.connectorBindings = []; }); },
     (fixture) => { changeArtifact(fixture, 'after/config.json', (config) => { config.actionBindings = []; }); },
     (fixture) => { changeArtifact(fixture, 'after/config.json', (config) => { config.dataSources = []; }); },
-    (fixture) => { fixture.events[0].forwarded.model = undefined; },
+    // Nothing is forwarded for a flag the update left out: the page backend keeps the page's own, and a value sent anyway is a change nobody approved.
+    (fixture) => { fixture.events[0].forwarded.model = 'gpt-5'; },
+    (fixture) => { fixture.events[0].forwarded.name = 'Another name'; },
+    (fixture) => { fixture.events[0].forwarded.dataSources = []; },
     (fixture) => { fixture.events[0].command += ' --connectors empty.json'; fixture.artifacts['empty.json'] = '[]'; },
     (fixture) => { fixture.events[0].result.pageId = APP; },
     (fixture) => { fixture.events[0].command += ' --add-to-sitemap'; },
+    (fixture) => { fixture.events[0].command = fixture.events[0].command.replace(`--app-id ${APP} `, ''); },
   ]) {
     const fixture = uploadFixture(true);
     mutate(fixture);
@@ -102,6 +135,30 @@ test('edit keeps name model and untouched bindings', () => {
   }
   assert.equal(typeof PHASE_EXPECTATIONS.get(EDIT), 'function');
   assert.equal(PHASE_EXPECTATIONS.get(EDIT)({ fixture: good }).status, 'pass');
+});
+
+test('an update that names the page of an app-less create that did not finish completes it, with or without the app', () => {
+  // genpage-upload.js: a create whose publish or placement failed leaves its page unfinished, and naming that page again completes it — for a page created with no app,
+  // without --app-id; with --add-to-sitemap when the create was asked to place it. Any other update names its app and omits --add-to-sitemap.
+  const failedCreate = (appId) => ({
+    id: 'create', command: `node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com ${appId ? `--app-id ${appId} ` : ''}--code-file page.tsx --prompt-file prompt.txt --agent-message-file agent-message.txt --name-file page-name.txt --model gpt-4.1${appId ? ' --add-to-sitemap' : ''}`,
+    result: { ok: false, pageId: PAGE, ...(appId && { appId }), error: 'page was created, but publishing it failed' },
+  });
+  const finish = (tail) => ({ id: 'upload', command: `node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com ${tail} --code-file page.tsx --prompt-file prompt.txt --agent-message-file agent-message.txt`, result: { ok: true, pageId: PAGE, updated: true } });
+  const run = (...events) => {
+    const fixture = uploadFixture(true);
+    delete fixture.manifest.uploads;
+    fixture.events = events;
+    return fixture;
+  };
+  const appless = finish(`--page-id ${PAGE}`);
+  assert.equal(score(run(failedCreate(null), appless)).status, 'pass', 'an app-less create is finished by naming its page, with no app');
+  assert.equal(score(run(failedCreate(null), { ...appless, id: 'other', command: appless.command.replace(PAGE, '88888888-8888-4888-8888-888888888888'), result: { ...appless.result, pageId: '88888888-8888-4888-8888-888888888888' } })).status, 'fail', 'another page is an ordinary update, which names its app');
+  assert.equal(score(run(appless)).status, 'fail', 'with no unfinished create ahead of it, an update with no app is an ordinary one');
+  const placed = finish(`--app-id ${APP} --page-id ${PAGE} --add-to-sitemap`);
+  placed.result.appId = APP;
+  assert.equal(score(run(failedCreate(APP), placed)).status, 'pass', 'the placement that failed is finished with --page-id and --add-to-sitemap');
+  assert.match(score(run({ ...failedCreate(APP), result: { ok: true, pageId: PAGE, appId: APP, updated: false } }, placed)).reason, /update must name a valid page id and omit sitemap placement/, 'a create that finished leaves nothing to complete');
 });
 
 test('explicit rename and model win without changing the navigation title', () => {
@@ -148,77 +205,68 @@ test('connector and action sets preserve, add, remove and explicitly clear with 
   }
 });
 
-test('ASCII quote and cmd percent names refuse before PAC writes; safe native names remain exact', () => {
-  for (const [approvedName, pacExecutable, reason] of [
-    ['Say "hi"', 'pac.exe', 'ASCII double quote'],
-    ['Margin 100%', 'pac.cmd', 'pac.cmd cannot receive %'],
-  ]) {
-    const fixture = uploadFixture();
-    const row = fixture.manifest.uploads[0];
-    row.approvedName = approvedName;
-    row.outcome = 'refused';
-    fixture.artifacts['page-name.txt'] = approvedName + '\n';
-    fixture.events[0].pacExecutable = pacExecutable;
-    fixture.events[0].result = { ok: false, error: reason };
-    fixture.events[0].pacWrites = 0;
-    delete fixture.events[0].forwarded;
-    assert.equal(score(fixture).status, 'pass', reason);
-    fixture.events[0].pacWrites = 1;
-    assert.equal(score(fixture).status, 'fail', 'refusal must precede the PAC write');
-  }
-  for (const approvedName of ["Maker's Revenue", 'Margin 100%', 'Revenue \u201cFY\u201d']) {
+test('a name is stored exactly as approved: a straight quote, a percent sign and a command substitution are only text', () => {
+  for (const approvedName of ['Say "hi"', 'Margin 100%', 'Revenue $100 $(Get-Date)', "Maker's Revenue", 'Revenue \u201cFY\u201d']) {
     const fixture = uploadFixture();
     fixture.manifest.uploads[0].approvedName = approvedName;
     fixture.artifacts['page-name.txt'] = approvedName + '\n';
     fixture.events[0].forwarded.name = approvedName;
     changeArtifact(fixture, 'after/page.json', (page) => { page.name = approvedName; page.navigationTitle = approvedName; });
     assert.equal(score(fixture).status, 'pass', approvedName);
-  }
-});
-
-test('implicit name transport and unreadable model losses remain warning-visible', () => {
-  const shim = uploadFixture(true);
-  changeArtifact(shim, 'before/page.json', (page) => { page.name = 'Margin 100%'; });
-  shim.events[0].reads.name.value = 'Margin 100%';
-  shim.events[0].pacExecutable = 'pac.cmd';
-  shim.events[0].forwarded.name = undefined;
-  changeArtifact(shim, 'after/page.json', (page) => { page.name = page.navigationTitle; });
-  shim.events[0].result.warnings = ['The page name could not be sent: pac.cmd cannot receive %. It may have changed to its navigation title.'];
-  assert.equal(score(shim).status, 'pass');
-  delete shim.events[0].result.warnings;
-  assert.equal(score(shim).status, 'fail');
-
-  const unread = uploadFixture(true);
-  unread.events[0].reads.config = { ok: false, error: 'config download unreadable' };
-  unread.events[0].command += ' --data-sources account';
-  unread.events[0].forwarded.model = undefined;
-  unread.events[0].result.warnings = ['could not read the current model; pass --model to set it'];
-  changeArtifact(unread, 'after/config.json', (config) => { config.model = ''; });
-  assert.equal(score(unread).status, 'pass');
-  delete unread.events[0].result.warnings;
-  assert.equal(score(unread).status, 'fail');
-});
-
-test('native implicit quote names preserve existing escaping and warn for newly lossy storage', () => {
-  for (const ownName of ['Say \\"hi\\"', 'Say "hi"']) {
-    const fixture = uploadFixture(true);
-    changeArtifact(fixture, 'before/page.json', (page) => { page.name = ownName; });
-    fixture.events[0].reads.name.value = ownName;
-    fixture.events[0].forwarded.name = 'Say "hi"';
-    changeArtifact(fixture, 'after/page.json', (page) => { page.name = 'Say \\"hi\\"'; });
-    if (ownName === 'Say "hi"') fixture.events[0].result.warnings = ['The page name has a double quote that PAC cannot store as it is.'];
-    assert.equal(score(fixture).status, 'pass', ownName);
-    if (ownName === 'Say "hi"') {
-      delete fixture.events[0].result.warnings;
-      assert.equal(score(fixture).status, 'fail');
-    } else {
-      changeArtifact(fixture, 'after/page.json', (page) => { page.name = 'Say \\\\"hi\\\\"'; });
-      assert.equal(score(fixture).status, 'fail', 'preservation must not accumulate backslashes');
+    // The page backend does not escape, so a quote stored as `\"` (the way an earlier release stored it) is a different name from the approved one.
+    if (approvedName.includes('"')) {
+      changeArtifact(fixture, 'after/page.json', (page) => { page.name = approvedName.replace(/"/g, '\\"'); });
+      assert.equal(score(fixture).status, 'fail', `${approvedName}: an escaped quote is not the approved name`);
     }
   }
+  // A straight quote is not refused any more: a create recorded as refused for it is not a successful one.
+  const refused = uploadFixture();
+  refused.manifest.uploads[0].approvedName = 'Say "hi"';
+  refused.artifacts['page-name.txt'] = 'Say "hi"\n';
+  refused.events[0].result = { ok: false, error: 'The page name contains an ASCII double quote.' };
+  refused.events[0].writes = 0;
+  delete refused.events[0].forwarded;
+  const result = score(refused);
+  assert.equal(result.status, 'fail', 'a quote is stored, so a create that was refused for one is wrong');
+  assert.match(result.reason, /expected successful upload is refused or has no single page write/);
 });
 
-test('#673 divergence refusals stop before PAC writes, and only the logged explicit choice authorizes an overwrite', () => {
+test('an update that gives no name, model or data sources keeps the page\u2019s own and sends nothing for them', () => {
+  // The own name an earlier release stored with an escaped quote stays as it is: the page backend rewrites nothing it was not asked to.
+  for (const ownName of ['Say \\"hi\\"', 'Margin 100%', 'Say "hi"']) {
+    const fixture = uploadFixture(true);
+    changeArtifact(fixture, 'before/page.json', (page) => { page.name = ownName; });
+    changeArtifact(fixture, 'after/page.json', (page) => { page.name = ownName; });
+    assert.equal(score(fixture).status, 'pass', ownName);
+    // Re-sent, or stored differently, it is no longer the page's own.
+    fixture.events[0].forwarded.name = ownName;
+    assert.equal(score(fixture).status, 'fail', `${ownName}: an omitted name is not sent again`);
+    delete fixture.events[0].forwarded.name;
+    changeArtifact(fixture, 'after/page.json', (page) => { page.name = `${ownName} (edited)`; });
+    assert.equal(score(fixture).status, 'fail', `${ownName}: the stored name changed`);
+  }
+  // An update that does give a model or data sources sends exactly those, and the read-back agrees.
+  const explicit = uploadFixture(true);
+  explicit.manifest.uploads[0].changes.dataSources = ['account', 'contact'];
+  explicit.manifest.uploads[0].changes.model = 'gpt-5';
+  explicit.events[0].command += ' --data-sources account,contact --model gpt-5';
+  Object.assign(explicit.events[0].forwarded, { dataSources: ['account', 'contact'], model: 'gpt-5' });
+  changeArtifact(explicit, 'after/config.json', (config) => { config.dataSources = ['account', 'contact']; config.model = 'gpt-5'; });
+  assert.equal(score(explicit).status, 'pass');
+  explicit.events[0].forwarded.dataSources = ['account'];
+  assert.equal(score(explicit).status, 'fail', 'the data sources sent are not the ones asked for');
+  // `--clear-data-sources` is the one way to empty the list, and it sends an empty one.
+  const cleared = uploadFixture(true);
+  cleared.manifest.uploads[0].changes.dataSources = [];
+  cleared.events[0].command += ' --clear-data-sources';
+  cleared.events[0].forwarded.dataSources = [];
+  changeArtifact(cleared, 'after/config.json', (config) => { config.dataSources = []; });
+  assert.equal(score(cleared).status, 'pass');
+  delete cleared.events[0].forwarded.dataSources;
+  assert.equal(score(cleared).status, 'fail', 'clearing sends an empty list, not nothing');
+});
+
+test('#673 divergence refusals stop before the page backend writes, and only the logged explicit choice authorizes an overwrite', () => {
   for (const code of ['no-base', 'deployed-changed', 'deployed-unreadable']) {
     const refused = uploadFixture(true);
     refused.manifest.uploads[0].outcome = 'refused';
@@ -226,22 +274,22 @@ test('#673 divergence refusals stop before PAC writes, and only the logged expli
       ok: false, code, pageId: PAGE, appId: APP, error: `refused: ${code}`,
       ...(code === 'deployed-changed' && { lines: { added: 3, removed: 1 }, deployedCopy: 'page.tsx.deployed.tsx' }),
     };
-    refused.events[0].pacWrites = 0;
+    refused.events[0].writes = 0;
     delete refused.events[0].forwarded;
     assert.equal(score(refused).status, 'pass', code);
-    refused.events[0].pacWrites = 1;
-    assert.equal(score(refused).status, 'fail', `${code}: the refusal must precede the PAC write`);
+    refused.events[0].writes = 1;
+    assert.equal(score(refused).status, 'fail', `${code}: the refusal must precede the page backend write`);
   }
   const noSummary = uploadFixture(true);
   noSummary.manifest.uploads[0].outcome = 'refused';
   noSummary.events[0].result = { ok: false, code: 'deployed-changed', pageId: PAGE, appId: APP, error: 'refused' };
-  noSummary.events[0].pacWrites = 0;
+  noSummary.events[0].writes = 0;
   delete noSummary.events[0].forwarded;
   assert.equal(score(noSummary).status, 'fail', 'deployed-changed must carry its line summary');
   const createRefused = uploadFixture();
   createRefused.manifest.uploads[0].outcome = 'refused';
   createRefused.events[0].result = { ok: false, code: 'no-base', pageId: PAGE, appId: APP, error: 'refused' };
-  createRefused.events[0].pacWrites = 0;
+  createRefused.events[0].writes = 0;
   delete createRefused.events[0].forwarded;
   assert.equal(score(createRefused).status, 'fail', 'a divergence refusal can only answer an update');
 
@@ -277,22 +325,22 @@ test('#673 divergence refusals stop before PAC writes, and only the logged expli
     lines: { added: 3, removed: 1 },
   };
   const contradicted = score(contradictory);
-  assert.equal(contradicted.status, 'fail', 'a divergence code cannot ride on ok:true / pacWrites:1 / forwarded');
-  assert.match(contradicted.reason, /must stop the update before PAC writes/);
+  assert.equal(contradicted.status, 'fail', 'a divergence code cannot ride on ok:true / writes:1 / forwarded');
+  assert.match(contradicted.reason, /must stop the update before the page backend writes/);
 
   // Each clause on its own: a recorded refusal row skips the row-level write checks, so only the
   // per-call rule can catch these.
   const okWithoutWrite = uploadFixture(true);
   okWithoutWrite.manifest.uploads[0].outcome = 'refused';
   okWithoutWrite.events[0].result = { ok: true, code: 'no-base', pageId: PAGE, appId: APP };
-  okWithoutWrite.events[0].pacWrites = 0;
+  okWithoutWrite.events[0].writes = 0;
   delete okWithoutWrite.events[0].forwarded;
-  assert.equal(score(okWithoutWrite).status, 'fail', 'a divergence code is never a success, even with no PAC write');
+  assert.equal(score(okWithoutWrite).status, 'fail', 'a divergence code is never a success, even with no write');
   const forwardedRefusal = uploadFixture(true);
   forwardedRefusal.manifest.uploads[0].outcome = 'refused';
   forwardedRefusal.events[0].result = { ok: false, code: 'deployed-unreadable', pageId: PAGE, appId: APP, error: 'refused' };
-  forwardedRefusal.events[0].pacWrites = 0;
-  assert.equal(score(forwardedRefusal).status, 'fail', 'a refusal cannot have forwarded arguments to PAC');
+  forwardedRefusal.events[0].writes = 0;
+  assert.equal(score(forwardedRefusal).status, 'fail', 'a refusal cannot have forwarded arguments to the page backend');
 });
 
 test('an overwrite approval is consumed by one upload and does not cover a later one', () => {

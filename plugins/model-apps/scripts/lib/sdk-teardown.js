@@ -20,6 +20,10 @@
 //   3. commands      — appactions per entity (they reference the web-resource JS; delete first).
 //                      The SDK's command delete is ENTITY-keyed (removes every appaction on that
 //                      entity's bar in one call), so this passes the entity logical name, not an id.
+//   3b. business rules — `workflow` rows (category 2): the definition first, then the activated copy the
+//                      platform makes of it — both BEFORE the tables phase, because once a rule's table is
+//                      gone its activated copy can never be deleted (400 0x80041102). When this step fails,
+//                      runTeardown keeps that rule's table (step 8) for a re-run, so the copy stays deletable.
 //   4. forms         — systemform rows per entity (forms reference views/web-resources; deleted before tables)
 //   4b. roles        — persona security roles. Deleted AFTER the forms and BEFORE the data model, and
 //                      both halves of that are load-bearing:
@@ -40,7 +44,8 @@
 //                      its parent, so children/referencing tables delete first). Deleting a table
 //                      does NOT cascade forms/views/charts/relationships when cross-references exist
 //                      (e.g. a form subgrid references another table's view), so teardown deletes
-//                      them explicitly first.
+//                      them explicitly first. A table whose business rule could not be deleted (step 3b)
+//                      is KEPT — reported as a `(kept — …)` skip — until a re-run deletes the rule.
 //   9. web-resources — webresourceset rows (form/command JS, table-icon SVG/raster images, and the
 //                      build's generated default app icon) — deleted AFTER tables: a table's icon
 //                      web resource is referenced by the TABLE itself, so it can't be removed until
@@ -59,10 +64,12 @@ const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.j
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
+const { savedPageRows, currentLayerRow } = require('./app-components.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
+const { unreadableAnswer } = require('./collection-answers.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
-const { unescapePacName } = require('./genpage-cli.js');
-const { readPageOwnership, recordPageTeardown, completePageDeletions } = require('./page-ownership-records.js');
+const { unescapePacName } = require('./genpage-sdk.js');
+const { readPageOwnership, readPendingCreations, recordPageTeardown, completePageDeletions, completePendingCreations } = require('./page-ownership-records.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
 // alias because it is part of this module's exported (and unit-tested) surface.
@@ -363,8 +370,11 @@ const KIND_HANDLERS = {
     tolerateDependencyBlock: true,
     async resolve(sdk, target) {
       const ownership = readPageOwnership(target.workspaceDir, target.appUnique, target.env);
+      // A create this app started and never acknowledged leaves a "pending" record under the id it used. The page it was sending may exist by now — the answer was lost, or the key was
+      // bound to another page so no later build resumed it, and the request landed late — and then nothing else names it: no manifest entry, no receipt. The record is how it is found.
+      const pendingCreations = readPendingCreations(target.workspaceDir, target.appUnique, target.env);
       if (typeof sdk.queryRecords !== 'function') {
-        if (ownership.created.length || ownership.teardown.length) throw new Error('cannot read pages while local ownership records remain');
+        if (ownership.created.length || ownership.teardown.length || pendingCreations.size) throw new Error('cannot read pages while local ownership records remain');
         return [];
       }
       // The manifest lives in a web resource this same teardown deletes later (web-resources phase),
@@ -403,29 +413,40 @@ const KIND_HANDLERS = {
       for (const r of [...ownership.created, ...ownership.teardown]) {
         if (!candidateMap.has(r.pageId)) candidateMap.set(r.pageId, { id: r.pageId, key: r.key, name: r.name });
       }
-      const candidates = [...candidateMap.values()];
-      if (!candidates.length) return [];
-
-      // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure).
-      let rows;
-      try {
-        const filter = candidates.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
-        // uxagentprojects rows: { "uxagentprojectid": "<id>", "name": "Overview" }.
-        // Read the row name, not the editable name carried by the manifest.
-        rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid', 'name'], filter, paginate: true });
-        if (!Array.isArray(rows) || rows.some((r) => !r || typeof r.uxagentprojectid !== 'string' || !FORM_GUID_RE.test(r.uxagentprojectid))) {
-          throw new Error('stored page id results are unreadable');
+      // The names each pending create sent under its id. A page found under such an id is deleted only when its stored name is one of them — the corroboration a receipt gets, for the
+      // same reason: the id is one this app's build minted and told nobody, and the name is what it gave the page. The record alone authorizes nothing, and a page named otherwise
+      // is kept. An id the record names that is NOT in the environment is not reported as gone and its record is not consumed (see runTeardown): the request may still land.
+      const sentNames = new Map();
+      const pendingOnly = new Map();
+      for (const [key, entries] of pendingCreations) {
+        for (const entry of entries) {
+          sentNames.set(entry.pageId, new Set(entry.sent.map((s) => s.name)));
+          if (!candidateMap.has(entry.pageId)) pendingOnly.set(entry.pageId, { id: entry.pageId, key, name: entry.sent[0].name, pending: true });
         }
+      }
+      const candidates = [...candidateMap.values()];
+      const lookups = [...candidates, ...pendingOnly.values()];
+      if (!lookups.length) return [];
+
+      // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure). A page exists when the SAVED layer holds it. A plain read of the page table answers the PUBLISHED
+      // layer only, and a page that was created and never published — a build killed after the create change set, a publish that was refused and never finished, a standalone create nobody
+      // published — has no row there: it was "not found" and kept, with its conversation messages, although this workspace's pending record or receipt names it. The saved layer is what the
+      // build's own listing and apps.js read, so the three agree on which pages there are (savedPageRows says how).
+      let byId;
+      try {
+        if (!sdk.dataverse || typeof sdk.dataverse.get !== 'function') throw new Error('the pages cannot be read in their saved layer: no Dataverse client');
+        // Read the row name, not the editable name carried by the manifest. A page with a pending edit is answered in both layers: its current one is the authored row.
+        const found = await savedPageRows(sdk.dataverse, lookups.map((a) => a.id), { label: 'the generative pages' });
+        byId = new Map([...found].map(([id, pageRows]) => [id, currentLayerRow(pageRows)]));
       } catch (err) {
         // Same as the manifest read above: not being able to look deletes nothing and fails the step,
         // so the manifest naming these pages survives for a re-run.
-        const e = new Error(`could not check which of the ${candidates.length} page(s) in '${target.manifestName}' still exist (${errMsg(err)}) — no page is deleted; re-run the teardown. Candidates: ${candidates.map((p) => `${p.id} ${JSON.stringify(p.name)} (stored name unreadable)`).join('; ')}`);
+        const e = new Error(`could not check which of the ${lookups.length} page(s) in '${target.manifestName}' still exist (${errMsg(err)}) — no page is deleted; re-run the teardown. Candidates: ${lookups.map((p) => `${p.id} ${JSON.stringify(p.name)} (stored name unreadable)`).join('; ')}`);
         e.failClosed = true;
-        e.candidates = candidates;
+        e.candidates = lookups;
         throw e;
       }
-      const byId = new Map(rows.map((r) => [r.uxagentprojectid.toLowerCase(), r]));
-      const present = candidates.filter((p) => byId.has(p.id.toLowerCase()));
+      const present = lookups.filter((p) => byId.has(p.id.toLowerCase()));
       const absent = candidates.filter((p) => !byId.has(p.id.toLowerCase())).map((p) => ({ ...p, absent: true }));
       if (!present.length) return { items: [], kept: [], candidates: absent };
       const published = target.appUnique ? await fetchSitemap(sdk, target.appUnique) : { ok: false, reason: 'app identity unavailable' };
@@ -434,6 +455,11 @@ const KIND_HANDLERS = {
       // current layer is read only when the published one leaves a present page unproven. Unlike the build,
       // teardown may take the saved layer as proof: a DELETE of a page another app's saved navigation still
       // references is refused by the platform (see isDependencyBlocked), and that refusal is a skip here.
+      // A page is in that navigation when an ENTRY of it names the page (navigationProof reads the entries of the sitemap, not the
+      // text of its XML): a GenPageId in a comment or a CDATA section names none, and a single-quoted one does.
+      // An app that was never published has no published layer at all — the plain read of it answers "not found",
+      // as it does for an app that is gone — so its saved navigation is the only proof there is: navigationProof
+      // looks for the app in its saved layer, and reads its navigation there when it finds it (`neverPublished`).
       const membership = await navigationProof(sdk, target.appUnique, published, present.map((p) => p.id));
       const savedNavUnread = !!(membership.currentNavigation && !membership.currentNavigation.ok);
       const unreadDraft = savedNavUnread
@@ -441,6 +467,9 @@ const KIND_HANDLERS = {
         : '';
       // Confirmed app absence permits only local proof, never a name-only substitute for navigation.
       const sitemapReadable = membership.ok || membership.reason === 'app-not-found';
+      // An app with no published layer has only its saved navigation, so that is what could not be read: "app sitemap unreadable (appmodule-query-failed)" alone would send an operator looking for a
+      // published sitemap that was never going to be there. A published app's message is exactly what it was.
+      const sitemapUnread = sitemapReadable ? '' : `app sitemap unreadable (${membership.neverPublished ? 'the app was never published, so its navigation is the one it saved, and that could not be read: ' : ''}${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`;
       const placed = new Set(membership.ok ? membership.ids : []);
       const specNames = new Map((target.pageEntries || []).map((p) => [p.key, p.name]));
       const pending = new Set(ownership.teardown.map((p) => p.pageId));
@@ -452,16 +481,22 @@ const KIND_HANDLERS = {
         const nameReadable = typeof row.name === 'string' && row.name.length > 0;
         const item = { id: p.id, key: p.key, name: nameReadable ? unescapePacName(row.name) : '[stored name unreadable]' };
         const receipt = ownership.created.find((r) => r.key === p.key && r.pageId === p.id.toLowerCase());
-        const expectedName = specNames.get(p.key) || (receipt && receipt.name);
+        // The names a receipted page may hold: what the spec calls it now (a build that updated it after a rename brought the page there) and what the receipt recorded when the build made, or adopted,
+        // it. A page the build adopted but did not use — its key is bound to another page, so no update ever renamed it — keeps the name the earlier create sent, which is the receipt's: the build proved
+        // it by that name and its source, told the user "teardown deletes it", and wrote this receipt for it. Comparing with the spec's current name alone kept it as "not proven" when the spec had been
+        // renamed since.
+        const receiptNames = new Set([specNames.get(p.key), receipt && receipt.name].filter(Boolean));
         if (!sitemapReadable) {
-          kept.push({ ...item, reason: `app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})` });
+          kept.push({ ...item, reason: sitemapUnread });
         } else if (!nameReadable) {
           kept.push({ ...item, reason: 'stored page name is unreadable' });
           errors.push(`page ${p.id}: stored page name is unreadable`);
-        } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && expectedName === item.name)) {
+        } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && receiptNames.has(item.name)) || (sentNames.has(p.id.toLowerCase()) && sentNames.get(p.id.toLowerCase()).has(item.name))) {
           items.push(item);
         } else {
-          kept.push({ ...item, reason: `not proven to belong to this app: no navigation membership or corroborated local creation receipt${unreadDraft}; inspect this id and remove it manually only if it is yours` });
+          kept.push({ ...item, reason: p.pending
+            ? `a create this app started under this id was never acknowledged, but the page is named ${JSON.stringify(item.name)}, not what that create sent (${[...sentNames.get(p.id.toLowerCase())].map((n) => JSON.stringify(n)).join(', ')}) — it is not proven to be the page that create was sending; inspect this id and remove it manually only if it is yours`
+            : `not proven to belong to this app: no navigation membership or corroborated local creation receipt${unreadDraft}; inspect this id and remove it manually only if it is yours` });
           // Unproven only because the saved navigation could not be read: it may be this app's page, and
           // deleting the app now would remove both the navigation that can prove it and the manifest that
           // lists it. That is unreadable proof, so the app is left intact for a re-run (runTeardown stops
@@ -469,13 +504,27 @@ const KIND_HANDLERS = {
           if (savedNavUnread) errors.push(`page ${p.id}: cannot be proven or ruled out while the app's saved but unpublished navigation is unreadable (${membership.currentNavigation.reason})`);
         }
       }
-      if (!sitemapReadable) errors.push(`app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`);
+      if (!sitemapReadable) errors.push(sitemapUnread);
       return { items, kept, candidates: [...items, ...kept, ...absent], ...(errors.length ? { readError: errors.join('; ') } : {}) };
     },
-    // Delete ONLY the project row. Its `uxagentprojectfile` children go with it: the
-    // uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
-    // Delete=Cascade, verified end to end — one DELETE of a real pac-created page removed the
-    // project and all four of its file rows, none orphaned.
+    // Is the page REALLY gone? A "not found" from the delete is not proof, for the reason the app handler gives above: deleteStep tolerates it as "already gone" unless the handler can check, and for a page that is still there that would consume
+    // its creation receipt and its pending record — what a later teardown finds the page by — and leave the page, with its conversation messages, behind. The SDK sends this DELETE without `MSCRM.IncludeUnpublished`, and its own notes say a by-id request on a
+    // page that was never published answers 404 without it. Measured live, the platform DELETED such a row instead (afterwards the saved layer no longer held it and its messages were gone), so this is
+    // insurance against an answer the platform has not been seen to give, not a path known to be taken. The question goes to the SAVED layer — the layer `resolve` found the page in (see savedPageRows) — and
+    // a read that fails answers "not proven": "cannot prove it is gone" must not license consuming a record that stands for a page that may still exist.
+    async confirmAbsent(sdk, item) {
+      try {
+        const found = await savedPageRows(sdk.dataverse, [item.id], { label: 'the generative page' });
+        return !found.has(String(item.id).toLowerCase());
+      } catch {
+        return false;
+      }
+    },
+    // The page goes through the SDK's own delete (`deleteRemoteArtifact('genPage')`): the project row, whose `uxagentprojectfile`
+    // children go with it — the uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
+    // Delete=Cascade, verified end to end: one DELETE of a real page removed the project and all four of its file rows, none
+    // orphaned — and then the conversation messages that point at the page, which do NOT cascade (the SDK measured one surviving the
+    // delete of its page). A raw DELETE of the row, which this step used, left those behind.
     //
     // Deleting the files ourselves first would be actively DESTRUCTIVE. Dataverse tracks a
     // dependency on the PROJECT row (component type 10372) but NOT on its files (10373):
@@ -483,9 +532,21 @@ const KIND_HANDLERS = {
     // DELETE is refused, while every one of its files reports ZERO dependents and would delete
     // cleanly. So a files-first order would strip the content out of a page the platform is about
     // to refuse to delete, leaving the app that still references it pointing at an empty shell —
-    // exactly the data loss this step exists to avoid. One delete, and the platform decides.
-    async del(sdk, item) {
-      await sdk.deleteRecord('uxagentproject', item.id);
+    // exactly the data loss this step exists to avoid. The SDK deletes the row first and the
+    // history only after it, so a page the platform refuses (HTTP 400, "referenced by N other components") loses nothing,
+    // and the platform decides.
+    async del(sdk, item, ctx) {
+      try {
+        await sdk.deleteRemoteArtifact('genPage', item.id);
+      } catch (err) {
+        // The page IS deleted; only part of its conversation history could not be removed, and nothing points at those rows any more — a
+        // re-run finds no page and cannot retry them. So it is a warning that names them (the SDK's message lists their ids), not a failed
+        // step, which would keep the manifest and the solution for a re-run that has nothing left to do.
+        if (!(err && err.code === 'GENPAGE_HISTORY_NOT_DELETED')) throw err;
+        const message = `page ${item.id} was deleted, but its conversation history was not fully removed: ${errMsg(err)}`;
+        if (ctx && Array.isArray(ctx.warnings)) ctx.warnings.push(message);
+        if (ctx && typeof ctx.warn === 'function') ctx.warn(message);
+      }
     },
   },
   dashboard: {
@@ -701,6 +762,10 @@ const KIND_HANDLERS = {
       //     the table is dropped it is undeletable forever (400 0x80041102).
       //
       // So: definition first, activated copy second, and both strictly before the tables phase.
+      //
+      // runTeardown holds that line when a step FAILS, too: a table whose business-rule step failed is
+      // kept (`failedRulesByTable` there), so a failed delete leaves a rule a re-run can still finish —
+      // never an activated copy that nobody can.
       return [
         ...items.filter((r) => r.type !== 2),
         ...items.filter((r) => r.type === 2),
@@ -720,7 +785,8 @@ const KIND_HANDLERS = {
         // silently no-ops `updateRecord` on a missing row — a contract the real SDK does not have.
         // A genuine 405 here is a real leftover that becomes PERMANENTLY undeletable once the table
         // is dropped, so it must surface as a reported failure rather than be papered over by a
-        // retry that can only ever fail the same way. See issue #493.
+        // retry that can only ever fail the same way. See issue #493. The same goes for ANY failure of this
+        // delete (an HTTP 500 included): it fails the rule's step, and runTeardown then keeps the rule's table.
         return sdk.deleteRecord('workflow', item.id);
       }
       // Deactivate before delete. Dataverse refuses to delete an activated process, and the error it
@@ -1005,6 +1071,15 @@ const KIND_HANDLERS = {
     //    Dataverse refuses to delete it, so a delete attempt would only surface a noisy error.
     // A table that can't be discovered is treated as already-gone: fall through to the delete
     // call, which tolerates the cosmetic/absent 404 (see tolerateNotFound).
+    //
+    // One failure of that read is not "can't be discovered": an answer that is no list of tables — a
+    // sign-in or proxy page, `{}`, `null`, which lib/maker-sdk.js turns into TABLES_UNREADABLE — says the
+    // environment is not answering as Dataverse. The SDK reads it as "no tables", so the system-table check
+    // below would go unmade; and where every answer is such a page, the DELETE that follows is answered
+    // with one too, which the SDK takes for done (measured on the real bundle) — a teardown that reports a
+    // table deleted that nothing deleted, on the one operation whose report must be trustworthy. So this
+    // read fails CLOSED, as the ownership reads above do: the step fails with the reason, nothing is
+    // deleted, and a re-run once the environment answers finishes it.
     async resolve(sdk, target) {
       if (target.existing) {
         return { items: [], skipReason: 'reused table (existing: true) — not created by this build' };
@@ -1013,7 +1088,13 @@ const KIND_HANDLERS = {
       try {
         const hits = await sdk.findTables(target.logical, { top: 50 });
         table = (hits || []).find((t) => String(t.logicalName).toLowerCase() === target.logical) || null;
-      } catch { table = null; }
+      } catch (err) {
+        const unreadable = unreadableAnswer(err);
+        if (unreadable) {
+          throw Object.assign(new Error(`table '${target.logical}' was not deleted: ${unreadable.message}`), { code: unreadable.code, cause: unreadable, failClosed: true });
+        }
+        table = null;
+      }
       if (table && table.isCustom === false) {
         return { items: [], skipReason: 'system table — not created by this build' };
       }
@@ -1138,7 +1219,7 @@ function planTeardown(spec) {
   for (const f of spec.forms || []) for (const qv of f.quickViews || []) if (qv && qv.form && qv.targetEntity) referencedQv.add(`${String(qv.targetEntity).toLowerCase()}|${qv.form}`);
   // A form is a "referenced quick-view" only if it is a QuickView whose (entity, name) a host embeds —
   // NOT merely a same NAME as some referenced QV (a same-named Main host must stay in the hosts-first
-  // group, else it'd be ordered after its own QV and the QV delete would 400 on the host reference; Sol).
+  // group, else it'd be ordered after its own QV and the QV delete would 400 on the host reference).
   const isReferencedQv = (f) => (f.formType || 'Main') === 'QuickView' && referencedQv.has(`${String(f.entity).toLowerCase()}|${f.name}`);
   const namedForms = (spec.forms || []).filter((f) => f.name);
   const orderedForms = [
@@ -1323,7 +1404,7 @@ function planTeardown(spec) {
   // those currently declaring pages). Always emit its teardown step so a spec that dropped its pages
   // still cleans up the derived manifest. The manifest is referenced only by the (already-deleted) app
   // module, so leaving it behind would orphan it in the solution. A not-found delete is idempotent —
-  // an app that never had pages adds a harmless no-op step. NOT gated on spec.pages (I5). Same
+  // an app that never had pages adds a harmless no-op step. NOT gated on spec.pages. Same
   // declared-name guard as the generated icon (protect an `external` collision; avoid a duplicate).
   if (spec.app && spec.solution) {
     const manifestName = manifestResourceName(appUniqueName(spec));
@@ -1409,7 +1490,7 @@ async function deleteStep(sdk, handler, items, ctx) {
 // ok=false with an `errors[]` is returned. deps: { sdk (MakerSdk client), emit(event), warn(message) }.
 //
 // `warn` hears (and `result.warnings` lists, when there are any) the default-view resets whose publish
-// could not be confirmed. This wrapper exists so the batched publish of those resets is settled however
+// could not be confirmed, and a deleted page whose conversation history could not be fully removed. This wrapper exists so the batched publish of those resets is settled however
 // the steps end — normally, through the app-delete stop, or because a callback threw — without wrapping
 // the step loop (and re-indenting every line of it) in a try/finally.
 async function runTeardown(spec, opts = {}, deps = {}) {
@@ -1506,6 +1587,24 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   // resource with the manifest's name is kept as well.
   const pageManifests = new Set(plan.filter((p) => p.kind === 'genpage').map((p) => String(p.target.manifestName).toLowerCase()));
   let pagesFailed = false;
+  // A table whose business rule could not be deleted is KEPT for a re-run. A rule is two `workflow` rows —
+  // the definition and the activated copy the platform makes of it (KIND_HANDLERS.businessRules) — and the
+  // copy can be deleted only while its table exists: once the table is gone the platform cannot resolve the
+  // entity the copy points at (400 0x80041102 "... ObjectTypeCode = N was not found in the MetadataCache")
+  // and nothing removes the copy again. Live: a definition delete answered HTTP 500 "There is no active
+  // transaction."; the run went on, dropped the table, and the re-run reported success with the copy still
+  // there for good, because an answer that says "not found" reads as "already gone" (to the read of the
+  // rule's rows and to the copy's delete alike). Of every step that follows a failed rule, dropping its
+  // table is the only one that turns a failure a re-run could finish into a permanent leftover, so it alone
+  // waits. The solution is already kept after any failure; a table icon's web resource or a global choice
+  // that the kept table still references is refused by the platform's own dependency check, as it is for
+  // any retained table, and that is one more reported failure, not a leftover.
+  //
+  // Keyed by the table's lower-cased logical name, as the rule step's target names it; the value is the
+  // names of the rules that failed on it. ANY failure of the rule step counts — an unreadable rule, the
+  // definition's delete or the copy's — because each can leave a copy behind. Nothing re-sends the failed
+  // delete: a 500 does not prove the delete did not run, and this plugin sends a delete once.
+  const failedRulesByTable = new Map();
   let n = 0;
   for (const step of plan) {
     const myN = (n += 1);
@@ -1570,10 +1669,25 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         emit({ phase: step.phase, status: 'skip', skip: skipReason ? 'kept' : 'not-found', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
         continue;
       }
-      const { deletedIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' ? deferredResetPublishes : undefined);
+      // The table of a failed business rule waits for a re-run (see failedRulesByTable). Asked AFTER the
+      // resolve, so a table this teardown would never have deleted — a reused (`existing: true`) or a
+      // system one, which the table handler has just skipped above with its own, exact reason — is not
+      // reported as kept for a rule's sake.
+      const failedRules = step.kind === 'table' ? failedRulesByTable.get(String(step.target.logical).toLowerCase()) : undefined;
+      if (failedRules) {
+        const why = `${step.label} (kept — business rule(s) on it could not be deleted (${failedRules.map((name) => JSON.stringify(String(name))).join(', ')}), and once the table is gone a rule's activated copy can never be deleted; a re-run deletes the rule(s) first, then the table)`;
+        result.skipped.push(why);
+        emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
+        continue;
+      }
+      const { deletedIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' ? deferredResetPublishes : undefined);
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
       if (step.kind === 'genpage') {
         completePageDeletions(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);
+        // A page found under the id of a create that was never acknowledged and deleted: what the record stood for is settled — as far as anything can settle it. (An id that was only ABSENT is not: the request may still land.)
+        // A request still in flight when the page is deleted can make it again, and nothing here can tell it cannot: a client can neither cancel a request it gave up on nor know when it can no longer arrive, so a
+        // record kept "until it is settled" could never be consumed and --clear-workspace would wait for it for ever. Accepted, and said next to the build's own account of it (AGENTS.md, the pending records).
+        completePendingCreations(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);
         const pending = readPageOwnership(opts.workspaceDir, step.target.appUnique, opts.env).teardown;
         if (pending.length) throw new Error(`proven pages remain undeleted: ${pending.map((p) => p.pageId).join(', ')}; keeping the manifest and solution`);
       }
@@ -1597,6 +1711,12 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       result.errors.push({ step: step.label, message });
       emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
       if (step.kind === 'genpage') pagesFailed = true;
+      if (step.kind === 'businessRules') {
+        // Whichever read or delete failed, the rule may still have an activated copy, and that copy
+        // must outlive this run's table delete (see failedRulesByTable).
+        const table = String(step.target.entity).toLowerCase();
+        failedRulesByTable.set(table, [...(failedRulesByTable.get(table) || []), step.target.name]);
+      }
       // Best-effort continue-on-error is right for the steps AFTER the dependency root is gone — one
       // undeletable view should not strand the rest. It is WRONG for the root itself (#587 item 5):
       // tables, forms, views and charts are COMPONENTS of the app module, so continuing past a failed

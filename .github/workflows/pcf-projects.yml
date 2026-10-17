@@ -25,6 +25,7 @@ on:
             - "plugins/pcf/scripts/lib/cli-failure.js"
             - "plugins/pcf/scripts/lib/dataverse-auth.js"
             - "plugins/pcf/scripts/lib/nearest-name.js"
+            - "plugins/pcf/scripts/lib/sdk-http-client.js"
             - "plugins/pcf/scripts/lib/source-literals.js"
             - "plugins/pcf/scripts/lib/xml-lite.js"
             - ".github/workflows/pcf-projects.yml"

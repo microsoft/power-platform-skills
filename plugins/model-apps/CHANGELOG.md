@@ -5,6 +5,437 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.15.0]
+
+Generative pages, the environment's apps and tables, connections, connector metadata and deployment settings now go through the
+bundled SDK instead of the PAC CLI, so `az` is needed for every Dataverse call, pages included. `pac` is left for signing in and
+choosing the environment, a tabular connector's tables and their columns, and the fallbacks where the SDK has no route or refuses
+— connections, connector metadata and deployment settings — which say so in their output. A page can be created before the app
+that holds it, a rebuild publishes only the pages that changed, and teardown finds a page that was never published. A rebuild now
+also applies a changed app name and description and a business process flow's stage edits, the build's automatic retry follows what
+the service answered, not the names a maker chose, and the next run releases the pages lock and removes the temporary folders a
+killed run leaves behind.
+
+### Added
+
+- **`scripts/apps.js list` and `scripts/list-tables.js`: the environment's apps and tables through the bundled SDK, in place of
+  `pac model list` and `pac model list-tables`.** `apps.js list` prints every model-driven app, drafts included, with its id, name,
+  unique name, description and two facts, apart: whether it is published (users can open it) and whether it has unpublished changes
+  — `pac model list`'s "(Saved - Not Published)" was neither (a managed app an import brought in carried it although it is live; a
+  published app with a saved edit did not). Its name and description are the app's saved layer's, what a maker sees in the designer:
+  a published app with a rename not yet published is listed by its new name, which users see only after a publish (`pac model list`
+  printed the published name). `list-tables.js` prints the tables a comma-separated `--search` names — the same tables
+  as `pac model list-tables` — with `--exact`, only those whose logical name is a
+  term, listing the terms that have no table, and with `--type custom|standard|all` only the custom or the standard ones.
+- **`scripts/apps.js create` makes an app that opens on generative pages, in place of `pac model create`.** It takes the pages
+  (`--page-id`, required: Dataverse refuses an app whose navigation group is empty, and an empty group is what `pac model create`
+  made), as one area "Main" and one group "Pages" with a sub-area per page, pins the default public view of each table the pages
+  read, adds the app and its sitemap to the solution, and publishes only with `--publish`. Every check — no page, a page or a
+  solution that does not exist, a managed solution, a unique name already taken — refuses before anything is written, and says why;
+  a run that fails after the push began reads the platform back and says what is actually left. Titles are written in the
+  environment's base language, the icon is the system's default one, and the app gets the new header and navigation setting, which
+  `pac model create` did not write.
+- **`scripts/genpage.js`: the page verbs the skills ran through `pac model genpage` — `list`, `download`, `types` (the type
+  generator), `add-to-app` — and two they had no verb for, `remove-from-app` and `delete`.** One pure-ASCII JSON line per command,
+  exit 0 or 1; a mistake in the command line is a usage error with nothing on stdout. `list` shows every page of the environment,
+  drafts included (with `--app-id`, an app's published navigation, or its saved one with `--include-unpublished`). `download` reads
+  every page before it writes, so a page that cannot be read leaves the folder as it was, and writes the page's own bytes — no byte
+  order mark, no line break appended, no `page.js`, all of which `pac` wrote; `--app-id` is optional. `types` is the SDK's
+  RuntimeTypes generator, so its file is not byte for byte `pac`'s; a table the environment does not have is
+  `GENPAGE_TABLE_NOT_FOUND`. `add-to-app` puts the page in an app's navigation with the default views of its tables, publishes the
+  app and checks the page shows in it; run again, it finishes a placement that was saved and never published. `remove-from-app`
+  takes the entry out, publishes the app (an app that was never published too, with a warning) and checks the page is gone, and
+  refuses to leave an app with no navigation entry unless `--allow-empty-navigation` says that is meant. Neither adds anything else
+  to the app: the SDK's push of an app also adds every active Main form, public view and chart of each table its navigation opens —
+  those a maker took out of the app included — so the plugin limits that push to the views the edit pins. `delete` says what it
+  would remove — the page, its file rows, its conversation messages (`GENPAGE_DELETE_NOT_CONFIRMED`) — and removes it, with its
+  conversation, only when `--allow-destructive` says that is meant; it refuses while any app's navigation, published or saved, names
+  the page, naming the apps (`GENPAGE_IN_APP`). The build's and the upload's messages that sent you to Maker or to a `pac` command
+  (a page another app holds, a page that could not be placed) now print the `genpage.js` command that does it.
+- **`scripts/connector.js` and `scripts/solution-settings.js`, in place of the `pac model genpage` connector verbs and
+  `pac solution create-settings` / `import --settings-file`.** `connector.js` lists a connector's operations, and reads one
+  operation's parameters and response or a tabular connector's table columns. `solution-settings.js template` writes the
+  deployment-settings file for a solution or a package, in `pac`'s own format, so settings files you already have keep working;
+  `import` imports a package and applies the settings in the same import. Both print one JSON line that says whether the bundled SDK
+  or `pac` answered.
+
+### Changed
+
+- **Every generative-page operation goes through the SDK** (`scripts/lib/genpage-sdk.js`): `genpage-upload.js`, the build's pages
+  phase, verify, download and teardown. No script runs a page verb of `pac model genpage` any more, so there is no `pac` process to
+  time out or parse for a page (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` is no longer read), and **`az` is now needed to deploy a
+  page**, not only to create entities. Verify reads page code in-process, four pages at a time; a command that could not remove the
+  temporary folder it read page source into says so instead of reporting success.
+- **A page is compiled by the bundled SDK, with the TypeScript 5.8.3 compiler the plugin now ships**, in place of the transpile `pac`
+  made when it uploaded one. The compiler is the official `typescript` package's `lib/typescript.js`, minified and brotli-compressed
+  (`scripts/vendor/typescript/`, ~0.8 MB, with its Apache-2.0 license and notices): the SDK compiles a page itself whenever a push
+  changes it and accepts only the TypeScript version the maker portal compiles with, and a plugin install has no `node_modules`. It is
+  unpacked and run (about 0.2 s) only when a page is compiled, and its bytes are checked against the recorded hash first. As in the
+  portal this is a transpile, not a type check — a page with a type error still deploys — and a page that does not parse, has no
+  default export or imports a value `RuntimeTypes` does not hold is refused by the SDK before anything is written.
+- **A page write is one atomic change set, and says what it did and nothing more.** A create mints its id first, so an unknown
+  outcome is settled by reading that id (sent once more under the same id only when nothing landed: never a second page); "nothing
+  was written" is said only when the SDK refused the write before sending it or the service answered 4xx, and any other failure at
+  or after the send is `unknown`, the error carrying `outcome` and `pageId`. A write the service throttles (HTTP 429) has written
+  nothing: it is waited out and sent again — up to six sends, on the HTTP client's schedule or, when the answer's `Retry-After` asks
+  for longer, for the whole of that wait, as long as it fits the run's five-minute throttle budget — and an edited page that someone
+  saved during the wait is refused, not overwritten; one that outlasts the waits ends the write, and the build runs it again like
+  any transient failure, within the same budget. A change set the service refuses as a whole is read by the part that failed — a 429
+  is waited out, a 400, 403 or 404 is final — but only when the answer is complete and every part in it is accounted for; any other
+  answer proves nothing and stays `unknown`. An update writes only what differs, so leaving out `--model`, `--name` or
+  `--data-sources` keeps the page's own (`pac` blanked the model and renamed the page to its navigation title; 2.14.0 re-sent both
+  and warned when it could not), and a page whose content is unchanged is written nowhere and records no prompt (the upload script
+  still publishes it).
+- **A page is stored exactly as written**: nothing is appended, one leading BOM is dropped, a file that is not UTF-8 is refused, and
+  a `"` in a page name is kept (`genpage-upload.js` no longer refuses it; spec-lint still warns about one, and now says why: a page
+  an earlier release created holds it as `\"` until a build rewrites its name).
+- **`genpage-upload.js` creates a page without `--app-id`** — a page needs no app, and a new app cannot be created empty, so the
+  first page comes first (`genpage-base.js record` takes a page with no app too). Such a create adds the page to no app and its base
+  marker names none; the first update that names the app the page was placed in goes ahead once that app's navigation lists the
+  page. `--add-to-sitemap` and updates still need `--app-id`, and with it the default views of the tables the page reads are pinned
+  into the app (as `pac` did). The entry `--add-to-sitemap` adds to the navigation is titled in the environment's base language, as
+  `genpage.js add-to-app` titles it. A page it created but could not finish (its publish failed, or the placement it was asked for
+  did) is finished by running the same command again with `--page-id` added. A failed write reports the page's id, `outcome` and the
+  SDK's `code`, and a placement that was saved with only its app publish left is reported as that.
+- **A rebuild does not publish a page that is already up to date.** 2.14.0 re-uploaded and re-published every page of a full rebuild
+  (through `pac`), a `PublishXml` of several seconds per page each time. A page that already holds what the spec asks for is not
+  written, but the server cannot say whether an earlier run's publish of it finished, so the build keeps a record in its workspace
+  (`page-published.<hash>.json`) of the content each page was published with and of the versions of its file rows and of the page's
+  own row, which holds its name. The versions are recorded only once the build has read the page's published copy back — its source,
+  settings and compiled output — between two reads of them that agree, so a page another writer published over in the moments after
+  the build's own publish is not recorded as the build's. A page's publish is skipped only while it holds that content and its rows,
+  read now, are exactly the recorded set at the recorded versions. Anything else publishes: a new or changed page, one saved by a
+  run whose publish failed or was not proven, one changed or published from another workspace, machine or Maker since, a failed read
+  of the versions, a missing or damaged record (so the first build in a workspace publishes each page once). What the proof cannot
+  see is a file other than the source, the settings and the compiled output — the first prompt, say — changed and published from
+  elsewhere just before the build first reads the versions.
+- **A create the build could not account for is remembered, and what it finds is checked against what was sent.** The build writes
+  down the id it minted for a page, with its name and a hash of the source it sends (a `pending` record in the workspace), before it
+  sends the create. If the answer never arrived and the page could not be read back, the next build resumes that create under the
+  same id — never a second page — and adopts a page it finds only when it holds a name and a source a create under the id sent;
+  anything else is a conflict. A record is kept until evidence settles it (the page adopted, or deleted by teardown), never because
+  a listing did not show the page, so a page that lands late is reported and found by teardown, and teardown's `--clear-workspace`
+  refuses while one is unsettled. A request still in flight when its page is deleted can make the page again, and nothing names it
+  (no client can cancel one). A halt that asks for a manual workspace reset now says to keep the `page-ownership.*.json` records
+  beside `last-applied.json` and `destructive-approval.json`: they are the only trace of a page that may still land.
+- **The build pins the default views of the tables its pages read** into the app's components once the pages are written (`pac` did
+  this on every upload): one app operation for all of them, which adds those views and nothing else (the SDK's push of an app would
+  also put back every active Main form, public view and chart of the tables its navigation opens, those a maker took out of the app
+  included), nothing written when every view is already pinned, and a failure to pin is a warning.
+- **Waiting out a throttled service has one budget per run: five minutes.** The page writes and the build's own re-runs of a phase
+  share it. The wait the service asks for (`Retry-After`) is honoured whole and carried from a page write to the build, a wait of
+  more than five seconds is announced on stderr, and a wait that does not fit stops the build with a `throttle-budget-exhausted`
+  halt that says what the service asked: running the same command again later continues. The HTTP client's own re-sends of a
+  throttled read or publish keep their own schedule and are not counted in it.
+- **Connections, connector metadata and deployment settings are read through the bundled SDK**, with your Azure CLI sign-in
+  (connections and connector metadata also use an Azure CLI token for the Power Apps service, sent only to that service's hosts and
+  never printed). `pac` is asked only where the SDK has
+  no route or refuses: an environment in the Test cloud or any other cloud the SDK does not read connections in (these go to `pac`
+  with no SDK attempt first), a token the service refused (401 or 403), an environment the service does not tie to the organization,
+  a service that has been switched off, a connector definition the SDK does not project, a package whose staging answer the SDK
+  cannot read (`template` also when the platform will not stage it; an import it will not stage fails, naming the dependencies it
+  is missing, and is not retried by `pac`), a settings file that uses a feature only `pac` applies, no Azure CLI token for the
+  Power Apps service, a settings template of a package with no `--env` (nothing to stage it in, so `pac` reads the zip offline), and
+  a tabular connector's table columns (`connector.js schema --dataset --table`; the SDK reads them only through a client the plugin
+  cannot build). The output says so (`connectionsSource` and `connectionsFallback` in `list-connections.js`; `source` and
+  `fallback` in the others; the last two of these say `source: "pac"` and carry no `fallback`); any other failure is reported with
+  the SDK's own code and never answered by `pac`. A tabular connector's tables are still listed by `pac` itself; no script does it.
+  A connector whose Swagger puts parameters on a path item now reads through the SDK, with them merged into each operation's own.
+- **A `pac` fallback is time-bounded and prints only why it failed.** A read gets three minutes and an import an hour (fixed;
+  `pac connection list` had no limit in 2.14.0). A call that runs out of time ends `pac` and the processes in its tree and says what
+  it confirmed — "`pac` and every process that held its output were stopped", or that something `pac` started "may still be running"
+  — and a failure shows `pac`'s error without its sign-in banner and version lines. The folder a fallback works in (the package the
+  SDK exported, `pac`'s template, a copy of the settings) is removed with the retries a Windows lock needs; one that stays is a
+  warning that names it, with the files in it that can hold values emptied first (`emptied, so it keeps no value`, or
+  `it could not be emptied either, so it may still hold values`). What the SDK warned of before it refused — a staged copy it could
+  not delete — stays in `warnings` whether `pac` then succeeds or fails, and also when `template`'s final write of `--out` fails.
+- **`list-connections.js` checks the environment URL before it runs anything, and prints one JSON line for every failure**, as
+  `connector.js` and `solution-settings.js` do: `{ ok: false, error, code }` in pure ASCII on stdout, the message still on stderr,
+  exit 1 (in 2.14.0 a failure was a message on stderr alone). `code` is there when the error has one (the SDK's errors do; a `pac`
+  failure and a bad environment URL do not). A `pac` listing that fails after the SDK refused carries the SDK's reason as
+  `connectionsFallback`, as a listing `pac` gave does. A usage error (no URL, an unknown flag) is still the problem on stderr alone.
+- **The `solution-settings.js import` defaults are `pac`'s**: nothing unmanaged is overwritten, no workflows or plug-ins are
+  activated, nothing is published afterwards. The solution actions that can run for minutes (`ExportSolution`, `StageSolution`,
+  `ImportSolution`) get an hour and are sent once: a gateway's 502, 504 or 401 for an import the platform accepted is not answered
+  with a second import. The one exception is an import the platform refused to start because a publish or another import holds the
+  environment's customization lock (HTTP 429 with one of the codes `0x8004F061` to `0x8004F064` and `0x8004F067`): it is sent again
+  under a new import job id once `importjobs(<id>)` of the refused send answers 404, which proves it never started, after 10, 20, 40
+  and 60 seconds or the longer `Retry-After` the platform asks for — at most five sends within five minutes of the first refusal,
+  never one early — and the output names the job that ran (`importJobId`), `importAttempts` and each refused send (`importRefusals`).
+  Every other answer is sent once, the solution-concurrency `0x80071151` included. That is the answer measured for an import that met
+  another import or a publish (its words begin "Cannot start the requested operation [Import]"), and that import's job existed by
+  then, so nothing proves it did not start: the maker runs it again once the other operation has finished. A failed import names its
+  job and, when the request was sent, the reason the job's log gives. When `pac` does the import it is given a copy of the settings
+  the run read, not the file's path, so a file saved while the package stages is neither applied nor printed; the copy is in a folder
+  only the current user can read, checked before a byte is written (`PAC_SETTINGS_COPY_FAILED` otherwise), and is removed on every
+  outcome and when the run is ended by Ctrl+C, a closed terminal or an uncaught error — a cancelled run still ends as cancelled (on
+  Windows with `0xC000013A`, not 1).
+  `template` does not replace an existing `--out` file unless `--force` is given (`pac` replaced it silently, and every value
+  already filled in with it) — not even one that appears while it works — so it needs a file system that can make a hard link (NTFS,
+  ext4, APFS): on one that cannot (a FAT or exFAT volume, some network shares) it refuses with `IO_ERROR` and says that `--force`,
+  which needs no link, writes there. If the temporary name it wrote the file under cannot be removed, the run still succeeds, with a
+  warning that names the leftover (the next run refuses the file as a hard link).
+- **What the settings file holds is kept out of what `solution-settings.js` prints** — an error, a warning, a job log, a message
+  `pac` printed — wherever a text quotes it as written or in a JSON, XML or URL escape, with white space collapsed and in any case.
+  A text that quotes a secret is withheld whole, whatever its length; a connection id and a value the package defines as not secret
+  are replaced by `<redacted>`. A variable counts as a secret when the package defines it as one (a `TypeId` of Secret in the file
+  can only add that, never take it away). For a variable the package was not read for (`pac` importing, an entry the package does
+  not define) a value of six characters or more is treated as a secret, and a shorter one withholds a text only where the text has
+  it as a whole word. What is not caught: a value quoted in part, hashed, base64-encoded, written as an HTML entity beyond XML's
+  five, normalized in its Unicode by a service, or nested in more than three levels of encoding; a value of fewer than six
+  characters that is known not to be a secret, which is printed wherever a text quotes it; and a value of fewer than six characters
+  with no recorded type that a text glues to letters, digits, marks or underscores or writes inside an escape the sanitizer does not
+  read. A token the run sent is never printed or written — it is taken out of both output streams, the file `template` writes and
+  the note a process that is ending leaves — and a variable's value is passed through exactly as written, white space included.
+- **The bundled cds-maker-sdk is current.** Through it: a business-rule or classic-workflow delete the platform rolled back (HTTP
+  500, transaction not started) is re-sent, bound to the version the build read; a business process flow write waits out the
+  platform's lock on the flow instead of failing; a choice read that returns options with no label is treated as incomplete metadata
+  (`genpage.js types` stops and says to retry); a business rule with no action step is refused for that (`business-rule-NO_ACTION`)
+  before anything is written; and a table's metadata comes back in one order on every read and every machine — columns by logical
+  name; relationships one-to-many, then many-to-one, then many-to-many, each by schema name, related table and related column — so
+  the copy the build keeps in its workspace no longer changes just because the platform listed the same relationships in another
+  order.
+- **Two rare page shapes that 2.14.0 resolved are now refused, naming the guess `generic`**: a class whose base is itself a class
+  expression, used as a value before a method (`{ a: class extends class {} {}, m() { … } }`), and a class field named `new` with a
+  method on the next line. Both are refused, never misread. Parenthesising the class expression (`extends (class {})`), or ending
+  the field with `;` or naming it otherwise, avoids the refusal.
+- **The eval graders read the new scripts the way the scripts read their arguments.** A run of `apps.js`, `genpage.js` or
+  `solution-settings.js` is read with its verb where the script takes it — after its flags too (`apps.js --env <url> create` is a
+  `create`) — and every run in one shell call counts, so a read followed by a write is graded as the write;
+  `solution-settings.js import` is a write. The graders still read recorded text, not a shell: a command line handed to a wrapper
+  (`bash -c '…'`), a here-document and variables are documented limits.
+
+### Removed
+
+- `scripts/lib/genpage-cli.js`, the wrapper around the `pac model genpage` page verbs, with its time limits.
+- **`/genpage`'s fallback to `pac model list-languages`.** Every `/genpage` page operation goes through the SDK and needs the Azure
+  CLI, so a failed language read now ends language detection instead of being retried with `pac`.
+
+### Fixed
+
+- **Teardown deletes a generative page that was created and never published, with its conversation.** 2.14.0 read pages from the
+  published layer only, so a page its build created and no publish ever finished (a build stopped after the create, a publish that
+  was refused) was "not found": teardown kept the page and its conversation and dropped its record. It also deleted only the page
+  row, and the conversation messages, which do not cascade, stayed behind for every page it did delete. Teardown now reads the saved
+  layer, deletes the conversation with the page (a history it cannot fully remove is a warning that names the messages) and matches
+  a page the build made by the name its receipt recorded as well as by the spec's current name.
+- **Teardown deletes the pages of an app that was created and never published, and proves a page by the entries of the app's
+  navigation.** 2.14.0 read the app's navigation from its published layer, and an app nobody published (a build stopped before its
+  publish, an app saved and left) has none, so its pages were proven by this workspace's records alone: a page only the app's
+  navigation named was kept, and the app and its sitemap — the only proof of it — were then deleted. Teardown now reads such an
+  app's saved navigation. A page is proven by an entry of the navigation, never by the text of the XML, read by one strict XML
+  reader: a page named only in a comment, a CDATA section, a processing instruction or another attribute's value is not proven, a
+  single-quoted `GenPageId` is, and a sitemap that is not one well-formed XML document keeps every page, and the app, for a re-run.
+  A page another app still references is refused by the platform and kept.
+- **Teardown keeps a table whose business rule it could not delete.** A rule is two rows — its definition and the activated copy the
+  platform makes of it — and the copy can be deleted only while its table exists. When a rule's delete failed (an HTTP 500 "There is
+  no active transaction.", say), 2.14.0 went on and deleted the table, which left the copy behind for good, and the re-run reported
+  success. The table is now kept — `table <name> (kept — business rule(s) on it could not be deleted (…), …)`, counted as kept in the
+  summary — until a re-run deletes the rule first, then the table. Teardown deactivates a rule before it deletes it, so a rule whose
+  deactivation succeeded and whose delete failed stays deactivated until then; one whose deactivation failed too stays as it was. A
+  reused or system table keeps its own reason, and the failed delete is still sent once. What depends on the
+  kept table — its icon web resource, a global choice its columns bind, a relationship to itself — can fail to delete in the same run
+  and is reported too, until the re-run removes the table.
+- **The connection list and the connector commands are pinned to the environment.** 2.14.0 ran `pac connection list`, and told the
+  agent to run `list-connector-operations` and `get-connector-schema`, without `--environment`, so they answered for the active
+  organization of `pac`'s auth profile — not necessarily the environment being built — and a settings import bound to one of those
+  connections failed with `ConnectionNotFound`. `list-connections.js` and the `pac` fallbacks now pass `--environment`, and
+  `/genpage` is told to pass it to `list-connector-tables` too.
+- **A read that spans more than one page follows the platform's continuation link.** The link is absolute and was requested as a
+  path under the API root (HTTP 404), so a result longer than one page — an app's components, the saved sitemaps, the apps never
+  published — was reported as unverifiable instead of read. A refused read now names the URL and carries the platform's own message.
+- **A new app whose navigation Dataverse would refuse stops the build before it writes anything.** A new app is created before its
+  pages exist, with its navigation minus the `page` entries, and Dataverse refuses to create a sitemap with no non-empty area
+  holding a non-empty group, so a spec whose navigation was only pages, or had `areas: []`, an area with no group, a group with no
+  entry or no `appShell` at all, passed validation and stopped at the app step, after the solution, tables, views and forms were
+  written. The build now refuses such a spec for a new app up front: the dry run marks the app step as one that would stop the build
+  and asks for the steps marked `?` to be fixed rather than applied, and `--apply` halts (`app-navigation-empty`) before its first
+  write, saying what to add — a new app needs one entry that is not a page. An existing app is not refused for a navigation of pages
+  only (its pages are written into it once they exist) or for one with no entry at all: Dataverse accepts an empty navigation when
+  an app's sitemap is updated, so the build goes on and warns that the app is left with none. A spec with no `appShell.areas` is
+  refused for every app. `lint-app-spec` warns about a navigation a new app cannot be built from; validation is unchanged.
+- **An alternate key over a new table's name column is made after the column's length is set, so the first build succeeds.** Some
+  environments make a new name column 850 characters long whatever length the table's create asks for, and Dataverse refuses a key
+  over it (a key holds at most 900 bytes, 2 for each character of text); 2.14.0 set the length as the last step of the data model,
+  after the key, so only a second run made the key. A key over the name column of a table the build creates, in a spec that gives
+  `primaryAttribute.maxLength`, whose label goes out in one language (a string, or a map that names one language), now waits for
+  that step — the dry run lists it there — and is not sent when the step failed: the build stops with a message that names the
+  length and the cause (`alt-key-name-length-not-set`) instead of the platform's refusal. The build runs that stop again exactly when
+  the length step's failure is one it runs again — a throttled or unavailable service, a timeout or a reset, or a lock, a SQL timeout,
+  a concurrent operation or a deadlock the service names by its code — and never because of the key's name; the warning for the length
+  says the build stops at that key. A key labelled in several languages is still made before the length is set — setting it reads the
+  column with its labels, which would cost a multi-language create its other languages — so where the platform refuses it the build
+  warns, naming the key and its languages, and says to run the build again (the length is set as it stops) or to label the key in one
+  language. A key in a spec that gives no length keeps its place: give `maxLength` for a name column you key.
+- **After the build's automatic retry of a transient failure, a table the failed attempt created gets the name column length that
+  attempt could not set — and only that table.** When the attempt's own length step failed too, 2.14.0's retry found the table and
+  left its name column as it was, without a word. The length is now carried to the retry, as the publishes an attempt owes are, set
+  at the end of the retry's data-model phase and reported as owed (`owed by the attempt that created the table`). It is read and
+  written by the MetadataIds of the table and of its name column, so a table another maker deleted and made again while the build
+  waited is left as it is, with a warning, never shortened. A length no attempt got as far as setting is tried once more when no
+  retry follows. A later run still leaves an existing table's name column alone.
+- **An unreadable table list is a failure in every script, not "no tables".** The bundled SDK reads a 2xx answer with no `value` list
+  — a sign-in or proxy page, `{}`, `null` — as an environment with no tables, and the scripts turned that into decisions: the build
+  created a table that exists, the teardown skipped its system-table check (and, where every answer was such a page, reported a table
+  deleted that nothing deleted), the flow name check saw no clash, the verifier reported every declared table missing, and
+  `list-tables.js --exact` named every searched table missing. The table-list read is now held to being a list for every SDK the
+  plugin makes (`TABLES_UNREADABLE`), so each fails with that reason: the build, which reads each table by name and turns to the list
+  only when that read is not conclusive, stops at the first table whose existence it cannot establish instead of creating it
+  (`table-list-unreadable`, which it does not run again: a run a moment later reads the same answer), keeping what its earlier steps
+  wrote (the solution, a global choice, the tables before it), and its dry run says `unknown`; the teardown deletes no table (its
+  other steps still run), the flow name check warns that it could not be made, the verify fails, and `list-tables.js`
+  exits 1. `{ "value": [] }` is still an empty answer, and no request is added or changed.
+- **A rebuild applies a changed app name and description.** 2.14.0 set them when the app was created and never again. A rebuild now
+  writes a changed, non-blank `app.name` / `app.description` to the existing app on the push it already makes for the navigation;
+  nothing is written when they already match, a spec that leaves them out never blanks them, and the unique name never changes. The
+  icon is still set only when the app is created: a different `app.icon` is reported as not applied. Two cases keep the existing
+  text and warn that it was not applied while the rest of the build goes ahead: an app that was never published (publish it in Power
+  Apps and re-run), and a name or description held as one text per language — the SDK writes both in one request, so while either is
+  held that way the header is not edited at all, and a changed plain text beside it and an `app.aiDescription` are reported as not
+  applied too. Nothing that is not plain text is ever sent: the SDK also writes the header it holds whenever its own read of it
+  fails, so the plugin's HTTP client refuses that write and the build stops with `APP_HEADER_NOT_PLAIN_TEXT` before anything is
+  sent; running it again normally succeeds.
+- **A rebuild applies the business process flow stage edits that cannot move a record.** 2.14.0 reused an existing flow as it was. A
+  stage added or renamed, and a step added, renamed, rebound to another column, made required or optional, or moved, are now written
+  in place in one push (an active flow stays active; every stage keeps its id). An edit that would remove a stage or a step, reorder
+  the stages, or that cannot be told from a removal, is refused with the reason and the ways forward: no stage or step edit is
+  applied, and the requested Active/Draft state is handled independently. An edit the SDK refuses — adding, removing or reordering
+  the stages of a flow that holds a branch, or the steps of a stage that holds an action — is reported as not applied.
+- **`readOnly` and `hidden` reach every cell of a field.** A field a deployed form holds more than once — in two sections, or in the
+  form's header, footer or a tab's own header or footer — got the flag on its first cell only, so the other stayed editable or
+  visible. Each cell now gets it, with the rest of the cell left as it was, and `--verify` checks each one.
+- **`--verify` compares tab and section labels, per language, in the language the build wrote them.** 2.14.0 used a label only to
+  find its tab or section and never compared it, so a relabel that never reached the published form passed. A tab or section label
+  the spec writes is now compared with the published form in the build's authoring language (a label map at each language it
+  declares); a relabel that never reached the published form, or a caption the published form lacks, fails the check, and a
+  translation in another language never stands in for it. `verify-model-app.js` takes the build's `--language-code` (and the build's
+  own `--verify` is told the language it used), so a form built in a language other than the organization's verifies. What cannot be
+  compared is listed as `unverified`, neither passed nor failed, with the reason and what to do (`unverified` changes neither `ok`
+  nor the exit status): a label whose language cannot be established (the organization cannot be read, and nothing else says it),
+  and a label in a language that no label of the form's read is in, when the read carries labels in other languages (a form whose
+  read carries no label at all still fails the captions the spec declares). The platform decides which languages' labels the form
+  read returns: a form built and published with Spanish captions in an English-language organization reads back with every label in
+  English, so its stored Spanish captions are listed, to be checked in Power Apps with that language, not failed. A label map is
+  compared at the languages the read carries and listed for the others; a caption in a language the read carries is compared
+  strictly, and a stale one fails.
+- **Verify no longer calls a published dashboard "not published" in an environment with a second language.** `verify-model-app.js`
+  and the build's `--verify` check a dashboard's tiles only when the saved layer they are read from is the published dashboard, and
+  2.14.0 compared the two FormXML reads as text. Where another language is provisioned beside the base one, the saved read carries a
+  label in it in every cell and the published read does not, so a dashboard nothing had changed since its publish was listed as
+  having changes that are not published (unverified), and every job whose surface it is failed with it. The two reads are now
+  compared without the labels of a language the published read carries none of; a tile, a cell, an attribute, any other text, a
+  label in a language it carries, and a FormXML that is not one well-formed XML document are still changes. That is what a user whose
+  own language is the organization's base language reads. For a user whose language is the other one, the platform's published read
+  carries both languages and can word a caption differently from the saved read, so the dashboard stays unverified for that user, as
+  before: never passed without being proven.
+- **A label saved and not published on a form the app holds, or is about to hold, is no longer held back by the app's publish.**
+  Dataverse leaves a saved form's label changes out of the published form when a publish that names only the app comes first,
+  whoever saved them, and 2.14.0 published before the app only the tables whose existing views and forms the build reconciled. With
+  `--publish` the build now publishes, in one request before the first thing that writes or publishes the app — its create, its
+  sitemap or routing-description push, the pages finalizer, the repair of a default view the app lost (which a changed-only
+  re-upload of a page can make on its own) and the publish phase — the tables whose views and forms it reconciled, the tables of the
+  charts it wrote, the tables whose Main forms its write adds to the app and, for an app that already exists, the tables of the form
+  and chart components the app's saved component list names, whether or not the spec names them (a form a maker added in the
+  designer and never published included). The tables whose Main forms a write adds are those of the navigation it sends: the spec's
+  for the build's own create and sitemap pushes, so the first build and the build that first pins a form are covered too; the app's
+  own on the server for a push that only carries the routing description; none for the repair of a default view, whose push adds the
+  view and no form. A table the app is not known to hold a form or chart of — one only declared, only the target of a lookup column,
+  only read by a page, or only pinned in `app.tables` — is not published by it, so what a maker left unfinished there stays
+  unfinished. If the app's components cannot be read completely and unambiguously, the build publishes only the tables it changed
+  and those its write adds forms of, and says which read failed. A rebuild of an app whose views or forms exist still sends the same
+  three publishes; a build that reconciled nothing — a first build, say — sends one more when it has something to name, and so does
+  a changed-only re-upload that has to put a default view back (the tables, before the app). A chart's description now goes out with
+  its table before the app's publish instead of after it.
+- **A refused publish before the app, and a build that stops before its publish phase, say what they leave unpublished.** When the
+  request above is refused the build goes on — a refusal of the publish of the tables it reconciled still stops it before the app,
+  as in 2.14.0 — and says that its protection did not apply, what it saved on those tables (a chart's description included, which
+  Dataverse may or may not hold back: that was not measured), and, apart from that, that a label saved on a form the app holds there
+  may have been left out by the app's publish and may need to be saved again. A build that stops before its publish phase, after
+  publishing what it had deferred, reads the saved layer of the forms, views and charts of the spec's tables (the tables its pages
+  read included) and lists those still saved and not published, or says it could not read them and names the tables to publish.
+  Columns and other kinds of change are not read, and a halt after the publish phase says nothing of the kind.
+- **The build runs itself again for what the service answered, not for the names a maker chose.** 2.14.0 decided whether a halt was
+  transient from its whole message, and a message quotes what a maker named, so a page, view, role, flow or table called "SQL
+  Timeout …" (or `contoso_customizationlockexception`) made a halt the build cannot change — a navigation-parity or `PAGEREF_` halt,
+  a 403 — run every earlier phase again, up to three more times. The decision now reads the failure's structure: a throttle (429),
+  an unavailable service (502, 503, 504), a timeout or a reset of the connection, and the conditions the service names by the error
+  code of its answer — a customization or solution lock, a SQL timeout, a concurrent operation, the lag of a column the spec
+  creates, and a SQL deadlock (the generic SQL error whose last SQL number is 1205) — are run again; any other status (a 400, 401,
+  403, 404, 409, 412 or 500), a refusal of the spec, an identity or ownership conflict, a removal that needs approval, a
+  prerequisite, a held pages lock and a local file error are reported once, whatever the answer's words. A failed publish of a
+  table's default views is judged by the status of the answer it embeds, not by the table's name.
+- **The HTTP client sends a failed request again only for a failure that can pass.** 2.14.0's client sent a request that got no
+  answer up to six times whatever the reason, so a certificate that does not verify, an unknown host or a refused connection cost
+  six attempts and their back-off before the error. It now sends again only for a reset, a timeout, an aborted connection, an answer
+  cut off or a temporary failure of name resolution, read from Node's own error code (from the failure's words only when there is
+  none), and never for a certificate that does not verify, whatever names it quotes.
+- **A build that was killed while it wrote pages no longer leaves its pages lock in the way.** A build killed outright ("End task",
+  an agent's timeout, a power cut) cannot remove its `pages-<app>.lock`, and 2.14.0 stopped every later build of that app at the
+  pages phase (`pages-locked`) until the file was deleted by hand. The lock now records who took it — the process, the machine and,
+  on Linux, the pid namespace and the process's start time — and the next build releases it, and says so, when it can prove that
+  owner is gone: on this machine, no such process or one that started at another time (on Linux only when both pid namespaces can be
+  read and are the same). A lock whose owner may be running, is on another machine or has a record that cannot be read is refused as
+  before, and no lock is ever taken for its age.
+- **A killed run's temporary workspace no longer stays in the OS temp folder.** The workspaces the page backend and the other
+  scripts make for the SDK hold the source of every page read and the environment's address, and were removed only when the run
+  ended normally. They are now made, with a record of who made them, in one folder of the plugin's own in the temp folder
+  (`power-platform-skills-model-apps`, with `-<uid>` after it on Linux and macOS), and the first workspace a later run makes removes
+  those of runs that are provably gone, saying on stderr what they held, and finishes a removal a killed run began. A run looks at
+  no more than 500 entries of that folder and the next one carries on where it stopped, so entries that must be kept never hide the
+  ones behind them. A workspace given to `pac` is marked as lent when it is made and is taken only once its maker is gone and it has
+  not been written to for a week. On Windows the plugin's folder is given an access list of its own — this user, the system and the
+  administrators — and a folder that was already there is used only when no one else can change it; where that cannot be shown, the
+  workspace is made in the temp folder as before: the plugin's folder is never a reason for a run to fail. A normal run leaves the
+  temp folder as it found it.
+- **A Dataverse failure can no longer carry the access token into what a script prints.** The Azure CLI-token client takes the token
+  (whole, or any of its segments of 24 characters or more) out of every answer that is not a success, and out of a transport
+  failure's text, before the SDK quotes it; `dataverseRequest()` takes it out of what a failure repeats. A successful answer is
+  never altered.
+- **`/genpage`'s upload counts a style shorthand as already deployed only where the deployed page had it.** 2.14.0 counted a key as
+  inherited when the deployed page had the same key and value anywhere, so an edit that moved `borderColor: red` to another slot,
+  hook or arm of a condition — where Griffel drops it just the same — was only warned about. A key is now inherited only with the
+  same value in the same slot of the same `makeStyles` hook (proved by the name it is bound to) and the same arm of every condition;
+  anything else is new, and refused as one. A key in a hook the page does not prove by name (written inside a function, passed as an
+  argument, exported as the default, or bound to a name two hooks share) is new on an edit too: delete it, or write the longhands.
+- **A rebuild no longer warns about the icon the platform gives a page entry.** A generative page entry the spec gives no icon gets
+  the platform's default page icon, and every rebuild of an app with a page then said it had kept the environment's `vectorIcon`
+  because it had changed there since the spec was last applied. That default is no longer taken for a maker's change; an icon a
+  maker chose is still kept and reported, and an icon the spec names is written over the default.
+- **A type whose members start like an element's head no longer has the data after it rewritten.** `<in U>(y)`, `<public U>(y)`,
+  `<const in U>(y)` and `<>(y)` in an interface, an object type or a function type (`callback: <in U>(y: U) => void`), and a method
+  named `delete`, `typeof`, `void` or `instanceof` that has type parameters (`delete<T>(url: string): Promise<T>`) — also after a
+  modifier or an accessor word, a decorator or a line break, with a type parameter written with a Unicode escape, and in the braces
+  of a class or an interface whose heritage ends in a call — were read as JSX elements whose text ran on to the next closing tag, so
+  a `navigateTo({… PAGEREF_…})` text in a later string, template, comment or regular expression could be rewritten. They are now
+  read as the type parameters they are wherever the text after the list shows it. Where a string, template, comment or regular
+  expression could hide the closing tag, so that the two readings may end the head in different places, the page is refused naming
+  the guess (`generic`), like any call signature; so is a page whose syntax the reader cannot read with confidence — a function
+  type's parameter list it cannot read to its end (`generic`), or a name written with an escape (`identifier`). An element after
+  `void`, `typeof` or `delete`, and one whose text starts with a parenthesis and holds a comment (`return <>(y); // note</>;`), is
+  read for certain in more places — the bodies of functions, methods and decorated members, after `return`, after a `,` in
+  parentheses, after a word that takes an operand and a line break — so those pages resolve.
+- **More pages that 2.13.0 resolved and 2.14.0 refused resolve again: JSX text whose line before a `//` note is left open
+  (`[ // note`, `m? = // note`, `f(a = // note`) and a later line that starts with a `/`.** The regular expression that line would
+  open is read: where it does not close on its line, ends at the closing tag's own `/` with nothing after the tag that an operand
+  could start, or closes right before it, no type can have the text and only the element compiles. A closing tag that an operand may
+  follow, and a path with a `/` of its own and text after it, are still refused (both readings compile, or only a parser tells them
+  apart): put the call before the text, or write the line with one name before the `//`.
+- **A download writes the same files for the same app, and keeps each page's key.** 2.14.0 wrote the pages and several lists in the
+  order the file system or Dataverse gave them, and sorted others by the host's locale, so two downloads of one app could differ;
+  and a page's key was minted in that order, so two pages whose names make one slug (`Work_Order`, `Work Order`) could swap keys
+  between downloads, and a copy of the spec deployed to another environment then updated the wrong pages. The pages, the description
+  inventory, the tables an app holds beyond its navigation, the Main-form names of `app.mainForms` and the `notRoundTripped` notes
+  are now written in a fixed order, compared by code units and never by the host's locale (the pages by name, then id). A page's key
+  comes from the app's page manifest, then from the key an earlier download of the same app gave it (the `app-spec.json` already in
+  `--out`, used only when its `app.uniqueName` is this app's), and only a page with neither gets a fresh key, minted in page-id
+  order. When that earlier spec gives one key to two pages, or one page two keys, for a page the manifest does not bind, the
+  download stops before it writes anything (`page-keys-ambiguous`, naming the pages and keys): correct the file and download again,
+  or pass the new `--reset-page-keys` to give exactly those pages fresh keys. Download into the same working folder every time.
+- **The eval graders count `pac solution import` as a write, and read a listing kept as text.** 2.14.0's graders did not count
+  `pac solution import` as a write, so an import escaped the auth-gate and refusal checks, and read a listing recorded as the JSON
+  text a command printed — a string result, or a log's `Result:` line — as a PAC table, one row named after the start of the JSON.
+  Such a listing is now read as the data it is, and a PAC table still goes to the table reader.
+
 ## [2.14.0]
 
 The Notes timeline renders, a related-records grid can be placed where you want it, lookups are labelled with the table
