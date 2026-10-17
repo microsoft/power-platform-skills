@@ -13,4 +13,17 @@ function systemTool(program, env = process.env) {
   return path.win32.join(path.win32.dirname(windowsCmd(env)), `${program}.exe`);
 }
 
-module.exports = { systemTool };
+// How an access list saved as SDDL (`icacls /save`) names this user: by its SID — or, when the account is the machine's own
+// built-in Administrator (RID 500) or Guest (RID 501), by the alias LA or LG. The administrator account a CI runner or a
+// virtual machine is made with IS the built-in Administrator, renamed, and its lists read `(A;OICI;FA;;;LA)`.
+function sddlNamesOf(sid) {
+  const names = [sid];
+  if (/^S-1-5-21-\d+-\d+-\d+-500$/.test(sid)) names.push('LA');
+  if (/^S-1-5-21-\d+-\d+-\d+-501$/.test(sid)) names.push('LG');
+  return names;
+}
+// BUILTIN\Administrators: the owner of what an ELEVATED process makes (a CI runner's processes are), which lib/windows-folder-acl.js
+// accepts as an owner beside the user.
+const ADMINISTRATORS_SID = 'S-1-5-32-544';
+
+module.exports = { systemTool, sddlNamesOf, ADMINISTRATORS_SID };

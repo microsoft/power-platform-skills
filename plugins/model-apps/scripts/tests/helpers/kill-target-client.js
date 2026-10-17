@@ -41,6 +41,25 @@ function deadPid() {
   return ended.pid;
 }
 
+// What must end before a test's folder can go: the processes it started and the holds it took, per test, newest first.
+// node:test runs a test's `after` hooks in the order they were added, and a hook that throws stops the ones after it. The folder of
+// privateTempRoot is added first, so its hook would run while the test's processes still have files open in it (EBUSY on Windows),
+// throw, and stop the hooks that kill them: a CI runner then kept a test file open until the job was cancelled. So that hook ends
+// everything registered here itself, first.
+const endings = new WeakMap();
+function onTestEnd(t, end) {
+  const list = endings.get(t) || [];
+  list.push(end);
+  endings.set(t, list);
+}
+async function endEverything(t) {
+  const list = endings.get(t) || [];
+  endings.delete(t);
+  for (const end of list.reverse()) {
+    try { await end(); } catch (e) { process.stderr.write(`kill-target-client: ${(e && e.message) || e}\n`); }
+  }
+}
+
 // A folder of the test's own, removed when the test ends, to be the temp folder of what it starts: TMPDIR on POSIX, TEMP and TMP on Windows.
 // Everything such a process makes in "the temp folder" is then here, whatever the plugin calls its own folder in it.
 // On Windows a folder of the plugin's own that already exists is judged by its access list (lib/windows-folder-acl.js), and a folder made in this one takes the list this one has: so that what
@@ -48,7 +67,12 @@ function deadPid() {
 // this one's list is replaced by a single entry, this user's.
 function privateTempRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kill-target-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Ends what the test started, then removes the folder — and never throws, so the hooks after it run whatever happens here. A folder
+  // that still cannot be removed is said on stderr and left for the runner's check of its temp folder (scripts/run-tests.js) to fail on.
+  t.after(async () => {
+    await endEverything(t);
+    try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { process.stderr.write(`kill-target-client: ${root} could not be removed: ${(e && e.code) || e}\n`); }
+  });
   if (process.platform === 'win32') {
     const who = spawnSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/m.exec(String(who.stdout));
@@ -113,16 +137,23 @@ function startTarget(t, args, { env = {} } = {}) {
   };
   started.push({ args, pid: child.pid, said: () => ({ stdout: out.slice(-2000), stderr: err.slice(-2000), ended }) });
   // After the test, the process is killed AND this side of its pipes is closed: a program it started may hold the other end of a
-  // pipe it was given, and an open pipe keeps this test file's process alive however its tests ended.
-  t.after(async () => {
-    try {
-      await target.kill();
-    } finally {
-      child.stdout.destroy();
-      child.stderr.destroy();
-      child.unref();
-    }
-  });
+  // pipe it was given, and an open pipe keeps this test file's process alive however its tests ended. Once is enough; it is
+  // registered twice — for privateTempRoot, which ends it before it removes the folder, and as a hook of its own.
+  let finished = null;
+  const finish = () => {
+    finished = finished || (async () => {
+      try {
+        await target.kill();
+      } finally {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+      }
+    })();
+    return finished;
+  };
+  onTestEnd(t, finish);
+  t.after(finish);
   return target;
 }
 
@@ -171,17 +202,28 @@ async function holdExclusively(t, file) {
   let err = '';
   child.stderr.on('data', (chunk) => { err += chunk; });
   const exited = new Promise((resolve) => child.once('exit', resolve));
-  t.after(async () => {
-    try { fs.writeFileSync(release, ''); } catch { /* the folder is gone */ }
-    child.kill('SIGKILL');
-    await exited;
-    fs.rmSync(signals, { recursive: true, force: true });
-  });
+  // A wait on the holder's end that ends, and never keeps a finished test file alive itself.
+  const ended = () => Promise.race([exited, new Promise((resolve) => setTimeout(resolve, EXIT_WAIT_MS).unref())]);
+  let finished = null;
+  const finish = () => {
+    finished = finished || (async () => {
+      try { fs.writeFileSync(release, ''); } catch { /* the folder is gone */ }
+      child.kill('SIGKILL');
+      await ended();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      fs.rmSync(signals, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    })();
+    return finished;
+  };
+  onTestEnd(t, finish);
+  t.after(finish);
   await waitUntil(() => {
     if (child.exitCode !== null) throw new Error(`the hold on ${file} ended: ${err}`);
     return fs.existsSync(ready);
   }, `the hold on ${file}`, WAIT_MS);
-  return { release: async () => { fs.writeFileSync(release, ''); await exited; } };
+  return { release: async () => { fs.writeFileSync(release, ''); await ended(); } };
 }
 
-module.exports = { privateTempRoot, tempEnv, startTarget, pause, deadPid, isRunning, waitUntil, readJsonWhenWritten, holdExclusively };
+module.exports = { privateTempRoot, tempEnv, startTarget, pause, deadPid, isRunning, waitUntil, readJsonWhenWritten, holdExclusively, onTestEnd };

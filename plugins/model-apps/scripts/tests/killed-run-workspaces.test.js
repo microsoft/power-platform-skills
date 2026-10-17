@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { privateTempRoot, tempEnv, startTarget, isRunning, waitUntil, readJsonWhenWritten, deadPid, holdExclusively } = require('./helpers/kill-target-client.js');
+const { privateTempRoot, tempEnv, startTarget, isRunning, waitUntil, readJsonWhenWritten, deadPid, holdExclusively, onTestEnd } = require('./helpers/kill-target-client.js');
 const { sweepDeadWorkspaces, workspaceParent, OWNER_FILE, REMOVING_SUFFIX, LENT_KEEP_MS } = require('../lib/temp-workspace.js');
 const { ownerStamp } = require('../lib/process-owner.js');
 
@@ -78,7 +78,8 @@ for (const [how, detached, skip] of [
     const launcher = startTarget(t, detached ? ['pac-template', work, detached] : ['pac-template', work], { env: tempEnv(root) });
     const folder = (await launcher.waitFor(/^workspace /, WORKER_TIME)).slice('workspace '.length);
     const worker = await readJsonWhenWritten(path.join(work, 'worker.json'), WORKER_TIME);
-    t.after(() => { try { process.kill(worker.pid, 'SIGKILL'); } catch { /* it ended */ } });
+    // Ended before privateTempRoot removes the folder it works in (helpers/kill-target-client.js onTestEnd).
+    onTestEnd(t, () => { try { process.kill(worker.pid, 'SIGKILL'); } catch { /* it ended */ } });
     const recordText = fs.readFileSync(path.join(folder, OWNER_FILE), 'utf8');
     const recordBefore = JSON.parse(recordText);
     await launcher.kill();
@@ -119,10 +120,14 @@ test('REAL KILL (Windows): a record that cannot be read for a moment — another
   const recordText = fs.readFileSync(marker, 'utf8');
   // The hold starts before the program does, and lasts past the kill, the way a scanner or a backup holds a file at the moment it is read.
   const hold = await holdExclusively(t, marker);
-  assert.throws(() => fs.readFileSync(marker, 'utf8'), (e) => ['EBUSY', 'EPERM', 'EACCES'].includes(e.code), 'control: the record cannot be read now');
+  // Control: the hold must make the record unreadable here. It does not on every machine — on a CI runner (the built-in Administrator,
+  // elevated) the file read through — and then there is nothing to show; the cleanup of what the test started is privateTempRoot's.
+  let readable = true;
+  try { fs.readFileSync(marker, 'utf8'); } catch (e) { if (!['EBUSY', 'EPERM', 'EACCES'].includes(e && e.code)) throw e; readable = false; }
+  if (readable) { t.skip('this machine lets a file be read while another program holds it with FileShare.None'); return; }
   fs.writeFileSync(path.join(work, 'go'), '');
   const worker = Number((await launcher.waitFor(/^worker \d+$/, WORKER_TIME)).slice('worker '.length));
-  t.after(() => { try { process.kill(worker, 'SIGKILL'); } catch { /* it ended */ } });
+  onTestEnd(t, () => { try { process.kill(worker, 'SIGKILL'); } catch { /* it ended */ } });
   await launcher.kill();
   assert.ok(isRunning(worker), 'the program outlives the run that started it');
 

@@ -13,7 +13,7 @@ const {
 } = require('../lib/temp-workspace.js');
 const { ownerStamp, isOwnerStamp } = require('../lib/process-owner.js');
 const { privateTempRoot, tempEnv, startTarget, deadPid, pause, waitUntil } = require('./helpers/kill-target-client.js');
-const { systemTool } = require('./helpers/windows-system-tools.js');
+const { systemTool, sddlNamesOf } = require('./helpers/windows-system-tools.js');
 
 const POSIX = process.platform !== 'win32';
 const onlyPosix = { skip: !POSIX && 'POSIX modes, owners and links' };
@@ -870,6 +870,11 @@ test('Windows: a plugin\'s folder that exists and denies this user the right to 
   const sid = currentSid();
   runWindows('icacls', [parent, '/deny', `*${sid}:(AD)`]);
   try {
+    // Control: the deny must hold for this account. It does not for every one — on a CI runner, whose account is the machine's built-in
+    // Administrator and whose processes run elevated, a folder was made in it all the same — and then there is nothing to show here.
+    let denied = false;
+    try { fs.rmdirSync(fs.mkdtempSync(path.join(parent, 'probe-'))); } catch (e) { denied = ['EPERM', 'EACCES'].includes(e && e.code); if (!denied) throw e; }
+    if (!denied) { t.skip('this account can add a folder to one whose list denies it that right'); return; }
     const dir = makeTempWorkspace('genpage-', deps);
     assert.strictEqual(path.dirname(dir), root);
     assert.deepStrictEqual(fs.readdirSync(parent), []);
@@ -1106,7 +1111,7 @@ test('Windows: a folder this process makes in a temp folder that EVERYONE can wr
   const list = savedList(parent);
   assert.match(list, /^D:P/, `protected: it takes nothing from the folder above: ${list}`);
   assert.doesNotMatch(list, /;;;WD\)/, `no entry for Everyone: ${list}`);
-  assert.ok(list.includes(`;;;${sid})`) && list.includes(';;;SY)') && list.includes(';;;BA)'), `this user, the system and the administrators: ${list}`);
+  assert.ok(sddlNamesOf(sid).some((name) => list.includes(`;;;${name})`)) && list.includes(';;;SY)') && list.includes(';;;BA)'), `this user, the system and the administrators: ${list}`);
   assert.doesNotMatch(savedList(dir), /;;;WD\)/, 'the workspace made inside it inherits nothing for Everyone');
   assert.doesNotMatch(savedList(path.join(dir, OWNER_FILE)), /;;;WD\)/, 'nor does its record, which a sweep believes');
   const { windowsFolderIsPrivate } = require('../lib/windows-folder-acl.js');

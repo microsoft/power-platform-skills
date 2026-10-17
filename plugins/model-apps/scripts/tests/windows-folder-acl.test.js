@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { windowsFolderIsPrivate, makeWindowsFolderPrivate, parseDacl, foreignWriters, WRITE_RIGHTS } = require('../lib/windows-folder-acl.js');
-const { systemTool } = require('./helpers/windows-system-tools.js');
+const { systemTool, sddlNamesOf, ADMINISTRATORS_SID } = require('./helpers/windows-system-tools.js');
 
 const USER = 'S-1-5-21-1111111111-2222222222-3333333333-1001';
 const OTHER = 'S-1-5-21-1111111111-2222222222-3333333333-1002';
@@ -459,13 +459,15 @@ test('REAL ICACLS (Windows): a folder made in a temp folder that EVERYONE can wr
   const list = savedList(folder, root);
   assert.match(list, /^D:P/, list);
   assert.doesNotMatch(list, /;;;WD\)/, list);
-  assert.ok(list.includes(`;;;${currentSid()})`) && list.includes(';;;SY)') && list.includes(';;;BA)'), list);
+  assert.ok(sddlNamesOf(currentSid()).some((name) => list.includes(`;;;${name})`)) && list.includes(';;;SY)') && list.includes(';;;BA)'), list);
   const inside = fs.mkdtempSync(path.join(folder, 'genpage-1-'));
   fs.writeFileSync(path.join(inside, '.owner.json'), '{}');
   assert.doesNotMatch(savedList(inside, root), /;;;WD\)/, 'what is made inside takes nothing from Everyone');
   assert.doesNotMatch(savedList(path.join(inside, '.owner.json'), root), /;;;WD\)/, 'nor does a record');
   const again = windowsFolderIsPrivate(folder);
-  assert.deepStrictEqual([again.ok, again.owner], [true, currentSid()], again.reason);
+  assert.strictEqual(again.ok, true, again.reason);
+  // Its owner is this user — or the administrators, who own what an elevated process makes (a CI runner's do), and whom the reader accepts.
+  assert.ok([currentSid(), ADMINISTRATORS_SID].includes(again.owner), `owner: ${again.owner}`);
   // A folder that is not there cannot be made private.
   assert.strictEqual(makeWindowsFolderPrivate(path.join(root, 'not-there')).ok, false);
   assert.deepStrictEqual(fs.readdirSync(root).filter((name) => name.startsWith('power-platform-skills-acl') || name.startsWith('acl-test')), [], 'no saved list is left');
