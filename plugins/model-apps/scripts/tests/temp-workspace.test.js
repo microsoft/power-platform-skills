@@ -545,7 +545,9 @@ test('a workspace whose record changes between the judgement and the removal —
     if (file === marker) {
       reads += 1;
       // Between the first read (the judgement) and the second (just before the removal): a run that is going has this folder now.
-      if (reads === 2) fs.writeFileSync(marker, JSON.stringify({ ...ownerStamp(), pid: gone.pid }));
+      // Its record is a new one: `at` is set past the old record's, since two stamps made in the same millisecond are the same text,
+      // and the sweep rightly removes a folder whose record did not change (a fast runner made that happen once).
+      if (reads === 2) fs.writeFileSync(marker, JSON.stringify({ ...ownerStamp(), pid: gone.pid, at: gone.at + 1 }));
     }
     return fs.readFileSync(file, encoding);
   } };
