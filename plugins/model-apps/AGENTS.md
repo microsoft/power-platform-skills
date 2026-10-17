@@ -1923,8 +1923,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     know the build's language, and the apply cannot disagree about it. Such a key is made only when the length step
     came out right (`ok`, or `already N`). When it did not, the key is not sent: its own step fails with
     `BuildHalt` code `alt-key-name-length-not-set` (`recoverable`), whose text names the table, the length and why the
-    step failed — not the platform's refusal of the key, which says nothing of the length — and which carries the step's
-    HTTP status (and an explicit `transient: false`), so a 429 or a 503 is retried by the build and a refusal is not.
+    step failed — not the platform's refusal of the key, which says nothing of the length — and which is raised around the
+    step's failure with the policy that failure gives (`retry: retryPolicyFor(…)`, `lib/retry-policy.js`) and the step's
+    HTTP status, so a 429, a lock or a 503 is retried by the build and a refusal, or a failure marked `transient: false`, is
+    not; the halt's own words (the key's name) never decide — a halt's code names it and is no type, where an error's own
+    `code` would read as a refusal of its kind.
     The retry then finds the length owed, sets it, and makes the key. A key made after the read that carries labels is
     safe because its label is one label, which a read has nothing to strip. That was measured for a create straight after
     the read and for a label in the base language; it has not been measured separately for a label in another language
@@ -3753,7 +3756,8 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   **`findExistingTable`** (`entity-provision.js`, the data-model phase and the dry run's plan: reuse or create) decides
   by the narrow `EntityDefinitions(LogicalName=…)` read when that is conclusive, and falls back to the list when it is
   not; it halts the build before any create (`BuildHalt`, `table-list-unreadable`, as it does for a localized table
-  above) and the plan says `unknown`, where "no tables" created a table that may exist. **The teardown's table step**
+  above, and `RETRY.NEVER`: a run again reads the same answer, and signing in again is the maker's) and the plan says
+  `unknown`, where "no tables" created a table that may exist. **The teardown's table step**
   (`sdk-teardown.js`: a system table to leave alone, or a custom one to delete) fails closed: the step fails with the
   reason and no delete is sent. Read as "no tables" it skipped the system-table check, and where an environment answers
   every request with a page it answered the DELETE with one too, which the SDK takes for done and `tolerateNotFound`
