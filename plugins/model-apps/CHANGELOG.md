@@ -229,8 +229,9 @@ killed run leaves behind.
   platform makes of it — and the copy can be deleted only while its table exists. When a rule's delete failed (an HTTP 500 "There is
   no active transaction.", say), 2.14.0 went on and deleted the table, which left the copy behind for good, and the re-run reported
   success. The table is now kept — `table <name> (kept — business rule(s) on it could not be deleted (…), …)`, counted as kept in the
-  summary — until a re-run deletes the rule first, then the table; the rule, which teardown deactivates before it deletes it, stays
-  deactivated until then. A reused or system table keeps its own reason, and the failed delete is still sent once. What depends on the
+  summary — until a re-run deletes the rule first, then the table. Teardown deactivates a rule before it deletes it, so a rule whose
+  deactivation succeeded and whose delete failed stays deactivated until then; one whose deactivation failed too stays as it was. A
+  reused or system table keeps its own reason, and the failed delete is still sent once. What depends on the
   kept table — its icon web resource, a global choice its columns bind, a relationship to itself — can fail to delete in the same run
   and is reported too, until the re-run removes the table.
 - **The connection list and the connector commands are pinned to the environment.** 2.14.0 ran `pac connection list`, and told the
