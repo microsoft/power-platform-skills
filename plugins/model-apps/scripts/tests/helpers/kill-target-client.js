@@ -25,23 +25,29 @@ const started = [];
 // it never keeps a finished file alive.
 const WATCHDOG_MS = 5 * 60 * 1000;
 let watchdog = null;
+let shuttingDown = false;
+const endLiveChildren = () => { for (const s of started) if (!s.isEnded()) { try { s.child.kill('SIGKILL'); } catch { /* it ended */ } } };
 function stalled() {
+  // From here on the file ends with a failure, whatever else happens: the code is set before anything that could stop it (a kill
+  // that releases the last handle ends the process at once), no process is started any more, and the exit comes in two seconds —
+  // a referenced timer, which ends what was started meanwhile too.
+  shuttingDown = true;
+  process.exitCode = 1;
   const handles = typeof process._getActiveHandles === 'function'
     ? process._getActiveHandles().map((h) => (h && h.constructor && h.constructor.name) || typeof h)
     : [];
-  const running = started.filter((s) => !s.isEnded());
-  // Written without waiting for it to drain: a stderr that does not drain must not stop the ending, which is the point.
-  try {
-    process.stderr.write(`kill-target-client: no process of this test file started or ended for ${WATCHDOG_MS / 60000} minutes. `
-      + `Processes it started: ${JSON.stringify(started.map((s) => ({ args: s.args, pid: s.pid, ...s.said() })))}. `
-      + `Open handles: ${JSON.stringify(handles)}\n`);
-  } catch { /* the words are a courtesy; the ending is not */ }
+  const said = `kill-target-client: no process of this test file started or ended for ${WATCHDOG_MS / 60000} minutes. `
+    + `Processes it started: ${JSON.stringify(started.map((s) => ({ args: s.args, pid: s.pid, ...s.said() })))}. `
+    + `Open handles: ${JSON.stringify(handles)}\n`;
   // What this file started and still runs goes with it: on POSIX a child outlives a parent that exits.
-  for (const s of running) { try { s.child.kill('SIGKILL'); } catch { /* it ended */ } }
-  // A moment for the words to reach the runner, then the exit, whatever stderr does.
-  setTimeout(() => process.exit(1), 2000).unref();
+  endLiveChildren();
+  setTimeout(() => { endLiveChildren(); process.exit(1); }, 2000);
+  // The words go through the thread pool (fs.write on fd 2), never the stderr stream: a pipe that does not drain blocks a stream
+  // write on Windows, inside the call, and the ending above must not wait for it.
+  try { fs.write(2, said, () => {}); } catch { /* the words are a courtesy; the ending is not */ }
 }
 function armWatchdog() {
+  if (shuttingDown) return;
   if (watchdog) clearTimeout(watchdog);
   watchdog = setTimeout(stalled, WATCHDOG_MS);
   watchdog.unref();
@@ -105,6 +111,7 @@ const tempEnv = (root) => ({ TMPDIR: root, TEMP: root, TMP: root });
 
 // Starts `node kill-target.js ...args`. Registers the kill for when the test ends, so a test that fails half way does not leave a process running.
 function startTarget(t, args, { env = {} } = {}) {
+  if (shuttingDown) throw new Error(`kill-target-client: this test file is being ended by its watchdog; ${args[0]} is not started`);
   const child = spawn(process.execPath, [TARGET, ...args], {
     env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
