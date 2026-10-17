@@ -15,7 +15,7 @@ const { opensTypeParameters, blankNonCodePreservingTemplateExpressions, TYPE_PAR
 const { resolvePageRefs, navigationFrontier } = require('../lib/pageref-resolver.js');
 const { loadTypescriptOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
 const { cleanSourceFile, readingAt, isElement, tokenVocabulary } = require('./helpers/angle-frames.js');
-const { NEWLINE_GAPS, DECORATED_PLACES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES, LAST_ELEMENT_HERITAGES, decoratorEndPages, KEYWORD_NAMES, KEYWORD_BODIES, KEYWORD_METHOD_FRAMES, OBJECT_VALUES, OBJECT_VALUE_FRAMES, SHORTHAND_NAMES, SHORTHAND_FRAMES } = require('./helpers/type-head-pages.js');
+const { NEWLINE_GAPS, DECORATED_PLACES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES, LAST_ELEMENT_HERITAGES, decoratorEndPages, decimalPointPages, NUMBER_GAPS, KEYWORD_NAMES, KEYWORD_BODIES, KEYWORD_METHOD_FRAMES, CLASS_VALUES_WRAPPED, OBJECT_VALUES, OBJECT_VALUE_FRAMES, SHORTHAND_NAMES, SHORTHAND_FRAMES } = require('./helpers/type-head-pages.js');
 
 const SKIP = 'no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it';
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -1080,6 +1080,9 @@ test('TypeScript: a method named like an operator is a member in the braces of a
 // What may stand before the comma in a heritage list: any left-hand-side expression, with type arguments, whatever its brackets, quotes and operators hold. The list is read back from the comma to the keyword that begins it, and a method after the call that ends it is a member
 // wherever the keyword is (`class C implements A, B() {`, `class C extends A, B() {`, `interface I extends A, B() {`).
 const LIST_ELEMENTS = ['A', 'A.B', 'A<T>', 'A<T, U>', 'A<(x: T) => U>', 'A<{ a: 1, b: 2 }>', 'A<B<C>>', 'A<X extends Y ? 1 : 2>', 'a?.b', 'a?.b()', 'a[0]', 'a[b, c]', 'x!', 'this', '"x"', "'x, y'", '`x, y`', 'tag`x`', 'class {}', 'class D extends E {}', 'function () {}', 'function* () {}',
+  'class Named<T> extends Base<T> implements I {}', 'class implements A, B() {}', 'class extends mixin(A) {}', 'class { m() {} }', 'class extends class {} {}', '@dec class {}', 'new @dec class {}', 'new @dec(1) class {}', 'new @a.b @c class {}', 'class extends (B) {}', 'class Named {}', 'class<T> {}', 'class implements {}', 'class extends Base<{ a: 1 }> {}',
+  // A template's substitution holds braces that are no class's.
+  '`x${A}y`', 'tag`${A}`', '`${class {}}`', '`${{ a: 1 }}`', 'f(`${A}`)',
   'async function () {}', 'new B', 'new B()', '(B, C)', '(cond ? A : B)', 'f(g(1, 2))', 'f({ a: 1 }, [2, 3])', 'f(function () { return 1; })', 'f(/a,b/)', 'import("x")', '/* c */ A', 'A /* c */', 'A // c\n', '\u00e9', String.raw`\u0041`, '$', 'a.b.c', 'null', '1',
   '/x/', '/x, y/g', '1e+5', '1E-5', '.5e+3', '1_0e+1', 'a?.[0]', 'a?.(b)', 'a!.b', 'this.#x'];
 
@@ -1306,6 +1309,59 @@ test('TypeScript: a method named like an operator is a member after a decorator 
   }
 });
 
+// ─── A number that ends in a decimal point, after white space of every kind ─────────────────────────────────────────────────────────────────────────────────
+
+// `1.` is a literal of its own (scanNumber, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/scanner.ts), and it ends a decorator or a field's initializer whatever stands before its digits, as long as it is no part of a name or of another number (`a1.`, `1.5.`, `1e5.`,
+// `0x1.` and `1n.` are member accesses). The scanner skips every character of `isWhiteSpaceSingleLine` and `isLineBreak` between two tokens, so the `@` of a decorator and the digits of its number may stand as far apart as any two tokens do: a no-break space, the line separator,
+// the byte order mark, a comment. A lexer that took any character beyond ASCII before the digits for the end of a name saw no number, no end of the decorator and no end of the field: it read the operator word after it for an operator and the `<T>` for an element, whose text ran on to
+// the closing tag in the note after the class, and rewrote the call there.
+test('TypeScript: a number that ends in a decimal point ends a decorator and a field\'s initializer after every character that the scanner skips between two tokens, and the method after it is a member', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  const base = loadBaseLexer();
+  const skipped = [];
+  for (let unit = 0; unit <= 0xffff; unit += 1) if (ts.isWhiteSpaceSingleLine(unit) || ts.isLineBreak(unit)) skipped.push(String.fromCharCode(unit));
+  assert.deepStrictEqual(skipped.filter((c) => !NUMBER_GAPS.includes(c)), [], 'a character that TypeScript skips between two tokens is missing from NUMBER_GAPS');
+  const beyondAscii = skipped.filter((c) => c.charCodeAt(0) > 0x7f);
+  assert.strictEqual(beyondAscii.length, 21, 'the characters beyond ASCII that the scanner skips');
+  const codes = [];
+  const covered = { decorator: new Set(), field: new Set() };
+  for (const { code, label } of decimalPointPages()) {
+    const names = typeParameterNames(ts, code);
+    if (!names || ![...MEMBER_NAME_OPERATORS].some((word) => names.has(word))) continue;
+    codes.push(code);
+    const [family, gap] = label.split(' / ');
+    covered[family === 'a decorator' ? 'decorator' : 'field'].add(JSON.parse(gap));
+    assertRead(code, 'exact', label);
+    assert.ok(readsAsCode(code), `${label}: the method is code`);
+  }
+  assert.ok(codes.length >= 2400, `${codes.length} pages are valid to TypeScript`);
+  t.diagnostic(`${codes.length} pages valid to TypeScript`);
+  // Each character that the scanner skips, beyond ASCII too, stood before the digits in a decorator and in a field's initializer that TypeScript parses.
+  for (const family of ['decorator', 'field']) assert.deepStrictEqual(skipped.filter((c) => !covered[family].has(c)), [], `a character that was never tried before the number of a ${family}`);
+  // The released lexer knows no number that ends a decorator, and reads the method after it for an element in most of them.
+  if (base) assert.ok(misreadByBase(base, codes) >= codes.length / 3, `the released lexer misreads only ${misreadByBase(base, codes)} of the ${codes.length} pages`);
+  // The named shapes, one by one: a decorated generator, a decorated method named `instanceof`, a field that a line break ends, and the number as an argument, which is no end of anything.
+  const element = 'void <span>(MARK); // note</span>;';
+  for (const c of ['\u00a0', '\u2028', '\u0085', '\u200b', '\ufeff', '\u3000']) {
+    for (const [what, source] of [
+      ['a decorated generator', `class Store { @${c}1. *delete<T>(key: MARK) { yield key; } }`], ['a decorated generator on the next line', `class Store { @${c}1.\n  *typeof<T>(key: MARK) { yield key; } }`],
+      ['a decorated method named instanceof', `class Guard { @${c}1. instanceof<T>(value: MARK): boolean { return true; } }`], ['a field and a method', `class Store { a =${c}1.\n  delete<T>(key: MARK): void {} }`],
+    ]) {
+      const code = pageOf(source, 'T');
+      assert.ok(cleanSourceFile(ts, code), `${what}: TypeScript parses ${visible(source)}`);
+      assertRead(code, 'exact', `${what} after ${visible(c)}`);
+      assert.ok(readsAsCode(code), `${what} after ${visible(c)}: the method is code`);
+    }
+    // After the number as an argument, or a number that goes on (`1.5`), the same word is an operator and the text after it is an element's, as it is with ASCII white space around it.
+    for (const source of [`class C { @dec(${c}1.) x = ${element} }`, `class C { @${c}1.5 x = ${element.replace('void', '+ void')} }`, `class C { @dec x = ${c}1.5 ${element.replace('void', '+ void')} }`]) {
+      assert.ok(cleanSourceFile(ts, source), `TypeScript parses ${visible(source)}`);
+      assert.ok(!readsAsCode(source), `the element is text: ${visible(source)}`);
+      assert.deepStrictEqual(guessesOf(source), [], `no guess: ${visible(source)}`);
+    }
+  }
+});
+
 // ─── A method, a function or a property that a heritage keyword names ───────────────────────────────────────────────────────────────────────────────────────
 
 // The word before the `(` of `class C extends (B) {` and `class C implements (B) {` is the keyword of a heritage clause, and the braces after the `)` hold members. The same word names a method (`class C { implements() { … } }`), a function and a property of an object
@@ -1336,7 +1392,8 @@ test('a method, a function or a property named `implements`, `extends` or `new` 
   assert.ok(valid >= 300, `${valid} pages are valid to TypeScript`);
   t.diagnostic(`${valid} pages valid to TypeScript`);
   // A method named `implements` or `extends` in the braces of a class whose heritage ends in the same word before a `(`: the first braces hold members, the second the statements, and each is read for what it is.
-  for (const heritage of ['class C implements (B)', 'class C extends (B)', 'class C extends A implements (B)', 'class C<T> implements (B)', 'abstract class C implements (B)', 'const K = class extends (B)', 'class C implements f(B)', 'class C extends A, f(B)', 'class C extends A implements B, f(C)']) {
+  for (const heritage of ['class C implements (B)', 'class C extends (B)', 'class C extends A implements (B)', 'class C<T> implements (B)', 'abstract class C implements (B)', 'const K = class extends (B)', 'class C implements f(B)', 'class C extends A, f(B)', 'class C extends A implements B, f(C)',
+    'class C extends class {} implements (B)', 'class C implements A, class {}, B()', 'class C extends class D extends E {}, f(B)', 'class C extends class {} implements class extends B {}, f(C)']) {
     for (const name of ['implements', 'extends']) {
       const code = `${heritage} { ${name}() { void <span>(MARK); // note</span>; }\n  delete<T>(x: MARK): void {} }\nconst note = '</T>};${CALL};//';\n${CALL};`;
       if (!cleanSourceFile(ts, code)) continue;
@@ -1422,4 +1479,88 @@ test('TypeScript: a method named like an operator is a member after a heritage w
   }
   assert.ok(valid >= LAST_ELEMENT_HERITAGES.length, `${valid} pages are valid to TypeScript`);
   t.diagnostic(`${valid} pages valid to TypeScript`);
+});
+
+// ─── A class that is complete before a method ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// A word that may be the keyword of a heritage clause (`extends`, `implements`), and a comma that may end one of its elements, are read back to the `class` or `interface` that the head starts with (readHeritageBack). Read back from the name or the comma after a class that is
+// complete — the value of a property, the initializer of a field, a declaration that no `;` ends — the scan meets that class's own `class`, `extends` and `implements`: they are the head of a class whose braces were closed before, and no heritage of what follows. A lexer that took
+// them for the keyword of the next call's list refused the body of the method after it, where an element is read for certain, and named a guess — for a page that the released lexer resolved. A parenthesis around the class was no change to the page: the scan crosses it as one bracket.
+test('a class that is complete before a method — the value of a property, the initializer of a field, a declaration — leaves no heritage behind it: the braces after the method\'s `)` hold a function\'s statements, and the element in them is read for certain', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  const bodies = ['void <span>(MARK); // details</span>;', 'return <>(MARK) // details</>;', 'return <span>(MARK) // detail</span>;', 'x;\nvoid <span>(MARK); // note</span>;'];
+  const shapes = [
+    ['the value of a property', (v, n, b) => `const registry = { Adapter: ${v}, ${n}() { ${b} } };`], ['the value of a property in a class', (v, n, b) => `class Host { #item = 1; make() { return { adapter: ${v}, ${n}() { ${b} } }; } }`],
+    ['a property between the class and the method', (v, n, b) => `const registry = { Adapter: ${v}, label: 'x', ${n}() { ${b} } };`], ['the value of a property in an argument', (v, n, b) => `register({ Adapter: ${v}, ${n}() { ${b} } });`],
+    ['the initializer of a field', (v, n, b) => `class Host { adapter = ${v}\n  ${n}() { ${b} } }`], ['a generator after the value', (v, n, b) => `const registry = { Adapter: ${v}, *${n}() { ${b} } };`],
+    ['an async method after the value', (v, n, b) => `const registry = { Adapter: ${v}, async ${n}() { ${b} } };`], ['a getter after the value', (v, n, b) => `const registry = { Adapter: ${v}, get ${n}() { ${b} } };`],
+  ];
+  let valid = 0;
+  for (const value of CLASS_VALUES_WRAPPED) {
+    for (const [place, frame] of shapes) {
+      for (const name of ['render', 'implements', 'extends']) {
+        for (const body of bodies) {
+          const code = `${frame(value, name, body)}\n${CALL};`;
+          if (!cleanSourceFile(ts, code)) continue;
+          valid += 1;
+          const label = `${place} / ${visible(value)} / ${name} / ${visible(body)}`;
+          assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+          assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+          assert.strictEqual(readPage(code).rewritten.length, 1, `${label}: the call after it is rewritten`);
+        }
+      }
+    }
+  }
+  assert.ok(valid >= 1200, `${valid} pages are valid to TypeScript`);
+  // A name after a declaration that no `;` ends: the class or the interface is complete, and the function that follows is no part of its head.
+  const declarations = ['class Q {}', 'class Q extends Base {}', 'class Q implements I {}', 'class Q extends mixin(A) {}', 'class Q implements A, B() {}', 'class Q<T> extends B<T> implements I {}', 'interface Q {}', 'interface Q extends A, B {}', 'abstract class Q {}', 'export default class {}',
+    '@dec class Q {}', 'const K = class extends Base {}', 'class Q { m() { return { a: 1 }; } }', 'class Q {} // note', 'class Q extends Base { static { x(); } }'];
+  let declared = 0;
+  for (const declaration of declarations) {
+    for (const body of bodies) {
+      const code = `${declaration}\nfunction implements() { ${body} }\n${CALL};`;
+      if (!cleanSourceFile(ts, code)) continue;
+      declared += 1;
+      assert.deepStrictEqual(guessesOf(code), [], `${visible(declaration)}: no guess`);
+      assert.ok(!readsAsCode(code), `${visible(declaration)}: the text of the element is text`);
+      assert.strictEqual(readPage(code).rewritten.length, 1, `${visible(declaration)}: the call after it is rewritten`);
+    }
+  }
+  assert.ok(declared >= 40, `${declared} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages with a class value and ${declared} with a declaration valid to TypeScript`);
+  // What stays as it was: a field named `new` that no `;` and no initializer ends, and a method after it on the next line, read as the operator `new` and an expression; and the same with the `;`.
+  const element = 'void <span>(MARK); // note</span>;';
+  const field = `class C { new\n  render() { ${element} } }\n${CALL};`;
+  assert.ok(cleanSourceFile(ts, field), `TypeScript parses ${visible(field)}`);
+  assert.ok(guessesOf(field).length > 0, 'a guess is named after a field named `new`');
+  assert.deepStrictEqual(readPage(field).rewritten, [], 'and the call after it is not rewritten');
+  const ended = `class C { new;\n  render() { ${element} } }\n${CALL};`;
+  assert.deepStrictEqual(guessesOf(ended), [], 'no guess where a `;` ends the field');
+  assert.strictEqual(readPage(ended).rewritten.length, 1);
+  // A class whose own base is a class expression has the braces of the base inside its head: the braces of the class are the second, after a `}`, and the scan does not read that head back across them. The guess side, never a block.
+  for (const nested of [`const registry = { Adapter: class extends class {} {}, render() { ${element} } };\n${CALL};`, `class Q extends class {} {}\nfunction implements() { ${element} }\n${CALL};`]) {
+    assert.ok(cleanSourceFile(ts, nested), `TypeScript parses ${visible(nested)}`);
+    assert.ok(guessesOf(nested).length > 0, `a guess is named: ${visible(nested)}`);
+    assert.deepStrictEqual(readPage(nested).rewritten, [], `and the call after it is not rewritten: ${visible(nested)}`);
+  }
+  // A run of members whose braces the scan crosses one after the other (as many as the window of 2,000 characters holds): it reads the head of each braces that it meets, and none of them twice. A scan that read the heads of all the braces before them for each would take time that doubles with every member.
+  for (const [what, member, length] of [['methods', (k) => `m${k}() { return ${k}; }`, 60], ['properties with a class', (k) => `p${k}: class extends B${k} {}`, 60], ['methods with a call in the head', (k) => `m${k}(a = f(${k})) { return a; }`, 45]]) {
+    const run = `const registry = {\n  ${Array.from({ length }, (unused, k) => member(k)).join(',\n  ')},\n  render() { ${element} }\n};\n${CALL};`;
+    assert.ok(cleanSourceFile(ts, run), `TypeScript parses a run of ${what}`);
+    const started = Date.now();
+    assert.deepStrictEqual(guessesOf(run), [], `a run of ${what}: no guess`);
+    assert.ok(!readsAsCode(run), `a run of ${what}: the text of the element is text`);
+    assert.strictEqual(readPage(run).rewritten.length, 1, `a run of ${what}: the call after it is rewritten`);
+    assert.ok(Date.now() - started < 10000, `a run of ${what} is read in linear time: ${Date.now() - started} ms`);
+  }
+  // A class among the elements of a heritage list is one element: the braces after the call that ends the list hold the members of the outer class, whatever words the inner class has, and a method that the outer class names like a keyword has the body of a function.
+  for (const heritage of ['class C extends class {}, B()', 'class C extends class {} implements (B)', 'class C implements A, class {}, B()', 'class C extends class D extends E {} implements (B)', 'class C extends class Named<T> extends Base<T> implements I {}, B()', 'class C extends function () {}, B()',
+    'class C implements A, class implements {}, B()', 'class C extends class extends mixin(A) {} implements (B)']) {
+    const code = pageOf(`${heritage} { implements() { ${element} }\n  delete<T>(x: MARK): void {} }`, 'T');
+    if (!cleanSourceFile(ts, code)) continue;
+    assertRead(code, 'exact', visible(heritage));
+    assert.ok(readsAsCode(code), `${visible(heritage)}: the method of the outer class is code`);
+    assert.ok(!/<span>\(MARK/.test(maskOf(code)), `${visible(heritage)}: the element in the body of a method is text`);
+  }
 });

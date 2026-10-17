@@ -14,7 +14,7 @@ const OPERATORS = ['delete', 'typeof', 'void', 'instanceof'];
 // What may stand before a member's name on its line: the words of MEMBER_PREFIX_WORDS (and the one that only a class takes), a generator's `*`, and decorators in every shape (a class only) — a decorator may end in the `>` of type arguments
 // (`@dec<T>`, which the parser takes for an instantiation expression when a binary operator follows it — a generator's `*`, `instanceof`, a field named `in` that a line break ends — or a line break does) and in a number's decimal point (`@1.`).
 const MEMBER_PREFIXES = ['', '', '', 'readonly ', 'static ', 'public ', 'async ', 'abstract ', 'override ', 'declare ', 'accessor ', 'in ', 'out ', 'export ', 'get ', 'set ', 'const ', 'static async ', 'public static ', '@dec ', '@dec() ', '@a.b ',
-  '@(x) ', '@dec<T>() ', 'static *', 'async *', '*', '@dec<T> ', '@dec<T> *', '@a.b<T> *', '@dec<A, B> *', '@dec<T>\n  ', '@dec<T> in\n  ', '@dec<T> instanceof\n  ', '@1. *', '@1.\n  *'];
+  '@(x) ', '@dec<T>() ', 'static *', 'async *', '*', '@dec<T> ', '@dec<T> *', '@a.b<T> *', '@dec<A, B> *', '@dec<T>\n  ', '@dec<T> in\n  ', '@dec<T> instanceof\n  ', '@1. *', '@1.\n  *', '@\u00a01. *', '@\u2028 1.\n  *', '@/*x*/1. *'];
 const GAPS = [' ', ' ', ' ', '\n', '\r\n', '\u2028', ' /**/ ', '/*\n*/', '\t', '  '];
 const NAMES = ['U', 'T', 'out', 'in', 'accessor'];
 // What follows the name in a list: a constraint, a default, a string with an escaped quote (which a JSX attribute string reads as ending earlier), a regex for a constraint, a self-closing end.
@@ -250,12 +250,49 @@ function* decoratorEndPages() {
   }
 }
 
+// What stands before a number that ends in a decimal point: right after the `@` of a decorator, or after the `=` of a field's initializer. TypeScript's scanner skips every character of `isWhiteSpaceSingleLine` and `isLineBreak`
+// between two tokens (https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/scanner.ts) — the ASCII ones, the next-line character U+0085, the no-break space, the ogham space mark, U+2000–U+200B, the line and paragraph separators, U+202F, U+205F, the
+// ideographic space and the byte order mark — and a comment is trivia too. A number is not the end of a name or of another number where one of them stands before its digits, whatever it is: a test asks the parser for every character that it skips.
+const NUMBER_GAPS = ['', ' ', '\t', '\v', '\f', '\n', '\r', '\r\n', '\u0085', '\u00a0', '\u1680', ...Array.from({ length: 12 }, (unused, k) => String.fromCharCode(0x2000 + k)), '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff', '/*x*/', '/*\u2028*/', '// c\n'];
+const DECIMAL_NUMBERS = ['1.', '1_000.'];
+// The text as a JSON string with every character beyond ASCII written as an escape, so that a label names the character that a page puts where it is: a no-break space and a zero-width space print the same.
+const escapedText = (text) => JSON.stringify(text).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+// A decorator that is a number ending in a decimal point, with each gap between its `@` and its digits, and a field that such a number initialises, with each gap before it and each line break after it: the member after either begins where the number ends, so the method is
+// code and the note after it, with the closing tag of its type parameter and a call, is data.
+function* decimalPointPages() {
+  const page = (member) => `function openDetail(){${CALL};}\n${member}\nconst note = '</U>};${CALL};//';\nexport default function Page(){return null;}\n`;
+  for (const gap of NUMBER_GAPS) {
+    for (const number of DECIMAL_NUMBERS) {
+      for (const [f, frame] of DECORATOR_FRAMES.slice(0, 2).entries()) {
+        for (const { text, words = ['delete'] } of DECORATOR_FOLLOWERS) {
+          for (const word of words) yield { code: page(frame(`@${gap}${number}${text(word)}`)), label: `a decorator / ${escapedText(gap)} / ${number} / ${escapedText(text(word))} / frame ${f}` };
+        }
+        // The white space after the number too: the member begins after whatever stands between the number and a generator's `*`.
+        const after = `${gap}*delete<U>(y: U): MARK { yield y; }`;
+        yield { code: page(frame(`@${number}${after}`)), label: `a decorator / ${escapedText('')} / ${number} / ${escapedText(after)} / frame ${f}` };
+        for (const word of ['delete', 'typeof']) {
+          for (const lineBreak of ['\n', '\r\n', '\u2028', '\u2029']) yield { code: page(frame(`a =${gap}${number}${lineBreak}${word}<U>(y: U): MARK {}`)), label: `a field / ${escapedText(gap)} / ${number} / ${word} / ${escapedText(lineBreak)} / frame ${f}` };
+        }
+      }
+    }
+  }
+}
+
 // A method, a function or a property that a heritage keyword names (`class C { implements() { … } }`, `{ extends() { … } }`), and a value that one of them spells, or that a letter beyond ASCII or a private name makes (`{ a: café, m() { … } }`, `{ a: this.#item, m() { … } }`).
 // The word before the `(` of `class C extends (B) {` or `class C implements (B) {` is the keyword of a heritage clause, whose braces hold members; here it is a name, and the braces after the `)` are the body of a function, whose statements an element may start: an element
 // after `void` there is read for certain. A comma before such a name is an object literal's, and the heritage list that a comma may belong to (`class C extends A, B() {`) is read back to the keyword that begins it, through whatever it holds.
 const KEYWORD_NAMES = ['implements', 'extends', 'new', 'ordinary'];
 // What the braces after the `)` hold: an element after `void`, and one after `return`, whose text has a comment that could hide the closing tag, so that braces that may hold members are a guess.
-const KEYWORD_BODIES = ['void <span>(MARK); // note</span>;', 'x;\nvoid <span>(MARK); // note</span>;', 'return <>(MARK); // note</>;', 'const e = <in U>(MARK); // note</in>;'];
+const KEYWORD_BODIES = ['void <span>(MARK); // note</span>;', 'x;\nvoid <span>(MARK); // note</span>;', 'return <>(MARK); // note</>;', 'const e = <in U>(MARK); // note</in>;', 'return <span>(MARK) // detail</span>;', 'return <>(MARK) // details</>;'];
+// A class expression that is complete where it stands, as the value of a property or as an initializer: its own head — its `class`, its name, its type parameters, its `extends` and `implements` clauses — is read back from the comma or the name after it, and is no heritage of
+// what follows. Each also stands in parentheses, which the reading crosses as one bracket.
+const CLASS_VALUES = [
+  'class {}', 'class extends Base {}', 'class Named {}', 'class Named<T> extends Base<T> implements I {}', 'class C implements D {}', 'class extends mixin(A) {}', 'class extends (B) {}', 'class implements A, B() {}', 'class { m() {} }', 'class { a = 1; static b() { return 1; } }',
+  'class extends a.b.C<T> {}', 'class extends Base<{ a: 1 }> {}', 'class extends A, B {}', 'class \u00e9 extends B {}', 'class Named<T extends { a: 1 }> {}', 'class<T> {}', 'class implements {}', 'class interface {}', 'class extends Base implements I, J<K> {}', '@dec class {}',
+  // The white space and the comments that stand inside a class and after it: every character that the scanner skips between two tokens.
+  'class\u00a0extends\u2028Base\u3000{}', 'class /* c */ extends /* d */ Base /* e */ {}', 'class\nextends\nBase\n{}', 'class\ufeffNamed\u200b{}\u0085',
+];
+const CLASS_VALUES_WRAPPED = [...CLASS_VALUES, ...CLASS_VALUES.map((value) => `(${value})`)];
 const KEYWORD_METHOD_FRAMES = [
   ['a method of a class', (n, b) => `class C { ${n}() { ${b} } }`], ['a method after a method', (n, b) => `class C { a() {} ${n}() { ${b} } }`], ['a method after a field', (n, b) => `class C { a = 1; ${n}() { ${b} } }`],
   ['a method after a field and a line break', (n, b) => `class C { a = 1\n  ${n}() { ${b} } }`], ['a method after a name and a line break', (n, b) => `class C { a\n  ${n}() { ${b} } }`], ['a method after a name and a comment', (n, b) => `class C { a /* c */\n  ${n}() { ${b} } }`],
@@ -272,13 +309,28 @@ const KEYWORD_METHOD_FRAMES = [
   ['an async method after a property', (n, b) => `const o = { a: 1, async ${n}() { ${b} } };`], ['a getter after a property', (n, b) => `const o = { a: 1, get ${n}() { ${b} } };`], ['a method of an object literal that an argument is', (n, b) => `f({ a: 1, ${n}() { ${b} } });`],
   ['a method of an object literal that a function returns', (n, b) => `function g() { return { ${n}() { ${b} } }; }`], ['a method of an object literal after a comma', (n, b) => `const v = (0, { ${n}() { ${b} } });`],
   ['a function', (n, b) => `function ${n}() { ${b} }`], ['a function expression', (n, b) => `const f = function ${n}() { ${b} };`], ['a generator function', (n, b) => `function* ${n}() { ${b} }`], ['a method after a class', (n, b) => `class D {}\nconst o = { ${n}() { ${b} } };`],
+  // A class that is complete before the name — the value of a property, the initializer of a field, a declaration that no `;` ends — leaves its own head behind it: its `class`, and the `extends` or `implements` that it was read back to, are not the keyword of
+  // the braces after the name.
+  ...CLASS_VALUES_WRAPPED.map((value) => [`a method after the class value ${value}`, (n, b) => `const o = { a: ${value}, ${n}() { ${b} } };`]),
+  ['a method after a class value and a property', (n, b) => `const o = { a: class extends B {}, b: 1, ${n}() { ${b} } };`], ['a method after two class values', (n, b) => `const o = { a: class {}, b: class extends B {}, ${n}() { ${b} } };`],
+  ['a generator after a class value', (n, b) => `const o = { a: class extends B {}, *${n}() { ${b} } };`], ['an async method after a class value', (n, b) => `const o = { a: class extends B {}, async ${n}() { ${b} } };`],
+  ['a method after a class value in an argument', (n, b) => `f({ a: class extends B {}, ${n}() { ${b} } });`], ['a method after a class value in a class', (n, b) => `class H { make() { return { a: class extends B {}, ${n}() { ${b} } }; } }`],
+  ['a method after a field that a class initialises', (n, b) => `class H { a = class {}\n  ${n}() { ${b} } }`], ['a method after a static field that a class initialises', (n, b) => `class H { static a = class extends B {}\n  ${n}() { ${b} } }`],
+  ['a function after a class', (n, b) => `class D {}\nfunction ${n}() { ${b} }`], ['a function after a class that extends a name', (n, b) => `class D extends B {}\nfunction ${n}() { ${b} }`], ['a function after a class that implements a name', (n, b) => `class D implements I {}\nfunction ${n}() { ${b} }`],
+  ['a function after a class that extends a call', (n, b) => `class D extends mixin(A) {}\nfunction ${n}() { ${b} }`], ['a function after a class whose list ends in a call', (n, b) => `class D implements A, B() {}\nfunction ${n}() { ${b} }`],
+  ['a function after a class with type parameters', (n, b) => `class D<T> extends B<T> implements I {}\nfunction ${n}() { ${b} }`], ['a function after an abstract class', (n, b) => `abstract class D {}\nfunction ${n}() { ${b} }`],
+  ['a function after an exported class', (n, b) => `export default class {}\nfunction ${n}() { ${b} }`], ['a function after a decorated class', (n, b) => `@dec class D {}\nfunction ${n}() { ${b} }`],
+  ['a function after an interface', (n, b) => `interface D {}\nfunction ${n}() { ${b} }`], ['a function after an interface that extends names', (n, b) => `interface D extends A, B {}\nfunction ${n}() { ${b} }`],
+  ['a function after a class expression', (n, b) => `const K = class extends B {}\nfunction ${n}() { ${b} }`], ['a function after a class and a comment', (n, b) => `class D {} // note\nfunction ${n}() { ${b} }`],
 ];
-// A value or a name before a method, in the braces of an object literal after a comma: what a letter beyond ASCII, a private name or a word that a heritage keyword spells makes of the comma's left side. Each is read to the `:` or the `{` that tells an object literal's comma from a
-// heritage list's, and the method after the comma is a function's head. (A private name stands in a class.)
+// A value or a name before a method, in the braces of an object literal after a comma: what a letter beyond ASCII, a private name, a word that a heritage keyword spells or a class expression makes of the comma's left side. Each is read to the `:` or the `{` that tells an object
+// literal's comma from a heritage list's, and the method after the comma is a function's head. (A private name stands in a class; the `class`, `extends` and `implements` of a class that is complete before the comma are not those of a list that the comma ends.)
 const OBJECT_VALUES = [
   'café', '名', 'a?.café', 'f(café)', '[café]', '{ café: 1 }', 'café.b', '"café"', '`x${café}y`', 'x as typeof café', 'café!', '(café)', '1 + café', 'café ? 1 : 2', 'café || 2', '() => café', 'café => 1', 'new Café()', 'x.café', 'x.名',
   'this.#item', 'this.#item.x', 'this?.#item', '(this.#item)', 'f(this.#item)', '#item in this', 'this.#item!',
   'implements', 'x.implements', 'x.extends', 'implements.x', 'implements(1)', 'typeof implements', '!implements', 'implements + 1', '[implements]', '{ implements: 1 }', 'implements ? 1 : 2', 'x => implements', '(implements)', 'f(implements)',
+  // A class expression, complete, with its own `class`, `extends` and `implements` behind the comma.
+  ...CLASS_VALUES_WRAPPED,
 ];
 const OBJECT_VALUE_FRAMES = [
   ['a property', (v, b) => `class H { #item = 1; make() { return { a: ${v}, m() { ${b} } }; } }`], ['two properties', (v, b) => `class H { #item = 1; make() { return { a: ${v}, b: ${v}, m() { ${b} } }; } }`],
@@ -389,6 +441,13 @@ const CLASS_HERITAGES = [
   'class C implements A, (B)', 'class C extends A, (B)', 'class C extends A, new B()', 'class C implements A, B<T>()', 'class C extends A, a?.b(c)', 'class C extends A, B.C().d()', 'class C<T> extends A<T>, B() implements I',
   // A letter beyond ASCII in a name of the list, which the comma is read back through, and the word that begins the list in other heads.
   'class C implements A, caf\u00e9()', 'class C extends caf\u00e9, B()', 'class C extends A, B(), caf\u00e9()', 'class C<T> implements (B)', 'abstract class C implements (B)', 'class C implements caf\u00e9, (B)', 'const K = class extends A, B()', 'class C extends implements, B()', 'class C extends A, implements, B()',
+  // A class expression among the elements: its own head and braces stand between the keyword and the call, and are one element. The list that the braces after the call end is the outer class's, whatever words the inner class has.
+  'class C extends class {}, B()', 'class C extends class {} implements (B)', 'class C extends class {} implements A, B()', 'class C implements A, class {}, B()', 'class C implements class {}, B()', 'class C extends class D extends E {} implements (B)', 'class C extends class D extends E {}, B()',
+  'class C extends class extends mixin(A) {}, B()', 'class C extends class { m() {} }, B()', 'class C extends class D implements E, F() {}, G()', 'class C extends class {} implements class {}, B()', 'class C extends function () {}, B()', 'class C implements function () {}, class {}, B()',
+  'class C extends class {}.x, B()', 'class C implements A, class<T> {}, B()', 'class C extends class Named<T> extends Base<T> implements I {}, B()', 'class C extends class implements {} implements (B)', 'class C implements class extends B {}, class extends D {}, E()', 'const K = class extends class {}, B()',
+  'class C extends class { a = class {}; } implements (B)', '@dec class C extends class {}, B()', 'class C extends class {} implements A<{ a: 1 }>, B()', 'class C implements new @d class {}, B()', 'class C extends A, new @d(1) class {}, B()', 'class C extends new @a.b @c class {} implements (B)',
+  // Braces after `extends`, `implements` or a comma are an object literal's, one element of the list, and no class's body.
+  'class C extends {}, B()', 'class C implements {}, B()', 'class C extends { a: 1 }, B()', 'class C extends A implements {}, B()', 'class C extends A, {}, B()', 'class C implements A, { a: 1, m() {} }, B()', 'class C extends {}.x, B()', 'class C extends [{}], B()',
   // Each of the elements that ends a list in a `)`, after `implements`, after a comma and after both keywords: the braces after it hold members (the sweep reads a part of them in every wrap).
   ...LAST_ELEMENT_HERITAGES,
 ];
@@ -401,7 +460,7 @@ const INTERFACE_HERITAGES = [
   'interface I extends A, (B)', 'interface I extends A, B<T>()', 'interface I extends A, a?.b()',
   // A call, a parenthesis, an import, `this.f(A)` and a cast after `extends` and after a comma, and after `implements`, which only the checker refuses.
   'interface I extends f(A)', 'interface I extends (A)', 'interface I extends A, f(B)', 'interface I extends A, import("x")', 'interface I extends A, this.f(B)', 'interface I extends A, (B as any)', 'interface I implements f(A)', 'interface I implements (A)',
-  'interface I<T> extends A<T>, f(B)', 'interface I extends A, f(B), g(C)', 'interface I extends A, caf\u00e9()', 'interface I extends caf\u00e9, B()',
+  'interface I<T> extends A<T>, f(B)', 'interface I extends A, f(B), g(C)', 'interface I extends A, caf\u00e9()', 'interface I extends caf\u00e9, B()', 'interface I extends A, class {}, B()', 'interface I extends A, new @d class {}, B()', 'interface I extends class D extends E {}, B()',
 ];
 const OBJECT_CONTAINER_WRAPS = [
   (m) => `const o = { ${m} };`, (m) => `f({ ${m} });`, (m) => `function g() { return { ${m} }; }`, (m) => `x = [{ ${m} }];`, (m) => `for (let i = 0;; { ${m} }) {}`, (m) => `for (let i = 0; i < 1; { ${m} }) {}`, (m) => `for (const x of [{ ${m} }]) {}`,
@@ -461,9 +520,13 @@ const NEST_FRAMES = [
   ['stmt', 'stmt', 'class C { implements() { __X__ } }'], ['stmt', 'stmt', 'class C { extends() { __X__ } }'], ['stmt', 'stmt', 'class C { static implements() { __X__ } }'], ['stmt', 'stmt', 'class C { a = 1\n  implements() { __X__ } }'], ['stmt', 'stmt', 'const o = { implements() { __X__ } };'],
   ['stmt', 'stmt', 'const o = { a: 1, implements() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: caf\u00e9, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: implements, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { implements, m() { __X__ } };'],
   ['stmt', 'stmt', 'class H { #x = 1; f() { return { a: this.#x, m() { __X__ } }; } }'], ['stmt', 'stmt', 'function implements() { __X__ }'], ['stmt', 'stmt', 'class C implements (B) { implements() { __X__ } }'], ['stmt', 'stmt', 'class C extends (B) { extends() { __X__ } }'],
+  // A class that is complete before the name or the comma — the value of a property, the initializer of a field, a declaration that no `;` ends — leaves its own `class`, `extends` and `implements` behind, and they are no heritage of the braces after the call.
+  ['stmt', 'stmt', 'const o = { a: class extends B {}, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: class {}, implements() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: class Named<T> extends Base<T> implements I {}, m() { __X__ } };'],
+  ['stmt', 'stmt', 'const o = { a: (class extends B {}), m() { __X__ } };'], ['stmt', 'stmt', 'class Q {}\nfunction implements() { __X__ }'], ['stmt', 'stmt', 'interface Q {}\nfunction implements() { __X__ }'], ['stmt', 'stmt', 'class Q extends mixin(A) {}\nfunction f() { __X__ }'],
+  ['stmt', 'stmt', 'class H { a = class {}\n  implements() { __X__ } }'], ['stmt', 'stmt', 'class H { static a = class extends B {}\n  extends() { __X__ } }'],
   // Statements inside, an expression.
   ['stmt', 'expr', '(function () { __X__ })'], ['stmt', 'expr', '(() => { __X__ })'], ['stmt', 'expr', '(async () => { __X__ })'], ['stmt', 'expr', '({ m() { __X__ } })'], ['stmt', 'expr', '({ get x() { __X__ } })'], ['stmt', 'expr', '(class { m() { __X__ } })'],
-  ['stmt', 'expr', '({ a: 1, m() { __X__ } })'], ['stmt', 'expr', '({ a: caf\u00e9, m() { __X__ } })'], ['stmt', 'expr', '({ implements() { __X__ } })'],
+  ['stmt', 'expr', '({ a: 1, m() { __X__ } })'], ['stmt', 'expr', '({ a: caf\u00e9, m() { __X__ } })'], ['stmt', 'expr', '({ implements() { __X__ } })'], ['stmt', 'expr', '({ a: class extends B {}, m() { __X__ } })'],
   ['stmt', 'expr', '(class extends mixin(A) { m() { __X__ } })'], ['stmt', 'expr', '(function* () { __X__ })'], ['stmt', 'expr', '(class { static { __X__ } })'],
   // An expression inside, a statement.
   ['expr', 'stmt', 'f(__X__);'], ['expr', 'stmt', '[__X__];'], ['expr', 'stmt', '(__X__);'], ['expr', 'stmt', 'const e = __X__;'], ['expr', 'stmt', 'a ? __X__ : b;'], ['expr', 'stmt', 'const o = { k: __X__ };'], ['expr', 'stmt', 'const h = () => __X__;'],
@@ -482,10 +545,16 @@ const NEST_FRAMES = [
   ['member', 'stmt', 'class C implements (B) { __X__ }'], ['member', 'stmt', 'class C extends A implements (B) { __X__ }'], ['member', 'stmt', 'class C implements (A as any) { __X__ }'], ['member', 'stmt', 'class C<T> implements (B) { __X__ }'], ['member', 'stmt', 'class C implements import("x") { __X__ }'],
   ['member', 'stmt', 'class C implements this.f(A) { __X__ }'], ['member', 'stmt', 'class C implements A, caf\u00e9() { __X__ }'], ['member', 'stmt', 'interface I extends A, f(B) { __X__ }'], ['member', 'stmt', 'interface I extends A, import("x") { __X__ }'],
   ['member', 'expr', '(class extends (B) { __X__ })'], ['member', 'expr', '(class extends A implements (B) { __X__ })'],
+  // A class expression among the elements of a list: the braces after the call are the outer class's, whatever its own head has.
+  ['member', 'stmt', 'class C extends class {} { __X__ }'], ['member', 'stmt', 'class C extends class {}, B() { __X__ }'], ['member', 'stmt', 'class C extends class {} implements (B) { __X__ }'], ['member', 'stmt', 'class C implements A, class {}, B() { __X__ }'],
+  ['member', 'stmt', 'class C extends class D extends E {} implements (B) { __X__ }'], ['member', 'stmt', 'class C extends class Named<T> extends Base<T> {}, B() { __X__ }'], ['member', 'stmt', 'class C extends function () {}, B() { __X__ }'],
+  ['member', 'expr', '(class extends class {}, B() { __X__ })'],
   ['member', 'expr', '({ __X__ })'], ['member', 'expr', '(class { __X__ })'], ['member', 'expr', '(class extends mixin(A) { __X__ })'],
 ];
 // What stands before the payload member, by the kind of the braces: a member that a separator or a line break ends.
-const NEST_MEMBER_BEFORE = { body: ['', '', '', 'static ', 'async ', 'get a() { return 1; }\n', 'a = await\n', 'a = 1;\n', 'x;\n', '@dec ', 'a: 1,\n', 'a() {},\n', '*', 'readonly ', '@dec<T> *', '@dec<T> in\n', '@dec<T> instanceof\n', '@1. *', 'a = 1\n', 'a\n'], signature: ['', '', 'a: void\n', 'a: string;\n', 'a(): void\n', 'readonly ', 'a?: T,\n'] };
+const NEST_MEMBER_BEFORE = { body: ['', '', '', 'static ', 'async ', 'get a() { return 1; }\n', 'a = await\n', 'a = 1;\n', 'x;\n', '@dec ', 'a: 1,\n', 'a() {},\n', '*', 'readonly ', '@dec<T> *', '@dec<T> in\n', '@dec<T> instanceof\n', '@1. *', 'a = 1\n', 'a\n',
+  // A decimal point that ends a number, after white space that is not ASCII.
+  '@\u00a01. *', '@\u2028 1.\n', 'a =\u00a01.\n', 'a =\u3000 1.\n'], signature: ['', '', 'a: void\n', 'a: string;\n', 'a(): void\n', 'readonly ', 'a?: T,\n'] };
 const NEST_PRECEDING_WORDS = ['', '', 'void', 'typeof', 'delete', 'await', 'a in', 'a instanceof', 'x ? 1 :', 'a &&', 'a ||'];
 function* nestedBracePages(seed, count) {
   const { pick, chance } = generator(seed);
@@ -521,5 +590,5 @@ function* nestedBracePages(seed, count) {
   }
 }
 
-module.exports = { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, decoratorEndPages, keywordNamedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages, MODIFIERS, OPERATORS, MEMBER_PREFIXES, MEMBER_PLACES, NEWLINE_GAPS, NEWLINE_PLACES, NEWLINE_ELEMENTS, KEYWORD_LINE_PLACES,
-  DECORATED_PLACES, DECORATOR_ENDS, DECORATOR_FOLLOWERS, DECORATOR_FRAMES, KEYWORD_NAMES, KEYWORD_BODIES, KEYWORD_METHOD_FRAMES, OBJECT_VALUES, OBJECT_VALUE_FRAMES, SHORTHAND_NAMES, SHORTHAND_FRAMES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES, LAST_ELEMENT_HERITAGES, CALL };
+module.exports = { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, decoratorEndPages, decimalPointPages, keywordNamedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages, MODIFIERS, OPERATORS, MEMBER_PREFIXES, MEMBER_PLACES, NEWLINE_GAPS, NEWLINE_PLACES, NEWLINE_ELEMENTS, KEYWORD_LINE_PLACES,
+  DECORATED_PLACES, DECORATOR_ENDS, DECORATOR_FOLLOWERS, DECORATOR_FRAMES, NUMBER_GAPS, KEYWORD_NAMES, KEYWORD_BODIES, KEYWORD_METHOD_FRAMES, CLASS_VALUES, CLASS_VALUES_WRAPPED, OBJECT_VALUES, OBJECT_VALUE_FRAMES, SHORTHAND_NAMES, SHORTHAND_FRAMES, UNREADABLE_LISTS, UNREADABLE_HEADS, ESCAPED_HEADS, ESCAPE_PLACES, ESCAPE_GAPS, CLASS_HERITAGES, LAST_ELEMENT_HERITAGES, CALL };

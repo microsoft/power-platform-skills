@@ -30,7 +30,7 @@ const { extractNavTargets, resolvePageRefs, strayPageRefs, navMalformedRefs, rev
 const { LONG_KEY, MISREAD_PAGES, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 const { ANY_SPACE } = require('./helpers/jsx-element-fuzz.js');
 const { numberedMemberPages, nestedTextPages, expressionLinePages, literalTagPages, nestedSoupPages, nestedCodePages, nestedTagPages, nestedPairPages, taggedStringPages, importTypePages, accessorNamePages } = require('./helpers/hidden-closing-pages.js');
-const { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, decoratorEndPages, keywordNamedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages } = require('./helpers/type-head-pages.js');
+const { typeHeadPages, newlinePages, keywordLinePages, decoratedPages, decoratorEndPages, decimalPointPages, keywordNamedPages, unreadableListPages, escapedHeadPages, containerPages, nestedBracePages } = require('./helpers/type-head-pages.js');
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const CALL = 'navigateTo({pageType:"generative", pageId:"PAGEREF_detail"});';
@@ -1269,6 +1269,23 @@ test('sweep (a method named like an operator after a decorator that ends in the 
   assert.strictEqual(reading.stats.exact, reading.stats.valid, 'every valid page is read exactly');
   assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
   if (base) assert.ok(reading.stats.baseMisread >= 1000, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
+});
+
+// A number that ends in a decimal point (`1.`) ends a decorator and a field's initializer, whatever stands before its digits: every character that TypeScript's scanner skips between two tokens, beyond ASCII too (U+00A0, U+2028, U+FEFF, …), and a comment. The member after it
+// begins there — a generator's `*`, the name `instanceof`, a method after a line break — so the method is code and the note after it is data. A lexer that took a character beyond ASCII before the digits for the end of a name read no number, and the note as the rest of an element.
+test('sweep (a method named like an operator after a number that ends in a decimal point, after white space of every kind, TypeScript parser): the method is a member, the note after it is data, and no guess is made', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const base = loadBaseLexer();
+  const pages = [...decimalPointPages()];
+  const reading = readTokens(ts, pages, base);
+  t.diagnostic(describeReading(reading));
+  assert.deepStrictEqual(reading.problems.slice(0, 5), [], 'every token is read where TypeScript reads it');
+  assert.ok(reading.stats.valid >= 2400, `only ${reading.stats.valid} of the ${pages.length} pages are valid to TypeScript`);
+  assert.strictEqual(reading.stats.guessed, 0, `a member after a decimal point was guessed at: ${guessSummary(reading.kinds)}: ${JSON.stringify(reading.guessedPrograms.slice(0, 3).map((program) => program.label))}`);
+  assert.strictEqual(reading.stats.exact, reading.stats.valid, 'every valid page is read exactly');
+  assert.deepStrictEqual(reading.lostPrograms.slice(0, 3).map((program) => program.label), [], 'a page that the base resolves is refused');
+  if (base) assert.ok(reading.stats.baseMisread >= 500, `the base misreads only ${reading.stats.baseMisread} of the ${pages.length} pages`);
 });
 
 // A method, a function or a property that a heritage keyword names, the value of an object literal before a method after a comma that a letter beyond ASCII, a private name or a word that a heritage keyword spells makes, and a shorthand property: the braces after the `)` are
