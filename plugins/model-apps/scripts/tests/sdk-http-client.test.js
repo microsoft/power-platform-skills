@@ -504,6 +504,64 @@ test('a 500 that is NOT a deadlock victim, or a $batch, still gets exactly one r
   assert.strictEqual(calls.length, 1, 'a $batch answer that does not show its operations\u2019 results is not re-sent');
 });
 
+// What makes a 500 a deadlock victim is the SQL number the service gives LAST. The platform writes its own diagnostic at the end of a SQL error's message, after the SQL text, and the SQL text can quote what a maker named — a duplicate-key
+// error (SQL 2627) quotes the value that collided:
+//   Sql error: Violation of UNIQUE KEY constraint 'ndx_name'. Cannot insert duplicate key. The duplicate key value is (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627
+// A name spelled `Sql Number: 1205` is in that answer and no deadlock happened, so a name in front of the diagnostic decides nothing — whether it spells the deadlock's number in front of another one, or another number in front of the deadlock's.
+const DIAGNOSTIC = (number) => ` CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: ${number}`;
+const QUOTING = (number, name = 'Sql Number: 1205') => ` Sql error: Violation of UNIQUE KEY constraint 'ndx_name'. Cannot insert duplicate key. The duplicate key value is (${name}).${DIAGNOSTIC(number)}`;
+test('the deadlock signature is the LAST SQL number an answer gives — a maker\'s name that quotes 1205 cannot make a unique-key violation a deadlock victim, nor hide a real one', () => {
+  const { SQL_DEADLOCK_VICTIM } = require('../lib/sdk-http-client.js');
+  const victims = [
+    ['the platform\'s own answer', ` Sql error: Generic SQL error.${DIAGNOSTIC(1205)}`],
+    ['the number alone', 'Sql Number: 1205'],
+    ['in any case, with no space after the colon', 'SQL NUMBER:1205'],
+    ['text after the number', `Sql error: Generic SQL error.${DIAGNOSTIC(1205)}. Rerun the transaction.`],
+    ['the number twice, the same one both times', 'Sql Number: 1205 (inner: Sql Number: 1205)'],
+    ['a later "Sql Number:" that gives no number', 'Sql Number: 1205 (Sql Number: unknown)'],
+    ['a name in front of it that quotes another SQL number', QUOTING(1205, 'Sql Number: 547')],
+    ['a name in front of it that quotes the same number', QUOTING(1205)],
+    ['the answer as the client reads it: the JSON of its body', JSON.stringify({ error: { code: '0x80044150', message: QUOTING(1205) } })],
+  ];
+  const others = [
+    ['another number', ` Sql error: Generic SQL error.${DIAGNOSTIC(547)}`],
+    ['a unique key (2627) after a name that quotes the deadlock\'s number', QUOTING(2627)],
+    ['a constraint (547) after a name that quotes it', QUOTING(547)],
+    ['a lock timeout (1222) after a name that quotes it', QUOTING(1222)],
+    ['the same, as the client reads it: the JSON of the body', JSON.stringify({ error: { code: '0x80044150', message: QUOTING(2627) } })],
+    ['a number that only starts with 1205', ` Sql error: Generic SQL error.${DIAGNOSTIC(12050)}`],
+    ['the deadlock\'s number in front of another', 'Sql Number: 1205 (inner: Sql Number: 547)'],
+    ['no SQL number at all', ' Sql error: Generic SQL error.'],
+  ];
+  for (const [what, text] of victims) assert.strictEqual(SQL_DEADLOCK_VICTIM.test(text), true, `a deadlock victim: ${what}`);
+  for (const [what, text] of others) assert.strictEqual(SQL_DEADLOCK_VICTIM.test(text), false, `not a deadlock victim: ${what}`);
+  // The check is linear in the text: a message that repeats the marker tens of thousands of times is read in a moment (a few milliseconds), not in a time that grows with the square of its length (seconds).
+  const flood = 'Sql Number: 1205 '.repeat(40000);
+  const started = Date.now();
+  assert.strictEqual(SQL_DEADLOCK_VICTIM.test(flood), true);
+  assert.strictEqual(SQL_DEADLOCK_VICTIM.test(`${flood}Sql Number: 547`), false);
+  assert.ok(Date.now() - started < 3000, `a flood of markers took ${Date.now() - started} ms`);
+});
+
+test('a RECORD delete whose 500 only quotes the deadlock\'s number in a name is sent ONCE — and the platform\'s own deadlock after the same quote is still re-sent', async () => {
+  for (const number of [547, 2627, 1222]) {
+    const slept = [];
+    const { request, calls } = fakeTransport({ statusCode: 500, headers: {}, body: JSON.stringify({ error: { code: '0x80044150', message: QUOTING(number) } }) });
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+    const res = await http.delete('https://org.crm.dynamics.com/api/data/v9.0/roles(1)');
+    assert.strictEqual(res.status, 500, `SQL ${number}`);
+    assert.strictEqual(calls.length, 1, `SQL ${number}: not re-sent`);
+    assert.deepStrictEqual(slept, [], `SQL ${number}: and nothing waited for`);
+  }
+  const slept = [];
+  const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { statusCode: 500, headers: {}, body: JSON.stringify({ error: { code: '0x80044150', message: QUOTING(1205) } }) } : { statusCode: 204, headers: {}, body: '' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+  const res = await http.delete('https://org.crm.dynamics.com/api/data/v9.0/roles(1)');
+  assert.strictEqual(res.status, 204, 'the platform\'s own deadlock diagnostic is a deadlock, whatever the name in front of it says');
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(slept, [1000]);
+});
+
 test('DOES retry a METADATA delete (EntityDefinitions) on a network error — async-idempotent, gets cosmetic 404', async () => {
   const { request, calls } = fakeTransport(() =>
     calls.length <= 1 ? { error: 'ETIMEDOUT' } : { statusCode: 404, headers: {}, body: '' }
@@ -722,6 +780,17 @@ test('postRaw DOES re-send a $batch whose change set lost a SQL deadlock, at mos
   assert.deepStrictEqual(slept2, [1000, 2000, 4000]);
 });
 
+test('postRaw DOES re-send a $batch whose change set lost a SQL deadlock after a name that quotes another SQL number — the last number is the service\'s own', async () => {
+  const body = batchAnswer(['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { code: '0x80044150', message: QUOTING(1205, 'Sql Number: 547') } })]);
+  const slept = [];
+  const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { statusCode: 500, headers: {}, body } : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async (ms) => { slept.push(ms); } });
+  const res = await postBatch(http);
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(slept, [1000]);
+});
+
 test('postRaw re-sends a $batch ONLY when its answer proves every operation was rolled back as a deadlock victim', async () => {
   const answers = {
     'an operation that committed beside the deadlocked one': batchAnswer(['HTTP/1.1 204 No Content'], DEADLOCK_PART),
@@ -740,6 +809,9 @@ test('postRaw re-sends a $batch ONLY when its answer proves every operation was 
     'an answer closed at its outer boundary with a part cut off after the deadlocked one': withPart(batchAnswer(DEADLOCK_PART), CUT_OFF_PART),
     // Only a 500 is a rolled-back deadlock victim; another status whose message quotes one is not.
     'another status whose error quotes the deadlock': batchAnswer(['HTTP/1.1 400 Bad Request', JSON.stringify({ error: { message: 'Validation failed (inner: Sql Number: 1205)' } })]),
+    // The number that counts is the last the answer gives: a name that quotes 1205 in front of the service's own other number is not a deadlock.
+    'a failure whose own SQL number is another, after a name that quotes the deadlock\u2019s': batchAnswer(['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { code: '0x80044150', message: QUOTING(2627) } })]),
+    'the same for every operation of the change set': batchAnswer(['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { code: '0x80044150', message: QUOTING(547) } })], ['HTTP/1.1 500 Internal Server Error', JSON.stringify({ error: { code: '0x80044150', message: QUOTING(2627) } })]),
     'a complete answer with no operation results': '--batchresponse_b1\r\n--batchresponse_b1--\r\n',
   };
   for (const [what, body] of Object.entries(answers)) {
@@ -1145,8 +1217,35 @@ const INCOMPLETE_STRUCTURES = {
   'two responses in one part': (s, o) => answerOf([responseOf(s, { ...o, length: null, headers: ['HTTP/1.1 204 No Content'] })]),
 };
 
-test('a delimiter-complete answer whose parts are not what its delimiters say proves nothing — an operation with no response, a change set declared and absent, a body not as long as its response says, a delimiter damaged — and the same parts in a sound answer say what they say', () => {
-  for (const [what, make] of Object.entries(INCOMPLETE_STRUCTURES)) {
+// A response that says `Transfer-Encoding: chunked` has a chunk stream for a body — `<size in hex>[;extension]`, a line break, that many bytes, a line break, …, `0`, a line break, the trailer fields and a blank line
+// (https://www.rfc-editor.org/rfc/rfc9112#section-7.1) — and the delimiters around the part say nothing of whether the stream is whole. Nothing here reads one: a part that declares any transfer coding is not read at all, so it never
+// certifies a refusal or a deadlock victim. The five ways a chunk stream is left unfinished are in the table, each inside a part that is otherwise complete, with a complete refusal beside them; so are the streams that ARE whole.
+const CHUNKED = ['Transfer-Encoding: chunked'];
+const THROTTLED_TEXT = '{"error":{"message":"throttled"}}';
+const bodyOf = (o) => o.body || THROTTLED_TEXT;
+const sizeOf = (text) => Buffer.byteLength(text).toString(16);
+const chunkStream = (text, { extension = '', trailer = '' } = {}) => `${sizeOf(text)}${extension}${CRLF}${text}${CRLF}0${CRLF}${trailer}${CRLF}`;
+// A response of `status` that declares `headers` and has no length of its own (a chunked response has none).
+const codedResponse = (status, options, headers, body) => responseOf(status, { ...options, length: null, headers, body });
+const TRANSFER_CODED = {
+  'a chunked body with no terminal chunk': (s, o) => answerOf([codedResponse(s, o, CHUNKED, `${sizeOf(bodyOf(o))}${CRLF}${bodyOf(o)}${CRLF}`)]),
+  'a chunk that is longer than the body that follows it': (s, o) => answerOf([codedResponse(s, o, CHUNKED, `200${CRLF}${bodyOf(o)}`)]),
+  'a chunked response with no chunk stream at all': (s, o) => answerOf([codedResponse(s, o, CHUNKED, '')]),
+  'a chunk size that is not hexadecimal': (s, o) => answerOf([codedResponse(s, o, CHUNKED, `xyz${CRLF}${bodyOf(o)}${CRLF}0${CRLF}${CRLF}`)]),
+  'a chunked body whose trailer is cut off': (s, o) => answerOf([codedResponse(s, o, CHUNKED, `${sizeOf(bodyOf(o))}${CRLF}${bodyOf(o)}${CRLF}0${CRLF}X-Trace:`)]),
+  'a complete chunked body': (s, o) => answerOf([codedResponse(s, o, CHUNKED, chunkStream(bodyOf(o)))]),
+  'a complete chunked body with a chunk extension and a trailer': (s, o) => answerOf([codedResponse(s, o, CHUNKED, chunkStream(bodyOf(o), { extension: ';key=value', trailer: `X-Trace: done${CRLF}` }))]),
+  'an empty chunked body': (s, o) => answerOf([codedResponse(s, o, CHUNKED, `0${CRLF}${CRLF}`)]),
+  'a chunked body that also counts its own bytes': (s, o) => answerOf([responseOf(s, { ...o, headers: CHUNKED, body: chunkStream(bodyOf(o)), length: Buffer.byteLength(chunkStream(bodyOf(o))) })]),
+  'a transfer coding that is not chunked': (s, o) => answerOf([codedResponse(s, o, ['Transfer-Encoding: gzip'], bodyOf(o))]),
+  'a transfer coding named in lower case': (s, o) => answerOf([codedResponse(s, o, ['transfer-encoding: chunked'], chunkStream(bodyOf(o)))]),
+  'a transfer coding with white space before the colon': (s, o) => answerOf([codedResponse(s, o, ['Transfer-Encoding : chunked'], chunkStream(bodyOf(o)))]),
+  'a transfer coding folded onto the next line': (s, o) => answerOf([codedResponse(s, o, ['Transfer-Encoding:', ' chunked'], chunkStream(bodyOf(o)))]),
+  'a transfer coding on the second of two responses, the first complete': (s, o) => answerOf([responseOf(s, o), codedResponse(s, { ...o, id: 2 }, CHUNKED, chunkStream(bodyOf(o)))]),
+};
+
+test('a delimiter-complete answer whose parts are not what its delimiters say proves nothing — an operation with no response, a change set declared and absent, a body not as long as its response says, a delimiter damaged, a body whose transfer coding is not read — and the same parts in a sound answer say what they say', () => {
+  for (const [what, make] of Object.entries({ ...INCOMPLETE_STRUCTURES, ...TRANSFER_CODED })) {
     const refused = make(429, {});
     assert.deepStrictEqual(proofOf(refused), UNPROVEN, `${what}: a refusal`);
     assert.strictEqual(isBatchThrottled({ statusCode: 429, body: refused }), false, `${what}: not even under an outer 429`);
@@ -1178,6 +1277,9 @@ for (const eol of ['CRLF', 'LF']) {
       ['a response that is only a status line', answerOf([['Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests']]), 429, 0],
       ['a response that ends with its headers: no blank line, no body', answerOf([['Content-Type: application/http', '', 'HTTP/1.1 429 Too Many Requests', 'Retry-After: 7']]), 429, 7000],
       ['a response with no type of its own', answerOf([['', 'HTTP/1.1 403 Forbidden', '']]), 403, 0],
+      // Every part names its own `Content-Transfer-Encoding: binary` in its MIME headers (responseOf does), and that is not the response's transfer coding; and a BODY line that is spelled like one is a body, not a header.
+      ['a body with a line spelled like a transfer coding', answerOf([responseOf(403, { length: null, body: 'Transfer-Encoding: chunked' })]), 403, 0],
+      ['a response whose own headers name a Content-Transfer-Encoding: that is a MIME header, not a transfer coding', answerOf([responseOf(403, { headers: ['Content-Transfer-Encoding: binary'] })]), 403, 0],
       ['an answer with a byte order mark in front of it', `\uFEFF${answerOf([responseOf(429)])}`, 429, 7000],
       ['a change set whose Content-Type is folded onto the next line', answerOf([responseOf(429)]).replace(`; boundary=${CHANGE_SET}`, `;${CRLF} boundary=${CHANGE_SET}`), 429, 7000],
       ['a change set whose boundary is quoted', answerOf([responseOf(429)]).replace(`boundary=${CHANGE_SET}`, `BOUNDARY="${CHANGE_SET}"`), 429, 7000],
@@ -1212,6 +1314,7 @@ test('postRaw sends a conditional-delete or column-create batch ONCE for an answ
   const every = {
     ...Object.fromEntries(Object.entries(MALFORMED_ENVELOPES).map(([what, make]) => [what, (s) => make(s === 500 ? DEADLOCK_PART : REFUSED_429)])),
     ...INCOMPLETE_STRUCTURES,
+    ...TRANSFER_CODED,
   };
   for (const [what, make] of Object.entries(every)) {
     const answers = [

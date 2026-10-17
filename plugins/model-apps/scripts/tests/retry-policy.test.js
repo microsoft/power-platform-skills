@@ -372,10 +372,13 @@ test('judgeFailure: a condition the service names by its error code is run again
 });
 
 // A SQL deadlock victim: SQL chose the request's transaction as the victim of a deadlock and rolled it back, so the idempotent build can run again. Its code is the generic SQL error's, which every SQL failure carries, so what tells it apart
-// is its SQL number — and it takes BOTH: the code in the `error.code` of the body, and the number in the service's own answer (the url the SDK opens its message with, which can carry anything a maker named, is not read).
+// is its SQL number — and it takes BOTH: the code in the `error.code` of the body, and the number in the service's own answer (the url the SDK opens its message with, which can carry anything a maker named, is not read). The number
+// that counts is the LAST one the answer gives: the platform writes its own diagnostic at the end of the message, after the SQL text, and the SQL text can quote what a maker named (a duplicate key quotes the value that collided).
 //   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
 const DEADLOCK_WORDS = ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
 const sqlNumber = (number) => DEADLOCK_WORDS.replace('1205', number);
+// The answer to a unique-key violation (2627) or a constraint (547) that quotes the name a maker gave: the name is in front of the platform's own diagnostic.
+const quoting = (number, name = 'Sql Number: 1205') => ` Sql error: Violation of UNIQUE KEY constraint 'ndx_name'. Cannot insert duplicate key. The duplicate key value is (${name}). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: ${number}`;
 
 test('judgeFailure: a SQL deadlock victim — the generic SQL error code and the platform\'s deadlock signature in the service\'s own answer — is run again, and each of them alone, another SQL number, and a url or a name that quotes the signature are final', () => {
   assert.ok(!TRANSIENT_SERVICE_CODES.has('0x80044150'), 'the generic SQL error code is not a transient condition of its own: it is every SQL failure');
@@ -387,6 +390,10 @@ test('judgeFailure: a SQL deadlock victim — the generic SQL error code and the
   assert.strictEqual(isTransientHalt({ message: 'views failed', cause: victim }), true, 'behind a halt');
   assert.strictEqual(isTransientHalt(new BuildHalt('views failed', { phase: 'views', code: 'x', cause: victim, retry: retryPolicyFor(victim) })), true, 'through the halt the runner raises');
   assert.strictEqual(isTransientHalt(answerOf(500, DEADLOCK_WORDS, '0X80044150')), true, 'the code in either case, as every code is read');
+  // The last number is the service's own, so a deadlock is a deadlock whatever the name in front of it quotes, and text after the number does not hide it.
+  assert.strictEqual(isTransientHalt(answerOf(500, quoting(1205, 'Sql Number: 547'), '0x80044150')), true, 'a name in front of it that quotes another SQL number');
+  assert.strictEqual(isTransientHalt(answerOf(500, quoting(1205), '0x80044150')), true, 'a name in front of it that quotes the deadlock\'s own');
+  assert.strictEqual(isTransientHalt(answerOf(500, `${DEADLOCK_WORDS}. Rerun the transaction.`, '0x80044150')), true, 'text after the number');
   // The same answer, one thing short of it.
   for (const [what, failure] of [
     ['the signature and no code', answerOf(500, DEADLOCK_WORDS)],
@@ -403,6 +410,11 @@ test('judgeFailure: a SQL deadlock victim — the generic SQL error code and the
     // What a maker named is in the url the SDK echoes: the answer is what follows it.
     ['the code and another SQL number, with the signature in the url', new ConnectionError(`${API}/roles?$filter=name eq 'Sql Number: 1205'`, 500, sqlNumber(547), { error: { code: '0x80044150', message: sqlNumber(547) } })],
     ['the code and no signature, with the signature in the url', new ConnectionError(`${API}/roles?$filter=name eq 'Sql Number: 1205'`, 500, 'Sql error: Generic SQL error.', { error: { code: '0x80044150', message: 'Sql error: Generic SQL error.' } })],
+    // What a maker named is ALSO in the service's own message, when the SQL text quotes it: the diagnostic the platform writes after that text is the number that counts.
+    ['a unique key (2627) after a name that quotes the deadlock\'s number', answerOf(500, quoting(2627), '0x80044150')],
+    ['a constraint (547) after a name that quotes the deadlock\'s number', answerOf(500, quoting(547), '0x80044150')],
+    ['a lock timeout (1222) after a name that quotes the deadlock\'s number', answerOf(500, quoting(1222), '0x80044150')],
+    ['the deadlock\'s number in front of another one', answerOf(500, `${DEADLOCK_WORDS} (inner: Sql Number: 547)`, '0x80044150')],
   ]) {
     assert.strictEqual(isTransientHalt(failure), false, what);
     assert.strictEqual(retryPolicyFor(failure), RETRY.NEVER, `${what}: a status that says no, and nothing that says otherwise`);
@@ -412,8 +424,10 @@ test('judgeFailure: a SQL deadlock victim — the generic SQL error code and the
   const refused = answerOf(500, sqlNumber(547), '0x80044150');
   assert.strictEqual(isTransientHalt(new BuildHalt("view 'Sql Number: 1205' could not be saved", { phase: 'views', code: 'x', cause: refused })), false, 'the halt\'s own message');
   assert.strictEqual(isTransientHalt(Object.assign(new Error("view 'Sql Number: 1205' could not be saved"), { cause: refused })), false, 'a wrapper\'s message');
-  // Only a failure with no status at all is read by its words, as it always was: that is the fallback this rule does not touch.
+  // Only a failure with no status at all is read by its words, as it always was: that is the fallback this rule does not touch — and it reads the same signature, the last SQL number, so a name in front of another number is not a deadlock there either.
   assert.strictEqual(isTransientHalt(new Error(DEADLOCK_WORDS)), true);
+  assert.strictEqual(isTransientHalt(new Error(quoting(1205, 'Sql Number: 547'))), true, 'the words of an error with no status: a deadlock whatever name is in front of it');
+  assert.strictEqual(isTransientHalt(new Error(quoting(2627))), false, 'the words of an error with no status: a unique key that quotes the deadlock\'s number is not one');
 });
 
 test('judgeFailure: a failure that carries no HTTP status at all is still judged by the service\'s own words — the fallback is for what has no structure', () => {

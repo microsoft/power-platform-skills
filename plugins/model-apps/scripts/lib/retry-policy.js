@@ -218,9 +218,12 @@ const TRANSIENT_SERVICE_CODES = Object.freeze(new Set([
 //   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
 // which the SDK words as `HTTP 500 from <url>: Sql error: Generic SQL error. CRM ErrorCode: … Sql Number: 1205`. Two things make it one, and neither does alone:
 //   - the CODE is the generic SQL error's, `0x80044150`, read from the `error.code` of the body (serviceCodeOf), never from text. Every SQL failure carries it, so it says only that SQL failed;
-//   - the service's own ANSWER — what follows the url in the SDK's message (answerOf), so the maker's names in the url are not read — has the platform's deadlock signature (SQL_DEADLOCK_VICTIM, the HTTP client's).
-// The signature without that code is text that can say anything — a display name that reads as one, or a url the SDK echoes — and the code beside another SQL number (547 is a constraint, 1222 a lock timeout) is a failure a run
-// again cannot change. Everything else about this code stays final.
+//   - the service's own ANSWER — what follows the url in the SDK's message (answerOf), so the maker's names in the url are not read — ends in the platform's deadlock signature (SQL_DEADLOCK_VICTIM, the HTTP client's): the LAST SQL
+//     number it gives is 1205. The platform writes its diagnostic after the SQL text, and the SQL text can quote what a maker named — a duplicate key quotes the value that collided — so a name that spells `Sql Number: 1205` in front of
+//     the platform's own 2627 is a unique-key violation and not a deadlock, and a name that quotes another number in front of the platform's 1205 does not hide one:
+//       …The duplicate key value is (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627
+// The signature without that code is text that can say anything — a display name that reads as one, or a url the SDK echoes — and the code beside another SQL number (547 is a constraint, 1222 a lock timeout, 2627 a unique key) is a failure
+// a run again cannot change. Everything else about this code stays final.
 // See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 const GENERIC_SQL_ERROR_CODE = '0x80044150';
 const isDeadlockVictimAnswer = (error) => serviceCodeOf(error) === GENERIC_SQL_ERROR_CODE && SQL_DEADLOCK_VICTIM.test(answerOf(error));

@@ -206,6 +206,8 @@ const transportFailure = (words, code) => {
 };
 // What Node says when a certificate does not name the host: the names it quotes can be any text, a transport code included.
 const ALTNAME_FAILURE = "Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:ECONNRESET.example.com";
+// The answer to a unique-key violation (SQL 2627) when the value that collided is a name a maker gave, spelled like the deadlock's signature: the platform writes its own diagnostic after the SQL text that quotes the name, and it says 2627.
+const ECHOED_UNIQUE_KEY = " Sql error: Violation of UNIQUE KEY constraint 'ndx_name'. Cannot insert duplicate key. The duplicate key value is (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627";
 // Failures a run again cannot change, as the SDK, the service and the machine report them — every one with a label that reads as transient where a label can be.
 // What `enrichDefaultViews` raises when the publish of the views it saved fails: an SdkError of its own code, the publish error's message inside it, and no cause.
 const wrappedPublish = (answer, table = 'contoso_order') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
@@ -223,6 +225,7 @@ const REFUSALS = [
   // A SQL deadlock victim is the generic SQL error code AND the platform's signature in the service's own answer: neither alone is, and a url that quotes the signature is the maker's.
   ['the deadlock signature in a 500 that names no code', () => connectionError(500, 'Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205')],
   ['the generic SQL error code beside another SQL number (a constraint), on a url that quotes the deadlock signature', () => new ConnectionError(`${ENV}/api/data/v9.2/roles?$filter=name eq 'Sql Number: 1205'`, 500, ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 547', { error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 547' } })],
+  ['the generic SQL error code beside a unique-key violation (2627) whose message quotes a name spelled like the deadlock signature', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, ECHOED_UNIQUE_KEY, { error: { code: '0x80044150', message: ECHOED_UNIQUE_KEY } })],
   ['a 403 whose answer names a privilege derived from a table called like a lock', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 403, 'Principal user is missing prvReadcontoso_customizationlockexception privilege.', { error: { code: '0x80040220', message: 'Principal user is missing prvReadcontoso_customizationlockexception privilege.' } })],
   // A certificate that does not verify is a fact about this machine's trust store: its names quote anything, and no word in them — a reset, a timeout — makes it a blip. Decided by Node's code when the error carries one, and by the certificate's own phrases when it does not.
   ['a certificate that does not name the host, whose alternative name spells a transport code (Node\'s code on the error)', () => transportFailure(ALTNAME_FAILURE, 'ERR_TLS_CERT_ALTNAME_INVALID')],
@@ -508,12 +511,62 @@ test('halt policy: the real SDK\'s read of a table called like a lock is run onc
       ['a 500 the service names as a SQL timeout by its code', 500, body('SQL timeout expired.', '0x80044151'), 4],
       // SQL rolled the request back as a deadlock victim: the generic SQL error code, and the platform's signature in the service's own answer. The build runs again, three times, as it did before the retry read the structure of a failure.
       ['a 500 the service names as a SQL deadlock victim by its code and the platform\'s signature', 500, body(' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', '0x80044150'), 4],
+      // The number that counts is the last the answer gives: a name quoted in the SQL text is not the platform's diagnostic, before another number or before the deadlock's.
+      ['a 500 under the code every SQL failure shares whose message quotes a name spelled like the deadlock signature, before the platform\'s own SQL 2627', 500, body(ECHOED_UNIQUE_KEY, '0x80044150'), 1],
+      ['the same before the platform\'s own deadlock diagnostic', 500, body(ECHOED_UNIQUE_KEY.replace('Sql Number: 2627', 'Sql Number: 1205'), '0x80044150'), 4],
       ['a 409 the service names as a customization lock by its code', 409, body('Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.', '0x8004F064'), 4],
     ];
     for (const [what, status, answerBody, attempts] of CASES) {
       const sdk = await viewsReadFailing({ status, headers: {}, body: answerBody });
       assert.strictEqual(await attemptsOfTheLoop(defaultViewsSpec(table), sdk, ['views']), attempts, `${what}, ${table}`);
     }
+  }
+});
+
+// A persona's role is created by the REAL SDK (`createPersonaRole` posts the role under the persona's name), in the real security phase and the real retry loop. The name a maker gives a persona is the role's name, and a role whose name is
+// taken is refused with a SQL unique-key violation (2627) that QUOTES the name: so a persona called `Sql Number: 1205` is in the answer to a failure that no run again can change. The platform's own diagnostic comes after the name.
+async function personaRoleRefused(label, messageFor) {
+  const businessUnit = '44444444-4444-4444-8444-444444444444';
+  const names = [];
+  const sdk = createMakerSdk({
+    instanceUrl: ENV,
+    workspaceStorage: createNodeWorkspaceStorage(tempDir('halt-policy-sdk')),
+    httpClient: {
+      get: async (url) => {
+        if (/businessunits/i.test(url)) return { status: 200, headers: {}, body: { value: [{ businessunitid: businessUnit }] } };
+        const table = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(String(url));
+        if (table) return { status: 200, headers: {}, body: { LogicalName: table[1], Privileges: [{ PrivilegeId: table[1] === 'appmodule' ? '33333333-3333-4333-8333-333333333333' : '11111111-1111-4111-8111-111111111111', Name: `prvRead${table[1]}`, PrivilegeType: 'Read', CanBeBasic: true, CanBeLocal: true, CanBeDeep: true, CanBeGlobal: true }] } };
+        return { status: 200, headers: {}, body: { value: [] } };
+      },
+      post: async (url, body) => {
+        assert.match(String(url), /\/roles$/, 'the only write the security phase makes here is the role');
+        names.push(body.name);
+        return { status: 500, headers: {}, body: { error: { code: '0x80044150', message: messageFor(body.name) } } };
+      },
+    },
+  });
+  await sdk.initWorkspace();
+  const engine = { queryRecords: async (entity) => (entity === 'businessunit' ? [{ businessunitid: businessUnit }] : []), createPersonaRole: sdk.createPersonaRole.bind(sdk) };
+  const attempts = await attemptsOfTheLoop(orderSpec({ personas: [persona(label)] }), engine, ['security']);
+  return { attempts, sends: names.length, names };
+}
+
+test('halt policy: a persona named like the deadlock signature does not make the unique-key violation its role gets a deadlock — through the real SDK\'s role create, the real security phase and the real loop — while a genuine deadlock still runs the phase again', async () => {
+  const unique = (name) => ` Sql error: Violation of UNIQUE KEY constraint 'ndx_name'. Cannot insert duplicate key. The duplicate key value is (${name}). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627`;
+  const constraint = (name) => unique(name).replace('Sql Number: 2627', 'Sql Number: 547');
+  const deadlock = () => ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+  const CASES = [
+    ['an ordinary name, a unique-key violation (SQL 2627)', 'Dispatcher', unique, 1],
+    ['a name spelled like the deadlock signature, a unique-key violation (SQL 2627)', 'Sql Number: 1205', unique, 1],
+    ['the same name, a constraint (SQL 547)', 'Sql Number: 1205', constraint, 1],
+    ['an ordinary name, a genuine deadlock (SQL 1205)', 'Dispatcher', deadlock, 4],
+    ['a name spelled like the deadlock signature, a genuine deadlock (SQL 1205)', 'Sql Number: 1205', deadlock, 4],
+  ];
+  for (const [what, label, messageFor, attempts] of CASES) {
+    const out = await personaRoleRefused(label, messageFor);
+    assert.ok(out.names.length > 0 && out.names.every((name) => name.includes(label)), `${what}: the real SDK sent the name the maker gave`);
+    assert.strictEqual(out.attempts, attempts, `${what}: how often the real loop runs the security phase`);
+    assert.strictEqual(out.sends, attempts, `${what}: one role create for each`);
   }
 });
 

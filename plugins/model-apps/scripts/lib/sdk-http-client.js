@@ -18,7 +18,13 @@ const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = requ
 //   HTTP 500 from …/api/data/v9.0/workflows(<id>):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205
 //   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
 // Only the SQL number identifies it; the code and message text are shared with every other SQL error. (The build's own retry, lib/retry-policy.js, reads this same marker — and only in an answer that also carries that code.)
-// The vendored SDK recognizes the same marker for its own re-send (1 s / 2 s / 4 s) of reads, an app create,
+// The number that counts is the LAST one the answer gives. The platform writes its diagnostic (`CRM ErrorCode: … Sql ErrorCode: … Sql Number: <n>`) at the END of a SQL error's message, after the SQL text, and the SQL text can quote what a
+// maker named: a duplicate-key error quotes the value that collided, so a name spelled `Sql Number: 1205` is in the answer to a unique-key violation, which no re-send changes:
+//   Sql error: Violation of UNIQUE KEY constraint 'ndx_name'. Cannot insert duplicate key. The duplicate key value is (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627
+// So the signature is `Sql Number: 1205` with no other `Sql Number: <digits>` after it: the number at the end decides, and a name in front of it decides nothing, whether it quotes the deadlock's number or another one. It is one pattern
+// for everything that reads the marker (the build's retry and the text fallback of its words included). `(?:(?!…)[\s\S])*$` reads on to the end of the text for as long as no further number starts — each candidate is read only as far
+// as the next number, so a message that repeats the marker tens of thousands of times is read in linear time, not quadratic.
+// The vendored SDK matches the marker anywhere in a 500's body for its own re-send (1 s / 2 s / 4 s) of reads, an app create,
 // PublishXml, a form create, a view create and a publisher create — requests this client has already re-sent by
 // then, because it re-sends every 5xx that is not a record delete or a $batch (TRANSIENT, below). So a deadlock the
 // client clears costs one re-send in all and the SDK's never fires; one that never clears is attempted up to the
@@ -36,7 +42,7 @@ const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = requ
 // atomic) and it goes out again on the throttle schedule. After any other answer, a deadlock included, it is sent once, because a
 // change set can commit behind a lost or failed answer; the SDK has no re-send of its own for it, so the layers never multiply
 // here either. Pinned through the real client and bundle in table-columns-in-create.test.js and in sdk-http-client.test.js.
-const SQL_DEADLOCK_VICTIM = /\bSql Number:\s*1205\b/i;
+const SQL_DEADLOCK_VICTIM = /\bSql Number:\s*1205\b(?:(?!\bSql Number:\s*\d)[\s\S])*$/i;
 // At most this many re-sends of a deadlock victim, 1 s / 2 s / 4 s apart — the SDK's own schedule.
 const DEADLOCK_RESENDS = 3;
 // The longest `Retry-After` honoured in full. Dataverse's service protection limits answer 429 with
@@ -191,8 +197,8 @@ function isColumnCreateBatch(body) {
  *   --changesetresponse_<id>--
  *   --batchresponse_<id>--
  * The answer is read part by part (batchResults), and it proves the rollback only when it is a complete, well-formed envelope (its outer boundary closed, every change set in it declared, opened and closed, every part a complete response with a
- * status line, and no part with no response in it), it answers at least one operation, and EVERY operation's own part is a 500 carrying the deadlock marker. Anything
- * else (one success, another failure, an operation whose part does not name the deadlock itself, a
+ * status line and no transfer coding, and no part with no response in it), it answers at least one operation, and EVERY operation's own part is a 500 whose answer ends in the deadlock marker (SQL_DEADLOCK_VICTIM: the LAST SQL number it gives is
+ * 1205). Anything else (one success, another failure, an operation whose part does not name the deadlock itself, a
  * truncated answer, an answer that closes its outer boundary and is incomplete inside) is returned as it came.
  */
 function isBatchDeadlockVictim(res) {
@@ -313,6 +319,17 @@ function headersOf(doc, from, to) {
  *     ordinary body has one (it is JSON). Without this a damaged delimiter between two operations left the first part to speak for both.
  *   - Its body is as long as it says. `Content-Length: <n>` (more than one, only when they agree) counts the bytes after the blank line that ends the headers: fewer bytes are a body cut off, and more than blank ones are
  *     not the body that was counted. A response with no such blank line (its headers are its last lines) has no body, and a response that does not count its body is not held to a length.
+ *   - Its body has no transfer coding. `Transfer-Encoding: chunked` (or any other) frames a body in a way the delimiters around the part say nothing about — whether the chunk stream is whole (a terminal `0` chunk, each chunk the size it
+ *     announces, a trailer that ends) is not something this reader checks, and a stream cut off inside a part whose boundaries all close would be taken for a complete response (abridged; no terminal chunk follows the `{}`):
+ *       HTTP/1.1 429 Too Many Requests
+ *       Retry-After: 7
+ *       Transfer-Encoding: chunked
+ *
+ *       2
+ *       {}
+ *     So a part that declares one is not read at all, whole stream or not: it never certifies a refusal or a deadlock victim. The service's own batch answers carry neither this header nor a `Content-Length` on a part, as far as its
+ *     documented samples show (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api#batch-responses), so no answer it is known to give is lost. The `Content-Transfer-Encoding:
+ *     binary` every part names in its MIME headers is not a transfer coding of the response, and a line of the BODY spelled like one is a body.
  * What the response's headers say is otherwise not read: it is the status line that makes a response, and the real service's shape after it (one blank line or two) is not something to turn an answer away for.
  */
 function readResponse(doc, from, bodyFrom, to, results) {
@@ -330,6 +347,8 @@ function readResponse(doc, from, bodyFrom, to, results) {
       headersEnd = i;
       continue;
     }
+    // Matched with or without white space before the colon, as the length is: a server that is loose about the syntax is still declaring one, and a declaration is all that is looked for.
+    if (/^transfer-encoding[ \t]*:/i.test(text)) return false;
     const length = /^content-length[ \t]*:[ \t]*(.*)$/i.exec(text);
     if (length) lengths.push(length[1]);
   }
@@ -383,10 +402,11 @@ function readPart(doc, from, to, depth, results) {
  *   - it is the multipart body of the boundary on its first line (partsOf): that outer delimiter `--<boundary>` opens it, the closing `--<boundary>--` ends it, and nothing but blank lines lies outside them;
  *   - a part that declares a multipart body is a change set (readPart): it names its boundary, and opens and closes exactly that boundary before the outer boundary goes on or closes. A change set the answer declares and never
  *     contains, one it opens and never closes, one whose delimiters are another boundary's, and one inside another change set are all out;
- *   - every other part is ONE COMPLETE operation (readResponse): a response that starts with a status line and whose body is as long as its `Content-Length` says. A part with no response in it is an operation nobody answered.
- * Anything missing or malformed — a change set left open or declared and absent, a part with no response at all, one with no status line or one cut off (`HTTP/1.1 20`), a body shorter than its `Content-Length`, a part of another kind,
- * text after a closing delimiter — makes the WHOLE answer null: a part that cannot be read is not one that can be left out, it may be the operation that succeeded. (Parts without a status line used to be dropped, so an answer that
- * closed its OUTER boundary proved the one part in it that happened to read; and a part with no response in it, or a change set declared and never opened, was let through the same way.)
+ *   - every other part is ONE COMPLETE operation (readResponse): a response that starts with a status line, whose body is as long as its `Content-Length` says and has no transfer coding (a part that declares a `Transfer-Encoding`, whole
+ *     stream or not, is not read: whether a chunk stream is finished is not what the delimiters around it say). A part with no response in it is an operation nobody answered.
+ * Anything missing or malformed — a change set left open or declared and absent, a part with no response at all, one with no status line or one cut off (`HTTP/1.1 20`), a body shorter than its `Content-Length`, a part that declares a
+ * transfer coding, a part of another kind, text after a closing delimiter — makes the WHOLE answer null: a part that cannot be read is not one that can be left out, it may be the operation that succeeded. (Parts without a status line
+ * used to be dropped, so an answer that closed its OUTER boundary proved the one part in it that happened to read; and a part with no response in it, or a change set declared and never opened, was let through the same way.)
  * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api (the format is the OData batch's, 11.7 of
  * http://docs.oasis-open.org/odata/odata/v4.0/errata03/os/complete/part1-protocol/odata-v4.0-errata03-os-part1-protocol-complete.html)
  */
@@ -410,7 +430,8 @@ function batchResults(res) {
  *       HTTP 429  {"error":{"code":"0x80072322","message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds."}}
  *   - a complete, well-formed multipart answer (batchResults) in which EVERY operation it answers is a 429 (read part by part, as
  *     isBatchDeadlockVictim reads a deadlock).
- * An answer that starts as a multipart envelope but is cut short, or is incomplete inside (a change set never closed, or declared and never opened; a part with no response in it, or with no status line; a body shorter than its response says), proves nothing and is returned as it came.
+ * An answer that starts as a multipart envelope but is cut short, or is incomplete inside (a change set never closed, or declared and never opened; a part with no response in it, or with no status line; a body shorter than its response says;
+ * a part that declares a transfer coding), proves nothing and is returned as it came.
  * See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits
  */
 function isBatchThrottled(res) {
@@ -445,7 +466,7 @@ function batchRetryAfterMs(res, now = Date.now(), cap = RETRY_AFTER_CAP_MS) {
 
 /**
  * The one HTTP status a COMPLETE multipart `$batch` answer reports for every operation it answers — 0 when the answer is not a complete, well-formed envelope (read as isBatchThrottled reads one, by batchResults: closed at its outer
- * boundary, every change set in it declared, opened and closed, every part a complete response with a status line), has no operation, or its operations do not all say the same. A change set the service refuses AS A WHOLE is answered HTTP 200 with
+ * boundary, every change set in it declared, opened and closed, every part a complete response with a status line and no transfer coding), has no operation, or its operations do not all say the same. A change set the service refuses AS A WHOLE is answered HTTP 200 with
  * the single part that failed (abridged):
  *   --batchresponse_<id>
  *   Content-Type: multipart/mixed; boundary=changesetresponse_<id>

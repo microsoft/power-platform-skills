@@ -1092,7 +1092,7 @@ test('REAL BUNDLE: an update whose change set is refused with a 429 inside HTTP 
 });
 
 // What the answer does NOT prove stays what it was. `crafted` rewrites the answer the service gave, the way a mix, a cut-off and a collision look on the wire.
-test('REAL BUNDLE: a refused change set that is not a COMPLETE refusal — a mix of statuses, an answer cut off, a part or a change set left incomplete inside a closed envelope (an operation with no response, a change set declared and absent, a body shorter than its Content-Length), a collision (409, 412) or an internal error (500) — is still an unknown outcome: read for, sent once more, and never "nothing was written"', async () => {
+test('REAL BUNDLE: a refused change set that is not a COMPLETE refusal — a mix of statuses, an answer cut off, a part or a change set left incomplete inside a closed envelope (an operation with no response, a change set declared and absent, a body shorter than its Content-Length, a body that declares a transfer coding), a collision (409, 412) or an internal error (500) — is still an unknown outcome: read for, sent once more, and never "nothing was written"', async () => {
   const { isTransientHalt } = require('../build-model-app.js');
   const mix = (answer) => ({ ...answer, body: batchEnvelope([{ contentId: 1, status: 403 }, { contentId: 2, status: 429, headers: { 'Retry-After': '7' } }]) });
   const cut = (answer) => ({ ...answer, body: answer.body.replace(/--batchresponse_[^\r\n]+--\r\n$/, '') });
@@ -1105,6 +1105,15 @@ test('REAL BUNDLE: a refused change set that is not a COMPLETE refusal — a mix
   const declaredAbsent = (answer) => ({ ...answer, body: answer.body.replace(/(--batchresponse_[^\r\n]+)--\r\n$/, '$1\r\nContent-Type: multipart/mixed; boundary=changesetresponse_missing\r\n\r\n$1--\r\n') });
   const otherBoundary = (answer) => ({ ...answer, body: answer.body.replace(/boundary=changesetresponse_[^\r\n]+/, 'boundary=changesetresponse_missing') });
   const shortBody = (answer) => ({ ...answer, body: answer.body.replace('OData-Version: 4.0\r\n\r\n', 'OData-Version: 4.0\r\nContent-Length: 200\r\n\r\n{\r\n') });
+  // A part that declares a transfer coding is not read, whole or not: the delimiters around it say nothing of whether its chunk stream is finished. The five ways a chunk stream is unfinished — and one that is whole — each inside a part
+  // that is otherwise complete, so a complete refusal sits in the answer.
+  const chunked = (stream) => (answer) => ({ ...answer, body: answer.body.replace('OData-Version: 4.0\r\n\r\n', `OData-Version: 4.0\r\nTransfer-Encoding: chunked\r\n\r\n${stream}`) });
+  const noTerminalChunk = chunked('2\r\n{}\r\n');
+  const longChunk = chunked('200\r\n{\r\n');
+  const noChunkStream = chunked('');
+  const badChunkSize = chunked('xyz\r\n{}\r\n0\r\n\r\n');
+  const cutTrailer = chunked('2\r\n{}\r\n0\r\nX-Trace:\r\n');
+  const wholeChunks = chunked('2\r\n{}\r\n0\r\n\r\n');
   const RETRY_429 = { status: 429, headers: { 'Retry-After': '7' } };
   const CASES = [
     ['a mix of a 403 and a 429', 403, mix],
@@ -1119,6 +1128,18 @@ test('REAL BUNDLE: a refused change set that is not a COMPLETE refusal — a mix
     ['a declared change-set boundary the delimiters do not use, around a complete 429', RETRY_429, otherBoundary],
     ['a body shorter than the Content-Length its response declares, on a 429', RETRY_429, shortBody],
     ['a body shorter than the Content-Length its response declares, on a 403', 403, shortBody],
+    ['a chunked body with no terminal chunk, on a 429', RETRY_429, noTerminalChunk],
+    ['the same on a 403', 403, noTerminalChunk],
+    ['a first chunk longer than the body that follows it, on a 429', RETRY_429, longChunk],
+    ['the same on a 403', 403, longChunk],
+    ['a response that says it is chunked and has no chunk stream, on a 429', RETRY_429, noChunkStream],
+    ['the same on a 403', 403, noChunkStream],
+    ['a chunk size that is not hexadecimal, on a 429', RETRY_429, badChunkSize],
+    ['the same on a 403', 403, badChunkSize],
+    ['a chunked trailer that is cut off, on a 429', RETRY_429, cutTrailer],
+    ['the same on a 403', 403, cutTrailer],
+    ['a chunked body that is whole, on a 429 — a transfer coding is not read', RETRY_429, wholeChunks],
+    ['the same on a 403', 403, wholeChunks],
     ['a 409', 409, (answer) => answer],
     ['a 412', 412, (answer) => answer],
     ['a 500', 500, (answer) => answer],

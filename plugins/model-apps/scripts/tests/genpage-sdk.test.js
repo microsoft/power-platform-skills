@@ -656,6 +656,13 @@ test('watchThrottles: a COMPLETE refusal inside an HTTP 200 — every part a 400
     ['a 429 beside a part that declares a change set the answer never contains', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7').replace('--batchresponse_1--', '--batchresponse_1\r\nContent-Type: multipart/mixed; boundary=changesetresponse_missing\r\n\r\n--batchresponse_1--')), [], []],
     ['a 429 in a change set whose declared boundary is not the one its delimiters use', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7').replace('boundary=changesetresponse_1', 'boundary=changesetresponse_missing')), [], []],
     ['a 429 whose body is shorter than its Content-Length says', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nContent-Length: 200\r\n\r\n{')), [], []],
+    // A part that declares a transfer coding is not read: the delimiters around it say nothing of whether its chunk stream is whole, so the refusal in it is not taken for one, nor is its Retry-After heard — complete or not.
+    ['a 429 whose chunked body has no terminal chunk', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}')), [], []],
+    ['a 429 whose first chunk is longer than the body that follows it', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked\r\n\r\n200\r\n{')), [], []],
+    ['a 429 that says it is chunked and has no chunk stream', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked')), [], []],
+    ['a 429 whose chunk size is not hexadecimal', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked\r\n\r\nxyz\r\n{}\r\n0\r\n')), [], []],
+    ['a 429 whose chunked trailer is cut off', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\nX-Trace:')), [], []],
+    ['a 429 whose chunked body is complete', answered(multipart('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n')), [], []],
     ['a change set that succeeded', answered(multipart('HTTP/1.1 204 No Content', 'HTTP/1.1 204 No Content')), [], []],
     ['a plain error body', answered('{"error":{"message":"nope"}}'), [], []],
   ];
