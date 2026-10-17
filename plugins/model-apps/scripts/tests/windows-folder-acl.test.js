@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { windowsFolderIsPrivate, makeWindowsFolderPrivate, parseDacl, foreignWriters, WRITE_RIGHTS } = require('../lib/windows-folder-acl.js');
+const { systemTool } = require('./helpers/windows-system-tools.js');
 
 const USER = 'S-1-5-21-1111111111-2222222222-3333333333-1001';
 const OTHER = 'S-1-5-21-1111111111-2222222222-3333333333-1002';
@@ -361,9 +362,9 @@ test('REAL ICACLS (Windows): a folder only this user can change is private; gran
   const root = scratchTemp(t);
   const folder = path.join(root, 'power-platform-skills-model-apps');
   fs.mkdirSync(folder);
-  const icacls = (...args) => { const r = spawnSync('icacls', args, { encoding: 'utf8', windowsHide: true }); assert.strictEqual(r.status, 0, `${args.join(' ')}: ${r.stdout}${r.stderr}`); };
+  const icacls = (...args) => { const r = spawnSync(systemTool('icacls'), args, { encoding: 'utf8', windowsHide: true }); assert.strictEqual(r.status, 0, `${args.join(' ')}: ${r.stdout}${r.stderr}`); };
   // The list is set — this user, and no one else — and not left to the machine's temp folder. (For a user who is the machine's own Administrator, renamed, SDDL writes the entry as LA.)
-  const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/m.exec(spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout)[1];
+  const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/m.exec(spawnSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout)[1];
   icacls(folder, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`);
   const baseline = windowsFolderIsPrivate(folder);
   assert.strictEqual(baseline.ok, true, baseline.reason);
@@ -382,8 +383,9 @@ test('REAL ICACLS (Windows): a folder only this user can change is private; gran
 });
 
 const onlyWindows = { skip: process.platform !== 'win32' && 'Windows access control lists' };
+// From System32, as the module starts them (helpers/windows-system-tools.js): by name, a GNU whoami on PATH answers instead.
 const runWindows = (program, args) => {
-  const run = spawnSync(program, args, { encoding: 'utf8', windowsHide: true });
+  const run = spawnSync(systemTool(program), args, { encoding: 'utf8', windowsHide: true });
   assert.ok(!run.error && run.status === 0, `${program} ${args.join(' ')} → ${run.error ? run.error.message : run.status}: ${run.stdout}${run.stderr}`);
   return run.stdout;
 };

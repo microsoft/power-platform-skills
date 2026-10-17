@@ -13,6 +13,7 @@ const {
 } = require('../lib/temp-workspace.js');
 const { ownerStamp, isOwnerStamp } = require('../lib/process-owner.js');
 const { privateTempRoot, tempEnv, startTarget, deadPid, pause, waitUntil } = require('./helpers/kill-target-client.js');
+const { systemTool } = require('./helpers/windows-system-tools.js');
 
 const POSIX = process.platform !== 'win32';
 const onlyPosix = { skip: !POSIX && 'POSIX modes, owners and links' };
@@ -706,9 +707,9 @@ test('(Linux) a workspace whose recorded start is empty, truncated or malformed 
 const rootCanWrite = POSIX && process.getuid() === 0;
 const WINDOWS = process.platform === 'win32';
 const onlyWindows = { skip: !WINDOWS && 'Windows access control lists' };
-// icacls and whoami are the programs of Windows itself, started by name as the tests of the access-list reader start them.
+// icacls and whoami are the programs of Windows itself, started from System32 as the module that reads access lists starts them (helpers/windows-system-tools.js).
 const runWindows = (program, args) => {
-  const run = spawnSync(program, args, { encoding: 'utf8', windowsHide: true });
+  const run = spawnSync(systemTool(program), args, { encoding: 'utf8', windowsHide: true });
   if (run.error || run.status !== 0) throw new Error(`${program} ${args.join(' ')} → ${run.error ? run.error.message : run.status}: ${run.stdout}${run.stderr}`);
   return run.stdout;
 };
@@ -849,10 +850,15 @@ test('POSIX: a plugin\'s folder this user owns but cannot add to (mode 0500) is 
   const parent = workspaceParent(deps);
   fs.mkdirSync(parent, { mode: 0o700 });
   fs.chmodSync(parent, 0o500);
-  t.after(() => fs.chmodSync(parent, 0o700));
-  const dir = makeTempWorkspace('genpage-', deps);
-  assert.strictEqual(path.dirname(dir), root);
-  assert.deepStrictEqual(fs.readdirSync(parent), []);
+  // The mode is given back in the test itself, not in a later `t.after`: hooks run in the order they were added, so
+  // tempRoot's removal of the whole temp folder ran first and the chmod then found no folder (ENOENT).
+  try {
+    const dir = makeTempWorkspace('genpage-', deps);
+    assert.strictEqual(path.dirname(dir), root);
+    assert.deepStrictEqual(fs.readdirSync(parent), []);
+  } finally {
+    fs.chmodSync(parent, 0o700);
+  }
 });
 
 test('Windows: a plugin\'s folder that exists and denies this user the right to add a folder (as a read-only one does) is skipped — the workspace is made in the temp folder', onlyWindows, (t) => {
@@ -1381,14 +1387,26 @@ test('a removal that was killed is NOT finished when anything about it does not 
   }
 });
 
-test('a record of a run that is going is never opened by a sweep that looks for the removals a kill left — nothing in its name is read', (t) => {
+test('a record of a run that is going is never opened by a sweep that looks for the removals a kill left — nothing in its name is read (on Linux, its record alone, for the start time) — and nothing of it is moved or removed', (t) => {
   const { deps } = tempRoot(t);
   const left = interrupted(deps, { record: ownerStamp(), pid: process.pid });
   const opened = [];
   const spying = { ...fs, readFileSync: (file, ...rest) => { opened.push(file); return fs.readFileSync(file, ...rest); }, lstatSync: (file, ...rest) => { opened.push(file); return fs.lstatSync(file, ...rest); } };
+  const sidecarText = fs.readFileSync(left.sidecar, 'utf8');
   const result = sweepDeadWorkspaces({ ...deps, fs: spying });
   assert.deepStrictEqual([result.removed, result.failed], [[], []]);
-  assert.deepStrictEqual(opened.filter((file) => file.includes(path.basename(left.dir))), [], 'neither the record nor the folder was looked at');
+  const looked = opened.filter((file) => file.includes(path.basename(left.dir)));
+  if (process.platform === 'linux') {
+    // On Linux a pid that runs is looked into too: the record's start time can show the pid was handed out again
+    // (lib/process-owner.js). That needs the record and nothing else — and on Linux a file another process has open
+    // can be removed, so reading it costs that run nothing. Windows and macOS never open it (the branch below).
+    const records = new Set([path.join(left.dir, '.owner.json'), left.sidecar]);
+    assert.deepStrictEqual(looked.filter((file) => !records.has(file)), [], 'nothing but the record was looked at');
+  } else {
+    assert.deepStrictEqual(looked, [], 'neither the record nor the folder was looked at');
+  }
+  assert.strictEqual(fs.readFileSync(left.sidecar, 'utf8'), sidecarText, 'the record is as it was');
+  assert.ok(fs.existsSync(left.dir), 'and the folder is where it was');
 });
 
 test('POSIX: a record beside a folder that is really a link, or that is a file, or a record that is itself a link or a folder, is left alone — nothing is followed', onlyPosix, (t) => {

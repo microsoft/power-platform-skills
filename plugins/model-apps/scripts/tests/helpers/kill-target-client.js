@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const TARGET = path.join(__dirname, 'kill-target.js');
+const { systemTool } = require('./windows-system-tools.js');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A pid that no process has: one that ran and ended just now.
@@ -24,10 +25,10 @@ function privateTempRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kill-target-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   if (process.platform === 'win32') {
-    const who = spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true });
+    const who = spawnSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true });
     const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/m.exec(String(who.stdout));
     if (!sid) throw new Error(`the user's SID could not be read: ${who.stdout}${who.stderr}`);
-    const set = spawnSync('icacls', [root, '/inheritance:r', '/grant:r', `*${sid[1]}:(OI)(CI)F`], { encoding: 'utf8', windowsHide: true });
+    const set = spawnSync(systemTool('icacls'), [root, '/inheritance:r', '/grant:r', `*${sid[1]}:(OI)(CI)F`], { encoding: 'utf8', windowsHide: true });
     if (set.status !== 0) throw new Error(`the access list of ${root} could not be set: ${set.stdout}${set.stderr}`);
   }
   return root;
