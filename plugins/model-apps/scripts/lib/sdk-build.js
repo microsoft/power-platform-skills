@@ -1741,7 +1741,7 @@ async function applyBpfStages(provision, flow, flowId, plan, opts = {}) {
   const stageOf = async (stageId) => {
     const stages = ((await provision.getArtifact('bpf', flowId)) || {}).stages || [];
     const index = stages.findIndex((s) => s && s.id === stageId);
-    if (index < 0) throw Object.assign(new Error(`stage ${stageId} is not in the flow the SDK holds`), { code: 'PATH_NOT_FOUND' });
+    if (index < 0) throw refusal(`stage ${stageId} is not in the flow the SDK holds`, { code: 'PATH_NOT_FOUND' });
     return { index, stage: stages[index] };
   };
   for (let j = 0; j < plan.target.length; j += 1) {

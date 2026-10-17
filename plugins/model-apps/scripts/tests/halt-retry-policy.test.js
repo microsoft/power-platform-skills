@@ -48,6 +48,13 @@ const POLICY = {
   'already-exists': { kinds: ['never'] },
   'version-conflict': { kinds: ['never'] },
   'table-probe-inconclusive': { kinds: ['by-failure'] },
+  // The table list the build falls back to, answered with a success that is no list of tables (lib/collection-answers.js): a run again reads the same answer, and signing in
+  // again is the maker's. Its message quotes the table's name in lower case, so it is held by a test of its own below rather than by a row of ROWS.
+  'table-list-unreadable': { kinds: ['never'], via: 'unreadable-table-list-callers.test.js' },
+  // The alternate key that waited for its table's name column length, when that length could not be set: the stop is as transient as the failure of the length step it wraps
+  // (a 429, a lock or a 503 is run again, and the run sets the length and makes the key; a refusal, or a failure that says it must not be retried, is final). Held failure by
+  // failure, through the real data-model phase, beside its doubles.
+  'alt-key-name-length-not-set': { kinds: ['by-failure'], via: 'table-columns-in-create.test.js' },
   'relationship-name-taken': { kinds: ['never'], via: 'entity-provision.test.js' },
   'view-filter-label-unresolved': { kinds: ['by-failure'], via: 'view-filter-labels.test.js' },
   'pages-locked': { kinds: ['never'] },
@@ -406,6 +413,23 @@ test('halt policy: the runner\'s halt follows the failure it wraps — typed ref
   assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Sql error: Generic SQL error. Sql Number: 1205'))), false, 'the deadlock signature in a 500 that names no code is words, and a status that says no is final: a deadlock victim is the generic SQL error code AND the signature, in the service\'s own answer');
   assert.strictEqual(isTransientHalt(await wrap(new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', { error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } }))), true, 'a deadlock victim the service answered with a 500 is run again: the generic SQL error code and the signature');
   assert.strictEqual(isTransientHalt(await wrap(connectionError(500, 'Internal server error', `${ENV}/api/data/v9.2/x?$filter=name eq '${LABEL}'`))), false, 'a url is not the service\'s words');
+});
+
+// The table list the build falls back to when the narrow read of a table is inconclusive, answered with a success that is no list of tables — a sign-in page, here — through the
+// guard every SDK a script makes carries (lib/collection-answers.js guardTableLists): the build cannot tell whether the table exists, and stops before any create.
+test('halt policy: table-list-unreadable is raised for a table named like a transient error, and is never run again', async () => {
+  const { guardTableLists } = require('../lib/collection-answers.js');
+  const tableList = guardTableLists({ get: async () => ({ status: 200, headers: {}, body: '<html><title>Sign in to your account</title></html>' }) });
+  const provision = {
+    dataverse: { get: async () => ({ status: 500, headers: {}, body: { error: { message: 'An unexpected error occurred.' } } }) },
+    findTables: () => tableList.get(`${ENV}/api/data/v9.2/EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,IsCustomEntity`),
+  };
+  const halt = await haltOf(() => findExistingTable(provision, LABEL));
+  assert.strictEqual(halt.code, 'table-list-unreadable');
+  assert.strictEqual(halt.recoverable, true, 'a run after signing in again goes on from here');
+  assert.strictEqual(isTransientHalt(halt, { spec: loopSpec() }), false, 'a success that is no list of tables is a verdict, whatever the table is called');
+  assert.strictEqual(isTransientHalt(new Error(halt.message)), true, 'the control: the halt quotes the table\'s name, and its words alone would have read as transient');
+  assert.deepStrictEqual(await attemptsFor(halt), { attempts: 1, retried: 0 }, 'the real retry loop runs the build once');
 });
 
 // A push the SDK refused by value, with the code the SDK gave: the halt it becomes follows the failure.

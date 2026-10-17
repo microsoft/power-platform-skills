@@ -2202,6 +2202,19 @@ test('a key that could not wait for the length fails the way the length step fai
   }
 });
 
+// The stop is a halt raised around the failure of the length step (retry: retryPolicyFor(…), lib/retry-policy.js), so the build's retry judges that failure and never the halt's own
+// words: they name the key, and a key's schema name can hold a word the retry once looked for in a message.
+test('a key that could not wait for the length is judged by the failure of the length step, never by its own words: a key named like a lock, over a length the platform refused, is not run again', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const LOCK_KEY = { ...NAME_KEY, schemaName: 'new_CustomizationLockException' };
+  const run = await provisionOver(keyedTable([LOCK_KEY]), { dataverse: { updateFails: () => ({ status: 400, headers: {}, body: { error: { message: 'The attribute cannot be changed right now' } } }) }, capture: true });
+  assert.strictEqual(run.error && run.error.code, 'alt-key-name-length-not-set');
+  assert.match(run.error.message, /new_CustomizationLockException/, 'the halt names the key');
+  assert.strictEqual(isTransientHalt(run.error), false, 'the length step was refused (400), and that is final whatever the key is called');
+  assert.strictEqual(isTransientHalt(new Error(run.error.message)), true, 'the control: the halt\'s words alone would have read as a customization lock');
+  assert.deepStrictEqual(keyPosts(run), [], 'the key is not asked for');
+});
+
 test('a key that waits and that the platform then refuses, or finds already there, is treated as any key is: the platform\'s own words stop the build, an already-exists answer is a skip', async () => {
   const refusedKey = await provisionOver(keyedTable([NAME_KEY]), {
     dataverse: { keyFails: () => ({ status: 400, headers: {}, body: { error: { message: 'The key column new_name is not valid in a key.' } } }) }, capture: true,

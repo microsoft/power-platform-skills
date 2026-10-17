@@ -337,12 +337,13 @@ function answerWhy(res) {
   return `HTTP ${res.status}${detail ? `: ${detail}` : ''}`;
 }
 
-// An answer that is not a success, as an error that carries its status — the way the SDK's own errors do. The status is what a step that waits
-// for the request (an alternate key, see provisionDataModel) hands on, because the build retries a halt only when its status is a throttle or a timeout.
+// An answer that is not a success, as an error that carries its status — the way the SDK's own errors do — made by serviceFailure (lib/retry-policy.js), the engine's maker of
+// the plugin's words around a failure of the service. The status is what the build's retry reads — a 429, 502, 503 or 504 is run again, any other status is final whatever the
+// answer says — and what a step that waits for the request (an alternate key, see provisionDataModel) hands on. Only a request that got no answer has no status, and then the
+// words (`no answer`) are all there is to read.
 function statusError(what, res) {
-  const failure = new Error(`${what} (${answerWhy(res)})`);
-  if (res && res.status) failure.statusCode = res.status;
-  return failure;
+  const why = answerWhy(res);
+  return serviceFailure(`${what} (${why})`, { status: res && res.status, words: why });
 }
 
 // How a table or a column is named in a metadata path: by its MetadataId, the primary key, when the caller holds the id of the one it means,
@@ -404,7 +405,7 @@ async function readTextColumn(provision, tableLogical, columnLogical, { sleep, b
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api#update-table-definitions
 async function updateTextColumnLengthById(sdk, { tableId, columnId, maxLength }) {
   const raw = sdk && sdk.dataverse;
-  if (!raw || typeof raw.get !== 'function' || typeof raw.put !== 'function') throw new Error('there is no Dataverse client to update the column with');
+  if (!raw || typeof raw.get !== 'function' || typeof raw.put !== 'function') throw refusal('there is no Dataverse client to update the column with');
   const path = `/EntityDefinitions(${tableId})/Attributes(${columnId})`;
   const type = 'Microsoft.Dynamics.CRM.StringAttributeMetadata';
   const read = await raw.get(`${path}/${type}`);
@@ -437,11 +438,11 @@ const inSchemaWrite = (sdk, logical, write) => (sdk && typeof sdk.schemaWrite ==
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api#query-the-entitymetadata-entity-type
 async function readTableIdentity(provision, tableLogical) {
   const raw = provision && provision.dataverse;
-  if (!raw || typeof raw.get !== 'function') throw new Error('there is no Dataverse client to read the table with');
+  if (!raw || typeof raw.get !== 'function') throw refusal('there is no Dataverse client to read the table with');
   const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(tableLogical)}')?$select=MetadataId,PrimaryNameAttribute`);
   if (res && res.status >= 200 && res.status < 300) {
     const metadataId = guidOf(res.body && res.body.MetadataId);
-    if (!metadataId) throw new Error('the answer to the read of the table carries no MetadataId');
+    if (!metadataId) throw refusal('the answer to the read of the table carries no MetadataId');
     return { metadataId, primaryName: String((res.body && res.body.PrimaryNameAttribute) || '').toLowerCase() };
   }
   if (res && res.status === 404) return null;
@@ -604,7 +605,7 @@ async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical,
           // Nothing was written: the request that answered 404 is the one that was refused. The step is a skip, as the proof's refusal is.
           if (bound && err && err.statusCode === 404) {
             vanished = true;
-            throw Object.assign(new Error(gone.why), { leftAlone: true });
+            throw refusal(gone.why, { leftAlone: true });
           }
           throw serviceFailure(`asked ${asked}, the platform made ${actual}: ${(err && err.message) || err}`, { cause: err });
         }
@@ -1568,7 +1569,9 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
     hits = await provision.findTables(schemaName, { top: 50 });
   } catch (err) {
     if (!unreadableAnswer(err)) throw err;
-    throw new BuildHalt(`could not determine whether table '${logical}' already exists: ${err.message}`, { phase: 'data-model', code: 'table-list-unreadable', recoverable: true, cause: err });
+    // `retry: NEVER`: the platform answered with a success that is no list of tables (a sign-in or proxy page, `{}`, `null`) — a verdict a run again a few seconds later reads
+    // the same way, and the remedy, signing in again, is the maker's (the failure says so). The table's name is in the message, and is not what decides.
+    throw new BuildHalt(`could not determine whether table '${logical}' already exists: ${err.message}`, { phase: 'data-model', code: 'table-list-unreadable', recoverable: true, cause: err, retry: RETRY.NEVER });
   }
   return (hits || []).find((t) => t.logicalName === logical) || null;
 }
@@ -1693,10 +1696,11 @@ async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, la
 // owed for (`left`, see checkOwedTable) is not one the build set the length of at all: its key is made as the key on any table the build
 // found is, and the platform decides.
 //
-// That stop is retried when the step failed the way a build's retry rides out (a 429, a lock, a 503) and not otherwise, because the
-// halt carries the status the step failed with — the build's check reads a status on the halt it is given and on its `cause`
-// (isTransientHalt, build-model-app.js) — and an explicit "never retry" too. The retry then finds the length still owed (`owedLengths`),
-// sets it, and makes the key.
+// That stop is retried when the step failed the way a build's retry rides out (a 429, a lock, a 503) and not otherwise: it is a halt
+// raised with the step's failure as its cause and the policy that failure gives (`retry: retryPolicyFor(…)`, lib/retry-policy.js), so the
+// build's check (isTransientHalt, build-model-app.js) judges the failure of the step — the status it carries (and the status the step
+// failed with, which the halt declares), the code of the service's answer, a reset, an explicit "never retry" — and never the halt's own
+// words or code. The retry then finds the length still owed (`owedLengths`), sets it, and makes the key.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
   for (const { entity, logical, key, languageCode } of waitingKeys) {
@@ -1705,18 +1709,17 @@ async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
       const column = String(entity.primaryAttribute.schemaName).toLowerCase();
       const asked = askedPrimaryNameLength(entity);
       const why = (outcome.error && outcome.error.message) || String(outcome.error);
-      const refusal = new Error(
+      // A halt, not an error with a code of its own: the build's retry takes an error's `code` for a refusal of that kind and reads nothing under it
+      // (lib/retry-policy.js), while a halt's code only names it. So the stop follows the step's failure, which it carries as its cause.
+      const chain = causeChain(outcome.error);
+      const status = chain.map((e) => e.statusCode || e.status).find(Boolean);
+      const halt = new BuildHalt(
         `alt key ${entity.schemaName}.${key.schemaName} was not created: it is over the name column ${column}, whose length the build could not set to ${asked} (${why}) — `
         + 'a key may hold at most 900 bytes, 2 for each character of text, so Dataverse refuses one over a name column left at the 850 characters some environments give a new table. '
         + `Nothing was sent for the key. Set ${column} to ${asked} characters in Maker, or clear the cause above, then run the build again: it creates the key.`,
-        { cause: outcome.error },
+        { phase: 'data-model', code: 'alt-key-name-length-not-set', recoverable: true, cause: outcome.error, retry: retryPolicyFor(outcome.error), ...(Number.isInteger(status) ? { statusCode: status } : {}) },
       );
-      refusal.code = 'alt-key-name-length-not-set';
-      const chain = causeChain(outcome.error);
-      const status = chain.map((e) => e.statusCode || e.status).find(Boolean);
-      if (status) refusal.statusCode = status;
-      if (chain.some((e) => e.transient === false)) refusal.transient = false;
-      await runner.run('data-model', `alt key ${entity.schemaName}.${key.schemaName}`, async () => { throw refusal; }, { recoverable: true });
+      await runner.run('data-model', `alt key ${entity.schemaName}.${key.schemaName}`, async () => { throw halt; }, { recoverable: true });
     }
     await alternateKeyStep({ runner, sdk, entity, logical, key, languageCode });
   }
