@@ -1390,21 +1390,30 @@ test('a removal that was killed is NOT finished when anything about it does not 
 test('a record of a run that is going is never opened by a sweep that looks for the removals a kill left — nothing in its name is read (on Linux, its record alone, for the start time) — and nothing of it is moved or removed', (t) => {
   const { deps } = tempRoot(t);
   const left = interrupted(deps, { record: ownerStamp(), pid: process.pid });
+  // Every call the sweep can make on a path, recorded as it is made — a final state that looks untouched does not show
+  // that nothing was moved away and back, or removed and made again, along the way.
   const opened = [];
-  const spying = { ...fs, readFileSync: (file, ...rest) => { opened.push(file); return fs.readFileSync(file, ...rest); }, lstatSync: (file, ...rest) => { opened.push(file); return fs.lstatSync(file, ...rest); } };
+  const changed = [];
+  const reading = (name) => (target, ...rest) => { opened.push(String(target)); return fs[name](target, ...rest); };
+  const changing = (name) => (...args) => { changed.push([name, ...args.filter((a) => typeof a === 'string' || Buffer.isBuffer(a)).map(String)]); return fs[name](...args); };
+  const spying = { ...fs };
+  for (const name of ['readFileSync', 'lstatSync', 'statSync', 'openSync', 'readdirSync', 'opendirSync']) spying[name] = reading(name);
+  for (const name of ['renameSync', 'rmSync', 'rmdirSync', 'unlinkSync', 'writeFileSync', 'mkdirSync', 'copyFileSync', 'truncateSync', 'utimesSync', 'chmodSync']) spying[name] = changing(name);
   const sidecarText = fs.readFileSync(left.sidecar, 'utf8');
   const result = sweepDeadWorkspaces({ ...deps, fs: spying });
   assert.deepStrictEqual([result.removed, result.failed], [[], []]);
-  const looked = opened.filter((file) => file.includes(path.basename(left.dir)));
+  const ours = (file) => file.includes(path.basename(left.dir));
+  const looked = opened.filter(ours);
   if (process.platform === 'linux') {
     // On Linux a pid that runs is looked into too: the record's start time can show the pid was handed out again
     // (lib/process-owner.js). That needs the record and nothing else — and on Linux a file another process has open
     // can be removed, so reading it costs that run nothing. Windows and macOS never open it (the branch below).
     const records = new Set([path.join(left.dir, '.owner.json'), left.sidecar]);
-    assert.deepStrictEqual(looked.filter((file) => !records.has(file)), [], 'nothing but the record was looked at');
+    assert.deepStrictEqual(looked.filter((file) => !records.has(file)), [], 'nothing but the record was looked at — the folder was not listed or opened');
   } else {
     assert.deepStrictEqual(looked, [], 'neither the record nor the folder was looked at');
   }
+  assert.deepStrictEqual(changed.filter(([, ...paths]) => paths.some(ours)), [], 'nothing of it was moved, written, removed or made again');
   assert.strictEqual(fs.readFileSync(left.sidecar, 'utf8'), sidecarText, 'the record is as it was');
   assert.ok(fs.existsSync(left.dir), 'and the folder is where it was');
 });
