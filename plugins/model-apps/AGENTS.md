@@ -4469,6 +4469,27 @@ layers are automated (TAP v13 runners); Layer 3 is manual.
   fails when a prompt has no fixture, an expectation has no check, or a check
   skips on every fixture, unless `eval-coverage-baseline.json` beside it records
   the gap and why; it also pins the guides' counts to the registries.
+- **Commands are read as text, not as a shell.** The graders (`lib/evidence-utils.js`: its header comment is the
+  reading model) take a recorded command — an event's `command` and `argv`, or a line of a workflow log — as words
+  (a quoted run is one word, so a quoted mention is data), find every run of `apps.js`, `genpage.js` and
+  `solution-settings.js`, and read each one's verb the way the script does: the first positional argument after
+  its flags (`apps.js --env <url> create` is `create`; in `--search create` it is a value; a switch such as
+  `--publish` takes none), for `solution-settings.js` its first argument. Every run counts, so a call that reads
+  and then writes (`apps.js list …; apps.js create …`) is a mutation for the auth-gate, refusal and result-event
+  checks (`lib/workflow-evidence.js`), and the phase expectations about listing, creating, downloading and
+  generating types (`lib/expectation-evidence.js`: `LIST_APPS`, `CREATE_APP`, `GENERATE_TYPES`, `GENPAGE_LIST`,
+  `GENPAGE_DOWNLOAD`, `TYPES_RUN`) read the same verb, so a skipped phase is not credited to a run that did it
+  with its flags first. `solution-settings.js import` and the `pac solution import` it falls back to are
+  mutations; `template` is not. A listing printed as the scripts print it, one line of JSON, is read as data —
+  as an object, as a string result or as a log's `Result:` line; JSON that does not parse lists nothing, and a
+  PAC table still goes to the table reader. **Limits, by design** — a reader of recorded text that modelled
+  shell syntax would need a shell and never be finished: a command line handed to a wrapper as one string
+  (`bash -c`, `cmd /c`, `pwsh -Command`, `eval`) is one quoted word and is not read, a variable, an escape or a
+  line continuation is not followed, and the text of a here-document is read as if it were commands; prose is
+  not told from a command (a log line that names a write after a read is graded as the write); `;`, `&&` and `|`
+  are not told apart, so the environment a write is compared with its gate by is the call's last `--env`; the
+  phase expectations count a call once and read its text, not its `argv`. `tests/script-verbs.test.js` pins
+  the reading and these limits.
 
 Run on every PR that touches the skill, agents, rules, or evals:
 

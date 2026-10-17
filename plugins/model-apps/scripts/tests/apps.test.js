@@ -310,9 +310,12 @@ test('pageIdArguments reads every occurrence — repeated, with an equals sign, 
   }
 });
 
-test('the script is a CLI only when run directly, and exports what the real-bundle tests drive', () => {
+test('the script is a CLI only when run directly, and exports what the real-bundle tests drive and the eval graders read', () => {
   const mod = require('../apps.js');
-  assert.deepStrictEqual(Object.keys(mod).sort(), ['createApp', 'deriveUniqueName', 'listApps', 'pageIdArguments']);
+  assert.deepStrictEqual(Object.keys(mod).sort(), ['COMMANDS', 'createApp', 'deriveUniqueName', 'listApps', 'pageIdArguments']);
+  // The flag contract the graders read: the flags each command knows and the ones that must carry a value (the rest, `--publish`, are switches).
+  assert.deepStrictEqual(Object.keys(mod.COMMANDS), ['list', 'create']);
+  assert.deepStrictEqual(mod.COMMANDS.create.known.filter((flag) => !mod.COMMANDS.create.needValue.includes(flag)), ['publish']);
 });
 
 // --- list --------------------------------------------------------------------------------------------------------------

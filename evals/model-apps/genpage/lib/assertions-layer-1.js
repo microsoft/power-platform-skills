@@ -43,9 +43,10 @@ function pass() { return { status: 'pass', reason: '' }; }
 const UPLOAD_CMD = /pac\s+model\s+genpage\s+upload|genpage-upload\.js/;
 const uploadLinesOf = (log) => String(log || '').split('\n').filter((l) => UPLOAD_CMD.test(l));
 
-// A run of the type generator in a log line: the script (`genpage.js types --…`) or the verb it replaced (`generate-types --…`, which a capture made before the script records, with or without the
-// `pac model genpage` before it). A flag must follow, so prose such as "genpage.js types not run" is no invocation.
-const TYPES_RUN = /(?:\bgenerate-types|\bgenpage\.js['"]?\s+types)\s+--/;
+// A run of the type generator in a log line: the script (`genpage.js types --…`, its flags before the verb or after it) or the verb it replaced (`generate-types --…`, which a capture made before the
+// script records, with or without the `pac model genpage` before it). A flag must be there, so prose such as "genpage.js types not run" is no invocation. Read by the one reader of a script's verb
+// the other expectations use (lib/expectation-evidence.js), so a run with its flags first is not credited to a phase that was skipped.
+const { TYPES_RUN } = evidence;
 
 // What the log records about an upload's PROMPT, whichever transport carried it: the inline quoted
 // value, or — for the file transport, where there is no inline value to read — the `Prompt scope:`
@@ -2778,8 +2779,9 @@ PHASE_EXPECTATIONS.set(
 //   1. genpage-upload.js with no --app-id creates the first page,
 //   2. apps.js create --name … --solution … --page-id <that page> --publish makes the app and prints its appId — and pins the page's tables into it itself,
 //   3. every page after it carries --app-id <appId> (a create adds --add-to-sitemap); a one-page app has none.
-// Only the script is accepted here: `pac model create` is the command it replaced, and a run that still ran it did not follow the skill.
-const isAppsCreate = (entry) => /\bapps\.js['"]?\s+create\b/.test(entry.call.command);
+// Only the script is accepted here: `pac model create` is the command it replaced, and a run that still ran it did not follow the skill. The script is read the way CREATE_APP reads it, its flags
+// before its verb or after.
+const isAppsCreate = (entry) => CREATE_APP.script(entry.call.command);
 
 function newAppRun(fixture) {
   const create = commandCalls(fixture, CREATE_APP)[0];

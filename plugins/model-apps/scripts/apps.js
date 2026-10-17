@@ -736,7 +736,9 @@ async function main() {
   emitResult(result.ok, result, { ascii: true });
 }
 
-module.exports = { listApps, createApp, deriveUniqueName, pageIdArguments };
+// `COMMANDS` is the flag contract the eval graders read (evals/model-apps/genpage/lib/evidence-utils.js, scriptSwitches): which flags take no value, from the script itself rather than from a copy that
+// could drift, as genpage.js exports its `VERBS`.
+module.exports = { listApps, createApp, deriveUniqueName, pageIdArguments, COMMANDS };
 
 if (require.main === module) {
   main().catch((err) => {
