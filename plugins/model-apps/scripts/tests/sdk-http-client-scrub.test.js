@@ -91,6 +91,34 @@ test('a transport failure that repeats the token — a socket error that holds t
   await assert.rejects(once.post(`${API}/ImportSolution`, {}), (err) => err.message === 'Request failed: socket hang up while sending Authorization: Bearer <token>');
 });
 
+// Node's own code for a failure of the transport (lib/dataverse-auth.js makeRequest reports it beside the words) decides whether the client sends the request again, and rides on the error
+// the client throws (transportError) for the build's retry to read; the words beside it are what a script prints, so they lose the token as every transport failure's words do. One error
+// carries both: the code as Node gave it, and the words without the token.
+test('a transport failure that carries Node\'s code and repeats the token: the code decides and stays on the error, the words lose the token — a reset is sent again, a certificate once', async () => {
+  const words = (what) => `${what} while sending the request that carried ${TOKEN}`;
+  // A reset, with its code: sent six times, as every reset is, then thrown with the code and without the token.
+  const reset = clientOver(Array.from({ length: 6 }, () => ({ error: words('read ECONNRESET'), code: 'ECONNRESET' })));
+  await assert.rejects(reset.client.get(`${API}/WhoAmI`), (err) => {
+    assert.equal(err.message, 'Request failed: read ECONNRESET while sending the request that carried <token>');
+    assert.equal(err.code, 'ECONNRESET');
+    return true;
+  });
+  assert.equal(reset.sent.length, 6);
+  // A certificate that does not verify, whose words name a host that spells a reset and hold the token: its code is final, so it is sent once, and thrown with the code and without the token.
+  const cert = clientOver([{ error: words('Hostname/IP does not match certificate\'s altnames: DNS:ECONNRESET.example.com'), code: 'ERR_TLS_CERT_ALTNAME_INVALID' }]);
+  await assert.rejects(cert.client.get(`${API}/WhoAmI`), (err) => {
+    assert.equal(err.code, 'ERR_TLS_CERT_ALTNAME_INVALID');
+    assert.ok(!err.message.includes(TOKEN) && err.message.endsWith('carried <token>'), err.message);
+    return true;
+  });
+  assert.equal(cert.sent.length, 1, 'a certificate that does not verify is not sent again');
+  // The writes a failure of the transport never sends again — a conditional write, and a POST whose answer began and was cut off — keep the code and lose the token as well.
+  const conditional = clientOver([{ error: words('write EPIPE'), code: 'EPIPE' }]);
+  await assert.rejects(conditional.client.patch(`${API}/appmodules(${GUID})`, {}, { headers: { 'If-Match': 'W/"1"' } }), (err) => err.code === 'EPIPE' && !err.message.includes(TOKEN) && /carried <token> — this conditional PATCH was not re-sent/.test(err.message));
+  const cut = clientOver([{ error: words('aborted'), code: 'ECONNRESET', incompleteResponse: true, statusCode: 200 }]);
+  await assert.rejects(cut.client.post(`${API}/appmodules`, {}), (err) => err.code === 'ECONNRESET' && !err.message.includes(TOKEN) && /carried <token> — the server had already answered 200/.test(err.message));
+});
+
 test('a token the client replaced after a 401 is taken out as well as the one it sent last — a service may repeat either', async () => {
   const { client, sent } = clientOver([
     answer(401, { error: { message: 'expired' } }),
