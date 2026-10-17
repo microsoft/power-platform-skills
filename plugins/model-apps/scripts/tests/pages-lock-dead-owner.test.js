@@ -10,12 +10,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { acquireAppPagesLease } = require('../lib/sdk-build.js');
 const { ownerStamp } = require('../lib/process-owner.js');
-const { startTarget, tempEnv, privateTempRoot, deadPid } = require('./helpers/kill-target-client.js');
+const { startTarget, tempEnv, privateTempRoot, deadPid, removeWhenTestEnds } = require('./helpers/kill-target-client.js');
 
 const APP = 'contoso_app';
 const workspace = (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-lock-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // Removed after the processes the test started have ended, and never by a hook that throws (helpers/kill-target-client.js).
+  removeWhenTestEnds(t, dir);
   return dir;
 };
 const lockFile = (dir, app = APP) => path.join(dir, `pages-${app}.lock`);

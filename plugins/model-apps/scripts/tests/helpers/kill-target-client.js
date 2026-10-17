@@ -14,25 +14,39 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const WAIT_MS = 30000;
 const EXIT_WAIT_MS = 30000;
 
-// The processes the tests of this file started, for the watchdog below.
+// The processes the tests of this file started, for the watchdog below: each with its ChildProcess, so that the watchdog ends only one
+// that is still running, through its handle — never a pid from the past, which the system may have given to another process since.
 const started = [];
-// A test file that starts real processes ends in seconds (each such file takes under half a minute on a workstation). If it is still
-// running after WATCHDOG_MS, something holds it open — a process that was not killed, a pipe of a program one of them started — and the
-// test runner would wait for it until the CI job's own limit cancels the whole run with nothing reported. So this file says what it
-// started and what is holding it open, and ends with a failure. The timer is unref'd: it never keeps a finished file alive.
+// A test file that starts real processes ends in seconds (each such file takes under half a minute on a workstation). If, for
+// WATCHDOG_MS, none of its tests starts a process and none of its processes ends, it is not making progress: something holds it open —
+// a process that was not killed, a pipe of a program one of them started — and the test runner would wait for it until the CI job's
+// own limit cancels the whole run with nothing reported. So the file says what it started and what is holding it open, ends the
+// processes of its own that still run, and exits with a failure. The timer is re-armed by every start and every end, and is unref'd:
+// it never keeps a finished file alive.
 const WATCHDOG_MS = 5 * 60 * 1000;
-setTimeout(() => {
+let watchdog = null;
+function stalled() {
   const handles = typeof process._getActiveHandles === 'function'
     ? process._getActiveHandles().map((h) => (h && h.constructor && h.constructor.name) || typeof h)
     : [];
-  process.stderr.write(`kill-target-client: this test file is still running after ${WATCHDOG_MS / 60000} minutes. `
-    + `Processes it started: ${JSON.stringify(started.map((s) => ({ args: s.args, pid: s.pid, ...s.said() })))}. `
-    + `Open handles: ${JSON.stringify(handles)}\n`, () => {
-    // What this file started goes with it: on POSIX a child outlives a parent that exits.
-    for (const s of started) { try { process.kill(s.pid, 'SIGKILL'); } catch { /* it ended */ } }
-    process.exit(1);
-  });
-}, WATCHDOG_MS).unref();
+  const running = started.filter((s) => !s.isEnded());
+  // Written without waiting for it to drain: a stderr that does not drain must not stop the ending, which is the point.
+  try {
+    process.stderr.write(`kill-target-client: no process of this test file started or ended for ${WATCHDOG_MS / 60000} minutes. `
+      + `Processes it started: ${JSON.stringify(started.map((s) => ({ args: s.args, pid: s.pid, ...s.said() })))}. `
+      + `Open handles: ${JSON.stringify(handles)}\n`);
+  } catch { /* the words are a courtesy; the ending is not */ }
+  // What this file started and still runs goes with it: on POSIX a child outlives a parent that exits.
+  for (const s of running) { try { s.child.kill('SIGKILL'); } catch { /* it ended */ } }
+  // A moment for the words to reach the runner, then the exit, whatever stderr does.
+  setTimeout(() => process.exit(1), 2000).unref();
+}
+function armWatchdog() {
+  if (watchdog) clearTimeout(watchdog);
+  watchdog = setTimeout(stalled, WATCHDOG_MS);
+  watchdog.unref();
+}
+armWatchdog();
 
 // A pid that no process has: one that ran and ended just now.
 function deadPid() {
@@ -60,6 +74,16 @@ async function endEverything(t) {
   }
 }
 
+// A folder a test's processes work in, removed when the test ends — after what the test registered has ended, with retries, and never
+// throwing, so the hooks after it run whatever happens here. A folder that still cannot be removed is said on stderr and left for the
+// runner's check of its temp folder (scripts/run-tests.js) to fail on.
+function removeWhenTestEnds(t, dir) {
+  t.after(async () => {
+    await endEverything(t);
+    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { process.stderr.write(`kill-target-client: ${dir} could not be removed: ${(e && e.code) || e}\n`); }
+  });
+}
+
 // A folder of the test's own, removed when the test ends, to be the temp folder of what it starts: TMPDIR on POSIX, TEMP and TMP on Windows.
 // Everything such a process makes in "the temp folder" is then here, whatever the plugin calls its own folder in it.
 // On Windows a folder of the plugin's own that already exists is judged by its access list (lib/windows-folder-acl.js), and a folder made in this one takes the list this one has: so that what
@@ -67,12 +91,7 @@ async function endEverything(t) {
 // this one's list is replaced by a single entry, this user's.
 function privateTempRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kill-target-'));
-  // Ends what the test started, then removes the folder — and never throws, so the hooks after it run whatever happens here. A folder
-  // that still cannot be removed is said on stderr and left for the runner's check of its temp folder (scripts/run-tests.js) to fail on.
-  t.after(async () => {
-    await endEverything(t);
-    try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { process.stderr.write(`kill-target-client: ${root} could not be removed: ${(e && e.code) || e}\n`); }
-  });
+  removeWhenTestEnds(t, root);
   if (process.platform === 'win32') {
     const who = spawnSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/m.exec(String(who.stdout));
@@ -99,7 +118,7 @@ function startTarget(t, args, { env = {} } = {}) {
   child.stderr.on('data', (chunk) => { err += chunk; });
   const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
   let ended = false;
-  exited.then(() => { ended = true; });
+  exited.then(() => { ended = true; armWatchdog(); });
   // Every wait on this process ends: a process that does not end in EXIT_WAIT_MS fails the wait with what it said, instead of
   // holding the test file open until the CI job's own limit cancels the whole run with nothing reported.
   const ending = (ms = EXIT_WAIT_MS) => {
@@ -135,7 +154,8 @@ function startTarget(t, args, { env = {} } = {}) {
       return ending();
     },
   };
-  started.push({ args, pid: child.pid, said: () => ({ stdout: out.slice(-2000), stderr: err.slice(-2000), ended }) });
+  started.push({ args, pid: child.pid, child, isEnded: () => ended, said: () => ({ stdout: out.slice(-2000), stderr: err.slice(-2000), ended }) });
+  armWatchdog();
   // After the test, the process is killed AND this side of its pipes is closed: a program it started may hold the other end of a
   // pipe it was given, and an open pipe keeps this test file's process alive however its tests ended. Once is enough; it is
   // registered twice — for privateTempRoot, which ends it before it removes the folder, and as a hook of its own.
@@ -226,4 +246,4 @@ async function holdExclusively(t, file) {
   return { release: async () => { fs.writeFileSync(release, ''); await ended(); } };
 }
 
-module.exports = { privateTempRoot, tempEnv, startTarget, pause, deadPid, isRunning, waitUntil, readJsonWhenWritten, holdExclusively, onTestEnd };
+module.exports = { privateTempRoot, removeWhenTestEnds, tempEnv, startTarget, pause, deadPid, isRunning, waitUntil, readJsonWhenWritten, holdExclusively, onTestEnd };

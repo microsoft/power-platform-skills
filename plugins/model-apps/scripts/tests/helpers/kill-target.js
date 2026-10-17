@@ -83,13 +83,16 @@ async function main() {
     genpage.enumerateEnv();
     // Polled on a timer, not in a loop: the SDK opens its workspace in this same event loop.
     const root = os.tmpdir();
+    // Gives up when no workspace is made — in less time than the test waits for the line (helpers/kill-target-client.js WAIT_MS), so
+    // that what this process says reaches the test's failure. Cleared once it is ready: a holder that has said its workspace stays,
+    // however long the test takes, until the test kills it.
+    const giveUp = setTimeout(() => { say('no workspace was made'); process.exit(1); }, 25000);
+    giveUp.unref();
     const poll = setInterval(() => {
       const [folder] = pageWorkspaces(root);
       // The folder exists from the moment it is made; the SDK has opened its workspace when it has written its manifest.
-      if (folder && fs.existsSync(path.join(folder, 'manifest.json'))) { clearInterval(poll); say(`workspace ${folder}`); wait(); }
+      if (folder && fs.existsSync(path.join(folder, 'manifest.json'))) { clearInterval(poll); clearTimeout(giveUp); say(`workspace ${folder}`); wait(); }
     }, 50);
-    // Less than the test waits for the line (helpers/kill-target-client.js WAIT_MS), so that what this process says reaches the test's failure.
-    setTimeout(() => { say('no workspace was made'); process.exit(1); }, 25000).unref();
   } else if (mode === 'pages-run') {
     const { makeGenpageSdk } = require('../../lib/genpage-sdk.js');
     const { FakeGenPageServer } = require('./fake-genpage-server.js');
