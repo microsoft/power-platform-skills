@@ -13,6 +13,8 @@ const skill = (name) => read(`skills/${name}/SKILL.md`);
 const shared = read('shared/shared-instructions.md');
 const routing = read('shared/references/app-edit-routing.md');
 const removal = read('shared/references/data-source-removal.md');
+const pluginGuidance = read('AGENTS.md');
+const templateGuidance = read('template/AGENTS.md');
 const edit = skill('edit-app');
 const create = skill('create-mobile-app');
 const pluginCheck = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.';
@@ -23,6 +25,45 @@ function section(text, start, end) {
   assert.ok(startIndex >= 0, `Missing section: ${start}`);
   assert.ok(endIndex > startIndex, `Missing section end: ${end}`);
   return text.slice(startIndex, endIndex);
+}
+
+function creationStateRow(content, state) {
+  const routing = section(content, '## Fresh-template working-directory mode', '## TypeScript Gate Policy');
+  const row = routing.split('\n').find(line => line.startsWith(`| ${state} |`));
+  assert.ok(row, `Missing creation state: ${state}`);
+  const [, , detection, action] = row.split('|').map(cell => cell.trim());
+  return { row, detection, action };
+}
+
+function assertCreationStateRouting(content) {
+  const fresh = creationStateRow(content, 'Fresh template');
+  assert.match(fresh.detection, /Confirmed new-app intent/);
+  assert.match(fresh.detection, /confirmed uncustomized starter/);
+  assert.match(fresh.action, /only when every condition is satisfied/);
+  assert.match(fresh.detection, /approved creation plan and its planning artifacts are allowed/);
+
+  const existing = creationStateRow(content, 'Already-created app');
+  assert.match(existing.detection, /Existing-app intent or confirmed app customizations/);
+  assert.match(existing.detection, /even when generated markers are missing/);
+  assert.doesNotMatch(existing.detection, /native-app-plan\.md/);
+  const continuation = creationStateRow(content, 'Creation continuation');
+  assert.match(continuation.detection, /Explicit creation-continuation intent/);
+  assert.match(continuation.detection, /not a request to edit an existing app/);
+  assert.match(continuation.action, /matching unfinished creation progress/);
+
+  const entry = section(content, '### Step 0 ', '### Step 1 ');
+  assert.match(entry, /Apply the state-routing table above once/);
+  assert.match(entry, /Classify the original request before\s+considering a creation resume/);
+  const handoff = entry.indexOf('**Existing-app changes leave this skill before resume handling.**');
+  const resume = entry.indexOf('#### Creation continuation');
+  assert.ok(handoff >= 0 && resume > handoff, 'Existing-app handoff must precede resume handling');
+  assert.match(entry, /return without entering Step 1 or modifying creation progress/);
+  assert.match(entry, /Pre-initialization creation may have an approved plan and saved planning\s+progress without a memory bank/);
+  assert.match(entry, /Completed creation[\s\S]*no unfinished creation to resume/);
+  assert.match(entry, /Missing or conflicting progress[\s\S]*then stop/);
+  assert.match(entry, /Reopen the build plan only after continuation approval/);
+  assert.doesNotMatch(entry, /\*\*Bank absent\*\*.*fresh project|highest-numbered completed step|The bank is the only resume mechanism/);
+  assert.doesNotMatch(entry, /If any already-created-app marker[\s\S]*STOP and tell the user to materialize a fresh template/);
 }
 
 for (const [name, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
@@ -106,6 +147,185 @@ test('direct requests preserve intent and do not infer implementation-only work'
   assert.match(routing, /Do not infer this mode merely because the user did not mention screens/);
   assert.match(routing, /Do not re-scaffold over the app/);
   assert.match(routing, /UI integration was intentionally\nnot performed/);
+});
+
+test('app guidance selects any matching advertised skill without requiring slash commands', () => {
+  const guidance = section(
+    templateGuidance,
+    '## Route natural-language requests to available skills',
+    '## Identify the app state first',
+  );
+  assert.match(guidance, /do not need to type a slash command/);
+  assert.match(guidance, /folder alone does not start a workflow/);
+  assert.match(guidance, /app state against advertised skill descriptions/);
+  assert.match(guidance, /most specific matching workflow/);
+  assert.match(guidance, /exact advertised skill name and namespace/);
+  assert.match(guidance, /respect its invocation\s+restrictions/);
+  assert.match(guidance, /Hidden implementation helpers[\s\S]*do not invoke them directly/);
+  assert.match(guidance, /required entry consent is captured, invoke the matching\s+skill/);
+  assert.match(guidance, /Do not merely suggest its command/);
+  assert.match(guidance, /Forward the original request[\s\S]*`working_dir`/);
+  assert.match(guidance, /Do not restart routing once a matching skill is running/);
+  assert.match(guidance, /invocations and approved children; let that skill own its workflow/);
+  assert.match(guidance, /not an exhaustive list or closed allowlist/);
+  assert.match(guidance, /Future or custom skills advertised by the host can match without a table entry/);
+  assert.match(guidance, /multiple workflows fit but differ in scope, ask before choosing/);
+  assert.match(guidance, /If none matches, continue only authorized bounded work/);
+  assert.match(guidance, /never install or enable skills automatically/);
+  assert.match(guidance, /Do not add a separate approval prompt just to choose or load a matching skill/);
+  assert.match(guidance, /Keep the workflow's existing scope\/cost gates/);
+  assert.match(shared, /host-advertised skill descriptions/);
+  assert.match(shared, /Future or custom advertised workflows remain eligible/);
+  assert.match(shared, /Invoke a matching skill\s+instead of merely recommending its command, after required entry consent/);
+  assert.match(shared, /do not force unrelated intents through `\/edit-app`/i);
+  assert.match(shared, /already-running matching skill owns its workflow; do not invoke it again/);
+  assert.match(shared, /re-dispatch an approved\s+child from its current owner/);
+  assert.match(pluginGuidance, /Natural-language routing is not a fixed skill list/);
+  assert.match(pluginGuidance, /including future\/custom workflows not in the example table/);
+});
+
+test('automatic skill invocation is not Dataverse mutation or installation approval', () => {
+  const approvals = section(
+    templateGuidance,
+    '## Keep operation approvals separate from routing',
+    '## Identify the app state first',
+  );
+  assert.match(approvals, /every selected workflow, including future\/custom skills/);
+  assert.match(approvals, /Confirm the exact target and proposed scope before cloud\/data mutations/);
+  assert.match(approvals, /changed targets or expanded scope need renewed approval/);
+  assert.match(approvals, /Dataverse work must use a matching data-workflow skill/);
+  assert.match(approvals, /validate the selected environment and tenant/);
+  assert.match(approvals, /inventory for reuse before proposing changes/);
+  assert.match(approvals, /exact schema, record,\s+connection, or app-binding changes/);
+  assert.match(approvals, /mutation approval\s+before writing/);
+  assert.match(approvals, /target is missing or conflicting, stop and clarify/);
+  assert.match(approvals, /Honor `--plan-only`/);
+  assert.match(approvals, /Never fabricate `approved_scope`, approval\s+receipts, or caller context/);
+  assert.match(approvals, /Cancellation, dismissal, or unclear consent stops the pending operation/);
+  const unavailable = section(templateGuidance, '## If skills are unavailable', '## Respect code ownership');
+  assert.match(unavailable, /required data-workflow skill is unavailable or cannot load/);
+  assert.match(unavailable, /do not replace\s+it with a generic editor or ad-hoc CLI\/HTTP mutations/);
+  assert.match(unavailable, /blocked until the required workflow and prerequisites are available/);
+  assert.match(shared, /Do not add a separate approval prompt just to select or load a matching skill/);
+  assert.match(shared, /Automatic routing never creates `approved_scope`, approval\s+receipts, or caller context/);
+  const dataScope = section(shared, '## Data-source invocation scope', '## Version Check');
+  assert.match(dataScope, /Dataverse work requires a matching data-workflow skill/);
+  assert.match(dataScope, /before obtaining mutation approval/);
+  assert.match(dataScope, /Missing\/conflicting\s+target context requires clarification/);
+  assert.match(dataScope, /never substitute a generic editor or ad-hoc\s+CLI\/HTTP mutations/);
+  assert.match(dataScope, /Installation approval is not approval of Dataverse changes/);
+});
+
+test('fresh starters do not enter the existing-app edit workflow', () => {
+  const state = section(
+    templateGuidance,
+    '## Identify the app state first',
+    '## Trigger edit-app for existing-app feature work',
+  );
+  assert.match(state, /minimal local markers/);
+  assert.match(state, /Honor current approved create\/edit\s+caller context first/);
+  assert.match(state, /Confirmed fresh starter[\s\S]*do not invoke `edit-app`/);
+  assert.match(state, /native-control request uses the available `add-native`/);
+  assert.match(state, /standalone prerequisites and approval gates/);
+  assert.match(state, /Do not\s+silently widen it to full app creation/);
+  assert.match(state, /missing\s+plan does not make the app fresh/);
+  assert.match(state, /After full-integration consent, invoke\s+`edit-app`/);
+  assert.match(state, /read-only inspection infers the current-state baseline/);
+  assert.match(state, /impact and mutation approval gates/);
+  assert.match(state, /Unclear state or intent[\s\S]*ask before choosing/);
+  const direct = section(routing, '## Direct requests', '## Orchestrated calls');
+  assert.match(direct, /confirmed fresh starter stays with `\/add-native`/);
+  assert.match(direct, /do not invoke `\/edit-app` or silently start full app creation/);
+  assert.match(direct, /Current approved create\/edit children retain their owner/);
+});
+
+test('template guidance invokes edit-app after explicit existing-app integration consent', () => {
+  const editing = section(
+    templateGuidance,
+    '## Trigger edit-app for existing-app feature work',
+    '## Trigger debug-app for reported issues',
+  );
+  assert.match(editing, /use the advertised `edit-app` workflow/);
+  assert.match(editing, /do not force other intents or custom workflows\s+through `edit-app`/);
+  assert.match(editing, /Do not merely suggest that the user run it/);
+  assert.match(editing, /Native-control prompts[\s\S]*`add-native` entry point and its shared routing/);
+  assert.match(editing, /approved child context; it does not\s+restart the entry-choice gate/);
+  assert.match(editing, /before loading or invoking `edit-app`/);
+  assert.match(editing, /\*\*Full app integration\*\*[\s\S]*invoke the available `edit-app` skill/);
+  assert.match(editing, /original request[\s\S]*absolute app root as `working_dir`[\s\S]*`entry_choice: full-integration`/);
+  assert.match(editing, /\*\*Implementation only\*\*[\s\S]*do not invoke `edit-app`/);
+  assert.match(editing, /\*\*Cancel\*\*[\s\S]*stop without loading `edit-app` or changing files/);
+  assert.match(editing, /direct `edit-app` invocation needs no mode question/);
+  assert.match(editing, /reported runtime or build problems to `debug-app`/);
+  assert.match(editing, /dependency\/template\nupgrades to `check-updates`/);
+  assert.match(editing, /genuinely new apps to `create-mobile-app`/);
+});
+
+test('edit-app metadata recognizes natural existing-app requests', () => {
+  const description = edit.match(/^description:\s*"([^"]+)"$/m)?.[1];
+  assert.ok(description, 'edit-app needs a single-line routing description');
+  for (const trigger of [
+    'the app already exists',
+    'edit my app',
+    'change this screen',
+    'add a feature to this app',
+  ]) {
+    assert.match(description, new RegExp(trigger));
+  }
+});
+
+test('plugin maintenance guidance preserves natural existing-app routing', () => {
+  assert.match(pluginGuidance, /Natural-language\n\s+existing-app feature requests preserve the original prompt and invoke/);
+  assert.match(pluginGuidance, /`\/edit-app` after full-integration consent/);
+  assert.match(pluginGuidance, /never merely suggest the command/);
+  assert.match(pluginGuidance, /never merely suggest the command[\s\S]*`\/create-mobile-app`/);
+});
+
+test('create-mobile-app redirects existing-app change requests without re-scaffolding', () => {
+  const freshMode = section(
+    create,
+    '## Fresh-template working-directory mode',
+    '## TypeScript Gate Policy',
+  );
+  assert.match(freshMode, /Already-created app[\s\S]*never re-scaffold it/);
+  assert.match(freshMode, /Do not send\s+an existing-app edit request to a new folder/);
+  assert.match(freshMode, /Missing generated markers alone do\s+not prove freshness/);
+  assert.match(freshMode, /preserve the original request and execute the shared existing-app entry routing/);
+  assert.match(freshMode, /invoke `\/edit-app` only after \*\*Full app integration\*\*/);
+  assert.match(freshMode, /Do not merely suggest `\/edit-app` or ask the user to repeat/);
+  assert.match(freshMode, /original request, absolute `working_dir`, and\s+`entry_choice: full-integration`/);
+  assert.match(freshMode, /Reported\s+problems still route to `\/debug-app`/);
+  assert.match(freshMode, /dependency\/template upgrades route to\s+`\/check-updates`/);
+  assertCreationStateRouting(create);
+});
+
+test('creation routing rejects marker-only freshness and contradictory resume rules', () => {
+  const fresh = creationStateRow(create, 'Fresh template');
+  const existing = creationStateRow(create, 'Already-created app');
+  const mutations = [
+    ['fresh without new-app intent', create.replace(fresh.row, fresh.row.replace('Confirmed new-app intent and ', ''))],
+    ['fresh without customization confirmation', create.replace(fresh.row, fresh.row.replace('a confirmed uncustomized starter', 'a directory'))],
+    ['plan alone treated as materialization', create.replace(existing.row, existing.row.replace('`memory-bank.md`', '`native-app-plan.md`, `memory-bank.md`'))],
+    ['bank absence treated as fresh', create.replace('#### Fresh run', '#### Fresh run\n\n- **Bank absent** -> fresh project. Continue to Step 1.')],
+    ['bank presence chooses arbitrary resume', create.replace('#### Creation continuation', '#### Creation continuation\n\nIdentify the highest-numbered completed step and resume it.')],
+    ['old re-scaffold fallback returns', create.replace('#### Fresh run', '#### Fresh run\n\nIf any already-created-app marker exists, STOP and tell the user to materialize a fresh template.')],
+    ['Step 0 no longer uses the shared decision', create.replace('Apply the state-routing table above once.', 'Run a separate freshness decision after checking the bank.')],
+  ];
+  for (const [name, mutated] of mutations) {
+    assert.notEqual(mutated, create, `${name}: mutation must change the source`);
+    assert.throws(() => assertCreationStateRouting(mutated), name);
+  }
+});
+
+test('creation progress is not resumed or mutated for existing-app routing exits', () => {
+  const protocol = section(create, '## Build documentation protocol', '### Step 0 ');
+  assert.match(protocol, /after Step 0 selects fresh creation or an approved\s+creation continuation/);
+  assert.match(protocol, /does not create, reopen, or reset the\s+creation plan or change its phase status/);
+  assert.match(protocol, /Step 0 routing exits leave existing creation history untouched/);
+  const memory = section(shared, '## Memory Bank', '## Preferred Environment');
+  assert.match(memory, /Resume on explicit continuation/);
+  assert.match(memory, /bank presence\s+alone is not resume intent/);
+  assert.match(memory, /Existing-app edits must not resume creation/);
 });
 
 test('the entry choice precedes costly work and requires explicit integration consent', () => {

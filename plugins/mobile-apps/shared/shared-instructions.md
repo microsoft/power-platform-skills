@@ -15,6 +15,28 @@ For native or data-source feature work, bind the invocation through
 [app-working-directory.md](references/app-working-directory.md) before reading
 even the minimal local app markers. A child's launch directory is not its app root.
 
+Natural-language requests do not require a slash command. App-level routing
+matches intent and app state against host-advertised skill descriptions and
+supported scope; the template's intent table is examples, not a closed allowlist.
+Future or custom advertised workflows remain eligible. Use the exact advertised
+name/namespace and respect invocation restrictions. Invoke a matching skill
+instead of merely recommending its command, after required entry consent.
+An already-running matching skill owns its workflow; do not invoke it again.
+Do not force unrelated intents through `/edit-app` or re-dispatch an approved
+child from its current owner. Unclear scope requires clarification; missing
+skills are not permission to install or enable
+plugins automatically. The classification and approval gates below still apply.
+
+Do not add a separate approval prompt just to select or load a matching skill
+for a clear request. Preserve existing workflow-entry scope/cost gates before
+costly planning. Automatic routing never creates `approved_scope`, approval
+receipts, or caller context; forward only the current approvals actually given.
+Read-only discovery and skill invocation are not mutation consent. Confirm
+cloud/data changes, installations, native builds/runs, and deployment through
+the owning workflow's operation gates; reuse current approval only for the same
+target and scope. Cancellation, dismissal, or unclear consent never authorizes
+the pending operation.
+
 The standard plugin-update notification remains first. Classify the current
 request from supplied intent, caller context, and minimal local app markers
 before operational toolchain/auth checks, metadata discovery, or planners:
@@ -48,6 +70,15 @@ change/new binding, retained-source refresh, retirement, or sample seeding.
 An existing plan or inventory is context, not permission to replay every row.
 Standalone implementation-only calls keep the data workflow's own approval and
 validation gates; the full-integration entry choice delegates to `/edit-app`.
+
+Dataverse work requires a matching data-workflow skill with the app-root,
+environment/tenant, schema, and generated-service checks below. Use the selected
+target and existing inventory; show the exact proposed schema, record, connection,
+or app-binding changes before obtaining mutation approval. Missing/conflicting
+target context requires clarification, not a guessed or silently switched
+environment. If a required skill is unavailable or cannot load, stop that work
+and offer the approved setup path; never substitute a generic editor or ad-hoc
+CLI/HTTP mutations. Installation approval is not approval of Dataverse changes.
 
 For every data child handoff, including routers and retries, pass
 `MOBILE_APP_ORCHESTRATING=1`, the owning `orchestrator`, absolute `working_dir`,
@@ -208,7 +239,10 @@ Per-project notebook persisted at `<working_dir>/memory-bank.md`. Every skill MU
 1. **Read it at start** — locate at `<working_dir>/memory-bank.md`. If present, parse Project facts, Power Platform context, Data model, Connectors, Screens, Build history. Inform the user what was found.
 2. **Skip work already done** — if a step is marked complete, ask whether to redo or move on. If invoked from another skill that already updated the bank, skip the summary.
 3. **Update at end** — append to the relevant section after a successful step. Use ISO dates. One-line entries. Never delete — mark `~~superseded~~`.
-4. **Resume on failure** — if a previous run died partway, the bank is the only record of where. Resume from the first incomplete step rather than re-running everything.
+4. **Resume on explicit continuation** — use the bank and the owning workflow's
+   saved progress only when the user requests continuation of that unfinished
+   workflow. Follow its resume gate and verify the current phase; bank presence
+   alone is not resume intent. Existing-app edits must not resume creation.
 
 If the bank doesn't exist yet, `/create-mobile-app` is responsible for copying the template (`${PLUGIN_ROOT}/shared/memory-bank.md`) into the working directory at Step 6 (right after `pa app init` succeeds).
 

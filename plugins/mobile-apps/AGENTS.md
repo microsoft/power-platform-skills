@@ -120,10 +120,13 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     fabricate the four-approval create-only execution receipt for an edit.
 23. **Feature entry points share one edit owner** — Direct native, connector,
     data-model, and design requests on existing apps choose implementation-only,
-    full integration, or cancellation before costly work. Approved children
-    reuse their current owner/root/phase/scope and never recurse into another
-    edit. Follow [app-edit-routing.md](shared/references/app-edit-routing.md);
-    the choice enters a workflow, not permission to mutate.
+    full integration, or cancellation before costly work. Natural-language
+    existing-app feature requests preserve the original prompt and invoke
+    `/edit-app` after full-integration consent; never merely suggest the command
+    or send an existing app through `/create-mobile-app`. Approved children reuse
+    their current owner/root/phase/scope and never recurse into another edit.
+    Follow [app-edit-routing.md](shared/references/app-edit-routing.md); the
+    choice enters a workflow, not permission to mutate.
 24. **Shared entry policy is not copied into every skill** — Every new public
     app workflow starts with a read-first link to `shared/shared-instructions.md`
     and allows `Read`. The shared preflight classifies feature work before
@@ -131,6 +134,16 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     cover newly added skills automatically. These static checks verify the
     instruction contract, not model compliance; do not claim smaller-model or
     host reliability without agent-run evidence.
+25. **Natural-language routing is not a fixed skill list** — App guidance selects
+    the most specific host-advertised skill by description and supported scope,
+    including future/custom workflows not in the example table. Invoke rather
+    than merely recommend it after required entry consent. Preserve exact
+    namespaces, invocation restrictions, current owners, and all approval gates;
+    do not route every request through `/edit-app`.
+    Selection needs no extra invocation-approval prompt, but Dataverse and other
+    consequential actions keep their target/scope checks and mutation approvals.
+    Never fabricate approval context or substitute ad-hoc mutations for an
+    unavailable domain workflow.
 
 ## Telemetry
 
@@ -145,7 +158,7 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 
 ## Decisions made
 
-- ✅ Markdown plan with Mermaid (no HTML rendering)
+- ✅ Markdown plan with Mermaid as the durable source, plus a living HTML plan and edit-progress page for user-visible status
 - ✅ **Architecture-first approval gates** in the planner (data platform + native APIs + connectors → conditional Dataverse model → screen plan)
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
 - ✅ Single `/deploy` skill — `npm run build` + `pa app push`; no local native compile, no OTA in v0

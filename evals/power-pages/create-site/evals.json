@@ -80,6 +80,7 @@
       "expectations": [
         "Discovery identifies external audience, influencing site toward landing page appeal, SEO-friendly structure, and marketing-oriented layout",
         "Astro template is copied from assets/astro/ directory with all placeholders replaced",
+        "Astro powerpages.config.json keeps framework.name = astro and framework.options.buildFormat = directory so PAC uploads generated route HTML as Power Pages page content",
         "Site values: __SITE_NAME__ = 'Aurelia Jewels', __SITE_SLUG__ = 'aurelia-jewels'",
         "Dev server starts at localhost:4321 (Astro default) and URL is shared with the user",
         "Scaffold verified via Playwright before proceeding to planning",

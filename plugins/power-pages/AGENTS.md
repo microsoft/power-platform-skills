@@ -334,7 +334,7 @@ There are two template systems:
 
 ### `create-site/scripts/validate-site.js`
 
-Checks generated sites for: required files (`package.json`, `.gitignore`, `powerpages.config.json`), config schema fields (`$schema`, `compiledPath`, `siteName`, `defaultLandingPage`), build/dev scripts in package.json, unreplaced `__PLACEHOLDER__` tokens, git initialization, and `src/` directory existence.
+Checks generated sites for: required files (`package.json`, `.gitignore`, `powerpages.config.json`), config schema fields (`$schema`, `compiledPath`, `siteName`, `defaultLandingPage`), the Astro directory upload contract (`framework.name` and `framework.options.buildFormat`), build/dev scripts in package.json, unreplaced `__PLACEHOLDER__` tokens, git initialization, and `src/` directory existence.
 
 ### `setup-datamodel/scripts/validate-datamodel.js`
 

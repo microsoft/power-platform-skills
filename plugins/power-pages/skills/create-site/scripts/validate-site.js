@@ -19,6 +19,7 @@ function validateSite(cwd, input = {}) {
   const projectRoot = path.dirname(configPath);
   const errors = [];
   const expectedLanguage = input.expectedSiteLanguage;
+  const framework = detectFramework(projectRoot);
 
   // 1. Required files
   for (const file of ['package.json', '.gitignore', 'powerpages.config.json']) {
@@ -34,6 +35,18 @@ function validateSite(cwd, input = {}) {
     if (!config.compiledPath) errors.push('powerpages.config.json: missing compiledPath');
     if (!config.siteName) errors.push('powerpages.config.json: missing siteName');
     if (!config.defaultLandingPage) errors.push('powerpages.config.json: missing defaultLandingPage');
+    if (framework.framework === 'astro' && !framework.ambiguous) {
+      const astroFramework = config.framework;
+      if (astroFramework?.name !== 'astro') {
+        errors.push('powerpages.config.json: Astro sites require framework.name "astro"');
+      }
+      if (astroFramework?.options?.buildFormat !== 'directory') {
+        errors.push(
+          'powerpages.config.json: Astro sites require ' +
+          'framework.options.buildFormat "directory"'
+        );
+      }
+    }
   } catch {
     errors.push('powerpages.config.json: invalid JSON');
   }
@@ -74,7 +87,6 @@ function validateSite(cwd, input = {}) {
   }
 
   // 7. The root document is the persisted source of truth for single-site language.
-  const framework = detectFramework(projectRoot);
   if (!framework.framework || framework.ambiguous) {
     errors.push('Unable to determine one supported framework for language validation');
   } else {

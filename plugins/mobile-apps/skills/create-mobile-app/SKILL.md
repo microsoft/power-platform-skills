@@ -26,7 +26,7 @@ to their phase; this marker never skips those gates.
 
 ## Workflow
 
-Resume/template checks → prerequisites → requirements (iOS + Android fixed) →
+Intent and creation-state checks → prerequisites → requirements (iOS + Android fixed) →
 rough plan preview → Gate 1 architecture (native capabilities, connectors,
 then data platform) → Gate 2 Dataverse model when selected → Gates 3 and 4
 screen graph/specifications → environment and template preparation → app
@@ -41,18 +41,43 @@ and summary.
 
 This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
 
-**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
+**Fresh template required for creation.** If the working directory is not a fresh
+template, STOP creation and follow the state-specific routing below. Do not send
+an existing-app edit request to a new folder. Missing generated markers alone do
+not prove freshness: if the template is customized or its state is unclear, ask
+before proceeding. Only a request for a new app requires a fresh template folder.
 
-Use these markers:
+Resolve the original request before classifying project state. Apply this
+state-routing table once in Step 0, in the order below; file markers are
+supporting evidence, not user intent or approval.
 
 | State | Detection | Action |
 |---|---|---|
-| Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
-| Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
-| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
-| Not template | Required template files are missing | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`. |
+| Creation continuation | Explicit creation-continuation intent or a valid current create handoff for this app, not a request to edit an existing app | Use Step 0's continuation path. Require matching unfinished creation progress and confirm the next phase before continuing; missing or conflicting progress requires clarification, not fresh scaffolding. |
+| Already-created app | Existing-app intent or confirmed app customizations/materialized state, even when generated markers are missing. `memory-bank.md`, `.datamodel-manifest.json`, and `src/generated/services/*.ts` can corroborate state, but do not select creation resume | STOP creation: never re-scaffold it. If the request changes this app, preserve the original request and execute the shared existing-app entry routing; invoke `/edit-app` only after **Full app integration**. If the user wants a separate new app, ask for a fresh template folder. |
+| Fresh template | Confirmed new-app intent and a confirmed uncustomized starter; `package.json`, `app.config.js`, `auth.config.json`, and `tamagui.config.ts` exist; `node_modules/expo` exists; no materialized app bindings, `memory-bank.md`, `.datamodel-manifest.json`, or generated Dataverse services. An approved creation plan and its planning artifacts are allowed | Proceed to Step 1 only when every condition is satisfied. Missing generated markers alone do not establish freshness. |
+| Template not installed | Confirmed new-app intent and a confirmed uncustomized starter with the required template files, but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
+| Not template | Confirmed new-app intent in a new/unsupported directory, after excluding existing-app work and creation continuation | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into a new or empty folder with `degit` and run `npm install`; never overwrite existing work. |
+| Unclear state or intent | New-app versus edit intent, customization, or creation progress cannot be established | Ask before selecting a workflow. Preserve the directory, plan, and history; do not default to fresh creation or resume. |
 
-This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
+An approved `native-app-plan.md` alone is not a created-app marker. Creation
+writes it before template preparation, and `assertFreshTemplate` intentionally
+allows it. A plan alone also does not identify a safe resume phase: use current
+caller context and saved creation progress, or ask. Do not treat an unrelated or
+stale plan as approved for this request.
+
+`/create-mobile-app` creates from a confirmed fresh starter or continues an
+explicitly requested unfinished creation. It does not adopt, repair, overwrite,
+or resume a completed app just because a bank or plan exists.
+
+An already-created app is a routing boundary, not a reason to discard the
+user's edit request. Do not merely suggest `/edit-app` or ask the user to repeat
+the request. For a current-app feature request, execute
+[app-edit-routing.md](../../shared/references/app-edit-routing.md), then invoke
+`/edit-app` with the original request, absolute `working_dir`, and
+`entry_choice: full-integration` only when that choice is approved. Reported
+problems still route to `/debug-app`; dependency/template upgrades route to
+`/check-updates`.
 
 ---
 
@@ -86,6 +111,11 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 ---
 
 ## Build documentation protocol
+
+This protocol applies after Step 0 selects fresh creation or an approved
+creation continuation. Routing an existing-app request elsewhere, asking for
+unclear intent, or declining creation does not create, reopen, or reset the
+creation plan or change its phase status.
 
 The run also writes a plan the user can read while it happens and keep afterwards:
 `<working_dir>/docs/create-app-plan.html`, rendered by
@@ -176,46 +206,91 @@ all user-authored, so they are written to a file with the `Write` tool and passe
 **Every one of these calls is best-effort.** If `app-docs.js` fails, say nothing and carry on:
 the documentation must never gate, retry, or fail a build.
 
-**Mark the phase `failed` before you stop.** Every STOP in this skill is a terminal state the
-user has to act on, and the plan is probably still open in their browser. Without this the last
+**Mark the active creation phase `failed` before stopping on a creation error.**
+Step 0 routing exits leave existing creation history untouched. Once creation is
+underway, a STOP is a terminal state the user has to act on, and the plan is
+probably still open in their browser. Without this the last
 phase stays `active`, so the page keeps reloading and keeps reporting work in progress on a run
 that ended. A failed phase settles the page, so the final thing it shows names what stopped.
 
 **No argument switches this protocol off.** `--no-design` suppresses design previews and
 `--no-preview` does not exist (Step 2c). The plan is how an abandoned or failed run explains
-itself, so it is written on every path.
+itself, so it is written on every creation path after Step 0's routing decision.
 
 ---
 
-### Step 0 — Resume check + fresh-template gate
+### Step 0 — Intent routing + creation-state gate
 
 **Telemetry checkpoint: `validate_fresh_template`**
 
-If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing directory), check whether `<working_dir>/memory-bank.md` exists.
+Before project reads or commands, bind the absolute `working_dir` through
+[app-working-directory.md](../../shared/references/app-working-directory.md).
+Apply the state-routing table above once. Classify the original request before
+considering a creation resume or testing freshness; do not derive the requested
+operation from the presence or absence of `memory-bank.md`.
 
-- **Bank present** → read it. Identify the highest-numbered completed step. Inform the user:
-  > "Found existing project '<name>' at `<dir>`. Steps 1–<N> already completed (last update <date>). Resume from Step <N+1>?"
-  Wait for confirmation. If the user says yes, jump to that step. Skip the wizard (Step 2) and re-use the values stored in the bank.
+**Existing-app changes leave this skill before resume handling.** Follow the
+table's existing-app handoff, preserving the original request and root, then
+return without entering Step 1 or modifying creation progress. Reported problems
+and dependency/template upgrades retain their matching workflows. If intent or
+customization is unclear, ask and wait; do not offer a creation resume merely
+because a bank exists.
 
-  **Reopen the build plan on resume.** A resume skips Step 2b, where the plan is created and
-  opened, so open `<working_dir>/docs/create-app-plan.html` in the browser yourself when it exists.
-  If the earlier run stopped on a failure, the plan still says so and has stopped reloading. Run
-  `node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' show`, and if it reports a `failedPhase`, reopen that phase before continuing:
+Only a confirmed **Fresh template** or explicit **Creation continuation**
+enters the creation workflow below. All other table outcomes stop or hand off
+without re-scaffolding, overwriting history, or running template preparation.
 
-  ```bash
-  node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id <failedPhase> --status active
-  ```
-- **Bank absent** → fresh project. Continue to Step 1.
-- **Bank present but corrupted** (missing required headings) → surface the parse error, ask the user whether to overwrite (lose history) or fix manually before proceeding.
+#### Fresh run
 
-The bank is the only resume mechanism. Do not infer resume state from `package.json` or `node_modules/` — those can lie.
+Require every condition in the Fresh-template row, including confirmed new-app
+intent and an uncustomized starter. The template/dependency failure rows apply
+only after that intent is established. An approved plan from the current
+creation is allowed; preparation stays in Step 5, not this read-only entry gate.
+Resolve the CLI below, then continue to Step 1.
 
-After the resume check, run the **fresh-template gate** from the section above. This is a create-only command:
+#### Creation continuation
 
-- If `memory-bank.md` exists and the user confirms resume, resume as documented above.
-- If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
-- If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
-- If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
+For an explicit request to continue this app's unfinished creation, inspect the
+matching `memory-bank.md` when present, `docs/.run-plan.json` when present, the
+approved creation plan, and any valid current create caller context. Establish
+the unfinished creation phase and corroborate it against current app artifacts.
+Do not infer the next phase from arbitrary completed entries belonging to edits,
+deployment, or another workflow.
+
+- **Missing or conflicting progress** — ask which creation phase is being
+  continued or ask to restore its records, then stop. Do not guess a phase,
+  restart creation, or classify the app as fresh.
+- **Completed creation** — report that there is no unfinished creation to resume.
+  Clarify whether the user wants an app edit or a separate new app and use the
+  table's matching route.
+- **Corrupt records** — report the error and ask to repair/restore them. Do not
+  delete or overwrite history to make the directory pass a freshness check.
+- **Verified unfinished phase** — show the phase, remaining scope, and target
+  app, then obtain continuation approval unless that exact continuation already
+  has current approval. Reuse only decisions approved for the same current
+  scope; pending or changed decisions keep their owning approval gates.
+
+Pre-initialization creation may have an approved plan and saved planning
+progress without a memory bank. It stays on this continuation path when the
+phase can be established; the plan's presence does not redirect it to editing.
+For a post-initialization continuation, resume the verified phase directly; do
+not rerun the fresh preparation or `pa app init` over the materialized app.
+
+**Reopen the build plan only after continuation approval.** When
+`<working_dir>/docs/create-app-plan.html` exists, reopen it. Inspect the existing
+plan with the read-only
+`node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' show`
+command. If it reports a `failedPhase` matching the approved continuation,
+reopen that phase before continuing:
+
+```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id <failedPhase> --status active
+```
+
+Use only a validated phase ID from the recorded creation state. Resolve the CLI
+below before entering the verified phase; do not skip unresolved approval or
+validation gates merely because an older plan exists.
 
 **Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `pa app init`.
 

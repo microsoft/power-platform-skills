@@ -31644,7 +31644,12 @@ var OAuthTokensSchema = object({
   token_type: string2(),
   expires_in: coerce_exports.number().optional(),
   scope: string2().optional(),
-  refresh_token: string2().optional()
+  refresh_token: string2().optional(),
+  /**
+   * Not part of the wire format: the authorization server this value was obtained from, added by
+   * the client's `auth()` before it is stored and compared when it is read back.
+   */
+  issuer: string2().optional().catch(void 0)
 }).strip();
 var OAuthErrorResponseSchema = object({
   error: string2(),
@@ -31674,7 +31679,12 @@ var OAuthClientInformationSchema = object({
   client_id: string2(),
   client_secret: string2().optional(),
   client_id_issued_at: number2().optional(),
-  client_secret_expires_at: number2().optional()
+  client_secret_expires_at: number2().optional(),
+  /**
+   * Not part of the wire format: the authorization server this value was obtained from, added by
+   * the client's `auth()` before it is stored and compared when it is read back.
+   */
+  issuer: string2().optional().catch(void 0)
 }).strip();
 var OAuthClientInformationFullSchema = OAuthClientMetadataSchema.merge(OAuthClientInformationSchema);
 var OAuthClientRegistrationErrorSchema = object({
@@ -31876,6 +31886,26 @@ async function parseErrorResponse(input2) {
     return new ServerError(errorMessage);
   }
 }
+function issuersMatch(a, b) {
+  let [x, y] = [a, b];
+  try {
+    [x, y] = [new URL(a).href, new URL(b).href];
+  } catch {
+  }
+  return x === y || x.endsWith("/") && x.slice(0, -1) === y || y.endsWith("/") && y.slice(0, -1) === x;
+}
+function discardIfIssuerMismatch(stored, issuer) {
+  if (!stored)
+    return void 0;
+  if (typeof stored.issuer !== "string")
+    return stored.issuer == null ? stored : { ...stored, issuer: void 0 };
+  return issuersMatch(stored.issuer, issuer) ? stored : void 0;
+}
+var TokenResponseSchema = OAuthTokensSchema.omit({ issuer: true });
+var RegistrationResponseSchema = OAuthClientInformationFullSchema.omit({ issuer: true });
+function boundElsewhereError(stored, issuer) {
+  return new Error(`OAuth client information is bound to authorization server ${stored.issuer} and is not presented to ${issuer}. Clear the stored client information, or correct \`expectedIssuer\`, if the authorization server has moved.`);
+}
 async function auth(provider, options) {
   try {
     return await authInternal(provider, options);
@@ -31929,9 +31959,24 @@ async function authInternal(provider, { serverUrl, authorizationCode, scope, res
       authorizationServerMetadata: metadata
     });
   }
-  const resource = await selectResourceURL(serverUrl, provider, resourceMetadata);
+  const issuer = String(authorizationServerUrl);
+  const selectedResource = await selectResourceURL(serverUrl, provider, resourceMetadata);
+  const resource = selectedResource && resourceMetadata && !provider.validateResourceURL ? resourceMetadata.resource : selectedResource;
   const resolvedScope = scope || resourceMetadata?.scopes_supported?.join(" ") || provider.clientMetadata.scope;
-  let clientInformation = await Promise.resolve(provider.clientInformation());
+  const storedClientInformation = await Promise.resolve(provider.clientInformation());
+  let clientInformation = discardIfIssuerMismatch(storedClientInformation, issuer);
+  const canRegisterAgain = provider.saveClientInformation !== void 0 && !!provider.redirectUrl;
+  if (storedClientInformation && !clientInformation && !canRegisterAgain) {
+    throw boundElsewhereError(storedClientInformation, issuer);
+  }
+  const unstampedClientInformation = clientInformation?.issuer == null ? clientInformation : void 0;
+  const bindClientInformation = async () => {
+    try {
+      if (unstampedClientInformation)
+        await provider.saveClientInformation?.({ ...unstampedClientInformation, issuer });
+    } catch {
+    }
+  };
   if (!clientInformation) {
     if (authorizationCode !== void 0) {
       throw new Error("Existing OAuth client information is required when exchanging an authorization code");
@@ -31943,9 +31988,7 @@ async function authInternal(provider, { serverUrl, authorizationCode, scope, res
     }
     const shouldUseUrlBasedClientId = supportsUrlBasedClientId && clientMetadataUrl;
     if (shouldUseUrlBasedClientId) {
-      clientInformation = {
-        client_id: clientMetadataUrl
-      };
+      clientInformation = { client_id: clientMetadataUrl, issuer };
       await provider.saveClientInformation?.(clientInformation);
     } else {
       if (!provider.saveClientInformation) {
@@ -31957,8 +32000,8 @@ async function authInternal(provider, { serverUrl, authorizationCode, scope, res
         scope: resolvedScope,
         fetchFn
       });
-      await provider.saveClientInformation(fullInformation);
-      clientInformation = fullInformation;
+      clientInformation = { ...fullInformation, issuer };
+      await provider.saveClientInformation(clientInformation);
     }
   }
   const nonInteractiveFlow = !provider.redirectUrl;
@@ -31969,10 +32012,14 @@ async function authInternal(provider, { serverUrl, authorizationCode, scope, res
       authorizationCode,
       fetchFn
     });
-    await provider.saveTokens(tokens2);
+    await bindClientInformation();
+    await provider.saveTokens({ ...tokens2, issuer });
     return "AUTHORIZED";
   }
-  const tokens = await provider.tokens();
+  const tokens = discardIfIssuerMismatch(await provider.tokens(), issuer);
+  if (tokens?.refresh_token && tokens.issuer == null) {
+    console.warn("[mcp-sdk] stored OAuth tokens have no 'issuer' property (saved by an earlier version, or by a provider that does not keep it) and are used as-is; make sure your OAuthClientProvider stores what saveTokens() and saveClientInformation() receive unchanged.");
+  }
   if (tokens?.refresh_token) {
     try {
       const newTokens = await refreshAuthorization(authorizationServerUrl, {
@@ -31983,7 +32030,8 @@ async function authInternal(provider, { serverUrl, authorizationCode, scope, res
         addClientAuthentication: provider.addClientAuthentication,
         fetchFn
       });
-      await provider.saveTokens(newTokens);
+      await bindClientInformation();
+      await provider.saveTokens({ ...newTokens, issuer });
       return "AUTHORIZED";
     } catch (error62) {
       if (!(error62 instanceof OAuthError) || error62 instanceof ServerError) {
@@ -32206,6 +32254,9 @@ async function discoverOAuthServerInfo(serverUrl, opts) {
     resourceMetadata
   };
 }
+function resourceIndicatorToString(resource) {
+  return typeof resource === "string" ? resource : resource.href;
+}
 async function startAuthorization(authorizationServerUrl, { metadata, clientInformation, redirectUrl, scope, state, resource }) {
   let authorizationUrl;
   if (metadata) {
@@ -32237,7 +32288,7 @@ async function startAuthorization(authorizationServerUrl, { metadata, clientInfo
     authorizationUrl.searchParams.append("prompt", "consent");
   }
   if (resource) {
-    authorizationUrl.searchParams.set("resource", resource.href);
+    authorizationUrl.searchParams.set("resource", resourceIndicatorToString(resource));
   }
   return { authorizationUrl, codeVerifier };
 }
@@ -32256,7 +32307,7 @@ async function executeTokenRequest(authorizationServerUrl, { metadata, tokenRequ
     Accept: "application/json"
   });
   if (resource) {
-    tokenRequestParams.set("resource", resource.href);
+    tokenRequestParams.set("resource", resourceIndicatorToString(resource));
   }
   if (addClientAuthentication) {
     await addClientAuthentication(headers, tokenRequestParams, tokenUrl, metadata);
@@ -32273,7 +32324,7 @@ async function executeTokenRequest(authorizationServerUrl, { metadata, tokenRequ
   if (!response.ok) {
     throw await parseErrorResponse(response);
   }
-  return OAuthTokensSchema.parse(await response.json());
+  return TokenResponseSchema.parse(await response.json());
 }
 async function refreshAuthorization(authorizationServerUrl, { metadata, clientInformation, refreshToken, resource, addClientAuthentication, fetchFn }) {
   const tokenRequestParams = new URLSearchParams({
@@ -32291,6 +32342,15 @@ async function refreshAuthorization(authorizationServerUrl, { metadata, clientIn
   return { refresh_token: refreshToken, ...tokens };
 }
 async function fetchToken(provider, authorizationServerUrl, { metadata, resource, authorizationCode, fetchFn } = {}) {
+  const readClientInformation = async () => {
+    const storedClientInformation = await provider.clientInformation();
+    const checked = discardIfIssuerMismatch(storedClientInformation, String(authorizationServerUrl));
+    if (storedClientInformation && !checked) {
+      throw boundElsewhereError(storedClientInformation, String(authorizationServerUrl));
+    }
+    return checked;
+  };
+  let clientInformation = await readClientInformation();
   const scope = provider.clientMetadata.scope;
   let tokenRequestParams;
   if (provider.prepareTokenRequest) {
@@ -32306,11 +32366,11 @@ async function fetchToken(provider, authorizationServerUrl, { metadata, resource
     const codeVerifier = await provider.codeVerifier();
     tokenRequestParams = prepareAuthorizationCodeRequest(authorizationCode, codeVerifier, provider.redirectUrl);
   }
-  const clientInformation = await provider.clientInformation();
+  clientInformation ?? (clientInformation = await readClientInformation());
   return executeTokenRequest(authorizationServerUrl, {
     metadata,
     tokenRequestParams,
-    clientInformation: clientInformation ?? void 0,
+    clientInformation,
     addClientAuthentication: provider.addClientAuthentication,
     resource,
     fetchFn
@@ -32339,7 +32399,7 @@ async function registerClient(authorizationServerUrl, { metadata, clientMetadata
   if (!response.ok) {
     throw await parseErrorResponse(response);
   }
-  return OAuthClientInformationFullSchema.parse(await response.json());
+  return RegistrationResponseSchema.parse(await response.json());
 }
 
 // node_modules/eventsource-parser/dist/index.js
@@ -33813,7 +33873,7 @@ var package_default = {
     test: "node scripts/test.mjs"
   },
   dependencies: {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     zod: "4.6.5"
   },
   devDependencies: {
@@ -34928,7 +34988,7 @@ Process Intelligence (MIT)
 
 ---
 
-@modelcontextprotocol/sdk@1.30.0 - LICENSE
+@modelcontextprotocol/sdk@1.31.0 - LICENSE
 
 MIT License
 

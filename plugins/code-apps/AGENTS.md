@@ -33,7 +33,7 @@ skills/
   create-code-app/
     SKILL.md                      <- Scaffold, init, build, and deploy a new code app
     references/
-      prerequisites-reference.md  <- Node, pac, git requirements
+      prerequisites-reference.md  <- Node, npm-installed Power Apps CLI, git requirements
       troubleshooting.md          <- Common issues and fixes
   deploy/
     SKILL.md                      <- Build and deploy an existing code app
