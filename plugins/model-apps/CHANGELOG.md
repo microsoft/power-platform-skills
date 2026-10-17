@@ -324,7 +324,10 @@ killed run leaves behind.
   label in it in every cell and the published read does not, so a dashboard nothing had changed since its publish was listed as
   having changes that are not published (unverified), and every job whose surface it is failed with it. The two reads are now
   compared without the labels of a language the published read carries none of; a tile, a cell, an attribute, any other text, a
-  label in a language it carries, and a FormXML that is not one well-formed XML document are still changes.
+  label in a language it carries, and a FormXML that is not one well-formed XML document are still changes. That is what a user whose
+  own language is the organization's base language reads. For a user whose language is the other one, the platform's published read
+  carries both languages and can word a caption differently from the saved read, so the dashboard stays unverified for that user, as
+  before: never passed without being proven.
 - **A label saved and not published on a form the app holds, or is about to hold, is no longer held back by the app's publish.**
   Dataverse leaves a saved form's label changes out of the published form when a publish that names only the app comes first,
   whoever saved them, and 2.14.0 published before the app only the tables whose existing views and forms the build reconciled. With

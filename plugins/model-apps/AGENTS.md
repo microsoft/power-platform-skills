@@ -1600,7 +1600,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   publish was "not published", and every job whose surface it is failed with it. A caption in a language
   the published read carries none of is set aside; a tile, a cell, an attribute, any text, a caption in a
   language it carries, and a FormXML that is not one well-formed XML document are still changes, and two
-  equal texts are the same dashboard as before. **App membership is checked on the published layer:** sitemap tables union `app.tables`
+  equal texts are the same dashboard as before. That is the read of a user whose own language is the
+  base one; live, for a user whose language was the other one, the published read carried both languages,
+  in another order than the saved read, and one cell's caption in that language differed between the two
+  layers — so for that user the dashboard stays unverified, as it was: it fails closed, never passed without
+  proof. **App membership is checked on the published layer:** sitemap tables union `app.tables`
   must have type-1 rows; each `app.mainForms` table gets an `app-main-forms` check comparing resolved
   active Main IDs with classified type-60 members. Missing members fail with “re-run the build”,
   extras fail with the Maker Forms remedy, and unreadable/unclassifiable membership is unverified,
