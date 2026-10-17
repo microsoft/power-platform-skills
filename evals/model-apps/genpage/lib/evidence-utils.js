@@ -12,7 +12,9 @@
 //     it are its arguments.
 //   - The verb is the script's first positional argument, after its flags: `apps.js --env <url> create …` is `create`, as `apps.js create --env <url> …` is. A flag takes the next word unless that
 //     starts with `--`, as lib/dataverse-auth.js parseArgs, which both scripts call, reads it — except a SWITCH (`--publish`, `--allow-destructive`: a flag the script's own flag list gives no value),
-//     which takes none, so a switch in front of the verb does not hide it. solution-settings.js reads its verb as its first argument, and so is it read.
+//     which takes none, so a switch in front of the verb does not hide it. That last is an INFERENCE, made on purpose and fail-closed, not the scripts' own parse: parseArgs gives a switch the next
+//     word too, so `genpage.js --include-unpublished list …` has no command to the script, and is read here as `list` (see readVerb below). solution-settings.js reads its verb as its first
+//     argument, and so is it read.
 //   - EVERY run counts. `apps.js list …; apps.js create …` is two runs, and a call is a mutation when any one of them writes (workflow-evidence.js `isMutation`): a grader that read only the first
 //     run missed the write behind a read. An event's argv is read after its text, as the arguments the text goes on with, so the verb may be in either.
 //
@@ -26,7 +28,9 @@
 //     call's last `--env`, and a write in the same call as its gate is not judged against that gate;
 //   - a quote that has no partner on its line is dropped, and a stray one in unquoted prose hides the words up to its partner;
 //   - only the verbs of the three scripts above are read from the words; the other mutations are named in `isMutation` and found anywhere in the text. The phase expectations (expectation-evidence.js)
-//     read a call's text and count a call once, however often it names a run, where `isMutation` also reads an event's argv.
+//     read a call's text and count a call once, however often it names a run, where `isMutation` also reads an event's argv; and a phase pattern still matches its older raw-text form too
+//     (`written.test(text) || scriptRuns(…)`), so a run inside a wrapper's string, which the verb reader does not read, can still credit a phase, as it did before;
+//   - a listing that is not valid JSON lists nothing when it is an event's result; on a workflow log's `Result:` line it goes on to the PAC table reader, as before, which can read a row out of it.
 // The graders' tests pin these limits (tests/script-verbs.test.js), so a change to the reading model has to change this comment with it.
 
 const pathKey = (name) => String(name || '').replace(/\\/g, '/');

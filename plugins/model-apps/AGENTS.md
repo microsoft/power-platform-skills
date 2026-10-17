@@ -4474,15 +4474,19 @@ layers are automated (TAP v13 runners); Layer 3 is manual.
   (a quoted run is one word, so a quoted mention is data), find every run of `apps.js`, `genpage.js` and
   `solution-settings.js`, and read each one's verb the way the script does: the first positional argument after
   its flags (`apps.js --env <url> create` is `create`; in `--search create` it is a value; a switch such as
-  `--publish` takes none), for `solution-settings.js` its first argument. Every run counts, so a call that reads
+  `--publish` takes none — an inference made on purpose, fail-closed: the scripts' own parser gives a switch the
+  next word, so `genpage.js --include-unpublished list` has no command to the script but is read as `list`), for
+  `solution-settings.js` its first argument. Every run counts, so a call that reads
   and then writes (`apps.js list …; apps.js create …`) is a mutation for the auth-gate, refusal and result-event
   checks (`lib/workflow-evidence.js`), and the phase expectations about listing, creating, downloading and
   generating types (`lib/expectation-evidence.js`: `LIST_APPS`, `CREATE_APP`, `GENERATE_TYPES`, `GENPAGE_LIST`,
   `GENPAGE_DOWNLOAD`, `TYPES_RUN`) read the same verb, so a skipped phase is not credited to a run that did it
   with its flags first. `solution-settings.js import` and the `pac solution import` it falls back to are
   mutations; `template` is not. A listing printed as the scripts print it, one line of JSON, is read as data —
-  as an object, as a string result or as a log's `Result:` line; JSON that does not parse lists nothing, and a
-  PAC table still goes to the table reader. **Limits, by design** — a reader of recorded text that modelled
+  as an object, as a string result or as a log's `Result:` line; JSON that does not parse lists nothing when it is
+  an event's result (on a log's `Result:` line it goes on to the PAC table reader, as before), and a PAC table
+  still goes to the table reader. A phase pattern still matches its older raw-text form as well, so a run inside a
+  wrapper's string (below), which the verb reader does not read, can still credit a phase, as it always did. **Limits, by design** — a reader of recorded text that modelled
   shell syntax would need a shell and never be finished: a command line handed to a wrapper as one string
   (`bash -c`, `cmd /c`, `pwsh -Command`, `eval`) is one quoted word and is not read, a variable, an escape or a
   line continuation is not followed, and the text of a here-document is read as if it were commands; prose is
