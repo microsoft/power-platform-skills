@@ -445,11 +445,13 @@ reason: re-run it with the flag.
 **A language the environment's form read does not show.** The platform decides which languages' labels the form's
 FormXML carries, and it can return fewer than the form stores: a form built with Spanish (`3082`) captions in an
 English-language organization reads back, with the Spanish captions stored, with its labels in English only. Verify
-never calls a caption missing in a language the read does not carry — it lists the labels compared in that language as
+never calls a caption missing in a language the read does not carry, as long as the read carries labels in other
+languages — it lists the labels compared in that language as
 **unverified** (neither passed nor failed; the run's result and exit status are unchanged), naming the languages the
 read does carry, and for a `{ "1033": …, "3082": … }` label map it compares the languages the read carries and lists
 the others. Say so, and ask the user to check those captions in Power Apps with that language; do not rebuild to
-"fix" them. A language the read does carry is still compared strictly: a stale caption in it fails.
+"fix" them. A language the read does carry is still compared strictly: a stale caption in it fails. A form whose read
+carries no label at all is not such a case: the captions the spec declares for it are missing, and fail.
 
 Narrate progress as it runs. Transient env errors (a 429 or 503, a customization lock, a concurrent-operation
 guard or a SQL timeout the service names by its error code, a timeout or reset of the connection) are

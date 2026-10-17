@@ -675,8 +675,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   after the app's own publish; whether the platform holds it back as it holds a form's labels was not
   measured) with its table. The request takes the place of the reconciled tables' envelope, so a rebuild whose
   views or forms exist sends the same three publishes as before (the tables, the app's finalize, phase 8) and
-  a build that reconciled nothing sends one more when the request is not empty (a first build with a
-  navigation always has one). Phase 8's envelope names only the
+  a build that reconciled nothing sends one more when the request is not empty (a first build has one when its
+  navigation opens a table or it wrote a chart). Phase 8's envelope names only the
   tables the build has artifacts of, so a table the app holds a form of and the build did not change is published
   once, before the app, and not again by the final publish. **Every write of the app asks for the request**
   (`appWriters`, in `lib/sdk-build.js`: the create, the push, the publish, the publish after the table
@@ -691,13 +691,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   publishes the app by itself when it finds a view the app lost (a maker took it out), and is handed the
   request to await right before it (`beforeAppWrite`), so a re-upload that has nothing to repair still writes and
   publishes nothing (0 publishes, as before) and one that repairs a view sends the request, then the app's
-  publish (2 where it sent 1), naming the tables the app holds forms and charts of and those the push adds
-  forms of — not the tables the page reads. The placement pushes the app as the SERVER holds it, so the tables its
-  push adds forms of are those of the navigation the server holds, which it tells the request (the Entity tables it
-  pushes, the Main-form list the pushed app carries — a fetched app carries none — and whether it pushes at all: a
-  completion that only publishes the app adds no form): a maker's change to the navigation in the designer stands
-  after a changed-only re-upload of a page, which rewrites none, so a table the maker took out of it is not
-  published, and one it was pointed at is. The placement applies none of the spec's `app.mainForms` list either, so
+  publish (2 where it sent 1), naming the tables the app holds forms and charts of — not the tables the page reads, and
+  no table of the navigation. The placement pushes the app through the page backend, whose transport limits that push to
+  the views it pins (`lib/app-component-scope.js`), so the push adds no Main form and the placement tells the request so
+  (`beforeAppWrite` is handed no Entity table, and `pushes: false` for a completion that only publishes the app; only an
+  SDK lent to the backend, whose push is not limited, reports the Entity tables of the navigation it sends): a maker's
+  change to the navigation in the designer stands after a changed-only re-upload of a page, which rewrites none, and a
+  table an entry was pointed at, whose forms the app does not hold, keeps what was saved on it. The placement applies none of the spec's `app.mainForms` list either, so
   the request looks no Main-form name up for it: a form renamed on the server does not stop the repair. The gate is the
   `--publish` flag, not the publish phase, which that re-upload does not have, and it comes first: what a write adds is
   worked out only once the request is going to be made, so a run without `--publish` reads no Main-form catalog and
@@ -4512,8 +4512,10 @@ placement of default views, a page edited only by a byte order mark — which th
 route — that has to pin a default view the app lost sends the request before the placement's first write (and, with nothing to
 repair, writes and publishes nothing); the pages finalizer and the publish phase of a run with no app step, and the push that only
 carries the routing description, do the same; a refused request, an unreadable component list and a row of it that cannot be
-placed each give their one warning; the placement and the routing-description push send the tables of the navigation THEY send, not the spec's — a
-navigation entry a maker removed, or pointed at another table, in the designer is followed, and a Main form renamed on the server (the spec's
+placed each give their one warning; the placement's push adds the view it pins and no form, so it names no table of the navigation (a
+table an entry was pointed at, or one a maker added a Main form to, keeps what was saved on it), while the routing-description push sends
+the tables of the navigation IT sends, not the spec's (a navigation entry a maker removed, or pointed at another table, in the designer is
+followed); a Main form renamed on the server (the spec's
 `app.mainForms` names it) does not stop the repair, with or without `--publish`; and a read of the engine's source fails on any call to the SDK for the app outside
 `appWriters`. (The fake org holds the page manifest, a web resource, and lists the generative pages a test records in `org.pages`.)
 `rebuild-writes-reuse-sites.test.js` and the `rebuild writes:` tests in `sdk-build.test.js` pin each

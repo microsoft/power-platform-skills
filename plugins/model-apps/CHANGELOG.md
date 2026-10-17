@@ -75,14 +75,15 @@ killed run leaves behind.
   outcome is settled by reading that id (sent once more under the same id only when nothing landed: never a second page); "nothing
   was written" is said only when the SDK refused the write before sending it or the service answered 4xx, and any other failure at
   or after the send is `unknown`, the error carrying `outcome` and `pageId`. A write the service throttles (HTTP 429) has written
-  nothing: it is waited out and sent again — up to six sends, on the HTTP client's schedule or the longer wait the answer's
-  `Retry-After` asks for (up to a minute) — and an edited page that someone saved during the wait is refused, not overwritten; one
-  that outlasts the waits ends the write, and the build runs it again like any transient failure. A change set the service refuses
-  as a whole is read by the part that failed — a 429 is waited out, a 400, 403 or 404 is final — but only when the answer is
-  complete and every part in it is accounted for; any other answer proves nothing and stays `unknown`. An update writes only what
-  differs, so leaving out `--model`, `--name` or `--data-sources` keeps the page's own (`pac` blanked the model and renamed the page
-  to its navigation title; 2.14.0 re-sent both and warned when it could not), and a page whose content is unchanged is written
-  nowhere and records no prompt (the upload script still publishes it).
+  nothing: it is waited out and sent again — up to six sends, on the HTTP client's schedule or, when the answer's `Retry-After` asks
+  for longer, for the whole of that wait, as long as it fits the run's five-minute throttle budget — and an edited page that someone
+  saved during the wait is refused, not overwritten; one that outlasts the waits ends the write, and the build runs it again like
+  any transient failure, within the same budget. A change set the service refuses as a whole is read by the part that failed — a 429
+  is waited out, a 400, 403 or 404 is final — but only when the answer is complete and every part in it is accounted for; any other
+  answer proves nothing and stays `unknown`. An update writes only what differs, so leaving out `--model`, `--name` or
+  `--data-sources` keeps the page's own (`pac` blanked the model and renamed the page to its navigation title; 2.14.0 re-sent both
+  and warned when it could not), and a page whose content is unchanged is written nowhere and records no prompt (the upload script
+  still publishes it).
 - **A page is stored exactly as written**: nothing is appended, one leading BOM is dropped, a file that is not UTF-8 is refused, and
   a `"` in a page name is kept (`genpage-upload.js` no longer refuses it; spec-lint still warns about one, and now says why: a page
   an earlier release created holds it as `\"` until a build rewrites its name).
@@ -196,6 +197,11 @@ killed run leaves behind.
   expression, used as a value before a method (`{ a: class extends class {} {}, m() { … } }`), and a class field named `new` with a
   method on the next line. Both are refused, never misread. Parenthesising the class expression (`extends (class {})`), or ending
   the field with `;` or naming it otherwise, avoids the refusal.
+- **The eval graders read the new scripts the way the scripts read their arguments.** A run of `apps.js`, `genpage.js` or
+  `solution-settings.js` is read with its verb where the script takes it — after its flags too (`apps.js --env <url> create` is a
+  `create`) — and every run in one shell call counts, so a read followed by a write is graded as the write;
+  `solution-settings.js import` is a write. The graders still read recorded text, not a shell: a command line handed to a wrapper
+  (`bash -c '…'`), a here-document and variables are documented limits.
 
 ### Removed
 
@@ -271,10 +277,11 @@ killed run leaves behind.
   deleted that nothing deleted), the flow name check saw no clash, the verifier reported every declared table missing, and
   `list-tables.js --exact` named every searched table missing. The table-list read is now held to being a list for every SDK the
   plugin makes (`TABLES_UNREADABLE`), so each fails with that reason: the build, which reads each table by name and turns to the list
-  only when that read is not conclusive, halts before any create (`table-list-unreadable`, which it does not run again: a run a moment
-  later reads the same answer) and its dry run says `unknown`, the teardown deletes no table (the steps before its tables still run),
-  the flow name check warns that it could not be made, the verify fails, and `list-tables.js` exits 1. `{ "value": [] }` is still an
-  empty answer, and no request is added or changed.
+  only when that read is not conclusive, stops at the first table whose existence it cannot establish instead of creating it
+  (`table-list-unreadable`, which it does not run again: a run a moment later reads the same answer), keeping what its earlier steps
+  wrote (the solution, a global choice, the tables before it), and its dry run says `unknown`; the teardown deletes no table (the
+  steps before its tables still run), the flow name check warns that it could not be made, the verify fails, and `list-tables.js`
+  exits 1. `{ "value": [] }` is still an empty answer, and no request is added or changed.
 - **A rebuild applies a changed app name and description.** 2.14.0 set them when the app was created and never again. A rebuild now
   writes a changed, non-blank `app.name` / `app.description` to the existing app on the push it already makes for the navigation;
   nothing is written when they already match, a spec that leaves them out never blanks them, and the unique name never changes. The
@@ -302,8 +309,9 @@ killed run leaves behind.
   own `--verify` is told the language it used), so a form built in a language other than the organization's verifies. What cannot be
   compared is listed as `unverified`, neither passed nor failed, with the reason and what to do (`unverified` changes neither `ok`
   nor the exit status): a label whose language cannot be established (the organization cannot be read, and nothing else says it),
-  and a label in a language that no label of the form's read is in. The platform decides which languages' labels the form read
-  returns: a form built and published with Spanish captions in an English-language organization reads back with every label in
+  and a label in a language that no label of the form's read is in, when the read carries labels in other languages (a form whose
+  read carries no label at all still fails the captions the spec declares). The platform decides which languages' labels the form
+  read returns: a form built and published with Spanish captions in an English-language organization reads back with every label in
   English, so its stored Spanish captions are listed, to be checked in Power Apps with that language, not failed. A label map is
   compared at the languages the read carries and listed for the others; a caption in a language the read carries is compared
   strictly, and a stale one fails.
@@ -387,12 +395,12 @@ killed run leaves behind.
   of a class or an interface whose heritage ends in a call — were read as JSX elements whose text ran on to the next closing tag, so
   a `navigateTo({… PAGEREF_…})` text in a later string, template, comment or regular expression could be rewritten. They are now
   read as the type parameters they are wherever the text after the list shows it. Where a string, template, comment or regular
-  expression could hide the closing tag and the two readings may end the head in different places, where a function type's parameter
-  list cannot be read to its end, or where a name is written with an escape, both programs compile and the page is refused naming
-  the guess (`generic` or `identifier`), like any call signature. An element after `void`, `typeof` or `delete`, and one whose text
-  starts with a parenthesis and holds a comment (`return <>(y); // note</>;`), is read for certain in more places — the bodies of
-  functions, methods and decorated members, after `return`, after a `,` in parentheses, after a word that takes an operand and a
-  line break — so those pages resolve.
+  expression could hide the closing tag, so that the two readings may end the head in different places, the page is refused naming
+  the guess (`generic`), like any call signature; so is a page whose syntax the reader cannot read with confidence — a function
+  type's parameter list it cannot read to its end (`generic`), or a name written with an escape (`identifier`). An element after
+  `void`, `typeof` or `delete`, and one whose text starts with a parenthesis and holds a comment (`return <>(y); // note</>;`), is
+  read for certain in more places — the bodies of functions, methods and decorated members, after `return`, after a `,` in
+  parentheses, after a word that takes an operand and a line break — so those pages resolve.
 - **More pages that 2.13.0 resolved and 2.14.0 refused resolve again: JSX text whose line before a `//` note is left open
   (`[ // note`, `m? = // note`, `f(a = // note`) and a later line that starts with a `/`.** The regular expression that line would
   open is read: where it does not close on its line, ends at the closing tag's own `/` with nothing after the tag that an operand
@@ -404,17 +412,16 @@ killed run leaves behind.
   and a page's key was minted in that order, so two pages whose names make one slug (`Work_Order`, `Work Order`) could swap keys
   between downloads, and a copy of the spec deployed to another environment then updated the wrong pages. The pages, the description
   inventory, the tables an app holds beyond its navigation, the Main-form names of `app.mainForms` and the `notRoundTripped` notes
-  are now written by name, then id, compared by code units and never by the host's locale. A page's key comes from the app's page
-  manifest, then from the key an earlier download of the same app gave it (the `app-spec.json` already in `--out`, used only when
-  its `app.uniqueName` is this app's), and only a page with neither gets a fresh key, minted in page-id order. When that earlier
-  spec gives one key to two pages, or one page two keys, for a page the manifest does not bind, the download stops before it writes
-  anything (`page-keys-ambiguous`, naming the pages and keys): correct the file and download again, or pass the new
-  `--reset-page-keys` to give exactly those pages fresh keys. Download into the same working folder every time.
-- **The eval graders read every run of a script.** A read and a write in one shell call were graded by the first run alone, so the
-  write passed the auth-gate and refusal checks; a verb written after its flags was not read as a run, so a phase reported as
-  "SKIPPED (mock data)" could pass; `solution-settings.js import`, and the `pac solution import` it falls back to, were not writes;
-  and a listing kept as the one JSON line the scripts print was read as a PAC table. The graders still read recorded text, not a
-  shell: a command line handed to a wrapper (`bash -c '…'`), a here-document and variables are documented limits.
+  are now written in a fixed order, compared by code units and never by the host's locale (the pages by name, then id). A page's key
+  comes from the app's page manifest, then from the key an earlier download of the same app gave it (the `app-spec.json` already in
+  `--out`, used only when its `app.uniqueName` is this app's), and only a page with neither gets a fresh key, minted in page-id
+  order. When that earlier spec gives one key to two pages, or one page two keys, for a page the manifest does not bind, the
+  download stops before it writes anything (`page-keys-ambiguous`, naming the pages and keys): correct the file and download again,
+  or pass the new `--reset-page-keys` to give exactly those pages fresh keys. Download into the same working folder every time.
+- **The eval graders count `pac solution import` as a write, and read a listing kept as text.** 2.14.0's graders did not count
+  `pac solution import` as a write, so an import escaped the auth-gate and refusal checks, and read a listing recorded as the JSON
+  text a command printed — a string result, or a log's `Result:` line — as a PAC table, one row named after the start of the JSON.
+  Such a listing is now read as the data it is, and a PAC table still goes to the table reader.
 
 ## [2.14.0]
 

@@ -165,7 +165,7 @@ test('ownerState (Linux): a local "no such process" proves death only when the r
   // The same through the real reads: a reader whose /proc cannot be read, with a record made where it could be (and the reverse).
   const blindReader = { ...here, ns: undefined, ...BLIND, ...gone };
   assert.strictEqual(ownerState(stampOf(), blindReader).state, 'unknown');
-  assert.strictEqual(ownerState(stampOf({ ns: undefined }), blindReader).state, 'unknown', 'a record made blind, read blind: the record in the review of this');
+  assert.strictEqual(ownerState(stampOf({ ns: undefined }), blindReader).state, 'unknown', 'a record made blind, read blind: neither side can prove a shared pid namespace');
   const blindStamp = ownerStamp({ ...LINUX, pid: 4242, now: () => 1, ...BLIND, ns: undefined });
   assert.strictEqual(blindStamp.ns, undefined, 'a blind maker records no namespace');
   assert.strictEqual(ownerState(blindStamp, blindReader).state, 'unknown', 'the same host name, the same volume, two blind sides');

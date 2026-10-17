@@ -193,9 +193,12 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Absent means "leave it alone":** the platform can write this text itself, so the build writes the
   field only when the spec sets it (at create, or on an existing app when the value differs) and never
   blanks it. A download carries it back when the app has one, and `--verify` checks the deployed value
-  whenever the spec sets one. Changing it on an app that has an **unpublished** change to its name,
-  description or routing description (saved in Maker but not published) halts the build: Dataverse
-  refuses the write until that change is published, so publish the app (or discard the change) first.
+  whenever the spec sets one. Changing it on an app that was **never published** halts the build
+  (`app-header-unpublished`): Dataverse refuses a write to a never-published app's name, description or
+  routing description, so publish the app in Power Apps, then re-run. On a published app, a change to
+  those texts saved in Maker and not yet published is kept: the build's push is saved with it. If the app
+  changes while the build runs, the push is refused as a concurrent edit (`version-conflict`): download
+  the app again and rebuild, which never overwrites the other edit.
   While the app's name or description is **localized** (or otherwise not plain text) this is **not applied**
   and the build warns — it is written in the same request as those two texts, which a rebuild never sends
   in that state; it does not halt.
@@ -1261,11 +1264,13 @@ reported **unverified** — neither passed nor failed — with the reason, and e
 The same goes for a language the environment's form read does not carry: the platform decides which languages' labels go
 into the FormXML it returns, and it can return fewer than the form stores (measured: a form built and published with Spanish
 (`3082`) captions in an English-language (`1033`) organization keeps both languages, yet its published FormXML carries every label in
-`1033` alone). When no label of the form — on any element — is in the language a label is compared in, the labels compared in it
+`1033` alone). When no label of the form — on any element — is in the language a label is compared in, while the read carries labels
+in other languages, the labels compared in it
 are reported **unverified** (what the read does carry, and what to do: check them in Power Apps with that language), a label map
 `{ "1033": …, "3082": … }` is compared at the languages the read carries and the others are listed the same way, and `ok` and the exit
 status are those of everything that could be compared. A language the read does carry is compared strictly: a stale caption in it
-fails. Translations are not read another way (a translation export, `RetrieveLocLabels`).
+fails. A form whose read carries no label at all names no language that could be missing from the read: the captions the spec
+declares for it are missing, and fail. Translations are not read another way (a translation export, `RetrieveLocLabels`).
 A label the spec does not write is not compared. Auto forms also require readable
 FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
 It does **not** check field order or `after` adjacency.

@@ -166,7 +166,8 @@ function isThrottle(error) {
 }
 
 // How many times a first send the service refused with a throttle is sent AGAIN: five, so six sends in all — the attempts the HTTP client gives every other throttled request (sdk-http-client.js `maxAttempts`), and on the
-// same schedule (throttleBackoffMs: 1 s, 2 s, 4 s, 8 s, 8 s, plus jitter), or longer when the answer's `Retry-After` asks for it (up to RETRY_AFTER_CAP_MS). A write rides out the ~23 s of service protection a read does, and no longer.
+// same schedule (throttleBackoffMs: 1 s, 2 s, 4 s, 8 s, 8 s, plus jitter), or longer when the answer's `Retry-After` asks for it: that wait is taken WHOLE, as long as it fits the run's throttle budget
+// (pushThroughThrottle, lib/throttle-budget.js). RETRY_AFTER_CAP_MS, a minute, caps the HTTP client's own retries and the wait before the read that settles an unknown outcome (pauseForRead), not this one.
 const THROTTLE_RESENDS = 5;
 
 // The statuses a change set the service refuses AS A WHOLE can prove, when every part of its answer carries one of them (watchThrottles): a 400, 403 or 404 — a request the service rejected, which no send can change — and a 429, which
