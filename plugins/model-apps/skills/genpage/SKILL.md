@@ -1185,7 +1185,11 @@ not counted) — and says so in its output (`importAttempts`, `importRefusals`).
 fit in what is left of the five minutes ends the retry at once, with no send made early. When the sends or the
 time run out the failure is the platform's refusal, with a sentence that says which: run the import again when
 the other operation has finished. Every other refusal is sent once, the generic solution-concurrency one
-(error code `0x80071151`, documented as an installation or removal that "failed") included. A secret value
+(error code `0x80071151`, documented as an installation or removal that "failed") included. The code decides, not
+the words: the platform has been measured to refuse an import that meets another import or a publish with
+`0x80071151` and the same "Cannot start the requested operation [Import] because there is another [Publish]
+running" words, and that import is sent once — tell the maker to run it again once the other operation has
+finished. A secret value
 and a connection id are kept out of what they print — a text that quotes one is withheld, or has it
 replaced by `<redacted>` — with these limits: a value of fewer than six characters that is known not to be
 a secret is not hidden; one whose type is not known (the `pac` route, a name the package does not define)

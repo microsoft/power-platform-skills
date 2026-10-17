@@ -143,7 +143,8 @@ const ACTION_TIMEOUT_MS = 60 * 60 * 1000;
 const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
 
 // The ONE exception to "sent exactly once" (solutionHttpClient): an ImportSolution that the platform REFUSED TO START is sent again, under a new import job id. The refusal is HTTP 429 with one of
-// these Dataverse error codes — matched as the code the Web API gives, never as English text. The answer has the Web API's error shape, for the code of an import sent during a publish:
+// these Dataverse error codes — matched as the code the Web API gives, never as English text. The answer has the Web API's error shape; this is the DOCUMENTED form for an import sent during a
+// publish (measured on a Public-cloud environment, the platform answered such an import with 0x80071151 instead — see below):
 //   { "error": { "code": "0x8004F064", "message": "Cannot start the requested operation [Import] because there is another [Publish] running at this moment. Use Solution History for more details." } }
 // The codes are the customization-lock codes of the platform's error reference whose DOCUMENTED text says the operation could not be STARTED — "Cannot start …" — so that what the code means is what the platform
 // says it means, and not what a run of live answers suggests (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes):
@@ -155,7 +156,8 @@ const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
 // Left out on purpose — those answers are sent once, and reported as every answer to an import was before this retry existed:
 //   0x80071151  SolutionConcurrencyFailure  "The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later." An operation that
 //               failed is not one the platform says it refused to start. Answers that begin "Cannot start the requested operation" and end with that sentence have been seen with this code; this list follows what
-//               the reference documents for a code, not what a few answers suggest about it.
+//               the reference documents for a code, not what a few answers suggest about it. Measured on a Public-cloud environment: an import that met another import or a publish was
+//               refused with this code and those words, and its import job existed by then (read back with its progress at 37.5%), so importJobIsAbsent could not have proved it either.
 //   0x80071154  ConcurrentOperationFailure  "The current {0} operation failed due to another concurrent operation running at the same time": an operation that failed had started.
 //   0x8004F077, 0x80090412 (the customization lock of other services) and the service protection limits 0x80072321, 0x80072322, 0x80072326: a 429 of another kind, with another remedy.
 // A code in this list says the import was refused; it is the job that proves it (importJobIsAbsent), because a refusal is what the platform SAYS and a gateway can say a good deal.

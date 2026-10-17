@@ -4157,7 +4157,12 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     ("Cannot start the requested operation …", and, for `0x8004F063`, "Cannot start another … because there is a previous …
     running") — pinned as an exact set. `0x80071151` (`SolutionConcurrencyFailure`) is NOT one of them: its documented text
     says the installation or removal FAILED, which does not say that nothing started, and an answer with that code is sent
-    once and reported as it always was, whatever words come with it. Matched on the code, never on the words. Such an answer
+    once and reported as it always was, whatever words come with it. Matched on the code, never on the words. Measured
+    on a Public-cloud environment, `0x80071151` is what the platform answers an import that meets another import or a
+    publish — with the "Cannot start the requested operation [Import] because there is another [Publish] running" words
+    — and the refused import's job exists by then (it reads back with its progress at 37.5%), so neither the code nor
+    the 404 proof below would let it be sent again: in practice the exception has not been seen to apply, and a resend
+    for `0x80071151` would need a proof built on the job row's own state. An answer with one of the five codes
     is the one that says the
     import did not start, and it is the one send that may be repeated — with two conditions, both shown before the
     second copy leaves. The status and the code must be the lock's (a service protection 429, `0x80072321`/`22`/`26`,

@@ -158,13 +158,15 @@ killed run leaves behind.
   environment's customization lock (HTTP 429 with one of the codes `0x8004F061` to `0x8004F064` and `0x8004F067`): it is sent again
   under a new import job id once `importjobs(<id>)` of the refused send answers 404, which proves it never started, after 10, 20, 40
   and 60 seconds or the longer `Retry-After` the platform asks for — at most five sends within five minutes of the first refusal,
-  never one early — and the output names the job that ran (`importJobId`), `importAttempts` and each refused send
-  (`importRefusals`). Every other answer, the generic solution-concurrency `0x80071151` included, is sent once. A failed import
-  names its job and, when the request was sent, the reason the job's log gives. When `pac` does the import it is given a copy of the
-  settings the run read, not the file's path, so a file saved while the package stages is neither applied nor printed; the copy is
-  in a folder only the current user can read, checked before a byte is written (`PAC_SETTINGS_COPY_FAILED` otherwise), and is
-  removed on every outcome and when the run is ended by Ctrl+C, a closed terminal or an uncaught error — a cancelled run still ends
-  as cancelled (on Windows with `0xC000013A`, not 1).
+  never one early — and the output names the job that ran (`importJobId`), `importAttempts` and each refused send (`importRefusals`).
+  Every other answer is sent once, the solution-concurrency `0x80071151` included. That is the answer measured for an import that met
+  another import or a publish (its words begin "Cannot start the requested operation [Import]"), and that import's job existed by
+  then, so nothing proves it did not start: the maker runs it again once the other operation has finished. A failed import names its
+  job and, when the request was sent, the reason the job's log gives. When `pac` does the import it is given a copy of the settings
+  the run read, not the file's path, so a file saved while the package stages is neither applied nor printed; the copy is in a folder
+  only the current user can read, checked before a byte is written (`PAC_SETTINGS_COPY_FAILED` otherwise), and is removed on every
+  outcome and when the run is ended by Ctrl+C, a closed terminal or an uncaught error — a cancelled run still ends as cancelled (on
+  Windows with `0xC000013A`, not 1).
   `template` does not replace an existing `--out` file unless `--force` is given (`pac` replaced it silently, and every value
   already filled in with it) — not even one that appears while it works — so it needs a file system that can make a hard link (NTFS,
   ext4, APFS): on one that cannot (a FAT or exFAT volume, some network shares) it refuses with `IO_ERROR` and says that `--force`,
@@ -220,10 +222,11 @@ killed run leaves behind.
 - **Teardown keeps a table whose business rule it could not delete.** A rule is two rows — its definition and the activated copy the
   platform makes of it — and the copy can be deleted only while its table exists. When a rule's delete failed (an HTTP 500 "There is
   no active transaction.", say), 2.14.0 went on and deleted the table, which left the copy behind for good, and the re-run reported
-  success. The table is now kept — `table <name> (kept — business rule(s) on it could not be deleted (…), …)`, counted as kept in
-  the summary — until a re-run deletes the rule first, then the table. A reused or system table keeps its own reason, and the failed
-  delete is still sent once. What depends on the kept table — its icon web resource, a global choice its columns bind, a
-  relationship to itself — can fail to delete in the same run and is reported too, until the re-run removes the table.
+  success. The table is now kept — `table <name> (kept — business rule(s) on it could not be deleted (…), …)`, counted as kept in the
+  summary — until a re-run deletes the rule first, then the table; the rule, which teardown deactivates before it deletes it, stays
+  deactivated until then. A reused or system table keeps its own reason, and the failed delete is still sent once. What depends on the
+  kept table — its icon web resource, a global choice its columns bind, a relationship to itself — can fail to delete in the same run
+  and is reported too, until the re-run removes the table.
 - **The connection list and the connector commands are pinned to the environment.** 2.14.0 ran `pac connection list`, and told the
   agent to run `list-connector-operations` and `get-connector-schema`, without `--environment`, so they answered for the active
   organization of `pac`'s auth profile — not necessarily the environment being built — and a settings import bound to one of those
@@ -262,15 +265,16 @@ killed run leaves behind.
   written by the MetadataIds of the table and of its name column, so a table another maker deleted and made again while the build
   waited is left as it is, with a warning, never shortened. A length no attempt got as far as setting is tried once more when no
   retry follows. A later run still leaves an existing table's name column alone.
-- **An unreadable table list is a failure in every script, not "no tables".** The bundled SDK reads a 2xx answer with no `value`
-  list — a sign-in or proxy page, `{}`, `null` — as an environment with no tables, and the scripts turned that into decisions: the
-  build created a table that exists, the teardown skipped its system-table check (and, where every answer was such a page, reported
-  a table deleted that nothing deleted), the flow name check saw no clash, the verifier reported every declared table missing, and
+- **An unreadable table list is a failure in every script, not "no tables".** The bundled SDK reads a 2xx answer with no `value` list
+  — a sign-in or proxy page, `{}`, `null` — as an environment with no tables, and the scripts turned that into decisions: the build
+  created a table that exists, the teardown skipped its system-table check (and, where every answer was such a page, reported a table
+  deleted that nothing deleted), the flow name check saw no clash, the verifier reported every declared table missing, and
   `list-tables.js --exact` named every searched table missing. The table-list read is now held to being a list for every SDK the
-  plugin makes (`TABLES_UNREADABLE`), so each fails with that reason: the build halts before any create (`table-list-unreadable`,
-  which it does not run again: a run a moment later reads the same answer) and its dry run says `unknown`, the teardown deletes
-  nothing, the flow name check warns that it could not be made, the verify fails, and `list-tables.js` exits 1. `{ "value": [] }` is
-  still an empty answer, and no request is added or changed.
+  plugin makes (`TABLES_UNREADABLE`), so each fails with that reason: the build, which reads each table by name and turns to the list
+  only when that read is not conclusive, halts before any create (`table-list-unreadable`, which it does not run again: a run a moment
+  later reads the same answer) and its dry run says `unknown`, the teardown deletes no table (the steps before its tables still run),
+  the flow name check warns that it could not be made, the verify fails, and `list-tables.js` exits 1. `{ "value": [] }` is still an
+  empty answer, and no request is added or changed.
 - **A rebuild applies a changed app name and description.** 2.14.0 set them when the app was created and never again. A rebuild now
   writes a changed, non-blank `app.name` / `app.description` to the existing app on the push it already makes for the navigation;
   nothing is written when they already match, a spec that leaves them out never blanks them, and the unique name never changes. The
