@@ -213,7 +213,9 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   flag, and a build run with it needs it there**: the build writes a form's tab and section captions in that
   language, and `--verify` holds them to the language it is told (the flag, else this field, else the
   organization's base language) — so without the flag, or this field pinned in the spec, such a form is held to
-  the organization's language and fails. (The build's own `--verify` is told the language the build used.)
+  the organization's language and its captions cannot be confirmed: they are reported missing, or listed as
+  unverified when the form's read carries no label in that language (below). (The build's own `--verify` is told
+  the language the build used.)
   When no language can be established at all — the organization cannot be read — those captions are listed
   as **unverified**, neither passed nor failed. So are the captions compared in a language the environment's form
   read does not carry: the platform decides which languages' labels the FormXML it returns carries (a form built

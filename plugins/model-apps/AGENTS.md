@@ -179,11 +179,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   which `verify-model-app.js` takes too, and, for the build's own `--verify`, what its SDK was made for), else the
   spec's `languageCode`, else the organization's base language (read once) — and a label map at every LCID it
   declares; a translation the spec leaves out is never required or changed. A caption the published form holds only
-  in ANOTHER language does not stand in for the declared one, and a missing caption or language is a mismatch, not
-  a pass; a label the spec does not write is not compared. **A string label is never held to a guessed language.**
-  A build run with `--language-code` in an organization whose base language is another one publishes its captions
-  in the flag's language, so verify it with the same flag (or pin `languageCode` in the spec): told nothing, verify
-  holds them to the organization's language, and the failure says so. When no language can be established at all —
+  in ANOTHER language does not stand in for the declared one: a missing caption is a mismatch, not a pass, and so is
+  a caption missing in a language the form's read carries (a language the read carries no label in at all is
+  unverified, below); a label the spec does not write is not compared. **A string label is never held to a guessed
+  language.** A build run with `--language-code` in an organization whose base language is another one publishes its
+  captions in the flag's language, so verify it with the same flag (or pin `languageCode` in the spec): told nothing,
+  verify holds them to the organization's language, and either the failure says so or, when the read carries no
+  label in that language, the captions are listed as unverified. When no language can be established at all —
   the organization cannot be read — the string labels are listed under `unverified` (the output, and the result
   JSON beside `missing`), neither passed nor failed, with the reason and the flag that settles it: the build's
   fallback to 1033 is a choice for a build, and for verify it would be a guess that passes a stale caption as
