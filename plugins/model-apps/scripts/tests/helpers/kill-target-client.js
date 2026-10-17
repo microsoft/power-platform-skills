@@ -36,9 +36,12 @@ function stalled() {
   const handles = typeof process._getActiveHandles === 'function'
     ? process._getActiveHandles().map((h) => (h && h.constructor && h.constructor.name) || typeof h)
     : [];
-  const said = `kill-target-client: no process of this test file started or ended for ${WATCHDOG_MS / 60000} minutes. `
+  const full = `kill-target-client: no process of this test file started or ended for ${WATCHDOG_MS / 60000} minutes. `
     + `Processes it started: ${JSON.stringify(started.map((s) => ({ args: s.args, pid: s.pid, ...s.said() })))}. `
     + `Open handles: ${JSON.stringify(handles)}\n`;
+  // Kept well under a pipe's buffer: a write that the reader of stderr has room for completes at once, and a process that exits
+  // does not wait on one that is still pending (it did, measured, with a megabyte the reader had stopped taking).
+  const said = full.length > 8000 ? `${full.slice(0, 8000)} … (cut at 8000 characters)\n` : full;
   // What this file started and still runs goes with it: on POSIX a child outlives a parent that exits.
   endLiveChildren();
   setTimeout(() => { endLiveChildren(); process.exit(1); }, 2000);
@@ -161,7 +164,7 @@ function startTarget(t, args, { env = {} } = {}) {
       return ending();
     },
   };
-  started.push({ args, pid: child.pid, child, isEnded: () => ended, said: () => ({ stdout: out.slice(-2000), stderr: err.slice(-2000), ended }) });
+  started.push({ args, pid: child.pid, child, isEnded: () => ended, said: () => ({ stdout: out.slice(-1000), stderr: err.slice(-1000), ended }) });
   armWatchdog();
   // After the test, the process is killed AND this side of its pipes is closed: a program it started may hold the other end of a
   // pipe it was given, and an open pipe keeps this test file's process alive however its tests ended. Once is enough; it is
