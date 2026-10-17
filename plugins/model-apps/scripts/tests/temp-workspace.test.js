@@ -562,7 +562,8 @@ test('no script of the plugin makes a workspace folder by hand: every one goes t
   // smoke-eval.js builds a whole app folder (its spec and its own `.maker-workspace`) for a live smoke run against a scratch environment, and
   // regenerate-verified-icons.js runs `npm install` in a scratch folder: a maintainer runs each by hand, and neither is a step of a skill. run-tests.js makes the folder the
   // test suite runs in (its TEMP), which is not a workspace: a sweep a test makes must not take it for one, and the runner removes it itself when the suite ends.
-  assert.deepStrictEqual(scriptsMatching(/\btmpdir\s*\(/), ['lib/temp-workspace.js', 'regenerate-verified-icons.js', 'run-tests.js', 'smoke-eval.js']);
+  // The write-safety hook reads the temp folder's path to judge where a write goes; it makes no folder.
+  assert.deepStrictEqual(scriptsMatching(/\btmpdir\s*\(/), ['../hooks/validate-write-safety.js', 'lib/temp-workspace.js', 'regenerate-verified-icons.js', 'run-tests.js', 'smoke-eval.js']);
   const makers = scriptsMatching(/\bmakeTempWorkspace\(/);
   for (const script of ['ai-preflight.js', 'build-model-app.js', 'download-model-app.js', 'provision-entities.js', 'provision-solution.js', 'solution-settings.js', 'teardown-model-app.js', 'verify-model-app.js',
     'lib/genpage-sdk.js', 'lib/sdk-first.js', 'lib/throwaway-sdk.js']) {

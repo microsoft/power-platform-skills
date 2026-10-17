@@ -263,7 +263,9 @@ test('lib/maker-sdk.js hands the SDK a guarded client — once — and options w
   const client = fakeClient(answerHtml);
   const made = create({ instanceUrl: ORIGIN, httpClient: client });
   assert.notStrictEqual(made.httpClient, client, 'the SDK is given the guarded client');
-  assert.strictEqual(Object.getPrototypeOf(made.httpClient), client, 'which is the caller\u2019s client with one read looked at');
+  // It delegates (a Proxy, as the app header guard is): every member but the table-list read is the client's own, run on the client itself.
+  assert.ok(typeof made.httpClient.get === 'function' && made.httpClient.get !== client.get, 'its read of the table list is the guard\u2019s');
+  for (const key of Object.keys(client).filter((k) => k !== 'get' && typeof client[k] === 'function')) assert.strictEqual(typeof made.httpClient[key], 'function', `${key} is the client\u2019s`);
   assert.strictEqual(create({ instanceUrl: ORIGIN, httpClient: made.httpClient }).httpClient, made.httpClient, 'a client already guarded is not guarded again');
   const marker = { marker: 'az-client' };
   assert.strictEqual(create({ instanceUrl: ORIGIN, httpClient: marker }).httpClient, marker, 'a client with no get is the caller\u2019s own');

@@ -200,11 +200,13 @@ test('every SDK the plugin makes is given the guarded client, the bundle\'s own 
   assert.deepStrictEqual(calls, []);
   await made.httpClient.patch(ROW, { name: 'Probe', description: 'Tickets' }, OPTIONS);
   assert.strictEqual(calls.length, 1);
-  // No client: no key is added. A client with no patch is the caller's own.
+  // No client: no key is added. The factory also holds the table list to being a list (lib/collection-answers.js), which looks at `get` alone, as this guard looks at writes: a client with neither is
+  // the caller's own.
   assert.deepStrictEqual(Object.keys(create({ instanceUrl: 'https://contoso.crm.dynamics.com' })).sort(), ['instanceUrl', 'typescript']);
-  const noPatch = { get: async () => 1 };
-  assert.strictEqual(create({ httpClient: noPatch }).httpClient, noPatch);
-  // A client the caller guarded itself is not guarded again.
-  const mine = guardAppHeaderWrites(client);
+  const neither = { post: async () => 1 };
+  assert.strictEqual(create({ httpClient: neither }).httpClient, neither);
+  // A client the caller guarded itself, both ways, is not guarded again.
+  const { guardTableLists } = require('../lib/collection-answers.js');
+  const mine = guardAppHeaderWrites(guardTableLists(client));
   assert.strictEqual(create({ httpClient: mine }).httpClient, mine);
 });

@@ -44,19 +44,28 @@ function describeAnswer(body) {
  * `client` with one addition: a 2xx answer to a `get` that `reads(url)` selects must be a collection, or `get` throws what `unreadable({ status, shape, url })` returns.
  * Everything else — every other method, every other read, every other status, the answers themselves — is the client's own, untouched. A client with no `get` is returned as it is.
  * @param {object} client - the SDK's HttpClient
- * @param {{ reads: (url: string) => boolean, unreadable: (answer: { status: number, shape: string, url: string }) => Error }} policy
+ * @param {{ reads: (url: string) => boolean, unreadable: (answer: { status: number, shape: string, url: string }) => Error, mark?: symbol }} policy - `mark` reads true on the wrapper
  */
-function requireCollectionAnswers(client, { reads, unreadable }) {
+function requireCollectionAnswers(client, { reads, unreadable, mark }) {
   if (!client || typeof client.get !== 'function') return client;
-  // `Object.create` rather than a copy: whatever else the client has (more methods, a prototype, getters) is reached as it was.
-  return Object.assign(Object.create(client), {
-    get: async (url, options) => {
-      const response = await client.get(url, options);
-      if (reads(url) && response && response.status >= 200 && response.status < 300 && !isCollection(response.body)) {
-        throw Object.defineProperty(unreadable({ status: response.status, shape: describeAnswer(response.body), url }), UNREADABLE, { value: true });
-      }
-      return response;
+  const get = async (url, options) => {
+    const response = await client.get(url, options);
+    if (reads(url) && response && response.status >= 200 && response.status < 300 && !isCollection(response.body)) {
+      throw Object.defineProperty(unreadable({ status: response.status, shape: describeAnswer(response.body), url }), UNREADABLE, { value: true });
+    }
+    return response;
+  };
+  // A delegating Proxy over an empty target, as lib/app-header-text.js's guard is: every other member is read from the client AT THE MOMENT it is read (a method it gains or is given later is seen,
+  // one it lacks stays absent) and runs with the CLIENT as its receiver. `Object.create(client)` would run an inherited method with the wrapper as `this`, which breaks a client whose methods keep
+  // private state (a class with `#fields`: "Receiver must be an instance of class …"); a copy would miss what the client gains later.
+  return new Proxy({}, {
+    get: (_, key) => {
+      if (key === 'get') return get;
+      if (mark !== undefined && key === mark) return true;
+      const value = client[key];
+      return typeof value === 'function' ? value.bind(client) : value;
     },
+    has: (_, key) => key === 'get' || (mark !== undefined && key === mark) || key in client,
   });
 }
 
@@ -89,12 +98,11 @@ const tablesUnreadableMessage = ({ status, shape }) => `The environment's tables
  */
 function guardTableLists(client, makeError = (code, message) => Object.assign(new Error(message), { code })) {
   if (!client || client[TABLE_LISTS_GUARDED]) return client;
-  const guarded = requireCollectionAnswers(client, {
+  return requireCollectionAnswers(client, {
     reads: (url) => TABLE_LIST_READ.test(url),
     unreadable: (answer) => makeError(TABLES_UNREADABLE, tablesUnreadableMessage(answer)),
+    mark: TABLE_LISTS_GUARDED,
   });
-  if (guarded !== client) Object.defineProperty(guarded, TABLE_LISTS_GUARDED, { value: true });
-  return guarded;
 }
 
 module.exports = { requireCollectionAnswers, unreadableAnswer, isCollection, describeAnswer, guardTableLists, TABLES_UNREADABLE, TABLE_LIST_READ, tablesUnreadableMessage };
