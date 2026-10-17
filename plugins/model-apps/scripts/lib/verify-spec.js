@@ -188,7 +188,7 @@ async function verifySpec(spec, read, opts = {}) {
   // an operator on a perfectly healthy environment that their environment is broken — and on the
   // normal `--changed-only` fast-apply path that would be wrong every single time. A THIRD thing is
   // neither: a check verify could not decide (`unverified` — the language a form's labels were written in
-  // could not be established). It is not a pass and it is not a failure, so it is listed apart and never
+  // could not be established, or the form's read does not carry it). It is not a pass and it is not a failure, so it is listed apart and never
   // counted in `checks` or `missing`. (Each task collects its own `environmentSkipped` / `phaseSkipped` /
   // `unverified`; the plan joins them in report order.)
 
@@ -712,6 +712,9 @@ async function verifySpec(spec, read, opts = {}) {
   // correct one. So when nothing answers, the string labels are reported `unverified` with the reason (`undetermined`), not held to a language.
   // `fromOrganization` says the language was inferred, not given, so a mismatch can tell the maker a build run with another one needs the flag.
   // Read once per pass, and only when a form authors a string label.
+  //
+  // A language that is known is not always one the form's READ can show (labelProblem says why): a label compared in a language no label of the
+  // form is in is listed `unverified` too, whichever way the language was learnt.
   let authoringLanguageP;
   const authoringLanguage = () => authoringLanguageP || (authoringLanguageP = (async () => {
     let fromOrganization = false;
@@ -786,7 +789,7 @@ async function verifySpec(spec, read, opts = {}) {
       // the whole form, including header/footer and unbound controls, even for an unshaped auto form.
       const identityProblems = formIdentityProblems(xml);
       add('form-identities', `${entity}.${name}`, identityProblems.length === 0, identityProblems.join('; '));
-      const { tabs: deployed, outer } = parseFormTopology(xml);
+      const { tabs: deployed, outer, languages: carriedLanguages } = parseFormTopology(xml);
       // The Notes timeline, on any layout: Dynamics renders it only under the control id `notescontrol` in a
       // tall cell (lib/form-timeline.js), so a form that carries it in the shape an older build wrote — or not at
       // all — has not got the timeline the spec asks for, however many other checks pass. The form need only
@@ -837,13 +840,37 @@ async function verifySpec(spec, read, opts = {}) {
       // to hold the string to — it is listed in `unverifiedLabels`, neither passed nor failed. A label map names its own languages and is compared
       // as ever. `comparedInOrganizationLanguage` is set when a string was held to a language inferred from the organization and the container
       // carries captions only in others, which is what a build run with a language flag leaves: the detail then says what to give verify.
+      //
+      // A language is also one the READ may not show, however well known: the platform decides which languages' labels go into the FormXML a caller
+      // reads, and it can return fewer than the form stores. Measured live — a form built and published with Spanish (3082) captions in an
+      // organization whose base language is English (1033) keeps both languages (a translation export finds them), yet the published FormXML
+      // comes back with every label in 1033 alone, whether or not the request asks for the other language:
+      //   <tab name="t"><labels><label description="Overview" languagecode="1033" /></labels> …
+      // The Spanish caption is then missing from the READ, not from the form, and failing it as missing failed a build that had written it right. So
+      // when no label anywhere in the form — `carriedLanguages`, any element's — is in the language a label is compared in, that language is one this
+      // read cannot show: the label is not compared but listed in `unshownLabels`, neither passed nor failed, like a language that cannot be
+      // established. A map is split the same way, entry by entry: the languages the read carries are compared and the others listed. A language
+      // that some label does carry is compared exactly as above, strictly — a stale caption in it fails. `carriedLanguages` is empty only for a form
+      // that publishes no label at all, which names no language to be missing from: what such a form lacks is a caption, and is a mismatch as ever
+      // (the read measured live carried every label of the form, in the base language).
+      // Translations are not read another way (a translation export, RetrieveLocLabels): what a caller's FormXML does not carry is not verified.
       const unverifiedLabels = [];
+      const unshownLabels = new Map();
       let comparedInOrganizationLanguage;
       const labelProblem = (what, container, authored, language) => {
         const known = language && language.lcid;
         if (typeof authored === 'string' && authored !== '' && !known) { unverifiedLabels.push(what); return; }
         const have = (container && container.labels) || [];
         for (const [lcid, text] of declaredLabels(authored, known)) {
+          if (carriedLanguages.length && !carriedLanguages.includes(lcid)) {
+            if (!unshownLabels.has(lcid)) unshownLabels.set(lcid, { whats: [], string: false });
+            const held = unshownLabels.get(lcid);
+            held.whats.push(what);
+            // A string label is compared in the language verify is told, so a read that carries others is something a maker can act on by telling it
+            // one of them; a map names its languages itself, and there is nothing to tell.
+            if (typeof authored === 'string') held.string = true;
+            continue;
+          }
           if (have.some((l) => l.lcid === lcid && l.text === text)) continue;
           const declared = `the spec declares label: ${JSON.stringify(text)} in language ${lcid}`;
           const same = have.filter((l) => l.lcid === lcid);
@@ -1116,6 +1143,18 @@ async function verifySpec(spec, read, opts = {}) {
         unverified.push(`form-labels:${entity}.${name} (${n === 1 ? 'the label' : 'the labels'} of ${unverifiedLabels.slice(0, 6).join(', ')}${n > 6 ? `, +${n - 6} more` : ''} ${n === 1 ? 'was' : 'were'} not compared: `
           + `the language the build wrote ${n === 1 ? 'it' : 'them'} in could not be established (${labelLanguage.reason}). `
           + `Pass --language-code <lcid> (the one the build was run with) or set "languageCode" in the spec to compare ${n === 1 ? 'it' : 'them'})`);
+      }
+      // The labels compared in a language the form's read does not carry (labelProblem), one entry per language: what happened, and what to do. A string
+      // label's language is the one verify was told, so the maker may also tell it another the read carries — and where it was not told but inferred from
+      // the organization, the flag that gives it the build's own is what most likely settles it.
+      for (const [lcid, held] of unshownLabels) {
+        const n = held.whats.length;
+        const inferred = held.string && labelLanguage && labelLanguage.fromOrganization
+          ? ` (verify used the organization's base language, because it was told no other: if the build was run with --language-code, give verify the same flag, or pin "languageCode" in the spec)`
+          : '';
+        unverified.push(`form-labels:${entity}.${name} (${n === 1 ? 'the label' : 'the labels'} of ${held.whats.slice(0, 6).join(', ')}${n > 6 ? `, +${n - 6} more` : ''} in language ${lcid} ${n === 1 ? 'was' : 'were'} not compared: `
+          + `the environment's form read returns labels only in ${carriedLanguages.join(', ')}, so labels written in ${lcid} cannot be read back from it. `
+          + `Check ${n === 1 ? 'it' : 'them'} in Power Apps with that language${held.string ? `, or verify in a language the read carries${inferred}` : ''})`);
       }
       placedGridChecks({
         tab: (i) => matchedTabs[i],
@@ -2540,6 +2579,9 @@ function authorsStringLabel(f) {
 //   They are returned beside the tabs, as `outer`: [{ part: 'header' | 'footer' | 'tabheader' | 'tabfooter', tab, cell }] in document
 //   order, `tab` being the name of the tab a tabheader or tabfooter belongs to. A field placed there is a placement of the field as much as
 //   a section's is, and the build flags it (artifact-intent.js findFieldOuterCells), so verify must see it.
+//   `languages` is every language a label of the form is in — a tab's, a section's, a field's, a header cell's alike — as the LCIDs the labels name,
+//   ascending: `<label description="Overview" languagecode="1033" />` adds 1033, and a label that names no language adds none. It is what the READ
+//   carries of the form (see labelProblem, which is where it matters).
 //
 // Written as a depth scanner rather than nested non-greedy regexes: tabs contain columns contain
 // sections contain rows contain cells, and a non-greedy `<section>[\s\S]*?</section>` stops at the
@@ -2548,6 +2590,7 @@ function parseFormTopology(xml) {
   const s = String(xml || '');
   const tabs = [];
   const outer = [];
+  const languages = new Set();
   // `part` is the form's header or footer, or a tab's own, while the scan is inside one: a cell then belongs to `outer`, not to a section's row.
   let tab = null, column = null, section = null, row = null, cell = null, part = null;
   // A <cell> carries its own <labels>, so a cell's label must not be attributed to its section.
@@ -2614,12 +2657,16 @@ function parseFormTopology(xml) {
     // label against: the build writes one language and a maker's translations stay beside it, listed in whatever order the platform
     // gives them. The language is kept because a label is only the spec's if it is the spec's in ITS language; one a label never
     // names (no `languagecode`) has `lcid: undefined`, and is the spec's in no language.
-    else if (tag === 'label' && !inCell) {
+    // `languages` is wider than that: the language of EVERY label, a cell's (a field's caption, the empty one of a header cell) included, because it
+    // answers a different question — which languages this read of the form carries at all (live: every label of a published form's read, the
+    // fields' and the header cells' as much as the tabs' and sections', was in the one language, 1033).
+    else if (tag === 'label') {
+      const lcid = normalizeLanguageCode(attr(raw, 'languagecode'));
+      if (lcid !== null) languages.add(lcid);
       const d = attr(raw, 'description') === undefined ? undefined : decodeXmlEntities(attr(raw, 'description'));
-      if (d !== undefined) {
+      if (d !== undefined && !inCell) {
         const owner = section || tab;
         if (owner) {
-          const lcid = normalizeLanguageCode(attr(raw, 'languagecode'));
           (owner.labels = owner.labels || []).push({ lcid: lcid === null ? undefined : lcid, text: d });
           if (owner.label === undefined) owner.label = d;
         }
@@ -2654,7 +2701,7 @@ function parseFormTopology(xml) {
       if (text) cell.control.relationshipName = decodeXmlEntities(text);
     }
   }
-  return { tabs, outer };
+  return { tabs, outer, languages: [...languages].sort((a, b) => a - b) };
 }
 
 function conditionMatches(want, got) {

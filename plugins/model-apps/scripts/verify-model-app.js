@@ -17,6 +17,14 @@
 // uses the organization's base language. When it can establish no language at all — the organization cannot be read — those labels are neither passed
 // nor failed: they are listed under `unverified`, in the output and in the result JSON, with the reason and the flag that settles it.
 //
+// A language is also one the form's READ may not carry. The platform decides which languages' labels go into the FormXML a caller reads, and it can
+// return fewer than the form stores (live: a form built with Spanish captions in an English-language organization, the Spanish captions stored, reads
+// back with every label in English). When no label of the form's FormXML is in the language a label is compared in, that label is not missing — the read
+// cannot show it — and it is listed under `unverified` as well, with the languages the read does carry and what to do (check it in Power Apps with that
+// language, or, for a label written as a string, verify in a language the read carries); a label map is compared at the languages the read carries and
+// listed for the others. A language the read does carry is compared strictly, as ever. Translations are not read another way (a translation export,
+// RetrieveLocLabels): what a caller's FormXML cannot show is not verified.
+//
 // Result JSON: { ok, present, total, missing, errors } and, only when a check could not be decided, `unverified: [ "<kind>:<name> (<reason>)" ]`.
 // `unverified` does not change `ok` or the exit status.
 

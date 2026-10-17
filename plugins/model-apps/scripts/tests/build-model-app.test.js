@@ -7,6 +7,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
 const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { verifySpec } = require(path.join(__dirname, '..', 'lib', 'verify-spec.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
@@ -2542,6 +2543,48 @@ test('verify NARRATES what it could not verify beside its PASS — it is neither
   assert.ok(cap.logs.some((l) => l.includes(unverified[0])), 'and names what, with the reason');
   assert.strictEqual(r.verify.ok, true, 'it is not a failure');
   assert.deepStrictEqual(r.verify.unverified, unverified, 'the machine channel — this is what emitResult serializes');
+});
+
+// A build run in a language the environment's form read does not show: live, Spanish (3082) captions in an organization whose base language is English
+// (1033), read back with the form's labels in English only. The build wrote what the spec says; its own verify cannot read it back, and says so — the
+// captions are listed unverified, neither passed nor failed, and the build is not reported as a partial one.
+test('the build\'s own verify of a form whose read carries no label in the language it wrote ends PASS — the captions are narrated unverified, not failed', async () => {
+  const spanish = {
+    solution: { uniqueName: 'FormProbe', displayName: 'Form Probe', publisherPrefix: 'new' },
+    app: { name: 'Form Probe', uniqueName: 'new_formprobe' },
+    entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', existing: true, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+    forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', layout: 'explicit', prune: false, notes: false,
+      tabs: [{ name: 'tab_main', label: 'Resumen', sections: [{ name: 'sec_main', label: 'Detalles', columns: 1, fields: ['new_name'] }] }] }],
+  };
+  // What the read returns: every label in 1033.
+  const formxml = '<form><tabs><tab id="{1}" name="tab_main" expanded="true" visible="true"><labels><label description="Overview" languagecode="1033" /></labels><columns><column width="100%"><sections>'
+    + '<section id="{2}" name="sec_main" showlabel="true" visible="true" columns="1"><labels><label description="Basics" languagecode="1033" /></labels><rows><row><cell id="{3}"><control id="new_name" classid="{4273EDBD-AC1D-40D3-9FB2-095C621B552D}" datafieldname="new_name" /></cell></row></rows></section>'
+    + '</sections></column></columns></tab></tabs><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+  const reader = {
+    findTable: async () => ({ logicalName: 'new_ticket' }),
+    findColumns: async () => [{ logicalName: 'new_name' }],
+    sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'f1', name: 'Main', objecttypecode: 'new_ticket', type: 2, isdefault: true }] : []),
+    formTopology: async () => formxml,
+  };
+  const cap = logCapture();
+  const r = await buildModelApp(spanish, { apply: true, verify: true, env: 'https://contoso.crm.dynamics.com', languageCode: 3082, preResolvedLanguageCode: 3082 }, {
+    log: cap.log,
+    // The build itself is not what this test is about: its verification step runs for real, over the form that build wrote.
+    runBuild: async () => ({ ok: true, dryRun: false, created: {}, skipped: {} }),
+    verify: (s, options) => verifySpec(s, reader, options),
+  });
+  const logs = cap.logs.join('\n');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.verify.ok, true, `no caption is reported missing: ${JSON.stringify(r.verify.missing)}`);
+  assert.deepStrictEqual(r.verify.missing, []);
+  assert.strictEqual(r.verify.present, r.verify.total, 'every check that was made passed');
+  assert.deepStrictEqual(r.verify.unverified, ['form-labels:new_ticket.Main (the labels of tab \'tab_main\', section \'sec_main\' in language 3082 were not compared: '
+    + 'the environment\'s form read returns labels only in 1033, so labels written in 3082 cannot be read back from it. Check them in Power Apps with that language, or verify in a language the read carries)'], 'the machine channel');
+  assert.match(logs, /✓ verify PASS/);
+  assert.match(logs, /⊘ 1 check could not be verified — it is neither passed nor failed/, 'the human channel says so');
+  assert.ok(cap.logs.some((l) => l.includes(r.verify.unverified[0])), 'and names what, with the reason');
+  assert.doesNotMatch(logs, /form-topology/, 'the captions are not reported as a failed check');
 });
 
 // #587 item 3 — a plain `--apply` called invalidateSnapshot but DISCARDED its `{ ok, reason }`

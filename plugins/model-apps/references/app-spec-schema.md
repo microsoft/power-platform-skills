@@ -215,7 +215,10 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   organization's base language) — so without the flag, or this field pinned in the spec, such a form is held to
   the organization's language and fails. (The build's own `--verify` is told the language the build used.)
   When no language can be established at all — the organization cannot be read — those captions are listed
-  as **unverified**, neither passed nor failed.
+  as **unverified**, neither passed nor failed. So are the captions compared in a language the environment's form
+  read does not carry: the platform decides which languages' labels the FormXML it returns carries (a form built
+  with Spanish captions in an English-language organization reads back with its labels in English only), and a
+  language no label of the form is in cannot be read back, whatever the form stores.
   If the organization has **not** provisioned the LCID you pin, the build stops at the start of the
   data-model phase and lists the ones it does have — Dataverse would otherwise accept the table and
   Choice labels (silently storing them under the org's base language) and then reject the first
@@ -1250,9 +1253,17 @@ A label is compared in the language the build wrote it — a string label in the
 `--language-code` the build was given, which `verify-model-app.js` takes too; else the spec's `languageCode`; else the
 organization's base language), a label map at each language it declares, with no
 word about a translation it leaves out — so a relabel that never reached the published form fails even when
-ANOTHER language carries the wanted text, and a caption or language the published form lacks is a mismatch, never a pass.
+ANOTHER language carries the wanted text, and a caption the published form lacks in a language it carries is a mismatch, never a pass.
 Where the build's language cannot be established (the organization cannot be read, and nothing else says it), a string label is
 reported **unverified** — neither passed nor failed — with the reason, and every other check still runs.
+The same goes for a language the environment's form read does not carry: the platform decides which languages' labels go
+into the FormXML it returns, and it can return fewer than the form stores (measured: a form built and published with Spanish
+(`3082`) captions in an English-language (`1033`) organization keeps both languages, yet its published FormXML carries every label in
+`1033` alone). When no label of the form — on any element — is in the language a label is compared in, the labels compared in it
+are reported **unverified** (what the read does carry, and what to do: check them in Power Apps with that language), a label map
+`{ "1033": …, "3082": … }` is compared at the languages the read carries and the others are listed the same way, and `ok` and the exit
+status are those of everything that could be compared. A language the read does carry is compared strictly: a stale caption in it
+fails. Translations are not read another way (a translation export, `RetrieveLocLabels`).
 A label the spec does not write is not compared. Auto forms also require readable
 FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
 It does **not** check field order or `after` adjacency.

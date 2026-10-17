@@ -562,6 +562,86 @@ test('verify CLI lists what it could not verify, beside the PASS, in the output 
   assert.ok(!('unverified' in none.events.find((e) => e.type === 'emitResult').payload), 'the result keeps its shape when nothing was left unverified');
 });
 
+// A form built in a language the environment's form read does not show: live, Spanish (3082) captions in an organization whose base language is English
+// (1033), read back with the form's labels in English only. Run as the CLI runs — the real verification over a reader built on an SDK that answers what the
+// platform answered — a verify told the language by either spelling of the flag, or by a pin in the spec, compares nothing it cannot read back: the
+// captions are listed unverified, the rest of the layout is checked, and the run ends clean.
+const SPANISH_FORM_ID = '00000000-0000-4000-8000-000000000001';
+const spanishFormSpec = (over = {}) => ({
+  solution: { uniqueName: 'FormProbe', displayName: 'Form Probe', publisherPrefix: 'new' },
+  app: { name: 'Form Probe', uniqueName: 'new_formprobe' },
+  entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', existing: true, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+  forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', layout: 'explicit', prune: false, notes: false,
+    tabs: [{ name: 'tab_main', label: 'Resumen', sections: [{ name: 'sec_main', label: 'Detalles', columns: 1, fields: ['new_name'] }] }] }],
+  ...over,
+});
+// The published form as a read returns it, with the captions `tab` and `section` (each `<label …/>` markup).
+const spanishFormXml = ({ tab, section }) => `<form><tabs><tab id="{1}" name="tab_main" expanded="true" visible="true"><labels>${tab}</labels><columns><column width="100%"><sections>`
+  + `<section id="{2}" name="sec_main" showlabel="true" visible="true" columns="1"><labels>${section}</labels><rows><row><cell id="{3}"><control id="new_name" classid="{4273EDBD-AC1D-40D3-9FB2-095C621B552D}" datafieldname="new_name" /></cell></row></rows></section>`
+  + '</sections></column></columns></tab></tabs><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+const englishLabels = { tab: '<label description="Overview" languagecode="1033" />', section: '<label description="Basics" languagecode="1033" />' };
+const formSdk = (formxml) => () => ({
+  initWorkspace: async () => {},
+  findTables: async () => [{ logicalName: 'new_ticket' }],
+  findColumns: async () => [{ logicalName: 'new_name' }],
+  queryRecords: async (set) => (set === 'systemform' ? [{ formid: SPANISH_FORM_ID, name: 'Main', objecttypecode: 'new_ticket', type: 2, isdefault: true, formxml }] : []),
+  fetchEntityMetadata: async () => ({ Relationships: [] }),
+  resolveArtifact: async () => [],
+  retrieveSetting: async () => null,
+  dataverse: {
+    get: async (p) => {
+      if (/WhoAmI/.test(String(p))) return { status: 200, body: { UserId: '11111111-2222-3333-4444-555555555555' } };
+      if (/RetrieveFilteredForms/.test(String(p))) return { status: 200, body: { value: [{ formid: SPANISH_FORM_ID }] } };
+      return { status: 200, body: { value: [] } };
+    },
+  },
+});
+const runSpanishVerify = async (flags, { spec = spanishFormSpec(), labels = englishLabels } = {}) => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { ...SPEC_FLAGS, ...flags } },
+    realGates: true,
+    specObject: spec,
+    sdkFactory: formSdk(spanishFormXml(labels)),
+  });
+  await harness.main();
+  return { harness, emitted: harness.events.find((e) => e.type === 'emitResult') };
+};
+
+test('verify CLI over a form read that carries only English — --language-code 3082, --languageCode 3082 and a spec pin — lists the Spanish captions unverified and exits clean', async () => {
+  for (const [what, flags, spec] of [
+    ['--language-code 3082', { 'language-code': '3082' }, spanishFormSpec()],
+    ['--languageCode 3082', { languageCode: '3082' }, spanishFormSpec()],
+    ['both spellings', { 'language-code': '3082', languageCode: '3082' }, spanishFormSpec()],
+    ['languageCode pinned in the spec', {}, spanishFormSpec({ languageCode: 3082 })],
+  ]) {
+    const { harness, emitted } = await runSpanishVerify(flags, { spec });
+    const stderr = harness.stderr.join('');
+    assert.strictEqual(emitted.ok, true, `${what}: the exit status is the verdict on what was compared — ${JSON.stringify(emitted.payload)}`);
+    assert.deepStrictEqual(emitted.payload.missing, [], `${what}: no caption is reported missing`);
+    assert.strictEqual(emitted.payload.present, emitted.payload.total, what);
+    assert.strictEqual(emitted.payload.unverified.length, 1, `${what}: ${JSON.stringify(emitted.payload.unverified)}`);
+    assert.match(emitted.payload.unverified[0], /^form-labels:new_ticket\.Main \(the labels of tab 'tab_main', section 'sec_main' in language 3082 were not compared: the environment's form read returns labels only in 1033, so labels written in 3082 cannot be read back from it\. Check them in Power Apps with that language, or verify in a language the read carries\)$/, what);
+    assert.match(stderr, /✓ verify PASS/, what);
+    assert.match(stderr, /⊘ 1 check could not be verified — it is neither passed nor failed/, what);
+    assert.ok(stderr.includes(`⊘ ${emitted.payload.unverified[0]}`), `${what}: the entry is named, with its reason`);
+  }
+});
+
+test('verify CLI compares the Spanish captions strictly when the read carries them — a stale one still fails the run', async () => {
+  const spanishToo = (tab) => ({
+    tab: `<label description="Overview" languagecode="1033" /><label description="${tab}" languagecode="3082" />`,
+    section: '<label description="Basics" languagecode="1033" /><label description="Detalles" languagecode="3082" />',
+  });
+  const right = await runSpanishVerify({ 'language-code': '3082' }, { labels: spanishToo('Resumen') });
+  assert.strictEqual(right.emitted.ok, true, JSON.stringify(right.emitted.payload));
+  assert.ok(!('unverified' in right.emitted.payload), 'the read shows Spanish: nothing is left it cannot tell');
+  const stale = await runSpanishVerify({ 'language-code': '3082' }, { labels: spanishToo('Antiguo') });
+  assert.strictEqual(stale.emitted.ok, false, 'a stale caption in a language the read carries fails, as ever');
+  assert.match(stale.emitted.payload.missing[0], /^form-topology:new_ticket\.Main \(deployed layout does not match the authored one — tab 'tab_main' is deployed with label "Antiguo" in language 3082, the spec declares label: "Resumen" in language 3082\)$/);
+  assert.ok(!('unverified' in stale.emitted.payload));
+  assert.match(stale.harness.stderr.join(''), /✗ verify FAIL — 1 missing/);
+});
+
 // The page reads a pass gave up on can still be running when it ends, and only a workspace the backend made itself is one it can close — so it is not
 // lent the run's SDK (whose folder the run removes). It is made lazily, when the first page is read, and disposed (closed, then removed) before the result is
 // printed: emitResult ends the process, so a cleanup placed after it never runs.

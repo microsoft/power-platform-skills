@@ -188,7 +188,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   JSON beside `missing`), neither passed nor failed, with the reason and the flag that settles it: the build's
   fallback to 1033 is a choice for a build, and for verify it would be a guess that passes a stale caption as
   readily as it fails a correct one (`resolveLanguageCode`'s `undetermined` hook replaces it). Everything else is
-  still checked, label maps included. Field order and anchor adjacency are not verified. A field's `readOnly`/`hidden` flag goes on
+  still checked, label maps included. **A language the form's read does not carry is never reported missing.** The platform
+  decides which languages' labels go into the FormXML a caller reads, and it can return fewer than the form stores —
+  measured: a form built and published with Spanish (3082) captions in an organization whose base language is English
+  (1033) keeps both languages (a translation export finds them), yet its published FormXML, with or without an
+  `Accept-Language` for the other language, carries every label in 1033 alone. When no label of the form's FormXML — on any
+  element, a field's included — is in the language a label is compared in, the labels compared in that language are listed
+  under `unverified` too (`form-labels:<table>.<form> (… in language 3082 … not compared: the environment's form read
+  returns labels only in 1033, so labels written in 3082 cannot be read back from it. Check … in Power Apps with that
+  language, or verify in a language the read carries)`), neither passed nor failed, with `ok` and the exit status unchanged;
+  a label map is compared at the languages the read carries and the others are listed the same way (`verifySpec`'s
+  `carriedLanguages`, `parseFormTopology`). A language the read does carry is compared exactly as above — a stale caption in
+  it still fails — and a form whose read carries no label at all names no language, so its missing caption is a
+  mismatch as ever. Translations are not read another way (a translation export, `RetrieveLocLabels`): what a caller's
+  FormXML cannot show is not verified. Field order and anchor adjacency are not verified. A field's `readOnly`/`hidden` flag goes on
   **every** cell the form holds of the field — in a section, in a maker's tab or section, in the form
   **header and footer**, and in a tab's own header and footer (`tabheader`/`tabfooter`): on a form a maker placed a
   field on twice, the first cell alone left the second editable or visible. `applyFieldControlOptions` visits each
@@ -942,7 +955,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   customer columns, global choices, status reasons, alternate keys, relationships); precedence is
   `--language-code` → App Spec `languageCode` → the org's base language → 1033 (`--verify` resolves the language its
   string tab and section labels were written in by the same precedence — it takes the same flag — but never falls to
-  1033: see the form-layout paragraph). Without this, an org
+  1033, and compares them only in a language its form read carries: see the form-layout paragraph). Without this, an org
   that has not provisioned 1033 fails the data-model phase with `The language code 1033 is not a valid
   language for this organization`
   (#447) — and confusingly only on

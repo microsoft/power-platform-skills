@@ -436,10 +436,20 @@ data-model labels, and form, dashboard and sitemap labels — the SDK serializer
 
 **Verify with the same flag.** A build run with `--language-code <lcid>` writes a form's tab and section
 captions in that language, so run the standalone verifier with the **same** `--language-code <lcid>` (or pin
-`languageCode` in the spec): without it, `--verify` holds the captions to the organization's base language and
-reports a correctly published form as missing its captions. The build's own `--verify` is told the language
-automatically. If verify cannot establish the language at all (the organization cannot be read), it lists those
-captions as **unverified** — neither passed nor failed — with the reason: re-run it with the flag.
+`languageCode` in the spec): without it, `--verify` looks for the captions in the organization's base language and
+cannot confirm a correctly published form's captions (it lists them as unverified or reports them missing). The
+build's own `--verify` is told the language automatically. If verify cannot establish the language at all (the
+organization cannot be read), it lists those captions as **unverified** — neither passed nor failed — with the
+reason: re-run it with the flag.
+
+**A language the environment's form read does not show.** The platform decides which languages' labels the form's
+FormXML carries, and it can return fewer than the form stores: a form built with Spanish (`3082`) captions in an
+English-language organization reads back, with the Spanish captions stored, with its labels in English only. Verify
+never calls a caption missing in a language the read does not carry — it lists the labels compared in that language as
+**unverified** (neither passed nor failed; the run's result and exit status are unchanged), naming the languages the
+read does carry, and for a `{ "1033": …, "3082": … }` label map it compares the languages the read carries and lists
+the others. Say so, and ask the user to check those captions in Power Apps with that language; do not rebuild to
+"fix" them. A language the read does carry is still compared strictly: a stale caption in it fails.
 
 Narrate progress as it runs. Transient env errors (a 429 or 503, a customization lock, a concurrent-operation
 guard or a SQL timeout the service names by its error code, a timeout or reset of the connection) are
@@ -516,7 +526,9 @@ node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<workin
 
 Pass `--language-code` only if the build was run with it. A line starting `⊘` under the verdict is a check verify
 could **not decide** (it is in the JSON result's `unverified` list): it is neither a pass nor a failure, so say what it
-was and what settles it — never report the run as "everything deployed" while one is listed.
+was and what settles it — the language of the captions, which `--language-code` gives, or a language the environment's
+form read does not carry, whose captions only Power Apps can show — never report the run as "everything deployed" while
+one is listed.
 
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
