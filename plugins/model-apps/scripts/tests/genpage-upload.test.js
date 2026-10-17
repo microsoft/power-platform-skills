@@ -87,7 +87,7 @@ function run(argv, backend, extra = {}) {
   let made;
   return new Promise((resolve, reject) => {
     uploadMod.main(argv, {
-      makeGenpageSdk: (env) => { made = make(env); return made; },
+      makeGenpageSdk: (env, deps) => { made = make(env, deps); return made; },
       emit: (ok, payload) => resolve({ ok, payload, disposedAtEmit: made && made.disposed }),
       ...extra,
     }).catch(reject);
@@ -1599,14 +1599,23 @@ test('an UPDATE that ADDS a key the deployed page did not have is refused, namin
   }
 });
 
-test('an UPDATE is judged key by key: a renamed slot keeps the keys the deployed page had, and a second key where there was one is new — and is the one that is named', async () => {
+test('an UPDATE is judged key by key: a key removed from one place and set to the same value in another is new there, and so is a second key where there was one — and it is the one that is named', async () => {
   const deployed = `${GRIFFEL_IMPORT}const s = makeStyles({\n  root: { borderWidth: '1px' },\n});\nexport default function P() { return null; }\n`;
   const aboutGriffel = (result) => (result.r.payload.warnings || []).filter((w) => /Griffel/.test(w));
-  // The slot is renamed: the same key, still dropped, still not new.
-  const renamed = await griffelUpdate(deployed.replace('root:', 'container:'), deployed);
-  assert.strictEqual(renamed.r.ok, true, JSON.stringify(renamed.r.payload));
-  assert.strictEqual(aboutGriffel(renamed).length, 1);
-  // A second `borderWidth`, in another slot, is new — wherever it comes in the file.
+  // The key is removed from `root` and set to the same value in `card`: the deployed page had it in `root` only, so the one in `card` is new — Griffel drops it just the same, and the page
+  // would show none of what the edit meant. It stops the upload, naming only that key, as a key it never had would.
+  for (const [what, local] of [
+    ['set in another slot', deployed.replace("root: { borderWidth: '1px' },", "root: { padding: '1px' },\n  card: { borderWidth: '1px' },")],
+    ['the slot renamed', deployed.replace('root:', 'container:')],
+  ]) {
+    const { file, genpage, r } = await griffelUpdate(local, deployed);
+    assert.strictEqual(r.ok, false, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(r.payload.code, 'griffel-shorthand', what);
+    assert.strictEqual(genpage.of('update').length, 0, `${what}: nothing is written`);
+    assert.deepStrictEqual(r.payload.problems.map((p) => [p.property, p.within]), [['borderWidth', [what === 'the slot renamed' ? 'container' : 'card']]], `${what}: the key where it is set now`);
+    assert.ok(r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '1px'")}: \`borderWidth\``), `${what}: named where it is`);
+  }
+  // A second `borderWidth`, in another slot, is new too — wherever it comes in the file.
   for (const [what, local] of [
     ['after the old one', deployed.replace("root: { borderWidth: '1px' },", "root: { borderWidth: '1px' },\n  card: { borderWidth: '2px' },")],
     ['before the old one', deployed.replace("root: { borderWidth: '1px' },", "card: { borderWidth: '2px' },\n  root: { borderWidth: '1px' },")],
@@ -1618,10 +1627,84 @@ test('an UPDATE is judged key by key: a renamed slot keeps the keys the deployed
     assert.ok(r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '2px'")}: \`borderWidth\``), `${what}: named where it is`);
     assert.ok(!r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '1px'")}:`), `${what}: the old one is not named`);
   }
+  // The key kept where the deployed page had it is inherited, whatever else is edited around it — with the warning an inherited key gets.
+  const kept = await griffelUpdate(deployed.replace("root: { borderWidth: '1px' },", "root: { borderWidth: '1px', padding: '2px' },\n  card: { padding: '1px' },"), deployed);
+  assert.strictEqual(kept.r.ok, true, JSON.stringify(kept.r.payload));
+  assert.strictEqual(aboutGriffel(kept).length, 1);
   // Fixing the page — the key deleted — is an update like any other.
   const fixed = await griffelUpdate(deployed.replace("root: { borderWidth: '1px' },", "root: { padding: '1px' },"), deployed);
   assert.strictEqual(fixed.r.ok, true);
   assert.deepStrictEqual(aboutGriffel(fixed), [], 'and says nothing about Griffel');
+});
+
+// The same place is the same call and the same branch: a key moved to another hook's slot of the same name — `root` is in every hook — or into the other arm of a condition is a new key there, which
+// the upload refuses as it refuses any new key; what stays where it was, and what is only reordered, is still the deployed page's.
+test('an UPDATE that moves a key to another hook\'s slot of the same name, or into the other arm of a condition, is refused — and one that moves nothing, or only reorders the hooks, goes ahead', async () => {
+  const hooks = (a, b, order = 'pc') => {
+    const panel = `const usePanel = makeStyles({\n  root: { ${a} },\n});\n`;
+    const card = `const useCard = makeStyles({\n  root: { ${b} },\n});\n`;
+    return `${GRIFFEL_IMPORT}${order === 'pc' ? panel + card : card + panel}export default function P() { return null; }\n`;
+  };
+  const arms = (a, b) => `${GRIFFEL_IMPORT}const dark = true;\nconst useStyles = makeStyles(dark ? {\n  root: { ${a} },\n} : {\n  root: { ${b} },\n});\nexport default function P() { return null; }\n`;
+  for (const [what, build, owner, branch] of [['two hooks', hooks, 'useCard', 0], ['the arms of a condition', arms, 'useStyles', 1]]) {
+    const deployed = build("borderColor: 'red'", "padding: '1px'");
+    const moved = build("padding: '1px'", "borderColor: 'red'");
+    const { file, genpage, r } = await griffelUpdate(moved, deployed);
+    assert.strictEqual(r.ok, false, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(r.payload.code, 'griffel-shorthand', what);
+    assert.strictEqual(genpage.of('update').length, 0, `${what}: nothing is written`);
+    assert.deepStrictEqual(r.payload.problems.map((p) => [p.property, p.owner, p.branch, p.within]), [['borderColor', owner, branch, ['root']]], `${what}: the key where it is set now`);
+    assert.ok(r.payload.error.includes(`${file}:${placeOf(moved, "borderColor: 'red'")}: \`borderColor\``), `${what}: named where it is`);
+    // What stayed where it was, with the other place edited, is the deployed page's, and the page goes ahead with the warning an inherited key gets.
+    const kept = await griffelUpdate(build("borderColor: 'red'", "padding: '2px'"), deployed);
+    assert.strictEqual(kept.r.ok, true, `${what}: ${JSON.stringify(kept.r.payload)}`);
+    assert.strictEqual(kept.genpage.of('update').length, 1, what);
+    assert.strictEqual((kept.r.payload.warnings || []).filter((w) => /Griffel/.test(w)).length, 1, what);
+  }
+  // Two hooks that swap places in the file and keep their names have each key where it was: the call is told by its name.
+  const deployed = hooks("borderColor: 'red'", "borderStyle: 'solid'");
+  const reordered = await griffelUpdate(hooks("borderColor: 'red'", "borderStyle: 'solid'", 'cp'), deployed);
+  assert.strictEqual(reordered.r.ok, true, JSON.stringify(reordered.r.payload));
+  assert.strictEqual(reordered.genpage.of('update').length, 1);
+});
+
+// The place of a key is the hook that holds it — told by the name it is bound to at the top of the page, through a type annotation or a property it is assigned to — and the arm of every condition between the call and
+// the key, below the call as well as at it. Each of these moves a shorthand to a place the deployed page did not have it in, as the first kind of edit the check exists to stop; the upload refuses it, and writes nothing.
+const MOVES = [
+  ['a condition in a slot', "const useStyles = makeStyles({ root: dark ? { borderColor: 'red' } : { padding: '1px' } });\n", "const useStyles = makeStyles({ root: dark ? { padding: '1px' } : { borderColor: 'red' } });\n"],
+  ['a condition under a selector', "const useStyles = makeStyles({ root: { ':hover': dark ? { borderColor: 'red' } : { padding: '1px' } } });\n", "const useStyles = makeStyles({ root: { ':hover': dark ? { padding: '1px' } : { borderColor: 'red' } } });\n"],
+  ['a condition in a spread', "const useStyles = makeStyles({ root: { ...(dark ? { borderColor: 'red' } : { padding: '1px' }) } });\n", "const useStyles = makeStyles({ root: { ...(dark ? { padding: '1px' } : { borderColor: 'red' }) } });\n"],
+  ['typed hooks that change places', "const usePanel: Hook = makeStyles({ root: { borderColor: 'red' } });\nconst useCard: Hook = makeStyles({ root: { padding: '1px' } });\n", "const useCard: Hook = makeStyles({ root: { borderColor: 'red' } });\nconst usePanel: Hook = makeStyles({ root: { padding: '1px' } });\n"],
+  ['hooks assigned to properties that change places', "const hooks: any = {};\nhooks.panel = makeStyles({ root: { borderColor: 'red' } });\nhooks.card = makeStyles({ root: { padding: '1px' } });\n", "const hooks: any = {};\nhooks.card = makeStyles({ root: { borderColor: 'red' } });\nhooks.panel = makeStyles({ root: { padding: '1px' } });\n"],
+  ['hooks of the same name written in two functions that change places', "function panel() { const useStyles = makeStyles({ root: { borderColor: 'red' } }); return useStyles; }\nfunction card() { const useStyles = makeStyles({ root: { padding: '1px' } }); return useStyles; }\n", "function card() { const useStyles = makeStyles({ root: { borderColor: 'red' } }); return useStyles; }\nfunction panel() { const useStyles = makeStyles({ root: { padding: '1px' } }); return useStyles; }\n"],
+];
+test('an UPDATE that moves a key to another arm of a condition below the call, or to another hook while the hooks change places — however the hooks are typed, assigned or scoped — is refused, and writes nothing', async () => {
+  const page = (declarations) => `${GRIFFEL_IMPORT}const dark = true;\ntype Hook = () => Record<string, string>;\n${declarations}export default function P() { return null; }\n`;
+  for (const [what, before, after] of MOVES) {
+    const { file, genpage, r } = await griffelUpdate(page(after), page(before));
+    assert.strictEqual(r.ok, false, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(r.payload.code, 'griffel-shorthand', what);
+    assert.strictEqual(genpage.of('update').length, 0, `${what}: nothing is written`);
+    assert.deepStrictEqual(r.payload.problems.map((p) => p.property), ['borderColor'], `${what}: the key where it is set now`);
+    assert.ok(r.payload.error.includes(`${file}:${placeOf(page(after), "borderColor: 'red'")}: \`borderColor\``), `${what}: named where it is`);
+  }
+});
+
+test('an UPDATE of a page with the same hooks and arms — reformatted, the hooks reordered with their keys, the other place edited — goes ahead with the warning an inherited key gets', async () => {
+  const page = (declarations) => `${GRIFFEL_IMPORT}const dark = true;\ntype Hook = () => Record<string, string>;\n${declarations}export default function P() { return null; }\n`;
+  for (const [what, before, edited] of [
+    ['a condition in a slot, the other arm edited', MOVES[0][1], MOVES[0][1].replace("padding: '1px'", "padding: '2px'")],
+    ['a condition in a slot, reformatted', MOVES[0][1], "const useStyles = makeStyles({\n  root: dark\n    ? { borderColor: \"red\" }\n    : { padding: '1px' },\n});\n"],
+    ['a condition under a selector, the other arm edited', MOVES[1][1], MOVES[1][1].replace("padding: '1px'", "padding: '2px'")],
+    ['a condition in a spread, reformatted', MOVES[2][1], "const useStyles = makeStyles({\n  root: {\n    ...(dark ? { borderColor: 'red' } : { padding: '1px' }),\n  },\n});\n"],
+    ['typed hooks reordered with their keys', MOVES[3][1], "const useCard: Hook = makeStyles({ root: { padding: '1px' } });\nconst usePanel: Hook = makeStyles({ root: { borderColor: 'red' } });\n"],
+    ['hooks assigned to properties reordered with their keys', MOVES[4][1], "const hooks: any = {};\nhooks.card = makeStyles({ root: { padding: '1px' } });\nhooks.panel = makeStyles({ root: { borderColor: 'red' } });\n"],
+  ]) {
+    const { genpage, r } = await griffelUpdate(page(edited), page(before));
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(genpage.of('update').length, 1, `${what}: the page is written`);
+    assert.strictEqual((r.payload.warnings || []).filter((w) => /Griffel/.test(w)).length, 1, `${what}: with the warning of an inherited key`);
+  }
 });
 
 // A key the deployed page already has is not what the check holds back — but a key given ANOTHER value is a change the maker meant to see, and Griffel drops the new value just as it
@@ -1865,9 +1948,10 @@ test('the page is written as the file is — one leading BOM goes, line endings 
 // (helpers/fake-genpage-server.js), so what reaches the page is what is STORED — and no process stands between the two. The server holds no apps (genpage-sdk-app.test.js holds
 // the app reads and edits against the SDK), so the backend's app reads are the one thing stood in for.
 const SOURCE = "import * as React from 'react';\nexport default function Page() { return <div>Hello</div>; }\n";
-function realBackend(server, { navigation = {}, made = [] } = {}) {
-  return (env) => {
-    const genpage = makeGenpageSdk(env, { httpClient: server.http(), mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; } });
+function realBackend(server, { navigation = {}, made = [], deps = {} } = {}) {
+  // `fromScript` is what the upload script hands its backend (its `warn` seam); `deps` is the test's own (a recorded sleep, no jitter).
+  return (env, fromScript = {}) => {
+    const genpage = makeGenpageSdk(env, { httpClient: server.http(), mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; }, ...deps, ...fromScript });
     genpage.enumeratePages = async (appId) => { const pages = navigation[appId] || []; return { ok: true, pages, empty: pages.length === 0 }; };
     genpage.placeInApp = async () => ({ added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false });
     return genpage;
@@ -2078,6 +2162,41 @@ test('REAL SDK: a create whose answer is lost and whose page cannot be read repo
   assert.strictEqual(typeof r.payload.code, 'string');
   assert.deepStrictEqual([...server.state.projects.keys()], [r.payload.pageId], 'that is the page the server holds');
   assert.strictEqual(fs.existsSync(markerPath(file)), false, 'and no base is recorded for a page nobody has seen');
+});
+
+// A throttled page write is waited out for up to five minutes (lib/throttle-budget.js), and the upload — which is not a build, and has no run budget of its own to be handed — is given a `warn` seam that writes on stderr:
+// a wait of more than a few seconds is a line there, and what the service asked is said in the words of the command and not the build's. Stdout carries the JSON result alone.
+test('REAL SDK: a throttled write the service asks to wait nine seconds for is announced on stderr as a WARNING line — once, and not in the result — and the page is written once', async (t) => {
+  const server = serverWithAccount();
+  server.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '9' } } : undefined);
+  const slept = [];
+  const written = [];
+  t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+  const r = await run(['--env', INSTANCE, '--code-file', codeFile(SOURCE), '--name', 'Throttled page', ...P, '--agent-message', 'm'],
+    realBackend(server, { deps: { sleep: async (ms) => { slept.push(ms); }, random: () => 0 } }));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual(slept, [9000], 'the answer\'s Retry-After was waited, whole');
+  assert.deepStrictEqual(written.filter((line) => /throttled the write/.test(line)), [
+    'WARNING: generative page "Throttled page": the service throttled the write (HTTP 429); waiting 9 s before sending it again (9 s of the 5 minutes a run allows itself for waiting out a throttled service are spent)\n',
+  ]);
+  assert.deepStrictEqual([...server.state.projects.keys()], [r.payload.pageId], 'one page');
+  assert.ok((r.payload.warnings || []).some((w) => /throttled the write of generative page "Throttled page" \(HTTP 429\) once/.test(w)), 'the result says it was throttled, as before');
+  assert.ok(!JSON.stringify(r.payload).includes('WARNING:'), 'the progress line is not in the result');
+});
+
+test('REAL SDK: a throttle that asks for longer than the budget stops the upload at once, and says so in the words of a command — nothing is written, and nothing is waited for', async () => {
+  const server = serverWithAccount();
+  server.failBatch = () => ({ status: 429, headers: { 'retry-after': '600' } });
+  const slept = [];
+  const file = codeFile(SOURCE);
+  const r = await run(['--env', INSTANCE, '--code-file', file, '--name', 'Throttled page', ...P, '--agent-message', 'm'],
+    realBackend(server, { deps: { sleep: async (ms) => { slept.push(ms); }, random: () => 0 } }));
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)\. Nothing more is sent now: run the same command again later, and it continues from here\./);
+  assert.doesNotMatch(r.payload.error, /\bbuild\b/);
+  assert.deepStrictEqual(slept, []);
+  assert.strictEqual(server.state.projects.size, 0, 'a refused change set wrote nothing');
+  assert.strictEqual(fs.existsSync(markerPath(file)), false, 'and no base is recorded for a page that was not written');
 });
 
 // The page is normalized once: a file that starts with TWO byte order marks loses the encoding marker only, in the check, the hash and the page.

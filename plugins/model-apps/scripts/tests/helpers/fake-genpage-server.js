@@ -71,6 +71,8 @@ function batchEnvelope(parts) {
     `Content-ID: ${part.contentId}`,
     '',
     `HTTP/1.1 ${part.status} ${part.status === 204 ? 'No Content' : 'Failed'}`,
+    // The headers a part carries of its own — a refused part's `Retry-After` — come before the OData version, as a service writes them.
+    ...Object.entries(part.headers || {}).map(([name, value]) => `${name}: ${value}`),
     'OData-Version: 4.0',
     '',
     '',
@@ -110,7 +112,8 @@ class FakeGenPageServer {
     // As `PublishXml` last snapshotted each page: what a read WITHOUT `MSCRM.IncludeUnpublished` is served (measured). A later
     // edit changes the draft, not this.
     this.publishedPages = new Map();
-    // Fault injection: `(method, path, batched, headers) => status | undefined`, a status to answer instead of executing.
+    // Fault injection: `(method, path, batched, headers) => status | { status, headers } | undefined`, a status to answer instead of executing. For a request inside a `$batch` change set the part that carries it
+    // is the one the answer reports, and `headers` are the headers of that part (a refused operation's own `Retry-After`).
     this.failOn = undefined;
     // Corrupt what a content upload STORES — for example append the stray CRLF pac's batch writer adds.
     this.mangleContent = undefined;
@@ -120,8 +123,8 @@ class FakeGenPageServer {
     this.afterCommit = undefined;
     // Called when a `$batch` ARRIVES, before it is executed. Throw to model a request that never reached the server.
     this.beforeBatch = undefined;
-    // `(n) => status | undefined`: answer an HTTP status for the whole of `$batch` request number n (1-based) instead of executing it —
-    // a throttle (429) or a gateway answer. Nothing is written: the request was refused.
+    // `(n) => status | { status, headers } | undefined`: answer an HTTP status for the whole of `$batch` request number n (1-based) instead of executing it —
+    // a throttle (429) or a gateway answer, with the headers the answer carries (`{ 'retry-after': '7' }`) when it is given as an object. Nothing is written: the request was refused.
     this.failBatch = undefined;
     // `(n) => boolean`: STRAND `$batch` request number n. The client is told it failed — a transport timeout, as the plugin's client
     // reports one — but the request is not lost: it is held, and COMMITS when `landStranded()` is called, as a request still in flight
@@ -145,7 +148,7 @@ class FakeGenPageServer {
   }
 
   seedProject(id, name) {
-    this.state.projects.set(id, { id, name, etag: this.nextEtag() });
+    this.state.projects.set(id, { id, name, etag: this.nextEtag(), version: this.nextVersion() });
   }
 
   seedFile(projectId, id, filename, filetype, content) {
@@ -220,7 +223,8 @@ class FakeGenPageServer {
 
   // What a PublishXml does to one page. MEASURED: it rotates the project's token and EVERY row's — synchronously — and changes no bytes (a push after a publish sees exactly what it would on a real org).
   // The `versionnumber` of a file row, read with a plain GET, is a separate measure: a publish moves the version of each file row whose content changed since the last publish, and an unchanged row keeps
-  // its own (a draft-only write of a file's content already moved it, `execute`; publishing that draft moves it again).
+  // its own (a draft-only write of a file's content already moved it, `execute`; publishing that draft moves it again). The page's own row is modelled the same way: a write to it (a rename) moves its version, and
+  // publishing that draft moves it again; a publish with nothing written to the row leaves it (an ASSUMPTION about the service for the row, the measured one for the files).
   publishProject(state, id) {
     this.published.push(id);
     const project = state.projects.get(id);
@@ -236,6 +240,8 @@ class FakeGenPageServer {
       file.draft = false;
     }
     if (project && !this.holdPublishedProjection) {
+      if (project.draft) project.version = this.nextVersion();
+      project.draft = false;
       this.publishedPages.set(id, {
         project: { ...project },
         files: [...state.files.values()].filter((f) => f.projectId === id).map((f) => ({ ...f, ...(f.content ? { content: f.content.slice() } : {}) })),
@@ -295,7 +301,7 @@ class FakeGenPageServer {
     this.requests.push({ method: 'POST', path: '/$batch', headers: {}, body, batched: false });
     if (this.beforeBatch) this.beforeBatch(body);
     const refused = this.failBatch ? this.failBatch(this.batches.length) : undefined;
-    if (refused !== undefined) return Promise.resolve(json(refused, { error: { message: 'injected' } }));
+    if (refused !== undefined) return Promise.resolve(typeof refused === 'object' ? json(refused.status, { error: { message: 'injected' } }, refused.headers || {}) : json(refused, { error: { message: 'injected' } }));
     if (this.strandBatch && this.strandBatch(this.batches.length)) {
       this.stranded.push(body);
       return Promise.reject(new Error('Request failed: connect ETIMEDOUT'));
@@ -338,11 +344,13 @@ class FakeGenPageServer {
         const request = { method, path, headers, body: opBody, batched: true };
         this.requests.push(request);
         const injected = this.failOn ? this.failOn(method, path, true, headers) : undefined;
-        const response = injected !== undefined ? json(injected) : this.execute(staged, request, {});
+        // A status, or `{ status, headers }` for a refused part that carries headers of its own (a throttle's `Retry-After`).
+        const failed = injected === undefined ? undefined : typeof injected === 'object' ? injected : { status: injected };
+        const response = failed ? json(failed.status) : this.execute(staged, request, {});
         if (this.afterRequest) this.afterRequest(request);
         if (response.status < 200 || response.status >= 300) {
           // Rolled back: nothing is committed, and only the failing part is reported.
-          return Promise.resolve(json(200, batchEnvelope([{ contentId, status: response.status }])));
+          return Promise.resolve(json(200, batchEnvelope([{ contentId, status: response.status, headers: failed && failed.headers }])));
         }
         statuses.push({ contentId, status: response.status });
       }
@@ -378,8 +386,13 @@ class FakeGenPageServer {
           : json(404, { error: { message: 'Does Not Exist' } });
       }
       if (/^\/uxagentprojects\?/.test(path)) {
-        const rows = unpublishedVisible ? [...state.projects.values()] : [...this.publishedPages.values()].map((p) => p.project);
-        return json(200, { value: rows.map((p) => ({ uxagentprojectid: p.id, name: p.name, '@odata.etag': `W/"${p.etag}"` })) });
+        // `$filter=uxagentprojectid eq <id> or …` narrows the list to those pages, as a read of their versions asks. A plain read is the published layer — the rows as the last publish left them — each with the version the row has
+        // NOW, as the files' are (below); a read that unpublished rows are visible to answers the draft.
+        const wanted = [...path.matchAll(new RegExp(`uxagentprojectid eq ${GUID}`, 'g'))].map((m) => m[1].toLowerCase());
+        const rows = unpublishedVisible
+          ? [...state.projects.values()]
+          : [...this.publishedPages.values()].map((p) => ({ ...p.project, version: state.projects.has(p.project.id) ? state.projects.get(p.project.id).version : p.project.version }));
+        return json(200, { value: rows.filter((p) => !wanted.length || wanted.includes(p.id)).map((p) => ({ uxagentprojectid: p.id, name: p.name, versionnumber: p.version, '@odata.etag': `W/"${p.etag}"` })) });
       }
       const contentRead = new RegExp(`^/uxagentprojectfiles\\(${GUID}\\)/filecontent/\\$value`).exec(path);
       if (contentRead) {
@@ -430,7 +443,7 @@ class FakeGenPageServer {
     if (method === 'POST' && path === '/uxagentprojects') {
       const id = String(record.uxagentprojectid || this.nextId()).toLowerCase();
       if (state.projects.has(id)) return json(412, { error: { code: '0x80040237', message: 'A record with matching key values already exists.' } });
-      state.projects.set(id, { id, name: String(record.name === undefined ? '' : record.name), etag: this.nextEtag() });
+      state.projects.set(id, { id, name: String(record.name === undefined ? '' : record.name), etag: this.nextEtag(), version: this.nextVersion(), draft: true });
       return json(204, undefined, { 'OData-EntityId': `${API}/uxagentprojects(${id})` });
     }
     if (method === 'POST' && path === '/uxagentprojectfiles') {
@@ -494,6 +507,9 @@ class FakeGenPageServer {
       if (gate) return gate;
       project.name = String(record.name === undefined ? project.name : record.name);
       project.etag = this.nextEtag();
+      // A write to the row moves its versionnumber — in the plain read as well as in the unpublished one, as a draft-only write of a file's content does — and the draft it leaves moves it again when it is published.
+      project.version = this.nextVersion();
+      project.draft = true;
       return json(204);
     }
     const messageRow = new RegExp(`^/agentconversationmessages\\(${GUID}\\)$`).exec(path);

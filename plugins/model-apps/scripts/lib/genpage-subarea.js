@@ -23,4 +23,9 @@ function genPageSubAreaId(genPageId) {
   return `genpage_${String(genPageId).replace(/[{}-]/g, '').toLowerCase()}`;
 }
 
-module.exports = { genPageSubArea, genPageSubAreaId };
+// The vector icon the platform gives a page entry that names none. The SDK writes it on every `GenPage` sub-area it serializes without a `VectorIcon` — the page icon of the Fluent table icon set — so a page the
+// spec gives no icon holds it live, and a rebuild must not read it as an icon somebody chose (lib/sitemap-merge.js); an icon of any other value still is one. It is a constant inside the vendored
+// bundle, which exports nothing to ask: sitemap-adopt-real-bundle.test.js has the bundle write a page entry and holds this to what it wrote, so a bundle that changes its default fails there.
+const GENPAGE_DEFAULT_VECTOR_ICON = '/_imgs/TableIconsFluentV9/document_one_page_sparkle.svg';
+
+module.exports = { genPageSubArea, genPageSubAreaId, GENPAGE_DEFAULT_VECTOR_ICON };

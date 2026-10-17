@@ -15,6 +15,7 @@ const { odataLit } = require('./odata.js');
 const { appComponentRows, currentAppLayer, collectionRows, currentLayerRows } = require('./app-components.js');
 const { subAreaTargetKey } = require('./sitemap-merge.js');
 const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
+const { withCause } = require('./retry-policy.js');
 
 // Match a <SubArea …> START TAG carrying a GenPageId, capturing the id and (optionally) the Title.
 // Attributes are order-independent, so scan each start tag and pull GenPageId + Title separately.
@@ -194,7 +195,7 @@ function isMalformed(xml) {
 //   { ok:false, reason:'sitemap-component-not-found' }  — no appmodulecomponent type 62
 //   { ok:false, reason:'sitemap-xml-unreadable' }       — sitemapxml is falsy/empty
 //   { ok:false, reason:'malformed' }                    — present XML fails structural validation
-//   { ok:false, reason:'*-query-failed', detail }       — transport error (still propagates as fail-closed)
+//   { ok:false, reason:'*-query-failed', detail } + `cause` — transport error (still propagates as fail-closed); `cause` (not enumerable: withCause) is the error itself, so a caller that has to decide whether to try again reads its status, not its words
 //   { ok:true,  xml, ids:[] }                          — valid, page-less sitemap (NOT "missing")
 //   { ok:true,  xml, ids:[...] }                        — valid sitemap with genpage subareas
 //
@@ -216,7 +217,7 @@ async function fetchSitemap(sdk, appUnique, { currentLayer, includeSitemapId } =
       });
       app = apps && apps[0];
     } catch (e) {
-      return { ok: false, reason: 'appmodule-query-failed', detail: String((e && e.message) || e) };
+      return withCause({ ok: false, reason: 'appmodule-query-failed', detail: String((e && e.message) || e) }, e);
     }
   }
   if (!app) return { ok: false, reason: 'app-not-found' };
@@ -227,7 +228,7 @@ async function fetchSitemap(sdk, appUnique, { currentLayer, includeSitemapId } =
     // because the SDK/Dataverse expects a raw GUID literal for navigation property filters).
     comps = await appComponentRows(sdk, app.appmoduleidunique, 62, { top: 1 });
   } catch (e) {
-    return { ok: false, reason: 'sitemap-component-query-failed', detail: String((e && e.message) || e) };
+    return withCause({ ok: false, reason: 'sitemap-component-query-failed', detail: String((e && e.message) || e) }, e);
   }
   const smId = comps && comps[0] && comps[0].objectid;
   if (!smId) return { ok: false, reason: 'sitemap-component-not-found' };
@@ -251,7 +252,7 @@ async function fetchSitemap(sdk, appUnique, { currentLayer, includeSitemapId } =
       });
     }
   } catch (e) {
-    return { ok: false, reason: 'sitemap-query-failed', detail: String((e && e.message) || e) };
+    return withCause({ ok: false, reason: 'sitemap-query-failed', detail: String((e && e.message) || e) }, e);
   }
   const xml = sms && sms[0] && sms[0].sitemapxml;
 
@@ -323,7 +324,7 @@ function currentSitemapRows(rows) {
 // component AND whose name no sitemap in the saved layer carries, which has no navigation and holds no page.
 //   -> { ok:true, byId: Map<id, appUniqueName[]> (an app holding the id in either layer), savedOnly: Map<id, appUniqueName[]> (the
 //        apps that hold it ONLY in the saved layer), unreadable: appUniqueName[], appIds: Map<lower-cased appUniqueName, appmoduleid> (the id of every app
-//        the scan read, from the rows it lists the apps from: a command that acts on an app takes its id, and this scan keys its answers by unique name) } | { ok:false, error }
+//        the scan read, from the rows it lists the apps from: a command that acts on an app takes its id, and this scan keys its answers by unique name) } | { ok:false, error, cause? } (`cause`: the error of the read that failed, when it was one)
 async function fetchAppsForPages(sdk, pageIds, opts) {
   opts = opts || {};
   const want = new Set(Array.from(pageIds || []).map((x) => String(x).toLowerCase()));
@@ -341,8 +342,8 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
     });
   } catch (e) {
     // Fail-closed: cannot enumerate apps (a query error OR a pagination abort) → cannot verify safety
-    // → report failure to caller.
-    return { ok: false, error: String((e && e.message) || e) };
+    // → report failure to caller. `cause` is the failure itself, for a caller that decides from its structure (retry-policy.js) and not from its text.
+    return withCause({ ok: false, error: String((e && e.message) || e) }, e);
   }
 
   // Fail-closed on an EMPTY enumeration (defense-in-depth). `fetchAppsForPages` is only called when we
@@ -366,7 +367,7 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   // The apps that were never published, which the list above cannot show. One small request, and in a single-app environment normally the only one beyond the
   // list itself. Fail-closed as a whole, before any sitemap is read: with no answer there is no knowing which apps the scan has not seen.
   const drafts = await draftOnlyApps(sdk, apps, self);
-  if (!drafts.ok) return { ok: false, error: `could not list the apps that have never been published: ${drafts.reason}` };
+  if (!drafts.ok) return withCause({ ok: false, error: `could not list the apps that have never been published: ${drafts.reason}` }, drafts.cause);
 
   const byId     = new Map();
   const savedOnly = new Map();
@@ -428,7 +429,7 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   if (readable.length || unlinked.length) {
     const saved = await savedSitemaps(sdk);
     // Fail-closed as a whole: with no answer there is nothing known about ANY app's draft, so none can be ruled out.
-    if (!saved.ok) return { ok: false, error: `could not read the other apps' saved (unpublished) navigation: ${saved.reason}` };
+    if (!saved.ok) return withCause({ ok: false, error: `could not read the other apps' saved (unpublished) navigation: ${saved.reason}` }, saved.cause);
     for (const d of unlinked) {
       const ids = saved.idsByName.get(String(d.name).toLowerCase());
       if (!ids) continue; // no sitemap carries the app's name: it has no navigation
@@ -463,14 +464,14 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
 // An app that has a published row — matched by `appmoduleid`, which a pending edit leaves alone, unlike the layer key `appmoduleidunique` — is read through its published layer and skipped
 // here, as is `self`. What is left exists only as a draft, and its one current layer (the only row, or the authored one: currentLayerRows) carries the layer key its components hang off.
 // FAIL-CLOSED: a list that cannot be read, or a row with no id, is { ok:false } — what the rows leave out cannot be known; a draft app whose layer cannot be told is named in `unreadable`.
-//   -> { ok:true, apps:[{ name, layerKey, appId }], unreadable:[name] } | { ok:false, reason }
+//   -> { ok:true, apps:[{ name, layerKey, appId }], unreadable:[name] } | { ok:false, reason, cause? }
 async function draftOnlyApps(sdk, published, self) {
   if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'no Dataverse client to read it' };
   let rows;
   try {
     rows = await collectionRows(sdk.dataverse, '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,uniquename,componentstate', 'apps that have never been published');
   } catch (e) {
-    return { ok: false, reason: String((e && e.message) || e) };
+    return withCause({ ok: false, reason: String((e && e.message) || e) }, e);
   }
   const havePublishedRow = new Set(published.map((app) => guidKey(app && app.appmoduleid)));
   const byApp = new Map();
@@ -494,7 +495,7 @@ async function draftOnlyApps(sdk, published, self) {
   return { ok: true, apps, unreadable };
 }
 
-// Every sitemap's CURRENT layer in ONE request: { ok:true, byId: Map<sitemapid, row[]>, idsByName: Map<lower-cased sitemapnameunique, Set<sitemapid>> } or { ok:false, reason }. The rows
+// Every sitemap's CURRENT layer in ONE request: { ok:true, byId: Map<sitemapid, row[]>, idsByName: Map<lower-cased sitemapnameunique, Set<sitemapid>> } or { ok:false, reason, cause? }. The rows
 // of one sitemap are all those the platform returned for its id (currentSitemapRows picks the current one), grouped here so the caller reads each app's by its own id. `idsByName` is
 // the same rows seen by the unique name the vendored SDK ties an app to its sitemap by (see fetchAppsForPages): a row looks like
 //   { "sitemapid": "5111e0f2-…", "sitemapnameunique": "contoso_orders", "componentstate": 1, "sitemapxml": "<SiteMap>…" }
@@ -508,7 +509,7 @@ async function savedSitemaps(sdk) {
   try {
     rows = await collectionRows(sdk.dataverse, '/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapxml,componentstate,sitemapnameunique', 'saved sitemaps');
   } catch (e) {
-    return { ok: false, reason: String((e && e.message) || e) };
+    return withCause({ ok: false, reason: String((e && e.message) || e) }, e);
   }
   const byId = new Map();
   const idsByName = new Map();

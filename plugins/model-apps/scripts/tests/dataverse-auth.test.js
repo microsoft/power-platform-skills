@@ -221,6 +221,71 @@ test('makeRequest keeps a timeout with no answer as a plain request failure', as
   }
 });
 
+// A request that fails comes with Node's own CODE beside the message. The message cannot say what the failure was — a certificate that does not verify quotes the host and the certificate's names, and a name can spell anything — so a
+// caller that decides whether the request is worth sending again (lib/sdk-http-client.js) reads the code. Only what Node raised for the request has one: the failures this module words itself have none.
+test('makeRequest reports Node\'s own error code beside the message of a request that failed — a refused connection, and a connection reset before any answer', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const probe = http.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port: closedPort } = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  const refused = await makeRequest({ url: `http://127.0.0.1:${closedPort}/x` });
+  assert.strictEqual(refused.code, 'ECONNREFUSED');
+  assert.match(refused.error, /ECONNREFUSED/);
+  assert.deepStrictEqual(Object.keys(refused).sort(), ['code', 'error'], 'the message and the code, and nothing that says the server answered');
+
+  const resetting = http.createServer((req) => req.socket.destroy());
+  await new Promise((resolve) => resetting.listen(0, '127.0.0.1', resolve));
+  try {
+    const reset = await makeRequest({ url: `http://127.0.0.1:${resetting.address().port}/x`, method: 'POST', body: '{}' });
+    assert.strictEqual(reset.code, 'ECONNRESET');
+    assert.match(reset.error, /socket hang up|ECONNRESET/);
+    assert.strictEqual(reset.incompleteResponse, undefined, 'no answer had arrived');
+  } finally {
+    await new Promise((resolve) => resetting.close(resolve));
+  }
+});
+
+test('makeRequest reports the code of a certificate that does not verify — Node raises it for the request, whatever the message quotes', async (t) => {
+  const https = require('node:https');
+  const { EventEmitter } = require('node:events');
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const failure = Object.assign(
+    new Error("Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:ECONNRESET.example.com"),
+    { code: 'ERR_TLS_CERT_ALTNAME_INVALID' },
+  );
+  let raised = failure;
+  t.mock.method(https, 'request', () => {
+    const req = new EventEmitter();
+    req.write = () => {};
+    req.end = () => setImmediate(() => req.emit('error', raised));
+    req.destroy = () => {};
+    return req;
+  });
+  assert.deepStrictEqual(await makeRequest({ url: 'https://contoso.crm.dynamics.com/api/data/v9.2/x' }), { error: failure.message, code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
+  // An error Node gave no code for is reported as it always was: the message alone.
+  raised = new Error('something Node did not give a code for');
+  assert.deepStrictEqual(await makeRequest({ url: 'https://contoso.crm.dynamics.com/api/data/v9.2/x' }), { error: 'something Node did not give a code for' });
+});
+
+test('the failures makeRequest words itself — a connection closed mid-response — carry no code: they are read by their words', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+    res.write('{"value":[');
+    setTimeout(() => res.socket.destroy(), 20);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const cut = await makeRequest({ url: `http://127.0.0.1:${server.address().port}/cut` });
+    assert.match(cut.error, /before (it|the response) completed/);
+    assert.strictEqual(cut.incompleteResponse, true);
+    assert.ok(!('code' in cut), 'the words are this module\'s own, and no code is made up for them');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('dataverseRequest does not replay a POST whose response was cut off, but retries a GET', async () => {
   const { dataverseRequest } = require('../lib/dataverse-auth.js');
   const cut = (statusCode) => ({ error: 'Connection closed before the response completed', incompleteResponse: true, statusCode });

@@ -441,9 +441,12 @@ reports a correctly published form as missing its captions. The build's own `--v
 automatically. If verify cannot establish the language at all (the organization cannot be read), it lists those
 captions as **unverified** — neither passed nor failed — with the reason: re-run it with the flag.
 
-Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout, a SQL
-deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
-retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
+Narrate progress as it runs. Transient env errors (a 429 or 503, a customization lock, a concurrent-operation
+guard or a SQL timeout the service names by its error code, a timeout or reset of the connection) are
+**auto-retried** with backoff on `--apply` (the build is idempotent, so a retry reuses what's already created).
+A throttled service is waited for as long as it asks (`Retry-After`) — by the page writes and by the build's own re-runs of a phase — inside one budget of five minutes per run for the waiting
+the build itself adds: when the next wait does not fit, the build stops with a `throttle-budget-exhausted`
+halt that says what the service asked — run it again later and it continues. (The HTTP client's own re-sends of a throttled read or publish keep their own, shorter schedule and are not counted in it.) If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
 gates the final *bulk* publish**, which also carries the edits made to existing views and forms.

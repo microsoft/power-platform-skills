@@ -419,7 +419,7 @@ async function preflightAuth(envUrl, deps = {}) {
  * @param {number} [options.timeout=60000]
  * @param {boolean} [options.binary=false] - resolve the body as the Buffer it arrived as, never decoded: a file's content (a
  *   generative page's rows, an image) is bytes, and decoding it as UTF-8 would corrupt anything that is not valid UTF-8
- * @returns {Promise<{statusCode: number, body: string|Buffer, headers?: object} | {error: string}>}
+ * @returns {Promise<{statusCode: number, body: string|Buffer, headers?: object} | {error: string, code?: string, incompleteResponse?: boolean, statusCode?: number}>}
  */
 function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000, binary = false }) {
   return new Promise((resolve) => {
@@ -433,9 +433,16 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
     // sdk-http-client). That includes a timeout or a socket error that fires while the body is still
     // streaming — they are delivered on the request, not the response, but the answer had arrived.
     let answeredStatus = null;
-    const fail = (error) => resolve(answeredStatus === null
-      ? { error }
-      : { error, incompleteResponse: true, statusCode: answeredStatus });
+    // `code` is Node's own code for a failure of the request itself — `ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `ERR_TLS_CERT_ALTNAME_INVALID` — and is reported beside the message
+    // only when Node gave one (`req.on('error')` below). The message cannot say what the failure was: a certificate that does not verify quotes the host and the certificate's names, and a name can spell anything
+    // (`DNS:ECONNRESET.example.com` is a valid one), so a caller that decides whether the request is worth sending again (lib/sdk-http-client.js, isTransientTransportFailure) reads the code. The failures this function words
+    // itself — a timeout, a response cut off — have none, and are read by their words.
+    // See https://nodejs.org/api/errors.html#common-system-errors and https://nodejs.org/api/tls.html#x509-certificate-error-codes
+    const fail = (error, code) => resolve({
+      error,
+      ...(typeof code === 'string' && code ? { code } : {}),
+      ...(answeredStatus === null ? {} : { incompleteResponse: true, statusCode: answeredStatus }),
+    });
     const req = mod.request(
       {
         method,
@@ -467,7 +474,7 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         });
       }
     );
-    req.on('error', (e) => fail(e.message));
+    req.on('error', (e) => fail(e.message, e.code));
     req.on('timeout', () => {
       req.destroy();
       fail(answeredStatus === null ? 'Request timed out' : 'Request timed out before the response completed');

@@ -434,7 +434,9 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(holds, /\*Unrecorded\* [^.]*fails \*\*open\*\* on purpose/);
   assert.match(holds, /a page that does not exist is always held, record or not/);
   assert.match(holds, /\*\*`genpage-upload\.js`\*\* has the deployed page in hand/);
-  assert.match(holds, /`griffelProblemsNotIn`: the same key set to the same value in the same place \(`within`: its slot, selectors and at-rules\), or failing that the same key and value anywhere that nothing else has claimed/);
+  assert.match(holds, /`griffelProblemsNotIn`: only the same key set to the same value in the same place \(`within`: its slot, selectors and at-rules — of the same `makeStyles` call, `owner`: the name its hook is bound to at the top of the page, read through a type annotation \(`const usePanel: Hook = …` is `usePanel`, not `Hook`\) and for a property it is assigned to \(`hooks\.panel = …`\); and the same arm of every condition between the call and the key — `branch` for the call's own argument, and `arms` below it: [^)]*\) is the deployed page's own — one set to the same value in \*another\* place is new, so an edit that removes a key from one place and sets it in another has added one/);
+  assert.match(holds, /a key moved to another hook's `root` or into the other arm of a condition, at any level: the source cannot tell it from a removal and an addition[^.]*where the correspondence cannot be shown[^.]*the key is new, never inherited/);
+  assert.match(holds, /\*\*Only a unique name at the top of the page proves which hook a call is\*\* — not its order among the calls, not the type it is annotated with, not the function it is written in[^.]*is nobody's \(`owner: null`\)[^.]*a key in it is refused on an update like any new one/);
   assert.match(holds, /A key given \*\*another value\*\* is new too: Griffel drops the new value as it dropped the old one, so the page would show none of the change the maker meant/);
   assert.match(holds, /the hash recorded is of the source the pages phase \*read and checked\* \(`created\.pageSourceShas`\), not of the file when the baseline is written as the build ends/);
   assert.match(holds, /Every page is written as the text the scan read — the SDK takes a page's text, so there is no file for a later save to reach — and a page saved after the scan does not ship: the next build checks it, because the record holds the source that was checked and the file no longer matches it\./);
@@ -448,7 +450,9 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(editFlow, /\*\*delete the key\*\* — nothing changes on screen, so it is the edit that preserves the page — or \*\*write the longhands\*\*, which makes the style start to render, so the page changes\. Delete it unless the user asked for that change/);
   const skill = read('skills', 'genpage', 'SKILL.md');
   assert.match(skill, /An update is held to what it \*\*adds\*\*\./);
-  assert.match(skill, /\*\*delete the key\*\* \(nothing changes on screen\) or \*\*write the longhands\*\* \(the style starts to render, so the page changes\)\. Only a key the deployed page did not have — or one it had, given another value, because Griffel drops the new value just as it dropped the old, so the page would show none of the change — stops the upload\./);
+  assert.match(skill, /\*\*delete the key\*\* \(nothing changes on screen\) or \*\*write the longhands\*\* \(the style starts to render, so the page changes\)\. Only a key the deployed page did not have in that place stops the upload: a key it had in another place \(an edit that removes it from one slot and sets it in another, or renames the slot, or moves it to another hook's slot of the same name — every hook has a `root` — or into the other arm of a condition, at any level, has added a key there\), or one it had, given another value, because Griffel drops the new value just as it dropped the old, so the page would show none of the change\./);
+  assert.match(skill, /the same place \(the same `makeStyles` hook — told by the name it is bound to at the top of the file, even with a type annotation — and its slot and selector, and the same arm of every condition above the key\)/);
+  assert.match(skill, /A hook whose name the file does not prove — written inside a function or a block, passed as an argument, exported as the default, or bound to a name two hooks share — has no earlier self to be compared with, so a key in it is refused on an update like any new one: delete it, or write the longhands\./);
   assert.match(read('skills', 'genpage', 'verify-flow.md'), /delete it to keep the page looking as it does, or write the longhands to make the style start to render/);
   const appBuilder = read('skills', 'app-builder', 'SKILL.md');
   assert.match(appBuilder, /The build runs the same check on every page it uploads that is new or that you changed since the last successful apply of this app, and halts as `pages-griffel-shorthand`/);
@@ -463,8 +467,9 @@ test('the docs say the gates hold a page to what a run would add, and say what e
 
 // A page write that cannot say what it did must never be sent again blindly, and what the maker or the agent does next depends on what the write can have done. The SDK writes a page as ONE atomic change
 // set, so a write either landed whole or wrote nothing; an unknown outcome is settled by reading the page, and the advice an update's refusal carries depends on the caller. AGENTS.md says so,
-// and says every page-write error is final for the build's own retry. scripts/tests/genpage-sdk.test.js and genpage-sdk-real-bundle.test.js run what the backend does.
-test('AGENTS.md says a page write whose outcome is not known is never sent again blindly, where each caller is pointed, and that every page-write error is final for the build\'s retry', () => {
+// and says every page-write error is final for the build's own retry — but a throttle (HTTP 429) the service refused the write with, which is waited out and sent again, and left to the build when it outlasts the waits.
+// scripts/tests/genpage-sdk.test.js and genpage-sdk-real-bundle.test.js run what the backend does.
+test('AGENTS.md says a page write whose outcome is not known is never sent again blindly, where each caller is pointed, that a throttled write is waited out and why that is safe, and that every other page-write error is final for the build\'s retry', () => {
   const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
   assert.match(agents, /\*\*Generative pages are written through the SDK\*\*/);
   assert.match(agents, /so a write either landed whole or wrote nothing/);
@@ -478,8 +483,32 @@ test('AGENTS.md says a page write whose outcome is not known is never sent again
   assert.match(agents, /The turn keeps \*\*one identity\*\* across that read \(`newTurn\.id`, minted per update\)/);
   // The advice depends on the caller: the upload script has a base marker to check against, the build has none and reads every page again when it runs.
   assert.match(agents, /the upload script's message names `genpage-base\.js check` \(the deployed page against the file and the base marker beside it\), and a re-run goes back through the script's own guards; the \*\*build\*\* keeps no base marker and reads every page again when it runs, so its message says to run the build again\./);
-  // Every error is final for the build's own retry of a halt that reads as transient — the page's name and the service's words are what that retry reads.
-  assert.match(agents, /\*\*Every page-write error carries `transient: false`\*\*/);
+  // A refusal with a throttle is the one write that is not a known failure of the page: it is waited out and sent again, and why that cannot write a page twice is written down.
+  assert.match(agents, /\*\*A first send the service refuses with a throttle \(HTTP 429\) is waited out and sent again\*\* \(`pushThroughThrottle`\), where any other 4xx is final\./);
+  assert.match(agents, /A 429 is the service declining to \*start\* the request, so the atomic change set committed nothing; and sending it again cannot write a page twice: a create's ids are minted before the first send/);
+  assert.match(agents, /an update's turn carries one identity from which the SDK derives its messages' ids\. An update's send goes through the SDK's version check again, so a page someone saved during the wait is refused as `VERSION_CONFLICT` and not written over/);
+  assert.match(agents, /an update's writes carry `If-Match: \*`, and `lib\/sdk-http-client\.js` re-sends a `\$batch` only when it is made of conditional deletes/);
+  assert.match(agents, /The wait is the schedule that client gives every throttled request \(`throttleBackoffMs`: 1 s, 2 s, 4 s, 8 s, 8 s, plus jitter\) or the answer's `Retry-After` when that asks for longer, \*\*waited whole\*\*/);
+  assert.match(agents, /inside \*\*one budget of five minutes for the waiting a throttled page write costs a build run\*\*/);
+  // What the budget bounds, and what it does not: the waiting the build's OWN layers add — and not the HTTP client's own re-sends of a throttled read or publish, which keep the schedule they always had.
+  assert.match(agents, /\*\*The budget bounds the waiting the build's OWN layers add — the page backend's resends of a page's `\$batch`, which the HTTP client never re-sends, and the build's phase restarts — and not all the waiting a run does\.\*\*/);
+  assert.match(agents, /The production HTTP client keeps its own schedule for the requests it re-sends — a read, a publish, a delete, a column create: at most five re-sends, each waiting 1, 2, 4, 8 and 8 s or the answer's `Retry-After` when that asks for longer, up to a minute — exactly as it did before the budget existed, and none of it is drawn from the budget: charging it would halt a throttled build that succeeds today\./);
+  assert.match(agents, /a resumed create that brings an earlier payload up to date hands the same budget — the one it was given, or the one it made for itself — on to the update it makes/);
+  assert.match(agents, /which reads an answer only when it is complete and well-formed — its outer boundary closes, every change set in it closes, and every part is a complete response whose first line is a status line — and takes ANYTHING missing or malformed/);
+  assert.match(agents, /takes ANYTHING missing or malformed \(a part with no response in it, a part with no status line or one cut off, a change set that is never closed, one that is declared and never opened, one whose delimiters are not the boundary it declares, a body shorter or longer than the `Content-Length` its response gives, a part that declares a `Transfer-Encoding`\) as proving nothing/);
+  assert.match(agents, /a part that declares a `Transfer-Encoding` \(chunked or any other\) is not read at all, whole stream or not — the delimiters around it say nothing of whether its chunk stream is finished, so it never certifies a refusal or a deadlock victim/);
+  assert.doesNotMatch(agents, /all the waiting of the run one budget|the ONE budget a run spends on waiting out a throttled service/, 'AGENTS.md says the budget bounds all the waiting of a run');
+  assert.match(agents, /at most six sends in all, and `dispose\(\)` ends a wait that is under way\. \*\*A change set the service refuses as a whole is answered HTTP 200 with the one part that failed\*\*/);
+  assert.match(agents, /when every part is one 400, 403 or 404 the change set is a known refusal and is sent \*\*once\*\*, create and update/);
+  assert.match(agents, /A mix of statuses, an answer cut off or incomplete inside, a 409 or 412 \(the ids of an earlier send that landed\) and a 500 prove nothing about the change set and stay unknown outcomes/);
+  assert.match(agents, /A \*\*resumed\*\* create is not sent again this way/);
+  assert.match(agents, /alone among the errors a page write raises — \*\*without\*\* `transient: false` \(`throttledError`\), carrying `statusCode: 429` and what the last answer asked \(`retryAfterMs`, and `retryNotBefore`: the moment before which nothing may be sent\), so the build runs the phase again/);
+  assert.match(agents, /\*\*waits for what the service asked, not for its own shorter backoff\*\*/);
+  assert.match(agents, /the build stops with `throttle-budget-exhausted` — a transient halt that says the service asked to wait N seconds and that a later run continues\. A wait of more than five seconds is announced on stderr/);
+  assert.match(agents, /A 502, 503 or 504 is not waited out as a throttle: an intermediary answered, so the write may have committed and it is \*unknown\*/);
+  assert.match(agents, /A write that was throttled and then taken says so in the `warnings` of its result \(which the build prints with the page's name\)/);
+  // Every other error is final for the build's own retry of a halt that reads as transient — the page's name and the service's words are what that retry reads.
+  assert.match(agents, /\*\*Every other page-write error carries `transient: false`\*\*/);
   assert.match(agents, /so without the marker a re-run would send a write again\./);
   assert.match(agents, /A \*publish\* that fails after a write is not an error: it is returned \(`publish\.kind: 'failed'`\) with the page's id, because the caller must still record that the page exists\./);
   assert.match(agents, /halts on it as `pages-publish-failed` \(re-runnable: the page is reused and published, not written again\)/);
@@ -488,6 +517,19 @@ test('AGENTS.md says a page write whose outcome is not known is never sent again
     assert.doesNotMatch(text, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, `${name} still says a second send of an update is harmless`);
     assert.doesNotMatch(text, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|time-bounded|runPac/, `${name} still describes the pac wrapper's time limits`);
   }
+});
+
+// The build's retry decides from the structure of a failure, and a SQL deadlock victim is the one condition that structure names in two places: the generic SQL error code every SQL failure carries, and the platform's signature in the
+// service's own answer. lib/retry-policy.js has the rule and scripts/tests/retry-policy.test.js and halt-retry-policy.test.js run it, with the real SDK and the real retry loop; this pins that the plugin's guide says it, and no longer says it is not run again.
+test('AGENTS.md says a SQL deadlock victim is run again by the build — the generic SQL error code and the platform\'s signature in the service\'s own answer, never either alone — and no longer says it is final', () => {
+  const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
+  assert.match(agents, /The SQL deadlock victim a service answers with a 500 is run again, narrowly \(`isDeadlockVictimAnswer`\): its code, `0x80044150`, is the generic SQL error every SQL failure carries, so it takes that code — read from the `error\.code` of the answer's body, never from text — AND the platform's deadlock signature \(`Sql Number: 1205`, the HTTP client's `SQL_DEADLOCK_VICTIM`\) in the service's own answer, which is what follows the url in the SDK's message, so a name the maker put in the url is not read\./);
+  assert.match(agents, /The code beside another SQL number \(a constraint, a lock timeout\) and the signature with no such code — a 500 whose words only quote it, a display name that reads as one — stay final, and a deadlock victim is counted as any transient failure is: the build runs the phase again up to three times\./);
+  assert.match(agents, /The number that counts is the LAST one the answer gives: the platform writes its own diagnostic after the SQL text, and the SQL text can quote what a maker named \(a duplicate key quotes the value that collided\), so a name spelled `Sql Number: 1205` in front of a unique-key violation \(2627\) is not a deadlock, and one that quotes another number in front of the platform's 1205 does not hide one — the same pattern is the HTTP client's own signature for its deadlock re-sends\./);
+  assert.match(agents, /a SQL deadlock victim \(the generic SQL error code `0x80044150` AND the platform's `Sql Number: 1205` — the last SQL number the answer gives — in the service's own answer, `isDeadlockVictimAnswer`\)/);
+  assert.doesNotMatch(agents, /deadlock victim[^.]*is therefore final for the build/, 'AGENTS.md says a deadlock victim is final for the build');
+  const policy = squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'retry-policy.js'), 'utf8'));
+  assert.doesNotMatch(policy, /NOT here, on purpose: the SQL deadlock victim/, 'lib/retry-policy.js still says a deadlock victim is not recovered');
 });
 
 // What the /genpage skill tells the agent to do when a page write cannot say what it did. The page is written through the SDK (lib/genpage-sdk.js), so there is no pac process to stall,

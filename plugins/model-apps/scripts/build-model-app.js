@@ -20,8 +20,10 @@ const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
-const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
+const { resolveAuthoringLanguage, BuildHalt } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
+const { judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
+const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -415,6 +417,12 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+  // One budget for the waiting the BUILD'S OWN retry layers add when a service throttles — the page backend's waits between the sends of a page write (a `$batch` the HTTP client never re-sends) and this loop's own waits before it runs
+  // a phase again — so the run can neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js). It is NOT a bound on all the waiting a run does:
+  // the production HTTP client re-sends a throttled read, publish, delete or column create on a schedule of its own (at most five re-sends, honouring a `Retry-After` of up to a minute), exactly as it did before there was a budget, and
+  // that is not charged to it — a throttled build that succeeds today would otherwise halt. `now` is the clock the page backend stamps the moment before which nothing may be sent on (`retryNotBefore`): a test seam, with `sleep`.
+  const throttle = deps.throttle || makeThrottleBudget({ warn: deps.warn });
+  const now = deps.now || Date.now;
   let authorizedFormRemovals;
   let authorizedSitemapRemovals;
   let currentDestructiveApproval;
@@ -672,6 +680,8 @@ async function buildModelApp(spec, opts, deps) {
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
         // rewrite keep a nav change made in the designer since then instead of reverting it.
         baselineSpec: opts.baselineSpec,
+        // The budget of waiting the page backend spends from, one for every attempt of this run.
+        throttle,
         emit,
       });
       break;
@@ -679,14 +689,29 @@ async function buildModelApp(spec, opts, deps) {
       if (err && err.owedPaid) owedAcrossAttempts.clear();
       collectOwedPublishes(owedAcrossAttempts, err && err.owedPublishes);
       if (err && Array.isArray(err.owedLengths)) owedLengths = err.owedLengths;
+      let halted = err;
       if (attempt <= maxRetries && isTransientHalt(err, { spec })) {
-        const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
-        if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
-        log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms…`);
-        await sleep(delay);
-        continue;
+        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
+        // What the service asked of the next send, carried across the layers (retry-policy.js, throttleAskOf): when the page backend's sends ran out it handed over the moment before which nothing may be
+        // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
+        const ask = throttleAskOf(err);
+        const asked = ask.notBefore > 0 ? Math.ceil(Math.min(ask.askedMs || Infinity, Math.max(0, ask.notBefore - now())) / 1000) * 1000 : 0;
+        const delay = Math.max(backoff, asked);
+        if (ask.throttled && !throttle.fits(delay)) {
+          // The wait does not fit what is left of the run's budget: stop, and say what the service asked. The build is idempotent, so a later run goes on from here.
+          halted = new BuildHalt(`${err && err.phase ? `${err.phase} stopped` : 'the build stopped'}: ${waitDoesNotFit(throttle, { askedMs: ask.askedMs || asked, waitMs: delay })}`, {
+            phase: err && err.phase, code: 'throttle-budget-exhausted', recoverable: true, cause: err, retry: retryPolicyFor(err), statusCode: 429,
+          });
+        } else {
+          if (ask.throttled) throttle.spend(delay);
+          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
+          const askNote = asked > 0 ? ` (the service asked to wait ${Math.ceil((ask.askedMs || asked) / 1000)} s)` : '';
+          log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms${askNote}…`);
+          await sleep(delay);
+          continue;
+        }
       }
-      // A non-transient (or retries-exhausted) halt — journal where/why it stopped, then propagate.
+      // A non-transient (or retries-exhausted, or out-of-budget) halt — journal where/why it stopped, then propagate.
       // Resume by re-running the same command (idempotent): a partial range (--from and the like) is
       // refused on --apply.
       //
@@ -701,8 +726,8 @@ async function buildModelApp(spec, opts, deps) {
       await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
       await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
-      if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
-      throw err;
+      if (journal) journal.close({ status: 'halt', phase: halted && halted.phase, code: halted && halted.code, recoverable: !!(halted && halted.recoverable), message: String((halted && halted.message) || halted), ...counts });
+      throw halted;
     }
   }
   // #559: a dry run's whole purpose is to say what an apply would DO, so summarise the decision
@@ -854,47 +879,48 @@ async function buildModelApp(spec, opts, deps) {
   return r;
 }
 
-// A halt is transient (safe to auto-retry, since the build is idempotent) when the underlying HTTP
-// status is 429/503, or the message names a known transient server condition (customization lock,
-// concurrent-op guard, SQL timeout, "try again later"). NOTE: the engine's `recoverable` flag means
-// "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
+// A failure is transient (safe to auto-retry, since the build is idempotent) when the SERVICE said so, by the
+// structure of its answer: the HTTP status it answered (429, 502, 503, 504), a timeout or a reset of the
+// transport, or a condition it names by the `error.code` of its answer (a customization or solution lock, SQL
+// giving up waiting, a concurrent request on the same record, a SQL deadlock victim — the generic SQL error code
+// with the platform's deadlock signature in the service's own answer — the lag of a column the spec creates). A
+// status that is not one of those — a 403, a 404, a 400, a 500 — is final, whatever the answer says: an answer
+// echoes what the maker named, and "SQL Timeout Reader" is a legal name for a view, a role, a persona, a flow,
+// a page, and — `contoso_customizationlockexception` — a table. Only a failure that carries no HTTP status at
+// all (a plain error, the words a helper reported by value) is read by the service's own words as a fallback:
+// customization lock, concurrent-op guard, SQL timeout, "try again later". What the build or the maker named
+// is never read: a halt's message quotes views, roles, personas, flows, pages, paths and the workspace's
+// folder. So the decision is made from the STRUCTURE of the failure first, and the plugin's own text is out of
+// it — lib/retry-policy.js holds the rule (`judgeFailure`), and tests/halt-retry-policy.test.js holds every
+// halt the build raises to a policy of its own. A failure that says it must not be retried (`transient: false`
+// anywhere along its causes) or that the SDK or the plugin types as a refusal (VALIDATION_ERROR,
+// VERSION_CONFLICT, a file system error) is never retried, whatever it quotes.
+// NOTE: the engine's `recoverable` flag means "re-runnable phase", NOT "transient error", so it is
+// deliberately NOT used here.
 //
-// `spec` (optional) enables the one clause that depends on what the build itself creates — see
-// MISSING_DECLARED_ATTRIBUTE below. Without it that clause never fires, so a caller that passes no spec gets
-// exactly the classification it always had.
+// `spec` (optional) enables the one condition that depends on what the build itself creates — the lag of a
+// column the spec declares (see MISSING_ATTRIBUTE_CODES in lib/retry-policy.js). Without it that condition never
+// fires, so a caller that passes no spec gets exactly the classification it always had.
 function isTransientHalt(err, { spec } = {}) {
   if (!err) return false;
-  // An error that says it must not be retried wins over any status or text it carries. A dashboard
-  // the build could neither add to its solution nor remove again is one (sdk-build.js): its message
-  // quotes the causes verbatim — a customization lock, "try again later" — but a retry would find the
-  // dashboard as a lone name match and reuse it outside the solution, the state the undo exists to
-  // prevent.
-  if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
-  const status = (err.cause && err.cause.statusCode) || err.statusCode;
-  const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
-  const missing = spec ? MISSING_DECLARED_ATTRIBUTE.exec(msg) : null;
+  // A dashboard the build could neither add to its solution nor remove again says `transient: false`
+  // (sdk-build.js): its message quotes the causes verbatim — a customization lock, "try again later" —
+  // but a retry would find the dashboard as a lone name match and reuse it outside the solution, the
+  // state the undo exists to prevent. `never` is that, and the typed refusals, and a status that says no.
+  const judgement = judgeFailure(err, spec ? { declares: (table, column) => specDeclaresAttribute(spec, table, column) } : {});
+  if (judgement.never) return false;
+  if (judgement.transient) return true;
+  // Here the failure carries no HTTP status at all. `text` is only what the service said — a halt's own
+  // message, and what an error says of its url, are not in it — unless an error declares its own words
+  // (`retryText`), and then those alone are.
+  const msg = judgement.text;
   return (
-    status === 429 ||
-    status === 503 ||
     /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg) ||
     // A SQL deadlock victim was rolled back, so the idempotent build can simply run again — the same
     // footing as the "SQL timeout" above, with a less ambiguous outcome (see SQL_DEADLOCK_VICTIM).
-    SQL_DEADLOCK_VICTIM.test(msg) ||
-    Boolean(missing && specDeclaresAttribute(spec, missing[1], missing[2]))
+    SQL_DEADLOCK_VICTIM.test(msg)
   );
 }
-
-// Dataverse rejects a view (or other fetch) naming a column it cannot see yet. Live-captured, from a view
-// pushed moments after this build created the relationship that adds the lookup:
-//   HTTP 400 from https://<org>/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has
-//   invalid fetch.  Error : 'contoso_task' entity doesn't contain attribute with Name = 'contoso_projectid'
-//   and NameMapping = 'Logical' (look up …
-// The metadata change had not yet reached the server validating the fetch, and re-running the same build
-// succeeded — so for a column the SPEC creates this is the same lag a retry rides out. Only for that column:
-// the lag explanation cannot apply to a column nobody declared, which is an authoring error and must halt at
-// once instead of spending three backoffs first. Group 1 is the table, group 2 the column (both logical).
-// `doesn.t` also accepts a typographic apostrophe, so a localized or reformatted rendering still matches.
-const MISSING_DECLARED_ATTRIBUTE = /'([^']+)' entity doesn.t contain attribute with Name\s*=\s*'([^']+)'/i;
 
 // Exponential backoff with jitter: ~3s, 6s, 12s (capped at 30s).
 function backoffMs(attempt) {

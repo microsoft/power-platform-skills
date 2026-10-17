@@ -2,8 +2,8 @@
 // lib/page-publish-records.js — the record a build keeps of the pages it has PUBLISHED, so that a rebuild does not publish a page that is already live. It is a cache: anything that is not a
 // clear "yes" reads as "nothing is known to be published", which costs a publish and nothing else, so the reader never throws and the writer's failure is the caller's warning.
 //
-// What it records per page: the fingerprint of the content published and the versionnumber of EVERY file row of the page as read right after the publish. A page skips its publish only while
-// the file rows read now are exactly those (`sameFileVersions`) — see the module's header for the measured facts, and sdk-build-pages-deploy.test.js for the build's use of it.
+// What it records per page: the fingerprint of the content published and the versionnumber of EVERY row of the page — its file rows and its own row, keyed by the page's id — as read right after the publish. A page skips its
+// publish only while the rows read now are exactly those (`sameFileVersions`) — see the module's header for the measured facts, and sdk-build-pages-deploy.test.js for the build's use of it.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -42,7 +42,7 @@ test('what was written is what is read: the pages, the content each was publishe
   assert.deepStrictEqual(Object.keys(record.pages), [ONE, TWO], 'sorted: the same pages are the same bytes, whatever order they were published in');
   assert.deepStrictEqual(record.pages[ONE], { fingerprint: HASH_A, files: { [ROW_A]: '1001', [ROW_B]: '1002' } });
   assert.deepStrictEqual(Object.keys(record).sort(), ['appUniqueName', 'environmentFingerprint', 'pages', 'schemaVersion']);
-  assert.strictEqual(record.schemaVersion, 2);
+  assert.strictEqual(record.schemaVersion, 3, 'the proof\'s version: a record of an earlier one cannot skip a publish');
   assert.deepStrictEqual(fs.readdirSync(dir), [path.basename(file)], 'no temporary file is left beside it');
   assert.ok(!text.includes(ENV), 'it stores a hash of the environment, not its address');
 });
@@ -91,12 +91,12 @@ test('a record that is damaged, of another version or shape, or written for anot
   const dir = workspace(t);
   const file = publishedRecordPath(dir, APP, ENV);
   const fingerprint = sha256(new URL(ENV).origin.toLowerCase());
-  const record = (over = {}) => JSON.stringify({ schemaVersion: 2, environmentFingerprint: fingerprint, appUniqueName: APP, pages: { [ONE]: entry(HASH_A, { [ROW_A]: '1001' }) }, ...over });
+  const record = (over = {}) => JSON.stringify({ schemaVersion: 3, environmentFingerprint: fingerprint, appUniqueName: APP, pages: { [ONE]: entry(HASH_A, { [ROW_A]: '1001' }) }, ...over });
   for (const [what, text] of [
-    ['torn', '{"schemaVersion":2,"pages":{'],
+    ['torn', '{"schemaVersion":3,"pages":{'],
     ['empty', ''],
     ['not an object', '[1,2]'],
-    ['another schema version', record({ schemaVersion: 3 })],
+    ['another schema version', record({ schemaVersion: 4 })],
     ['no schema version', record({ schemaVersion: undefined })],
     ['another environment inside the file', record({ environmentFingerprint: sha256('https://fabrikam.crm.dynamics.com') })],
     ['another app inside the file', record({ appUniqueName: 'fabrikam_app' })],
@@ -124,7 +124,7 @@ test('an entry whose files are not a clear set keeps its fingerprint and loses i
   const file = publishedRecordPath(dir, APP, ENV);
   const fingerprint = sha256(new URL(ENV).origin.toLowerCase());
   const read = (filesValue) => {
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, environmentFingerprint: fingerprint, appUniqueName: APP, pages: { [ONE]: { fingerprint: HASH_A, files: filesValue } } }), 'utf8');
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 3, environmentFingerprint: fingerprint, appUniqueName: APP, pages: { [ONE]: { fingerprint: HASH_A, files: filesValue } } }), 'utf8');
     return readPublishedPages(dir, APP, ENV).get(ONE);
   };
   assert.deepStrictEqual(read({ [ROW_A]: '1001' }), { fingerprint: HASH_A, files: new Map([[ROW_A, '1001']]) }, 'a clear set is read');
@@ -152,7 +152,24 @@ test('a record of the earlier format (schema version 1: a hash per page, no vers
   assert.deepStrictEqual([...readPublishedPages(dir, APP, ENV)], [[ONE, { fingerprint: HASH_A, files: null }]]);
   writePublishedPages(dir, APP, ENV, readPublishedPages(dir, APP, ENV));
   const record = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.deepStrictEqual([record.schemaVersion, record.pages], [2, { [ONE]: { fingerprint: HASH_A } }]);
+  assert.deepStrictEqual([record.schemaVersion, record.pages], [3, { [ONE]: { fingerprint: HASH_A } }]);
+});
+
+// The proof that wrote a schema 2 record's versions compared the published copy's source and settings only, and read the file rows' versions without the page's own row: another writer's compiled output, published
+// under the same source, or a rename, passed it. What it proved cannot vouch for what is proved now, so the versions of such a record are not read — the entry keeps its fingerprint and skips nothing — and one write
+// of the current proof replaces it.
+test('a record of schema version 2 — versions proved without the page\'s own row or the compiled output — is read as entries with no files, which never skip a publish, and the next write makes it the current format', (t) => {
+  const dir = workspace(t);
+  const file = publishedRecordPath(dir, APP, ENV);
+  const fingerprint = sha256(new URL(ENV).origin.toLowerCase());
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, environmentFingerprint: fingerprint, appUniqueName: APP, pages: { [ONE]: { fingerprint: HASH_A, files: { [ROW_A]: '1001', [ROW_B]: '1002' } }, [TWO]: { fingerprint: HASH_B } } }), 'utf8');
+  assert.deepStrictEqual([...readPublishedPages(dir, APP, ENV)], [[ONE, { fingerprint: HASH_A, files: null }], [TWO, { fingerprint: HASH_B, files: null }]]);
+  writePublishedPages(dir, APP, ENV, readPublishedPages(dir, APP, ENV));
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual([record.schemaVersion, record.pages], [3, { [ONE]: { fingerprint: HASH_A }, [TWO]: { fingerprint: HASH_B } }]);
+  // The same versions in a record of the current schema are read.
+  writePublishedPages(dir, APP, ENV, new Map([[ONE, entry(HASH_A)]]));
+  assert.deepStrictEqual(readPublishedPages(dir, APP, ENV).get(ONE), { fingerprint: HASH_A, files: files() });
 });
 
 test('a folder, an oversized file or a link in place of the record is not read', (t) => {
@@ -164,7 +181,7 @@ test('a folder, an oversized file or a link in place of the record is not read',
 
   // Large, but otherwise a record in good standing: without the size limit it would be read.
   const fingerprint = sha256(new URL(ENV).origin.toLowerCase());
-  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, environmentFingerprint: fingerprint, appUniqueName: APP, pages: { [ONE]: { fingerprint: HASH_A } }, pad: 'x'.repeat((1 << 20) + 1) }), 'utf8');
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 3, environmentFingerprint: fingerprint, appUniqueName: APP, pages: { [ONE]: { fingerprint: HASH_A } }, pad: 'x'.repeat((1 << 20) + 1) }), 'utf8');
   assert.strictEqual(readPublishedPages(dir, APP, ENV).size, 0, 'a file larger than any record of this kind');
   fs.rmSync(file);
 

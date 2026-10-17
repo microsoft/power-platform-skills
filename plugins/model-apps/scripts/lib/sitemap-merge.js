@@ -29,6 +29,8 @@
 // spot duplicates); areas and groups have no target, so they correspond by label, then by the id an
 // earlier build of this plugin gave them.
 
+const { GENPAGE_DEFAULT_VECTOR_ICON } = require('./genpage-subarea.js');
+
 // The fixed launcher path the designer gives every dashboard entry it creates, and the one the
 // runtime keys the dashboard glyph on.
 const DASHBOARD_LAUNCHER_URL = '/workplace/home_dashboards.aspx';
@@ -133,6 +135,13 @@ const CHROME = [
   { field: 'icon', same: (a, b) => text(a).toLowerCase() === text(b).toLowerCase() },
   { field: 'vectorIcon', same: (a, b) => text(a).toLowerCase() === text(b).toLowerCase() },
 ];
+
+// Whether `liveValue` is an icon the platform gave the entry rather than one somebody chose, for an entry whose spec names none. A generative page entry that names no `vectorIcon` holds the
+// platform's page icon (genpage-subarea.js) — the SDK writes it whenever it serializes one — so the live entry has an icon the spec and its baseline never did, and without this the rebuild
+// read that as a change made in the designer and said it had kept it, on every rebuild. Only for a spec that says nothing about the field (a spec that names an icon is compared with the live
+// one like any other), and only for the page entry's vector icon: no other kind of entry is given one, so a live icon there was put there by someone.
+const isPlatformDefault = (specEntry, field, liveValue) => specEntry.type === 'GenPage' && field === 'vectorIcon'
+  && text(specEntry[field]) === '' && text(liveValue).toLowerCase() === GENPAGE_DEFAULT_VECTOR_ICON.toLowerCase();
 
 /**
  * Whether a rebuild KEEPS a live nav entry's `field` rather than writing the spec's value: the spec
@@ -337,9 +346,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
           const base = baseChrome.get(pick.key);
           const label = text(liveSub.title) || text(sub.title) || pick.key;
           for (const { field: f, same } of CHROME) {
-            if (same(sub[f], liveSub[f])) {
-              // Equal as far as the platform cares (an icon name differing only in case): re-emit the
-              // live string, so the node round-trips byte-for-byte.
+            if (same(sub[f], liveSub[f]) || isPlatformDefault(sub, f, liveSub[f])) {
+              // Equal as far as the platform cares (an icon name differing only in case, or the icon the
+              // platform gave an entry the spec gives none): re-emit the live string, so the node
+              // round-trips byte-for-byte.
               if (text(liveSub[f])) nextSub[f] = liveSub[f];
               continue;
             }

@@ -207,6 +207,67 @@ test('a kept value that is absent live is removed from the typed node, not writt
   assert.ok(!('icon' in sub), 'the designer removed the icon; the stale spec does not put it back');
 });
 
+// A generative page entry the spec gives no icon gets one from the platform — the SDK writes the page icon (`vectorIcon` below; the real bundle is asked in
+// sitemap-adopt-real-bundle.test.js) — so every rebuild finds an icon live that neither the spec nor its baseline ever named. That is not a change made in the designer, and the note for one
+// ("kept the environment's vectorIcon … it changed there after this spec was last applied") was printed on every rebuild of every app with a page. An icon a maker chose is a change, and is still said.
+const PAGE_ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const PAGE_DEFAULT_ICON = '/_imgs/TableIconsFluentV9/document_one_page_sparkle.svg';
+const pageEntry = (id, title, extra = {}) => ({ id, type: 'GenPage', genPageId: PAGE_ID, title, ...extra });
+const specWithPage = (icon) => ({ appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ page: 'home', title: 'Home', ...(icon ? { vectorIcon: icon } : {}) }] }] }] } });
+const pageDesired = (extra = {}) => tree([{ id: 'area_0', title: 'M', groups: [{ id: 'group_0_0', title: 'G', subAreas: [pageEntry('sub_0_0_0', 'Home', extra)] }] }]);
+const pageLive = (vectorIcon) => tree([{ id: 'a', title: 'M', groups: [{ id: 'g', title: 'G', subAreas: [pageEntry('p', 'Home', { ...(vectorIcon ? { vectorIcon } : {}), bag: bag('p') })] }] }]);
+const pageIds = { pages: { home: PAGE_ID } };
+
+test('a page entry the spec gives no icon may hold the platform\u2019s default one: nothing is kept, nothing changes and nothing is said — with a baseline or without', () => {
+  for (const [what, opts] of [
+    ['a baseline that never named an icon', { baseChrome: chromeByTargetKey(specWithPage(), pageIds) }],
+    ['no baseline', {}],
+  ]) {
+    for (const live of [PAGE_DEFAULT_ICON, PAGE_DEFAULT_ICON.toUpperCase()]) {
+      const { siteMap, notes } = adoptLiveSitemap(pageDesired(), pageLive(live), opts);
+      assert.deepStrictEqual(notes, [], `${what}: ${live}`);
+      const sub = siteMap.areas[0].groups[0].subAreas[0];
+      assert.strictEqual(sub.vectorIcon, live, `${what}: the live icon is written back as it is, so the node does not change`);
+      assert.strictEqual(sub.id, 'p', 'and it is the live node');
+    }
+  }
+});
+
+test('a page entry holding an icon a maker chose is still kept and said — the default is not every icon', () => {
+  const custom = '$webresource:contoso_home.svg';
+  const base = { baseChrome: chromeByTargetKey(specWithPage(), pageIds) };
+  const { siteMap, notes } = adoptLiveSitemap(pageDesired(), pageLive(custom), base);
+  assert.strictEqual(siteMap.areas[0].groups[0].subAreas[0].vectorIcon, custom, 'kept');
+  assert.deepStrictEqual(notes.map((n) => [n.kind, n.node, n.field, n.live]), [['kept', 'subArea', 'vectorIcon', custom]]);
+  const lines = describeSitemapNotes(notes);
+  assert.strictEqual(lines.length, 1);
+  assert.match(lines[0], /^nav entry "Home": kept the environment's vectorIcon '\$webresource:contoso_home\.svg' — it changed there after this spec was last applied or downloaded, and the spec still has \(none\)\./);
+  // With no baseline the spec wins, and the change is said, as for any other entry.
+  const noBase = adoptLiveSitemap(pageDesired(), pageLive(custom));
+  assert.deepStrictEqual(noBase.notes.map((n) => [n.kind, n.field]), [['changed', 'vectorIcon']]);
+  // An icon that merely starts like the default is not it.
+  const near = adoptLiveSitemap(pageDesired(), pageLive(`${PAGE_DEFAULT_ICON}?v=2`), base);
+  assert.deepStrictEqual(near.notes.map((n) => n.kind), ['kept']);
+});
+
+test('the default page icon is the page entry\u2019s own: another kind of entry that holds it, with no icon in the spec, is still kept and said', () => {
+  const live = tree([{ id: 'a', title: 'M', groups: [{ id: 'g', title: 'G', subAreas: [{ ...entitySub('s', 'new_x', 'X', bag('s')), vectorIcon: PAGE_DEFAULT_ICON }] }] }]);
+  const desired = tree([{ id: 'area_0', title: 'M', groups: [{ id: 'group_0_0', title: 'G', subAreas: [entitySub('sub_0_0_0', 'new_x', 'X')] }] }]);
+  const baseSpec = { appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ entity: 'new_x', title: 'X' }] }] }] } };
+  const { notes } = adoptLiveSitemap(desired, live, { baseChrome: chromeByTargetKey(baseSpec) });
+  assert.deepStrictEqual(notes.map((n) => [n.kind, n.field]), [['kept', 'vectorIcon']]);
+});
+
+test('an icon the spec names is written over the platform\u2019s default, and said only when no baseline shows the spec meant it', () => {
+  const named = '$webresource:contoso_home.svg';
+  const baseline = adoptLiveSitemap(pageDesired({ vectorIcon: named }), pageLive(PAGE_DEFAULT_ICON), { baseChrome: chromeByTargetKey(specWithPage(), pageIds) });
+  assert.strictEqual(baseline.siteMap.areas[0].groups[0].subAreas[0].vectorIcon, named, 'the spec\u2019s icon is written');
+  assert.deepStrictEqual(baseline.notes.map((n) => [n.kind, n.field, n.intended === true]), [['changed', 'vectorIcon', true]]);
+  assert.deepStrictEqual(describeSitemapNotes(baseline.notes), [], 'an edit the spec made is not repeated back');
+  const noBase = adoptLiveSitemap(pageDesired({ vectorIcon: named }), pageLive(PAGE_DEFAULT_ICON));
+  assert.match(describeSitemapNotes(noBase.notes)[0], /vectorIcon changes from '\/_imgs\/TableIconsFluentV9\/document_one_page_sparkle\.svg' to the spec's '\$webresource:contoso_home\.svg'/);
+});
+
 test('chromeByTargetKey resolves dashboards and pages through this build\u2019s ids and drops ambiguous targets', () => {
   const spec = { appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [
     { dashboard: 'Ops', title: 'Operations' },

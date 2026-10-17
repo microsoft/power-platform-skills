@@ -142,10 +142,15 @@ const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { navigationEntryKind, navigationVerdict } = require('./app-navigation.js');
 const { isAppTextMap, appTextKind, localizedAppText, describeHeldAppText } = require('./app-header-text.js');
+// The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
+// raises itself is made by refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service), because the build's retry reads a failure's STRUCTURE and the
+// service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
+const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
 const SDK_COLUMN_TYPE = _SDK_COLUMN_TYPE;
+
 
 // Dataverse control class ids. The vendored bundle does NOT export the SDK's ControlClassId enum, so
 // these stable platform GUIDs are pinned here (matching the SDK's
@@ -233,7 +238,7 @@ async function findPinnedDashboard(sdk, pin) {
   const row = rows && rows[0];
   if (!row) return null;
   if (row.type !== undefined && row.type !== null && Number(row.type) !== 0) {
-    throw new Error(`dashboardId ${id} is a type-${row.type} form, not a dashboard — correct the id, or remove it to find the dashboard by name`);
+    throw refusal(`dashboardId ${id} is a type-${row.type} form, not a dashboard — correct the id, or remove it to find the dashboard by name`);
   }
   return { id: String(row.formid), name: String(row.name === undefined || row.name === null ? '' : row.name) };
 }
@@ -368,7 +373,7 @@ function buildCommandControl(c, webResources, location = 'MainTab') {
   if (c.icon) control.icon = c.icon;
   if (c.library && c.function) {
     const wrId = webResources[c.library];
-    if (!wrId) throw new Error(`command "${c.label}" references web resource '${c.library}' which wasn't created — declare it in webResources[] and don't skip the web-resources phase`);
+    if (!wrId) throw refusal(`command "${c.label}" references web resource '${c.library}' which wasn't created — declare it in webResources[] and don't skip the web-resources phase`);
     control.action = { type: 'javascript', webResourceId: wrId, functionName: c.function };
     // Default the parameters when the author did not say. A JS command with none is handed nothing
     // and cannot act on the record — see COMMAND_DEFAULT_PARAMETERS. An explicit value (including
@@ -423,7 +428,7 @@ function resolvePhases({ only, skip, from, to } = {}) {
   const known = new Set(PHASES);
   const named = [from, to, ...[].concat(only || []), ...[].concat(skip || [])].filter(Boolean);
   const bad = [...new Set(named.filter((p) => !known.has(p)))];
-  if (bad.length) throw new Error(`unknown phase(s): ${bad.join(', ')} (valid: ${PHASES.join(', ')})`);
+  if (bad.length) throw refusal(`unknown phase(s): ${bad.join(', ')} (valid: ${PHASES.join(', ')})`);
   let active = PHASES.slice();
   if (from) { const i = active.indexOf(from); active = active.slice(i); }
   if (to) { const i = active.indexOf(to); active = active.slice(0, i + 1); }
@@ -750,19 +755,19 @@ async function blockingViewLabelProblems(problems, { provision, say }) {
 // before it writes a view. The pre-flight is tagged with the phase name the CLI's own pre-flight halts already
 // carry (`preflight`): it is not part of the views phase, which has not started.
 function viewLabelHalt(blocking, { beforeAnyWrite }) {
-  const halt = new BuildHalt(
-    `${blocking.length} view filter value${blocking.length === 1 ? '' : 's'} cannot be resolved to an option of the table. ${beforeAnyWrite ? 'The build stopped before writing anything' : 'No view was written'}:\n${describeProblems(blocking)}`,
-    { phase: beforeAnyWrite ? 'preflight' : 'views', code: 'view-filter-label-unresolved', recoverable: false });
   // A label the environment shows to be wrong (`unknown`, `ambiguous`) is wrong on a re-run too, so such a halt is never
   // run again. One that only unanswered option reads left undecided (`unreadable`, each `why` reading e.g. "HTTP 503: …")
-  // may be answered next time, but only when every one of those reads was throttled or unavailable (429, 503): it then
-  // carries that status, which the CLI's retry check (isTransientHalt) reads. Every other halt is marked never-retry,
+  // may be answered next time, but only when every one of those reads was throttled or unavailable (429, 502, 503, 504): it then
+  // carries that status, which the CLI's retry check (isTransientHalt) reads. Every other halt is never run again,
   // because the message quotes the user's own filter labels, and a label such as "SQL Timeout" must not read as transient.
-  const statusOf = (p) => { const m = /\bHTTP (\d{3})\b/.exec(String(p.why || '')); return m ? Number(m[1]) : null; };
-  const throttled = blocking.length > 0 && blocking.every((p) => p.reason === 'unreadable' && [429, 503].includes(statusOf(p)));
-  if (throttled) halt.statusCode = statusOf(blocking[0]);
-  else halt.transient = false;
-  return halt;
+  // The status is read from the START of a `why` — both of its forms open with it (`HTTP 503: …` for an answer the read reported by value,
+  // `HTTP 503 from <url>: …` for the SDK's error) — and nowhere else: a `why` that quotes a column or a label in its words must not
+  // pass for an answer of the service.
+  const statusOf = (p) => { const m = /^\s*HTTP (\d{3})\b/.exec(String(p.why || '')); return m ? Number(m[1]) : null; };
+  const throttled = blocking.length > 0 && blocking.every((p) => p.reason === 'unreadable' && isTransientStatus(statusOf(p)));
+  return new BuildHalt(
+    `${blocking.length} view filter value${blocking.length === 1 ? '' : 's'} cannot be resolved to an option of the table. ${beforeAnyWrite ? 'The build stopped before writing anything' : 'No view was written'}:\n${describeProblems(blocking)}`,
+    { phase: beforeAnyWrite ? 'preflight' : 'views', code: 'view-filter-label-unresolved', recoverable: false, ...(throttled ? { retry: RETRY.SERVICE, statusCode: statusOf(blocking[0]) } : { retry: RETRY.NEVER }) });
 }
 
 // The build's pre-flight (ADO 6691114): before the first write of an apply that writes the data model, stop on a
@@ -910,13 +915,13 @@ function enrichesDefaultViews(spec, entity) {
 //     refuse to guess rather than reconcile an arbitrary form (fail-closed).
 async function resolveExistingFormId(provision, def) {
   if (def.formId) {
-    if (!FORM_GUID_RE.test(String(def.formId))) throw new Error(`form "${def.name}": formId '${def.formId}' is not a valid GUID`);
+    if (!FORM_GUID_RE.test(String(def.formId))) throw refusal(`form "${def.name}": formId '${def.formId}' is not a valid GUID`);
     const rows = await provision.queryRecords('systemform', { select: ['formid', 'objecttypecode', 'type', 'name'], filter: `formid eq ${def.formId}`, top: 1 });
     const row = rows && rows[0];
     // A pinned id names an EXISTING form to reconcile. If it's ABSENT this is a stale/wrong pin, NOT a
     // create trigger — returning null would drop to the create path and mint a NEW form on EVERY rerun
     // (the pin stays in the spec), silently accumulating duplicate forms. Fail loud instead.
-    if (!row) throw new Error(`form "${def.name}": pinned formId ${def.formId} does not exist on this environment — remove the pin to create a new form, or correct the id`);
+    if (!row) throw refusal(`form "${def.name}": pinned formId ${def.formId} does not exist on this environment — remove the pin to create a new form, or correct the id`);
     // The pin must point at the SAME (table, type, name) the spec intends. reconcileForm blindly pushes the
     // spec layout onto whatever id it gets, so a wrong pin (a Quick View id under formType:"Main", a form on
     // another table, or an unrelated form) would CORRUPT that form. The pin's only legitimate use — two
@@ -924,13 +929,13 @@ async function resolveExistingFormId(provision, def) {
     // a valid pin, only a mistaken one.
     const wantType = FORM_TYPE_CODE[def.formType || 'Main'];
     if (String(row.objecttypecode).toLowerCase() !== String(def.entityLogicalName).toLowerCase()) {
-      throw new Error(`form "${def.name}": formId ${def.formId} belongs to table '${row.objecttypecode}', not '${def.entityLogicalName}'`);
+      throw refusal(`form "${def.name}": formId ${def.formId} belongs to table '${row.objecttypecode}', not '${def.entityLogicalName}'`);
     }
     if (wantType != null && row.type != null && Number(row.type) !== wantType) {
-      throw new Error(`form "${def.name}": formId ${def.formId} is a type-${row.type} form but the spec declares formType "${def.formType || 'Main'}" (type ${wantType}) — pin a form of the matching type`);
+      throw refusal(`form "${def.name}": formId ${def.formId} is a type-${row.type} form but the spec declares formType "${def.formType || 'Main'}" (type ${wantType}) — pin a form of the matching type`);
     }
     if (row.name != null && String(row.name).toLowerCase() !== String(def.name).toLowerCase()) {
-      throw new Error(`form "${def.name}": formId ${def.formId} is named '${row.name}', not '${def.name}' — pin the form whose name matches the spec`);
+      throw refusal(`form "${def.name}": formId ${def.formId} is named '${row.name}', not '${def.name}' — pin the form whose name matches the spec`);
     }
     return String(row.formid);
   }
@@ -958,7 +963,7 @@ async function resolveExistingFormId(provision, def) {
   }
   if (!rows || !rows.length) return null;
   if (rows.length > 1) {
-    throw new Error(`form "${def.name}" (${def.formType || 'Main'}) on ${def.entityLogicalName}: ${rows.length} forms share this table, type, and name — pin the exact one with forms[].formId (e.g. "${rows[0].formid}")`);
+    throw refusal(`form "${def.name}" (${def.formType || 'Main'}) on ${def.entityLogicalName}: ${rows.length} forms share this table, type, and name — pin the exact one with forms[].formId (e.g. "${rows[0].formid}")`);
   }
   return String(rows[0].formid);
 }
@@ -1190,10 +1195,8 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
     verdict = navigationVerdict(spec, { ...rule, appExists, whyUnknown });
   }
   if (verdict.outcome === 'refuse') {
-    const halt = new BuildHalt(`app "${spec.app.name}" cannot be built: ${verdict.message} The build stopped before writing anything.`, { phase: 'preflight', code: verdict.code, recoverable: false });
-    // The message quotes the author's own page keys, so it must never be read as one of the texts the CLI retries on (isTransientHalt).
-    halt.transient = false;
-    throw halt;
+    // The message quotes the author's own page keys, so it must never be read as one of the texts the CLI retries on (isTransientHalt), and a re-run reads the same spec.
+    throw new BuildHalt(`app "${spec.app.name}" cannot be built: ${verdict.message} The build stopped before writing anything.`, { phase: 'preflight', code: verdict.code, recoverable: false, retry: RETRY.NEVER });
   }
   if ((verdict.outcome === 'unknown' || verdict.outcome === 'warn') && typeof warn === 'function') warn(`app "${spec.app.name}": ${verdict.message}`);
 }
@@ -1228,7 +1231,8 @@ function acquireAppPagesLease(wsDir, appUnique, deps = {}) {
     if (lease.error) throw lease.error;
     // `stale`: the lock's owner is gone, but the lock could not be released (another build was releasing it at the same moment, or died doing so).
     const unreleased = lease.stale ? ` The build that held it is no longer running, but its lock could not be released: ${lease.reason}.` : '';
-    throw new BuildHalt(`another build is deploying pages for '${appUnique}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${lockPath} if it is stale.${unreleased}`, { phase: 'pages', code: 'pages-locked', recoverable: true });
+    // `retry: NEVER`: the lock belongs to a build that is still running, or to one that is gone but whose lock could not be released — running the earlier phases again releases neither — and the message quotes the lock's path, which holds the maker's folder.
+    throw new BuildHalt(`another build is deploying pages for '${appUnique}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${lockPath} if it is stale.${unreleased}`, { phase: 'pages', code: 'pages-locked', recoverable: true, retry: RETRY.NEVER });
   }
   if (lease.reclaimed && typeof deps.warn === 'function') {
     deps.warn(`released the pages lock for '${appUnique}': the build that held it (${describeOwner(lease.previous)}) is no longer running`);
@@ -1262,7 +1266,7 @@ function appDef(spec, result, opts = {}) {
     const kind = navigationEntryKind(s);
     if (kind === 'dashboard') {
       const dashboardId = (result.dashboards || {})[s.dashboard];
-      if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
+      if (!dashboardId) throw refusal(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
       // The designer gives every dashboard entry it creates this launcher Url, recognizes a dashboard
       // entry by it, and the runtime shows the dashboard glyph only for it — without it the entry
       // renders a placeholder icon (AB#6726727). The SDK's from-scratch node omits it.
@@ -1275,7 +1279,7 @@ function appDef(spec, result, opts = {}) {
         // the pages phase rewrites the sitemap once the genPageIds exist. A genuinely-missing page
         // (finalize/edit time) still throws.
         if (opts.omitUnbuiltPages) return null;
-        throw new Error(`sitemap subarea "${s.title}" references page '${s.page}' which wasn't built — declare it in pages[] and don't skip the pages phase`);
+        throw refusal(`sitemap subarea "${s.title}" references page '${s.page}' which wasn't built — declare it in pages[] and don't skip the pages phase`);
       }
       return genPageSubArea(withVector, genPageId);
     }
@@ -1290,7 +1294,7 @@ function appDef(spec, result, opts = {}) {
   // an error naming nothing the author could act on. Fail with the same actionable shape the
   // subarea errors above use.
   if (!spec.appShell || !Array.isArray(spec.appShell.areas)) {
-    throw new Error("the spec has no appShell.areas, so the app has no navigation to build — add appShell: { areas: [ { label, groups: [ { label, subAreas: [ { entity: '<table>', title: '<label>' } ] } ] } ] }");
+    throw refusal("the spec has no appShell.areas, so the app has no navigation to build — add appShell: { areas: [ { label, groups: [ { label, subAreas: [ { entity: '<table>', title: '<label>' } ] } ] } ] }");
   }
   const areas = (spec.appShell.areas || []).map((a, ai) => ({ id: `area_${ai}`, title: a.label,
     // Same rule as subAreaJson: preserve a platform icon path VERBATIM (case-sensitive OOB/WebResources
@@ -1506,7 +1510,8 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
   }
   const workspace = reset ? ''
     : ` First reset the workspace, which still holds this run's unpushed copy of the app (a re-run would refuse to overwrite it): ${RESET_WORKSPACE}.`;
-  throw new BuildHalt(`push app ${name} failed: the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is. Re-downloading reads the same draft and fails the same way: publish the app in Power Apps, then re-run the build.${workspace}`, { phase: 'push', code: 'app-header-unpublished', recoverable: true, cause: pushed.error });
+  // `retry: NEVER`: publishing the app is the maker's step, and the app's name is in the message.
+  throw new BuildHalt(`push app ${name} failed: the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is. Re-downloading reads the same draft and fails the same way: publish the app in Power Apps, then re-run the build.${workspace}`, { phase: 'push', code: 'app-header-unpublished', recoverable: true, cause: pushed.error, retry: RETRY.NEVER });
 }
 
 // #583: push an app artifact whose header this run may have changed (the routing description, the app's text). A refusal
@@ -1607,7 +1612,8 @@ async function discardUnrecordedEdits(provision, appId, error, thrown) {
 async function refuseUnpushedAppCopy(provision, appId, name) {
   const listed = (await provision.listArtifacts('app')).find((a) => a && a.id === appId);
   if (listed && listed.isDirty) {
-    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. To reset it, ${RESET_WORKSPACE}, and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true });
+    // `retry: NEVER`: the copy stays dirty until the operator resets it, and the app's name is in the message.
+    throw new BuildHalt(`app ${name}: the workspace copy holds edits an earlier run did not push (an interrupted build, say), and this run's push of the app would send them too. To reset it, ${RESET_WORKSPACE}, and re-run.`, { phase: 'app-shell', code: 'app-copy-unpushed-edits', recoverable: true, retry: RETRY.NEVER });
   }
 }
 
@@ -2044,7 +2050,7 @@ async function resolveRoleGrantTarget(provision, grant, buCache) {
   if (grant.roleId) {
     const rows = await provision.queryRecords('role', { select: ['roleid', 'name', 'ismanaged'], filter: `roleid eq ${grant.roleId}`, top: 1 });
     const row = rows && rows[0];
-    if (!row) throw new Error(`roleGrant: pinned roleId ${grant.roleId} does not exist on this environment — correct the id, or target the role by name`);
+    if (!row) throw refusal(`roleGrant: pinned roleId ${grant.roleId} does not exist on this environment — correct the id, or target the role by name`);
     return { roleId: String(row.roleid), name: row.name || '', managed: row.ismanaged === true };
   }
   const name = String(grant.role).trim();
@@ -2052,15 +2058,15 @@ async function resolveRoleGrantTarget(provision, grant, buCache) {
   // FAIL CLOSED when the BU cannot be resolved. Teardown/verify fall back to a name-only match because a
   // false negative there is merely noisy; here a name-only match could grant privileges on a same-named
   // role in a DIFFERENT business unit, which is a real privilege escalation.
-  if (!bu) throw new Error(`roleGrant "${name}": could not resolve the business unit to scope the role lookup — pin the role with 'roleId' instead`);
+  if (!bu) throw refusal(`roleGrant "${name}": could not resolve the business unit to scope the role lookup — pin the role with 'roleId' instead`);
   const rows = await provision.queryRecords('role', {
     select: ['roleid', 'name', 'ismanaged'],
     filter: `name eq '${String(name).replace(/'/g, "''")}'${roleBuClause(bu)}`,
     top: 5,
   });
   const matches = (rows || []).filter((r) => r && r.roleid);
-  if (!matches.length) throw new Error(`roleGrant "${name}": no security role with that name exists in business unit ${bu} — check the spelling (the name must match EXACTLY), or pin the role with 'roleId'`);
-  if (matches.length > 1) throw new Error(`roleGrant "${name}": ${matches.length} roles share that name in business unit ${bu} — pin the one you mean with 'roleId'`);
+  if (!matches.length) throw refusal(`roleGrant "${name}": no security role with that name exists in business unit ${bu} — check the spelling (the name must match EXACTLY), or pin the role with 'roleId'`);
+  if (matches.length > 1) throw refusal(`roleGrant "${name}": ${matches.length} roles share that name in business unit ${bu} — pin the one you mean with 'roleId'`);
   return { roleId: String(matches[0].roleid), name: matches[0].name || name, managed: matches[0].ismanaged === true };
 }
 
@@ -2343,7 +2349,8 @@ async function assertAuthorizedSitemapRewrite(provision, appId, nextSiteMap, aut
   const dropped = sitemapTargetsForFence(live.siteMap || {}).filter((target) => !want.has(target));
   const unauthorized = dropped.filter((target) => !authorized.has(target));
   if (unauthorized.length) {
-    throw new BuildHalt(`refusing to rewrite the app sitemap because ${unauthorized.join(', ')} appeared after the run's approval and would be removed. Re-run to review it.`, { phase, code: 'sitemap-removal-unapproved', recoverable: true });
+    // `retry: NEVER`: an approval fence. Only a renewed approval authorizes the removal, so running the build again would meet the same fence; the message names live URLs, which are the maker's.
+    throw new BuildHalt(`refusing to rewrite the app sitemap because ${unauthorized.join(', ')} appeared after the run's approval and would be removed. Re-run to review it.`, { phase, code: 'sitemap-removal-unapproved', recoverable: true, retry: RETRY.NEVER });
   }
 }
 
@@ -2464,6 +2471,23 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
 // deferred and saved artifacts, the app's own label), else `type id`.
 function targetLabel([type, id, label]) {
   return (Array.isArray(label) ? label.join(', ') : label) || `${type} ${id}`;
+}
+
+// The halt for tables whose publish was refused before the app was written. `failed` is publishTargets' `{ target, error }` per table. The message names the saved artifacts, which are the maker's (a
+// view called "SQL Timeout Reader"), and the service's answer to each. What decides whether a run again can help is each refusal's own structure — its status, its type, whether it says it must not be run
+// again — never the names: it is run again for a 429 or a 503 (the build re-runs a throttled publish as it did before this publish moved ahead of the app), and NEVER when any one table's refusal is final,
+// since the run would stop at that table again. The words that may decide are the answers' own (`retryText`, cut of the url each carries), never the names. The runner wraps this halt once more
+// (makeRunner); the policy, the status and the words are read through that wrapper.
+function reconciledPublishHalt(failed) {
+  const names = failed.map(({ target }) => targetLabel(target)).join('; ');
+  const detail = failed.map(({ error }) => (error && error.message) || 'refused').join('; ');
+  const errors = failed.map(({ error }) => error);
+  const final = errors.some((error) => retryPolicyFor(error) === RETRY.NEVER);
+  const status = errors.map((error) => error && (error.statusCode || error.status)).find(isTransientStatus);
+  const words = errors.map((error) => (error && typeof error === 'object' ? judgeFailure(error).text : '')).filter(Boolean).join('; ');
+  return new BuildHalt(`publish ${names} FAILED before the app was written: ${detail} — the build stopped there, because the app's publish would leave the labels saved on these tables unpublished for good. The changes are saved; re-run the build once the cause is cleared.`, {
+    phase: 'app-shell', code: 'reconciled-publish-failed', recoverable: true, cause: errors[0], retry: final ? RETRY.NEVER : RETRY.SERVICE, retryText: words, ...(status ? { statusCode: status } : {}),
+  });
 }
 
 // The publishes a build still OWED when it stopped: the tables whose saved views and forms — the default
@@ -2736,18 +2760,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // unpublished, and the app's publish below would strand them for good — so the build stops before it writes the
     // app. Nothing is lost: the halt carries every table this run owes (runSdkBuild), the CLI re-runs a transient
     // refusal at once, and once no retry follows it publishes them without the app (settleOwedPublishes).
-    const names = failed.map(({ target }) => targetLabel(target)).join('; ');
-    const detail = failed.map(({ error }) => (error && error.message) || 'refused').join('; ');
-    const first = failed[0].error;
-    const halt = new BuildHalt(`publish ${names} FAILED before the app was written: ${detail} — the build stopped there, because the app's publish would leave the labels saved on these tables unpublished for good. The changes are saved; re-run the build once the cause is cleared.`, { phase: 'app-shell', code: 'reconciled-publish-failed', recoverable: true, cause: first });
-    // The runner wraps this halt once more (makeRunner), and the CLI's retry check (isTransientHalt, build-model-app.js)
-    // reads a status only on the halt it is given and on that halt's cause. So the refusal's HTTP status is carried here,
-    // where it can see it — a 429 or a 503 is re-run as it was before this publish moved ahead of the app — and so is an
-    // explicit "never retry".
-    const status = first && (first.statusCode || first.status);
-    if (status) halt.statusCode = status;
-    if (first && first.transient === false) halt.transient = false;
-    throw halt;
+    throw reconciledPublishHalt(failed);
   };
 
   // ...and the tables the app is PROVEN to hold a form or chart of, and the charts this run wrote. The measured strand follows from the order of the
@@ -3333,7 +3346,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
     }
     if (isWorkspaceMetadataRace(last)) {
-      throw new Error(`form ${f && (f.name || f.entity)}: the workspace metadata for this form was still not readable after ${attempts} attempts `
+      throw refusal(`form ${f && (f.name || f.entity)}: the workspace metadata for this form was still not readable after ${attempts} attempts `
         + `(${(last && last.message) || last}). The form row itself was created — this is a local workspace write race, not a Dataverse failure. `
         + 'Re-run the same command: the build is idempotent and the metadata will exist on the next run.');
     }
@@ -5395,7 +5408,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // A quick-view embeds a QuickView form OF THE TARGET ENTITY — key by (targetEntity, name), not a
           // global name, so two entities with same-named QuickView forms don't cross-wire.
           const qvFormId = formIdByEntityName[`${String(qv.targetEntity).toLowerCase()}|${qv.form}`];
-          if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' on '${qv.targetEntity}' which wasn't built — declare it in forms[] with formType: "QuickView", entity "${qv.targetEntity}", and a matching name`);
+          if (!qvFormId) throw refusal(`form "${f.name || f.entity}" quick-view references form '${qv.form}' on '${qv.targetEntity}' which wasn't built — declare it in forms[] with formType: "QuickView", entity "${qv.targetEntity}", and a matching name`);
           const lookup = String(qv.lookup).toLowerCase();
           if (hasQuickView(await provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
           const rowsPtr = firstFieldSectionRowsPointer(await provision.getArtifact('form', hostId) || {});
@@ -5567,7 +5580,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           select: ['workflowid'], filter: businessRuleFilter(rule.name, entityLogical), paginate: true,
         });
         if (!Array.isArray(beforeCreate) || beforeCreate.some((w) => !w || typeof w.workflowid !== 'string' || !w.workflowid.trim())) {
-          throw new Error(`business rule "${rule.name}" on ${entityLogical}: before-create id snapshot is unreadable — refusing to push or delete rules without a complete id set`);
+          throw refusal(`business rule "${rule.name}" on ${entityLogical}: before-create id snapshot is unreadable — refusing to push or delete rules without a complete id set`);
         }
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
@@ -5778,7 +5791,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (clash) {
           throw new BuildHalt(
             `business process flow "${flow.name}" on ${flow.entity} cannot be created: the Dataverse unique name it derives ('${unique}') is already used by ${clash}. The derivation lower-cases the name, strips punctuation and always uses the 'new_' prefix, so two differently-spelled names can collide — and activation creates a backing TABLE with that name, so only one owner can exist. Rename this flow, or remove the existing one.`,
-            { phase: 'business-process-flows', code: 'bpf-unique-name-conflict', recoverable: false });
+            { phase: 'business-process-flows', code: 'bpf-unique-name-conflict', recoverable: false, retry: RETRY.NEVER });
         }
         // The whole flow — including its stages and steps — is carried on the CREATE payload. The
         // adapter normalizes and id-stamps the stage/step tree there, so unlike a business rule's
@@ -5869,7 +5882,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             ? `and this app's solution cannot say which is its own${unreadable}`
             : `and ${ours.length ? `${ours.length} of them are` : 'none of them is'} in this app's solution '${sol.uniqueName}'`;
           await runner.run('dashboards', `dashboard "${dash.name}"`, async () => {
-            throw new Error(`${existing.length} dashboards in this environment match the name '${dash.name}' (Dataverse compares names ignoring case, most accents and trailing spaces) ${reason}, so the build cannot tell which one to reuse. Rename or delete the extra ones in Maker, or give this dashboard a different name.`);
+            throw refusal(`${existing.length} dashboards in this environment match the name '${dash.name}' (Dataverse compares names ignoring case, most accents and trailing spaces) ${reason}, so the build cannot tell which one to reuse. Rename or delete the extra ones in Maker, or give this dashboard a different name.`);
           });
         }
       } else if (existing.length === 1 && typeof opts.warn === 'function') {
@@ -5931,20 +5944,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
             } catch { /* cannot tell — keep assuming it is still there */ }
           }
           if (stranded) {
-            const left = new Error(`dashboard "${dash.name}" was created (${pushed.id}) but could not be added to solution '${sol.uniqueName}' (${why}), and removing it again failed (${(undoErr && undoErr.message) || undoErr}) — add it to the solution or delete it in Maker before re-running, or teardown will not recognise it as this app's`);
             // Never auto-retried (isTransientHalt, build-model-app.js): a retry would reuse it as a lone
             // name match without adding it, whatever transient text the causes quoted above carry.
-            left.transient = false;
-            left.cause = err;
-            throw left;
+            throw refusal(`dashboard "${dash.name}" was created (${pushed.id}) but could not be added to solution '${sol.uniqueName}' (${why}), and removing it again failed (${(undoErr && undoErr.message) || undoErr}) — add it to the solution or delete it in Maker before re-running, or teardown will not recognise it as this app's`, { cause: err });
           }
-          const removed = new Error(`dashboard "${dash.name}" could not be added to solution '${sol.uniqueName}' (${why}), so it was removed again — re-run to create it afresh`);
-          // Nothing is left behind, so a retry is safe: keep the cause's HTTP status, so a 429/503 is
-          // still auto-retried as it was before the undo existed.
-          const status = err && (err.statusCode || err.status);
-          if (status) removed.statusCode = status;
-          removed.cause = err;
-          throw removed;
+          // Nothing is left behind, so a retry is safe — when the SERVICE said it may be: the cause's HTTP
+          // status (a 429/503 is still auto-retried as it was before the undo existed) and its own words
+          // decide, and the message, which quotes the dashboard's name and the solution's, does not.
+          throw serviceFailure(`dashboard "${dash.name}" could not be added to solution '${sol.uniqueName}' (${why}), so it was removed again — re-run to create it afresh`, {
+            status: err && (err.statusCode || err.status), words: judgeFailure(err).text, cause: err,
+          });
         }
         result.created.dashboards[dash.name] = pushed.id;
       });
@@ -6049,8 +6058,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // path is already blocked from partial phase ranges by the partial-apply guard, but runSdkBuild must be safe
           // on its own.)
           const liveSm = await fetchSitemap(provision, appUniqueName(spec));
-          if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
-          if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
+          if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true, ...retryFrom(liveSm.cause, liveSm.detail) });
+          if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false, retry: RETRY.NEVER });
           await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', await siteMapOverLive(provision, existingId, def.siteMap, opts, result.created));
           // The header — its text (name, description) and its routing description — rides this one push, as the sitemap does.
@@ -6123,7 +6132,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const appUnique = appUniqueName(spec);
     // Recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun.
-    if (!result.created.app) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false });
+    if (!result.created.app) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false, retry: RETRY.NEVER });
     const wsDir = opts.workspaceDir || path.join(path.resolve(opts.appDir || '.'), '.maker-workspace');
     // Advisory lease: acquired OUTSIDE the try so a failed acquire (pages-locked HALT) never triggers the
     // finally that would release a lease we never held. Correctness rests on the convergence spine, not this.
@@ -6136,7 +6145,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // a page created + manifested but not yet finalized into the sitemap is still in EXISTENCE, so a
       // crash-after-create converges to REUSE, not a duplicate.
       const enumd = await genpage.enumerateEnv();
-      if (!enumd.ok) throw new BuildHalt(`generative-page existence enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error}`, { phase: 'pages', code: 'pages-existence-failed', recoverable: true });
+      // The listing failed: what a run again may do follows the service's answer in `enumd.error` (the listing names no page of the maker's).
+      if (!enumd.ok) throw new BuildHalt(`generative-page existence enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error}`, { phase: 'pages', code: 'pages-existence-failed', recoverable: true, ...retryFrom(enumd.cause, enumd.error) });
 
       // MEMBERSHIP (this app's live sitemap) — fail-closed & discriminated. Fetched BEFORE
       // reconcile because reconcile's provenance guard needs the sitemap id set (a spec pageId may bind
@@ -6144,14 +6154,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // the app, so the sitemap MUST be readable; ok:false is a real failure, never "empty". A fresh app's
       // sitemap is validly empty of genpages here → ids:[] (correct). Reused below for the removal gate.
       const membership = await fetchSitemap(provision, appUnique);
-      if (!membership.ok) throw new BuildHalt(`could not read the app sitemap (${membership.reason}) — refusing to proceed without verifying the app's page set`, { phase: 'pages', code: 'pages-sitemap-read-failed', recoverable: true });
+      if (!membership.ok) throw new BuildHalt(`could not read the app sitemap (${membership.reason}) — refusing to proceed without verifying the app's page set`, { phase: 'pages', code: 'pages-sitemap-read-failed', recoverable: true, ...retryFrom(membership.cause, membership.detail) });
       const sitemapIds = membership.ids;
 
       // IDENTITY (the durable manifest, discriminated read). A PRESENT-but-unparseable manifest is CORRUPT
       // and must HALT fail-closed BEFORE reconcile — reconciling it as "no identity" would recreate the
       // app's existing pages as orphans. An ABSENT manifest (present:false) is normal for a fresh app.
       const { id: readId, manifest, text, present } = await readPageManifest(provision, appUnique);
-      if (present && !manifest) throw new BuildHalt(`the page manifest ${manifestResourceName(appUnique)} exists but is corrupt/unparseable — refusing to proceed (would risk recreating existing pages as orphans). Fix or delete the web resource and rebuild.`, { phase: 'pages', code: 'pages-manifest-corrupt', recoverable: false });
+      if (present && !manifest) throw new BuildHalt(`the page manifest ${manifestResourceName(appUnique)} exists but is corrupt/unparseable — refusing to proceed (would risk recreating existing pages as orphans). Fix or delete the web resource and rebuild.`, { phase: 'pages', code: 'pages-manifest-corrupt', recoverable: false, retry: RETRY.NEVER });
       let manifestId = readId;
       let lastManifestContent = text;
 
@@ -6168,7 +6178,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const placed = new Set(sitemapIds.map((id) => String(id).toLowerCase()));
       let ownership;
       try { ownership = readPageOwnership(opts.workspaceDir, appUnique, opts.env); } catch (e) {
-        throw new BuildHalt(`could not read local page creation receipts (${e.message}); refusing to bind off-sitemap ids`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+        // `retry: NEVER`: a record on the maker's disk that cannot be read; its path — in the maker's folder — is in the message and in the error beneath, and nothing a run again does reads it.
+        throw new BuildHalt(`could not read local page creation receipts (${e.message}); refusing to bind off-sitemap ids`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, retry: RETRY.NEVER });
       }
       // The page list holds each page's name exactly as its own row has it, drafts included — so a page that was written and never published (a create
       // that stopped between its write and its publish) is found by it, where a read of the PUBLISHED rows would not see it at all.
@@ -6193,7 +6204,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const pendingConflicts = [];
       let pendingByKey;
       try { pendingByKey = readPendingCreations(opts.workspaceDir, appUnique, opts.env); } catch (e) {
-        throw new BuildHalt(`could not read local records of page creations that were started (${e.message}); refusing to create pages past a record this build cannot read`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+        throw new BuildHalt(`could not read local records of page creations that were started (${e.message}); refusing to create pages past a record this build cannot read`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, retry: RETRY.NEVER });
       }
       for (const [key, pendingRecords] of pendingByKey) {
         // A key this spec does not declare is another build's, or an earlier spec's: left as it is, and it keeps blocking `--clear-workspace` until settled.
@@ -6232,7 +6243,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           adoptedPending.push({ key, pageId: record.pageId, name: page.name });
         } catch (e) {
           // `transient: false`, as for any creation receipt that cannot be saved: the build's re-run of a halt it takes for transient must not run on.
-          throw Object.assign(new BuildHalt(`page "${page.name}" was found as ${record.pageId} (a create an earlier build started), but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
+          throw new BuildHalt(`page "${page.name}" was found as ${record.pageId} (a create an earlier build started), but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false, retry: RETRY.NEVER });
         }
       }
       if (pendingConflicts.length) {
@@ -6241,7 +6252,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (c.reason === 'pending-create-unreadable') return `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it could not be read to tell whether it is a page that build sent (${c.error}), so it is neither adopted nor updated`;
           return `page ${c.pageId} exists under the id an earlier build minted for "${c.key}", but it is not a page that build sent: ${c.why} — so it is neither adopted nor updated`;
         });
-        throw new BuildHalt(`generative-page creation(s) that an earlier build started cannot be settled: ${why.join('; ')}. Look at the page(s) in the environment: delete the one that is not yours, or delete the "pending" record(s) named in ${path.join(path.resolve(opts.workspaceDir || '.'), 'page-ownership.pending.*.json')} for a page you have confirmed is not this app's, and re-run.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+        throw new BuildHalt(`generative-page creation(s) that an earlier build started cannot be settled: ${why.join('; ')}. Look at the page(s) in the environment: delete the one that is not yours, or delete the "pending" record(s) named in ${path.join(path.resolve(opts.workspaceDir || '.'), 'page-ownership.pending.*.json')} for a page you have confirmed is not this app's, and re-run.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, retry: RETRY.NEVER });
       }
       const createdIds = creationIds(ownership);
       const storedNames = new Map();
@@ -6293,7 +6304,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const removal = genpageCommand('delete', { env: opts.env, pageId: c.manifestId, flags: ' --allow-destructive' });
           return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation with ${place} (it publishes the app and proves the page in what runs) and re-run; if not, remove the stale id from the manifest/spec (or delete the page, after asking the user — it is permanent: ${removal}) and re-run`;
         });
-        throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+        throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, retry: RETRY.NEVER });
       }
       // A key that is bound to a page does not create one, so a creation an earlier build left pending for it is not resumed. What becomes of its record is decided by what is KNOWN
       // about its page, never by one listing:
@@ -6335,7 +6346,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (group.length < 2) continue;
         const unbound = group.filter((p) => !keyToId.has(p.key || p.name));
         if (unbound.length) {
-          throw new BuildHalt(`refusing to CREATE a duplicate-named generative page: ${unbound.length} of ${group.length} pages named '${group[0].name}' are NOT bound to an existing deployed page (their pageId is absent/stale — e.g. the page was deleted in Maker since this spec was downloaded), so this build would re-materialize the duplicate. Re-download the app for fresh page ids, or rename/remove the stale page(s) in the spec.`, { phase: 'pages', code: 'pages-duplicate-name-create', recoverable: false });
+          throw new BuildHalt(`refusing to CREATE a duplicate-named generative page: ${unbound.length} of ${group.length} pages named '${group[0].name}' are NOT bound to an existing deployed page (their pageId is absent/stale — e.g. the page was deleted in Maker since this spec was downloaded), so this build would re-materialize the duplicate. Re-download the app for fresh page ids, or rename/remove the stale page(s) in the spec.`, { phase: 'pages', code: 'pages-duplicate-name-create', recoverable: false, retry: RETRY.NEVER });
         }
       }
 
@@ -6352,7 +6363,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const keptIds = new Set(Array.from(keyToId.values()).map((id) => String(id).toLowerCase()));
       const liveAppIds = sitemapIds.filter((id) => existenceLower.has(String(id).toLowerCase()));
       const removedIds = liveAppIds.filter((id) => !keptIds.has(String(id).toLowerCase()));
-      if (removedIds.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to orphan ${removedIds.length} generative page(s) the spec removed but the app still references: ${removedIds.join(', ')}. Re-run with --allow-destructive to detach them (the page records are LEFT deployed; only the app's nav SubAreas are removed), or restore them to the spec.`, { phase: 'pages', code: 'pages-removed', recoverable: false });
+      if (removedIds.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to orphan ${removedIds.length} generative page(s) the spec removed but the app still references: ${removedIds.join(', ')}. Re-run with --allow-destructive to detach them (the page records are LEFT deployed; only the app's nav SubAreas are removed), or restore them to the spec.`, { phase: 'pages', code: 'pages-removed', recoverable: false, retry: RETRY.NEVER });
 
       // ── SHARED-PAGE DETECTION (report-only, FAIL-CLOSED). A page we are about to UPDATE (a reused
       // id in keyToId) that ALSO belongs to ANOTHER app's sitemap is shared (added to a second app in Maker) — updating
@@ -6393,15 +6404,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
       };
       const sharedPagesNow = async (ids) => {
         const { scan, entries } = await scanShared(ids);
-        if (!scan.ok) throw new BuildHalt(`could not scan the environment for pages shared across apps (${scan.error}) — refusing to UPDATE a page without verifying it is not shared. Re-run to retry.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
-        if (scan.unreadable.length) throw new BuildHalt(`cannot verify pages are not shared across apps — ${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')}); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
+        if (!scan.ok) throw new BuildHalt(`could not scan the environment for pages shared across apps (${scan.error}) — refusing to UPDATE a page without verifying it is not shared. Re-run to retry.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, ...retryFrom(scan.cause, scan.error) });
+        // `retry: NEVER`: an app whose sitemap cannot be read is one a maker has to fix or remove; the message names other apps, which are theirs.
+        if (scan.unreadable.length) throw new BuildHalt(`cannot verify pages are not shared across apps — ${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')}); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, retry: RETRY.NEVER });
         return entries;
       };
       const updateIds = Array.from(keyToId.values());
       if (updateIds.length) {
         const shared = await sharedPagesNow(updateIds);
         if (shared.length) {
-          throw new BuildHalt(`generative page(s) shared across apps: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
+          throw new BuildHalt(`generative page(s) shared across apps: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false, retry: RETRY.NEVER });
         }
       }
 
@@ -6415,7 +6427,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         try { recordPageCreation(opts.workspaceDir, appUnique, p.key || p.name, id, p.name, opts.env); } catch (e) {
           // `transient: false`: the page exists and nothing records it, so the build's own re-run of a halt it takes for transient (isTransientHalt, build-model-app.js — which reads this
           // message, and so the page's name: "SQL Timeouts" would match) would create a second one beside it.
-          throw Object.assign(new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
+          throw new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false, retry: RETRY.NEVER });
         }
         // The receipt is what the page's creation is now known by; the record that stood for it while it was not is consumed after it, never before. One that cannot be
         // removed is harmless — the next build finds the receipt for the same key and id when it settles the pending records (above), and consumes the record without proving the page again — so it is not a halt.
@@ -6443,6 +6455,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return await genpage.create({
             ...fields,
             caller: 'build',
+            // The hash of the compiled output the draft holds when the page is published, for the publish record: what is certified is the runtime, not only the source (`provedVersions`).
+            runtimeEvidence: true,
+            // The budget of waiting a throttle costs this run: one for every page, and for the build's own waits (lib/throttle-budget.js). Absent when the engine is run with none, and the write then has one of its own.
+            ...(opts.throttle ? { throttle: opts.throttle } : {}),
             ...(resumeIds.has(key) ? { pageId: resumeIds.get(key), sentBefore: resumeSent.get(key) } : {}),
             beforeSend: async (id, sent) => {
               sentUnder = id;
@@ -6451,7 +6467,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           });
         } catch (e) {
           // A page found under the id that no create under it sent: the conflict a page listed under a pending id is, said the same way. Nothing was adopted, published or updated.
-          if (e && e.code === 'GENPAGE_CREATE_DIVERGED') throw Object.assign(new BuildHalt(e.message, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, cause: e }), { transient: false });
+          if (e && e.code === 'GENPAGE_CREATE_DIVERGED') throw new BuildHalt(e.message, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, cause: e, retry: RETRY.NEVER });
           // Only for a create this build started itself. A resumed one may share its id with a request an earlier build sent that has still not arrived, which a refusal of THIS send says nothing about.
           if (sentUnder && opts.workspaceDir && e && e.outcome === 'nothing' && !resumeIds.has(key)) {
             try { completePendingCreations(opts.workspaceDir, appUnique, [sentUnder], opts.env); } catch { /* the record of a create that wrote nothing: the next build resumes it, or keeps it while the key is bound to another page — not a reason to halt */ }
@@ -6475,7 +6491,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       for (const p of implemented) {
         for (const [field, value] of [['prompt', p.prompt], ['agentMessage', p.agentMessage]]) {
           if (suppliedButBlank(value)) {
-            throw new BuildHalt(`page "${p.name || keyOf(p)}": ${field} is present but blank — refusing to deploy generated text in its place. Give it real content or remove the key.`, { phase: 'pages', code: 'pages-blank-provenance', recoverable: false });
+            throw new BuildHalt(`page "${p.name || keyOf(p)}": ${field} is present but blank — refusing to deploy generated text in its place. Give it real content or remove the key.`, { phase: 'pages', code: 'pages-blank-provenance', recoverable: false, retry: RETRY.NEVER });
           }
         }
       }
@@ -6530,26 +6546,26 @@ async function runSdkBuildPhases(spec, opts, owed) {
         scannedSha.set(keyOf(p), sourceSha);
         let code;
         try { code = sourceText(bytes); } catch (e) {
-          throw new BuildHalt(`page "${p.name}" cannot be deployed: ${e.message}`, { phase: 'pages', code: 'pages-source-not-utf8', recoverable: false });
+          throw new BuildHalt(`page "${p.name}" cannot be deployed: ${e.message}`, { phase: 'pages', code: 'pages-source-not-utf8', recoverable: false, retry: RETRY.NEVER });
         }
         sourceByKey.set(keyOf(p), code);
         const malformed = navMalformedRefs(code);
-        if (malformed.length) throw new BuildHalt(`page "${p.name}" has malformed navigation reference(s): ${malformed.join(', ')} — a cross-page link must be a double-quoted "PAGEREF_<key>" pageId literal, alone or followed only by casts such as \`as const\`; ${PAGEREF_RULE}`, { phase: 'pages', code: 'pages-malformed-navref', recoverable: false });
+        if (malformed.length) throw new BuildHalt(`page "${p.name}" has malformed navigation reference(s): ${malformed.join(', ')} — a cross-page link must be a double-quoted "PAGEREF_<key>" pageId literal, alone or followed only by casts such as \`as const\`; ${PAGEREF_RULE}`, { phase: 'pages', code: 'pages-malformed-navref', recoverable: false, retry: RETRY.NEVER });
         const { declaredNotReferenced, referencedNotDeclared } = navTargetParity((p.navigatesTo || []).map((n) => n.targetKey), navReferencedKeys(code));
         // A declared call can be absent only because the lexer cannot see it (it read a regex or a comment over it), and "declared-but-absent"
         // alone sends the author looking for a call that is plainly there: when the page has a guess, the halt names it.
         const hidden = declaredNotReferenced.length ? frontierNote(code) : '';
-        if (declaredNotReferenced.length || referencedNotDeclared.length) throw new BuildHalt(`page "${p.name}" navigation parity mismatch — declared-but-absent: [${declaredNotReferenced.join(', ')}], referenced-but-undeclared: [${referencedNotDeclared.join(', ')}]${hidden ? ` — ${hidden}` : ''}`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false });
+        if (declaredNotReferenced.length || referencedNotDeclared.length) throw new BuildHalt(`page "${p.name}" navigation parity mismatch — declared-but-absent: [${declaredNotReferenced.join(', ')}], referenced-but-undeclared: [${referencedNotDeclared.join(', ')}]${hidden ? ` — ${hidden}` : ''}`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false, retry: RETRY.NEVER });
         // Fail-closed: a nav pageId must be a DECLARED "PAGEREF_<key>" — never a dynamic
         // expression (unverifiable target) or a hardcoded GUID literal in CANONICAL source (breaks cross-env
         // recreate and ships nav the design never declared). extractNavTargets classifies each nav call site's
         // pageId; 'pageref'-not-declared is already caught by navTargetParity, so here reject 'dynamic' + 'literal'.
         const badNav = extractNavTargets(code).filter((t) => t.kind === 'dynamic' || t.kind === 'literal');
-        if (badNav.length) throw new BuildHalt(`page "${p.name}" has ${badNav.length} undeclared/non-symbolic navigation target(s) (dynamic expression or hardcoded page GUID) — cross-page navigation must use a double-quoted "PAGEREF_<key>" pageId declared via navigatesTo`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false });
+        if (badNav.length) throw new BuildHalt(`page "${p.name}" has ${badNav.length} undeclared/non-symbolic navigation target(s) (dynamic expression or hardcoded page GUID) — cross-page navigation must use a double-quoted "PAGEREF_<key>" pageId declared via navigatesTo`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false, retry: RETRY.NEVER });
         // A PAGEREF_ token nothing resolves (anywhere but the canonical pageId of a call the checker trusts — no comment is exempt) would ship as the literal
         // string — a dead link — so it halts here, before any page is created, naming the page and where the token is.
         const stray = strayPageRefs(code);
-        if (stray.length) throw new BuildHalt(`page "${p.name}" has PAGEREF_ token(s) that no navigation rewrite will resolve, so they would ship as literal text: ${describePageRefLocations(stray)} — ${pageRefAdvice(stray)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false });
+        if (stray.length) throw new BuildHalt(`page "${p.name}" has PAGEREF_ token(s) that no navigation rewrite will resolve, so they would ship as literal text: ${describePageRefLocations(stray)} — ${pageRefAdvice(stray)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false, retry: RETRY.NEVER });
         // The Griffel check, last, so a page's navigation problems — which a style fix does not touch — are reported first. The file named is the canonical source, as the spec gives it.
         // A page that is created, or whose source changed since the last recorded apply, is held to it; one that is sent again as it is gets a warning (griffelStanding above).
         if (uploadedThisRun(p)) {
@@ -6563,7 +6579,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
               // `transient: false`, as for the receipt halt: this refuses the page's own source, before anything in the pages phase is written, so running the build again cannot change
               // the answer — but isTransientHalt (build-model-app.js) reads the halt's TEXT, which opens with the page's name, and a page called "SQL Timeout Report" would read as a
               // transient error: three more runs of every earlier phase, and a log that blames the service.
-              throw Object.assign(new BuildHalt(describeGriffelRefusal(problems, file, { ...words, note }), { phase: 'pages', code: 'pages-griffel-shorthand', recoverable: false }), { transient: false });
+              throw new BuildHalt(describeGriffelRefusal(problems, file, { ...words, note }), { phase: 'pages', code: 'pages-griffel-shorthand', recoverable: false, retry: RETRY.NEVER });
             }
             griffelWarnings.push(describeGriffelWarning(problems, file, { ...words, standing }));
           }
@@ -6578,39 +6594,78 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // published is a halt — the page exists (the caller has recorded it by now), the runtime still serves the copy it had, and a re-run reuses the page
       // and publishes it (a page that already holds its content is published, not written again — unless this workspace recorded that this very content was
       // published, below, and that record is only ever written after a publish that was seen to take effect).
-      const afterWrite = async (p, verb, written) => {
+      const afterWrite = async (p, verb, written, fields) => {
         if (typeof opts.warn === 'function') for (const w of written.warnings || []) opts.warn(`page "${p.name}": ${w}`);
         if (written.publish && written.publish.kind === 'failed') {
-          throw new BuildHalt(`page "${p.name}" was ${verb} as ${written.pageId} and saved, but publishing it failed (${written.publish.detail}) — the runtime still serves the previously published copy. Re-run the build once the cause is cleared: the page is reused, not created again`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true });
+          // The halt quotes the page's name, and in the parentheses the service's own words. What decides whether a run again can help is the FAILURE the backend caught — its status, its type, whether it
+          // is a file error on the maker's machine — so the backend passes that error on (`publish.cause`) and the halt wraps it: a 429 or a 503 is run again, a file error, a refusal or an error that
+          // says it must never be retried is not, and a page called "SQL Timeout Report" has no say. A backend that reports only the words (`detail`) gets those words read as the service's.
+          throw new BuildHalt(`page "${p.name}" was ${verb} as ${written.pageId} and saved, but publishing it failed (${written.publish.detail}) — the runtime still serves the previously published copy. Re-run the build once the cause is cleared: the page is reused, not created again`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true, ...retryFrom(written.publish.cause, String(written.publish.detail || '')) });
         }
-        await rememberPublished(written);
+        await rememberPublished(written, p, fields);
       };
 
       // WHICH PAGES ARE KNOWN TO BE PUBLISHED. A page that already holds what the spec asks for is not written, but the backend publishes it unless it is told that exactly this content was
       // published already (`publishedFingerprint`, genpage.update): the server cannot say whether an earlier run's publish of a page finished, and a page whose publish did not finish has to be
       // published by the next run. Without a record of its own that would publish EVERY unchanged page on EVERY rebuild — one PublishXml of several seconds each, ten pages ten publishes. So the build keeps the
       // record (lib/page-publish-records.js), written once a publish was SEEN to take effect (`verified`) and never otherwise: per page the hash of the content it was published with, and the versionnumber
-      // of each of its file rows read right after that publish.
+      // of each of its file rows and of its own row, taken only from a published copy that was read back and found to hold that content and the compiled output the draft held at the publish (`provedVersions`, below).
       // The hash says what this workspace SENT; it cannot say that nobody has published anything else since — another workspace, another machine or Maker publishing other content and then leaving the
-      // draft equal to the file would match it. The file rows' versions are what moves (measured: publishing new content, or a draft-only save, moves the version of each file row it changes; an unchanged row
-      // keeps its own), so the hash is handed to `update` only while the versions read NOW are exactly the recorded ones (`publishesStillStanding`, below). A page that is not in the record, is there with
-      // other content, has no versions (an earlier record, or a read that failed), or whose files were added, removed or moved — new, changed since, saved by a run whose publish failed or was not proven,
-      // changed from elsewhere, or a workspace that is new or cleared — is "not known to be published", and is published. A page a changed-only run leaves alone keeps its entry; the entry of a page the spec
+      // draft equal to the file would match it. The rows' versions are what moves (measured: publishing new content, or a draft-only save, moves the version of each file row it changes; an unchanged row
+      // keeps its own; the page's own row moves with a write to it, a rename), so the hash is handed to `update` only while the versions read NOW are exactly the recorded ones (`publishesStillStanding`, below). A page that is not in the record, is there with
+      // other content, has no versions (an earlier record, or a read that failed), or whose rows were added, removed or moved — new, changed since, saved by a run whose publish failed or was not proven,
+      // changed from elsewhere, renamed, or a workspace that is new or cleared — is "not known to be published", and is published. A page a changed-only run leaves alone keeps its entry; the entry of a page the spec
       // no longer binds is dropped when the next is written. A full rebuild of the release before pages went through the SDK re-uploaded and re-published every page; this is what spares an unchanged
-      // page that, and what it cannot see is spelled out in the record's header (the page row's own fields, its name).
+      // page that, and what it cannot see is spelled out in the record's header.
       const publishedPages = readPublishedPages(opts.workspaceDir, appUnique, opts.env);
       let publishRecordWarned = false;
-      const rememberPublished = async (written) => {
+      // The versions of every row a page's record vouches for, as one Map<row id, version> per page: its file rows (genpage.fileVersions) and its OWN row, keyed by the page's id (genpage.projectVersions). The name is in the
+      // page's row and in none of its files, so a page renamed from elsewhere moves no file's version — the row's has to be read beside them. Map<page id, Map<row id, version> | null>: a page whose files or row could not be taken
+      // as one known set is `null`. A backend that cannot read the row's version at all, or a read that fails, is `{ ok: false }`: nothing is certified, or found to stand, on rows that could not be read.
+      const readRowVersions = async (ids) => {
+        if (typeof genpage.fileVersions !== 'function' || typeof genpage.projectVersions !== 'function') return { ok: false, error: 'the page backend cannot read them' };
+        const files = await genpage.fileVersions(ids);
+        if (!files.ok) return files;
+        const rows = await genpage.projectVersions(ids);
+        if (!rows.ok) return rows;
+        const versions = new Map();
+        for (const id of ids) {
+          const own = files.versions.get(id);
+          const row = rows.versions.get(id);
+          versions.set(id, own instanceof Map && typeof row === 'string' ? new Map([...own, [id, row]]) : null);
+        }
+        return { ok: true, versions };
+      };
+      // The versions of a page's rows that may go into the record: Map<row id, version>, or null — "no versions", which costs the next build a publish and nothing else. The versions only mean "the published
+      // copy held this content while the files read so" when they belong to such a copy, and a read of them taken AFTER the SDK saw the publish take effect does not say that: a writer that published other content and
+      // put this content back as a draft in between left the versions of ITS publication, with this build's hash beside them, and every rebuild then trusted the pair. So they are proved, in the order that proves them: the
+      // versions, then the page's PUBLISHED copy read back and compared with the content that was sent (`publishedDiffers`) AND with the compiled output the draft held when it was published (`runtimeSha256`: the runtime is
+      // what is certified, and the source does not say what runs), then the versions again. They are recorded only when both reads of the versions are one
+      // consistent set and the same set — nothing moved while the copy was read, the page's own row (its name) included — and the copy held the content: the versions are then those of a published copy that holds it, whoever published it. A copy that differs
+      // was published over from elsewhere and is said so; a read that fails, a set that moved, a publish that gave no evidence of the compiled output, or a backend that cannot read the copy or the row back says nothing and records none, as a failed read of the versions never said anything.
+      const provedVersions = async (p, pageId, fields, fingerprint, runtimeSha256) => {
+        try {
+          if (!fields || typeof runtimeSha256 !== 'string' || typeof genpage.publishedDiffers !== 'function') return null;
+          const first = await readRowVersions([pageId]);
+          const before = first.ok ? first.versions.get(pageId) : null;
+          if (!before) return null;
+          const copy = await genpage.publishedDiffers(pageId, fields, { runtimeSha256 });
+          // `fingerprint` is the hash of the content the copy was compared with: it must be the hash the record keeps, or the answer is about other content.
+          if (!copy.ok || copy.fingerprint !== fingerprint) return null;
+          if (copy.differing.length) {
+            if (typeof opts.warn === 'function') opts.warn(`page "${p.name}": its published copy, read back right after the publish, differs from what this build sent in its ${copy.differing.join(', ')} — it was published again from elsewhere — so it is not recorded as published, and the next build publishes it again`);
+            return null;
+          }
+          // The answer must carry the compiled output it read, and it must be the one the draft held: an answer that says nothing of it — a backend that did not compare the runtime — certifies nothing.
+          if (copy.runtimeSha256 !== runtimeSha256) return null;
+          const second = await readRowVersions([pageId]);
+          return second.ok && sameFileVersions(before, second.versions.get(pageId)) ? before : null;
+        } catch { return null; }
+      };
+      const rememberPublished = async (written, p, fields) => {
         if (!opts.workspaceDir || !written.publish || written.publish.kind !== 'verified' || typeof written.fingerprint !== 'string') return;
         const pageId = String(written.pageId).toLowerCase();
-        // The versions of the page's files as they are right after the publish that was seen to take effect. A read that fails, or that is not one consistent set, records none — and the next build publishes the page.
-        let files = null;
-        try {
-          if (typeof genpage.fileVersions === 'function') {
-            const read = await genpage.fileVersions([pageId]);
-            files = read.ok ? read.versions.get(pageId) || null : null;
-          }
-        } catch { files = null; }
+        const files = await provedVersions(p, pageId, fields, written.fingerprint, written.runtimeSha256);
         publishedPages.set(pageId, { fingerprint: written.fingerprint, files });
         const bound = new Set(Array.from(keyToId.values(), (id) => String(id).toLowerCase()));
         try {
@@ -6623,21 +6678,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
           }
         }
       };
-      // The recorded publishes that still stand: Map<page id, fingerprint> for each page whose file rows read now are exactly the recorded set with the recorded versions. ONE read for all of the pages
+      // The recorded publishes that still stand: Map<page id, fingerprint> for each page whose rows read now — its files' and its own — are exactly the recorded set with the recorded versions. ONE read for all of the pages
       // that have a record with versions. Anything else is absent from the map and costs the page a publish: a page with no versions in its record, a read that fails (said once), a page whose rows
-      // cannot be read as one consistent set, a row added, removed or moved. The read is the plain one both here and when the versions were recorded (genpage.fileVersions): see the record's header.
+      // cannot be read as one consistent set, a row added, removed or moved, a page renamed. The read is the plain one both here and when the versions were recorded (readRowVersions): see the record's header.
       const publishesStillStanding = async () => {
         const standing = new Map();
         const recorded = Array.from(keyToId.values(), (id) => String(id).toLowerCase()).filter((id) => publishedPages.has(id) && publishedPages.get(id).files);
         if (!recorded.length) return standing;
         let read;
         try {
-          read = typeof genpage.fileVersions === 'function' ? await genpage.fileVersions(recorded) : { ok: false, error: 'the page backend cannot read them' };
+          read = await readRowVersions(recorded);
         } catch (e) {
           read = { ok: false, error: String((e && e.message) || e) };
         }
         if (!read.ok) {
-          if (typeof opts.warn === 'function') opts.warn(`could not read the versions of the pages' files (${read.error}), so the pages are published again, as they are when nothing is recorded`);
+          if (typeof opts.warn === 'function') opts.warn(`could not read the versions of the pages' files and rows (${read.error}), so the pages are published again, as they are when nothing is recorded`);
           return standing;
         }
         for (const id of recorded) {
@@ -6656,19 +6711,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const up = await createPage(p, { name: p.name, source: sourceByKey.get(key), prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model });
+            const fields = { name: p.name, source: sourceByKey.get(key), prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
+            const up = await createPage(p, fields);
             recordCreate(p, up.pageId);
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
             result.created.pageSourceShas[key] = scannedSha.get(key);
             mintedKeys.add(key);
             await persistNow();
-            await afterWrite(p, 'created', up);
+            await afterWrite(p, 'created', up, fields);
           }
           const navSources = new Map();
           for (const p of implemented) if ((p.navigatesTo || []).length) navSources.set(keyOf(p), { code: sourceByKey.get(keyOf(p)) });
           const { deployment: dep, unresolved, residual } = resolvePageRefs(navSources, keyToId);
-          if (unresolved.length) throw new BuildHalt(`unresolved cross-page navigation target(s): ${unresolved.join(', ')} — a page navigates to a key that isn't a built page`, { phase: 'pages', code: 'pages-dangling-navref', recoverable: false });
+          if (unresolved.length) throw new BuildHalt(`unresolved cross-page navigation target(s): ${unresolved.join(', ')} — a page navigates to a key that isn't a built page`, { phase: 'pages', code: 'pages-dangling-navref', recoverable: false, retry: RETRY.NEVER });
           // The resolved copy is checked again, because the lexer can read it differently from the source: each token became a longer page id,
           // which can move a `(` out of the lexer's look-behind (see lexNavigation in pageref-resolver.js). The check is a plain scan of the text
           // with no exemption: ANY PAGEREF_ token left in it, in a comment too, would ship as literal text, so the page halts here — after the
@@ -6676,7 +6732,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (residual.length) {
             const left = residual.filter((r) => r.page === residual[0].page);
             const owner = implemented.find((p) => keyOf(p) === residual[0].page);
-            throw new BuildHalt(`page "${owner ? owner.name : residual[0].page}" has PAGEREF_ token(s) left once its navigation links were resolved, so they would ship as literal text: ${describePageRefLocations(left)} (line and column are in the resolved copy) — ${pageRefAdvice(left)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false });
+            throw new BuildHalt(`page "${owner ? owner.name : residual[0].page}" has PAGEREF_ token(s) left once its navigation links were resolved, so they would ship as literal text: ${describePageRefLocations(left)} (line and column are in the resolved copy) — ${pageRefAdvice(left)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false, retry: RETRY.NEVER });
           }
           for (const [k, code] of dep) deployment.set(k, code);
           return `${deployment.size} navigation source(s)`;
@@ -6715,7 +6771,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (!updatedInPlace.size) return;
         const report = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
         let checked;
-        try { checked = await scanShared(Array.from(updatedInPlace.keys())); } catch (e) { checked = { scan: { ok: false, error: String((e && e.message) || e) } }; }
+        try { checked = await scanShared(Array.from(updatedInPlace.keys())); } catch (e) { checked = { scan: withCause({ ok: false, error: String((e && e.message) || e) }, e) }; }
         const { scan, entries } = checked;
         if (!entries) {
           const why = !scan.ok ? scan.error : `${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')})`;
@@ -6740,7 +6796,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             checkedBeforeWritingInPlace = true;
             const shared = await sharedPagesNow(Array.from(writesInPlace, (k) => keyToId.get(k)));
             if (shared.length) {
-              throw Object.assign(new BuildHalt(`generative page(s) became shared across apps while this build ran: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content); no page this build began with has been updated in place. ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false }), { transient: false });
+              throw new BuildHalt(`generative page(s) became shared across apps while this build ran: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content); no page this build began with has been updated in place. ${detachAdvice(shared.flatMap((s) => s.detach))}`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false, retry: RETRY.NEVER });
             }
           }
           await runner.run('pages', `page "${p.name}"`, async () => {
@@ -6756,11 +6812,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
             const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
             // `publishedFingerprint` is what this workspace recorded about the page's last publish, handed over only while the page's files still read as they did right after it (`publishesStillStanding`):
             // a page that already holds this very content, and was not touched from elsewhere since, is not published again.
-            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()) }) : await createPage(p, fields);
+            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', runtimeEvidence: true, publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()), ...(opts.throttle ? { throttle: opts.throttle } : {}) }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
             // An UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
-            if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
+            if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false, retry: RETRY.NEVER });
             if (requestedId && writesInPlace.has(key)) updatedInPlace.set(String(requestedId).toLowerCase(), p.name);
             // Key by the STABLE key (p.key||p.name): appDef resolves result.pages[s.page] where s.page is the
             // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
@@ -6770,7 +6826,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
             result.created.pageSourceShas[key] = scannedSha.get(key);
             await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9)
-            await afterWrite(p, requestedId ? 'updated' : 'created', up);
+            await afterWrite(p, requestedId ? 'updated' : 'created', up, fields);
             return up.pageId;
           });
         }
@@ -7182,7 +7238,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // role the SDK refuses to adopt) or an apply-time metadata guard (an entity that does not
           // support a requested access, or the shared-privilege same-scope rule). Halt with the SDK's
           // message rather than leave a half-authored access model behind.
-          throw new BuildHalt(`security role "${roleName}" could not be authored: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'security-role-failed', recoverable: false });
+          // The halt follows the SDK's failure (cause): a typed refusal is final, a failure of the service is run again. The persona's name in the message is the maker's, and decides nothing.
+          throw new BuildHalt(`security role "${roleName}" could not be authored: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'security-role-failed', recoverable: false, cause: err, retry: retryPolicyFor(err) });
         }
         result.created.roles[roleName] = rr;
         // Ensure the role is in the app's solution on EVERY run so an export/import carries it.
@@ -7257,7 +7314,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // Fail-closed: an unresolvable or ambiguous role means we do not know what we would be granting
         // on. Halting is better than skipping, because a skipped grant reads as a successful build whose
         // users still cannot open the table — the exact failure this feature was filed for.
-        throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false });
+        // The resolver's own refusals (no such role, several, no business unit) are marked; a failure of the service while it asked (a 503 on the read) is run again.
+        throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false, cause: err, retry: retryPolicyFor(err) });
       }
       const idKey = String(target.roleId).toLowerCase();
       if (personaRoleIds.has(idKey)) {
@@ -7265,7 +7323,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           `roleGrant ${label} resolves to role ${target.roleId}, which is also persona "${personaRoleIds.get(idKey)}" in this spec. `
           + 'The build CONVERGES a persona\'s role (privileges not declared on the persona are removed), so this grant would be '
           + 'undone on the next build — declare these privileges on that persona\'s job instead.',
-          { phase: 'security', code: 'role-grant-persona-overlap', recoverable: false },
+          { phase: 'security', code: 'role-grant-persona-overlap', recoverable: false, retry: RETRY.NEVER },
         );
       }
       if (grantedRoleIds.has(idKey)) {
@@ -7273,7 +7331,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           `roleGrant ${label} resolves to role ${target.roleId}, which roleGrant ${grantedRoleIds.get(idKey)} already targets. `
           + 'Merge them into one entry: two entries can request conflicting depths for one shared Dataverse privilege, and the '
           + 'SDK only detects that within a single call, so the later write would silently win.',
-          { phase: 'security', code: 'role-grant-duplicate-target', recoverable: false },
+          { phase: 'security', code: 'role-grant-duplicate-target', recoverable: false, retry: RETRY.NEVER },
         );
       }
       grantedRoleIds.set(idKey, label);
@@ -7288,7 +7346,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // Apply-time metadata guards live here: a table that exposes no such access, and the SDK's
           // shared-privilege rule (two tables aliasing to one prv* must request one depth). Both are
           // author errors that only live metadata can detect, so they surface with the SDK's own message.
-          throw new BuildHalt(`roleGrant ${label} could not be applied: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-failed', recoverable: false });
+          throw new BuildHalt(`roleGrant ${label} could not be applied: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-failed', recoverable: false, cause: err, retry: retryPolicyFor(err) });
         }
         const n = Array.isArray(applied) ? applied.length : 0;
         // Keyed on the resolved ROLE ID, with the display name carried in the value. Keying on
@@ -7351,7 +7409,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           .map(([name, rr]) => [String(name).trim().toLowerCase(), rr]));
         const roleIds = personas.map((p) => {
           const rr = roleByLower.get(String(canonicalPersonaName({ persona: p }) || '').toLowerCase());
-          if (!rr || !rr.roleId) throw new BuildHalt(`${label}: persona '${p}' has no role in this build`, { phase: 'security', code: 'bpf-role-unresolved', recoverable: false });
+          if (!rr || !rr.roleId) throw new BuildHalt(`${label}: persona '${p}' has no role in this build`, { phase: 'security', code: 'bpf-role-unresolved', recoverable: false, retry: RETRY.NEVER });
           return { persona: p, roleId: rr.roleId };
         });
         for (const { persona, roleId } of roleIds) {
@@ -7360,7 +7418,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // report CanBeGlobal only, so any other depth is rejected by the platform.
             await provision.addEntityPrivilegesToRole(roleId, [{ entity: backingTable, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
           } catch (err) {
-            throw new BuildHalt(`${label}: could not grant to persona '${persona}': ${err && err.message ? err.message : err}`, { phase: 'security', code: 'bpf-role-grant-failed', recoverable: false });
+            throw new BuildHalt(`${label}: could not grant to persona '${persona}': ${err && err.message ? err.message : err}`, { phase: 'security', code: 'bpf-role-grant-failed', recoverable: false, cause: err, retry: retryPolicyFor(err) });
           }
         }
         result.created.bpfRoleGrants[f.name] = { backingTable, personas };
@@ -7420,7 +7478,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           opts2.roleIds = (sr.personas || []).map((p) => {
             const rr = roleByLower.get(String(canonicalPersonaName({ persona: p }) || '').toLowerCase());
             if (!rr || !rr.roleId) {
-              throw new Error(`securityRoles names persona "${p}", which this build did not create a role for. Declare it in personas[], or use "everyone": true.`);
+              throw refusal(`securityRoles names persona "${p}", which this build did not create a role for. Declare it in personas[], or use "everyone": true.`);
             }
             return rr.roleId;
           });
@@ -7626,4 +7684,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt };

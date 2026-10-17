@@ -324,8 +324,14 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(isTransientHalt({ message: 'Microsoft.Crm.ObjectModel.CustomizationLockException: ...' }));
   assert.ok(isTransientHalt({ cause: { message: 'SQL timeout expired' } }));
   assert.ok(isTransientHalt({ message: 'More than one concurrent Delete requests detected' }));
-  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live.
-  assert.ok(isTransientHalt({ message: 'HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' }));
+  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live. Said in words alone (an error with no status), it is still read; as the service answers it, a 500, it takes the
+  // generic SQL error code every SQL failure shares AND the platform's signature in the service's own answer (lib/retry-policy.js, isDeadlockVictimAnswer): neither alone is a deadlock victim.
+  const DEADLOCK = ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+  const answered = (words, code) => Object.assign(new Error(`HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1): ${words}`), { code: 'CONNECTION_ERROR', statusCode: 500, url: 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1)', cause: { error: { ...(code ? { code } : {}), message: words } } });
+  assert.ok(isTransientHalt({ message: `HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1): ${DEADLOCK}` }));
+  assert.ok(isTransientHalt(answered(DEADLOCK, '0x80044150')), 'a 500 with the generic SQL error code and the signature');
+  assert.ok(!isTransientHalt(answered(DEADLOCK)), 'the signature in a 500 that names no code');
+  assert.ok(!isTransientHalt(answered(DEADLOCK.replace('1205', '547'), '0x80044150')), 'the code beside another SQL number');
   assert.ok(!isTransientHalt({ message: 'Sql error: Generic SQL error. Sql Number: 547' }), 'another SQL error is not a deadlock');
   assert.ok(!isTransientHalt({ transient: false, message: 'Sql Number: 1205' }), 'an explicit non-transient still wins');
   // recoverable is a re-runnable-phase flag, NOT a transient signal — must not trigger a retry alone.
@@ -338,29 +344,105 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
 });
 
-// Live-captured shape, renamed onto the support-desk sample: a view pushed moments after the build created the
-// relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse reports the
-// logical (lower-case) name.
-const LAG_MESSAGE = "HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has invalid fetch.  Error : 'new_ticket' entity doesn't contain attribute with Name = 'new_customerid' and NameMapping = 'Logical' (look up";
+// A halt that quotes the maker's own words beside the service's — a page's name, then the answer to its refused publish — names the words that decide (`retryText`), so the maker's cannot.
+test('isTransientHalt: a halt that names the words it is judged by is judged by them alone — the message, which quotes the maker, is not read', () => {
+  const quoting = (retryText, extra = {}) => Object.assign(new Error('page "SQL Timeout Report" was updated as 1 and saved, but publishing it failed (…)'), { retryText }, extra);
+  assert.ok(!isTransientHalt(quoting('PublishXml answered 500: the service is busy')), 'the page\'s name is a SQL timeout to the whole message, and to nothing else');
+  assert.ok(isTransientHalt(quoting('The service is unavailable. Please try again later.')), 'the service\'s own words still decide');
+  assert.ok(isTransientHalt(quoting('Microsoft.Crm.ObjectModel.CustomizationLockException: ...')));
+  assert.ok(!isTransientHalt(quoting('')), 'a refusal with no words says nothing');
+  // The runner wraps every step's halt once, with the text of the first in its own message: the declaration on the cause is read, and the wrapper's message — the name again — is not.
+  const wrapped = (cause) => ({ message: `pages failed: ${cause.message}`, cause });
+  assert.ok(!isTransientHalt(wrapped(quoting('PublishXml answered 500: the service is busy'))));
+  assert.ok(isTransientHalt(wrapped(quoting('SQL timeout expired'))));
+  // A status still counts, and an explicit never-retry still wins over the words.
+  assert.ok(isTransientHalt(quoting('busy', { statusCode: 503 })));
+  assert.ok(!isTransientHalt(quoting('try again later', { transient: false })));
+  // A halt that names nothing is read as it always was.
+  assert.ok(isTransientHalt(new Error('page "SQL Timeout Report" has a token')), 'unmarked and undeclared: the whole message is read');
+});
 
-test('isTransientHalt: a missing-attribute fetch error is transient only for a column the spec creates', () => {
+// ── What a halt is judged by ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A halt's message is the plugin's own, and it quotes what the maker named; the failure the halt wraps is the service's. The decision to run the whole build again reads the second, by
+// structure first (the HTTP status, the transport, the SDK's typed errors) and by the service's words after — never the first. lib/retry-policy.js holds the rule; halt-retry-policy.test.js holds each halt.
+const SERVICE_URL = "https://contoso.crm.dynamics.com/api/data/v9.2/roles?$filter=name eq 'SQL Timeout Reader'";
+const serviceError = (statusCode, words, url = SERVICE_URL) => Object.assign(new Error(`${statusCode > 0 ? `HTTP ${statusCode} from ${url}` : `Transport failure reaching ${url}`}: ${words}`), { code: 'CONNECTION_ERROR', statusCode, url });
+
+test('isTransientHalt: a halt is judged by the failure it wraps — its own message, which quotes the maker, is never read', () => {
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const quoting = 'security role "SQL Timeout Reader" could not be authored: same-name role is managed';
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed' })), false, 'a halt with no failure behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed', cause: new Error('same-name role is managed') })), false, 'a failure with nothing transient in it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed', cause: serviceError(503, 'The service is unavailable.') })), true, 'a 503 behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt('x', { phase: 'security', code: 'x', cause: new Error('Please try again later.') })), true, 'the service\'s words behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'x', retry: 'never', cause: serviceError(503, 'x') })), false, 'a halt that says never');
+});
+
+test('isTransientHalt: 502 and 504 are transient beside 429 and 503, and so are a timeout and a reset of the transport — a 500 and a certificate failure are not', () => {
+  for (const status of [429, 502, 503, 504]) assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(status, 'nothing to read') }), true, String(status));
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'nothing to read') }), false, 'a bare 500');
+  for (const words of ['Request failed: read ECONNRESET', 'Request timed out', 'Request failed: connect ETIMEDOUT 10.0.0.1:443']) assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(0, words) }), true, words);
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(0, 'Request failed: unable to verify the first certificate') }), false);
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })), true, 'a system error of the transport');
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('EACCES: permission denied, open \'/work/SQL Timeout/page.json\''), { code: 'EACCES' })), false, 'a file error');
+});
+
+test('isTransientHalt: an error the SDK or the plugin types is a refusal whatever its message quotes — and a typed error that carries a throttle is the service\'s answer all the same', () => {
+  for (const code of ['VALIDATION_ERROR', 'VERSION_CONFLICT', 'APP_SOURCE_PATH']) {
+    assert.strictEqual(isTransientHalt({ message: 'wrapper', cause: Object.assign(new Error('"SQL Timeout Reader": try again later'), { code }) }), false, code);
+  }
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('x'), { code: 'APP_COMPONENT_UNREADABLE', statusCode: 429 })), true);
+});
+
+test('isTransientHalt: the url of a request is where it went, not what the service said — a maker\'s name in the query is not a SQL timeout, and the words of an answer under a status that says no are not read either', () => {
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'The server is busy') }), false, 'SQL Timeout in the url only');
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'SQL timeout expired') }), false, 'in the answer of a 500: a status that is not transient is final, and an answer echoes what the maker named');
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(503, 'SQL timeout expired') }), true, 'a 503 is run again, whatever it says');
+});
+
+test('transient auto-retry: a refusal whose message quotes a name that reads as a transient error is run once — a 503 is retried, whatever the name', async () => {
+  const run = async (failure) => {
+    const { sdk } = mockSdk();
+    let attempts = 0;
+    sdk.createTable = async () => { attempts += 1; throw failure; };
+    await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk }));
+    return attempts;
+  };
+  assert.strictEqual(await run(Object.assign(new Error('Table "SQL Timeout 503 try again later" is invalid'), { code: 'VALIDATION_ERROR' })), 1, 'a typed refusal');
+  assert.strictEqual(await run(serviceError(403, 'permission denied')), 1, 'a 403 whose url quotes the name');
+  assert.strictEqual(await run(serviceError(503, 'The service is unavailable.')), 4, 'a 503: the first run and three more');
+});
+
+// The lag is the SERVICE's answer — an HTTP 400 — and a 400 is final unless the service names the condition by the code it returns (lib/retry-policy.js): `QueryBuilderNoAttribute`, "The specified attribute does not
+// exist on this entity" (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes). The words alone — which any answer that echoes a table can hold — decide nothing; the code
+// says what kind of answer it is, and the spec says whether the missing column is one this build creates. The SDK's own ConnectionError carries the answer's body as its cause.
+// Live-captured words, renamed onto the support-desk sample: a view pushed moments after the build created the relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse
+// reports the logical (lower-case) name.
+const LAG_WORDS = "The column, fetchxml, has invalid fetch.  Error : 'new_ticket' entity doesn't contain attribute with Name = 'new_customerid' and NameMapping = 'Logical' (look up";
+const lagAnswer = (words, code = '0x80041103', status = 400) => new (require('../lib/maker-sdk.js').ConnectionError)('https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries?$select=savedqueryid', status, words, { error: { ...(code ? { code } : {}), message: words } });
+
+test('isTransientHalt: the lag is run again when the service names it by its code and the spec creates the column — and by nothing the answer\'s words say', () => {
   const spec = desk;
-  const err = (message) => ({ message, cause: { statusCode: 400 } });
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE), { spec }), true, 'a relationship lookup the spec declares (case differs)');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE)), false, 'without the spec nothing proves the column is ours');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")), { spec }), false, 'an undeclared column is an authoring error');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_ticket'", "'new_comment'")), { spec }), false, 'declared on another table only');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_priority'")), { spec }), true, 'a declared column');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_name'")), { spec }), true, 'the primary name column');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("doesn't", 'doesn\u2019t')), { spec }), true, 'a typographic apostrophe');
-  assert.strictEqual(isTransientHalt({ message: 'view "Tickets" failed', cause: { statusCode: 400, message: LAG_MESSAGE } }, { spec }), true, 'the Dataverse text in the cause');
-  assert.strictEqual(isTransientHalt({ transient: false, message: LAG_MESSAGE }, { spec }), false, 'an explicit non-transient still wins');
-  assert.strictEqual(isTransientHalt(err('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS), { spec }), true, 'the code, and a column the spec declares (case differs)');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, '0x80040303'), { spec }), true, 'the code of the validation that wraps the missing attribute: both documented codes are taken');
+  assert.strictEqual(isTransientHalt({ message: 'views failed', cause: lagAnswer(LAG_WORDS) }, { spec }), true, 'behind the halt the runner raises');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, '0x80041103', 500), { spec }), true, 'the status the service gave it does not matter: the code says what it is');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS), {}), false, 'without the spec nothing proves the column is ours');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, null), { spec }), false, 'the same words with no code: any answer that echoes a table can say them');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, '0x80040220'), { spec }), false, 'the words under another code (a missing privilege)');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_typo'")), { spec }), false, 'a column nobody declared is an authoring error');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_ticket'", "'new_comment'")), { spec }), false, 'declared on another table only');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_priority'")), { spec }), true, 'a declared column');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_name'")), { spec }), true, 'the primary name column');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("doesn't", 'doesn\u2019t')), { spec }), true, 'a typographic apostrophe');
+  assert.strictEqual(isTransientHalt(lagAnswer('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
+  assert.strictEqual(isTransientHalt(Object.assign(lagAnswer(LAG_WORDS), { transient: false }), { spec }), false, 'an explicit non-transient still wins');
+  // The words of an answer with no code and no ConnectionError behind them — what an older caller's failure looked like — are not the lag either.
+  assert.strictEqual(isTransientHalt({ message: LAG_WORDS, cause: { statusCode: 400 } }, { spec }), false);
 });
 
 test('isTransientHalt: only attributes the build materializes ride the lag retry', () => {
-  const err = (message) => ({ message, cause: { statusCode: 400 } });
-  const lag = (table, column) => err(LAG_MESSAGE.replace("'new_ticket'", `'${table}'`).replace("'new_customerid'", `'${column}'`));
+  const lag = (table, column) => lagAnswer(LAG_WORDS.replace("'new_ticket'", `'${table}'`).replace("'new_customerid'", `'${column}'`));
   const spec = {
     entities: [
       { schemaName: 'new_asset', existing: true, primaryAttribute: { schemaName: 'new_title' },
@@ -383,7 +465,7 @@ test('transient auto-retry: a view rejected for a lookup the build just created 
   let failed = 0;
   const push = sdk.pushArtifact;
   sdk.pushArtifact = async (type, ...rest) => {
-    if (type === 'view' && failed === 0) { failed += 1; const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    if (type === 'view' && failed === 0) { failed += 1; throw lagAnswer(LAG_WORDS); }
     return push(type, ...rest);
   };
   const events = [];
@@ -399,7 +481,7 @@ test('transient auto-retry: a view rejected for a column the spec never declared
   const { sdk } = mockSdk();
   const push = sdk.pushArtifact;
   sdk.pushArtifact = async (type, ...rest) => {
-    if (type === 'view') { const e = new Error(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")); e.statusCode = 400; throw e; }
+    if (type === 'view') throw lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_typo'"));
     return push(type, ...rest);
   };
   const events = [];
@@ -408,13 +490,26 @@ test('transient auto-retry: a view rejected for a column the spec never declared
   assert.ok(!events.some((e) => e.status === 'retry'), 'no retry for a column nobody declared');
 });
 
+test('transient auto-retry: the same words under no code halt at once — the lag is the service\'s answer by its code, not by what an answer says', async () => {
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') throw lagAnswer(LAG_WORDS, null);
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }));
+  assert.ok(!events.some((e) => e.status === 'retry'), 'no retry');
+});
+
 test('transient auto-retry: a declared column that never appears exhausts the retries and surfaces the original error', async () => {
   // The lag clause must not loop: maxRetries (3 on --apply) bounds it to four attempts, and the halt that ends the
   // run still carries Dataverse's own words so the operator can see which column never became visible.
   const { sdk } = mockSdk();
   const push = sdk.pushArtifact;
   sdk.pushArtifact = async (type, ...rest) => {
-    if (type === 'view') { const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    if (type === 'view') throw lagAnswer(LAG_WORDS);
     return push(type, ...rest);
   };
   const events = [];
@@ -448,6 +543,159 @@ test('transient auto-retry: a non-transient halt is NOT retried', async () => {
   sdk.createTable = async () => { attempts += 1; const e = new Error('bad request'); e.recoverable = false; throw e; };
   await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk }));
   assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
+});
+
+// ── A throttle's wait crosses the layers, and what the build's own layers add is one budget ──────────────────────────────────────────────────────────
+// The page backend sends a throttled page write again up to six times, waiting what the service asked; when that is not enough it raises an error that carries the last ask (`retryAfterMs`) and the moment before which
+// nothing may be sent (`retryNotBefore`). The loop that runs the build again then waits for THAT — never its own, shorter, backoff — and every wait it spends on a throttle comes out of the budget the backend spends from:
+// five minutes for the whole run (lib/throttle-budget.js). A wait that does not fit ends the run with a halt that says what the service asked, and that a later run continues.
+const throttleDriver = async ({ failures, budget, retryDelayMs, spec = desk, onRun }) => {
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const { sdk } = mockSdk();
+  let clock = 1800000000000;
+  let attempts = 0;
+  const sleeps = [];
+  const logs = [];
+  const warnings = [];
+  const budgets = [];
+  const closed = [];
+  let halt = null;
+  let result = null;
+  try {
+    result = await buildModelApp(spec, { apply: true, env: 'https://x', ...(retryDelayMs !== undefined ? { retryDelayMs } : {}) }, {
+      sdk, provisionSdk: sdk, ...(budget ? { throttle: budget } : {}), now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms; },
+      log: (m) => logs.push(String(m)), warn: (m) => warnings.push(String(m)),
+      journal: { path: 'x', record: () => {}, close: (s) => closed.push(s) },
+      discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+      runBuild: async (s, o) => {
+        attempts += 1;
+        budgets.push(o.throttle);
+        if (onRun) onRun(attempts, () => clock, (ms) => { clock += ms; });
+        const failure = failures(attempts, clock);
+        if (failure) throw new BuildHalt(`pages failed: ${failure.message}`, { phase: 'pages', code: 'CONNECTION_ERROR', recoverable: true, cause: failure });
+        return { ok: true };
+      },
+    });
+  } catch (e) { halt = e; }
+  return { halt, result, attempts, sleeps, logs, warnings, budgets, closed, throttle: budgets[0], clock: () => clock };
+};
+// What the page backend raises when a throttle outlasts its sends.
+const throttledFailure = (clock, askedMs, extra = {}) => Object.assign(new Error('the service throttled all 6 sends, waiting between them (HTTP 429 from https://x/api/data/v9.0/$batch: Too many requests)'), {
+  statusCode: 429, ...(askedMs ? { retryAfterMs: askedMs, retryNotBefore: clock + askedMs } : {}), ...extra,
+});
+
+test('retry loop: the wait the service asked for crosses to the build — it is waited whole before the next run, and the build\'s own shorter backoff does not replace it', async () => {
+  const out = await throttleDriver({ failures: (n, clock) => (n === 1 ? throttledFailure(clock, 7000) : null) });
+  assert.strictEqual(out.halt, null);
+  assert.strictEqual(out.attempts, 2);
+  assert.deepStrictEqual(out.sleeps, [7000], 'the ask, which is longer than the first backoff (3 s plus under a second of jitter)');
+  assert.match(out.logs.join('\n'), /retrying \(attempt 1\/3\) after 7000ms.*the service asked to wait 7 s/, 'and the line the build writes says why');
+  // An ask shorter than the backoff leaves the backoff in charge, and a throttle that asked for nothing waits the backoff.
+  const short = await throttleDriver({ failures: (n, clock) => (n === 1 ? throttledFailure(clock, 1000) : null) });
+  assert.ok(short.sleeps.length === 1 && short.sleeps[0] >= 3000 && short.sleeps[0] < 4000, `the build's backoff: ${short.sleeps}`);
+  const bare = await throttleDriver({ failures: (n) => (n === 1 ? throttledFailure(0, 0) : null) });
+  assert.ok(bare.sleeps.length === 1 && bare.sleeps[0] >= 3000 && bare.sleeps[0] < 4000, `${bare.sleeps}`);
+});
+
+test('retry loop: the ask is a moment on the clock — what has passed since the answer is not waited again, and a fraction of a second is waited as the whole second the service counts in', async () => {
+  // The failure was raised 2.5 s before the loop looked at it (the layers between did work): 4.5 s of the 7 s are left, and that is waited as 5 s.
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const { sdk } = mockSdk();
+  let clock = 1800000000000;
+  const sleeps = [];
+  let n = 0;
+  await buildModelApp(desk, { apply: true, env: 'https://x' }, {
+    sdk, provisionSdk: sdk, now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms; }, log: () => {}, warn: () => {},
+    discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+    runBuild: async () => {
+      n += 1;
+      if (n > 1) return { ok: true };
+      const failure = throttledFailure(clock, 7000);
+      clock += 2500;
+      throw new BuildHalt('pages failed', { phase: 'pages', code: 'CONNECTION_ERROR', recoverable: true, cause: failure });
+    },
+  });
+  assert.deepStrictEqual(sleeps, [5000], '4.5 s were left, and a second is the unit the service counts in');
+  // A moment already past asks for nothing: the build's own backoff is all there is.
+  const past = await throttleDriver({ failures: (n2, c) => (n2 === 1 ? throttledFailure(c, 2000, { retryNotBefore: c - 60000 }) : null) });
+  assert.ok(past.sleeps.length === 1 && past.sleeps[0] >= 3000 && past.sleeps[0] < 4000, `${past.sleeps}`);
+});
+
+test('retry loop: every wait the build adds for a throttle comes out of one budget of five minutes — the build stops, with a halt that says what the service asked, when the next wait does not fit', async () => {
+  // The service asks for two minutes each time: two waits are 240 s of the 300, and the third does not fit.
+  const out = await throttleDriver({ failures: (n, clock) => throttledFailure(clock, 120000) });
+  assert.strictEqual(out.attempts, 3, 'the build ran three times, and not a fourth');
+  assert.deepStrictEqual(out.sleeps, [120000, 120000], 'two waits were taken');
+  assert.strictEqual(out.throttle.spentMs(), 240000);
+  assert.ok(out.halt, 'the build stops');
+  assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+  assert.strictEqual(out.halt.phase, 'pages');
+  assert.strictEqual(out.halt.recoverable, true);
+  assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: the service is throttling, and a later run can go on');
+  assert.strictEqual(out.halt.statusCode, 429);
+  assert.match(out.halt.message, /the service asked to wait 120 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(240 s are spent\)/);
+  assert.match(out.halt.message, /run the same command again later, and it continues from here/);
+  assert.strictEqual(out.halt.cause.cause.statusCode, 429, 'the failure itself is its cause');
+  assert.strictEqual(out.closed.length, 1, 'the journal says where the run stopped');
+  assert.deepStrictEqual([out.closed[0].status, out.closed[0].code, out.closed[0].phase, out.closed[0].recoverable], ['halt', 'throttle-budget-exhausted', 'pages', true]);
+  // One ask that is longer than the whole budget stops the run at once, with nothing waited.
+  const long = await throttleDriver({ failures: (n, clock) => throttledFailure(clock, 600000) });
+  assert.strictEqual(long.attempts, 1);
+  assert.deepStrictEqual(long.sleeps, []);
+  assert.match(long.halt.message, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)/);
+});
+
+test('retry loop: the budget is the run\'s — the backend\'s waits count, so what is left for the build is what the backend did not spend — and a caller may give a smaller one', async () => {
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  // The backend spent 250 s: a 60 s ask does not fit in the 50 that are left.
+  const spentByBackend = makeThrottleBudget();
+  spentByBackend.spend(250000);
+  const out = await throttleDriver({ budget: spentByBackend, failures: (n, clock) => throttledFailure(clock, 60000) });
+  assert.strictEqual(out.attempts, 1);
+  assert.deepStrictEqual(out.sleeps, []);
+  assert.match(out.halt.message, /does not fit in what is left of the 5 minutes .*\(250 s are spent\)/);
+  // The one budget is handed to every run of the engine: the same object each time, the caller's when it gave one.
+  const given = makeThrottleBudget({ totalMs: 10000 });
+  const twice = await throttleDriver({ budget: given, failures: (n, clock) => (n === 1 ? throttledFailure(clock, 7000) : null) });
+  assert.strictEqual(twice.attempts, 2);
+  assert.ok(twice.budgets.every((b) => b === given), 'the caller\'s budget reaches the engine on every run');
+  assert.strictEqual(given.spentMs(), 7000, 'and the wait was spent from it');
+  const second = await throttleDriver({ budget: makeThrottleBudget({ totalMs: 10000 }), failures: (n, clock) => throttledFailure(clock, 7000) });
+  assert.strictEqual(second.attempts, 2, '7 s fits in 10 s, and a second 7 s does not');
+  assert.match(second.halt.message, /what is left of the 10 seconds a run allows itself/);
+  const own = await throttleDriver({ failures: (n) => (n === 1 ? throttledFailure(0, 0) : null) });
+  assert.ok(own.budgets.length === 2 && own.budgets[0] === own.budgets[1], 'a run with no budget given makes one, the same for every run of the engine');
+  assert.ok(own.budgets[0].spentMs() >= 3000, 'and a throttle that asked for nothing still waited the build\'s backoff, which is a throttle wait too');
+});
+
+test('retry loop: only a throttle spends the budget — the backoff of any other transient failure is the build\'s own, as it was', async () => {
+  const out = await throttleDriver({ failures: (n) => (n <= 3 ? Object.assign(new Error('the service is unavailable'), { statusCode: 503 }) : null) });
+  assert.strictEqual(out.attempts, 4, 'three more runs, as ever');
+  assert.deepStrictEqual(out.sleeps.map((ms) => Math.floor(ms / 1000)), [3, 6, 12]);
+  assert.strictEqual(out.throttle.spentMs(), 0, 'and none of it is the budget\'s');
+  // Nor does a throttle whose retries ran out change what the run says: the failure itself.
+  const spent = await throttleDriver({ failures: (n) => throttledFailure(0, 0) });
+  assert.strictEqual(spent.attempts, 4);
+  assert.strictEqual(spent.halt.code, 'CONNECTION_ERROR', 'the retries ran out before the budget did');
+});
+
+test('retry loop: the waits the loop takes are on stderr — the retry line says what the service asked — and the budget\'s own announcements go to the warn seam, never anywhere else', async () => {
+  const stdout = [];
+  const write = process.stdout.write;
+  process.stdout.write = (chunk, ...rest) => { stdout.push(String(chunk)); return typeof rest[rest.length - 1] === 'function' ? rest[rest.length - 1]() : true; };
+  let out;
+  try {
+    out = await throttleDriver({ failures: (n, clock) => (n === 1 ? throttledFailure(clock, 30000) : null) });
+  } finally { process.stdout.write = write; }
+  assert.deepStrictEqual(stdout, [], 'nothing was written to stdout, which carries the JSON result');
+  assert.deepStrictEqual(out.sleeps, [30000]);
+  assert.ok(out.logs.some((l) => /retrying \(attempt 1\/3\) after 30000ms.*the service asked to wait 30 s/.test(l)), out.logs.join('\n'));
+});
+
+test('transient auto-retry: a non-transient halt is NOT retried (the budget is not consulted)', async () => {
+  const out = await throttleDriver({ failures: () => Object.assign(new Error('bad request'), { statusCode: 400, retryAfterMs: 5000, retryNotBefore: 1800000000000 + 5000 }) });
+  assert.strictEqual(out.attempts, 1, 'a status that says no is final, whatever else the failure carries');
+  assert.deepStrictEqual(out.sleeps, []);
 });
 
 // With --publish the views a rebuild reconciles are published just before the app is written (sdk-build.js,

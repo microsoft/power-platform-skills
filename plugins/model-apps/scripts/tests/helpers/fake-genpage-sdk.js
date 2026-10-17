@@ -55,7 +55,7 @@ class FakeSdk {
     this.createError = null;
     this.onGet = options.onGet || (async () => ({ status: 404, body: null }));
     this.onPublish = options.onPublish;
-    this.dataverse = { get: async (url) => { this.calls.push({ name: 'dataverse.get', args: [url] }); return this.onGet(url); } };
+    this.dataverse = { get: async (url, options) => { this.calls.push({ name: 'dataverse.get', args: [url] }); return this.onGet(url, options); } };
   }
 
   seedPage(page) {

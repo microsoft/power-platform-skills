@@ -5,8 +5,8 @@
 //   genpage.enumerateEnv()                  every page of the environment, drafts included  -> { ok, ids, pages: [{ pageId, name }], error }
 //   genpage.enumeratePages(appId, options)  the pages an app's navigation names             -> { ok, pages: [{ pageId, name }], empty, error }
 //   genpage.read(pageId)                    one page as the SDK projects it                  -> { id, name, source, dataSources, model, … }
-//   genpage.create(args)                    mint an id (or take one), write, publish, prove  -> { pageId, name, publish, fingerprint, warnings }
-//   genpage.update(pageId, args)            write only what differs, publish, prove          -> { pageId, unchanged?, publish, fingerprint, warnings }
+//   genpage.create(args)                    mint an id (or take one), write, publish, prove  -> { pageId, name, publish, fingerprint, runtimeSha256?, warnings }
+//   genpage.update(pageId, args)            write only what differs, publish, prove          -> { pageId, unchanged?, publish, fingerprint, runtimeSha256?, warnings }
 //   genpage.placeInApp(appId, options)      pages into an app's navigation + their tables' default views into its components (and nothing else of the app's components)
 //   genpage.removeFromApp(appId, pageId, options)  a page's sub-area out of an app's navigation (the page itself stays; no component of the app is added)
 //   genpage.describe(pageId)                one page's identity and size, without needing a source -> { pageId, name, editable, dataSources, fileRows, conversationMessages }
@@ -15,6 +15,8 @@
 //   genpage.defaultViews(tables)            the default public view of each table                  -> { views: [{ table, viewId }], warnings }
 //   genpage.baseLanguage()                  the environment's base language (an LCID)
 //   genpage.fileVersions(pageIds)           the versionnumber of every file row of each page, from one plain read -> { ok, versions: Map<pageId, Map<fileRowId, version> | null>, error }
+//   genpage.projectVersions(pageIds)        the versionnumber of each page's own row, from one plain read          -> { ok, versions: Map<pageId, version | null>, error }
+//   genpage.publishedDiffers(pageId, args, expected)  what a page's PUBLISHED copy differs from `args` (and its compiled output from `expected.runtimeSha256`) in, read back with plain reads -> { ok, differing: [field…], fingerprint, error }
 //   genpage.dispose({ waitMs })             close the backend and remove its throwaway workspaces -> a promise of { left } (await it before the process ends)
 //   genpage.discardWorkspaces({ waitMs })   the same for the workspaces made so far, leaving the backend open for the next operation
 //
@@ -40,6 +42,8 @@ const { guardWorkspaceStorage } = require('./workspace-storage-guard.js');
 const { makeAppComponentScope } = require('./app-component-scope.js');
 const { makeTempWorkspace } = require('./temp-workspace.js');
 const { sha256 } = require('./hash.js');
+const { withCause } = require('./retry-policy.js');
+const { makeThrottleBudget, waitDoesNotFit, spentNote } = require('./throttle-budget.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -65,15 +69,24 @@ function suppliedButBlank(value) {
   return value !== undefined && value !== null && !String(value).trim();
 }
 
-// An error that must never be answered by trying again. The build re-runs a whole phase when a halt looks transient (isTransientHalt
-// in build-model-app.js), and it decides that from the error's TEXT — which quotes the page's name (user text: "SQL Timeouts",
-// "Concurrent Deletes") and the SDK's own message — so every error a page write raises says `transient: false`, which that check
-// reads on the error and on its cause. A write that failed for a known reason would only fail again, and one whose outcome is not
+// An error that must never be answered by trying again. The build re-runs a whole phase when a failure looks transient (isTransientHalt in build-model-app.js, by the rule of lib/retry-policy.js), and an error that says
+// `transient: false` — on itself or anywhere along its causes — is never run again, whatever its text quotes (the page's name is the maker's: "SQL Timeouts", "Concurrent Deletes"). So every error a page write raises says
+// so. A write that failed for a known reason would only fail again, and one whose outcome is not
 // known must not be sent by a re-run that does not know it: a create would mint a second page beside the first one if it landed,
-// and an update could record its turn twice.
+// and an update could record its turn twice. The one write that is NOT final is a throttle that outlasted every wait (throttledError): nothing was written, and the service's load is not the maker's to fix.
 function genpageError(message, props = {}) {
   const { cause, ...rest } = props;
   return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { transient: false }, rest);
+}
+
+// The error of a write the service REFUSED with a throttle every time it was sent, or whose next wait did not fit what is left of the run's budget — the one page-write error that does not say `transient: false`. Nothing was
+// written: a request the service declines to start commits nothing, and the page's id (a create) and the turn's identity (an update) were fixed before the first send, so a run again sends the same page, never a second one.
+// What refused it is the service's load, which a run again a little later may find lifted, so the build is left to read the failure itself — the status 429 it carries, and the SDK's own error kept as the cause
+// (lib/retry-policy.js) — and run the phase again, as it does for every failure that is the service's to say. What the last answer ASKED travels with it — `retryAfterMs`, and `retryNotBefore`, the moment on the backend's
+// clock before which nothing may be sent — so the layer that runs the build again waits for that and not for its own, shorter, backoff (build-model-app.js, via throttleAskOf).
+function throttledError(message, props = {}) {
+  const { cause, ...rest } = props;
+  return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), rest);
 }
 
 const messageOf = (error) => String((error && error.message) || error);
@@ -143,6 +156,59 @@ function writeOutcome(error) {
     return Number.isInteger(status) && status >= 400 && status < 500 ? 'nothing' : 'unknown';
   }
   return PRE_WRITE_REFUSALS.has(error.code) ? 'nothing' : 'unknown';
+}
+
+// A send the service refused with a throttle: the SDK's typed `ConnectionError` with status 429, read from its structure and never from its words. Dataverse's service protection limits answer a request they will not
+// START this way (HTTP 429, with a `Retry-After`), so no part of the change set ran.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations
+function isThrottle(error) {
+  return isSdkError(error) && error.code === 'CONNECTION_ERROR' && error.statusCode === 429;
+}
+
+// How many times a first send the service refused with a throttle is sent AGAIN: five, so six sends in all — the attempts the HTTP client gives every other throttled request (sdk-http-client.js `maxAttempts`), and on the
+// same schedule (throttleBackoffMs: 1 s, 2 s, 4 s, 8 s, 8 s, plus jitter), or longer when the answer's `Retry-After` asks for it (up to RETRY_AFTER_CAP_MS). A write rides out the ~23 s of service protection a read does, and no longer.
+const THROTTLE_RESENDS = 5;
+
+// The statuses a change set the service refuses AS A WHOLE can prove, when every part of its answer carries one of them (watchThrottles): a 400, 403 or 404 — a request the service rejected, which no send can change — and a 429, which
+// a later send can. NOT here, on purpose: a 409 or a 412 (the ids of an earlier send, which landed after its answer was lost, collide with the ones this send carries: that is the case the read after an unknown outcome exists
+// for), a 500, and anything else. Those stay what they were, an outcome nobody knows.
+const PROVEN_REFUSALS = Object.freeze(new Set([400, 403, 404, 429]));
+
+// Wraps the HTTP client the SDK is given so the backend can learn what the SDK's errors do not carry. The SDK reports a refused request as a typed error that carries the status and the body of the answer but NOT its
+// headers, so the wait the service asked for would be lost on the way up; and a change set the service refuses AS A WHOLE is answered HTTP 200 with the single part that failed, which the SDK can only report as an answer it
+// cannot account for (a ConnectionError of status 200, "cannot be confirmed": one result for twelve operations), whatever the part says. The wrapper sees the answer first. Only the one request that writes a page is listened to —
+// the `$batch`, `postRaw`:
+//   - An answer that asks a caller to try again later — a 429, and the 5xx of a gateway (RFC 9110 defines `Retry-After` for a 503, and a 502 or 504 that carries one asks the same) — hands `record(ms)` whatever it asks, in its own
+//     headers or in the headers of a refused operation inside it, as the HTTP client reads both (retryAfterMs, batchRetryAfterMs). It is the service's request WHOLE: the HTTP client's cap is for that client's own retries, and
+//     what fits is the run's throttle budget's to judge (lib/throttle-budget.js).
+//   - An answer of 2xx that is a COMPLETE, well-formed multipart envelope whose every part carries one of PROVEN_REFUSALS — read with the HTTP client's own strict parser (isBatchThrottled, completeBatchStatus), which takes anything missing or
+//     malformed (a change set never closed, a part with no status line or one cut off) as proving nothing — is the change set the
+//     service refused, and `refused({ status, outer, url })` says so. An answer that is cut off or incomplete inside, mixes statuses or carries any other status proves nothing about the change set and is not heard.
+// The answer itself is returned as it came, and every other request is the client's own. A client that has no `postRaw` is returned as it is: the SDK refuses to write a page through it anyway.
+// See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after and https://www.rfc-editor.org/rfc/rfc6585#section-4 (429)
+function watchThrottles(client, record, now = Date.now, refused) {
+  if (!client || typeof client.postRaw !== 'function') return client;
+  const { retryAfterMs, batchRetryAfterMs, isBatchThrottled, completeBatchStatus } = require('./sdk-http-client.js');
+  // `Object.create` keeps every other method, own or inherited, exactly as the client has it.
+  const watched = Object.create(client);
+  watched.postRaw = async (...args) => {
+    const answer = await client.postRaw(...args);
+    if (answer && (answer.status === 429 || answer.status >= 500)) {
+      const asked = Math.max(retryAfterMs(answer.headers, now(), Infinity), batchRetryAfterMs({ body: answer.body }, now(), Infinity));
+      if (asked > 0) record(asked);
+    } else if (answer && answer.status >= 200 && answer.status < 300) {
+      const status = isBatchThrottled({ statusCode: answer.status, body: answer.body }) ? 429 : completeBatchStatus({ body: answer.body });
+      if (PROVEN_REFUSALS.has(status)) {
+        if (status === 429) {
+          const asked = batchRetryAfterMs({ body: answer.body }, now(), Infinity);
+          if (asked > 0) record(asked);
+        }
+        if (typeof refused === 'function') refused({ status, outer: answer.status, url: args[0] });
+      }
+    }
+    return answer;
+  };
+  return watched;
 }
 
 // The page's source as TEXT — the one place bytes become text, and it runs ONCE. The caller that reads a file calls this on the bytes it
@@ -237,6 +303,117 @@ function contentFingerprint(fields) {
   const content = {};
   for (const key of ['source', 'name', 'dataSources', 'model', 'connectorBindings', 'actionBindings']) if (fields[key] !== undefined) content[key] = fields[key];
   return sha256(`genpage-content/1\n${JSON.stringify(content)}`);
+}
+
+// The content fields of a page as `update` takes them from its arguments, normalized as the write normalizes them, so what is compared, hashed and checked afterwards is what is written. A field the caller leaves
+// out (`undefined`) is the page's own. `publishedDiffers` takes its arguments through this too, so the `fingerprint` it answers is the one `update` answers for the same arguments.
+function contentFieldsOf(args) {
+  return {
+    source: sourceText(args.source),
+    name: args.name === undefined || args.name === null || !String(args.name).trim() ? undefined : String(args.name),
+    dataSources: dataSourcesOf(args.dataSources),
+    model: args.model ? String(args.model) : undefined,
+    connectorBindings: bindingOf(args.connectorBindings, 'connectorBindings'),
+    actionBindings: bindingOf(args.actionBindings, 'actionBindings'),
+  };
+}
+
+// The filetype of the rows that hold a page's TEXT: its source and its settings (`config.json`). The compiled output is the type after it. This is the layout the maker portal and the SDK write, and the one the SDK's
+// page adapter reads (GenPageAdapter `fromApiResponse`): the source is the one text row whose name holds `page.tsx`, the settings the text row named `config.json`.
+const TEXT_ROW_TYPE = 200000000;
+
+// A file's content as bytes. The plugin's HTTP client answers a `$value` read with the Buffer it arrived as, never decoded (lib/sdk-http-client.js); a client that answers a string means its UTF-8.
+function bytesOf(body) {
+  if (typeof body === 'string') return Buffer.from(body, 'utf8');
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  if (Object.prototype.toString.call(body) === '[object ArrayBuffer]') return Buffer.from(body);
+  return null;
+}
+
+// The page as its PUBLISHED layer holds it, in the shape `planEdits` compares — { name, source, dataSources, model, connectorBindings, actionBindings } — or null for a page that has no published copy. The published layer is
+// what a plain read (no `MSCRM.IncludeUnpublished`) is served: the copy a publish writes and a draft does not touch. They are the plain reads the SDK's own check of a publish makes (it does not hand back what it
+// read), made one after another — so a caller that needs them as ONE state brackets them with `fileVersions`, as the build does:
+//   GET /uxagentprojects(<id>)?$select=uxagentprojectid,name                       { "uxagentprojectid": "…", "name": "Overview" }
+//   GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id>
+//                                                                                  { "value": [ { "uxagentprojectfileid": "…", "filename": "src/pages/page.tsx", "filetype": 200000000 }, … ] }
+//   GET /uxagentprojectfiles(<file id>)/filecontent/$value                         the file's bytes: the source row, and `config.json` when the page has one
+// The settings are read as the SDK reads them: a JSON object (one leading byte order mark is ignored), `dataSources` a list of names, `model` a text, the two bindings as they are, every other key left alone.
+// A page laid out otherwise — no source row or two, a file that is not UTF-8, settings that are not those — is one this reads no content from. It throws, and what a caller takes from that is "cannot be told".
+async function readPublishedPage(sdk, id, { runtime = false } = {}) {
+  const client = sdk.dataverse;
+  if (!client || typeof client.get !== 'function') throw genpageError('the SDK has no Dataverse client to read the published layer with', { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+  const get = async (path, what) => {
+    const response = await client.get(path);
+    if (!response || (response.status !== 404 && (response.status < 200 || response.status >= 300))) {
+      throw genpageError(`${what}: HTTP ${response && response.status}`, { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+    }
+    return response;
+  };
+  const project = await get(`/uxagentprojects(${id})?$select=uxagentprojectid,name`, 'the page\'s row');
+  if (project.status === 404) return null;
+  const rows = await sdk.queryRecords('uxagentprojectfile', { select: ['uxagentprojectfileid', 'filename', 'filetype'], filter: `_uxagentprojectid_value eq ${id}`, paginate: true });
+  const textRows = (rows || []).filter((row) => row && Number(row.filetype) === TEXT_ROW_TYPE && typeof row.filename === 'string');
+  const sources = textRows.filter((row) => row.filename.includes('page.tsx'));
+  const settings = textRows.filter((row) => row.filename === 'config.json');
+  if (sources.length !== 1 || settings.length > 1) {
+    throw genpageError(`its published files are not laid out as a page is (${sources.length} source rows, ${settings.length} settings rows)`, { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+  }
+  const textOf = async (row, what) => {
+    const fileId = String(row.uxagentprojectfileid || '').replace(/[{}]/g, '').toLowerCase();
+    if (!GUID_RE.test(fileId)) throw genpageError(`${what} has no file id`, { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+    const content = await get(`/uxagentprojectfiles(${fileId})/filecontent/$value`, what);
+    const bytes = content.status === 404 ? null : bytesOf(content.body);
+    if (!bytes) throw genpageError(`${what} has no readable content`, { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+    // `fatal`: a byte that is not UTF-8 is an error, not U+FFFD; `ignoreBOM`: a mark at the start is content, as the SDK's own read of the row keeps it.
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  };
+  const page = { name: String((project.body && project.body.name) ?? ''), source: await textOf(sources[0], 'the source row') };
+  if (settings.length) {
+    const config = JSON.parse((await textOf(settings[0], 'config.json')).replace(/^\uFEFF/, ''));
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw genpageError('config.json is not a JSON object', { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+    if ('dataSources' in config) {
+      if (!Array.isArray(config.dataSources) || !config.dataSources.every((name) => typeof name === 'string')) throw genpageError('config.json holds dataSources that are not a list of names', { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+      page.dataSources = config.dataSources;
+    }
+    if ('model' in config) {
+      if (typeof config.model !== 'string') throw genpageError('config.json holds a model that is not a text', { code: 'GENPAGE_PUBLISHED_LAYOUT' });
+      page.model = config.model;
+    }
+    for (const key of ['connectorBindings', 'actionBindings']) if (key in config) page[key] = config[key];
+  }
+  // `runtime`: the hash of the same copy's compiled output too (`runtimeSha256`, null for a copy that has none), from the listing of rows just read — a caller that compares the copy with evidence of what was published asks for it.
+  if (runtime) page.runtimeSha256 = await compiledOutputSha256(sdk, id, { rows: rows || [] });
+  return page;
+}
+
+// The filetype of a page's COMPILED output row: the one after the text rows (TEXT_ROW_TYPE) — the bytes the runtime serves. The SDK writes it with the source, and a publish copies it to the published layer.
+const COMPILED_ROW_TYPE = TEXT_ROW_TYPE + 1;
+
+// The hash of the bytes of a page's compiled-output row as one layer serves them — the DRAFT (`unpublished`: the header `MSCRM.IncludeUnpublished`, which is what makes a read answer the draft) or the PUBLISHED layer
+// (a plain read) — or null when the page has no such row, or it has no readable content. What the build certifies is a RUNTIME, and the source and the settings do not say what runs: another writer that published other
+// compiled bytes under the SAME source, and put the original back as a draft, left a page whose draft, source and file versions all agreed with the file while the page that ran was theirs. Two plain reads:
+//   GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id>     { "value": [ { "uxagentprojectfileid": "…", "filename": "src/pages/page.compiled", "filetype": 200000001 }, … ] }
+//   GET /uxagentprojectfiles(<file id>)/filecontent/$value                                                               the bytes (a 404 is a row with no content)
+// A read that fails throws, which a caller takes as "cannot be told" — never as "there is none". `rows` are the rows of the page's files when the caller has just listed them (the published copy's read does): the listing is then not made again.
+async function compiledOutputSha256(sdk, id, { unpublished = false, rows: listed } = {}) {
+  const client = sdk.dataverse;
+  if (!client || typeof client.get !== 'function') throw genpageError('the SDK has no Dataverse client to read the compiled output with', { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+  const options = unpublished ? { headers: { 'MSCRM.IncludeUnpublished': 'true' } } : undefined;
+  const get = async (path, what) => {
+    const response = options ? await client.get(path, options) : await client.get(path);
+    if (!response || (response.status !== 404 && (response.status < 200 || response.status >= 300))) {
+      throw genpageError(`${what}: HTTP ${response && response.status}`, { code: 'GENPAGE_PUBLISHED_UNREADABLE' });
+    }
+    return response;
+  };
+  const rows = listed || (await get(`/uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq ${id}`, 'the page\'s files')).body?.value;
+  const compiled = (Array.isArray(rows) ? rows : []).filter((row) => row && Number(row.filetype) === COMPILED_ROW_TYPE && typeof row.filename === 'string' && row.filename.includes('page.compiled'));
+  if (compiled.length !== 1) return null;
+  const fileId = String(compiled[0].uxagentprojectfileid || '').replace(/[{}]/g, '').toLowerCase();
+  if (!GUID_RE.test(fileId)) return null;
+  const content = await get(`/uxagentprojectfiles(${fileId})/filecontent/$value`, 'the compiled output');
+  const bytes = content.status === 404 ? null : bytesOf(content.body);
+  return bytes ? sha256(bytes) : null;
 }
 
 // Whether a page read from the environment holds what one of the creates sent under its id sent: its name, and its source. `sent` is [{ name, sourceSha256 }] —
@@ -448,6 +625,34 @@ function makeGenpageSdk(env, deps = {}) {
   const running = new Set();
   const closedError = () => genpageError('the page backend was disposed, or its workspace was discarded: an operation that was under way is cut short, and none can start on a backend that was disposed', { code: 'GENPAGE_BACKEND_CLOSED' });
 
+  // ── Waiting out a throttle ──
+  // The wait the last refused answer of a page write asked for (its `Retry-After`, as watchThrottles heard it): pushOnce clears it before a push and hands it to the caller in the push's own answer.
+  let asked = 0;
+  // What the answer to this push proved when it was a change set the service refused AS A WHOLE ({ status, outer, url }, as watchThrottles heard it): cleared with `asked`, and read only through provenRefusal.
+  let refusal = null;
+  const random = deps.random || Math.random;
+  // The clock `retryNotBefore` is stamped on: the moment before which nothing may be sent, for the layer that runs the build again. A test seam, with `sleep` and `random`.
+  const clock = deps.now || Date.now;
+  // The waits in progress. release() ends them, and an operation that wakes to a backend that was closed, or whose workspace was discarded, sends nothing more: `generation` is what release() moves.
+  let generation = 0;
+  const sleepers = new Set();
+  // `deps.sleep` is a test seam (the waits are recorded, not taken). Either way a wait is one release() can end — a build that is told to stop must not go on to send a write after a pause it was woken from.
+  function pause(ms) {
+    return new Promise((resolve) => {
+      let timer;
+      const wake = () => { clearTimeout(timer); sleepers.delete(wake); resolve(); };
+      sleepers.add(wake);
+      if (deps.sleep) Promise.resolve().then(() => deps.sleep(ms)).then(wake, wake);
+      else timer = setTimeout(wake, ms);
+    });
+  }
+  async function pauseFor(ms) {
+    if (!(ms > 0)) return;
+    const epoch = generation;
+    await pause(ms);
+    if (closed || epoch !== generation) throw closedError();
+  }
+
   // The SDK, made on first use. `languageCode` only matters to an app edit (a sitemap title is written in it) and is the SDK's
   // construction-time option, so one SDK per language.
   async function getSdk(languageCode) {
@@ -470,8 +675,10 @@ function makeGenpageSdk(env, deps = {}) {
           const sdk = createMakerSdk({
             workspaceStorage: guard.storage,
             instanceUrl: env,
-            // The SDK's transport, limited for a page edit of an app: see appScope above and `pushApp`.
-            httpClient: appScope.wrap(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env)),
+            // The SDK's transport, limited for a page edit of an app (see appScope above and `pushApp`), and watched, so a refused page write's Retry-After reaches this backend, and so does what a change set
+            // refused as a whole proved (watchThrottles): the SDK's error for either carries no headers and no part. The watch is the inner layer, next to the transport, so what it hears is what the service
+            // answered: a post the limit answers itself (an AddAppComponents left with nothing to add) never reached the service.
+            httpClient: appScope.wrap(watchThrottles(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env), (ms) => { asked = Math.max(asked, ms); }, deps.now, (found) => { refusal = found; })),
             // A page's file downloads overlap (four at a time): a read of a page is its rows' bytes, one request each.
             readConcurrency: 4,
             ...(options.languageCode ? { languageCode: options.languageCode } : {}),
@@ -517,39 +724,118 @@ function makeGenpageSdk(env, deps = {}) {
   // One push, its answer sorted by what it says about the page. The SDK REPORTS some failures instead of throwing them
   // (`saved: false` with an `error`): an id that already exists, and a version conflict.
   //   { saved: true, result }
-  //   { saved: false, outcome: 'nothing' | 'unknown' | 'exists' | 'conflict', error }
+  //   { saved: false, outcome: 'nothing' | 'unknown' | 'exists' | 'conflict', error, asked, throttled?, refusedWith? }
+  // `asked` is the wait, in milliseconds, that the answer to this push asked for in its `Retry-After` (watchThrottles; 0 when it asked for none). `throttled` is there when a 'nothing' was the service's throttle (HTTP 429).
+  // `refusedWith` is there when the answer was a change set the service refused AS A WHOLE and the parts of its answer prove which status (see provenRefusal).
   // A create whose ids already exist — an earlier request that carried them landed — comes back one of two ways, and neither is ever "nothing was
   // written": the SDK reports the service's 412 as `ARTIFACT_ALREADY_EXISTS` ('exists'), and a change set the service rolled back for it is an answer the
   // SDK cannot account for (a CONNECTION_ERROR with status 200, "cannot be confirmed": 'unknown'). Both end in a read of the id.
   async function pushOnce(sdk, id) {
+    asked = 0;
+    refusal = null;
+    // What the answer to THIS push proved, when the SDK could not account for it. A change set the service refuses as a whole is answered HTTP 200 with the one part that failed, which the SDK reports as a ConnectionError of
+    // status 200 on the `$batch` ("cannot be confirmed": one result for N operations) — so by its status that error is an unknown outcome, like any answer the SDK cannot read. The parts say more: when watchThrottles read every
+    // part of this push's `$batch` answer, and every part was the same 400, 403, 404 or 429, the change set was refused — nothing in it committed (it is atomic) — and for a 429 it is a throttle, waited out like any other.
+    // The error must be that answer's: the SDK's own ConnectionError, of the status that answer had, at the `$batch` url (a second request of the push, or any other error, is not the proof's). Anything the parts do not
+    // prove stays what writeOutcome says.
+    const provenRefusal = (error) => {
+      if (!refusal || !isSdkError(error) || error.code !== 'CONNECTION_ERROR') return 0;
+      return error.statusCode === refusal.outer && /\/\$batch$/.test(String(error.url)) && /\/\$batch$/.test(String(refusal.url)) ? refusal.status : 0;
+    };
+    // `asked` and the proof are read as the push ends, before anything else can answer.
+    const unsaved = (outcome, error) => {
+      const proven = provenRefusal(error);
+      const settled = proven ? 'nothing' : outcome;
+      return { saved: false, outcome: settled, error, asked, ...(proven ? { refusedWith: proven } : {}), ...(settled === 'nothing' && (proven === 429 || isThrottle(error)) ? { throttled: true } : {}) };
+    };
     let result;
     try {
       result = await sdk.pushArtifact('genPage', id);
     } catch (error) {
-      return { saved: false, outcome: writeOutcome(error), error };
+      return unsaved(writeOutcome(error), error);
     }
     if (result && result.saved === true) return { saved: true, result };
     const error = result && result.error;
-    if (error && error.code === 'ARTIFACT_ALREADY_EXISTS') return { saved: false, outcome: 'exists', error };
-    if (error && error.code === 'VERSION_CONFLICT') return { saved: false, outcome: 'conflict', error };
-    return { saved: false, outcome: error ? writeOutcome(error) : 'unknown', error: error || new Error('the SDK did not report the page as saved') };
+    if (error && error.code === 'ARTIFACT_ALREADY_EXISTS') return unsaved('exists', error);
+    if (error && error.code === 'VERSION_CONFLICT') return unsaved('conflict', error);
+    return unsaved(error ? writeOutcome(error) : 'unknown', error || new Error('the SDK did not report the page as saved'));
   }
+
+  // A first send the service REFUSED with a throttle (HTTP 429) — as a whole request, or as the one failing part of a change set it answered with HTTP 200 — waited out and sent again — at most THROTTLE_RESENDS times, six sends in
+  // all — and the answer of the last one. The wait is the HTTP client's schedule for every other throttled request (throttleBackoffMs), or what the answer's Retry-After asks when that is longer, WHOLE (watchThrottles): what
+  // fits is the budget's to say. Every wait comes out of the run's throttle budget (lib/throttle-budget.js), the same one the build's own waits come out of; the wait that does not fit is not taken, nothing more is sent, and the
+  // answer comes back marked `stopped` for the caller to say so. Why a send that follows a 429 is safe, and why it is made here and not by the HTTP client re-sending the request (as it does for a conditional delete):
+  //  - A 429 is the service declining to START the request: the change set is atomic, so nothing in it committed. The page is as unsent as it was.
+  //  - And even a request that had been processed could not write a page twice. A create's ids — the page's, and those of its rows — are minted before the first send, so a second send meets the first and is rolled back whole (the
+  //    property the resend after an unknown outcome rests on, too). An update's turn carries an identity from which the SDK derives the ids of its messages, so a second send addresses the same two rows and collides the same way.
+  //  - The SDK compares the version tokens of the page's rows with the ones this operation read, on EVERY push: an update sent again after the wait is refused (`VERSION_CONFLICT`, reported by value and judged by the caller as any
+  //    first send's) when anyone changed the page meanwhile, and is never sent over what they saved. The update's writes carry `If-Match: *`, so a request replayed by the HTTP client after the wait would skip that check —
+  //    which is why that client leaves a page's change set to this backend (sdk-http-client.js, `isConditionalDeleteBatch`).
+  //  - It is bounded (the sends, and each wait), and cut short by dispose() (pauseFor).
+  // A refusal that is not a throttle, and a send that got no usable answer, are not waited out: they are settled as they always were by the caller.
+  async function pushThroughThrottle(sdk, id, first, waited, budget, who) {
+    let pushed = first;
+    for (let resend = 0; !pushed.saved && pushed.throttled && resend < THROTTLE_RESENDS; resend += 1) {
+      const { throttleBackoffMs } = require('./sdk-http-client.js');
+      const wait = Math.max(throttleBackoffMs(resend, random), pushed.asked);
+      if (!budget.fits(wait)) return { ...pushed, stopped: { askedMs: pushed.asked, waitMs: wait } };
+      budget.spend(wait);
+      budget.announce(`${who}: the service throttled the write (HTTP 429); waiting ${Math.ceil(wait / 1000)} s before sending it again (${spentNote(budget)})`, wait);
+      await pauseFor(wait);
+      waited.push(wait);
+      pushed = await pushOnce(sdk, id);
+    }
+    return pushed;
+  }
+  // The wait before the read that settles an unknown outcome, when the answer that left it unknown (a gateway's 503) asked to wait: a request still on its way has had that time to land. It is a wait the service asked for, so it
+  // is counted — at most the client's own cap of a minute (the longest it ever was), and at most what is left of the budget — and it never stops the write: the page is read for, and settled, either way.
+  async function pauseForRead(askedMs, budget, who) {
+    const { RETRY_AFTER_CAP_MS } = require('./sdk-http-client.js');
+    const wait = Math.min(askedMs, RETRY_AFTER_CAP_MS, budget.remainingMs());
+    if (!(wait > 0)) return;
+    budget.spend(wait);
+    budget.announce(`${who}: the service asked to wait ${Math.ceil(wait / 1000)} s before the page is read to see whether the write landed; waiting (${spentNote(budget)})`, wait);
+    await pauseFor(wait);
+  }
+  // What the error of a throttle that outlasted the sends — or that did not fit the budget — carries on top of what every page-write error does: the status, so the build reads the throttle from the error itself (a refusal
+  // proven by the parts of an HTTP 200 has no 429 anywhere else), and what the last answer asked, for the layer that runs the build again (throttleAskOf).
+  const throttledProps = (pushed, failure) => ({ ...failure, statusCode: 429, ...(pushed.asked > 0 ? { retryAfterMs: pushed.asked, retryNotBefore: clock() + pushed.asked } : {}) });
+  // The words an error of a page write uses for a failed send: the SDK's own, and — when the parts of the answer proved a refusal of the whole change set — what they proved, which the SDK's error ("cannot be confirmed") does not say.
+  const refusalWords = (pushed) => (pushed.refusedWith
+    ? `the service refused the change set with HTTP ${pushed.refusedWith} (inside its HTTP 200 answer: ${messageOf(pushed.error)})`
+    : messageOf(pushed.error));
+  // What an operation says of a write that was throttled and then taken: why it was slow, and that the page was written once. `waited` is what pushThroughThrottle recorded.
+  const throttleNote = (what, waited) => `the service throttled the write of ${what} (HTTP 429) ${waited.length === 1 ? 'once' : `${waited.length} times`}: a refused request writes nothing, so it was sent again after waiting ${waited.map((ms) => `${Math.round(ms / 100) / 10} s`).join(', ')}, and written once`;
+  // The budget an operation spends its waits from: the run's, which the build hands to every page write (`args.throttle`), or — for a caller that has none, such as the upload script — one of its own for this write.
+  const budgetOf = (args) => (args && args.throttle && typeof args.throttle.fits === 'function' ? args.throttle : makeThrottleBudget({ warn: deps.warn }));
 
   // Publish the page and prove the published copy is the one just written. The SDK answers `publish.kind`:
   //   'verified'      the published projection serves exactly what was saved
   //   'unverifiable'  the publish was submitted but the published projection does not show the page yet (PublishXml is asynchronous)
   //   'failed'        the publish was refused
+  // The answer carries the failure itself as a non-enumerable `cause` (withCause, retry-policy.js) when there was one — the SDK's reported `publish.error`, or what the call threw.
   async function publish(sdk, type, id, options) {
     try {
       const outcome = await sdk.publishArtifact(type, id, options);
       const state = (outcome && outcome.publish) || {};
-      return { kind: state.kind || 'unknown', detail: state.reason || (state.error && messageOf(state.error)) || '' };
+      return withCause({ kind: state.kind || 'unknown', detail: state.reason || (state.error && messageOf(state.error)) || '' }, state.error);
     } catch (error) {
-      return { kind: 'failed', detail: messageOf(error) };
+      return withCause({ kind: 'failed', detail: messageOf(error) }, error);
     }
   }
 
   const label = (name, id) => (name ? `"${name}" (${id})` : String(id));
+  // The hash of the compiled output the page's DRAFT holds right now — read just BEFORE the publish, so it is what the publish copies — for a caller that asked (`runtimeEvidence: true`) because it keeps a record of what it
+  // published and certifies the RUNTIME in it (lib/page-publish-records.js; `publishedDiffers` compares the published copy with it). It is evidence and nothing more: a read that fails, or a page with no compiled row, answers
+  // `undefined`, and the caller then has nothing to certify with.
+  async function runtimeEvidenceOf(sdk, id, args) {
+    if (!args || args.runtimeEvidence !== true) return undefined;
+    try {
+      return (await compiledOutputSha256(sdk, id, { unpublished: true })) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
   // The warnings a finished write carries: the SDK's own, and what a publish that could not be proven says.
   const warningsOf = (pushed, published, who) => [
     ...((pushed && pushed.result && pushed.result.warnings) || []),
@@ -567,7 +853,7 @@ function makeGenpageSdk(env, deps = {}) {
         const pages = list.map((p) => ({ pageId: String(p.id), name: String(p.name === undefined || p.name === null ? '' : p.name) }));
         return { ok: true, ids: pages.map((p) => p.pageId.toLowerCase()), pages };
       } catch (error) {
-        return { ok: false, ids: [], error: `could not list the environment's generative pages: ${messageOf(error)}`, ...codeOf(error) };
+        return withCause({ ok: false, ids: [], error: `could not list the environment's generative pages: ${messageOf(error)}`, ...codeOf(error) }, error);
       }
     },
 
@@ -610,7 +896,11 @@ function makeGenpageSdk(env, deps = {}) {
     },
 
     // CREATE: mint the page's id here, write it as one atomic change set, publish it, and prove the published copy.
-    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, pageId, sentBefore, caller, beforeSend }
+    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, pageId, sentBefore, caller, beforeSend, runtimeEvidence, throttle }
+    //   `throttle` is the budget the waits of a throttled write are spent from (lib/throttle-budget.js): the run's, which the build hands every page write, so what the service asked is waited for once for the whole run; a caller
+    //   that gives none (the upload script) gets one of its own for this write. A wait that does not fit it stops the write: nothing more is sent, and the error says what the service asked.
+    //   `runtimeEvidence: true` makes the result carry `runtimeSha256`, the hash of the compiled output the draft held when the page was published (read just before the publish), for a caller that records what it published
+    //   and wants the record to certify the runtime that was published and not only its source (`publishedDiffers`'s `expected`). Without it nothing more is read.
     //   `source` is the text the caller checked (sourceText turns the bytes of a file into it, once); bytes given here are decoded the
     //   same way, a string is used exactly as it is.
     //   `pageId` is an id to create the page under instead of a new one — a caller RESUMING a create that did not finish passes the id it
@@ -624,6 +914,10 @@ function makeGenpageSdk(env, deps = {}) {
     //   a known failure             -> reported with the SDK's own code and message, and not sent again: the SDK refused it before
     //                                  writing, or the server answered the change set with a 4xx (atomic: nothing was written). It is
     //                                  a known failure of the page only while no earlier send is still open.
+    //   a throttle (HTTP 429)       -> the service declined to start the request, so nothing was written; with no earlier send open it is waited out — the HTTP
+    //                                  client's schedule, or what the answer's Retry-After asks — and sent again under the same id, six sends in all
+    //                                  (pushThroughThrottle says why that is safe). One that outlasts them is reported as nothing written and, alone among
+    //                                  the errors a page write raises, is not marked `transient: false`: the build may run again.
     //   an UNKNOWN outcome          -> read the id. Present: it landed (see "a page found" below). Absent: nothing was written YET, so the
     //                                  create is sent ONCE more under the SAME id: a first send that lands late collides on the id
     //                                  — no second page can exist — and that collision, like a second unknown, is settled by reading
@@ -687,17 +981,29 @@ function makeGenpageSdk(env, deps = {}) {
       }
 
       const warnings = [];
+      const budget = budgetOf(args);
       let pushed = await pushOnce(sdk, id);
+      // A first send the service refused with a throttle wrote nothing, and is waited out and sent again under the same id (pushThroughThrottle). Not when a send is already open — a resumed create: what the refusal says is then
+      // about this send alone, and the request an earlier call gave up on can still land, so the refusal is judged below, by reading the page, as it always was.
+      const waited = [];
+      if (!open.length) pushed = await pushThroughThrottle(sdk, id, pushed, waited, budget, `generative page ${who}`);
+      if (waited.length) warnings.push(throttleNote(`generative page ${who}`, waited));
       for (let send = 1; !pushed.saved; send += 1) {
         const refused = pushed.outcome === 'nothing';
         // Settled: there has been no other send, and this one is known to have written nothing.
         if (refused && !open.length) {
-          throw genpageError(`generative page ${who} was not created (nothing was written): ${messageOf(pushed.error)}`, { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing' });
+          const failure = { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing' };
+          // A throttle that outlasted every wait — or whose next wait did not fit the budget — is the one refusal a run again can change.
+          throw pushed.throttled
+            ? throttledError(`generative page ${who} was not created (nothing was written): ${pushed.stopped ? waitDoesNotFit(budget, pushed.stopped) : `the service throttled all ${THROTTLE_RESENDS + 1} sends, waiting between them (${refusalWords(pushed)})`}`, throttledProps(pushed, failure))
+            : genpageError(`generative page ${who} was not created (nothing was written): ${refusalWords(pushed)}`, failure);
         }
         if (!refused) open.push(pushed.error);
         // What the sends said, for a message: a refused send is named as such, because it says nothing about the ones before it.
         const said = [...open.map(messageOf), ...(refused ? [`a later send was refused: ${messageOf(pushed.error)}`] : [])].join('; ');
         const code = (open[0] && open[0].code) || (pushed.error && pushed.error.code);
+        // An answer that asked to wait (a gateway's 503 with a Retry-After) is waited for before the page is read: a request still on its way has had that time to land.
+        await pauseForRead(pushed.asked, budget, `generative page ${who}`);
         const found = await readServer(sdk, id);
         if (found.kind === 'unreadable') {
           throw genpageError(`generative page ${who}: the outcome of creating it is unknown (${said}), and reading the page it would have (id ${id}) failed too (${messageOf(found.error)}). It was not sent again. Look for page ${id} before creating it again.`, { code, cause: open[0] || pushed.error, outcome: 'unknown', pageId: id });
@@ -715,17 +1021,19 @@ function makeGenpageSdk(env, deps = {}) {
             // Ours, but it holds what an earlier create under the id sent (another model, other data sources or bindings, or a name this one does not): brought to what this
             // create asks for by the ordinary update, which reads it again, writes only what differs, records this create's turn, publishes it and proves the publish. Publishing
             // it as it is would put the earlier content live under this create's name.
+            // The update is one more write of this run, so it spends THIS create's budget — the run's, or the one this create made for itself when it was given none — and not a new one: a
+            // budget the update made would give it five more minutes, and what the run (or this create's own pause before its read) already spent would not be there to refuse a wait that does not fit.
             const differing = edits.map((e) => e.key);
             let updated;
             try {
-              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile });
+              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget });
             } catch (error) {
               // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
               throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });
             }
             return {
-              pageId: id, name, publish: updated.publish, fingerprint,
-              warnings: [`the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
+              pageId: id, name, publish: updated.publish, fingerprint, ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}),
+              warnings: [...warnings, `the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
             };
           }
           warnings.push(`the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed that it had been written — so it was not sent again`);
@@ -749,12 +1057,13 @@ function makeGenpageSdk(env, deps = {}) {
         pushed = await pushOnce(sdk, id);
       }
 
+      const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, name, publish: published, fingerprint, warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
+      return { pageId: id, name, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
     },
 
     // UPDATE: read the page, write only what differs from it, record the turn, publish, and prove the published copy.
-    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, caller, appId, sourceFile, publishedFingerprint }
+    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, caller, appId, sourceFile, publishedFingerprint, runtimeEvidence, throttle } (`runtimeEvidence`, `throttle`: see create)
     //   A field the caller leaves out (`undefined`) is left alone — an omitted data-source list, model, name or binding list is the
     //   page's own, not an instruction to clear it; `[]` clears a list. The page's FIRST prompt is kept and the new one is recorded
     //   as a turn of its conversation (pac overwrote the first prompt on every upload).
@@ -772,17 +1081,12 @@ function makeGenpageSdk(env, deps = {}) {
     //   anything else                           -> refused, with where to look first. `caller: 'build'` words that for the build,
     //                                              which keeps no base marker and reads every page again when it runs; otherwise the
     //                                              standalone upload's `genpage-base.js check` (`appId` and `sourceFile` name its arguments).
+    // A first send the service refuses with a throttle (HTTP 429) wrote nothing: it is waited out and sent again (pushThroughThrottle), and the SDK's version check runs again on that send, so a page someone saved meanwhile
+    // is refused (`VERSION_CONFLICT`), never written over. A throttle that outlasts the waits is reported as nothing written and is not marked `transient: false`, so the build may run again.
     async update(pageId, args = {}) {
       if (!GUID_RE.test(String(pageId || ''))) throw genpageError(`'${pageId}' is not a page id`, { code: 'GENPAGE_ID_INVALID' });
       const id = String(pageId).toLowerCase();
-      const fields = {
-        source: sourceText(args.source),
-        name: args.name === undefined || args.name === null || !String(args.name).trim() ? undefined : String(args.name),
-        dataSources: dataSourcesOf(args.dataSources),
-        model: args.model ? String(args.model) : undefined,
-        connectorBindings: bindingOf(args.connectorBindings, 'connectorBindings'),
-        actionBindings: bindingOf(args.actionBindings, 'actionBindings'),
-      };
+      const fields = contentFieldsOf(args);
       const sdk = await getSdk();
       const found = await readServer(sdk, id);
       if (found.kind === 'absent') throw genpageError(`page ${id} does not exist in this environment — nothing was changed`, { code: 'GENPAGE_NOT_FOUND', outcome: 'nothing', pageId: id });
@@ -810,8 +1114,9 @@ function makeGenpageSdk(env, deps = {}) {
         if (typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === fingerprint) {
           return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, and the caller recorded that this content was published' }, fingerprint, warnings: [] };
         }
+        const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
         const published = await publish(sdk, 'genPage', id, { verify: true });
-        return { pageId: id, unchanged: true, publish: published, fingerprint, warnings: warningsOf(null, published, `page ${who()}`) };
+        return { pageId: id, unchanged: true, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: warningsOf(null, published, `page ${who()}`) };
       }
 
       // Where to look before an update that may have landed is run again.
@@ -843,7 +1148,11 @@ function makeGenpageSdk(env, deps = {}) {
       } catch (error) {
         throw genpageError(`the update of generative page ${who()} was refused before anything was written: ${messageOf(error)}`, { code: error && error.code, cause: error, outcome: 'nothing', pageId: id });
       }
-      let pushed = await pushOnce(sdk, id);
+      // A first send the service refused with a throttle wrote nothing, and is waited out and sent again — the SDK's version check runs again on each push (pushThroughThrottle).
+      const waited = [];
+      const budget = budgetOf(args);
+      let pushed = await pushThroughThrottle(sdk, id, await pushOnce(sdk, id), waited, budget, `generative page ${who()}`);
+      if (waited.length) warnings.push(throttleNote(`generative page ${who()}`, waited));
       for (let send = 1; !pushed.saved; send += 1) {
         // The one outcome that is known: the first send is the only one so far, and it wrote nothing. A version conflict is that when it is the first —
         // the SDK compared the page's version tokens before it wrote anything and found them moved — and so is a refusal or a 4xx. Every later failure
@@ -853,8 +1162,14 @@ function makeGenpageSdk(env, deps = {}) {
           throw genpageError(`the update of generative page ${who()} was refused because the page was changed by someone else after it was read, and nothing was written (${messageOf(pushed.error)}). Read the page again and apply the change to what it holds now.`, { code: 'VERSION_CONFLICT', cause: pushed.error, outcome: 'nothing', pageId: id });
         }
         if (send === 1 && pushed.outcome === 'nothing') {
-          throw genpageError(`the update of generative page ${who()} failed and wrote nothing: ${messageOf(pushed.error)}`, { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing', pageId: id });
+          const failure = { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'nothing', pageId: id };
+          // A throttle that outlasted every wait — or whose next wait did not fit the budget — is the one refusal a run again can change.
+          throw pushed.throttled
+            ? throttledError(`the update of generative page ${who()} failed and wrote nothing: ${pushed.stopped ? waitDoesNotFit(budget, pushed.stopped) : `the service throttled all ${THROTTLE_RESENDS + 1} sends, waiting between them (${refusalWords(pushed)})`}`, throttledProps(pushed, failure))
+            : genpageError(`the update of generative page ${who()} failed and wrote nothing: ${refusalWords(pushed)}`, failure);
         }
+        // An answer that asked to wait (a gateway's 503 with a Retry-After) is waited for before the page is read: a request still on its way has had that time to land.
+        await pauseForRead(pushed.asked, budget, `generative page ${who()}`);
         const now = await readServer(sdk, id);
         if (now.kind !== 'present') {
           throw genpageError(`the update of generative page ${who()} MAY HAVE LANDED (${messageOf(pushed.error)}), and ${now.kind === 'absent' ? 'the page can no longer be read — it was deleted' : `reading it failed (${messageOf(now.error)})`}. It was NOT sent again. ${lookFirst()}`, { code: pushed.error && pushed.error.code, cause: pushed.error, outcome: 'unknown', pageId: id });
@@ -884,8 +1199,9 @@ function makeGenpageSdk(env, deps = {}) {
         pushed = await pushOnce(sdk, id);
       }
 
+      const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, publish: published, fingerprint, warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
+      return { pageId: id, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
     },
 
     // Place pages into an app that exists, as the app designer does: each page becomes a sub-area of the app's navigation (the shape
@@ -1253,6 +1569,78 @@ function makeGenpageSdk(env, deps = {}) {
       return { ok: true, versions: new Map([...versions].map(([id, files]) => [id, unknown.has(id) || !files.size ? null : files])) };
     },
 
+    // The versionnumber of each page's OWN row (`uxagentprojects`), read as `fileVersions` reads the files' — one plain query per PAGE_VERSION_CHUNK pages, followed to its last page:
+    //   GET /uxagentprojects?$select=uxagentprojectid,versionnumber&$filter=uxagentprojectid eq <id> or uxagentprojectid eq <id>
+    //   { "value": [ { "uxagentprojectid": "…", "versionnumber": 1234500 }, … ] }
+    // A file row cannot show what the page's row holds — its NAME is there, not in a file — so a page renamed and published from elsewhere moves no file's version. The build's publish record keeps this version
+    // beside the files' (lib/page-publish-records.js): a write to the row moves it as a write to a file moves that file's, and the SAME plain read must be used when it is recorded and when it is checked.
+    //   -> { ok: true, versions: Map<page id (lower case), version (digits) | null> } | { ok: false, error }
+    // A page whose row cannot be taken as one known version is `null`, "not known": no row came back (a page that has no published copy has none in the plain read), a row listed twice, a version that is no whole
+    // number or too large to be one exactly. A read that fails is `ok: false`, never an empty answer.
+    async projectVersions(pageIds) {
+      const ids = [...new Set((pageIds || []).map((id) => String(id).toLowerCase()))];
+      const bad = ids.find((id) => !GUID_RE.test(id));
+      if (bad !== undefined) return { ok: false, error: `'${bad}' is not a page id` };
+      const versions = new Map(ids.map((id) => [id, null]));
+      const seen = new Set();
+      const unknown = new Set();
+      try {
+        const sdk = await getSdk();
+        for (let at = 0; at < ids.length; at += PAGE_VERSION_CHUNK) {
+          const chunk = ids.slice(at, at + PAGE_VERSION_CHUNK);
+          const rows = await sdk.queryRecords('uxagentproject', {
+            select: ['uxagentprojectid', 'versionnumber'],
+            filter: chunk.map((id) => `uxagentprojectid eq ${id}`).join(' or '),
+            paginate: true,
+          });
+          for (const row of rows || []) {
+            const id = row && typeof row.uxagentprojectid === 'string' ? row.uxagentprojectid.replace(/[{}]/g, '').toLowerCase() : '';
+            if (!versions.has(id)) continue;
+            const version = typeof row.versionnumber === 'number' ? (Number.isSafeInteger(row.versionnumber) && row.versionnumber >= 0 ? String(row.versionnumber) : '') : row.versionnumber;
+            if (seen.has(id) || typeof version !== 'string' || !/^[0-9]{1,19}$/.test(version)) unknown.add(id);
+            else versions.set(id, version);
+            seen.add(id);
+          }
+        }
+      } catch (error) {
+        return { ok: false, error: `could not read the versions of the pages' rows: ${messageOf(error)}`, ...codeOf(error) };
+      }
+      return { ok: true, versions: new Map([...versions].map(([id, version]) => [id, unknown.has(id) ? null : version])) };
+    },
+
+    // What the PUBLISHED copy of a page differs from `args` in: the content a caller that keeps a record of what it published (the build: lib/page-publish-records.js) needs to see held before it records a publish.
+    //   args: what `update` takes — only the content fields count (the source, and the name, data sources, model and bindings given); an omitted one is the page's own and cannot differ
+    //   expected: `{ runtimeSha256 }` — the hash of the compiled output the DRAFT held when it was published (what `create` and `update` answer with `runtimeEvidence: true`); the published copy's compiled output must hash to it
+    //   -> { ok: true, differing: [key…], fingerprint, runtimeSha256? } | { ok: false, error }
+    // `differing` names the fields whose published value is not the one asked for, in `planEdits`' own words — the one definition of "holds that content", made on the published layer where `update` makes it on the
+    // draft — and, given `expected.runtimeSha256`, `compiled output` when the published copy's compiled bytes are not those (or it has none): the runtime is what a record certifies, and the source does not say what
+    // runs. It is empty when the published copy holds the content. `fingerprint` is `contentFingerprint` of the content that was asked about, so the caller can hold the answer to the hash it keeps; and given evidence the
+    // answer carries `runtimeSha256`, the hash of the compiled output of the published copy it read (null when it has none), so the caller can hold it to the evidence too. `ok: false` is
+    // "cannot be told", and never "holds it": a page with no published copy, a read that fails, a page laid out otherwise (see readPublishedPage). The reads are one after another, not one state: a caller that needs
+    // them as one reads `fileVersions` and `projectVersions` before and after, and takes the answer only when those agree.
+    async publishedDiffers(pageId, args = {}, expected = {}) {
+      if (!GUID_RE.test(String(pageId || ''))) return { ok: false, error: `'${pageId}' is not a page id` };
+      const id = String(pageId).toLowerCase();
+      let fields;
+      try {
+        fields = contentFieldsOf(args);
+      } catch (error) {
+        return { ok: false, error: messageOf(error), ...codeOf(error) };
+      }
+      try {
+        const sdk = await getSdk();
+        const wantsRuntime = !!expected && typeof expected.runtimeSha256 === 'string';
+        const page = await readPublishedPage(sdk, id, { runtime: wantsRuntime });
+        if (page === null) return { ok: false, error: `page ${id} has no published copy` };
+        const differing = planEdits(fields, page).map((edit) => edit.key);
+        if (wantsRuntime && page.runtimeSha256 !== expected.runtimeSha256) differing.push('compiled output');
+        // Given evidence, the answer says which compiled output it read (`runtimeSha256`, null for a copy with none), so a caller can see that the comparison was made: an answer that does not carry it was not about the runtime.
+        return { ok: true, differing, fingerprint: contentFingerprint(fields), ...(wantsRuntime ? { runtimeSha256: page.runtimeSha256 } : {}) };
+      } catch (error) {
+        return { ok: false, error: `could not read the published copy of page ${id}: ${messageOf(error)}`, ...codeOf(error) };
+      }
+    },
+
     // Closes the backend and removes the workspace folders it made. Idempotent; it never throws, and the promise it returns never rejects.
     //   - No operation starts after it (`GENPAGE_BACKEND_CLOSED`), and what is removed is what release() removes: the workspaces are
     //     closed first, so an initialization or a read that is still running can neither write into a folder that is about to go nor put
@@ -1314,6 +1702,9 @@ function makeGenpageSdk(env, deps = {}) {
   //   from here, so its owner — who removes the folder after this — is given the time the operations still running on it need to end, at
   //   most `deps.drainMs` (10 s, the time the page reads this replaced were given to let go of their folders).
   function release(waitMs) {
+    // A throttle that is being waited out is ended: the operation wakes to a closed backend and sends nothing more.
+    generation += 1;
+    for (const wake of [...sleepers]) wake();
     const workspaces = made.splice(0);
     for (const { guard } of workspaces) guard.close();
     byLanguage.clear();
@@ -1333,7 +1724,7 @@ function makeGenpageSdk(env, deps = {}) {
   // The operations are counted while they run: what release() waits for on an SDK it does not own. A closed backend refuses them in getSdk,
   // which the two listings reach inside their own try — a listing never rejects (a listing that cannot be read is `{ ok: false, error }`, and a
   // caller decides between creating a page and reusing one on that), so on a closed backend it answers exactly that.
-  for (const name of ['enumerateEnv', 'enumeratePages', 'read', 'create', 'update', 'placeInApp', 'removeFromApp', 'describe', 'delete', 'runtimeTypes', 'defaultViews', 'baseLanguage', 'fileVersions']) {
+  for (const name of ['enumerateEnv', 'enumeratePages', 'read', 'create', 'update', 'placeInApp', 'removeFromApp', 'describe', 'delete', 'runtimeTypes', 'defaultViews', 'baseLanguage', 'fileVersions', 'projectVersions', 'publishedDiffers']) {
     const operation = api[name];
     api[name] = (...args) => {
       const run = operation(...args);
@@ -1426,5 +1817,5 @@ async function appsNaming(sdk, pageId) {
 
 module.exports = {
   makeGenpageSdk, unescapePacName, suppliedButBlank, sourceText, dataSourcesOf, promptTranscript, configJson, pageFolderFiles,
-  genPagesOfSiteMap, entityTablesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, GUID_RE,
+  genPagesOfSiteMap, entityTablesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, watchThrottles, GUID_RE,
 };
