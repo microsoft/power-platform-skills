@@ -159,6 +159,9 @@ node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'
 
 It prints `{ "ok": true, "count": N, "apps": [{ "id", "name", "uniqueName", "description",
 "published", "unpublishedChanges" }] }`, drafts included. Offer each app by its `name` and `id`.
+`name` and `description` come from the app's saved layer (what a maker sees in the designer): an
+app whose rename is saved but not yet published (`unpublishedChanges: true`) is listed by its new
+name, which its users see only after a publish.
 `published` (users can open the app) and `unpublishedChanges` (a saved edit is waiting for a
 publish) are two separate facts about it — an app can be both published and have changes — so
 say which applies when it matters. If the script fails (exit 1), report why and stop; a failed

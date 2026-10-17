@@ -38,6 +38,36 @@ test('readXmlElements: it answers the elements the caller asks for, in document 
   }
 });
 
+// `spans` is for a caller that must take elements OUT of the text and compare what is left (formxml-layers.js: a dashboard's saved and published FormXML, without
+// the labels of a language one read does not carry). Where an element is comes from the reader, so markup that is data is never one.
+test('readXmlElements { spans: true }: each element answered says where it is in the text, from its "<" to the end of its empty-element tag or of its end tag', () => {
+  const xml = '\uFEFF<?xml version="1.0"?>\n<form><labels><label description="a &gt; b" languagecode="1033" /><label description=\'x\' languagecode="3082"></label>'
+    + '\r\n<label languagecode="1036">t<b/></label></labels><!-- <label languagecode="1036"/> --><x a="/>"><![CDATA[<label/>]]><?p <label/> ?></x ></form>';
+  const r = readXmlElements(xml, (name) => name === 'label', { spans: true });
+  assert.strictEqual(r.ok, true, r.detail);
+  assert.deepStrictEqual(r.elements.map((e) => [e.path, xml.slice(e.start, e.end)]), [
+    ['form/labels', '<label description="a &gt; b" languagecode="1033" />'],
+    ['form/labels', "<label description='x' languagecode=\"3082\"></label>"],
+    ['form/labels', '<label languagecode="1036">t<b/></label>'],
+  ], 'a comment, a CDATA section and a processing instruction are data, and a ">" in a value ends nothing');
+  assert.deepStrictEqual(readXmlElements(xml, (name) => name === 'x', { spans: true }).elements.map((e) => xml.slice(e.start, e.end)),
+    ['<x a="/>"><![CDATA[<label/>]]><?p <label/> ?></x >'], 'an end tag with white space before its ">" ends at the ">"');
+  assert.deepStrictEqual({ ...r.elements[0].attrs }, { description: 'a > b', languagecode: '1033' }, 'with the attributes, as without it');
+  // An element inside another of the same name: the outer one spans the inner one.
+  const nested = '<a><b x="1"><b/></b><b></b></a>';
+  assert.deepStrictEqual(readXmlElements(nested, (name) => name === 'b', { spans: true }).elements.map((e) => [e.path, nested.slice(e.start, e.end)]),
+    [['a', '<b x="1"><b/></b>'], ['a/b', '<b/>'], ['a', '<b></b>']]);
+  assert.deepStrictEqual(readXmlElements('<r/>', () => true, { spans: true }).elements.map((e) => [e.start, e.end]), [[0, 4]], 'the root, an empty-element tag');
+  // Without it the answer is what it always was: the name, the path and the attributes, and nothing else.
+  for (const options of [undefined, {}, { spans: false }]) {
+    assert.deepStrictEqual(readXmlElements(xml, () => true, options).elements.map((e) => Object.keys(e)), Array(7).fill(['name', 'path', 'attrs']), JSON.stringify(options));
+  }
+  // A document that is not read answers no element, with it as without it.
+  const bad = readXmlElements('<a><label/><b></a>', () => true, { spans: true });
+  assert.deepStrictEqual(Object.keys(bad).sort(), ['detail', 'ok']);
+  assert.match(bad.detail, /closing tag <\/a> where <\/b> is expected/);
+});
+
 test('readXmlElements: a document that is not read answers no element — not the ones before the fault — and says what is wrong and where', () => {
   const detail = refused('<a>\n  <b x="1"/>\r\n  <c y="2"></d>\n</a>');
   assert.match(detail, /closing tag <\/d> where <\/c> is expected, at line 3, column 12/);

@@ -1591,7 +1591,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a same-named dashboard of another app sorted first and failed a correctly wired nav entry. When the reader supplies `dashboardComponents`, every chart tile's
   visualization and view must belong to the tile's `TargetEntityType` — the cross-wiring a same-named
   chart on another table produced. A tile whose owner rows cannot be read is reported unverified, not
-  passed. **App membership is checked on the published layer:** sitemap tables union `app.tables`
+  passed. The tiles are the PUBLISHED dashboard's: the SDK reads them from the saved layer, and the reader
+  takes them only when that layer's FormXML is the published row's, before and after the read, with the
+  same `@odata.etag` in between — a dashboard with changes that are not published is unverified. The two
+  FormXML reads are compared in the languages the published read carries (`lib/formxml-layers.js`): live,
+  in an organization with a second language provisioned, the saved read held a caption in that language in
+  every cell and the published read the base language alone, so a dashboard nothing had changed since its
+  publish was "not published", and every job whose surface it is failed with it. A caption in a language
+  the published read carries none of is set aside; a tile, a cell, an attribute, any text, a caption in a
+  language it carries, and a FormXML that is not one well-formed XML document are still changes, and two
+  equal texts are the same dashboard as before. **App membership is checked on the published layer:** sitemap tables union `app.tables`
   must have type-1 rows; each `app.mainForms` table gets an `app-main-forms` check comparing resolved
   active Main IDs with classified type-60 members. Missing members fail with “re-run the build”,
   extras fail with the Maker Forms remedy, and unreadable/unclassifiable membership is unverified,
@@ -2141,7 +2150,8 @@ scripts/
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
     sitemap-pages.js           ← pure GenPageId extractors (the TEXT readers `sitemapGenPages` / `sitemapGenPageIds`, which only refuse or report; `navigationGenPageIds`, which reads the navigation ELEMENTS through `strict-xml.js` and is what a page is deleted by) + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof, read as navigation, from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries); a read that fails is reported by value with the error itself as a non-enumerable `cause` (`withCause`), for the halt raised around it to decide from
-    strict-xml.js              ← `readXmlElements(xml, wanted)`: ONE strict reader of ONE XML document, in one pass, no dependency — comments, CDATA sections, processing instructions and attribute values are data, never elements; anything that is not exactly one well-formed document (or that the SDK's own xmldom would read differently) is `{ ok:false, detail }` with no element at all. `tests/strict-xml-oracle.test.js` holds it to xmldom over a generated corpus
+    strict-xml.js              ← `readXmlElements(xml, wanted, { spans? })`: ONE strict reader of ONE XML document, in one pass, no dependency — comments, CDATA sections, processing instructions and attribute values are data, never elements; anything that is not exactly one well-formed document (or that the SDK's own xmldom would read differently) is `{ ok:false, detail }` with no element at all. With `spans`, each element also says where it is in the text (`start`, `end`), for `formxml-layers.js`. `tests/strict-xml-oracle.test.js` holds it to xmldom over a generated corpus
+    formxml-layers.js          ← `sameFormXmlAcrossLayers(published, saved)`: whether a systemform's saved FormXML (RetrieveUnpublished) is its published one in the languages the published read carries — a caption in another language is set aside, anything else that differs (and a FormXML that is not one well-formed document, read by `strict-xml.js`) is a change; what verify's dashboard check decides "published" by
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
     deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there, each page with the hash of the source the pages phase read and sent (what the build's Griffel check compares a later source with)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode

@@ -46,6 +46,7 @@ const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
+const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
 //
@@ -390,6 +391,14 @@ function readerFor(sdk, appUnique, opts) {
     // a throwaway workspace (opts.isolatedReader — isolatedReaderFor), never the build's, whose copy may hold
     // unpushed edits or be written by another process mid-read. Callers without one (tests) read through `sdk`.
     //
+    // "IS the published dashboard" is decided in the languages the published read carries (lib/formxml-layers.js,
+    // sameFormXmlAcrossLayers), not by the two texts alone: the two reads do not carry the same languages. Live, in an
+    // organization with Spanish provisioned beside its base language, the draft read held a 3082 label in every cell
+    // that the published read did not, on a dashboard nothing had written since its publish, so every dashboard there
+    // was "not published". A label in a language the published read carries none of is set aside; anything else that
+    // differs — a tile, a cell, an attribute, a label in a language it carries — is a change, and a FormXML that is not
+    // one well-formed XML document is one too. Two equal texts are the same dashboard, as before.
+    //
     // Equal FormXML before and after does not prove the fetch between them read it: a draft saved and then put
     // back (A, then B, then A again) leaves both checks reading A while the fetch read B, and B's tiles passed. So
     // each check also takes the draft's `@odata.etag`, which RetrieveUnpublished returns in the body and which
@@ -407,7 +416,7 @@ function readerFor(sdk, appUnique, opts) {
         if (!draft || draft.status < 200 || draft.status >= 300) throw new Error(`the draft of dashboard ${dashboardId} could not be read (HTTP ${draft && draft.status})`);
         const draftXml = draft.body && draft.body.formxml;
         if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
-        if (draftXml !== row.formxml) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
+        if (!sameFormXmlAcrossLayers(row.formxml, draftXml)) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
         const version = draft.body['@odata.etag'];
         if (typeof version !== 'string' || version === '') throw new Error(`the version of dashboard ${dashboardId} could not be read`);
         return { xml: row.formxml, version };

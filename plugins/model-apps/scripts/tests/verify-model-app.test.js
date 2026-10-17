@@ -1135,6 +1135,237 @@ test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not w
   assert.strictEqual(disposed, 1, 'the throwaway workspace is disposed after the read');
 });
 
+// ── A dashboard's two layers in an organization with a second language ───────────────────────────────────────────────────────────
+// Live, in an organization whose base language is 1033 and which has Spanish (3082) provisioned too, verify called a dashboard
+// that nothing had written since its build created and published it "has changes that are not published", and failed the job
+// whose surface it is with it. The two reads it compares answered, cell by cell:
+//   published (a plain read of the systemform row)  <cell …><labels><label description="By Priority" languagecode="1033" /></labels><control …
+//   saved (RetrieveUnpublished)                      <cell …><labels><label description="By Priority" languagecode="1033" /><label description="…" languagecode="3082" /></labels><control …
+// and nothing else: without its four 3082 labels the saved read IS the published FormXML. These fixtures are that shape, with
+// the ids and the names replaced.
+const DASH_TILE_CLASS = '{E7A81278-8635-4D9E-8D4D-59480B391C5B}';
+const dashId = (n) => `{aaaaaaaa-0000-4000-8000-${String(n).padStart(12, '0')}}`;
+const DASH_VIEW_OPEN = '11111111-0000-4000-8000-000000000001';
+const DASH_VIEW_CRITICAL = '11111111-0000-4000-8000-000000000002';
+const DASH_VIEW_GOLD = '11111111-0000-4000-8000-000000000003';
+const DASH_CHART_PRIORITY = '22222222-0000-4000-8000-000000000001';
+const DASH_CHART_STATUS = '22222222-0000-4000-8000-000000000002';
+const dashChartCell = (n, caption, table, view, chart) => `<cell id="${dashId(n)}" colspan="1" rowspan="1" showlabel="true"><labels><label description="${caption}" languagecode="1033" /></labels>`
+  + `<control id="${dashId(n + 100)}" classid="${DASH_TILE_CLASS}"><parameters><TargetEntityType>${table}</TargetEntityType><ViewId>${view}</ViewId>`
+  + `<VisualizationId>${chart}</VisualizationId><ChartGridMode>Chart</ChartGridMode></parameters></control></cell>`;
+const dashListCell = (n, caption, table, view) => `<cell id="${dashId(n)}" colspan="1" rowspan="1" showlabel="true"><labels><label description="${caption}" languagecode="1033" /></labels>`
+  + `<control id="${dashId(n + 100)}" classid="${DASH_TILE_CLASS}"><parameters><TargetEntityType>${table}</TargetEntityType><ViewId>${view}</ViewId>`
+  + '<IsUserView>false</IsUserView><ChartGridMode>Grid</ChartGridMode><RecordsPerPage>10</RecordsPerPage></parameters></control></cell>';
+const dashboardXml = (rows) => `<form><tabs><tab id="${dashId(90)}" name="General" showlabel="true" expanded="true" verticallayout="true"><labels><label description="" languagecode="1033" /></labels>`
+  + `<columns><column width="100%"><sections><section id="${dashId(91)}" name="Section 1" showlabel="false" columns="2"><labels><label description="" languagecode="1033" /></labels><rows>`
+  + rows.map((cells) => `<row>${cells.join('')}</row>`).join('')
+  + '</rows></section></sections></column></columns></tab></tabs></form>';
+const DASH_CELLS = {
+  priority: dashChartCell(1, 'By Priority', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_PRIORITY),
+  status: dashChartCell(2, 'By Status', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_STATUS),
+  critical: dashListCell(3, 'Critical Queue', 'new_workorder', DASH_VIEW_CRITICAL),
+  gold: dashListCell(4, 'Gold Customers', 'new_customer', DASH_VIEW_GOLD),
+};
+const PUBLISHED_DASHBOARD = dashboardXml([[DASH_CELLS.priority, DASH_CELLS.status], [DASH_CELLS.critical, DASH_CELLS.gold]]);
+// The saved read of the same dashboard: a label in `lcid` after each cell's captions (live, the platform's 3082 one said the same for every cell).
+// A cell is where a `</labels>` is followed by the tile's `<control>`.
+const withCellCaptionsIn = (xml, lcid = 3082, text = 'Órdenes de trabajo') => xml.replace(/<\/labels><control /g, `<label description="${text}" languagecode="${lcid}" /></labels><control `);
+// The tiles the SDK's deserializer reads out of it (the chart tiles are what the dashboard check proves).
+const DASH_TILES = [
+  { type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_workorder', ViewId: DASH_VIEW_OPEN, VisualizationId: DASH_CHART_PRIORITY } },
+  { type: 'chart', name: 'By Status', parameters: { TargetEntityType: 'new_workorder', ViewId: DASH_VIEW_OPEN, VisualizationId: DASH_CHART_STATUS } },
+  { type: 'list', name: 'Critical Queue', parameters: { TargetEntityType: 'new_workorder', ViewId: DASH_VIEW_CRITICAL } },
+  { type: 'list', name: 'Gold Customers', parameters: { TargetEntityType: 'new_customer', ViewId: DASH_VIEW_GOLD } },
+];
+// The dashboard is the surface of a persona's job, as the live app's was, so a dashboard that fails takes the job with it.
+const DASH_SPEC = { solution: { publisherPrefix: 'new' }, app: { name: 'Field Ops', uniqueName: 'new_fieldops' }, entities: [], appShell: { areas: [] },
+  dashboards: [{ name: 'Field Ops Overview', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_workorder', viewId: 'v', visualizationId: 'c' }] }],
+  personas: [{ persona: 'Dispatcher', jobs: [{ name: 'Watch the field', surfaces: ['Field Ops Overview'] }] }] };
+// An SDK whose published read of the dashboard answers `published` and whose saved read answers `draft` — or, from the third read on
+// (the bracket's second pair), `laterPublished` / `laterDraft` / `laterVersion` when given. `chartOwner` is the table a tile's chart
+// belongs to. `owners` records each read of a tile's chart and view, which is the tile check running.
+function dashboardLayers({ published, draft, laterPublished, laterDraft, laterVersion, chartOwner = 'new_workorder' }) {
+  let reads = 0;
+  const owners = [];
+  const fetches = [];
+  return {
+    owners,
+    fetches,
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, o) => {
+      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) {
+        reads += 1;
+        return [{ formid: 'dash-1', formxml: laterPublished !== undefined && reads > 2 ? laterPublished : published }];
+      }
+      if (set === 'systemform') return [{ formid: 'dash-1', name: 'Field Ops Overview' }];
+      if (set === 'savedqueryvisualization') { owners.push(set); return [{ primaryentitytypecode: chartOwner }]; }
+      if (set === 'savedquery') { owners.push(set); return [{ returnedtypecode: 'new_workorder' }]; }
+      return [];
+    },
+    listArtifacts: async () => [],
+    dataverse: { get: async (url) => {
+      assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
+      reads += 1;
+      const later = reads > 2;
+      return { status: 200, body: { formxml: later && laterDraft !== undefined ? laterDraft : draft, '@odata.etag': later && laterVersion ? laterVersion : 'W/"1"' } };
+    } },
+    fetchArtifact: async (type, id) => { fetches.push([type, id]); },
+    getArtifact: async () => ({ components: DASH_TILES }),
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+}
+const dashboardVerify = async (layers) => {
+  const r = await verifySpec(DASH_SPEC, readerFor(dashboardLayers(layers), 'new_fieldops', {}));
+  return { check: r.checks.find((c) => c.kind === 'dashboard'), jobs: r.checks.filter((c) => c.kind === 'job-surface') };
+};
+const NOT_PUBLISHED = /its tiles could not be read \(dashboard dash-1 has changes that are not published — publish it, then verify\) — unverified, not proven correct/;
+
+test('readerFor + verifySpec: a published dashboard whose saved read carries a second language\u2019s captions too verifies — its tiles are checked, and its job passes with it', async () => {
+  const draft = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  assert.strictEqual(draft.split('languagecode="3082"').length - 1, 4, 'the live shape: a 3082 caption in each of the four cells');
+  assert.strictEqual(draft.replace(/<label description="Órdenes de trabajo" languagecode="3082" \/>/g, ''), PUBLISHED_DASHBOARD, 'and nothing else');
+  const sdk = dashboardLayers({ published: PUBLISHED_DASHBOARD, draft });
+  const r = await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}));
+  const check = r.checks.find((c) => c.kind === 'dashboard');
+  assert.deepStrictEqual([check.present, check.detail], [true, '']);
+  assert.deepStrictEqual(sdk.fetches, [['dashboard', 'dash-1']], 'the tiles were read');
+  assert.deepStrictEqual(sdk.owners, ['savedqueryvisualization', 'savedquery', 'savedqueryvisualization', 'savedquery'], 'and each chart tile\u2019s chart and view were checked');
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind === 'job-surface'), [], 'the job whose surface the dashboard is passes with it');
+  // It is the tiles that decide: a chart tile cross-wired to another table still fails over the same two reads.
+  const crossed = await dashboardVerify({ published: PUBLISHED_DASHBOARD, draft, chartOwner: 'new_customer' });
+  assert.strictEqual(crossed.check.present, false);
+  assert.match(crossed.check.detail, /chart tile 'By Priority' shows new_workorder, but its chart belongs to new_customer/);
+  assert.match(crossed.jobs[0] && crossed.jobs[0].detail, /surface "Field Ops Overview" is not deployed \(Field Ops Overview\)/);
+  // A language the published read does not carry is set aside whichever it is, and however many: a read in 1033 and 3082, a saved one with 1036 too.
+  const bilingual = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const trilingual = await dashboardVerify({ published: bilingual, draft: withCellCaptionsIn(bilingual, 1036, 'Ordres de travail') });
+  assert.deepStrictEqual([trilingual.check.present, trilingual.check.detail], [true, '']);
+});
+
+test('readerFor + verifySpec: a saved dashboard that differs from the published one in more than another language\u2019s captions is still not published', async () => {
+  const changes = [
+    ['a tile moved', dashboardXml([[DASH_CELLS.status, DASH_CELLS.priority], [DASH_CELLS.critical, DASH_CELLS.gold]])],
+    ['a tile added', dashboardXml([[DASH_CELLS.priority, DASH_CELLS.status], [DASH_CELLS.critical, DASH_CELLS.gold], [dashChartCell(5, 'By Region', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_STATUS)]])],
+    ['a tile removed', dashboardXml([[DASH_CELLS.priority, DASH_CELLS.status], [DASH_CELLS.critical]])],
+    ['a caption changed in the base language', PUBLISHED_DASHBOARD.replace('description="By Priority" languagecode="1033"', 'description="By Owner" languagecode="1033"')],
+    ['a base-language caption removed', PUBLISHED_DASHBOARD.replace('<label description="By Status" languagecode="1033" />', '')],
+    ['an attribute changed', PUBLISHED_DASHBOARD.replace(`<cell id="${dashId(1)}" colspan="1"`, `<cell id="${dashId(1)}" colspan="2"`)],
+    ['an attribute added', PUBLISHED_DASHBOARD.replace('name="Section 1" showlabel="false"', 'name="Section 1" showlabel="false" visible="false"')],
+    ['a tile\u2019s view changed', PUBLISHED_DASHBOARD.replace(`<ViewId>${DASH_VIEW_CRITICAL}</ViewId>`, `<ViewId>${DASH_VIEW_GOLD}</ViewId>`)],
+    ['a tile\u2019s table changed', PUBLISHED_DASHBOARD.replace('<TargetEntityType>new_customer</TargetEntityType>', '<TargetEntityType>new_workorder</TargetEntityType>')],
+  ];
+  for (const [what, saved] of changes) {
+    assert.notStrictEqual(saved, PUBLISHED_DASHBOARD, what);
+    // Each saved read also carries the second language, as live: it is the comparison without those captions that must still find the change.
+    const { check, jobs } = await dashboardVerify({ published: PUBLISHED_DASHBOARD, draft: withCellCaptionsIn(saved) });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+    assert.strictEqual(jobs.length, 1, `${what}: the job fails with its dashboard`);
+  }
+});
+
+test('readerFor + verifySpec: a caption changed in a language the published read carries is a change, however many languages it carries', async () => {
+  const bilingual = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const once = (xml, from, to) => { const i = xml.indexOf(from); assert.ok(i >= 0, from); return xml.slice(0, i) + to + xml.slice(i + from.length); };
+  for (const [what, draft] of [
+    ['a 3082 caption', once(bilingual, 'description="Órdenes de trabajo" languagecode="3082"', 'description="Pedidos" languagecode="3082"')],
+    ['a 3082 caption removed', once(bilingual, '<label description="Órdenes de trabajo" languagecode="3082" />', '')],
+    ['a 1033 caption', once(bilingual, 'description="Critical Queue" languagecode="1033"', 'description="Urgent Queue" languagecode="1033"')],
+  ]) {
+    const { check } = await dashboardVerify({ published: bilingual, draft });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+  }
+});
+
+test('readerFor + verifySpec: a FormXML that is not one well-formed XML document, on either side, is refused as before — never passed', async () => {
+  const draft = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const cutShort = PUBLISHED_DASHBOARD.slice(0, -'</form>'.length);
+  for (const [what, published, saved] of [
+    ['a saved read with a label left open', PUBLISHED_DASHBOARD, draft.replace('languagecode="3082" />', 'languagecode="3082">')],
+    ['a saved read with a bare "&" in a caption of the other language', PUBLISHED_DASHBOARD, draft.replace('Órdenes de trabajo', 'Órdenes & trabajo')],
+    ['a saved read with a second root element', PUBLISHED_DASHBOARD, `${draft}<form/>`],
+    ['a published read cut short', cutShort, withCellCaptionsIn(cutShort)],
+    ['a published read with a closing tag missing', PUBLISHED_DASHBOARD.replace('</rows>', ''), withCellCaptionsIn(PUBLISHED_DASHBOARD.replace('</rows>', ''))],
+    ['a published read that is no XML', 'not xml', draft],
+  ]) {
+    const sdk = dashboardLayers({ published, draft: saved });
+    const check = (await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}))).checks.find((c) => c.kind === 'dashboard');
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+    assert.deepStrictEqual(sdk.fetches, [], `${what}: no tile is read`);
+  }
+});
+
+test('readerFor + verifySpec: on two layers in two languages, a dashboard that changes while its tiles are read is still caught', async () => {
+  const draft = withCellCaptionsIn(PUBLISHED_DASHBOARD);
+  const moved = dashboardXml([[DASH_CELLS.status, DASH_CELLS.priority], [DASH_CELLS.critical, DASH_CELLS.gold]]);
+  for (const [what, later] of [
+    ['published again with a tile moved', { laterPublished: moved, laterDraft: withCellCaptionsIn(moved) }],
+    ['a draft saved and put back', { laterVersion: 'W/"3"' }],
+  ]) {
+    const { check } = await dashboardVerify({ published: PUBLISHED_DASHBOARD, draft, ...later });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, /dashboard dash-1 changed while it was being read — verify again/, what);
+  }
+});
+
+// The same two reads through the REAL bundle: the reader's own reads and the SDK's deserializer, over a stub of the HTTP client. What
+// the reader hands verify is the tiles the SDK reads out of the saved layer — here the live shape, a 3082 caption in every cell.
+test('readerFor REAL BUNDLE: the tiles of a published dashboard whose saved read carries a second language are read, and a real change is refused', async (t) => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const id = '33333333-0000-4000-8000-000000000001';
+  const run = async (published, draft) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dash-layers-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const reads = [];
+    const ok = (body) => ({ status: 200, headers: {}, body });
+    const httpClient = {
+      get: async (url) => {
+        const u = decodeURIComponent(url);
+        if (/EntityDefinitions\(LogicalName='systemform'\)/.test(u)) return ok({ EntitySetName: 'systemforms' });
+        if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`) && !u.includes(',')) {
+          reads.push('saved formxml');
+          return ok({ formxml: draft, '@odata.etag': 'W/"7"' });
+        }
+        if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()`)) {
+          reads.push('the SDK\u2019s fetch');
+          return ok({ formid: id, name: 'Field Ops Overview', description: null, formxml: draft, type: 0, objecttypecode: 'none', componentstate: 1, '@odata.etag': 'W/"7"' });
+        }
+        if (/\/systemforms\?/.test(u) && u.includes(`formid eq ${id}`)) {
+          reads.push('published formxml');
+          return ok({ value: [{ formid: id, formxml: published }] });
+        }
+        assert.fail(`unexpected GET ${u}`);
+      },
+      post: async (url) => assert.fail(`unexpected POST ${url}`),
+      patch: async (url) => assert.fail(`unexpected PATCH ${url}`),
+      put: async (url) => assert.fail(`unexpected PUT ${url}`),
+      delete: async (url) => assert.fail(`unexpected DELETE ${url}`),
+    };
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+    await sdk.initWorkspace();
+    const settled = await readerFor(sdk, 'new_fieldops', {}).dashboardComponents(id).then((tiles) => ({ tiles }), (error) => ({ error }));
+    return { ...settled, reads };
+  };
+  const live = await run(PUBLISHED_DASHBOARD, withCellCaptionsIn(PUBLISHED_DASHBOARD));
+  assert.ifError(live.error);
+  assert.deepStrictEqual(live.tiles.map((c) => [c.type, c.name, c.parameters.TargetEntityType, c.parameters.ViewId, c.parameters.VisualizationId]), [
+    ['chart', 'By Priority', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_PRIORITY],
+    ['chart', 'By Status', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_STATUS],
+    ['list', 'Critical Queue', 'new_workorder', DASH_VIEW_CRITICAL, undefined],
+    ['list', 'Gold Customers', 'new_customer', DASH_VIEW_GOLD, undefined],
+  ]);
+  assert.deepStrictEqual(live.reads, ['published formxml', 'saved formxml', 'the SDK\u2019s fetch', 'published formxml', 'saved formxml'], 'the tiles are read between the two checks');
+  // A tile moved in the saved layer, over the same second language: refused before the SDK reads anything.
+  const moved = await run(PUBLISHED_DASHBOARD, withCellCaptionsIn(dashboardXml([[DASH_CELLS.status, DASH_CELLS.priority], [DASH_CELLS.critical, DASH_CELLS.gold]])));
+  assert.match(moved.error && moved.error.message, /^dashboard 33333333-0000-4000-8000-000000000001 has changes that are not published — publish it, then verify$/);
+  assert.deepStrictEqual(moved.reads, ['published formxml', 'saved formxml']);
+});
+
 // A client per isolated read ran `az account get-access-token` once per dashboard. One client serves every read of a
 // run — the run's own when it is given — while each read still gets a fresh SDK in its own throwaway workspace.
 test('isolatedReaderFor shares one HTTP client across reads, each with a fresh SDK', async () => {

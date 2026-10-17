@@ -599,6 +599,15 @@ test('the planner, the skills and the authoring playbook run list-tables.js and 
   assert.match(skill, /App detection \(`node "\$\{PLUGIN_ROOT\}\/scripts\/apps\.js" list --env '<envUrl>'`\)/);
 });
 
+// `apps.js list` names an app by its saved layer, the name a maker sees in the designer (apps.test.js pins the script), where `pac model list` named it by
+// its published one: a published app with a rename not yet published is listed by the new name, which its users do not see yet. The three places that
+// tell an agent what `list` prints say which name it is.
+test('the planner, the authoring playbook and the edit flow say that apps.js list names an app by its saved layer', () => {
+  for (const parts of [['agents', 'genpage-planner.md'], ['references', 'authoring-flow.md'], ['skills', 'genpage', 'edit-flow.md']]) {
+    assert.match(squash(doc(...parts)), /`name` and `description` come from the app's saved layer \(what a maker sees in the designer\): an app whose rename is saved but not yet published \(`unpublishedChanges: true`\) is listed by its new name, which its users see only after a publish\./, parts.join('/'));
+  }
+});
+
 // A new app opens on the pages it is made with, and the platform refuses an empty navigation: the first page comes first, with no app, then the app is made from it, then the rest.
 test('the genpage skill creates a new app from its first page: no app in Phase 3, the first page with no app, apps.js create --page-id --publish, then the other pages', () => {
   const skill = squash(doc('skills', 'genpage', 'SKILL.md'));

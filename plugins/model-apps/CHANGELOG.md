@@ -22,7 +22,9 @@ killed run leaves behind.
   `pac model list` and `pac model list-tables`.** `apps.js list` prints every model-driven app, drafts included, with its id, name,
   unique name, description and two facts, apart: whether it is published (users can open it) and whether it has unpublished changes
   — `pac model list`'s "(Saved - Not Published)" was neither (a managed app an import brought in carried it although it is live; a
-  published app with a saved edit did not). `list-tables.js` prints the tables a comma-separated `--search` names — the same tables
+  published app with a saved edit did not). Its name and description are the app's saved layer's, what a maker sees in the designer:
+  a published app with a rename not yet published is listed by its new name, which users see only after a publish (`pac model list`
+  printed the published name). `list-tables.js` prints the tables a comma-separated `--search` names — the same tables
   as `pac model list-tables` — with `--exact`, only those whose logical name is a
   term, listing the terms that have no table, and with `--type custom|standard|all` only the custom or the standard ones.
 - **`scripts/apps.js create` makes an app that opens on generative pages, in place of `pac model create`.** It takes the pages
@@ -316,6 +318,13 @@ killed run leaves behind.
   English, so its stored Spanish captions are listed, to be checked in Power Apps with that language, not failed. A label map is
   compared at the languages the read carries and listed for the others; a caption in a language the read carries is compared
   strictly, and a stale one fails.
+- **Verify no longer calls a published dashboard "not published" in an environment with a second language.** `verify-model-app.js`
+  and the build's `--verify` check a dashboard's tiles only when the saved layer they are read from is the published dashboard, and
+  2.14.0 compared the two FormXML reads as text. Where another language is provisioned beside the base one, the saved read carries a
+  label in it in every cell and the published read does not, so a dashboard nothing had changed since its publish was listed as
+  having changes that are not published (unverified), and every job whose surface it is failed with it. The two reads are now
+  compared without the labels of a language the published read carries none of; a tile, a cell, an attribute, any other text, a
+  label in a language it carries, and a FormXML that is not one well-formed XML document are still changes.
 - **A label saved and not published on a form the app holds, or is about to hold, is no longer held back by the app's publish.**
   Dataverse leaves a saved form's label changes out of the published form when a publish that names only the app comes first,
   whoever saved them, and 2.14.0 published before the app only the tables whose existing views and forms the build reconciled. With

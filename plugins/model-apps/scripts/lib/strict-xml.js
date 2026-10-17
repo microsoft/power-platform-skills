@@ -1,6 +1,8 @@
 'use strict';
 // ONE strict reader of ONE XML document, in ONE pass, for the decision in this plugin that must not be wrong in the dangerous direction: which
 // elements a document holds, when a generative page is DELETED because an element of an app's sitemap names it (sitemap-pages.js, navigationGenPageIds).
+// It also reads the two FormXML documents verify compares to prove a dashboard's tiles are the published ones (formxml-layers.js): there, a document it
+// does not read is a difference, never the same document.
 //
 // WHY NOT REGULAR EXPRESSIONS. The navigation used to be read by three passes over the text, each taking one kind of construct out of it (comments, then
 // CDATA sections, then processing instructions) before the elements were matched. XML has no such order: a delimiter is data wherever the construct that
@@ -42,8 +44,9 @@
 //   - a sitemap has a handful of kinds of element: more than MAX_ELEMENT_NAMES of them are not read, which bounds the work of the search above.
 //
 // WHAT IT DOES NOT DO: validate against a schema, resolve namespaces (a prefix is part of a name: `m:SubArea` is not `SubArea`), or build a tree. It
-// answers with the attributes of the elements the caller asks for, and answers with NOTHING when any part of the document is not readable — never the
-// elements read before the fault, because the caller acts on an element only when it knows the whole document is one.
+// answers with the attributes of the elements the caller asks for — and, asked for `spans`, where each one is in the text — and answers with NOTHING
+// when any part of the document is not readable — never the elements read before the fault, because the caller acts on an element only when it knows
+// the whole document is one.
 //
 // Linear in the length of the text, in time and memory: no backtracking pattern runs over the document, only over one name or one declaration at a time, and the search for an
 // element's end tag (see `endTagHint`) costs one more look at the text for each KIND of element, of which a document may have MAX_ELEMENT_NAMES. A nesting depth costs one array
@@ -143,20 +146,28 @@ function position(xml, at) {
  * carriage return in the text of the value (not one written as `&#9;`) a space (https://www.w3.org/TR/xml/#AVNormalize). Names are exact — XML is case-sensitive —
  * and a namespace prefix is part of the name.
  *
+ * With `{ spans: true }` each element also says where it is in `xml`: `start` is the index of its "<", and `end` the index just past the end of its empty-element
+ * tag ("/>") or of its end tag (">"), so `xml.slice(start, end)` is the element, its content included — for a caller that takes elements out of the text (a "<" in
+ * a comment, a CDATA section, a processing instruction is never one, and an attribute value holds none). Without it, an element has those three keys and no other.
+ *
+ *   readXmlElements('<labels><label languagecode="3082" /></labels>', (name) => name === 'label', { spans: true })
+ *     → { ok: true, elements: [ { name: 'label', path: 'labels', attrs: { languagecode: '3082' }, start: 8, end: 37 } ] }
+ *
  * @param {*} xml the text of the document; anything that is not a string is refused
  * @param {(name: string) => boolean} wanted decides which elements are answered, by their names as written
- * @returns {{ ok: true, elements: { name: string, path: string, attrs: Object<string, string> }[] } | { ok: false, detail: string }}
+ * @param {{ spans?: boolean }} [options]
+ * @returns {{ ok: true, elements: { name: string, path: string, attrs: Object<string, string>, start?: number, end?: number }[] } | { ok: false, detail: string }}
  */
-function readXmlElements(xml, wanted) {
+function readXmlElements(xml, wanted, options) {
   try {
-    return { ok: true, elements: scan(xml, wanted) };
+    return { ok: true, elements: scan(xml, wanted, !!options && options.spans === true) };
   } catch (e) {
     if (!(e instanceof Refusal)) throw e;
     return { ok: false, detail: e.at === undefined ? e.message : `${e.message}, at ${position(xml, e.at)}` };
   }
 }
 
-function scan(xml, wanted) {
+function scan(xml, wanted, spans) {
   if (typeof xml !== 'string') throw new Refusal(undefined, 'the XML is not text');
   const illegal = ILLEGAL_CHAR.exec(xml);
   if (illegal) throw new Refusal(illegal.index, 'a character that XML does not allow');
@@ -166,6 +177,8 @@ function scan(xml, wanted) {
   // The names of the elements that are open, outermost first, and the default namespace each is in (a `xmlns="…"` attribute sets it, and an element inherits it).
   const open = [];
   const defaultNamespace = [];
+  // With `spans`, beside `open`: the answered element each open one is (null for one not asked for), so that its end tag can say where it ends.
+  const openAnswered = [];
   // For each kind of element, where the SDK's parser looks for the end of an element of that kind: the last place the text `</name>` is, or `</name` if there is none after the first start tag.
   const endTagHint = new Map();
   // The first thing the SDK's parser would misread (noteWhatTheSdkParserMisreads), refused once the document has been read to its end.
@@ -270,12 +283,19 @@ function scan(xml, wanted) {
       attrs[attr[0]] = value.text;
       p = value.end;
     }
-    if (wanted(name)) elements.push({ name, path: open.join('/'), attrs });
+    let answered = null;
+    if (wanted(name)) {
+      answered = { name, path: open.join('/'), attrs };
+      if (spans) answered.start = from;
+      elements.push(answered);
+    }
     if (selfClosing) {
+      if (spans && answered) answered.end = p;
       if (open.length === 0) state = EPILOG;
     } else {
       noteWhatTheSdkParserMisreads(from, p - 1, name, attrs);
       open.push(name);
+      if (spans) openAnswered.push(answered);
       state = CONTENT;
     }
     return p;
@@ -315,6 +335,10 @@ function scan(xml, wanted) {
     if (found[0] !== expected) throw new Refusal(from, `closing tag </${found[0]}> where </${expected}> is expected`);
     open.pop();
     defaultNamespace.pop();
+    if (spans) {
+      const answered = openAnswered.pop();
+      if (answered) answered.end = p + 1;
+    }
     if (open.length === 0) state = EPILOG;
     return p + 1;
   }
