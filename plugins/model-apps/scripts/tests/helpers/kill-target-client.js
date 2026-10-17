@@ -8,6 +8,11 @@ const path = require('node:path');
 const TARGET = path.join(__dirname, 'kill-target.js');
 const { systemTool } = require('./windows-system-tools.js');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// How long a test waits for one thing a process should do — a line, a file, its end. Each takes well under a second on a workstation and
+// seconds on a busy CI runner; a test that waits minutes for each of several things outlives the CI job, which is then cancelled with
+// nothing reported (a Windows runner was, at 20 minutes). Long enough to be patient, short enough that a failure says what happened.
+const WAIT_MS = 30000;
+const EXIT_WAIT_MS = 30000;
 
 // A pid that no process has: one that ran and ended just now.
 function deadPid() {
@@ -51,13 +56,20 @@ function startTarget(t, args, { env = {} } = {}) {
   const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
   let ended = false;
   exited.then(() => { ended = true; });
+  // Every wait on this process ends: a process that does not end in EXIT_WAIT_MS fails the wait with what it said, instead of
+  // holding the test file open until the CI job's own limit cancels the whole run with nothing reported.
+  const ending = (ms = EXIT_WAIT_MS) => {
+    let timer;
+    const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`the process ${child.pid} did not end in ${ms} ms: ${JSON.stringify({ stdout: out, stderr: err })}`)), ms); });
+    return Promise.race([exited, late]).finally(() => clearTimeout(timer));
+  };
   const target = {
     pid: child.pid,
-    exited,
+    get exited() { return ending(); },
     lines: () => out.split('\n').filter(Boolean),
     stderr: () => err,
     // The first line that matches, waiting for it; fails, with what the process said, if it ends first or the time runs out.
-    async waitFor(pattern, ms = 120000) {
+    async waitFor(pattern, ms = WAIT_MS) {
       const until = Date.now() + ms;
       for (;;) {
         const line = target.lines().find((l) => pattern.test(l));
@@ -76,7 +88,7 @@ function startTarget(t, args, { env = {} } = {}) {
     // SIGKILL cannot be caught. On Windows `kill` is TerminateProcess whatever the signal: the process gets no word either.
     async kill() {
       if (!ended) child.kill('SIGKILL');
-      return exited;
+      return ending();
     },
   };
   t.after(() => target.kill());
@@ -89,7 +101,7 @@ function isRunning(pid) {
 }
 
 // Waits for `check()` to answer something other than false/undefined/null, and answers it; fails, naming `what`, when the time runs out.
-async function waitUntil(check, what, ms = 60000) {
+async function waitUntil(check, what, ms = WAIT_MS) {
   const until = Date.now() + ms;
   for (;;) {
     const found = check();
@@ -137,7 +149,7 @@ async function holdExclusively(t, file) {
   await waitUntil(() => {
     if (child.exitCode !== null) throw new Error(`the hold on ${file} ended: ${err}`);
     return fs.existsSync(ready);
-  }, `the hold on ${file}`, 60000);
+  }, `the hold on ${file}`, WAIT_MS);
   return { release: async () => { fs.writeFileSync(release, ''); await exited; } };
 }
 

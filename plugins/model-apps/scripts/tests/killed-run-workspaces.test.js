@@ -62,7 +62,7 @@ test('a page workspace of a run that is still going is not touched by another ru
 // a hard kill of the run (SIGKILL, an agent's timeout) leaves the program running on POSIX. (On Windows a child ends with its launcher unless it was started detached, which is
 // how these tests make the program outlive the run there.) The programs are REAL, started by solution-settings.js through the process runner, over a fake pac.
 // The run says so when it makes the folder, once; nothing about the folder is changed after the program has started, and a sweep takes a lent folder only when it is old (LENT_KEEP_MS).
-const WORKER_TIME = 120000;
+const WORKER_TIME = 30000;
 const DAY = 24 * 60 * 60 * 1000;
 
 // The program is started the way pac is: an ordinary child of the run. On POSIX it outlives a run that is killed with no help at all; on Windows an ordinary child ends with its launcher

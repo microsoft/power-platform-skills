@@ -88,7 +88,8 @@ async function main() {
       // The folder exists from the moment it is made; the SDK has opened its workspace when it has written its manifest.
       if (folder && fs.existsSync(path.join(folder, 'manifest.json'))) { clearInterval(poll); say(`workspace ${folder}`); wait(); }
     }, 50);
-    setTimeout(() => { say('no workspace was made'); process.exit(1); }, 60000).unref();
+    // Less than the test waits for the line (helpers/kill-target-client.js WAIT_MS), so that what this process says reaches the test's failure.
+    setTimeout(() => { say('no workspace was made'); process.exit(1); }, 25000).unref();
   } else if (mode === 'pages-run') {
     const { makeGenpageSdk } = require('../../lib/genpage-sdk.js');
     const { FakeGenPageServer } = require('./fake-genpage-server.js');
