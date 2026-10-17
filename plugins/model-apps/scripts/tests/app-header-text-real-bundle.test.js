@@ -446,7 +446,7 @@ test('REAL BUNDLE: a complete rebuild over a header that is not plain text finis
     for (const pages of [false, true]) {
       const { sdk, writes, state } = await freshSdk(initial);
       const warnings = [];
-      const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, ...app }), { sdk, apply: true, publish: true, genpage: fakeGenpage(),
+      const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, ...app }), { sdk, apply: true, publish: true, genpage: fakeGenpage(), workspaceDir: workspaceDir(), env: 'https://contoso.crm.dynamics.com',
         phases: pages ? ['app-shell', 'pages', 'publish'] : ['app-shell', 'publish'], warn: (m) => warnings.push(m) });
       const label = `${what}${pages ? ', with the pages phase' : ''}`;
       assert.strictEqual(built.ok, true, label);
@@ -460,7 +460,7 @@ test('REAL BUNDLE: a complete rebuild over a header that is not plain text finis
   }
   // The neighbour: the same rebuild of a plain header writes it, as before.
   const { sdk, writes } = await freshSdk();
-  const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, name: 'Help Desk', description: 'Changed' }), { sdk, apply: true, publish: true, genpage: fakeGenpage(), phases: ['app-shell', 'publish'] });
+  const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, name: 'Help Desk', description: 'Changed' }), { sdk, apply: true, publish: true, genpage: fakeGenpage(), workspaceDir: workspaceDir(), env: 'https://contoso.crm.dynamics.com', phases: ['app-shell', 'publish'] });
   assert.strictEqual(built.ok, true);
   assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), [{ name: 'Help Desk', description: 'Changed' }]);
 });
