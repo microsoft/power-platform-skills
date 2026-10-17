@@ -248,12 +248,13 @@ killed run leaves behind.
   after the key, so only a second run made the key. A key over the name column of a table the build creates, in a spec that gives
   `primaryAttribute.maxLength`, whose label goes out in one language (a string, or a map that names one language), now waits for
   that step — the dry run lists it there — and is not sent when the step failed: the build stops with a message that names the
-  length and the cause (`alt-key-name-length-not-set`; a 429 or 503 is retried) instead of the platform's refusal, and the warning
-  for the length says the build stops at that key. A key labelled in several languages is still made before the length is set —
-  setting it reads the column with its labels, which would cost a multi-language create its other languages — so where the platform
-  refuses it the build warns, naming the key and its languages, and says to run the build again (the length is set as it stops) or
-  to label the key in one language. A key in a spec that gives no length keeps its place: give `maxLength` for a name column you
-  key.
+  length and the cause (`alt-key-name-length-not-set`) instead of the platform's refusal. The build runs that stop again exactly when
+  the length step's failure is one it runs again — a throttled or unavailable service, a timeout or a reset, or a lock, a SQL timeout,
+  a concurrent operation or a deadlock the service names by its code — and never because of the key's name; the warning for the length
+  says the build stops at that key. A key labelled in several languages is still made before the length is set — setting it reads the
+  column with its labels, which would cost a multi-language create its other languages — so where the platform refuses it the build
+  warns, naming the key and its languages, and says to run the build again (the length is set as it stops) or to label the key in one
+  language. A key in a spec that gives no length keeps its place: give `maxLength` for a name column you key.
 - **After the build's automatic retry of a transient failure, a table the failed attempt created gets the name column length that
   attempt could not set — and only that table.** When the attempt's own length step failed too, 2.14.0's retry found the table and
   left its name column as it was, without a word. The length is now carried to the retry, as the publishes an attempt owes are, set
@@ -266,9 +267,10 @@ killed run leaves behind.
   build created a table that exists, the teardown skipped its system-table check (and, where every answer was such a page, reported
   a table deleted that nothing deleted), the flow name check saw no clash, the verifier reported every declared table missing, and
   `list-tables.js --exact` named every searched table missing. The table-list read is now held to being a list for every SDK the
-  plugin makes (`TABLES_UNREADABLE`), so each fails with that reason: the build halts before any create (`table-list-unreadable`)
-  and its dry run says `unknown`, the teardown deletes nothing, the flow name check warns that it could not be made, the verify
-  fails, and `list-tables.js` exits 1. `{ "value": [] }` is still an empty answer, and no request is added or changed.
+  plugin makes (`TABLES_UNREADABLE`), so each fails with that reason: the build halts before any create (`table-list-unreadable`,
+  which it does not run again: a run a moment later reads the same answer) and its dry run says `unknown`, the teardown deletes
+  nothing, the flow name check warns that it could not be made, the verify fails, and `list-tables.js` exits 1. `{ "value": [] }` is
+  still an empty answer, and no request is added or changed.
 - **A rebuild applies a changed app name and description.** 2.14.0 set them when the app was created and never again. A rebuild now
   writes a changed, non-blank `app.name` / `app.description` to the existing app on the push it already makes for the navigation;
   nothing is written when they already match, a spec that leaves them out never blanks them, and the unique name never changes. The
