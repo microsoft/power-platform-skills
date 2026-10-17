@@ -739,6 +739,11 @@ function pageScenario(t) {
   const backend = {
     enumerateEnv: (...args) => pages.enumerateEnv(...args),
     fileVersions: (...args) => pages.fileVersions(...args),
+    // The two reads the build makes before it records a page as published, and again before it trusts that record (lib/sdk-build.js `provedVersions`, `publishesStillStanding`):
+    // the version of the page's own row beside its files', and its published copy read back. A backend without them certifies nothing, so every rebuild would publish the page
+    // again — and the fast route below would publish it ahead of the app.
+    projectVersions: (...args) => pages.projectVersions(...args),
+    publishedDiffers: (...args) => pages.publishedDiffers(...args),
     create: async (options) => {
       const result = await pages.create(options);
       s.org.pages.set(result.pageId, { uxagentprojectid: result.pageId, name: options.name, componentstate: 0 });
