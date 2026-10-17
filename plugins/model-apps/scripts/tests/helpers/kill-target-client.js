@@ -14,9 +14,29 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const WAIT_MS = 30000;
 const EXIT_WAIT_MS = 30000;
 
+// The processes the tests of this file started, for the watchdog below.
+const started = [];
+// A test file that starts real processes ends in seconds (each such file takes under half a minute on a workstation). If it is still
+// running after WATCHDOG_MS, something holds it open — a process that was not killed, a pipe of a program one of them started — and the
+// test runner would wait for it until the CI job's own limit cancels the whole run with nothing reported. So this file says what it
+// started and what is holding it open, and ends with a failure. The timer is unref'd: it never keeps a finished file alive.
+const WATCHDOG_MS = 5 * 60 * 1000;
+setTimeout(() => {
+  const handles = typeof process._getActiveHandles === 'function'
+    ? process._getActiveHandles().map((h) => (h && h.constructor && h.constructor.name) || typeof h)
+    : [];
+  process.stderr.write(`kill-target-client: this test file is still running after ${WATCHDOG_MS / 60000} minutes. `
+    + `Processes it started: ${JSON.stringify(started.map((s) => ({ args: s.args, pid: s.pid, ...s.said() })))}. `
+    + `Open handles: ${JSON.stringify(handles)}\n`, () => {
+    // What this file started goes with it: on POSIX a child outlives a parent that exits.
+    for (const s of started) { try { process.kill(s.pid, 'SIGKILL'); } catch { /* it ended */ } }
+    process.exit(1);
+  });
+}, WATCHDOG_MS).unref();
+
 // A pid that no process has: one that ran and ended just now.
 function deadPid() {
-  const ended = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
+  const ended = spawnSync(process.execPath, ['-e', ''], { windowsHide: true, timeout: 30000 });
   if (!Number.isInteger(ended.pid) || ended.pid <= 0) throw new Error('a process that ends was not started');
   return ended.pid;
 }
@@ -30,10 +50,10 @@ function privateTempRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kill-target-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   if (process.platform === 'win32') {
-    const who = spawnSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true });
+    const who = spawnSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/m.exec(String(who.stdout));
     if (!sid) throw new Error(`the user's SID could not be read: ${who.stdout}${who.stderr}`);
-    const set = spawnSync(systemTool('icacls'), [root, '/inheritance:r', '/grant:r', `*${sid[1]}:(OI)(CI)F`], { encoding: 'utf8', windowsHide: true });
+    const set = spawnSync(systemTool('icacls'), [root, '/inheritance:r', '/grant:r', `*${sid[1]}:(OI)(CI)F`], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     if (set.status !== 0) throw new Error(`the access list of ${root} could not be set: ${set.stdout}${set.stderr}`);
   }
   return root;
@@ -91,7 +111,18 @@ function startTarget(t, args, { env = {} } = {}) {
       return ending();
     },
   };
-  t.after(() => target.kill());
+  started.push({ args, pid: child.pid, said: () => ({ stdout: out.slice(-2000), stderr: err.slice(-2000), ended }) });
+  // After the test, the process is killed AND this side of its pipes is closed: a program it started may hold the other end of a
+  // pipe it was given, and an open pipe keeps this test file's process alive however its tests ended.
+  t.after(async () => {
+    try {
+      await target.kill();
+    } finally {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+    }
+  });
   return target;
 }
 

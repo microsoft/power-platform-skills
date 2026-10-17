@@ -711,7 +711,7 @@ const WINDOWS = process.platform === 'win32';
 const onlyWindows = { skip: !WINDOWS && 'Windows access control lists' };
 // icacls and whoami are the programs of Windows itself, started from System32 as the module that reads access lists starts them (helpers/windows-system-tools.js).
 const runWindows = (program, args) => {
-  const run = spawnSync(systemTool(program), args, { encoding: 'utf8', windowsHide: true });
+  const run = spawnSync(systemTool(program), args, { encoding: 'utf8', windowsHide: true, timeout: 30000 });
   if (run.error || run.status !== 0) throw new Error(`${program} ${args.join(' ')} → ${run.error ? run.error.message : run.status}: ${run.stdout}${run.stderr}`);
   return run.stdout;
 };
