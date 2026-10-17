@@ -279,8 +279,8 @@ killed run leaves behind.
   plugin makes (`TABLES_UNREADABLE`), so each fails with that reason: the build, which reads each table by name and turns to the list
   only when that read is not conclusive, stops at the first table whose existence it cannot establish instead of creating it
   (`table-list-unreadable`, which it does not run again: a run a moment later reads the same answer), keeping what its earlier steps
-  wrote (the solution, a global choice, the tables before it), and its dry run says `unknown`; the teardown deletes no table (the
-  steps before its tables still run), the flow name check warns that it could not be made, the verify fails, and `list-tables.js`
+  wrote (the solution, a global choice, the tables before it), and its dry run says `unknown`; the teardown deletes no table (its
+  other steps still run), the flow name check warns that it could not be made, the verify fails, and `list-tables.js`
   exits 1. `{ "value": [] }` is still an empty answer, and no request is added or changed.
 - **A rebuild applies a changed app name and description.** 2.14.0 set them when the app was created and never again. A rebuild now
   writes a changed, non-blank `app.name` / `app.description` to the existing app on the push it already makes for the navigation;

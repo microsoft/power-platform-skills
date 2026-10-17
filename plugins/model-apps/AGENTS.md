@@ -3773,12 +3773,14 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   as it does for any failed read, and now says so (a warning that names the flow and the table name).
   **`findExistingTable`** (`entity-provision.js`, the data-model phase and the dry run's plan: reuse or create) decides
   by the narrow `EntityDefinitions(LogicalName=…)` read when that is conclusive, and falls back to the list when it is
-  not; it halts the build before any create (`BuildHalt`, `table-list-unreadable`, as it does for a localized table
-  above, and `RETRY.NEVER`: a run again reads the same answer, and signing in again is the maker's) and the plan says
-  `unknown`, where "no tables" created a table that may exist. **The teardown's table step**
+  not; it halts the build before it creates that table (`BuildHalt`, `table-list-unreadable`, as it does for a localized
+  table above, and `RETRY.NEVER`: a run again reads the same answer, and signing in again is the maker's) and the plan
+  says `unknown`, where "no tables" created a table that may exist. What earlier steps wrote (the solution, a global
+  choice, the tables before it) stays: it is a halt, not a preflight. **The teardown's table step**
   (`sdk-teardown.js`: a system table to leave alone, or a custom one to delete) fails closed: the step fails with the
-  reason and no delete is sent. Read as "no tables" it skipped the system-table check, and where an environment answers
-  every request with a page it answered the DELETE with one too, which the SDK takes for done and `tolerateNotFound`
+  reason and no delete is sent, while teardown's other steps run as usual. Read as "no tables" it skipped the
+  system-table check, and where an environment answers every request with a page it answered the DELETE with one too,
+  which the SDK takes for done and `tolerateNotFound`
   for gone — a table reported deleted that nothing deleted; any other failure of that read keeps its documented
   handling, and the delete goes on. **The verifier's catalog** (`verify-model-app.js`) fails the verify, where "no
   tables" reported every declared table missing. `apps.js list` (`collectionRows`: `no readable result set`) and
