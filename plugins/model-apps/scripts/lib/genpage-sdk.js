@@ -185,13 +185,16 @@ const PROVEN_REFUSALS = Object.freeze(new Set([400, 403, 404, 429]));
 //     malformed (a change set never closed, a part with no status line or one cut off) as proving nothing — is the change set the
 //     service refused, and `refused({ status, outer, url })` says so. An answer that is cut off or incomplete inside, mixes statuses or carries any other status proves nothing about the change set and is not heard.
 // The answer itself is returned as it came, and every other request is the client's own. A client that has no `postRaw` is returned as it is: the SDK refuses to write a page through it anyway.
+// The wrapper is a delegating Proxy over an empty target, as the app-component scope that goes over it (lib/app-component-scope.js) and the table-list and app header guards the SDK factory puts
+// over both (lib/collection-answers.js, lib/app-header-text.js) are: `postRaw` is the watch's, and every other member is read from the CLIENT at the moment it is read, a method bound to the
+// client. So a client whose methods keep private state (a class with `#fields`) runs them on itself, a getter reads with the client as its receiver, a method the SDK holds detached from its
+// receiver still reaches the client, and a frozen client is never written to. (An `Object.create(client)` with `postRaw` assigned on it ran every other method with the wrapper as `this` —
+// "Cannot read private member #… from an object whose class did not declare it" — and could not be made over a frozen client's own `postRaw`: "Cannot assign to read only property".)
 // See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after and https://www.rfc-editor.org/rfc/rfc6585#section-4 (429)
 function watchThrottles(client, record, now = Date.now, refused) {
   if (!client || typeof client.postRaw !== 'function') return client;
   const { retryAfterMs, batchRetryAfterMs, isBatchThrottled, completeBatchStatus } = require('./sdk-http-client.js');
-  // `Object.create` keeps every other method, own or inherited, exactly as the client has it.
-  const watched = Object.create(client);
-  watched.postRaw = async (...args) => {
+  const postRaw = async (...args) => {
     const answer = await client.postRaw(...args);
     if (answer && (answer.status === 429 || answer.status >= 500)) {
       const asked = Math.max(retryAfterMs(answer.headers, now(), Infinity), batchRetryAfterMs({ body: answer.body }, now(), Infinity));
@@ -208,7 +211,14 @@ function watchThrottles(client, record, now = Date.now, refused) {
     }
     return answer;
   };
-  return watched;
+  return new Proxy({}, {
+    get: (_, key) => {
+      if (key === 'postRaw') return postRaw;
+      const value = client[key];
+      return typeof value === 'function' ? value.bind(client) : value;
+    },
+    has: (_, key) => key in client,
+  });
 }
 
 // The page's source as TEXT — the one place bytes become text, and it runs ONCE. The caller that reads a file calls this on the bytes it

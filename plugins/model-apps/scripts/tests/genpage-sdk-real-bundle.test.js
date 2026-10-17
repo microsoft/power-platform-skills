@@ -764,6 +764,57 @@ test('REAL BUNDLE: an update whose resend is refused (429) while the first send 
   });
 });
 
+// The transport the backend composes for the real bundle — the app-component scope over the throttle watch, under the SDK factory's guards — delegates every member to the client it is
+// given, so a client whose methods keep private state, and a frozen one, list, write, read and publish pages as a plain one does (a watch made with `Object.create` ran the client's methods
+// with itself as the receiver, and assigned `postRaw` over a frozen client's own: the backend could not even list the pages).
+class PrivateStateClient {
+  #http;
+  constructor(http) { this.#http = http; }
+  get(...args) { return this.#http.get(...args); }
+  post(...args) { return this.#http.post(...args); }
+  patch(...args) { return this.#http.patch(...args); }
+  put(...args) { return this.#http.put(...args); }
+  delete(...args) { return this.#http.delete(...args); }
+  postRaw(...args) { return this.#http.postRaw(...args); }
+  patchRaw(...args) { return this.#http.patchRaw(...args); }
+}
+const CLIENTS = [
+  ['a client whose methods keep private state', (server) => new PrivateStateClient(server.http())],
+  ['a frozen client', (server) => Object.freeze(server.http())],
+];
+
+for (const [what, clientOf] of CLIENTS) {
+  test(`REAL BUNDLE: ${what} — the backend lists the pages, creates one, reads it back and publishes it, and leaves the client as it was`, async () => {
+    const server = makeServer();
+    const client = clientOf(server);
+    const members = () => Object.getOwnPropertyNames(client).map((key) => [key, client[key]]);
+    const before = members();
+    await withBackend(server, async (genpage) => {
+      assert.deepStrictEqual(await genpage.enumerateEnv(), { ok: true, ids: [], pages: [] }, 'the listing');
+      const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+      assert.deepStrictEqual(projectIds(server), [out.pageId], 'one page');
+      assert.strictEqual(out.publish.kind, 'verified');
+      assert.strictEqual((await genpage.read(out.pageId)).source, SOURCE, 'read back as it was written');
+      assert.deepStrictEqual((await genpage.enumerateEnv()).ids, [out.pageId]);
+    }, { httpClient: client });
+    assert.deepStrictEqual(members(), before, 'no member of the client was written or added');
+  });
+}
+
+test('REAL BUNDLE: through a client whose methods keep private state, a create the service refuses with a throttle (429, Retry-After: 7) is still heard, waited out and sent again: one page', async () => {
+  const server = makeServer();
+  server.failBatch = (n) => (n === 1 ? { status: 429, headers: { 'retry-after': '7' } } : undefined);
+  const slept = [];
+  await withBackend(server, async (genpage) => {
+    const out = await genpage.create({ name: 'Overview', source: SOURCE, prompt: 'p', agentMessage: 'r' });
+    assert.deepStrictEqual(projectIds(server), [out.pageId], 'one page');
+    assert.strictEqual(server.batches.length, 2, 'the change set went out twice: the first refused, the second taken');
+    assert.deepStrictEqual(slept, [7000], 'the wait the service asked for, heard by the watch through the composed transport');
+    assert.strictEqual(out.publish.kind, 'verified', 'and the reads and the publish around the write go through the client too');
+    assert.deepStrictEqual(snapshot(server, out.pageId).messages, ['p', 'r'], 'the turn is in the conversation once');
+  }, { httpClient: new PrivateStateClient(server.http()), sleep: async (ms) => { slept.push(ms); }, random: () => 0 });
+});
+
 // ── A write the service REFUSES with a throttle (HTTP 429) is waited out and sent again ─────────────────────────────────────────────
 // What makes the second send safe: a 429 is the service declining to start the request, so the atomic change set committed nothing; the page's id and the turn's identity were minted before the first send, so a
 // request that WAS processed would collide on them and be rolled back whole; and the SDK's own version check runs again on the resend, so a page someone changed during the wait is refused, not overwritten.

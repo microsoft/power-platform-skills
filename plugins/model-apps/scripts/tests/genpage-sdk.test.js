@@ -680,6 +680,82 @@ test('watchThrottles: a COMPLETE refusal inside an HTTP 200 — every part a 400
   assert.strictEqual((await watched.postRaw(URL, 'body', {})).status, 200);
 });
 
+// The transport the page backend gives the SDK is the app-component scope's limit over this watch (lib/genpage-sdk.js), and the SDK factory puts the table-list and app header guards over that
+// (lib/maker-sdk.js). Every layer but the watch delegates to the client it is given — reads each member from it and runs a method ON it — so a client whose methods keep private state (`#fields`)
+// and a frozen client work through them. The watch must do the same: it listens to `postRaw` and to nothing else, and it neither runs another member with itself as the receiver ("Cannot read
+// private member") nor writes `postRaw` over the client's own ("Cannot assign to read only property"). Called detached from their receiver, as the SDK may hold them.
+const SEVEN = ['get', 'post', 'patch', 'put', 'delete', 'postRaw', 'patchRaw'];
+class PrivateStateClient {
+  #http;
+  constructor(http) { this.#http = http; }
+  get marker() { return this.#http; }
+  get(...args) { return this.#http.get(...args); }
+  post(...args) { return this.#http.post(...args); }
+  patch(...args) { return this.#http.patch(...args); }
+  put(...args) { return this.#http.put(...args); }
+  delete(...args) { return this.#http.delete(...args); }
+  postRaw(...args) { return this.#http.postRaw(...args); }
+  patchRaw(...args) { return this.#http.patchRaw(...args); }
+}
+function composedTransport(client, record = () => {}, refused) {
+  const { watchThrottles } = require('../lib/genpage-sdk.js');
+  const { makeAppComponentScope } = require('../lib/app-component-scope.js');
+  const { withVendoredCompiler } = require('../lib/maker-sdk.js');
+  const guarded = withVendoredCompiler((options) => options)({ httpClient: makeAppComponentScope().wrap(watchThrottles(client, record, () => Date.parse('2026-09-30T10:00:00Z'), refused)) });
+  return guarded.httpClient;
+}
+
+test('watchThrottles: the composed transport runs every member on the client itself — a client with private state, a frozen one, and all seven methods called detached from their receiver', async () => {
+  const OTHER = 'https://contoso.crm.dynamics.com/api/data/v9.2/other';
+  const answer = { status: 200, headers: { etag: 'W/"7"' }, body: { value: [] } };
+  const plain = () => {
+    const calls = [];
+    const http = Object.fromEntries(SEVEN.map((key) => [key, async (...args) => { calls.push(key); return answer; }]));
+    return { http, calls };
+  };
+  // A client whose methods reach private state: every method, and a getter that reads it, run on the client.
+  const own = plain();
+  const privateClient = new PrivateStateClient(own.http);
+  const composed = composedTransport(privateClient);
+  for (const key of SEVEN) assert.strictEqual(await composed[key].call({ unrelatedReceiver: true }, OTHER, {}, {}), answer, `${key}, detached`);
+  assert.deepStrictEqual(own.calls, SEVEN, 'each reached the client, once');
+  assert.strictEqual(composed.marker, own.http, 'a getter runs with the client as its receiver');
+  // A frozen client: nothing is written to it, and every member works.
+  const frozen = plain();
+  const frozenClient = Object.freeze({ ...frozen.http });
+  const before = Object.getOwnPropertyNames(frozenClient).map((key) => [key, frozenClient[key]]);
+  const composedFrozen = composedTransport(frozenClient);
+  for (const key of SEVEN) assert.strictEqual(await composedFrozen[key].call(undefined, OTHER, {}, {}), answer, `${key}, frozen, detached`);
+  assert.deepStrictEqual(frozen.calls, SEVEN);
+  assert.ok(Object.isFrozen(frozenClient));
+  assert.deepStrictEqual(Object.getOwnPropertyNames(frozenClient).map((key) => [key, frozenClient[key]]), before, 'the client is as it was: no member written, none added');
+  // What is not the client's is not invented: a member it lacks reads as absent, and `in` answers for the client.
+  assert.strictEqual(composedFrozen.notAMember, undefined);
+  assert.ok('patchRaw' in composedFrozen);
+});
+
+test('watchThrottles: through the composed transport, over a client with private state and over a frozen one, the watch still hears a refused $batch — the throttle\'s Retry-After and a refusal inside an HTTP 200', async () => {
+  const BATCH = 'https://contoso.crm.dynamics.com/api/data/v9.0/$batch';
+  const throttled = { status: 429, headers: { 'retry-after': '7' }, body: '{}' };
+  const part = ['--batchresponse_1', 'Content-Type: multipart/mixed; boundary=changesetresponse_1', '', '--changesetresponse_1', 'Content-Type: application/http', '', 'HTTP/1.1 403 Forbidden', '', '--changesetresponse_1--', '--batchresponse_1--', ''].join('\r\n');
+  const refusedWhole = { status: 200, headers: {}, body: part };
+  for (const [what, makeClient] of [
+    ['a client with private state', (http) => new PrivateStateClient(http)],
+    ['a frozen client', (http) => Object.freeze({ ...http })],
+  ]) {
+    const answers = [throttled, refusedWhole];
+    const http = Object.fromEntries(SEVEN.map((key) => [key, async () => (key === 'postRaw' ? answers.shift() : { status: 200, headers: {}, body: {} })]));
+    const asks = [];
+    const refusals = [];
+    const composed = composedTransport(makeClient(http), (ms) => asks.push(ms), (found) => refusals.push(found));
+    const options = { headers: { 'Content-Type': 'multipart/mixed; boundary=batch_1' } };
+    assert.strictEqual(await composed.postRaw.call(undefined, BATCH, '--batch_1--', options), throttled, `${what}: the throttle is passed on as it came`);
+    assert.deepStrictEqual(asks, [7000], `${what}: and its Retry-After is heard`);
+    assert.strictEqual(await composed.postRaw(BATCH, '--batch_1--', options), refusedWhole, `${what}: the HTTP 200 is passed on as it came`);
+    assert.deepStrictEqual(refusals, [{ status: 403, outer: 200, url: BATCH }], `${what}: and the refusal inside it is heard`);
+  }
+});
+
 test('create: an id the caller supplies is the one the page is created under, and beforeSend hears it before anything is sent — a resume can reuse the id it recorded', async () => {
   const sdk = new FakeSdk();
   const heard = [];
