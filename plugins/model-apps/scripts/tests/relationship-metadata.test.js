@@ -135,6 +135,33 @@ test('a 429 on the exact-name read is found:null with status 429', async () => {
   assert.ok(!c.paths.some((p) => p.includes('/EntityDefinitions(')));
 });
 
+// A read that failed is reported by value, and the halt raised around it (lib/entity-provision.js) hands the service's code to the build's retry (lib/retry-policy.js, serviceFailure's
+// `answered`): so the OData `error` of the answer rides along on the result — not enumerable, so a result prints and compares as it did — and only an object is one.
+test('a failed read carries the OData error of its answer, unseen: the exact-name read, its cast, and a candidate collection', async () => {
+  const LOCKED = { code: '0x8004F064', message: 'Cannot start the requested operation [Update] because there is another [EntityCustomization] running at this moment.' };
+  const TIMEOUT = { code: '0x80044151', message: 'SQL timeout expired.' };
+  const exact = await findRelationshipHolder(client([{ test: (p) => p.startsWith('/RelationshipDefinitions('), status: 409, body: { error: LOCKED } }]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.deepStrictEqual(exact, { found: null, status: 409, error: LOCKED.message }, 'the result is what it was');
+  assert.deepStrictEqual(exact.answered, LOCKED, 'and the answer\'s error rides along');
+  assert.ok(!Object.keys(exact).includes('answered'), 'unseen');
+  const cast = await findRelationshipHolder(client([
+    { path: ONE_TO_MANY_BASE, status: 200, body: { SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } },
+    { path: ONE_TO_MANY_CAST, status: 500, body: { error: TIMEOUT } },
+  ]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.deepStrictEqual([cast.found, cast.status, cast.answered], [null, 500, TIMEOUT], 'the read of the cast');
+  const collection = await findRelationshipHolder(client([
+    { test: (p) => p.startsWith('/RelationshipDefinitions('), status: 404, body: { error: { message: 'does not exist' } } },
+    { test: (p) => p.includes('/EntityDefinitions('), status: 500, body: { error: TIMEOUT } },
+  ]), 'contoso_project_contoso_task', { candidates: ['contoso_project'] });
+  assert.deepStrictEqual(collection, { found: null, status: 500, error: TIMEOUT.message });
+  assert.deepStrictEqual(collection.answered, TIMEOUT, 'a candidate collection');
+  const listed = await readRelationshipsOf(client([{ test: () => true, status: 500, body: { error: TIMEOUT } }]), 'contoso_project', 'OneToMany');
+  assert.deepStrictEqual([listed, listed.answered], [{ ok: false, status: 500, error: TIMEOUT.message }, TIMEOUT], 'and the collection read itself');
+  // A body whose error is not an object carries none.
+  const plain = await findRelationshipHolder(client([{ test: () => true, status: 500, body: { error: 'SQL timeout expired.' } }]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.strictEqual(plain.answered, undefined);
+});
+
 test('projectionHolder turns the SDK row into ends before compare or describe', () => {
   const { projectionHolder } = require(path.join(__dirname, '..', 'lib', 'relationship-metadata.js'));
   const one = projectionHolder(

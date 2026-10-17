@@ -2237,7 +2237,7 @@ test('a key that waits and that the platform then refuses, or finds already ther
 // These run the real retry loop over the real engine (runSdkBuild, data-model phase), the real SDK and the stub. `faults` says how the
 // stub misbehaves: the first N requests of a kind answer 503 — and, for the writes of the table, change nothing. `arrange(dv)` is a
 // last word on the stub, made after the faults are in place: a test wraps the transport in it (swapAfterIdentityRead).
-async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {}, arrange } = {}) {
+async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {}, arrange, halts = false } = {}) {
   const { buildModelApp } = require('../build-model-app.js');
   const { runSdkBuild } = require('../lib/sdk-build.js');
   const dv = fakeDataverse(dataverse);
@@ -2282,16 +2282,18 @@ async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {}, arr
     }
   };
   const journal = [];
+  // `halts`: a build that stops for good answers with its halt (`halt`) instead of throwing, so what each attempt did can still be read.
+  let halt;
   const result = await buildModelApp(spec, { apply: true, env: ORG, retryDelayMs: 0 }, {
     sdk, provisionSdk: sdk, runBuild,
     // The pause between two attempts is where another maker can change the environment (`faults.between`).
     sleep: async () => { if (faults.between) await faults.between(dv, attempts.length); },
     journal: { path: 'x', record: (e) => journal.push(e), close: () => {} },
     discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
-  });
+  }).catch((err) => { if (!halts) throw err; halt = err; return undefined; });
   const requests = (n) => dv.log.slice(attempts[n - 1].from, attempts[n - 1].to);
   const steps = (n, pattern) => events.filter((e) => e.attempt === n && e.status !== 'start' && pattern.test(e.label)).map((e) => `${e.status} ${e.label}`);
-  return { result, dv, attempts, events, warnings, journal, requests, steps, retries: journal.filter((e) => e.status === 'retry').length };
+  return { result, halt, dv, attempts, events, warnings, journal, requests, steps, retries: journal.filter((e) => e.status === 'retry').length };
 }
 
 // A table with a File column, which has its own request (so a fault can hit it), and a name column of 120 characters, with a key over
@@ -2384,6 +2386,73 @@ test('a length step that fails on its own stops the build at the key that waited
   assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120);
   assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
   assert.deepStrictEqual(run.attempts.map((a) => (a.owedIn || []).length), [0, 1]);
+});
+
+// The engine's own requests — the read of the column's length, the read of which table answers to a name and the update that pays a carried length (readTextColumn,
+// readTableIdentity, updateTextColumnLengthById: the last two address the table and the column by their ids) — fail as the engine's error around the answer (statusError),
+// and the answer's OData `error.code` rides on it to the build's retry (lib/retry-policy.js), as it rides on the SDK's ConnectionError for the first attempt's update
+// (the SDK's own updateColumn). A condition the service names by its code is run again whatever the status; any other status is final, whatever the answer's words say.
+// Here the first attempt's update is refused with a 503 — the key that waited for it stops that attempt, and the retry is handed the debt — and the retry's update, the
+// engine's own request, gets the answer under test.
+const odataAnswer = (status, code, message) => ({ status, headers: {}, body: { error: { ...(code ? { code } : {}), message } } });
+const SERVICE_UNAVAILABLE = odataAnswer(503, null, 'Service Unavailable');
+const SQL_TIMEOUT = odataAnswer(500, '0x80044151', 'SQL timeout expired.');
+const DEADLOCK_VICTIM = ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+// Each update of the name column's length gets the next answer; one that has none goes through.
+const lengthUpdates = (...answers) => { let n = 0; return () => { n += 1; return answers[n - 1] || null; }; };
+
+for (const [what, refused] of [
+  ['SQL giving up waiting (500, 0x80044151)', SQL_TIMEOUT],
+  ['a customization lock (409, 0x8004F064)', odataAnswer(409, '0x8004F064', 'Cannot start the requested operation [Update] because there is another [EntityCustomization] running at this moment.')],
+  ['a SQL deadlock victim (500, 0x80044150, Sql Number: 1205 last)', odataAnswer(500, '0x80044150', DEADLOCK_VICTIM)],
+]) {
+  test(`the update that pays a carried length, refused for ${what}: the build runs again, and the next attempt sets the length and makes the key`, async () => {
+    const run = await buildWithRetries(retriedTicket(), { dataverse: { updateFails: lengthUpdates(SERVICE_UNAVAILABLE, refused) } });
+    assert.strictEqual(run.result.ok, true, 'the build completed');
+    assert.strictEqual(run.retries, 2, 'the first attempt stopped at the key for the 503, the second for the answer under test, and the third completed');
+    assert.deepStrictEqual(run.steps(2, /^(primary column length|alt key) /), [`error primary column length new_ticket.new_name -> 120${OWED_NOTE}`, 'error alt key new_ticket.new_namekey']);
+    assert.deepStrictEqual(run.steps(3, /^(primary column length|alt key) /), [`ok primary column length new_ticket.new_name -> 120${OWED_NOTE}`, 'ok alt key new_ticket.new_namekey']);
+    assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120, 'the third attempt set the length');
+    assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey'], 'and made the key');
+  });
+}
+
+for (const [what, refused] of [
+  ['a unique-key violation (500, 0x80044150) whose message quotes the deadlock\'s number in front of its own', odataAnswer(500, '0x80044150', " Sql error: Violation of UNIQUE KEY constraint 'ndx_name'. Cannot insert duplicate key. The duplicate key value is (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627")],
+  ['a 400 under a code that names no condition, whose words say to try again', odataAnswer(400, '0x80040203', 'The attribute cannot be changed right now. Please try again later.')],
+  ['a 500 whose message names the SQL timeout\'s code under another code', odataAnswer(500, '0x80040216', 'An unexpected error occurred (0x80044151). SQL timeout expired.')],
+]) {
+  test(`the update that pays a carried length, refused with ${what}: final — the build stops at the key and does not run again`, async () => {
+    const { isTransientHalt } = require('../build-model-app.js');
+    const run = await buildWithRetries(retriedTicket(), { dataverse: { updateFails: lengthUpdates(SERVICE_UNAVAILABLE, refused) }, halts: true });
+    assert.ok(run.halt, 'the build stopped');
+    assert.strictEqual(run.halt.code, 'alt-key-name-length-not-set');
+    assert.strictEqual(isTransientHalt(run.halt), false, 'a status that says no, and no code that names a condition a run again can ride out');
+    assert.deepStrictEqual([run.attempts.length, run.retries], [2, 1], 'the 503 of the first attempt was run again, the answer of the second was not');
+    assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 850, 'the length was never set');
+    assert.strictEqual(run.dv.tables.get('new_ticket').keys.size, 0, 'and the key was never asked for');
+  });
+}
+
+test('the read of the column\'s length, answered 500 0x80044151 in the attempt that created the table: the build runs again, and the retry sets the length and makes the key', async () => {
+  const run = await buildWithRetries(retriedTicket(), { dataverse: { lengthRead: (n) => (n === 1 ? SQL_TIMEOUT : undefined) } });
+  assert.strictEqual(run.result.ok, true, 'the build completed');
+  assert.strictEqual(run.retries, 1, 'the first attempt stopped at the key, and the read\'s answer is run again');
+  assert.deepStrictEqual(run.steps(2, /^(primary column length|alt key) /), [`ok primary column length new_ticket.new_name -> 120${OWED_NOTE}`, 'ok alt key new_ticket.new_namekey']);
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120);
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
+});
+
+test('a 404 on the read of which table answers to the name is still "no table" — the debt\'s table is gone and left alone — and never a failure the build judges', async () => {
+  const run = await buildWithRetries(retriedTicket({ key: false }), {
+    dataverse: { updateFails: lengthUpdates(SERVICE_UNAVAILABLE), identityRead: (n) => (n === 1 ? odataAnswer(404, '0x80040217', 'Could not find entity new_ticket.') : undefined) },
+    faults: { createFile: 1 },
+  });
+  assert.strictEqual(run.result.ok, true, 'the build completed');
+  assert.strictEqual(run.retries, 1, 'only the File column\'s 503 was run again');
+  assert.deepStrictEqual(run.steps(2, /^primary column length /), ['skip primary column length new_ticket.new_name (the table the build created is gone — kept)']);
+  assert.deepStrictEqual(run.requests(2).filter((r) => r.method === 'PUT'), [], 'nothing was written to a table the build cannot prove is its own');
+  assert.ok(run.warnings.some((w) => w.attempt === 2 && /the table new_ticket this build created is no longer there/.test(w.text)), 'and it says so');
 });
 
 test('whichever write of the build is refused with a 503, the build converges: the table has the length the spec asks for and the key exists', async () => {

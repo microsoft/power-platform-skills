@@ -430,6 +430,71 @@ test('judgeFailure: a SQL deadlock victim — the generic SQL error code and the
   assert.strictEqual(isTransientHalt(new Error(quoting(2627))), false, 'the words of an error with no status: a unique key that quotes the deadlock\'s number is not one');
 });
 
+// The build's engine reads some answers with requests of its own (lib/entity-provision.js: a column's length, which table answers to a name, the update of a column by its ids) and words the
+// failure itself (statusError, made by serviceFailure). The OData `error` of such an answer rides on that failure (`answered`), and the rule reads it as it reads the body the SDK's
+// ConnectionError keeps: its `code`, and — for a deadlock's signature — its own `message`; never the plugin's sentence around it, which quotes what the maker named, and never a code that is
+// merely MENTIONED. Raw, and as statusError words it:
+//   {"error":{"code":"0x80044151","message":"SQL timeout expired."}}   ->   could not read the column's length (HTTP 500: SQL timeout expired.)
+const recordedAnswerOf = (status, words, code, around = 'could not read the column\'s length') => serviceFailure(`${around} (HTTP ${status}: ${words})`, { status, words: `HTTP ${status}: ${words}`, answered: { ...(code ? { code } : {}), message: words } });
+
+test('judgeFailure: an answer the engine read with a request of its own carries its OData code to the rule — a condition the service names by its code is run again on any status, as through the SDK', () => {
+  for (const [code, name] of TRANSIENT_CODES) {
+    for (const status of [400, 409, 412, 500]) {
+      const failure = recordedAnswerOf(status, 'nothing a rule could read here', code);
+      assert.strictEqual(isTransientHalt(failure), true, `${status} ${code} (${name})`);
+      assert.strictEqual(retryPolicyFor(failure), RETRY.SERVICE, `${status} ${code} (${name})`);
+      assert.strictEqual(isTransientHalt(new BuildHalt('data-model failed', { phase: 'data-model', code: 'x', cause: failure, retry: retryPolicyFor(failure) })), true, `${status} ${code} (${name}): through the halt the runner raises`);
+    }
+  }
+  // Behind the wrapper a step puts around it (alignPrimaryNameLength: "asked 120, the platform made 850: …"), as a step's failure reaches the build.
+  const step = serviceFailure('asked 120, the platform made 850: the update of the column was refused (HTTP 500: SQL timeout expired.)', { cause: recordedAnswerOf(500, 'SQL timeout expired.', '0x80044151', 'the update of the column was refused') });
+  assert.strictEqual(isTransientHalt(step), true, 'behind the step\'s own wrapper');
+  // Everything else of the rule is as it was: a status that says no, with no such code, is final whatever the answer's words or the plugin's sentence say.
+  for (const [what, failure] of [
+    ['the SQL timeout in words, under another code', recordedAnswerOf(500, 'SQL timeout expired.', '0x80040216')],
+    ['the SQL timeout in words, and no code', recordedAnswerOf(500, 'SQL timeout expired.')],
+    ['a code merely named in the answer\'s message, under another code', recordedAnswerOf(500, 'An unexpected error occurred (0x80044151). Please try again later.', '0x80040216')],
+    ['a 400 under a code that names no condition', recordedAnswerOf(400, 'The attribute cannot be changed right now. Please try again later.', '0x80040203')],
+    ['a transient code named in the plugin\'s own sentence, not in the answer', serviceFailure('could not read 0x80044151 (HTTP 500: An unexpected error occurred.)', { status: 500, words: 'HTTP 500: An unexpected error occurred.', answered: { code: '0x80040216', message: 'An unexpected error occurred.' } })],
+  ]) {
+    assert.strictEqual(isTransientHalt(failure), false, what);
+    assert.strictEqual(retryPolicyFor(failure), RETRY.NEVER, what);
+  }
+  // Only an object is an answer's error, and only a string `code` in it is a code: anything else records nothing.
+  for (const answered of ['0x80044151', ['0x80044151'], [{ code: '0x80044151' }], null, undefined, 42, { code: 0x80044151 }, { code: ['0x80044151'] }, { message: '0x80044151' }]) {
+    const failure = serviceFailure('could not read the column\'s length (HTTP 500: x)', { status: 500, words: 'HTTP 500: x', answered });
+    assert.strictEqual(isTransientHalt(failure), false, JSON.stringify(answered));
+  }
+  // An explicit never still wins over the code it carries, here as everywhere.
+  assert.strictEqual(isTransientHalt(Object.assign(recordedAnswerOf(500, 'SQL timeout expired.', '0x80044151'), { transient: false })), false, 'an explicit never on it');
+  assert.strictEqual(isTransientHalt(refusal('the spec says no', { cause: recordedAnswerOf(500, 'SQL timeout expired.', '0x80044151') })), false, 'a refusal around it');
+  // What is recorded is not one of the error's own enumerable properties: the error prints, serializes and compares as it did.
+  const recorded = recordedAnswerOf(409, 'locked', '0x8004F064');
+  assert.deepStrictEqual(Object.keys(recorded).sort(), ['retryText', 'statusCode']);
+  assert.ok(!JSON.stringify(recorded).includes('0x8004F064'));
+});
+
+test('judgeFailure: a SQL deadlock victim in an answer the engine read itself is read from that answer — its code and its own message — and never from the plugin\'s sentence around it', () => {
+  const victim = recordedAnswerOf(500, DEADLOCK_WORDS, '0x80044150');
+  assert.strictEqual(isTransientHalt(victim), true);
+  assert.strictEqual(retryPolicyFor(victim), RETRY.SERVICE);
+  assert.strictEqual(isTransientHalt(recordedAnswerOf(500, quoting(1205, 'Sql Number: 547'), '0x80044150')), true, 'a name in front of it that quotes another SQL number');
+  for (const [what, failure] of [
+    ['a unique key (2627) after a name that quotes the deadlock\'s number', recordedAnswerOf(500, quoting(2627), '0x80044150')],
+    ['the code and another SQL number', recordedAnswerOf(500, sqlNumber(547), '0x80044150')],
+    ['the signature under another code', recordedAnswerOf(500, DEADLOCK_WORDS, '0x80040220')],
+    ['the signature and no code', recordedAnswerOf(500, DEADLOCK_WORDS)],
+    // The plugin's sentence goes on after the answer, and what it quotes there — a maker's column — can spell the signature: the answer is what is read.
+    ['a unique key, in a sentence that quotes a column spelled like the signature after the answer', serviceFailure(`the update of the column was refused (HTTP 500: ${quoting(2627)}) for column 'Sql Number: 1205'`, { status: 500, words: `HTTP 500: ${quoting(2627)}`, answered: { code: '0x80044150', message: quoting(2627) } })],
+  ]) {
+    assert.strictEqual(isTransientHalt(failure), false, what);
+    assert.strictEqual(retryPolicyFor(failure), RETRY.NEVER, what);
+  }
+  // And the other way round: an answer that is a deadlock victim is one, whatever the sentence around it quotes after it.
+  const quotedAfter = serviceFailure(`the update of the column was refused (HTTP 500: ${DEADLOCK_WORDS}) for column 'Sql Number: 547'`, { status: 500, words: `HTTP 500: ${DEADLOCK_WORDS}`, answered: { code: '0x80044150', message: DEADLOCK_WORDS } });
+  assert.strictEqual(isTransientHalt(quotedAfter), true, 'the plugin\'s words after the answer do not hide it');
+});
+
 test('judgeFailure: a failure that carries no HTTP status at all is still judged by the service\'s own words — the fallback is for what has no structure', () => {
   assert.strictEqual(isTransientHalt(new Error('The service says: try again later.')), true);
   assert.strictEqual(isTransientHalt(Object.assign(new Error('x'), { retryText: 'SQL timeout expired.' })), true);

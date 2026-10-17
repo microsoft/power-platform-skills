@@ -29,6 +29,7 @@ const {
 const { BuildHalt, makeRunner, requireSuccessfulPush, findExistingTable, resolveLanguageCode, checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
 const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
 const { SdkError, ConnectionError, createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+const { serviceFailure } = require('../lib/retry-policy.js');
 
 const SCRIPTS = path.join(__dirname, '..');
 // What a maker may call anything — a view, a role, a persona, a flow, a folder — and what no halt may be judged by.
@@ -218,6 +219,9 @@ const ECHOED_UNIQUE_KEY = " Sql error: Violation of UNIQUE KEY constraint 'ndx_n
 // Failures a run again cannot change, as the SDK, the service and the machine report them — every one with a label that reads as transient where a label can be.
 // What `enrichDefaultViews` raises when the publish of the views it saved fails: an SdkError of its own code, the publish error's message inside it, and no cause.
 const wrappedPublish = (answer, table = 'contoso_order') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
+// What the build's engine words around an answer it read with a request of its own (lib/entity-provision.js statusError: a column's length, which table answers to a name, the update of a
+// column by its ids): the answer's OData `error` rides on the failure (`answered`), and the rule reads its code as it reads the code the SDK's ConnectionError keeps.
+const engineAnswer = (status, message, code) => serviceFailure(`the update of the column was refused (HTTP ${status}: ${message})`, { status, words: `HTTP ${status}: ${message}`, answered: { ...(code ? { code } : {}), message } });
 const REFUSALS = [
   ['a refusal in the SDK\'s words', () => new Error('same-name role is managed and cannot be adopted')],
   ['a typed validation error that quotes the label', () => Object.assign(new Error(`View '${LABEL}' is invalid`), { code: 'VALIDATION_ERROR' })],
@@ -237,6 +241,10 @@ const REFUSALS = [
   // A certificate that does not verify is a fact about this machine's trust store: its names quote anything, and no word in them — a reset, a timeout — makes it a blip. Decided by Node's code when the error carries one, and by the certificate's own phrases when it does not.
   ['a certificate that does not name the host, whose alternative name spells a transport code (Node\'s code on the error)', () => transportFailure(ALTNAME_FAILURE, 'ERR_TLS_CERT_ALTNAME_INVALID')],
   ['the same failure from a transport that reports no code', () => transportFailure(ALTNAME_FAILURE)],
+  // An answer the engine read itself is judged as the SDK's: a status that says no is final, and a code merely NAMED in its words, or a deadlock's number that a name quotes, is not the code.
+  ['an answer the engine read itself: a 400 under a code that names no condition, whose words say to try again', () => engineAnswer(400, `The attribute ${LABEL} cannot be changed right now. Please try again later.`, '0x80040203')],
+  ['an answer the engine read itself: a 500 whose message names the SQL timeout\'s code under another code', () => engineAnswer(500, 'An unexpected error occurred (0x80044151). SQL timeout expired.', '0x80040216')],
+  ['an answer the engine read itself: the generic SQL error code beside a unique-key violation whose message quotes the deadlock signature', () => engineAnswer(500, ECHOED_UNIQUE_KEY, '0x80044150')],
 ];
 // Failures that ARE the service's to say, whatever anything is called.
 const GENUINE = [
@@ -252,6 +260,10 @@ const GENUINE = [
   // SQL chose the request as a deadlock victim and rolled it back: the generic SQL error code, and the platform's signature in the service's own answer.
   ['a SQL deadlock victim, named by the generic SQL error code and the platform\'s signature in its answer', () => new ConnectionError(`${ENV}/api/data/v9.2/roles`, 500, ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', { error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } })],
   ['a reset of the connection, with Node\'s code on the error the client raised', () => transportFailure('read ECONNRESET', 'ECONNRESET')],
+  // The same conditions in an answer the engine read with a request of its own: the code of that answer rides on the engine's failure, and is read as the SDK's is.
+  ['an answer the engine read itself: a customization lock, named by the code of its answer', () => engineAnswer(409, 'Cannot start the requested operation [Update] because there is another [EntityCustomization] running at this moment.', '0x8004F064')],
+  ['an answer the engine read itself: SQL giving up waiting, named by the code of its answer', () => engineAnswer(500, 'SQL timeout expired.', '0x80044151')],
+  ['an answer the engine read itself: a SQL deadlock victim, the generic SQL error code and the platform\'s signature in its own message', () => engineAnswer(500, ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205', '0x80044150')],
 ];
 
 // The spec every row's retry loop runs on: valid, and not the point.

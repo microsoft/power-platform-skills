@@ -12,7 +12,8 @@
 //   2. STATUS. The HTTP status the service answered — 429 (throttled) and 502, 503, 504 (the gateway or the service is down or behind) — on any error of the chain. The SDK's own
 //      ConnectionError carries it as `statusCode`, and 0 for a failure of the transport. See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/api-limits
 //      and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors
-//   3. CODE. A condition the service names by the `error.code` of its answer — the OData error the SDK keeps, as the cause of its ConnectionError — is run again on any status: a customization or
+//   3. CODE. A condition the service names by the `error.code` of its answer — the OData error the SDK keeps, as the cause of its ConnectionError, or the one the engine's own failure records of an answer
+//      it read with a request of its own (serviceFailure's `answered`) — is run again on any status: a customization or
 //      solution lock, SQL giving up waiting, a concurrent request on the same record (TRANSIENT_SERVICE_CODES), the lag of a column the build has only just created (the spec says which are its), and a SQL
 //      deadlock victim (isDeadlockVictimAnswer: the generic SQL error code AND, in the service's own answer, the platform's deadlock signature). Never the words beside a code on their own: see 5.
 //   4. TRANSPORT. A timeout or a reset of the connection. The HTTP client puts Node's own `code` on the error it throws for a request that failed, and the SDK keeps that error as the cause of its ConnectionError of status 0: when the
@@ -36,7 +37,8 @@
 //     it wraps (`retry: retryPolicyFor(error)` / `...retryFrom(error)`), which is NEVER for a failure that says so or is typed, and SERVICE otherwise. `recoverable` is not a retry decision:
 //     it says a re-run of the phase can continue, not that the service will have recovered.
 //   - an error the build's engine raises itself is made by `refusal(message)` (deterministic: the spec, the environment's state, a local file) or `serviceFailure(message, …)` (the plugin's
-//     words around a failure of the service). tests/halt-retry-policy.test.js enumerates every halt in the sources and holds each to a table, so a halt added without a policy fails there.
+//     words around a failure of the service — and, for an answer the engine read with a request of its own, that answer's OData error, `answered`, which rule 3 reads as it reads the SDK's).
+//     tests/halt-retry-policy.test.js enumerates every halt in the sources and holds each to a table, so a halt added without a policy fails there.
 // An error that carries none of this — an SDK or transport error that reaches the build as it is — is read by the rule above, as it always was.
 // The platform's signature of a SQL deadlock victim, the one the HTTP client already sends requests again on (lib/sdk-http-client.js): `Sql Number: 1205`.
 const { SQL_DEADLOCK_VICTIM } = require('./sdk-http-client.js');
@@ -99,12 +101,26 @@ function neverRetry(error) {
 
 // An error the plugin words around a failure of the service: `status` is the HTTP status the service answered, `words` its own words about it (the only text the decision reads of this
 // error), `cause` the failure itself. What the message quotes of the maker's is the plugin's, and does not decide.
-function serviceFailure(message, { status, words, cause } = {}) {
+// `answered` is the OData `error` of the answer itself, for a failure of a request the plugin sent and read on its own (lib/entity-provision.js statusError): the answer
+//   { "error": { "code": "0x80044151", "message": "SQL timeout expired." } }
+// is recorded as its `code` and its `message` — the only two members the rule ever reads (answeredErrorOf, isDeadlockVictimAnswer), each kept only when it is a string — so the code decides here exactly as it
+// does for the same answer reaching the build as the SDK's ConnectionError, which keeps the body as its cause. An `answered` that is not an object (a string, a list) records nothing, and a code that is only
+// MENTIONED — in the message, in the plugin's sentence — is not the code. The record is not one of the error's enumerable properties, so the error prints, serializes and compares as it did.
+const RECORDED_ANSWER = Symbol('the OData error of an answer the plugin read itself');
+function serviceFailure(message, { status, words, cause, answered } = {}) {
   const error = new Error(message, cause === undefined ? undefined : { cause });
   if (Number.isInteger(status) && status > 0) error.statusCode = status;
   if (words !== undefined) error.retryText = String(words);
+  if (isObject(answered) && !Array.isArray(answered)) {
+    const recorded = {};
+    if (typeof answered.code === 'string') recorded.code = answered.code;
+    if (typeof answered.message === 'string') recorded.message = answered.message;
+    Object.defineProperty(error, RECORDED_ANSWER, { value: Object.freeze(recorded), enumerable: false });
+  }
   return error;
 }
+// What serviceFailure recorded of an answer, or null for any other error.
+const recordedAnswerOf = (error) => (Object.prototype.hasOwnProperty.call(error, RECORDED_ANSWER) ? error[RECORDED_ANSWER] : null);
 
 // A result that reports a failure BY VALUE (`{ ok: false, error: '…' }`, `{ kind: 'failed', detail: '…' }` — a listing never throws) flattens the failure to a string, and a string holds the SDK's url and
 // whatever the maker named in it. The failure itself rides along as `cause`, for the halt raised around the result to decide from (`retryFrom(result.cause, result.detail)`). NOT enumerable on a result
@@ -181,8 +197,12 @@ const isTypedRefusal = (error) => !isHalt(error) && typedCode(error) !== null &&
 
 // The OData `error.code` of the answer an SDK ConnectionError carries — its `cause` is the response body, `{ "error": { "code": "0x80044151", "message": "SQL timeout expired." } }` — lower-cased (the platform writes
 // them with either case: 0x8004F064, 0x80071151), or null when the error has no such body. Only the SDK's own ConnectionError for an answer (a status above 0) is read, and only the `code` field of the body's `error`:
-// a code that is merely MENTIONED — in the message, in a name — is not the code, and a body that is not an OData error (a string, an HTML page from a gateway) holds none.
+// a code that is merely MENTIONED — in the message, in a name — is not the code, and a body that is not an OData error (a string, an HTML page from a gateway) holds none. The same answer read by a request of
+// the plugin's own reaches the build as the engine's error around it, which records that `error` (serviceFailure's `answered`): it is read the same way, so a lock or a SQL timeout answered to the engine's own
+// read or write is what it is when the SDK reads it.
 function answeredErrorOf(error) {
+  const recorded = recordedAnswerOf(error);
+  if (recorded) return recorded;
   const body = isConnectionError(error) && error.statusCode > 0 && isObject(error.cause) ? error.cause : null;
   return body && isObject(body.error) ? body.error : null;
 }
@@ -218,7 +238,8 @@ const TRANSIENT_SERVICE_CODES = Object.freeze(new Set([
 //   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
 // which the SDK words as `HTTP 500 from <url>: Sql error: Generic SQL error. CRM ErrorCode: … Sql Number: 1205`. Two things make it one, and neither does alone:
 //   - the CODE is the generic SQL error's, `0x80044150`, read from the `error.code` of the body (serviceCodeOf), never from text. Every SQL failure carries it, so it says only that SQL failed;
-//   - the service's own ANSWER — what follows the url in the SDK's message (answerOf), so the maker's names in the url are not read — ends in the platform's deadlock signature (SQL_DEADLOCK_VICTIM, the HTTP client's): the LAST SQL
+//   - the service's own ANSWER — what follows the url in the SDK's message (answerOf), so the maker's names in the url are not read; for an answer the engine read itself, the `message` it recorded of it
+//     (serviceFailure's `answered`), never the plugin's sentence around it, which goes on after the answer and can quote a name there — ends in the platform's deadlock signature (SQL_DEADLOCK_VICTIM, the HTTP client's): the LAST SQL
 //     number it gives is 1205. The platform writes its diagnostic after the SQL text, and the SQL text can quote what a maker named — a duplicate key quotes the value that collided — so a name that spells `Sql Number: 1205` in front of
 //     the platform's own 2627 is a unique-key violation and not a deadlock, and a name that quotes another number in front of the platform's 1205 does not hide one:
 //       …The duplicate key value is (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627
@@ -226,7 +247,12 @@ const TRANSIENT_SERVICE_CODES = Object.freeze(new Set([
 // a run again cannot change. Everything else about this code stays final.
 // See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 const GENERIC_SQL_ERROR_CODE = '0x80044150';
-const isDeadlockVictimAnswer = (error) => serviceCodeOf(error) === GENERIC_SQL_ERROR_CODE && SQL_DEADLOCK_VICTIM.test(answerOf(error));
+const serviceWordsOf = (error) => {
+  const recorded = recordedAnswerOf(error);
+  if (recorded) return typeof recorded.message === 'string' ? recorded.message : '';
+  return answerOf(error);
+};
+const isDeadlockVictimAnswer = (error) => serviceCodeOf(error) === GENERIC_SQL_ERROR_CODE && SQL_DEADLOCK_VICTIM.test(serviceWordsOf(error));
 
 // The lag of a column the build has only just created. A view pushed moments after the relationship that adds its lookup is refused with a 400 whose answer says the table has no such attribute, and a run again succeeds
 // (live-captured, from a view pushed right after the build created the relationship):

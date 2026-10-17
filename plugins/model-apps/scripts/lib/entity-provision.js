@@ -337,13 +337,16 @@ function answerWhy(res) {
   return `HTTP ${res.status}${detail ? `: ${detail}` : ''}`;
 }
 
-// An answer that is not a success, as an error that carries its status — the way the SDK's own errors do — made by serviceFailure (lib/retry-policy.js), the engine's maker of
-// the plugin's words around a failure of the service. The status is what the build's retry reads — a 429, 502, 503 or 504 is run again, any other status is final whatever the
-// answer says — and what a step that waits for the request (an alternate key, see provisionDataModel) hands on. Only a request that got no answer has no status, and then the
+// An answer that is not a success, as an error that carries what the SDK's own errors carry of it — made by serviceFailure (lib/retry-policy.js), the engine's maker of the plugin's
+// words around a failure of the service: the status, and the OData `error` of the answer (`answered`, recorded only when the body has one as an object), e.g.
+//   HTTP 500  { "error": { "code": "0x80044151", "message": "SQL timeout expired." } }   ->   could not read the column's length (HTTP 500: SQL timeout expired.)
+// The build's retry reads them as it reads the same answer through the SDK's ConnectionError: a 429, 502, 503 or 504 is run again, and so is a condition the service names by
+// that code on any status (a customization or solution lock, SQL giving up waiting, a concurrent request, a SQL deadlock victim); any other status is final, whatever the
+// answer's words say. A step that waits for the request (an alternate key, see provisionDataModel) hands both on. Only a request that got no answer has neither, and then the
 // words (`no answer`) are all there is to read.
 function statusError(what, res) {
   const why = answerWhy(res);
-  return serviceFailure(`${what} (${why})`, { status: res && res.status, words: why });
+  return serviceFailure(`${what} (${why})`, { status: res && res.status, words: why, answered: res && res.body && res.body.error });
 }
 
 // How a table or a column is named in a metadata path: by its MetadataId, the primary key, when the caller holds the id of the one it means,
@@ -1177,7 +1180,8 @@ async function readAttributeRequiredLevels({ sdk, provision, logical }) {
     const msg = res && res.body && res.body.error && res.body.error.message
       ? res.body.error.message
       : `HTTP ${res && res.status}`;
-    throw serviceFailure(`could not read RequiredLevel for ${logical}: ${msg}`, { status: res && res.status, words: msg });
+    // The answer's OData error goes with it, as statusError's does: a lock or a SQL timeout the service names by its code is run again on any status.
+    throw serviceFailure(`could not read RequiredLevel for ${logical}: ${msg}`, { status: res && res.status, words: msg, answered: res && res.body && res.body.error });
   }
   const out = new Map();
   for (const a of (res.body && res.body.value) || []) {
@@ -2244,8 +2248,9 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
             throw refusal(`relationship schema name '${schema}' is already used by a relationship the build could not identify. Give it an explicit "schemaName".`);
           }
         }
-        // What the read of the holder said — its status and its words — is what decides whether a run again can help; the create's own refusal, and the name, do not.
-        throw serviceFailure(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`, { status: holder.status, words: holder.error || '' });
+        // What the read of the holder said — its status, the code of its answer (`answered`, which lib/relationship-metadata.js carries beside the result) and its words — is what decides whether a
+        // run again can help; the create's own refusal, and the name, do not.
+        throw serviceFailure(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`, { status: holder.status, words: holder.error || '', answered: holder.answered });
       }
     }, { skipIf: (e) => isAlreadyExists(e) && e.sameRelationshipExists === true });
   }

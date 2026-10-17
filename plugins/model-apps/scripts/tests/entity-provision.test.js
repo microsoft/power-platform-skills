@@ -1424,6 +1424,29 @@ test('a 429 while identifying an already-exists holder stays transient', async (
   );
 });
 
+// The read that would identify the holder is the engine's own request (lib/relationship-metadata.js), and the halt around it is the engine's error, which carries the OData error of that
+// answer (serviceFailure's `answered`): a condition the service names by its code is run again on any status, as when the SDK reads the answer; another code on a status that says no is final.
+test('a condition the service names by its code, while identifying an already-exists holder, is run again on any status — another code is final, whatever the words', async () => {
+  for (const [what, status, error, transient] of [
+    ['SQL giving up waiting (500, 0x80044151)', 500, { code: '0x80044151', message: 'SQL timeout expired.' }, true],
+    ['a customization lock (409, 0x8004F064)', 409, { code: '0x8004F064', message: 'Cannot start the requested operation [Update] because there is another [EntityCustomization] running at this moment.' }, true],
+    ['a 500 under another code, whose words name a timeout', 500, { code: '0x80040216', message: 'SQL timeout expired. Please try again later.' }, false],
+  ]) {
+    const m = mockSdk();
+    m.sdk.createRelationship = async () => alreadyExists(409);
+    m.provision.dataverse = metadataClient((p) => (p.startsWith('/RelationshipDefinitions(') ? { status, body: { error } } : { status: 200, body: { value: [] } }));
+    const runner = makeRunner({ emit: () => {}, total: 8 });
+    await assert.rejects(
+      () => provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: collisionSpec([ONE_TO_MANY]), apply: true }),
+      (e) => {
+        assert.match(e.message, /could not identify/, what);
+        assert.strictEqual(isTransientHalt(e), transient, what);
+        return true;
+      },
+    );
+  }
+});
+
 test('a same-type probe that finds the name on different endpoints halts before create', async () => {
   const m = mockSdk();
   let created = 0;
