@@ -163,16 +163,20 @@ test('intent page (no codeFile) is skipped — nothing written, no throw', async
   const genpage = fakeGenpage();
   const events = [];
 
-  await assert.doesNotReject(
-    runSdkBuild(v2, {
-      sdk, apply: true, env: 'https://x.dynamics.com', appDir: process.cwd(),
-      genpage, phases: ['solution', 'data-model', 'app-shell', 'pages'],
-      emit: (e) => events.push(e),
-    }),
-    'intent page should not throw'
-  );
+  // The build opens its workspace in `<appDir>/.maker-workspace` when it is given none, so the app folder is one of the test's own, removed after it — never `process.cwd()`, which is the plugin's folder.
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-pages-'));
+  try {
+    await assert.doesNotReject(
+      runSdkBuild(v2, {
+        sdk, apply: true, env: 'https://x.dynamics.com', appDir,
+        genpage, phases: ['solution', 'data-model', 'app-shell', 'pages'],
+        emit: (e) => events.push(e),
+      }),
+      'intent page should not throw'
+    );
 
-  assert.deepStrictEqual([genpage.of('create').length, genpage.of('update').length], [0, 0], 'no page written for an intent page');
-  // The skip event should be emitted so the plan log reflects it.
-  assert.ok(events.some((e) => e.status === 'skip' && /Overview/.test(e.label)), 'skip event emitted for the intent page');
+    assert.deepStrictEqual([genpage.of('create').length, genpage.of('update').length], [0, 0], 'no page written for an intent page');
+    // The skip event should be emitted so the plan log reflects it.
+    assert.ok(events.some((e) => e.status === 'skip' && /Overview/.test(e.label)), 'skip event emitted for the intent page');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { commandDef, chartDef, runSdkBuild: runSdkBuildWithRealWaits, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 // The AI phase's proof after a publish waits 500 ms between reads of an override row that is not there yet, as --verify
 // does. No test below is about that wait (it is pinned through `proofBudget`), and every one that leaves a row absent
 // would otherwise sleep a second for it.
@@ -23,7 +24,12 @@ function pageBackend(double) {
     update: (id, o) => written(double.upload({ ...o, pageId: id }), o),
   };
 }
-const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofDelayMs: 0, ...opts, ...(opts.genpageCli ? { genpage: pageBackend(opts.genpageCli) } : {}) });
+// A build that runs the pages phase opens its workspace in `<appDir>/.maker-workspace` — unless it is given a `workspaceDir` — and an `appDir` it is not given is the folder the tests run in, which is the
+// plugin's own: every such build took its pages lock there and left `plugins/model-apps/.maker-workspace` behind, empty (scripts/run-tests.js fails a run that makes it). A call that names neither is given an
+// app folder of this file's own, one for all of those calls — as the plugin's folder was — removed after the file's last test. It is only a place for the lock: none of these tests reads a file from it.
+let defaultAppDir;
+const appFolderOf = (opts) => (opts.appDir === undefined && opts.workspaceDir === undefined ? { appDir: defaultAppDir || (defaultAppDir = makeTempDir('sdkb-app-')) } : {});
+const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofDelayMs: 0, ...opts, ...appFolderOf(opts), ...(opts.genpageCli ? { genpage: pageBackend(opts.genpageCli) } : {}) });
 
 // Real GUIDs for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
@@ -6738,8 +6744,12 @@ test('an EXISTING page-backed app writes its sitemap ONCE, in the finalizer, wit
 test('an EXISTING app with NO page subareas still pushes its sitemap in app-shell (unchanged behavior)', async () => {
   const spec = makeSpec(); // entity subarea only, no pages
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
-  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), phases: ['solution', 'data-model', 'app-shell'] });
-  assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'a no-page existing app keeps pushing its sitemap in app-shell');
+  // The build opens its workspace in `<appDir>/.maker-workspace` when it is given none, so the app folder is one of the test's own, removed after it: never `process.cwd()`, which is the plugin's own folder.
+  const appDir = stagePages([]);
+  try {
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, phases: ['solution', 'data-model', 'app-shell'] });
+    assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'a no-page existing app keeps pushing its sitemap in app-shell');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 // ── Three-authority safety gates: existence-driven crash-safety, discriminated reads,

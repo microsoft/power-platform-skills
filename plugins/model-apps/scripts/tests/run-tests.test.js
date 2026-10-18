@@ -92,12 +92,44 @@ test('runPluginSuite runs the suite in a temporary folder of its own, names what
     '',
   ].join('\n'));
 
-  assert.deepStrictEqual(runPluginSuite(['clean.test.js'], { cwd: work, stdio: 'pipe', tempParent: parent }), { status: 0, left: [] });
+  assert.deepStrictEqual(runPluginSuite(['clean.test.js'], { cwd: work, stdio: 'pipe', tempParent: parent }), { status: 0, left: [], made: [] });
   const leaky = runPluginSuite(['leaky.test.js'], { cwd: work, stdio: 'pipe', tempParent: parent });
   assert.strictEqual(leaky.status, 0, 'the leaking test itself passes: only the check catches it');
   assert.strictEqual(leaky.left.length, 1, leaky.left.join(', '));
   assert.match(leaky.left[0], /^leaked-/);
   assert.deepStrictEqual(fs.readdirSync(parent), [], "the suite's temporary folder is removed either way");
+});
+
+// A build's workspace is `<app folder>/.maker-workspace` unless it is given another, so a test that handed a build `process.cwd()` as its app folder — the suite runs in the plugin's own folder — made
+// `plugins/model-apps/.maker-workspace` and left it behind, empty. The run names such a folder and fails, and it removes the folder: a leftover is not a leak the next run can see, since it would find
+// the folder already there and take it for one that was always there.
+test('runPluginSuite names a .maker-workspace the suite made in its working folder and removes it — and leaves alone one that was there before the run', () => {
+  const root = makeTempDir('runtests-cwd-');
+  const work = path.join(root, 'work');
+  const parent = path.join(root, 'temp');
+  fs.mkdirSync(work);
+  fs.mkdirSync(parent);
+  fs.writeFileSync(path.join(work, 'clean.test.js'), "const test = require('node:test');\ntest('makes nothing', () => {});\n");
+  fs.writeFileSync(path.join(work, 'stray.test.js'), [
+    "const test = require('node:test');",
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    "test('makes the workspace a build opens when it is given no other', () => { fs.mkdirSync(path.join(process.cwd(), '.maker-workspace')); });",
+    '',
+  ].join('\n'));
+  const run = (file) => runPluginSuite([file], { cwd: work, stdio: 'pipe', tempParent: parent });
+
+  const stray = run('stray.test.js');
+  assert.strictEqual(stray.status, 0, 'the test itself passes: only the check catches it');
+  assert.deepStrictEqual(stray.made, [path.join(work, '.maker-workspace')], 'the folder is named, by its path');
+  assert.deepStrictEqual(stray.left, [], 'it is not in the temporary folder');
+  assert.ok(!fs.existsSync(path.join(work, '.maker-workspace')), 'and it is removed, so that the next run is not blind to the leak');
+
+  // One that was there before the run is nobody's to answer for, and stays as it is, with what is in it.
+  fs.mkdirSync(path.join(work, '.maker-workspace'));
+  fs.writeFileSync(path.join(work, '.maker-workspace', 'last-applied.json'), '{}');
+  assert.deepStrictEqual(run('clean.test.js'), { status: 0, left: [], made: [] });
+  assert.deepStrictEqual(fs.readdirSync(path.join(work, '.maker-workspace')), ['last-applied.json']);
 });
 
 test('withTempDir points TEMP, TMP and TMPDIR at the folder whatever their spelling, and keeps the rest', () => {
@@ -116,10 +148,11 @@ test('summarize fails the run when the suite left something in its temporary fol
 
 // main() is the gate CI runs, and it is not run here (it runs this whole suite), so its wiring is read from the source:
 // the suite goes through runPluginSuite and what it left decides a result of its own.
-test('the regression gate runs the plugin suite through runPluginSuite and fails on what it left behind', () => {
+test('the regression gate runs the plugin suite through runPluginSuite and fails on what it left behind, in its temporary folder and in the plugin\'s own', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'run-tests.js'), 'utf8');
   assert.match(source, /const plugin = runPluginSuite\(files, \{ cwd: pluginRoot \}\);/);
   assert.match(source, /results\.push\(\{ name: 'nothing left in the temporary folder', ok: plugin\.left\.length === 0 \}\);/);
+  assert.match(source, /results\.push\(\{ name: 'nothing made in the plugin folder', ok: plugin\.made\.length === 0 \}\);/);
 });
 
 // --- CI workflow scoping ---------------------------------------------------------------------

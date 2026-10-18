@@ -5,7 +5,8 @@
 // is built for the Node-20 ABI; the default Node fails to load it). Prints a combined PASS/FAIL and
 // exits non-zero on any failure — the "did I break anything?" gate to run before every commit.
 // The plugin suite runs in a temporary folder of its own, and the run also fails when a test leaves
-// a file or folder in it (runPluginSuite, below).
+// a file or folder in it, or makes a `.maker-workspace` in the plugin's own folder, which is the
+// folder the suite runs in (runPluginSuite, below).
 //
 // Usage:
 //   node scripts/run-tests.js                       # plugin suite only
@@ -56,13 +57,47 @@ function sdkTestSpec(sdkPath, node20Bin) {
   };
 }
 
+// Folders a test must not make in the folder the suite runs in, which is the plugin's own. A build opens its workspace, `<app folder>/.maker-workspace`, unless it is given another, so a test that hands a
+// build `process.cwd()` as its app folder (or none, which a build reads as `.`) made `plugins/model-apps/.maker-workspace` and left it there: empty, and in no .gitignore. Nothing about such a folder says
+// which test made it, and the next run finds it already there and takes it for one that always was, so a leak of this kind can only be caught by the run that makes it.
+const STRAY_NAMES = ['.maker-workspace'];
+
+// Which of them `dir` holds, whatever they are (a link is there too).
+function strayFoldersIn(dir) {
+  return STRAY_NAMES.filter((name) => {
+    try {
+      fs.lstatSync(path.join(dir, name));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// What a run made: the stray folders `dir` holds now that it did not hold before the run, named by path, and removed — they are what the run made and nobody else, so there is nothing in them to keep, and a leftover
+// would hide the next leak (see above). One that was there before the run is not the run's to answer for, and stays as it is.
+function removeStrayFolders(dir, before) {
+  const made = strayFoldersIn(dir).filter((name) => !before.includes(name)).map((name) => path.join(dir, name));
+  for (const folder of made) {
+    try {
+      fs.rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (error) {
+      process.stderr.write(`could not remove ${folder}: ${error.message}\n`);
+    }
+  }
+  return made;
+}
+
 // The plugin suite runs in a temporary folder of its own: TEMP, TMP and TMPDIR point into it, so os.tmpdir() does too,
 // in every test file and in every process a test starts. Whatever is still in it when the suite ends was left by a test
 // that did not clean up after itself, so the run names it and fails. A full run used to leave about 260 folders in the
 // developer's own temp folder, which grew by hundreds of thousands of entries; tests/helpers/temp-dirs.js is the shared
 // way to clean up. The private folder is removed either way, so a leak never reaches the developer's temp folder.
+// The folder the suite runs in is watched too: `made` is what the run made in it that was not there before it (STRAY_NAMES, above), removed again.
 function runPluginSuite(files, { cwd, stdio = 'inherit', tempParent = os.tmpdir() } = {}) {
   const tempDir = fs.mkdtempSync(path.join(tempParent, 'model-apps-tests-'));
+  const here = cwd || process.cwd();
+  const before = strayFoldersIn(here);
   try {
     // A process a test runner starts inherits NODE_TEST_CONTEXT, and a `node --test` that has it acts as that runner's
     // child: given these files, it ran none of them and exited 0 (measured: a test that makes a folder made none). The
@@ -70,7 +105,7 @@ function runPluginSuite(files, { cwd, stdio = 'inherit', tempParent = os.tmpdir(
     const env = withTempDir(process.env, tempDir);
     delete env.NODE_TEST_CONTEXT;
     const run = spawnSync(process.execPath, ['--test', ...files], { cwd, stdio, env });
-    return { status: run.status, left: fs.readdirSync(tempDir).sort() };
+    return { status: run.status, left: fs.readdirSync(tempDir).sort(), made: removeStrayFolders(here, before) };
   } finally {
     try {
       fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -115,6 +150,12 @@ function main(argv) {
     process.stdout.write('A test must remove every file and folder it makes (scripts/tests/helpers/temp-dirs.js).\n');
   }
   results.push({ name: 'nothing left in the temporary folder', ok: plugin.left.length === 0 });
+  if (plugin.made.length) {
+    process.stdout.write(`\n${plugin.made.length} folder(s) made in the plugin's own folder by the suite (removed again):\n`);
+    for (const folder of plugin.made) process.stdout.write(`  ${folder}\n`);
+    process.stdout.write('A test that runs a build must give it a folder and a workspace of its own: a temporary folder it removes (scripts/tests/helpers/temp-dirs.js), never process.cwd(). With no workspace given, a build opens <app folder>/.maker-workspace.\n');
+  }
+  results.push({ name: 'nothing made in the plugin folder', ok: plugin.made.length === 0 });
 
   // 2) SDK Jest suite (opt-in, Node 20).
   if (sdkPath) {
