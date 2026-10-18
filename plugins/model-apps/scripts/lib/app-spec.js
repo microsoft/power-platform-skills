@@ -871,6 +871,31 @@ function primaryNameLengthProblem(length) {
   return `primaryAttribute.maxLength must be a whole number from 1 to ${PRIMARY_NAME_MAX_LENGTH} (got ${describeSpecValue(length)})`;
 }
 
+// A column of type `AutoNumber` needs a format to be created with. The SDK refuses to create one without — an InvalidArgumentError raised before
+// any request, for a missing, null, empty or blank format (measured against the vendored bundle for createColumn and createColumns alike; a format
+// that is not a string does not get that far: the SDK throws a TypeError of its own) — where the SDK it replaced created a plain text column,
+// which is all an autonumber column is until it carries a format.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/autonumber-fields
+// So a spec with an AutoNumber column and no format used to build, as text, and now halts the data-model phase at that column, after the solution
+// and the tables exist. It is refused here instead, where nothing has been written, with both ways out: give the column a format, or declare it
+// `Text`, which is also what a column an earlier release made from such a spec is.
+//
+// The ONE rule behind both gates — validateAppSpec and the provision-entities input validator, the entry point of /genpage and /app-builder — so
+// that neither accepts what the other refuses. Each puts the table and the column in front of the text it returns (null when the column is fine).
+// It looks at the AutoNumber TYPE only: a `Text` column that carries an `autoNumberFormat` is built as it always was (the format is not passed on),
+// and the primary name column keeps its own rule — an absent or blank `primaryAttribute.autoNumberFormat` has always meant a plain text name column
+// (the table create sends no format for it), a valid spec that builds as before. A format with no {SEQNUM} token stays the lint's warning.
+function autoNumberFormatProblem(column) {
+  if (!column || column.type !== 'AutoNumber') return null;
+  const format = column.autoNumberFormat;
+  let found;
+  if (format === undefined || format === null) found = 'missing';
+  else if (typeof format !== 'string') found = `not a string (got ${describeSpecValue(format)})`;
+  else if (!format.trim()) found = 'blank';
+  else return null;
+  return `is an AutoNumber column but its autoNumberFormat is ${found} — give it a format such as "C-{SEQNUM:5}", or use type "Text" for a plain text column`;
+}
+
 // The length the spec asks for a table's primary name column, or undefined when it does not ask. The build, its dry-run plan
 // and its progress total all key on this one answer — it decides whether the build has a "primary column length" step for
 // the table — so they cannot disagree about it (the same arrangement as quickCreateEnabledFor).
@@ -2280,6 +2305,11 @@ function validateSampleDataRows(entityKey, records, errors) {
 
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
+  // The column rules below (an AutoNumber column's format) say what the BUILD can use, so every profile that builds or plans a build holds a spec to
+  // them. The structural profile — teardown's, which also serves preview and the eval harness — does not: it reads a spec for the tables and components
+  // it names, and a spec an earlier release accepted and built (an AutoNumber column made as text) must still be torn down. The same arrangement as the
+  // relationship-name collisions checked at the end of this function.
+  const checksColumnValues = profile !== 'structural';
   const errors = [];
   // Non-blocking advisories (e.g. a PRE-EXISTING duplicate page name the current run did not create).
   // Additive to the return shape — callers that only read { ok, errors } are unaffected.
@@ -2500,6 +2530,11 @@ function validateAppSpec(spec, opts = {}) {
       }
       if (c.type && !TYPE_MAP[c.type]) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
+      }
+      // An AutoNumber column needs a format (see checksColumnValues): the SDK refuses to create one without.
+      if (checksColumnValues) {
+        const formatProblem = autoNumberFormatProblem(c);
+        if (formatProblem) errors.push(`entity ${e.schemaName}: column ${c.schemaName} ${formatProblem}`);
       }
       if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
         errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
@@ -4272,6 +4307,7 @@ module.exports = {
   validateAppSpec,
   PRIMARY_NAME_MAX_LENGTH,
   primaryNameLengthProblem,
+  autoNumberFormatProblem,
   askedPrimaryNameLength,
   keyNeedsNameLength,
   keyWaitsForNameLength,

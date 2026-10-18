@@ -336,8 +336,9 @@ clearly, then use `AskUserQuestion` to confirm or refine:
 
 Column `type` is one of: `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
 Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`. A `Choice`/`MultiChoice`
-column needs `options[]` **or** a `globalChoice` reference. Lookups are **not** a column type —
-declare a `OneToMany` relationship instead.
+column needs `options[]` **or** a `globalChoice` reference, and an `AutoNumber` column needs an
+`autoNumberFormat` such as `"C-{SEQNUM:5}"` (`Text` is the plain text column). Lookups are **not** a
+column type — declare a `OneToMany` relationship instead.
 
 > **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the source for
 > everything an app always has; [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)

@@ -463,13 +463,15 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
 - **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
-- **Per-type options** (all optional): `required: true` / `"recommended"`; Text → `maxLength`,
+- **Per-type options** (all optional except an AutoNumber column's `autoNumberFormat`): `required: true` /
+  `"recommended"`; Text → `maxLength`,
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
   Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
   raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
   (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
   `false` — see note below); File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber →
-  `autoNumberFormat` (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
+  `autoNumberFormat` (**required** on an AutoNumber column, e.g. `"C-{SEQNUM:5}"` — see the
+  AutoNumber note below); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
   `formula`.
 - **Write permissions** (optional, every column type **except Customer**): `isValidForCreate` /
   `isValidForUpdate` / `isValidForRead` — see `isValidForCreate / isValidForUpdate /
@@ -505,6 +507,10 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
   (above) instead of adding a separate column, so the generated number is the record identity.
+  An `AutoNumber` **column** needs its `autoNumberFormat` — a non-blank string such as `"C-{SEQNUM:5}"`.
+  One without it is refused when the spec is validated, before anything is built, naming the table and
+  the column: the platform would create a plain text column instead, so write `type: "Text"` for a plain
+  text column. On the primary column the format stays optional: without one the name column is plain text.
 - **Primary column length — `primaryAttribute.maxLength`** (optional; a whole number from 1 to 850, the
   most Dataverse allows for a table's name column — more is refused by Dataverse, so
   anything else is rejected at validation, for `/genpage` and `/app-builder` input as well). Without it

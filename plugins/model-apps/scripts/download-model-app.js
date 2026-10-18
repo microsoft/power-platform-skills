@@ -1135,8 +1135,10 @@ const SPEC_TYPE_FROM_ATTRIBUTE_TYPE = {
 // Types whose App Spec declaration REQUIRES a companion field this hydrator cannot supply: a
 // `Choice`/`MultiChoice` column must carry `options[]` or a `globalChoice` reference, and reading
 // those needs a per-column typed-metadata expand the download does not perform. (Verified to be the
-// ONLY such dependency: every other companion rule in `validateAppSpec` / `spec-lint` — AutoNumber's
-// format, Calculated/Rollup's formula, Customer's description — is a warning, not an error.)
+// ONLY such dependency: every other companion rule in `validateAppSpec` / `spec-lint` — Calculated/
+// Rollup's formula, Customer's description — is a warning, not an error. An AutoNumber column's
+// format IS an error there, and cannot arise here: an auto-number column is a String attribute, so it
+// is hydrated as Text, and no AutoNumber column or format is ever emitted.)
 //
 // So the column is emitted WITHOUT a type rather than with one that makes the whole spec fail
 // validation ("column X: Choice needs options[] or a globalChoice reference") — which is what

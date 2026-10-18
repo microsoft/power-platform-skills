@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage, primaryNameLengthProblem } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage, primaryNameLengthProblem, autoNumberFormatProblem } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -162,6 +162,10 @@ function validateProvisionInput(input) {
         }
         validateLabel(c.displayName, `entity '${e.schemaName}': column '${c.schemaName || ''}' displayName`, errors, { baseLanguageCode: input.languageCode });
         validateChoiceOptionLabels(c.options, `entity '${e.schemaName}': column '${c.schemaName || ''}'`, errors, { baseLanguageCode: input.languageCode });
+        // An AutoNumber column needs a format: the SDK refuses to create one without — after the solution and the tables are written, where this gate stops
+        // it before the first write. The rule is the one validateAppSpec applies.
+        const formatProblem = autoNumberFormatProblem(c);
+        if (formatProblem) errors.push(`entity '${e.schemaName}': column '${c.schemaName || ''}' ${formatProblem}`);
       }
     }
 

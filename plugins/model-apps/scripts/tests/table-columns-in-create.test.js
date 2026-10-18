@@ -3726,4 +3726,71 @@ test('where the read of the column that pays a debt fails, nothing is written an
   assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
 });
 
+// --- an AutoNumber column needs a format: what the SDK does, and what the spec gate keeps the build from -------------------------
+// The SDK refuses to create an `autonumber` column without a format — before any request — where the SDK it replaced created a plain text column.
+// validateAppSpec and the provision-entities input gate refuse such a spec before anything is written (column-autonumber-gate.test.js); these tests
+// pin the SDK behaviour that makes the rule necessary, so a bundle that changes it is noticed, and what the build does with a spec that got past the gate.
+
+const autoNumberColumn = (extra = {}) => ({ schemaName: 'new_ref', displayName: 'Reference', type: 'AutoNumber', ...extra });
+
+test('the SDK refuses to create an autonumber column that has no format — before any request, one column or a change set — and still creates one that has', async () => {
+  for (const format of [undefined, null, '', '   ']) {
+    const dv = fakeDataverse();
+    const sdk = await realSdk(dv.httpClient);
+    const options = { schemaName: 'new_ref', displayName: 'Reference', type: 'autonumber', languageCode: 1033, ...(format === undefined ? {} : { autoNumberFormat: format }) };
+    for (const create of [() => sdk.createColumn('new_ticket', options), () => sdk.createColumns('new_ticket', [options])]) {
+      await assert.rejects(create, (err) => err.code === 'INVALID_ARGUMENT' && /an 'autonumber' column needs an 'autoNumberFormat'/.test(err.message) && /'new_ref' has none/.test(err.message), `${JSON.stringify(format)}`);
+    }
+    assert.deepStrictEqual(dv.log, [], `${JSON.stringify(format)}: nothing was sent`);
+  }
+  // A format that is not a string never gets as far as that message, but is refused before any request all the same.
+  for (const format of [5, {}, true, ['C-{SEQNUM:5}']]) {
+    const dv = fakeDataverse();
+    const sdk = await realSdk(dv.httpClient);
+    await assert.rejects(() => sdk.createColumn('new_ticket', { schemaName: 'new_ref', displayName: 'Reference', type: 'autonumber', languageCode: 1033, autoNumberFormat: format }), `${JSON.stringify(format)}`);
+    assert.deepStrictEqual(dv.log, [], `${JSON.stringify(format)}: nothing was sent`);
+  }
+  // With a format the column is created, and the format is in the request.
+  const run = await provisionOver(oneTable([autoNumberColumn({ autoNumberFormat: 'C-{SEQNUM:5}' })]));
+  assert.strictEqual(inlineNames(run).includes('new_ref'), true);
+  assert.strictEqual(batchColumns(run).find((a) => a.SchemaName === 'new_ref').AutoNumberFormat, 'C-{SEQNUM:5}');
+});
+
+test('a spec that got past the gate with an AutoNumber column and no format stops the build at that column — the table is already made — whichever way the columns are created', async () => {
+  for (const inlineColumns of [true, false]) {
+    const run = await provisionOver(oneTable([textColumn('new_a'), autoNumberColumn(), textColumn('new_b')]), { capture: true, inlineColumns });
+    assert.ok(run.error instanceof BuildHalt, `inlineColumns ${inlineColumns}: ${run.error && run.error.message}`);
+    assert.match(run.error.message, /an 'autonumber' column needs an 'autoNumberFormat'/, 'the SDK\'s own words reach the author');
+    assert.strictEqual(run.error.code, 'INVALID_ARGUMENT');
+    assert.strictEqual(run.error.recoverable, false, 'a run again cannot get past it');
+    assert.deepStrictEqual(run.events.filter((e) => e.status !== 'start').map((e) => `${e.status}: ${e.label}`), ['ok: table new_ticket', 'ok: column new_ticket.new_a (Text)', 'error: column new_ticket.new_ref (AutoNumber)']);
+    assert.strictEqual(tablePosts(run).length, 1, 'the table was created first');
+    assert.deepStrictEqual([...run.dv.tables.get('new_ticket').columns.keys()].filter((name) => /^new_/.test(name)), ['new_name', 'new_a'], 'the column before it was made, the one after it was never reached, and no plain text column stands in for it');
+    assert.strictEqual(run.dv.refusals.length, 0, 'the platform was never asked to create it');
+  }
+});
+
+test('a rebuild that finds the AutoNumber column already there never reaches the SDK\'s refusal — the column is skipped and nothing is written for it', async () => {
+  // The column an earlier release made from a spec with no format is a plain text column. The next build of that spec finds it by name and does not create it.
+  const first = await provisionOver(oneTable([{ schemaName: 'new_ref', displayName: 'Reference', type: 'Text' }]));
+  assert.strictEqual(first.dv.tables.get('new_ticket').columns.has('new_ref'), true);
+  const again = fakeDataverse();
+  again.tables.set('new_ticket', first.dv.tables.get('new_ticket'));
+  const sdk = await realSdk(again.httpClient);
+  const events = [];
+  const warnings = [];
+  await provisionDataModel({ sdk, provision: sdk, runner: makeRunner({ emit: (e) => events.push(e), total: 99 }), spec: oneTable([autoNumberColumn()]), apply: true, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033], sleep: async () => {}, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(events.filter((e) => e.status === 'skip').map((e) => e.label), ['table new_ticket (exists — reuse)', 'column new_ticket.new_ref (exists)']);
+  assert.deepStrictEqual(events.filter((e) => e.status === 'error'), []);
+  assert.deepStrictEqual(again.log.filter((r) => r.method !== 'GET'), [], 'no write of any kind');
+  assert.deepStrictEqual(warnings, []);
+  // The same when the spec states a required level for it: the level is reconciled through updateColumn, which never carries a format.
+  const stated = fakeDataverse();
+  stated.tables.set('new_ticket', first.dv.tables.get('new_ticket'));
+  const statedSdk = await realSdk(stated.httpClient);
+  await provisionDataModel({ sdk: statedSdk, provision: statedSdk, runner: makeRunner({ emit: () => {}, total: 99 }), spec: oneTable([autoNumberColumn({ required: true })]), apply: true, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033], sleep: async () => {}, warn: () => {} });
+  assert.deepStrictEqual(stated.log.filter((r) => r.method === 'POST'), [], 'nothing is created');
+  for (const put of stated.log.filter((r) => r.method === 'PUT')) assert.ok(!('AutoNumberFormat' in put.body), 'an update of the column carries no format');
+});
+
 
