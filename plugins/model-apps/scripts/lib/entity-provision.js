@@ -2071,11 +2071,13 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     for (const c of requiredDeclared) {
       if (existingTable && existingCols.has(c.schemaName.toLowerCase())) continue;
       // A column's level is part of its own create request — except the primary name column's: it is asked in the table's create, which
-      // does not keep it on a plain text name column, so it is applied only when the SDK says it read the level back (`primaryColumnRequired`,
-      // answered for a level other than None). A table found after its create, or an SDK that answers nothing, is not that: the level is
-      // not reported as applied, and the re-run reconciles it as it does an existing column's.
+      // does not keep it on a plain text name column, so a level other than None is applied only when the SDK says it read the level back
+      // (`primaryColumnRequired`). None has nothing to read back, so what shows it is the create itself — one this build saw succeed. A table
+      // the build did not see made (found after its create, the answer being lost, or existing with columns that could not be read) shows
+      // nothing about the level, None included: a maker may have set Business Required there. Neither that nor an SDK that answers nothing is
+      // reported as applied; the re-run reconciles the level as it does an existing column's. Nothing is written blind.
       const desired = REQUIRED(c);
-      if (c === e.primaryAttribute && desired !== 'None' && !(createdTable && createdTable.primaryColumnRequired === desired)) {
+      if (c === e.primaryAttribute && !(createdTable && (desired === 'None' || createdTable.primaryColumnRequired === desired))) {
         const confirmed = createdTable && createdTable.primaryColumnRequired;
         const why = createdTable
           ? `the SDK confirmed ${confirmed ? `'${confirmed}'` : 'no level'} for the name column of the table it created`

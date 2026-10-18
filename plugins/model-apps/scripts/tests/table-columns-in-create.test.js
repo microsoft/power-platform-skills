@@ -136,6 +136,7 @@ function fakeDataverse({
   keepsAskedLength = false,    // the environment that keeps the length asked of a plain text primary column in a one-attribute create
   keepsAskedRequired = false,  // the environment that keeps the required level asked of a plain text primary column (the one measured stores it None whatever is sent)
   levelRead = null,            // (n) => response | undefined; overrides the typed read of one column's RequiredLevel (the SDK's check of a primary column's level)
+  columnListRead = null,       // (n) => response | undefined; overrides the read of all of a table's columns with their RequiredLevel (the build's read of what an existing table holds)
   lengthRead = null,           // (n) => response | undefined; overrides the typed read of a text column's MaxLength
   identityRead = null,         // (n) => response | undefined; overrides the read of which table answers to a name (its MetadataId and primary name column)
   updateFails = null,          // (body) => response | falsy, for the PUT of a typed column; a falsy answer lets it through
@@ -149,6 +150,7 @@ function fakeDataverse({
   let attributeReadCount = 0;
   let lengthReadCount = 0;
   let levelReadCount = 0;
+  let columnListReadCount = 0;
   let identityReadCount = 0;
   const reply = (status, body, headers = {}) => ({ status, headers, body });
   const refuse = (path, response) => { refusals.push({ path, message: response.body && response.body.error && response.body.error.message }); return response; };
@@ -214,6 +216,9 @@ function fakeDataverse({
         return override || (t ? reply(200, { value: rows }) : reply(404, { error: { message: 'no such table' } }));
       }
       if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Attributes\?\$select=LogicalName,RequiredLevel$/.exec(p))) {
+        columnListReadCount += 1;
+        const override = columnListRead && columnListRead(columnListReadCount);
+        if (override) return override;
         const t = tables.get(m[1]);
         return t ? reply(200, { value: [...t.columns.values()].map((c) => ({ LogicalName: c.row.LogicalName, RequiredLevel: c.body.RequiredLevel })) }) : reply(404, { error: { message: 'no such table' } });
       }
@@ -1504,6 +1509,73 @@ test('a table that exists and whose name column states no required level is left
   assert.deepStrictEqual(again.log.filter((r) => r.method !== 'GET'), [], 'no write of any kind');
   assert.deepStrictEqual(requiredSteps(events), []);
   assert.strictEqual(levelOf(again), 'None');
+});
+
+// An explicit required:false asks the create for None, and the SDK has nothing to read back for it, so a build that SAW the create succeed has nothing to
+// add (the tests above). A table it did not see made shows nothing about its name column's level, None included: the column may hold Business Required, set
+// by a maker or left by an earlier create — so the step is the same failed, warned one a level above None gets, and the re-run sets it.
+// A table that is already there, made by an earlier run whose name column was asked required, in a stub of its own (so the run under test has a log of its own).
+async function existingTicket(dataverse = {}) {
+  const earlier = await provisionOver(oneTable([], requiredName()));
+  const dv = fakeDataverse(dataverse);
+  dv.tables.set('new_ticket', earlier.dv.tables.get('new_ticket'));
+  return dv;
+}
+async function buildOn(dv, spec) {
+  const sdk = await realSdk(dv.httpClient);
+  const events = [];
+  const warnings = [];
+  const error = await provisionDataModel({ sdk, provision: sdk, runner: makeRunner({ emit: (e) => events.push(e), total: 99 }), spec, apply: true, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033], sleep: async () => {}, warn: (m) => warnings.push(m) })
+    .then(() => null, (err) => err);
+  return { events, warnings, error };
+}
+
+test('a table found after its create (the answer was lost) is not reported as having required:false applied either: nothing is written, and the re-run sets the level', async () => {
+  const dv = await existingTicket();
+  dv.tables.get('new_ticket').lagReads = 1; // the look for the table before the create does not see it yet, so the create is tried and refused
+  const spec = oneTable([], requiredName({ required: false }));
+  const first = await buildOn(dv, spec);
+  assert.strictEqual(first.error, null);
+  assert.strictEqual(tablePosts({ dv }).length, 1, 'the create was tried, once');
+  assert.deepStrictEqual(requiredSteps(first.events), ['error: required new_ticket.new_name -> None'], 'nothing shows this build made the table, so nothing is "applied on create"');
+  assert.deepStrictEqual(first.warnings, ['could not confirm the required level of new_ticket.new_name (None) — a re-run sets it, and the rest of the build continues: the table was found after its create, so nothing shows that the level was applied']);
+  assert.deepStrictEqual(dv.log.filter((r) => r.method === 'PUT'), [], 'no update on a level that is not known');
+  assert.strictEqual(levelOf(dv), 'ApplicationRequired', 'the column holds what it held');
+
+  // The re-run finds the table at once, reads its name column, and sets the level the spec says; the run after that has nothing left to do.
+  const second = await buildOn(dv, spec);
+  assert.strictEqual(second.error, null);
+  assert.strictEqual(tablePosts({ dv }).length, 1, 'the table is not created again');
+  assert.deepStrictEqual(requiredSteps(second.events), ['ok: required new_ticket.new_name -> None']);
+  assert.deepStrictEqual(second.warnings, []);
+  assert.strictEqual(levelOf(dv), 'None');
+  const putsBefore = dv.log.filter((r) => r.method === 'PUT').length;
+  assert.strictEqual(putsBefore, 1, 'one update, by the re-run');
+  const third = await buildOn(dv, spec);
+  assert.strictEqual(dv.log.filter((r) => r.method === 'PUT').length, putsBefore, 'no update');
+  assert.deepStrictEqual(requiredSteps(third.events), ['skip: required new_ticket.new_name (already None)']);
+});
+
+test('a reused table whose columns could not be read is not reported as having required:false applied either: nothing is written, and the re-run sets the level', async () => {
+  let down = true;
+  const dv = await existingTicket({ columnListRead: () => (down ? { status: 503, headers: {}, body: { error: { message: 'metadata collection unavailable' } } } : undefined) });
+  const spec = oneTable([], requiredName({ required: false }));
+  const first = await buildOn(dv, spec);
+  assert.strictEqual(first.error, null);
+  assert.strictEqual(tablePosts({ dv }).length, 0, 'the table is found before the create, so no create is tried');
+  assert.deepStrictEqual(requiredSteps(first.events), ['error: required new_ticket.new_name -> None'], 'nothing is "applied on create" on a table this build did not create');
+  assert.strictEqual(first.warnings.length, 2);
+  assert.match(first.warnings[0], /^could not read existing columns for new_ticket \(HTTP 503\)/);
+  assert.strictEqual(first.warnings[1], 'could not confirm the required level of new_ticket.new_name (None) — a re-run sets it, and the rest of the build continues: the table exists but its columns could not be read, so its current level is unknown');
+  assert.deepStrictEqual(dv.log.filter((r) => r.method !== 'GET'), [], 'no write of any kind on a level that is not known');
+  assert.strictEqual(levelOf(dv), 'ApplicationRequired', 'the column holds what it held');
+
+  down = false;
+  const second = await buildOn(dv, spec);
+  assert.strictEqual(second.error, null);
+  assert.deepStrictEqual(requiredSteps(second.events), ['ok: required new_ticket.new_name -> None']);
+  assert.deepStrictEqual(second.warnings, []);
+  assert.strictEqual(levelOf(dv), 'None');
 });
 
 test('through the plugin\'s own HTTP client — which has put() — a required plain text name column is made required, and without a put() nothing is created at all', async () => {

@@ -379,6 +379,70 @@ test('a reused table whose columns could not be read is not reported as having i
   assert.ok(!m.calls.some((c) => c[0] === 'updateColumn'), 'and nothing is written on a level that is not known');
 });
 
+// None is the one level the create can show nothing about even when it succeeds (the SDK has nothing to read back for it), so a build that SAW the create succeed
+// reports it applied (above). A table the build did not see made — found after the answer to its create was lost, or an existing table whose columns could not
+// be read — shows nothing about the level of its name column, None included: it may hold Business Required, set there by a maker or left by an earlier create.
+test('a table found after its create (the answer was lost) is not reported as having required:false applied either', async () => {
+  const m = mockSdk();
+  let probes = 0;
+  m.provision.findTables = async (s) => (++probes === 1 ? [] : [{ logicalName: s.toLowerCase(), entitySetName: `${s.toLowerCase()}s` }]);
+  m.sdk.createTable = async () => { throw Object.assign(new Error('Entities already exist: new_ticket'), { statusCode: 400 }); };
+  const { events, warnings, error } = await buildPrimary(m, primaryRequiredSpec({ required: false }));
+  assert.strictEqual(error, null);
+  assert.deepStrictEqual(requiredSteps(events), ['error: required new_ticket.new_name -> None'], 'never "applied on create": nothing shows this build made the table');
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /could not confirm the required level of new_ticket\.new_name \(None\) — a re-run sets it.*: the table was found after its create, so nothing shows that the level was applied$/);
+  assert.ok(!m.calls.some((c) => c[0] === 'updateColumn'), 'and nothing is written on a level that is not known');
+});
+
+test('a reused table whose columns could not be read is not reported as having required:false applied either', async () => {
+  const m = mockSdk({ new_ticket: true });
+  m.sdk.createTable = async () => { throw new Error('the table is not created again'); };
+  m.provision.findColumns = async () => []; // what an unreadable column list comes out as: no column, the name column included
+  const { events, warnings, error } = await buildPrimary(m, primaryRequiredSpec({ required: false }));
+  assert.strictEqual(error, null);
+  assert.deepStrictEqual(requiredSteps(events), ['error: required new_ticket.new_name -> None'], 'nothing is "applied on create" on a table this build did not create');
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /could not confirm the required level of new_ticket\.new_name \(None\) — a re-run sets it.*: the table exists but its columns could not be read, so its current level is unknown$/);
+  assert.ok(!m.calls.some((c) => c[0] === 'updateColumn'), 'and nothing is written on a level that is not known');
+});
+
+test('a table the build did not see made says nothing about a name column whose spec states no required level', async () => {
+  const found = mockSdk();
+  let probes = 0;
+  found.provision.findTables = async (s) => (++probes === 1 ? [] : [{ logicalName: s.toLowerCase(), entitySetName: `${s.toLowerCase()}s` }]);
+  found.sdk.createTable = async () => { throw Object.assign(new Error('Entities already exist: new_ticket'), { statusCode: 400 }); };
+  const reused = mockSdk({ new_ticket: true });
+  reused.sdk.createTable = async () => { throw new Error('the table is not created again'); };
+  reused.provision.findColumns = async () => [];
+  for (const [what, m] of [['found after its create', found], ['reused with columns that could not be read', reused]]) {
+    const { events, warnings, error } = await buildPrimary(m, primaryRequiredSpec({}));
+    assert.strictEqual(error, null, what);
+    assert.deepStrictEqual(requiredSteps(events), [], `${what}: no step for a level the spec does not state`);
+    assert.deepStrictEqual(warnings, [], what);
+    assert.ok(!m.calls.some((c) => c[0] === 'updateColumn'), what);
+  }
+});
+
+test('a reused table whose name column can be read converges to an explicit required:false, and is left alone once it is None', async () => {
+  const run = async (level) => {
+    const m = mockSdk({ new_ticket: true });
+    m.sdk.createTable = async () => { throw new Error('the table is not created again'); };
+    m.provision.findColumns = async () => [{ logicalName: 'new_name', schemaName: 'new_name', RequiredLevel: { Value: level } }];
+    return { m, ...(await buildPrimary(m, primaryRequiredSpec({ required: false }))) };
+  };
+  const required = await run('ApplicationRequired');
+  assert.strictEqual(required.error, null);
+  assert.deepStrictEqual(required.m.calls.filter((c) => c[0] === 'updateColumn'), [['updateColumn', 'new_ticket', 'new_name', { required: 'None' }]]);
+  assert.deepStrictEqual(requiredSteps(required.events), ['ok: required new_ticket.new_name -> None']);
+  assert.deepStrictEqual(required.warnings, []);
+  const none = await run('None');
+  assert.strictEqual(none.error, null);
+  assert.ok(!none.m.calls.some((c) => c[0] === 'updateColumn'), 'a level that is already there is not written again');
+  assert.deepStrictEqual(requiredSteps(none.events), ['skip: required new_ticket.new_name (already None)']);
+  assert.deepStrictEqual(none.warnings, []);
+});
+
 test('PRIMARY_COLUMN_REQUIRED_NOT_APPLIED: the table was created, so the build stops once, never looks for it as if its name were taken, and says what to do', async () => {
   const causes = [
     ['no cause', undefined],

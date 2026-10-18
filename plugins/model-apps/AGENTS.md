@@ -1946,10 +1946,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     where it differs, reads it again, and answers the level it read as `primaryColumnRequired` — or refuses with
     `PRIMARY_COLUMN_REQUIRED_NOT_APPLIED`, whose message says the table WAS created. The update is a PUT, so the HTTP client must
     implement `put()` (`lib/sdk-http-client.js` does; a client without one is refused before the table is made, for a plain text
-    name column). `provisionDataModel` reports `required <table>.<column> (applied on create)` only for `None` or for a level the
-    SDK answered; anything else — an SDK that answers none, a table found after the answer to its create was lost, or an existing
-    table whose columns could not be read, where nothing shows the level was applied — is a failed best-effort step, `required <table>.<column> -> <level>`, with a warning: the build
-    goes on, and a re-run sets the level the way it does for any existing column. On `PRIMARY_COLUMN_REQUIRED_NOT_APPLIED` the
+    name column). `provisionDataModel` reports `required <table>.<column> (applied on create)` only for a table whose create it saw
+    succeed, and then only for `None` (the create asked it, and the SDK has nothing to read back for it) or for a level the SDK
+    answered. Anything else is a failed best-effort step, `required <table>.<column> -> <level>`, with a warning: an SDK that
+    answers none or another level, a table found after the answer to its create was lost, or an existing table whose columns could
+    not be read — where nothing shows what the name column holds, so an explicit `required: false` is no exception. The build goes
+    on, writes nothing for it, and a re-run sets the level the way it does for any existing column. On `PRIMARY_COLUMN_REQUIRED_NOT_APPLIED` the
     build stops, as it does on `TABLE_METADATA_NOT_VISIBLE` (`createNewTable`): the table exists, so a warning says to run the build
     again — it finds the table, does not create it again, and sets the level through the existing-column path (the halt names the
     same step, `operatorRemedy`) — and, for a length asked of a plain text name column, that the length may not have been applied

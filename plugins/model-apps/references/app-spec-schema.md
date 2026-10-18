@@ -489,10 +489,11 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   `required` is applied on a **new** table too: it is asked in the table's create, and because a plain
   text name column is stored not required whatever the create asks (an auto-numbered one keeps the
   level), the build's SDK reads the level back and sets it with one update. The build says the level
-  was applied on create only once the SDK has confirmed it. When it cannot be confirmed the table
-  still exists: the build stops (or, for a table found after the answer to its create was lost,
-  warns), and running the build again finds the table and sets the level as it does for any existing
-  column — it never creates the table twice.
+  was applied on create only once the SDK has confirmed it (for `false`, once it has seen the table
+  created). When it cannot be confirmed the table still exists: the build stops (or, for a table found
+  after the answer to its create was lost, or an existing table whose columns could not be read,
+  warns — `false` too, since nothing shows what the column holds), and running the build again finds
+  the table and sets the level as it does for any existing column — it never creates the table twice.
 - **`defaultValue`, `integerFormat`, and `isValidFor*` converge differently: by re-assertion, not
   by diff.** Unlike `required` above, a rebuild does not read the column's current state first —
   it simply re-sends whichever of these fields the spec sets explicitly, on every build, for both a
