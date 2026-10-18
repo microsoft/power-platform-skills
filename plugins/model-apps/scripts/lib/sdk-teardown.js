@@ -45,7 +45,11 @@
 //                      does NOT cascade forms/views/charts/relationships when cross-references exist
 //                      (e.g. a form subgrid references another table's view), so teardown deletes
 //                      them explicitly first. A table whose business rule could not be deleted (step 3b)
-//                      is KEPT — reported as a `(kept — …)` skip — until a re-run deletes the rule.
+//                      is KEPT — reported as a `(kept — …)` skip — until a re-run deletes the rule. What only
+//                      that table's existence blocks is kept with it, each as a `(kept — …)` skip naming the
+//                      table: its icon web resource (step 9), a global choice one of its columns binds (step 10)
+//                      and a relationship from the table to itself (planned after the tables). The platform would
+//                      refuse each of those deletes, and the run would report the refusal as one more failure.
 //   9. web-resources — webresourceset rows (form/command JS, table-icon SVG/raster images, and the
 //                      build's generated default app icon) — deleted AFTER tables: a table's icon
 //                      web resource is referenced by the TABLE itself, so it can't be removed until
@@ -1145,6 +1149,47 @@ const KIND_HANDLERS = {
   },
 };
 
+// Which tables the SPEC says hold a web resource or a global choice. While one of them exists the platform refuses to delete either
+// ("The <type>(<id>) component cannot be deleted because it is referenced by N other components" — a component is not deleted while
+// another depends on it, https://learn.microsoft.com/en-us/power-platform/alm/dependency-tracking-solution-components). It matters only
+// for a table this run KEEPS (runTeardownSteps, `keptTables`); a table that is deleted takes its references with it. Read the way the
+// build acted on the spec, so that it names no more than the build made:
+//   * an ICON: `entities[].vectorIcon` (an SVG web resource) and `entities[].icon` (a raster one), which the build sets on the table
+//     with setEntityIcon once the web resource exists. It checks the name lower-cased (`builtWrNames`, sdk-build.js), as the spec
+//     validator does — a web resource's name is not case-sensitive, so neither is this match.
+//   * a GLOBAL CHOICE a column binds: only a Choice or MultiChoice column does, and the build looks the choice up by the EXACT name the
+//     column gives (`globalChoiceIds[c.globalChoice]`, entity-provision.js columnOptions). A column that spells it in another letter
+//     case was never bound — it got inline options of its own — so it holds nothing here.
+// Only the spec is read: an icon or a binding made by hand in the environment is not in it, and nothing here can know of it.
+// Returns { icons, choices }: lower-cased web resource name -> holders, global choice name -> holders, each holder `{ table, by }`
+// with the table's lower-cased logical name, once per table.
+function tablesHolding(spec) {
+  const icons = new Map();
+  const choices = new Map();
+  const add = (holders, key, table, by) => {
+    const held = holders.get(key) || [];
+    if (!held.some((h) => h.table === table)) holders.set(key, [...held, { table, by }]);
+  };
+  for (const e of spec.entities || []) {
+    const table = String(e.schemaName).toLowerCase();
+    for (const icon of [e.vectorIcon, e.icon]) {
+      if (typeof icon === 'string' && icon) add(icons, icon.toLowerCase(), table, 'icon');
+    }
+    for (const c of e.columns || []) {
+      if (c && (c.type === 'Choice' || c.type === 'MultiChoice') && typeof c.globalChoice === 'string' && c.globalChoice) add(choices, c.globalChoice, table, 'column');
+    }
+  }
+  return { icons, choices };
+}
+
+// How a step is held, for the `(kept — …)` line of a step that waits for a table this run keeps. `table` is the name the table's own
+// step reports.
+const HELD_BY = {
+  icon: (table) => `it is the icon of table ${table}`,
+  column: (table) => `a column of table ${table} binds it`,
+  itself: (table) => `it relates table ${table} to itself`,
+};
+
 // Build the ordered teardown plan from an App Spec. Pure — no I/O. Each step names exactly one
 // artifact target (resolved live at execution time). Steps whose spec section is absent are
 // simply omitted, so a partial spec tears down only what it declares.
@@ -1311,6 +1356,9 @@ function planTeardown(spec) {
     // forms it cannot prove it authored — stripping a lookup out of somebody's main form is a worse
     // outcome than leaving a lookup on a table they already own.
     if (r.type === 'OneToMany' && String(r.referenced || '').toLowerCase() === String(r.referencing || '').toLowerCase()) {
+      // Held by its own table for as long as that table exists — the reason it is deferred. A table this run KEEPS (see
+      // `keptTables` in runTeardownSteps) keeps it too: the refused delete would be one more reported failure, not a deletion.
+      step.heldBy = [{ table: String(r.referenced).toLowerCase(), by: 'itself' }];
       selfRefRelSteps.push(step);
       continue;
     }
@@ -1376,6 +1424,9 @@ function planTeardown(spec) {
   // while the table still exists, so it must come after the tables phase.
   const declaredWrNames = new Set(
     (spec.webResources || []).map((w) => w && w.name && String(w.name).toLowerCase()).filter(Boolean));
+  // `heldBy` on a web resource or global choice step names the tables whose existence blocks its delete (see tablesHolding); a step
+  // nothing holds carries none, so every other step is exactly what it was.
+  const { icons: iconHolders, choices: choiceHolders } = tablesHolding(spec);
   for (const wr of spec.webResources || []) {
     // `external:true` marks a web resource this app merely REFERENCES (a re-declared path/`$webresource`
     // nav icon whose ownership can't be proven exclusive — see download-model-app iconWebResources). The
@@ -1383,7 +1434,8 @@ function planTeardown(spec) {
     // would break there (fail-safe — an orphan is recoverable, a deleted shared resource is not; same
     // posture as the `existing:true` protection on downloaded tables). Skip it.
     if (wr.external === true) continue;
-    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${wr.name}`, target: { name: wr.name } });
+    const heldBy = iconHolders.get(String(wr.name).toLowerCase());
+    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${wr.name}`, target: { name: wr.name }, ...(heldBy ? { heldBy } : {}) });
   }
   // The build generates a default app icon web resource (`<appUnique>_icon`) in the solution when
   // the spec sets no explicit app.icon; it is referenced by the app module (deleted first), so it
@@ -1414,8 +1466,10 @@ function planTeardown(spec) {
   }
   // Global option sets last (before the solution container): every column that bound one lives
   // on a table deleted above, so the shared choice now has no dependents blocking its delete.
+  // (A table this run keeps still has its columns — `heldBy`, see tablesHolding.)
   for (const gc of spec.globalChoices || []) {
-    steps.push({ kind: 'globalChoice', phase: 'global-choices', label: `global choice ${gc.name}`, target: { name: gc.name, existing: gc.existing === true } });
+    const heldBy = choiceHolders.get(gc.name);
+    steps.push({ kind: 'globalChoice', phase: 'global-choices', label: `global choice ${gc.name}`, target: { name: gc.name, existing: gc.existing === true }, ...(heldBy ? { heldBy } : {}) });
   }
   if (spec.solution) {
     steps.push({ kind: 'solution', phase: 'solution', label: `solution ${spec.solution.uniqueName}`, target: { uniqueName: spec.solution.uniqueName } });
@@ -1596,15 +1650,20 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   // there for good, because an answer that says "not found" reads as "already gone" (to the read of the
   // rule's rows and to the copy's delete alike). Of every step that follows a failed rule, dropping its
   // table is the only one that turns a failure a re-run could finish into a permanent leftover, so it alone
-  // waits. The solution is already kept after any failure; a table icon's web resource or a global choice
-  // that the kept table still references is refused by the platform's own dependency check, as it is for
-  // any retained table, and that is one more reported failure, not a leftover.
+  // waits. The solution is already kept after any failure. What only the kept table's existence blocks — its
+  // icon web resource, a global choice one of its columns binds, a relationship from the table to itself — is
+  // kept with it (`keptTables`, below), reported as a `(kept — …)` skip: the platform's own dependency check
+  // would refuse each of those deletes, and each refusal would be one more reported failure, not a leftover.
   //
   // Keyed by the table's lower-cased logical name, as the rule step's target names it; the value is the
   // names of the rules that failed on it. ANY failure of the rule step counts — an unreadable rule, the
   // definition's delete or the copy's — because each can leave a copy behind. Nothing re-sends the failed
   // delete: a 500 does not prove the delete did not run, and this plugin sends a delete once.
   const failedRulesByTable = new Map();
+  // The tables this run actually kept for a failed rule: lower-cased logical name -> the name the table's own step reports. Filled by
+  // that step, which comes before every step it can hold (the plan's `heldBy`: web resources, global choices and relationships to
+  // themselves all follow the tables). What the platform would refuse while such a table exists is not sent.
+  const keptTables = new Map();
   let n = 0;
   for (const step of plan) {
     const myN = (n += 1);
@@ -1675,7 +1734,20 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       // reported as kept for a rule's sake.
       const failedRules = step.kind === 'table' ? failedRulesByTable.get(String(step.target.logical).toLowerCase()) : undefined;
       if (failedRules) {
+        keptTables.set(String(step.target.logical).toLowerCase(), step.target.schemaName);
         const why = `${step.label} (kept — business rule(s) on it could not be deleted (${failedRules.map((name) => JSON.stringify(String(name))).join(', ')}), and once the table is gone a rule's activated copy can never be deleted; a re-run deletes the rule(s) first, then the table)`;
+        result.skipped.push(why);
+        emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
+        continue;
+      }
+      // What only a kept table's existence blocks waits with it: the platform refuses these deletes while the table exists, so sending
+      // them would report a refusal as one more failure beside the rule's (see keptTables). Asked AFTER the resolve, like the table's
+      // own keep: a step that found nothing, or was retained for its own reason (an `existing: true` choice or relationship), reports
+      // that, as before. Only a table kept for a rule counts — what hangs on a reused or system table is sent as it always was.
+      const holders = (step.heldBy || []).filter((h) => keptTables.has(h.table));
+      if (holders.length) {
+        const many = holders.length > 1;
+        const why = `${step.label} (kept — ${holders.map((h) => HELD_BY[h.by](keptTables.get(h.table))).join('; ')}, and ${many ? 'those tables are' : 'that table is'} kept because business rule(s) on ${many ? 'them' : 'it'} could not be deleted; a re-run deletes it once ${many ? 'they are' : 'the table is'} gone)`;
         result.skipped.push(why);
         emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
         continue;

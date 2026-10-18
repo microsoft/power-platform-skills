@@ -1405,8 +1405,8 @@ const ruleWorld = (over = {}) => ruleEnvironment({
 });
 const keptTableLabel = (table, ruleNames) => `table ${table} (kept — business rule(s) on it could not be deleted (${ruleNames.map((n) => JSON.stringify(n)).join(', ')}), and once the table is gone a rule's activated copy can never be deleted; a re-run deletes the rule(s) first, then the table)`;
 // Every SDK call of a run as one line each, in order — the request sequence the assertions compare.
-const ruleRequests = (sdk, from = 0) => sdk.calls.slice(from).map((c) => [c.method, c.entitySet, c.kind, c.type, c.query, c.logical, c.id, c.data && JSON.stringify(c.data)].filter(Boolean).join(' '));
-const ruleWrites = (sdk, from = 0) => ruleRequests(sdk, from).filter((line) => /^(updateRecord|deleteRecord|deleteTable|deleteSolution|deleteRemoteArtifact|deleteWebResource) /.test(line));
+const ruleRequests = (sdk, from = 0) => sdk.calls.slice(from).map((c) => [c.method, c.entitySet, c.kind, c.type, c.query, c.logical, c.id, c.name, c.schemaName, c.data && JSON.stringify(c.data)].filter(Boolean).join(' '));
+const ruleWrites = (sdk, from = 0) => ruleRequests(sdk, from).filter((line) => /^(updateRecord|deleteRecord|deleteTable|deleteSolution|deleteRemoteArtifact|deleteWebResource|deleteRelationship|deleteGlobalOptionSet) /.test(line));
 
 test('a business rule whose definition cannot be deleted keeps ITS table (and the solution); everything else is deleted as before', async () => {
   const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
@@ -1667,6 +1667,355 @@ test('a dry run is unchanged: the same plan, nothing read or written, nothing ke
     ],
   });
   assert.deepStrictEqual(sdk.calls, []);
+});
+
+// --- what only a kept table's existence blocks is kept with it ------------------------------------
+//
+// A table kept for a failed rule (above) goes on existing, and the platform refuses to delete three things for as long as it does
+// (HTTP 400 "... cannot be deleted because it is referenced by N other components"): the table's ICON web resource, a GLOBAL CHOICE
+// that one of its columns binds, and a relationship from the table to ITSELF (the plan defers that one behind the tables: its lookup
+// sits on the table, so it goes with the table and never before it). Teardown used to send those deletes anyway and report each
+// refusal as one more failed step next to the one real failure — the rule — until a re-run. They are now kept with the table: a
+// `(kept — …)` skip that names it, and the re-run deletes them once the table goes. The run still ends as a failure, with the
+// solution kept.
+//
+// `icons`, `bound` and `selfRef` are what the ENVIRONMENT holds: the web resources each table is the icon of, the global choices its
+// columns bind, and the table a relationship to itself hangs on. Each is refused only while that table exists, and a table's delete
+// takes its own relationship to itself with it (the plan relies on that: the deferred delete then reads "not found").
+function dependentsEnvironment({ icons = {}, bound = {}, selfRef = {}, ...state }) {
+  const sdk = ruleEnvironment(state);
+  const exists = (table) => sdk.db.tables.has(table);
+  const refused = (what, id, by) => Object.assign(new Error(`HTTP 400: The ${what}(${id}) component cannot be deleted because it is referenced by ${by} other components.`), { statusCode: 400 });
+  const deleteWebResource = sdk.deleteWebResource;
+  sdk.deleteWebResource = async (id) => {
+    const row = Object.values(sdk.db.webresources).find((w) => w.webresourceid === id);
+    if (row && Object.entries(icons).some(([table, names]) => exists(table) && names.includes(row.name))) {
+      sdk.calls.push({ method: 'deleteWebResource', id });
+      throw refused('WebResource', id, 1);
+    }
+    return deleteWebResource(id);
+  };
+  const deleteGlobalOptionSet = sdk.deleteGlobalOptionSet;
+  sdk.deleteGlobalOptionSet = async (name) => {
+    if (Object.entries(bound).some(([table, names]) => exists(table) && names.includes(name))) {
+      sdk.calls.push({ method: 'deleteGlobalOptionSet', name });
+      throw refused('OptionSet', name, 1);
+    }
+    return deleteGlobalOptionSet(name);
+  };
+  const deleteRelationship = sdk.deleteRelationship;
+  sdk.deleteRelationship = async (schemaName) => {
+    if (sdk.db.relationships.has(schemaName) && selfRef[schemaName] && exists(selfRef[schemaName])) {
+      sdk.calls.push({ method: 'deleteRelationship', schemaName });
+      throw refused('EntityRelationship', schemaName, 2);
+    }
+    return deleteRelationship(schemaName);
+  };
+  const deleteTable = sdk.deleteTable;
+  sdk.deleteTable = async (logical) => {
+    try {
+      return await deleteTable(logical);
+    } finally {
+      for (const [schemaName, table] of Object.entries(selfRef)) if (table === logical && !exists(table)) sdk.db.relationships.delete(schemaName);
+    }
+  };
+  return sdk;
+}
+
+// Two tables: `new_ticket` carries the rule that fails and `new_customer` is deleted as ever. Each has an icon, a column that binds a
+// global choice and a relationship to itself; the script is a web resource that is nobody's icon, and one more relationship joins the
+// two tables (it goes before any table, so a table kept later does not hold it).
+const dependentsSpec = (over = {}) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [
+    { schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, vectorIcon: 'new_ticket.svg', columns: [{ schemaName: 'new_priority', type: 'Choice', globalChoice: 'new_priority' }] },
+    { schemaName: 'new_customer', primaryAttribute: { schemaName: 'new_name' }, vectorIcon: 'new_customer.svg', columns: [{ schemaName: 'new_tier', type: 'Choice', globalChoice: 'new_tier' }] },
+  ],
+  relationships: [
+    { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', lookup: { schemaName: 'new_CustomerId' } },
+    { type: 'OneToMany', referenced: 'new_ticket', referencing: 'new_ticket', lookup: { schemaName: 'new_ParentTicketId' } },
+    { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_customer', lookup: { schemaName: 'new_ParentCustomerId' } },
+  ],
+  webResources: [
+    { name: 'new_ticket.svg', type: 'svg', content: '<svg/>' },
+    { name: 'new_customer.svg', type: 'svg', content: '<svg/>' },
+    { name: 'new_ticket.js', type: 'js', content: '' },
+  ],
+  globalChoices: [
+    { name: 'new_priority', displayName: 'Priority', options: ['Low', 'High'] },
+    { name: 'new_tier', displayName: 'Tier', options: ['Gold', 'Silver'] },
+  ],
+  businessRules: [{ entity: 'new_ticket', name: 'Gate' }],
+  ...over,
+});
+const dependentsWorld = (over = {}) => dependentsEnvironment({
+  tables: ['new_ticket', 'new_customer'],
+  relationships: ['new_customer_new_ticket', 'new_ticket_new_ticket', 'new_customer_new_customer'],
+  webresources: {
+    'new_ticket.svg': { webresourceid: 'wr-ticket', name: 'new_ticket.svg' },
+    'new_customer.svg': { webresourceid: 'wr-customer', name: 'new_customer.svg' },
+    'new_ticket.js': { webresourceid: 'wr-js', name: 'new_ticket.js' },
+  },
+  globalchoices: ['new_priority', 'new_tier'],
+  rules: ruleRows('Gate', 'new_ticket', 'gate'),
+  icons: { new_ticket: ['new_ticket.svg'], new_customer: ['new_customer.svg'] },
+  bound: { new_ticket: ['new_priority'], new_customer: ['new_tier'] },
+  selfRef: { new_ticket_new_ticket: 'new_ticket', new_customer_new_customer: 'new_customer' },
+  ...over,
+});
+const keptWithTable = (label, how, tables = 1) => `${label} (kept — ${how}, and ${tables > 1 ? 'those tables are' : 'that table is'} kept because business rule(s) on ${tables > 1 ? 'them' : 'it'} could not be deleted; a re-run deletes it once ${tables > 1 ? 'they are' : 'the table is'} gone)`;
+const solutionKept = /^solution S \(kept — 1 earlier step\(s\) failed/;
+
+test('a table kept for a failed rule keeps its icon, the global choice its column binds and its relationship to itself too — one failure is reported, everything else goes as before', async () => {
+  const sdk = dependentsWorld({ failNextDelete: ['gate-def'] });
+  const events = [];
+  const res = await runTeardown(dependentsSpec(), { apply: true }, { sdk, emit: (e) => events.push(e) });
+
+  // The one real failure. Before, the platform's three refusals were reported next to it, as three more failed steps.
+  assert.strictEqual(res.ok, false, 'the rule failed, so the run is a failure');
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  assert.deepStrictEqual(events.filter((e) => e.status === 'error').map((e) => e.label), ['business rule "Gate" (new_ticket)']);
+
+  // What is kept, in the order the plan reaches it — each a `(kept — …)` skip that names the table, and the solution last.
+  assert.deepStrictEqual(res.skipped.slice(0, 4), [
+    keptTableLabel('new_ticket', ['Gate']),
+    keptWithTable('relationship new_ticket_new_ticket', 'it relates table new_ticket to itself'),
+    keptWithTable('web resource new_ticket.svg', 'it is the icon of table new_ticket'),
+    keptWithTable('global choice new_priority', 'a column of table new_ticket binds it'),
+  ]);
+  assert.strictEqual(res.skipped.length, 5, JSON.stringify(res.skipped));
+  assert.match(res.skipped[4], solutionKept, 'the solution is kept for the re-run, as for any earlier failure');
+  assert.deepStrictEqual(events.filter((e) => e.status === 'skip').map((e) => [e.phase, e.skip]), [
+    ['tables', 'kept'], ['relationships', 'kept'], ['web-resources', 'kept'], ['global-choices', 'kept'], ['solution', 'kept'],
+  ], 'each is a kept skip, which the summary counts as kept');
+
+  // What was deleted as before: the other table with everything it holds, the script, the relationship between the two tables.
+  assert.deepStrictEqual(res.deleted.table, ['new_customer']);
+  assert.deepStrictEqual(res.deleted.webResource, ['wr-customer', 'wr-js']);
+  assert.deepStrictEqual(res.deleted.globalChoice, ['new_tier']);
+  assert.deepStrictEqual(res.deleted.relationship, ['new_customer_new_ticket', 'new_customer_new_customer']);
+
+  // What the environment holds afterwards: the table with the rule and everything that hangs on it, nothing the platform refused.
+  assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), ['new_ticket.svg']);
+  assert.deepStrictEqual([...sdk.db.globalchoices], ['new_priority']);
+  assert.deepStrictEqual([...sdk.db.relationships], ['new_ticket_new_ticket']);
+  assert.deepStrictEqual(sdk.workflowIds(), ['gate-def', 'gate-copy']);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S']);
+  assert.deepStrictEqual(sdk.stranded(), []);
+
+  // No delete the platform would refuse is sent, and the failed rule delete is still sent once.
+  const sent = ruleWrites(sdk);
+  for (const refusedDelete of ['deleteWebResource wr-ticket', 'deleteGlobalOptionSet new_priority', 'deleteRelationship new_ticket_new_ticket']) {
+    assert.ok(!sent.includes(refusedDelete), `${refusedDelete} was sent: ${sent.join(' | ')}`);
+  }
+  assert.strictEqual(sent.filter((line) => line === 'deleteRecord workflow gate-def').length, 1);
+});
+
+test('the re-run, with the fault gone, deletes the rule, the table and everything that was kept with it', async () => {
+  const sdk = dependentsWorld({ failNextDelete: ['gate-def'] });
+  const failed = await runTeardown(dependentsSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(failed.ok, false);
+
+  const from = sdk.calls.length;
+  const again = await runTeardown(dependentsSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(again.ok, true, JSON.stringify(again.errors));
+  assert.deepStrictEqual(again.skipped.filter((s) => /kept/.test(s)), [], 'nothing is kept once the rule is deletable');
+  assert.deepStrictEqual(ruleWrites(sdk, from), [
+    'deleteRecord workflow gate-def',
+    'deleteRecord workflow gate-copy',
+    'deleteRelationship new_customer_new_ticket', // gone in the first run: the tolerated not-found
+    'deleteTable new_ticket',
+    'deleteTable new_customer', // gone in the first run
+    'deleteRelationship new_ticket_new_ticket', // went with its table: the tolerated not-found the plan counts on
+    'deleteRelationship new_customer_new_customer',
+    'deleteWebResource wr-ticket',
+    'deleteGlobalOptionSet new_priority',
+    'deleteGlobalOptionSet new_tier',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), []);
+  assert.deepStrictEqual([...sdk.db.globalchoices], []);
+  assert.deepStrictEqual([...sdk.db.relationships], []);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), []);
+});
+
+// The control: with no failed rule nothing is kept, and every request goes out as it always did — in the same order, the same number.
+test('with no failed rule the same spec is torn down exactly as before: the same requests in the same order, nothing kept', async () => {
+  const sdk = dependentsWorld();
+  const res = await runTeardown(dependentsSpec(), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.deepStrictEqual(res.skipped, []);
+  assert.deepStrictEqual(ruleRequests(sdk), [
+    'queryRecords workflow',
+    'updateRecord workflow gate-def {"statecode":0,"statuscode":1}',
+    'deleteRecord workflow gate-def',
+    'deleteRecord workflow gate-copy',
+    'deleteRelationship new_customer_new_ticket',
+    'findTables new_ticket',
+    'deleteTable new_ticket',
+    'findTables new_customer',
+    'deleteTable new_customer',
+    'deleteRelationship new_ticket_new_ticket',
+    'deleteRelationship new_customer_new_customer',
+    'resolveArtifact webResource',
+    'deleteWebResource wr-ticket',
+    'resolveArtifact webResource',
+    'deleteWebResource wr-customer',
+    'resolveArtifact webResource',
+    'deleteWebResource wr-js',
+    'deleteGlobalOptionSet new_priority',
+    'deleteGlobalOptionSet new_tier',
+    'resolveArtifact solution',
+    'deleteSolution sol-1',
+  ]);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), []);
+  assert.deepStrictEqual([...sdk.db.globalchoices], []);
+  assert.deepStrictEqual([...sdk.db.relationships], []);
+});
+
+test('an icon and a global choice that the kept table and a deleted table share stay while the kept table needs them', async () => {
+  const shared = (spec) => ({
+    ...spec,
+    entities: spec.entities.map((e) => ({ ...e, vectorIcon: 'shared.svg', columns: [{ schemaName: 'new_level', type: 'Choice', globalChoice: 'new_level' }] })),
+    webResources: [{ name: 'shared.svg', type: 'svg', content: '<svg/>' }],
+    globalChoices: [{ name: 'new_level', displayName: 'Level', options: ['Low', 'High'] }],
+  });
+  const sdk = dependentsWorld({
+    failNextDelete: ['gate-def'],
+    webresources: { 'shared.svg': { webresourceid: 'wr-shared', name: 'shared.svg' } },
+    globalchoices: ['new_level'],
+    icons: { new_ticket: ['shared.svg'], new_customer: ['shared.svg'] },
+    bound: { new_ticket: ['new_level'], new_customer: ['new_level'] },
+  });
+  const res = await runTeardown(shared(dependentsSpec()), { apply: true }, { sdk, emit: () => {} });
+
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  // Named by the table that is kept — the other table is deleted in this run and holds nothing.
+  assert.ok(res.skipped.includes(keptWithTable('web resource shared.svg', 'it is the icon of table new_ticket')), JSON.stringify(res.skipped));
+  assert.ok(res.skipped.includes(keptWithTable('global choice new_level', 'a column of table new_ticket binds it')), JSON.stringify(res.skipped));
+  assert.deepStrictEqual(res.deleted.table, ['new_customer']);
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), ['shared.svg']);
+  assert.deepStrictEqual([...sdk.db.globalchoices], ['new_level']);
+
+  // Once the other table is deleted too (a later run, the rule deletable) both go with the last table that needed them.
+  const again = await runTeardown(shared(dependentsSpec()), { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(again.ok, true, JSON.stringify(again.errors));
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), []);
+  assert.deepStrictEqual([...sdk.db.globalchoices], []);
+});
+
+test('an icon shared by two kept tables names both, and a table the run deletes holds nothing', async () => {
+  const sdk = dependentsWorld({
+    failNextDelete: ['gate-def', 'lock-def'],
+    rules: [...ruleRows('Gate', 'new_ticket', 'gate'), ...ruleRows('Lock', 'new_customer', 'lock')],
+    webresources: { 'shared.svg': { webresourceid: 'wr-shared', name: 'shared.svg' } },
+    icons: { new_ticket: ['shared.svg'], new_customer: ['shared.svg'] },
+  });
+  const spec = dependentsSpec({
+    entities: dependentsSpec().entities.map((e) => ({ ...e, vectorIcon: 'shared.svg' })),
+    webResources: [{ name: 'shared.svg', type: 'svg', content: '<svg/>' }],
+    businessRules: [{ entity: 'new_ticket', name: 'Gate' }, { entity: 'new_customer', name: 'Lock' }],
+  });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)', 'business rule "Lock" (new_customer)']);
+  assert.ok(res.skipped.includes(keptWithTable('web resource shared.svg', 'it is the icon of table new_ticket; it is the icon of table new_customer', 2)), JSON.stringify(res.skipped));
+  assert.deepStrictEqual(Object.keys(sdk.db.webresources), ['shared.svg']);
+  assert.deepStrictEqual([...sdk.db.tables].sort(), ['new_customer', 'new_ticket']);
+});
+
+test('a reused table that a failed rule is on is not a table this run keeps — what hangs on it is sent, and refused, exactly as before', async () => {
+  const sdk = dependentsWorld({ failNextDelete: ['gate-def'] });
+  const spec = dependentsSpec();
+  spec.entities[0].existing = true;
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.deepStrictEqual(res.errors.map((e) => e.step), [
+    'business rule "Gate" (new_ticket)',
+    'relationship new_ticket_new_ticket',
+    'web resource new_ticket.svg',
+    'global choice new_priority',
+  ]);
+  assert.ok(res.skipped.includes('table new_ticket (reused table (existing: true) — not created by this build)'), JSON.stringify(res.skipped));
+  assert.ok(!res.skipped.some((s) => /^(relationship|web resource|global choice) .*kept — .*business rule/.test(s)), 'its own reason stands; nothing else is kept for a rule');
+});
+
+test('a kept table\'s icon that the environment no longer has reads "not found", as before — nothing is kept for what is not there', async () => {
+  const sdk = dependentsWorld({ failNextDelete: ['gate-def'], webresources: { 'new_customer.svg': { webresourceid: 'wr-customer', name: 'new_customer.svg' } } });
+  const events = [];
+  const res = await runTeardown(dependentsSpec(), { apply: true }, { sdk, emit: (e) => events.push(e) });
+  assert.ok(res.skipped.includes('web resource new_ticket.svg'), JSON.stringify(res.skipped));
+  assert.ok(events.some((e) => e.phase === 'web-resources' && e.status === 'skip' && e.skip === 'not-found' && e.label === 'web resource new_ticket.svg (not found)'), JSON.stringify(events.filter((e) => e.phase === 'web-resources')));
+});
+
+test('the plan says which tables hold a web resource, a global choice and a relationship to itself — and the plan itself is as it was', () => {
+  const steps = planTeardown(dependentsSpec());
+  const heldBy = (kind, key) => (steps.find((s) => s.kind === kind && (s.target.name === key || s.target.schemaName === key)) || {}).heldBy;
+  assert.deepStrictEqual(heldBy('webResource', 'new_ticket.svg'), [{ table: 'new_ticket', by: 'icon' }]);
+  assert.deepStrictEqual(heldBy('webResource', 'new_customer.svg'), [{ table: 'new_customer', by: 'icon' }]);
+  assert.strictEqual(heldBy('webResource', 'new_ticket.js'), undefined, 'a script is nobody\'s icon');
+  assert.deepStrictEqual(heldBy('globalChoice', 'new_priority'), [{ table: 'new_ticket', by: 'column' }]);
+  assert.deepStrictEqual(heldBy('relationship', 'new_ticket_new_ticket'), [{ table: 'new_ticket', by: 'itself' }]);
+  assert.strictEqual(heldBy('relationship', 'new_customer_new_ticket'), undefined, 'a relationship between two tables goes before the tables, so no table holds it');
+  // Same labels, same order — a dry run prints exactly this.
+  assert.deepStrictEqual(steps.map((s) => s.label), [
+    'business rule "Gate" (new_ticket)',
+    'reset default views for new_ticket (drop parent lookups)',
+    'reset default views for new_customer (drop parent lookups)',
+    'relationship new_customer_new_ticket',
+    'table new_ticket',
+    'table new_customer',
+    'relationship new_ticket_new_ticket',
+    'relationship new_customer_new_customer',
+    'web resource new_ticket.svg',
+    'web resource new_customer.svg',
+    'web resource new_ticket.js',
+    'global choice new_priority',
+    'global choice new_tier',
+    'solution S',
+  ]);
+});
+
+test('what a table holds follows how the build made it: an icon by its lower-cased name, a global choice by the exact name a Choice column asks for', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{
+      schemaName: 'new_Ticket',
+      primaryAttribute: { schemaName: 'new_name' },
+      vectorIcon: 'NEW_Glyph.svg',
+      icon: 'new_photo.png',
+      columns: [
+        { schemaName: 'new_tags', type: 'MultiChoice', globalChoice: 'new_tags' },
+        // The build binds a column by looking the name up exactly, so a reference in another letter case was never bound: the column got
+        // inline options of its own instead, and the global choice has nothing to wait for.
+        { schemaName: 'new_stage', type: 'Choice', globalChoice: 'NEW_STAGE' },
+        // Only a Choice or MultiChoice column binds a global choice; on any other type the name is ignored.
+        { schemaName: 'new_note', type: 'Text', globalChoice: 'new_note' },
+      ],
+    }],
+    relationships: [
+      { type: 'OneToMany', referenced: 'New_Ticket', referencing: 'new_ticket', lookup: { schemaName: 'new_ParentId' } },
+      { type: 'ManyToMany', schemaName: 'new_ticket_related', entity1: 'new_ticket', entity2: 'new_ticket' },
+    ],
+    webResources: [{ name: 'new_glyph.svg', type: 'svg', content: '<svg/>' }, { name: 'new_photo.png', type: 'png', contentBase64: '' }],
+    globalChoices: [{ name: 'new_tags', options: ['a'] }, { name: 'new_stage', options: ['a'] }, { name: 'new_note', options: ['a'] }],
+  };
+  const steps = planTeardown(spec);
+  const heldBy = (kind, key) => (steps.find((s) => s.kind === kind && (s.target.name === key || s.target.schemaName === key)) || {}).heldBy;
+  assert.deepStrictEqual(heldBy('webResource', 'new_glyph.svg'), [{ table: 'new_ticket', by: 'icon' }], 'a web resource name is not case-sensitive');
+  assert.deepStrictEqual(heldBy('webResource', 'new_photo.png'), [{ table: 'new_ticket', by: 'icon' }], 'the raster icon holds its web resource too');
+  assert.deepStrictEqual(heldBy('globalChoice', 'new_tags'), [{ table: 'new_ticket', by: 'column' }]);
+  assert.strictEqual(heldBy('globalChoice', 'new_stage'), undefined);
+  assert.strictEqual(heldBy('globalChoice', 'new_note'), undefined);
+  const relationships = steps.filter((s) => s.kind === 'relationship');
+  assert.deepStrictEqual(relationships.map((s) => [s.target.schemaName, s.heldBy]), [
+    ['new_ticket_related', undefined], // the many-to-many, planned before the tables, as it always was
+    ['new_ticket_new_ticket', [{ table: 'new_ticket', by: 'itself' }]],
+  ]);
+  assert.ok(steps.findIndex((s) => s === relationships[0]) < steps.findIndex((s) => s.kind === 'table'));
+  assert.ok(steps.findIndex((s) => s === relationships[1]) > steps.findIndex((s) => s.kind === 'table'));
 });
 
 // --- helpers ----------------------------------------------------------------------------

@@ -1379,10 +1379,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   "kept"); the rule is matched to it by logical name in any letter case, and a re-run deletes the rule, then
   the table, then the solution.
   Only a table the run would have deleted is kept this way — a reused (`existing: true`) or system table
-  keeps its own skip reason. Nothing re-sends the failed delete (a 500 does not prove it did not run). Keeping the table
-  adds no error of its own: the rule's failure stays reported, and `ok` is false and the exit status a failure as before,
-  but what still depends on the kept table (its icon web resource, a global choice its column binds, a relationship to
-  itself) can fail to delete in the same run and is reported too, until a re-run removes the table; a dry run is unchanged. A failed
+  keeps its own skip reason, and what hangs on one is sent as it always was. Nothing re-sends the failed delete (a 500 does not
+  prove it did not run). Keeping the table adds no error of its own: the rule's failure stays reported, and `ok` is false and the
+  exit status a failure as before (so the solution is kept for the re-run too). What only the kept table's existence blocks is
+  kept with it, not sent for the platform to refuse — each refusal used to be one more reported failure until the re-run: its
+  icon web resource (`entities[].vectorIcon`/`icon`, matched in any letter case), a global choice one of its Choice or
+  MultiChoice columns binds (the exact name the column gives, as the build binds it), and a relationship from the table to
+  itself (the one relationship planned after the tables). Each is reported as `<step> (kept — …)` naming the table
+  (`skip: 'kept'`), says that a re-run deletes it once the table goes, and is deleted by that re-run; an icon or a choice that a
+  table the run deletes also uses stays while the kept table needs it, and a step that finds nothing in the environment still
+  reads "not found". This is read from the spec alone (`planTeardown` marks such a step with `heldBy`): an icon set or a column
+  bound by hand in the environment is not in the spec, so that delete is still sent — and refused — as before. A rule whose
+  deactivation succeeded and whose delete failed stays deactivated until the re-run, which deletes the draft rule and its copy as
+  it deletes any: teardown does not try to re-activate it, because a failed delete does not prove the rule is still there and
+  a second write into a platform that has just failed one is not clearly safe. A dry run is unchanged. A failed
   **business process flow** keeps no table: its handler's notes say the platform removes the flow's
   activated copy with the flow, and nothing measured says a flow becomes undeletable once its table is gone.
   Command teardown

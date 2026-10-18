@@ -553,9 +553,10 @@ a lookup column from a retained table or deletes a shared option set. Dashboards
 teardown deletes only those the app's solution holds, never another app's namesake — and none when the spec
 has no real solution to ask (the `Default` a download may leave); it keeps the solution itself while any step
 failed, so a re-run can still tell, keeps the page manifest while the generative-pages step failed, so a
-re-run still finds the pages the app authored, and keeps a table while a business rule on it could not be
-deleted (the rule's activated copy can never be deleted once its table is gone), so a re-run deletes the rule
-first, then the table. **Dry-run by default**; add `--apply
+re-run still finds the pages the app authored, and keeps a table — with its icon web resource, a global choice its
+columns bind and a relationship to itself, which the platform refuses to delete while the table exists — while a
+business rule on it could not be deleted (the rule's activated copy can never be deleted once its table is gone), so
+a re-run deletes the rule first, then the table and what was kept with it. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.
