@@ -50,6 +50,8 @@ const SDK_COLUMN_TYPE = {
   Integer: 'integer', BigInt: 'bigint', Decimal: 'decimal', Double: 'double',
   File: 'file', Image: 'image', AutoNumber: 'autonumber',
 };
+// The level a spec's `required` asks for: true, "recommended" or false (None). Those are the only values the spec gate lets through
+// (requiredValueProblem, lib/app-spec.js) — it refuses the rest instead of having them read as None here.
 const REQUIRED = (c) => (c.required === true ? 'ApplicationRequired' : c.required === 'recommended' ? 'Recommended' : 'None');
 const DEFAULT_LANGUAGE_CODE = 1033;
 
@@ -1030,7 +1032,9 @@ function isVisualizationUnsupported(err) {
 }
 
 function hasExplicitRequired(c) {
-  return c && Object.prototype.hasOwnProperty.call(c, 'required');
+  // `undefined` states nothing, like a missing key — validateAppSpec reads it that way (requiredValueProblem). A bare own-property test took it for an
+  // explicit None, which on an existing column writes None over a level a maker set. JSON cannot carry an undefined; a spec built in code can.
+  return !!c && c.required !== undefined;
 }
 
 function requiredLevelValue(raw) {

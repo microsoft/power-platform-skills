@@ -148,7 +148,8 @@ function dataModel(spec) {
     if (pa) out.push(`| ${cell(labelText(pa.displayName, spec && spec.languageCode) || pa.schemaName)} | ${cell(pa.type, 'Text')} | primary name${pa.autoNumberFormat ? `, auto-number \`${cell(pa.autoNumberFormat)}\`` : ''} |`);
     for (const c of objs(e.columns)) {
       const notes = [];
-      if (c.required) notes.push('required');
+      if (c.required === true) notes.push('required');
+      else if (c.required === 'recommended') notes.push('recommended');
       // `o.label` is the legacy object-option shape. A LOCALIZED option is also an object but has no
       // `label` key, so the legacy branch rendered every one as an empty cell — resolve through
       // labelText first and only then fall back.

@@ -896,6 +896,30 @@ function autoNumberFormatProblem(column) {
   return `is an AutoNumber column but its autoNumberFormat is ${found} — give it a format such as "C-{SEQNUM:5}", or use type "Text" for a plain text column`;
 }
 
+// What a column's — or the primary name column's — `required` may be: true (Dataverse's ApplicationRequired, "Business Required"), "recommended"
+// (Recommended) or false (None); or nothing, which asks nothing of a new column's create (it is created not required) and leaves an existing column as
+// it is. The build reads exactly these (REQUIRED, lib/entity-provision.js) and took every other value for None, so every other value was a silent
+// one: `"ApplicationRequired"`, `"true"`, `"required"`, `"Recommended"`, `1` or `null` made a new column not required and, on an existing column —
+// which the build reconciles whenever the spec states a `required` — wrote None where the level differed, demoting a column a maker had made
+// Business Required. Refused here instead, naming what was written and what to write. `undefined` is "not stated", as it is for every optional
+// field of the spec (JSON cannot carry one), and the build reads it that way too (hasExplicitRequired).
+// Not the other `required`s of a spec: a business process flow step's (a boolean, gated where the flow is), a business rule's SetBusinessRequired
+// action's, a form's.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributerequiredlevel
+// The ONE rule behind both gates, like autoNumberFormatProblem; the callers put the column — or `primaryAttribute.required` — in front of the text it
+// returns.
+function requiredValueProblem(value) {
+  if (value === undefined || value === true || value === false || value === 'recommended') return null;
+  // The usual slips are the names Dataverse gives the levels, a boolean written as text, and a flag written as a number.
+  const spelled = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  let hint;
+  if (['applicationrequired', 'true', 'required', 'yes', 1].includes(spelled)) hint = 'write true for a required column';
+  else if (spelled === 'recommended') hint = 'write "recommended" for a recommended column';
+  else if (['none', 'false', 'no', 'optional', 0].includes(spelled)) hint = 'write false for a column that is not required';
+  else hint = 'true makes a column required, "recommended" makes it recommended and false makes it not required';
+  return `must be true, false or "recommended" (got ${describeSpecValue(value)}) — ${hint}; omit the key to leave an existing column's level as it is`;
+}
+
 // The length the spec asks for a table's primary name column, or undefined when it does not ask. The build, its dry-run plan
 // and its progress total all key on this one answer — it decides whether the build has a "primary column length" step for
 // the table — so they cannot disagree about it (the same arrangement as quickCreateEnabledFor).
@@ -2305,10 +2329,10 @@ function validateSampleDataRows(entityKey, records, errors) {
 
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
-  // The column rules below (an AutoNumber column's format) say what the BUILD can use, so every profile that builds or plans a build holds a spec to
-  // them. The structural profile — teardown's, which also serves preview and the eval harness — does not: it reads a spec for the tables and components
-  // it names, and a spec an earlier release accepted and built (an AutoNumber column made as text) must still be torn down. The same arrangement as the
-  // relationship-name collisions checked at the end of this function.
+  // The column rules below (an AutoNumber column's format, a `required` value) say what the BUILD can use, so every profile that builds or plans a
+  // build holds a spec to them. The structural profile — teardown's, which also serves preview and the eval harness — does not: it reads a spec for
+  // the tables and components it names, and a spec an earlier release accepted and built (an AutoNumber column made as text, a `required: "true"`
+  // made not required) must still be torn down. The same arrangement as the relationship-name collisions checked at the end of this function.
   const checksColumnValues = profile !== 'structural';
   const errors = [];
   // Non-blocking advisories (e.g. a PRE-EXISTING duplicate page name the current run did not create).
@@ -2496,6 +2520,10 @@ function validateAppSpec(spec, opts = {}) {
     if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
       const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
       if (lengthProblem) errors.push(`entity ${e.schemaName}: ${lengthProblem}`);
+      if (checksColumnValues) {
+        const requiredProblem = requiredValueProblem(e.primaryAttribute.required);
+        if (requiredProblem) errors.push(`entity ${e.schemaName}: primaryAttribute.required ${requiredProblem}`);
+      }
     }
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
@@ -2531,10 +2559,12 @@ function validateAppSpec(spec, opts = {}) {
       if (c.type && !TYPE_MAP[c.type]) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
       }
-      // An AutoNumber column needs a format (see checksColumnValues): the SDK refuses to create one without.
+      // An AutoNumber column needs a format, and `required` is true, false or "recommended" (see checksColumnValues).
       if (checksColumnValues) {
         const formatProblem = autoNumberFormatProblem(c);
         if (formatProblem) errors.push(`entity ${e.schemaName}: column ${c.schemaName} ${formatProblem}`);
+        const requiredProblem = requiredValueProblem(c.required);
+        if (requiredProblem) errors.push(`entity ${e.schemaName}: column ${c.schemaName} required ${requiredProblem}`);
       }
       if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
         errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
@@ -4308,6 +4338,7 @@ module.exports = {
   PRIMARY_NAME_MAX_LENGTH,
   primaryNameLengthProblem,
   autoNumberFormatProblem,
+  requiredValueProblem,
   askedPrimaryNameLength,
   keyNeedsNameLength,
   keyWaitsForNameLength,

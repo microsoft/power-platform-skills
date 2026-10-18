@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage, primaryNameLengthProblem, autoNumberFormatProblem } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage, primaryNameLengthProblem, autoNumberFormatProblem, requiredValueProblem } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -138,6 +138,10 @@ function validateProvisionInput(input) {
     if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
       const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
       if (lengthProblem) errors.push(`entity '${e.schemaName}': ${lengthProblem}`);
+      // A `required` that is not true, false or "recommended" is read by the build as "not required" — and written over an existing column's level —
+      // so it is refused at the gate, by the one rule validateAppSpec applies.
+      const requiredProblem = requiredValueProblem(e.primaryAttribute.required);
+      if (requiredProblem) errors.push(`entity '${e.schemaName}': primaryAttribute.required ${requiredProblem}`);
     }
 
     // Validate columns
@@ -162,10 +166,13 @@ function validateProvisionInput(input) {
         }
         validateLabel(c.displayName, `entity '${e.schemaName}': column '${c.schemaName || ''}' displayName`, errors, { baseLanguageCode: input.languageCode });
         validateChoiceOptionLabels(c.options, `entity '${e.schemaName}': column '${c.schemaName || ''}'`, errors, { baseLanguageCode: input.languageCode });
-        // An AutoNumber column needs a format: the SDK refuses to create one without — after the solution and the tables are written, where this gate stops
-        // it before the first write. The rule is the one validateAppSpec applies.
+        // The two column rules a build depends on, which validateAppSpec applies from the same functions: an AutoNumber column needs a format (the SDK
+        // refuses to create one without — after the solution and the tables are written, where this gate stops it before the first write), and `required`
+        // is true, false or "recommended".
         const formatProblem = autoNumberFormatProblem(c);
         if (formatProblem) errors.push(`entity '${e.schemaName}': column '${c.schemaName || ''}' ${formatProblem}`);
+        const requiredProblem = requiredValueProblem(c.required);
+        if (requiredProblem) errors.push(`entity '${e.schemaName}': column '${c.schemaName || ''}' required ${requiredProblem}`);
       }
     }
 

@@ -464,7 +464,7 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
 - **Per-type options** (all optional except an AutoNumber column's `autoNumberFormat`): `required: true` /
-  `"recommended"`; Text → `maxLength`,
+  `"recommended"` / `false`; Text → `maxLength`,
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
   Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
   raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
@@ -482,7 +482,13 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   column (not `BigInt`/`Decimal`/`Double`/`Money`, even though they share the same numeric
   `minValue`/`maxValue`/`precision` options) — either mismatch is rejected by name at validation
   time rather than surfacing as a mid-build SDK error.
-- **`required` converges on rebuild only when authored explicitly.** For a new column, `true` creates
+- **`required` is `true`, `false` or `"recommended"` — and converges on rebuild only when authored
+  explicitly.** `true` is Dataverse `ApplicationRequired` (Business Required), `"recommended"` is
+  `Recommended` and `false` is `None`. Any other value — `"ApplicationRequired"`, `"true"`,
+  `"required"`, `"Recommended"`, `1`, `null` — is refused at validation, on a column and on
+  `primaryAttribute` alike, naming the table, the column and the value (the build would otherwise
+  read it as not required, and write that over an existing column's level); omit the key instead to
+  leave an existing column as it is. For a new column, `true` creates
   Dataverse `ApplicationRequired` and `"recommended"` creates `Recommended`. For a column that
   already exists (including the primary/name column), a rebuild first reads its current
   `RequiredLevel` and only writes when the explicit spec value differs. If `required` is omitted,
