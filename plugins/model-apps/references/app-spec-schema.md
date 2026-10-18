@@ -1094,8 +1094,8 @@ A table's Main forms are served in its **Main Form Set order**, and a user opens
 they may open** — unless they switched forms earlier: the platform remembers the last Main form each
 user opened for a table and opens that one for them while they may still open it. The order is
 stored on each form (its formxml `<DisplayConditions Order="n">`), and `systemform.isdefault` does
-not change it: measured, moving the flag reordered nothing, and a table's three new Main forms — all
-at the same order, as every new form is — were served with the `isdefault` form *last*.
+not change it: measured, moving the flag reordered nothing, and a table's three new Main forms, all at
+the same order, were served with the `isdefault` form *last*.
 
 - **`forms[].isDefault: true`** — this form opens first: it becomes the table's default **and** comes
   first in the order. Applied on any table.

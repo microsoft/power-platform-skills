@@ -4869,11 +4869,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //
   // Only forms the spec declares are ever written. Where the spec orders the table — `mainFormOrder`,
   // an explicit `isDefault`, or any table the spec owns — its Main forms get Order 0..n-1 in the
-  // planned order, skipping any already in place. Elsewhere the order belongs to the environment, and
-  // the build touches it only to put a Main form it CREATED in this run after the table's other Main
-  // forms: a new form carries Order 0, so it would otherwise tie with the form everyone opens today —
-  // or, on a table whose forms carry no order at all, displace it. A table the author orders by hand
-  // (`securityRoles.order`) is left alone entirely.
+  // planned order, skipping any already in place (a form the SDK just created has no Order, so it is
+  // always written, the first of a table included). Elsewhere the order belongs to the
+  // environment, and the build touches it only to put a Main form it CREATED in this run after the
+  // table's other Main forms: a new form carries no Order, and where the platform serves a form with
+  // none is not the build's choice, so it could come ahead of the form everyone opens today. (On a
+  // table whose forms carry no order at all there is nothing to follow: it comes first, and the build
+  // says so.) A table the author orders by hand (`securityRoles.order`) is left alone entirely.
   //
   // Best-effort like the promotion above: a failed read or write is reported (✗ and a warning) and
   // `--verify` fails on the order it reads back, but the build goes on.
@@ -4982,9 +4984,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
   // AB#6736948 — a Main form the build CREATES on a table whose order it does not set is created already
   // after the table's other Main forms. Its order is written into the new form's own <DisplayConditions>
-  // (the SDK gives every new form one, at Order 0, in its root bag) BEFORE the first push, so the order is
-  // part of the create: no interrupted run and no later failure can leave the form at Order 0, which can
-  // put it ahead of the form the table opens with. A separate write after the create, as first tried,
+  // (the SDK gives every new form one, with no Order, in its root bag) BEFORE the first push, so the order
+  // is part of the create: no interrupted run and no later failure can leave the form without one, which
+  // can put it ahead of the form the table opens with. A separate write after the create, as first tried,
   // left exactly that on any failure between the two — and a later build cannot tell the form is new.
   //
   // The place is (highest order among the table's other Main forms) + 1 + (the form's index among the
@@ -5016,9 +5018,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const order = snapshot.error ? APPEND_FALLBACK_ORDER + idx : snapshot.base + 1 + idx;
     // The root bag of a new form, as the SDK builds it (abridged):
     //   { "c": [ { "i": 1, "node": { "n": "header", … } }, { "i": 2, "node": { "n": "footer", … } },
-    //            { "i": 3, "node": { "n": "DisplayConditions", "a": [["Order", "0"], ["FallbackForm", "true"]],
+    //            { "i": 3, "node": { "n": "DisplayConditions", "a": [["FallbackForm", "true"]],
     //                                "c": [{ "n": "Everyone", "a": [], "c": [] }] } } ] }
-    // Only the Order attribute changes; the node is replaced whole through the generic surface, as the
+    // Only the Order attribute is added; the node is replaced whole through the generic surface, as the
     // form-events region is (wireFormEvents).
     const art = await provision.getArtifact('form', formId);
     const bag = (art && art.bag && Array.isArray(art.bag.c)) ? art.bag.c : [];
@@ -5026,6 +5028,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     if (at < 0) return;
     const entry = JSON.parse(JSON.stringify(bag[at]));
     const attrs = Array.isArray(entry.node.a) ? entry.node.a : [];
+    // The SDK gives a new form no Order, so it is added first, as Maker's own file has it. A node that already
+    // carries one (an earlier SDK gave every new form Order "0") has it replaced, not repeated.
     const has = attrs.some((p) => Array.isArray(p) && p[0] === 'Order');
     entry.node.a = has ? attrs.map((p) => (Array.isArray(p) && p[0] === 'Order' ? ['Order', String(order)] : p)) : [['Order', String(order)], ...attrs];
     await provision.updateElement('form', formId, `/bag/c/${at}`, entry);

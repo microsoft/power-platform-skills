@@ -89,6 +89,11 @@ async function build(spec, { failSet, warn } = {}) {
   return { res, calls, events };
 }
 
+// The forms phase also gives a new table's first Main form its place, `{ order: 0 }` — a form the SDK creates has no Order — through
+// the same call. These tests are about the roles the security phase writes, which are the writes that carry `roleIds` or `everyone`.
+const isRolesWrite = (call) => call[0] === 'setFormSecurityRoles' && (call[2].roleIds !== undefined || call[2].everyone === true);
+const rolesWrites = (calls) => calls.filter(isRolesWrite);
+
 // --- the multi-Main-form warning ------------------------------------------------------------------
 //
 // `created.forms` keeps ONE id per entity, so a second Main form silently replaces the first there.
@@ -138,8 +143,8 @@ test('a form offered to two personas resolves them to the roles this build creat
   const { res, calls } = await build(specWithFormRoles({ personas: ['Dispatcher', 'Technician'] }));
   assert.strictEqual(res.ok, true);
 
-  const set = calls.find((c) => c[0] === 'setFormSecurityRoles');
-  assert.ok(set, `setFormSecurityRoles must be called; calls: ${JSON.stringify(calls.map((c) => c[0]))}`);
+  const set = rolesWrites(calls)[0];
+  assert.ok(set, `setFormSecurityRoles must be called with the roles; calls: ${JSON.stringify(calls.map((c) => c[0]))}`);
   assert.deepStrictEqual(set[2], { roleIds: [ROLE_DISPATCHER, ROLE_TECH] });
 
   // The id must be the FORM's, not the entity's or the app's.
@@ -152,14 +157,14 @@ test('role assignment runs AFTER the roles are created, never before', async () 
   // distinguishes the correct implementation from the broken one.
   const { calls } = await build(specWithFormRoles({ personas: ['Dispatcher'] }));
   const firstRole = calls.findIndex((c) => c[0] === 'createPersonaRole');
-  const set = calls.findIndex((c) => c[0] === 'setFormSecurityRoles');
+  const set = calls.findIndex(isRolesWrite);
   assert.ok(firstRole > -1 && set > -1, JSON.stringify(calls.map((c) => c[0])));
   assert.ok(set > firstRole, 'the form may only be assigned once the role it names exists');
 });
 
 test('everyone: true emits the Everyone shape and no role list', async () => {
   const { calls } = await build(specWithFormRoles({ everyone: true }));
-  const set = calls.find((c) => c[0] === 'setFormSecurityRoles');
+  const set = rolesWrites(calls)[0];
   assert.deepStrictEqual(set[2], { everyone: true });
   assert.strictEqual('roleIds' in set[2], false,
     'the platform models <Everyone /> as a REPLACEMENT for the role list, and the SDK rejects both together');
@@ -169,16 +174,16 @@ test('fallbackForm and order are sent only when the author set them', async () =
   // The SDK PRESERVES both when omitted. Sending `undefined` would be indistinguishable from
   // "reset it" if that ever changes, so omission must stay omission.
   const bare = await build(specWithFormRoles({ personas: ['Dispatcher'] }));
-  const bareOpts = bare.calls.find((c) => c[0] === 'setFormSecurityRoles')[2];
+  const bareOpts = rolesWrites(bare.calls)[0][2];
   assert.deepStrictEqual(Object.keys(bareOpts).sort(), ['roleIds']);
 
   const full = await build(specWithFormRoles({ personas: ['Dispatcher'], fallbackForm: true, order: 3 }));
-  const fullOpts = full.calls.find((c) => c[0] === 'setFormSecurityRoles')[2];
+  const fullOpts = rolesWrites(full.calls)[0][2];
   assert.deepStrictEqual(fullOpts, { roleIds: [ROLE_DISPATCHER], fallbackForm: true, order: 3 });
 
   // `false` and `0` must SURVIVE — they are meaningful values, not absence.
   const falsy = await build(specWithFormRoles({ personas: ['Dispatcher'], fallbackForm: false, order: 0 }));
-  const falsyOpts = falsy.calls.find((c) => c[0] === 'setFormSecurityRoles')[2];
+  const falsyOpts = rolesWrites(falsy.calls)[0][2];
   assert.strictEqual(falsyOpts.fallbackForm, false);
   assert.strictEqual(falsyOpts.order, 0);
 });
@@ -193,10 +198,12 @@ test('a persona the build did not create HALTS — it must never silently hide t
     'the halt must name the offending persona and how to fix it');
 });
 
-test('a form without securityRoles is left alone entirely', async () => {
+test('a form without securityRoles gets no role write — the only write is its place in the form order', async () => {
   const { calls } = await build(specWithFormRoles(null));
-  assert.strictEqual(calls.some((c) => c[0] === 'setFormSecurityRoles'), false,
+  assert.strictEqual(calls.some(isRolesWrite), false,
     'omitting securityRoles must not touch the form — every role can see it, which is the default');
+  assert.deepStrictEqual(calls.filter((c) => c[0] === 'setFormSecurityRoles').map((c) => c[2]), [{ order: 0 }],
+    'a form the SDK creates has no order, so the forms phase writes the first form of its table');
 });
 
 test('a failure to assign roles HALTS the build', async () => {
@@ -228,7 +235,7 @@ test('a non-Main form is addressed by its own identity, not the entity default',
     { entity: 'new_ticket', name: 'Quick', formType: 'QuickCreate', securityRoles: { personas: ['Dispatcher'] } },
   ];
   const { res, calls } = await build(spec);
-  const set = calls.find((c) => c[0] === 'setFormSecurityRoles');
+  const set = rolesWrites(calls)[0];
   assert.ok(set, 'the QuickCreate form must still be assignable');
   assert.notStrictEqual(set[1], res.created.forms['new_ticket'],
     'it must NOT resolve to the entity Main form');
@@ -342,7 +349,7 @@ test('a persona named in a DIFFERENT CASE resolves — the gate and the build mu
 
   const { res, calls } = await build(spec);
   assert.strictEqual(res.ok, true, 'so the build must too, rather than halting at the last phase');
-  const set = calls.find((c) => c[0] === 'setFormSecurityRoles');
+  const set = rolesWrites(calls)[0];
   assert.deepStrictEqual(set[2], { roleIds: [ROLE_DISPATCHER] });
 });
 
@@ -352,7 +359,7 @@ test('surrounding whitespace in a persona name also resolves', async () => {
   const spec = specWithFormRoles({ personas: ['  Dispatcher  '] });
   const { res, calls } = await build(spec);
   assert.strictEqual(res.ok, true);
-  assert.deepStrictEqual(calls.find((c) => c[0] === 'setFormSecurityRoles')[2], { roleIds: [ROLE_DISPATCHER] });
+  assert.deepStrictEqual(rolesWrites(calls)[0][2], { roleIds: [ROLE_DISPATCHER] });
 });
 
 test('the case-insensitive persona lookup DEPENDS on personas[] being unique case-insensitively', () => {

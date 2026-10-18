@@ -338,11 +338,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (measured: moving the flag reorders nothing, and a table's three new forms, all at the same order,
   were served with the `isdefault` form last). After every form exists, the forms phase promotes the default (an explicit
   `isDefault` or `entities[].mainFormOrder[0]` on any table; the first Main form only on a table the
-  spec owns) and then writes Order 0..n-1 onto the spec's Main forms, the ones it does not list keeping
-  their stored relative order. On a table it orders nothing on, a Main form it creates is created after the
-  table's others: its order is written into the new form's own `<DisplayConditions>` before the first
-  push (`createInPlace`), so no interrupted run or later failure can leave it at the Order 0 every new
-  form gets — a later build could not tell it is new. Only declared forms are written, order-only through `setFormSecurityRoles` so roles
+  spec owns) and then writes Order 0..n-1 onto the spec's Main forms (a form the SDK creates has no
+  `Order`, so a new form is always written, the first of a table included), the ones it does not
+  list keeping their stored relative order. On a table it orders nothing on, a Main form it creates is
+  created after the table's others: its order is written into the new form's own `<DisplayConditions>`
+  before the first push (`createInPlace`), so no interrupted run or later failure can leave it with no
+  order — a form with none takes no slot in the order Maker lists — and a later build could not tell it is
+  new. Only declared forms are written, order-only through `setFormSecurityRoles` so roles
   survive; a table ordered by hand (`securityRoles.order`) is left alone; the step is best-effort (✗ and
   a warning, never a halt). Verify checks the stored order (`form-order`) and what the public
   `RetrieveFilteredForms` serves the user running it (`form-order-served`). On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
