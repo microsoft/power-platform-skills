@@ -15,11 +15,17 @@
 // it the moment a plugin skill is invoked (see lib/agents.js for the isolation flags and
 // lib/transcript.js for the event shapes). Cost is therefore ~one model turn per trial.
 //
+// A case is graded on the decision of the agent's FIRST turn. Its tool menu is read-only (no file writes,
+// no shell), so a request that is not for the plugin can go: turn 0 looks at the empty workspace and
+// decides no skill applies, turn 1 asks for a skill because nothing else can do the work. That later
+// request is reported beside the grade as a "later fallback" and graded only with `--grade eventual`
+// (lib/grade.js; EVAL_GUIDE.md → "What counts as the decision").
+//
 // NOT part of the per-PR gate: it needs model credentials, is non-deterministic, and costs money.
 // See EVAL_GUIDE.md → "Cadence" and .github/workflows/model-apps-agent-evals.yml.
 //
 // Usage: node run-routing.js [--agent claude|copilot] [--model <m>] [--runs <n>]
-//          [--threshold <0..1|a/b>] [--tier smoke|full|stress] [--eval <id>] [--concurrency <n>]
+//          [--threshold <0..1|a/b>] [--grade initial|eventual] [--tier smoke|full|stress] [--eval <id>] [--concurrency <n>]
 //          [--timeout <sec>] [--out <results.json>] [--transcripts <dir>] [--compare <prev.json>]
 //          [--agent-bin <path>] [--dry-run]
 // Exit:  0 every case met the threshold · 1 a case failed · 2 harness error (bad args, agent
@@ -34,13 +40,13 @@ const { spawn, spawnSync } = require('node:child_process');
 const { TIERS } = require('../lib/eval-args.js');
 const { TranscriptParser, AGENTS } = require('./lib/transcript.js');
 const { buildInvocation, quoteForCmd } = require('./lib/agents.js');
-const { summarizeCase, validateEvals } = require('./lib/grade.js');
+const { summarizeCase, validateEvals, decisionOf, GRADE_BASES } = require('./lib/grade.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const PLUGIN_DIR = path.join(REPO_ROOT, 'plugins', 'model-apps');
 const PLUGIN_NAME = 'model-apps';
 
-const DEFAULTS = { agent: 'claude', model: null, runs: 3, threshold: 2 / 3, thresholdLabel: '2/3', tier: null, eval: null, concurrency: 4, timeout: 180, out: null, transcripts: null, compare: null, agentBin: null, dryRun: false };
+const DEFAULTS = { agent: 'claude', model: null, runs: 3, threshold: 2 / 3, thresholdLabel: '2/3', grade: 'initial', tier: null, eval: null, concurrency: 4, timeout: 180, out: null, transcripts: null, compare: null, agentBin: null, dryRun: false };
 
 const USAGE = `Usage: run-routing.js [options]
 
@@ -48,6 +54,9 @@ const USAGE = `Usage: run-routing.js [options]
   --model <name>            Model passed to the agent CLI (default: the CLI's own default)
   --runs <n>                Trials per case (default: 3)
   --threshold <0..1|a/b>    Minimum pass rate per case, compared strictly (default: 2/3)
+  --grade <${GRADE_BASES.join('|')}>  Which decision a case is graded on: the first turn's (default), or the first plugin skill
+                            asked for at any turn. A skill asked for only after a first turn that chose none is
+                            reported as a later fallback either way
   --tier <tier>             Only cases of this tier (${TIERS.join(' | ')})
   --eval <id>               Only this case id
   --concurrency <n>         Parallel trials (default: 4)
@@ -94,6 +103,7 @@ function parseArgs(argv, { fail = (m) => { console.error(`error: ${m}`); process
         a.thresholdLabel = raw;
         break;
       }
+      case '--grade': a.grade = value(f, ++i); if (!GRADE_BASES.includes(a.grade)) fail(`--grade must be one of ${GRADE_BASES.join('|')} (got ${JSON.stringify(a.grade)})`); break;
       case '--tier': a.tier = value(f, ++i); if (!TIERS.includes(a.tier)) fail(`--tier must be one of ${TIERS.join('|')}`); break;
       case '--eval': a.eval = int(f, value(f, ++i), 0); break;
       case '--concurrency': a.concurrency = int(f, value(f, ++i), 1); break;
@@ -435,6 +445,7 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
     const inv = buildInvocation(opts.agent, { pluginDir: PLUGIN_DIR, model: opts.model, copilotHome: '<temp COPILOT_HOME>' });
     write(`# dry run — would launch ${cases.length} case(s) × ${opts.runs} trial(s):`);
     write(`#   ${opts.agentBin || inv.bin} ${inv.args.join(' ')}   (prompt on stdin, cwd = empty temp dir)`);
+    write(`#   graded on the ${opts.grade || DEFAULTS.grade} decision`);
     for (const c of cases) write(`#   #${c.id} [${c.tier}] expect ${c.expect === null ? 'none' : c.expect}: ${c.prompt}`);
     return { exitCode: 0, results: null };
   }
@@ -454,26 +465,38 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
 
   const prev = opts.compare ? JSON.parse(fs.readFileSync(opts.compare, 'utf8')) : null;
   const prevRate = new Map(prev ? prev.cases.map((c) => [c.id, c.rate]) : []);
+  const grade = opts.grade || DEFAULTS.grade;
 
   write('TAP version 13');
-  write(`# agent ${opts.agent} · model ${opts.model || '(cli default)'} · runs ${opts.runs} · threshold ${opts.thresholdLabel || opts.threshold}`);
+  write(`# agent ${opts.agent} · model ${opts.model || '(cli default)'} · runs ${opts.runs} · threshold ${opts.thresholdLabel || opts.threshold} · grade ${grade}`);
+  // A results file written before the first-turn grade has no `grade`: its rates counted every later
+  // skill request, so a delta against it can come from the grading and not from the descriptions.
+  const prevGrade = prev ? prev.grade || 'eventual' : null;
+  if (prev && prevGrade !== grade) {
+    write(`# note: ${path.basename(opts.compare)} was graded on the ${prevGrade} decision; this run is graded on the ${grade} decision, so a delta can come from the grading (--grade ${prevGrade} compares like with like)`);
+  }
   write(`1..${cases.length}`);
-  const summary = { pass: 0, fail: 0, error: 0, trials: 0, trialErrors: 0, costUsd: 0 };
+  const summary = { pass: 0, fail: 0, error: 0, trials: 0, trialErrors: 0, costUsd: 0, delayedTrials: 0, delayedCases: 0 };
   const caseResults = [];
   cases.forEach((c, i) => {
     const ts = byCase.get(c.id);
-    const s = summarizeCase(c, ts, opts.threshold);
+    const s = summarizeCase(c, ts, opts.threshold, grade);
     summary[s.status] += 1;
     summary.trials += ts.length;
     summary.trialErrors += s.errors.length;
     for (const t of ts) if (t.result && typeof t.result.costUsd === 'number') summary.costUsd += t.result.costUsd;
+    const delayedTrials = Object.values(s.delayed).reduce((n, v) => n + v, 0);
+    summary.delayedTrials += delayedTrials;
+    if (delayedTrials) summary.delayedCases += 1;
     const dist = Object.entries(s.outcomes).map(([k, v]) => `${k}×${v}`).join(', ') || 'no valid trials';
-    const head = `#${c.id} [${c.tier}] expect ${c.expect === null ? 'none' : c.expect} — ${s.passes}/${s.valid} (${dist})`;
+    const later = Object.entries(s.delayed).map(([k, v]) => `${k}×${v}`).join(', ');
+    const head = `#${c.id} [${c.tier}] expect ${c.expect === null ? 'none' : c.expect} — ${s.passes}/${s.valid} (${dist})${later ? ` · later: ${later}` : ''}`;
     write(`${s.status === 'pass' ? 'ok' : 'not ok'} ${i + 1} - ${head}`);
     if (s.status !== 'pass' || s.errors.length) {
       write('  ---');
       write(`  prompt: ${yamlStr(c.prompt)}`);
       if (c.trap) write(`  trap: ${yamlStr(c.trap)}`);
+      if (later) write(`  later: ${yamlStr(`${later} — requested only after a first turn that chose none; ${grade === 'initial' ? 'not part of the grade (--grade eventual counts it)' : 'counted in the grade'}`)}`);
       for (const e of [...new Set(s.errors)]) write(`  error: ${yamlStr(e)}`);
       write('  ...');
     }
@@ -482,12 +505,18 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
     }
     caseResults.push({
       id: c.id, tier: c.tier, prompt: c.prompt, expect: c.expect, accept: c.accept || [],
-      status: s.status, rate: s.rate, passes: s.passes, valid: s.valid, outcomes: s.outcomes, errors: s.errors,
-      trials: ts.map((t) => ({ routedTo: t.routedTo, skills: (t.skillCalls || []).map((k) => k.raw), timedOut: !!t.timedOut, error: t.error || null, durationMs: t.durationMs })),
+      status: s.status, rate: s.rate, passes: s.passes, valid: s.valid, outcomes: s.outcomes, delayed: s.delayed, errors: s.errors,
+      trials: ts.map((t) => {
+        const d = decisionOf(t);
+        return { routedTo: t.routedTo, initial: d.initial, delayed: d.delayed, turn: d.turn, skills: (t.skillCalls || []).map((k) => k.raw), timedOut: !!t.timedOut, error: t.error || null, durationMs: t.durationMs };
+      }),
     });
   });
   write(`# cases ${cases.length} (pass ${summary.pass}, fail ${summary.fail}, error ${summary.error})`);
   write(`# trials ${summary.trials} (errors ${summary.trialErrors})`);
+  if (summary.delayedTrials) {
+    write(`# later fallbacks: ${summary.delayedTrials} trial(s) in ${summary.delayedCases} case(s) chose a plugin skill only after a first turn that chose none (${grade === 'initial' ? 'reported, not graded; --grade eventual counts them' : 'counted: --grade eventual'})`);
+  }
   // Only runs that reach their `result` event report cost; trials killed at the routing decision
   // never do, so this is a lower bound and is labelled as one.
   if (summary.costUsd) write(`# cost >= $${summary.costUsd.toFixed(2)} (killed trials do not report cost)`);
@@ -498,6 +527,7 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
     model: opts.model,
     runs: opts.runs,
     threshold: opts.threshold,
+    grade,
     finishedAt: new Date().toISOString(),
     descriptions: descriptionFingerprint(),
     summary,

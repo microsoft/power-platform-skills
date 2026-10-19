@@ -4891,7 +4891,10 @@ React dashboard). The offline harnesses above grade what a run *produced* and
 cannot see a mis-route; both skill descriptions point at each other, so a
 wording change to one can start stealing the other's prompts. The agent is
 killed at its first plugin-skill call, so a trial costs about one model turn;
-cases are graded as a pass rate over N trials. **Run it when you edit a skill
+cases are graded as a pass rate over N trials, on the decision of the agent's
+**first turn**: a skill it reaches for only after a first turn that chose none (a
+stand-in, when its read-only menu has no way to do the work) is reported as a
+later fallback, not graded (`--grade eventual` counts it). **Run it when you edit a skill
 `description:`.** It is not a per-PR gate (cost, non-determinism):
 `model-apps-agent-evals.yml` runs it on a same-repo PR labelled
 `run-agent-evals`, weekly, and on demand, using Copilot CLI authenticated by the
