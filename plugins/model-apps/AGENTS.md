@@ -372,6 +372,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   buttons** (`commands[]` — functional JS on-click + static hidden/disabled, incl. **flyout/split-button
   menus** via `type`+`children[]`), and **dashboards** (`dashboards[]` — chart/list/iframe/webresource
   tiles) with **sitemap placement** (a `dashboard` subarea auto-pins the dashboard as an app component).
+  A tile the spec does not size is built 1 column by 12 rows (`dashboardComponent`), because the app draws
+  a one-row tile as its title bar alone; an authored `colspan`/`rowspan` wins, and a rebuild never resizes
+  the tiles of a dashboard that exists. The cells are read back from the real bundle in
+  `dashboard-roundtrip.test.js`.
   It also builds **business process flows** (`businessProcessFlows[]` — the staged process bar on a
   record): a `workflows` row of category 4 / type 1 / businessprocesstype 0 whose XAML the SDK compiles
   from ordered `stages[]`/`steps[]`, activated in the same push. The phase is additive

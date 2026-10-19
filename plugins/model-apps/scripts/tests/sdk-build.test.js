@@ -2721,6 +2721,28 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
 });
 
+// A tile's height is its rowspan, and the app draws a one-row tile as its title bar alone, so a tile the spec does not
+// size is built 12 rows tall whatever its kind, and a size the spec states reaches the payload as written. The cells the
+// real bundle writes are read in dashboard-roundtrip.test.js; this drives the dashboards phase itself.
+test('dashboards: a tile the spec does not size is built 12 rows by 1 column, and an authored size is kept', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [
+    { name: 'Ops', tiles: [
+      { type: 'chart', chart: 'By Priority', view: 'Active Tickets' },
+      { type: 'list', view: 'Active Tickets', name: 'Recent' },
+      { type: 'iframe', url: 'https://contoso.com/map', name: 'Map' },
+      { type: 'list', view: 'Active Tickets', name: 'Wide', colspan: 2, rowspan: 6 },
+      { type: 'list', view: 'Active Tickets', name: 'Strip', rowspan: 1 },
+    ] },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const sizes = find(calls, 'addElement')
+    .filter((c) => c.args[0] === 'dashboard' && c.args[2] === '/components')
+    .map((c) => [c.args[3].name, c.args[3].rowspan, c.args[3].colspan]);
+  assert.deepStrictEqual(sizes, [['By Priority', 12, 1], ['Recent', 12, 1], ['Map', 12, 1], ['Wide', 6, 2], ['Strip', 1, 1]]);
+});
+
 test('app-shell: a live sitemap target absent from the gate approval halts before the app push', async () => {
   const spec = makeSpec();
   const existingSitemap = { areas: [{ groups: [{ subAreas: [
@@ -2826,6 +2848,24 @@ test('dashboards: a pin that names a form, not a dashboard, halts instead of wir
   answerPinned(sdk, { [PINNED_DASH]: { formid: PINNED_DASH, name: 'Account', type: 2 } });
   await assert.rejects(runSdkBuild(pinnedSpec(), { sdk, apply: true }), /dashboardId 280948ec-7bbb-5279-b106-2bdd09451a3a is a type-2 form, not a dashboard/);
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'));
+});
+
+// The build never applies tile edits to a dashboard that exists — it reuses the dashboard as it is — so a dashboard an
+// earlier version built keeps its one-row tiles when the default tile height changes. A rebuild adds no tile and pushes
+// nothing, whether it finds the dashboard by name or by the id a download recorded.
+test('dashboards: a rebuild does not resize the tiles of a dashboard that already exists', async () => {
+  const touched = (calls) => ['addElement', 'updateElement', 'removeElement', 'pushArtifact']
+    .flatMap((name) => find(calls, name))
+    .filter((c) => c.args[0] === 'dashboard');
+  const byName = makeSpec();
+  byName.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const named = mockSdk({ existingDashboards: ['Ops'] });
+  await runSdkBuild(byName, { sdk: named.sdk, apply: true });
+  assert.deepStrictEqual(touched(named.calls), [], 'a dashboard found by name is reused as it is');
+  const pinned = mockSdk();
+  answerPinned(pinned.sdk, { [PINNED_DASH]: { formid: PINNED_DASH, name: 'Command Center - Event operations', type: 0 } });
+  await runSdkBuild(pinnedSpec(), { sdk: pinned.sdk, apply: true });
+  assert.deepStrictEqual(touched(pinned.calls), [], 'a dashboard found by its pinned id is reused as it is');
 });
 
 // Names are neither unique nor compared exactly, so the lookup can return several dashboards. Reusing
