@@ -7153,35 +7153,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // An org without the AI template a row summary is built from. The SDK reads the template before its first write and refuses with its own
     // code (`configureRowSummary`: ROW_SUMMARY_TEMPLATE_NOT_FOUND, "Nothing was written"), where it used to publish a model that named no template and let the
     // platform answer. It is the same kind of environment gate as the licence refusal below — nothing in the spec can fix it — so it skips the same way.
+    // The code is the SDK's word for an EMPTY template list and for nothing else (cds-maker-sdk 9a0c9f03):
+    //   GET /msdyn_aitemplates?$select=msdyn_aitemplateid&$filter=msdyn_uniquename eq 'GptPowerPrompt'&$top=1   ->   { "value": [] }    the org has no template: this code
+    // Every other answer it cannot read as a template — no `value` list, a first row that is no row (`[ null ]`), a row without a GUID `msdyn_aitemplateid` (`[ {} ]`) — is a
+    // ConnectionError, which stops the build like any read that failed (and is run again when it was the service that failed it, lib/retry-policy.js). So the code needs no
+    // confirming read of the build's own: before that SDK it was raised for `[ {} ]` and `[ null ]` as well, and 2.16.0 read the list a second time to tell them apart.
     const NO_TEMPLATE_REASON = 'no row-summary AI template in this environment';
-    // The code alone does not prove that the org has no template, though. The SDK's lookup is
-    //   GET /msdyn_aitemplates?$select=msdyn_aitemplateid&$filter=msdyn_uniquename eq 'GptPowerPrompt'&$top=1   ->   { "value": [ { "msdyn_aitemplateid": "<guid>" } ] }
-    // and it raises the code whenever the FIRST row has no `msdyn_aitemplateid`, without checking that there is a row: `{ "value": [] }`, `{ "value": [ {} ] }` and
-    // `{ "value": [ null ] }` all raise it. Only the empty list says the org has no template; the other two are answers that cannot be read, and an answer that cannot be
-    // read stops the build (as it did before the skip) instead of passing for an environment gate. So the first time the code is seen, the build asks the same question
-    // through `queryRecords` — which refuses an answer without its `value` array — and skips only on an empty list. Rows, a row that is no row and a read that fails leave
-    // the SDK's own error to stop the build. The verdict is kept: every table's lookup is the same question, so one read settles the whole build.
-    // This mirrors the SDK's lookup (its template name, its select) and can go once the SDK raises the code for an empty list only and answers a malformed first row with a
-    // ConnectionError. If the SDK ever looks for another template, this read can only fail to confirm, which stops the build: the safe side.
-    // `msdyn_aitemplate` is the table behind the SDK's `/msdyn_aitemplates` set:
-    // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/msdyn_aitemplate
-    // The verdict is `{ absent }` — true only for an empty list — and, when the read itself failed, `{ absent: false, failure }`, what it threw. The read is two requests, the first time:
-    // the one that names the template table's set (the SDK looks it up once and keeps it) and the one that reads the list; either can fail.
-    const ROW_SUMMARY_TEMPLATE_NAME = 'GptPowerPrompt';
-    let templateVerdict;
-    const confirmNoTemplate = async () => {
-      if (templateVerdict === undefined) {
-        try {
-          const rows = await provision.queryRecords('msdyn_aitemplate', { select: ['msdyn_aitemplateid'], filter: `msdyn_uniquename eq '${ROW_SUMMARY_TEMPLATE_NAME}'`, top: 1 });
-          templateVerdict = { absent: Array.isArray(rows) && rows.length === 0 };
-        } catch (failure) {
-          templateVerdict = { absent: false, failure };
-        }
-      }
-      return templateVerdict;
-    };
     const aiSummaryUnsupported = (err) => {
-      if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') return templateVerdict && templateVerdict.absent ? NO_TEMPLATE_REASON : false;
+      if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') return NO_TEMPLATE_REASON;
       const detail = `${(err && err.message) || ''} ${JSON.stringify((err && err.cause) || '')}`;
       // Match the platform's own error CODE, not the prose: the message is localized and the status
       // alone (403/400) is also what a plain privilege or validation failure returns, which must
@@ -7232,25 +7211,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const override = summaryOverrides.get(String(logical).toLowerCase());
         await runner.run('ai-features', `row summary for ${logical}`, async () => {
           const promptSpec = buildPromptSpec(ent, { spec, override });
-          let res;
-          try {
-            res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
-          } catch (err) {
-            // `skipIf` is synchronous, so the read that confirms the template is absent is made here, before the error reaches it. The error is never replaced: when the
-            // read does not confirm it, it stops the build as it is — the SDK's own error, whole, as the halt's own cause.
-            if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') {
-              const { failure } = await confirmNoTemplate();
-              // A read that FAILED is kept beneath the SDK's error. The runner decides from the chain of causes whether the build may run this attempt again (lib/retry-policy.js, judgeFailure): a throttle, an
-              // unavailable service or a reset connection that stopped the read has to be on that chain, or the halt is final whatever the read failed with — and the halt's text says that the read failed, and why
-              // (operatorRemedy). It is only a failure of the SERVICE that makes the halt transient: a missing template on its own, and a read that answered, however wrongly, stay final. The SDK's error has no
-              // cause of its own, so the one it has here is this one. `withCause` is the link a result carries for the same reason (a failure reported by value); an error that cannot take it (a frozen one)
-              // stops the build as it did before, final.
-              if (failure !== undefined) {
-                try { withCause(err, failure); } catch { /* nothing to carry it on */ }
-              }
-            }
-            throw err;
-          }
+          const res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
           result.created.ai.summaries[logical] = res;
           return res.modelId;
         }, {
