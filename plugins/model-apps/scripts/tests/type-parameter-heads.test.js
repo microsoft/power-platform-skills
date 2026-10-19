@@ -11,7 +11,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { opensTypeParameters, blankNonCodePreservingTemplateExpressions, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS, OPERATOR_WORD_ENDS_MEMBER_AFTER, OPERATOR_WORDS_THAT_ARE_NAMES } = require('../lib/source-literals.js');
+const { opensTypeParameters, blankNonCodePreservingTemplateExpressions, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS, OPERATOR_WORD_ENDS_MEMBER_AFTER, OPERATOR_WORDS_THAT_ARE_NAMES, HEAD_NESTING } = require('../lib/source-literals.js');
 const { resolvePageRefs, navigationFrontier } = require('../lib/pageref-resolver.js');
 const { loadTypescriptOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
 const { cleanSourceFile, readingAt, isElement, tokenVocabulary } = require('./helpers/angle-frames.js');
@@ -1529,23 +1529,26 @@ test('a class that is complete before a method — the value of a property, the 
   }
   assert.ok(declared >= 40, `${declared} pages are valid to TypeScript`);
   t.diagnostic(`${valid} pages with a class value and ${declared} with a declaration valid to TypeScript`);
-  // What stays as it was: a field named `new` that no `;` and no initializer ends, and a method after it on the next line, read as the operator `new` and an expression; and the same with the `;`.
+  // A field named `new` that no `;` and no initializer ends, and a method after it on the next line: the field is the name of a member of the class, no operator, and the braces of the method are its body. The same with the `;`.
   const element = 'void <span>(MARK); // note</span>;';
   const field = `class C { new\n  render() { ${element} } }\n${CALL};`;
   assert.ok(cleanSourceFile(ts, field), `TypeScript parses ${visible(field)}`);
-  assert.ok(guessesOf(field).length > 0, 'a guess is named after a field named `new`');
-  assert.deepStrictEqual(readPage(field).rewritten, [], 'and the call after it is not rewritten');
+  assert.deepStrictEqual(guessesOf(field), [], 'no guess after a field named `new`');
+  assert.ok(!readsAsCode(field), 'the text of the element is text');
+  assert.strictEqual(readPage(field).rewritten.length, 1, 'and the call after it is rewritten');
   const ended = `class C { new;\n  render() { ${element} } }\n${CALL};`;
   assert.deepStrictEqual(guessesOf(ended), [], 'no guess where a `;` ends the field');
   assert.strictEqual(readPage(ended).rewritten.length, 1);
-  // A class whose own base is a class expression has the braces of the base inside its head: the braces of the class are the second, after a `}`, and the scan does not read that head back across them. The guess side, never a block.
+  // A class whose own base is a class expression has the braces of the base inside its head: the braces of the class are the second, after a `}`. The head is read back across the first, as the head of a class that is complete, and the braces of the method after it are its body.
   for (const nested of [`const registry = { Adapter: class extends class {} {}, render() { ${element} } };\n${CALL};`, `class Q extends class {} {}\nfunction implements() { ${element} }\n${CALL};`]) {
     assert.ok(cleanSourceFile(ts, nested), `TypeScript parses ${visible(nested)}`);
-    assert.ok(guessesOf(nested).length > 0, `a guess is named: ${visible(nested)}`);
-    assert.deepStrictEqual(readPage(nested).rewritten, [], `and the call after it is not rewritten: ${visible(nested)}`);
+    assert.deepStrictEqual(guessesOf(nested), [], `no guess: ${visible(nested)}`);
+    assert.ok(!readsAsCode(nested), `the text of the element is text: ${visible(nested)}`);
+    assert.strictEqual(readPage(nested).rewritten.length, 1, `and the call after it is rewritten: ${visible(nested)}`);
   }
   // A run of members whose braces the scan crosses one after the other (as many as the window of 2,000 characters holds): it reads the head of each braces that it meets, and none of them twice. A scan that read the heads of all the braces before them for each would take time that doubles with every member.
-  for (const [what, member, length] of [['methods', (k) => `m${k}() { return ${k}; }`, 60], ['properties with a class', (k) => `p${k}: class extends B${k} {}`, 60], ['methods with a call in the head', (k) => `m${k}(a = f(${k})) { return a; }`, 45]]) {
+  for (const [what, member, length] of [['methods', (k) => `m${k}() { return ${k}; }`, 60], ['properties with a class', (k) => `p${k}: class extends B${k} {}`, 60], ['methods with a call in the head', (k) => `m${k}(a = f(${k})) { return a; }`, 45],
+    ['properties with a class whose base is a class expression', (k) => `p${k}: class extends class B${k} {} {}`, 40], ['methods with a class whose base is a class expression between them', (k) => (k % 3 === 0 ? `p${k}: class extends class {} {}` : `m${k}() { return ${k}; }`), 60]]) {
     const run = `const registry = {\n  ${Array.from({ length }, (unused, k) => member(k)).join(',\n  ')},\n  render() { ${element} }\n};\n${CALL};`;
     assert.ok(cleanSourceFile(ts, run), `TypeScript parses a run of ${what}`);
     const started = Date.now();
@@ -1563,4 +1566,169 @@ test('a class that is complete before a method — the value of a property, the 
     assert.ok(readsAsCode(code), `${visible(heritage)}: the method of the outer class is code`);
     assert.ok(!/<span>\(MARK/.test(maskOf(code)), `${visible(heritage)}: the element in the body of a method is text`);
   }
+});
+
+// ─── A class whose base is a class expression, and a field named `new` ──────────────────────────────────────────────────────────────────────────────────
+
+// A class expression in the head of a class has its braces inside the head, so the braces of the class come after a `}` (`{ a: class extends class {} {}, m() { … } }`). The head is read back across them, as the head of a class that is complete is, and the braces of the method after it are its body,
+// where an element is read for certain. So it is for a base that is an element of `implements`, one after a comma or after `new`, with members, decorators and type parameters of its own, and for a chain of them: no more than HEAD_NESTING deep.
+const NESTED_BASE_HEADS = ['class extends class {}', 'class extends class A {}', 'class A extends class B {}', 'class extends class extends B {}', 'class extends class extends class {} {}', 'class extends class {} implements I', 'class implements class {}', 'class extends A implements class {}', 'class extends A implements class {}, class {}',
+  'class extends class {}, class {}', 'class extends class {}.x', 'class extends class {}()', 'class extends class {}!', 'class extends new class {}', 'class extends new @d class {}', 'class extends class { m() { return class {}; } }', 'class extends class Named<T> extends Base<T> implements I {}', 'class extends class implements I {}',
+  'class extends class<T> {}', 'class extends class\n{}', 'class\nextends\nclass\n{}', 'class extends class /* c */ {} /* d */', 'class extends class {}\n.x', 'class implements class {}, class {}, class {}, class {}, class {}, class {}, class {}', `${'class extends '.repeat(HEAD_NESTING)}class {}${' {}'.repeat(HEAD_NESTING - 1)}`];
+const NESTED_BASE_FRAMES = [
+  ['the value of a property', (head, n, b) => `const registry = { Adapter: ${head} {}, ${n}() { ${b} } };`], ['a property between the class and the method', (head, n, b) => `const registry = { Adapter: ${head} {}, label: 'x', ${n}() { ${b} } };`],
+  ['the value of a property in an argument', (head, n, b) => `register({ Adapter: ${head} {}, ${n}() { ${b} } });`], ['two classes', (head, n, b) => `const registry = { A: ${head} {}, B: ${head} {}, ${n}() { ${b} } };`],
+  ['the value of a property in a class', (head, n, b) => `class Host { make() { return { adapter: ${head} {}, ${n}() { ${b} } }; } }`], ['the initializer of a field', (head, n, b) => `class Host { adapter = ${head} {}\n  ${n}() { ${b} } }`],
+  ['a generator after the value', (head, n, b) => `const registry = { Adapter: ${head} {}, *${n}() { ${b} } };`], ['an async method after the value', (head, n, b) => `const registry = { Adapter: ${head} {}, async ${n}() { ${b} } };`],
+  ['a declaration before a function', (head, n, b) => `${head} {}\nfunction ${n}() { ${b} }`], ['a declaration and a comment before a function', (head, n, b) => `${head} {} // note\nfunction ${n}() { ${b} }`], ['an expression before a function', (head, n, b) => `const Adapter = ${head} {}\nfunction ${n}() { ${b} }`],
+];
+test('a class whose base is a class expression, as the value before a method, the initializer of a field or a declaration before a function, has its head read back across the braces of the base: the braces of the method after it are its body, and an element in it is read for certain', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  const bodies = ['void <span>(MARK); // details</span>;', 'return <>(MARK) // details</>;', 'return <span>(MARK) // detail</span>;', 'x;\nvoid <span>(MARK); // note</span>;'];
+  let valid = 0;
+  for (const head of NESTED_BASE_HEADS) {
+    for (const [place, frame] of NESTED_BASE_FRAMES) {
+      for (const name of ['render', 'implements', 'extends']) {
+        for (const body of bodies) {
+          const code = `${frame(head, name, body)}\n${CALL};`;
+          if (!cleanSourceFile(ts, code)) continue;
+          valid += 1;
+          const label = `${place} / ${visible(head)} / ${name} / ${visible(body)}`;
+          assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+          assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+          assert.strictEqual(readPage(code).rewritten.length, 1, `${label}: the call after it is rewritten`);
+        }
+      }
+    }
+  }
+  assert.ok(valid >= 1000, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
+  // The braces of the class itself hold members, wherever the class stands: a method named like an operator that has type parameters is code after such a head, and the closing tag of its type parameter in the note after it is data.
+  let members = 0;
+  for (const head of NESTED_BASE_HEADS) {
+    for (const wrap of [(c) => c, (c) => `const o = { a: ${c}, b: 1 };`, (c) => `function f() { ${c} }`, (c) => `const K = ${c};`, (c) => `class H { a = ${c} }`, (c) => `f(${c});`]) {
+      const code = pageOf(wrap(`${head} { delete<U>(y: U): MARK {} }`), 'U');
+      if (!cleanSourceFile(ts, code)) continue;
+      members += 1;
+      assertRead(code, 'exact', visible(head));
+      assert.ok(readsAsCode(code), `${visible(head)}: the method is code`);
+    }
+  }
+  assert.ok(members >= 100, `${members} pages are valid to TypeScript`);
+});
+
+test('a class whose base is a class expression and a field named `new` leave as they were what they never resolved: a function expression or an object literal in a head, type arguments after the base, a chain that is deeper than HEAD_NESTING, a `new` that no member of a class begins', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  const element = 'void <span>(MARK); // note</span>;';
+  const chain = (depth) => `${'class extends '.repeat(depth)}class {}${' {}'.repeat(depth)}`;
+  // The braces of a function expression or an object literal in a head have no `class` of their own, and a class read back across them would take the `class` of the head for theirs; type arguments after the base are the guess `brace` of the `}` before them. A `new` that is no
+  // field — an operator on a line of its own in a function, a property that a field's initializer ends in, a private name — has no member of a class begin at it, and a class whose head is not read leaves its field named `new` where it was.
+  const refused = [
+    ['a function expression for the base', `const registry = { Adapter: class extends function () {} {}, render() { ${element} } };`], ['an async function expression for the base', `const registry = { Adapter: class extends async function () {} {}, render() { ${element} } };`],
+    ['an object literal for the base', `const registry = { Adapter: class extends {} {}, render() { ${element} } };`], ['a function expression after a class expression', `const registry = { Adapter: class extends class {}, function () {} {}, render() { ${element} } };`],
+    ['a declaration with a function expression for the base', `class Q extends function () {} {}\nfunction implements() { ${element} }`], ['type arguments after the base', `const registry = { Adapter: class extends class {}<T> {}, render() { ${element} } };`],
+    [`${HEAD_NESTING + 1} bases, one in the head of the other`, `const registry = { Adapter: ${chain(HEAD_NESTING + 1)}, render() { ${element} } };`],
+    ['a field named `new` in a class whose base is a function expression', `class C extends function () {} { new\n  m() { ${element} } }`], ['a field named `new` in a class whose base is an object literal', `class C extends {} { new\n  m() { ${element} } }`],
+    ['an operator `new` and a block on the next line', `function g() {\n  new Foo()\n  { ${element} }\n}`], ['an operator `new` that a line break separates from its name, and a block', `function g() {\n  new\n  Foo()\n  { ${element} }\n}`],
+    ['a property named `new` that ends a field\'s initializer', `class C { a = x.new\n  render() { ${element} } }`], ['a private field named `new`', `class C { #new\n  render() { ${element} } }`],
+  ];
+  for (const [what, text] of refused) {
+    const code = `${text}\n${CALL};`;
+    assert.ok(cleanSourceFile(ts, code), `TypeScript parses ${what}`);
+    assert.ok(guessesOf(code).length > 0, `${what}: a guess is named`);
+    assert.deepStrictEqual(readPage(code).rewritten, [], `${what}: the call after it is not rewritten`);
+  }
+  // A chain of HEAD_NESTING bases is read, and so is a long list of class expressions that are no more than one deep.
+  for (const [what, text] of [[`${HEAD_NESTING} bases, one in the head of the other`, `const registry = { Adapter: ${chain(HEAD_NESTING)}, render() { ${element} } };`], ['seven class expressions in a list', `const registry = { Adapter: class implements ${Array(7).fill('class {}').join(', ')} {}, render() { ${element} } };`]]) {
+    const code = `${text}\n${CALL};`;
+    assert.ok(cleanSourceFile(ts, code), `TypeScript parses ${what}`);
+    assert.deepStrictEqual(guessesOf(code), [], `${what}: no guess`);
+    assert.strictEqual(readPage(code).rewritten.length, 1, `${what}: the call after it is rewritten`);
+  }
+});
+
+// A field named `new` that a line break ends is the name of a member, and the call on the next line is the head of a method, whose braces are its body: an element there is read for certain. After `extends`, `implements` or a comma of a heritage list the same words are the operator and an element
+// of the list, whose braces hold members. What stands before the `new` tells them apart: a member of a class begins at the field — after the start of the body, a separator, a modifier or a decorator — and no keyword or comma of a heritage list is before it.
+const NEW_FIELDS = ['new', 'static new', 'readonly new', 'declare new', 'public new', 'private new', 'protected new', 'abstract new', 'accessor new', 'override new', '@d new', '@d() new', '@a.b new', 'static readonly new', '@d static new'];
+const NEW_FIELD_PLACES = [
+  ['a class', (f, m) => `class C { ${f}\n  ${m} }`], ['a class expression', (f, m) => `const K = class { ${f}\n  ${m} };`], ['a class that extends a name', (f, m) => `class C extends B { ${f}\n  ${m} }`], ['a class that extends a call', (f, m) => `class C extends mixin(A) { ${f}\n  ${m} }`],
+  ['a class that extends new', (f, m) => `class C extends new X() { ${f}\n  ${m} }`], ['a class that implements a call after a comma', (f, m) => `class C implements A, B() { ${f}\n  ${m} }`], ['an abstract class', (f, m) => `abstract class C { ${f}\n  ${m} }`],
+  ['a class in a function', (f, m) => `function g() { class C { ${f}\n  ${m} } }`], ['the class of a property', (f, m) => `const o = { k: class { ${f}\n  ${m} }, l() { x; } };`], ['a class whose base is a class expression', (f, m) => `class C extends class {} { ${f}\n  ${m} }`],
+  ['a class after a member', (f, m) => `class C { a() {}\n  ${f}\n  ${m} }`], ['a class after a field', (f, m) => `class C { a = 1;\n  ${f}\n  ${m} }`], ['a class after a static block', (f, m) => `class C { static { x; }\n  ${f}\n  ${m} }`],
+  // What ends the member before the field, with no `;`: a name, a type, a modifier mark, a call, a bracket, a literal, a regex, a postfix operator and another field named `new`.
+  ['a class after a field with no `;`', (f, m) => `class C { a = 1\n  ${f}\n  ${m} }`], ['a class after a typed field', (f, m) => `class C { a: string\n  ${f}\n  ${m} }`], ['a class after an optional field', (f, m) => `class C { a?: string\n  ${f}\n  ${m} }`], ['a class after a definite field', (f, m) => `class C { a!: string\n  ${f}\n  ${m} }`],
+  ['a class after a call', (f, m) => `class C { a = g()\n  ${f}\n  ${m} }`], ['a class after an array', (f, m) => `class C { a = [1]\n  ${f}\n  ${m} }`], ['a class after a string', (f, m) => `class C { a = 'x'\n  ${f}\n  ${m} }`], ['a class after a template', (f, m) => `class C { a = \`x\`\n  ${f}\n  ${m} }`],
+  ['a class after a regex', (f, m) => `class C { a = /x/\n  ${f}\n  ${m} }`], ['a class after an increment', (f, m) => `class C { a = x++\n  ${f}\n  ${m} }`], ['a class after a static field', (f, m) => `class C { static a\n  ${f}\n  ${m} }`], ['a class after a field named `new`', (f, m) => `class C { new\n  ${f}\n  ${m} }`],
+  ['a comment before the line break', (f, m) => `class C { ${f} // c\n  ${m} }`], ['a comment that holds the line break', (f, m) => `class C { ${f} /* c\n */ ${m} }`], ['a CR LF', (f, m) => `class C { ${f}\r\n  ${m} }`], ['the initializer of a field', (f, m) => `class H { a = class C { ${f}\n  ${m} } }`],
+];
+const AFTER_NEW_FIELD = ['m() { B }', 'static m() { B }', 'async m() { B }', '*m() { B }', 'get m() { B }', 'set m(v) { B }', 'implements() { B }', 'extends() { B }', 'new() { B }', 'constructor() { B }', 'x = 1\n  m() { B }', '@d m() { B }'];
+test('a class expression whose own head holds the braces of an object literal or of a function expression is no class that is complete: the heritage that holds it is read as it was, and the braces after the call that ends its list hold members', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  // The braces of an object literal or a function expression have no `class` of their own: a head that holds them is read to no `class`, and the `class` of the head that holds it is not theirs. A scan that took one for the other found the keyword of the outer class behind the
+  // braces, took the inner class for a class that is complete, and read the comma after it back to the start of the source: a heritage that no list was found in, and the braces after the call that ends it for a function's body.
+  const heritages = ['class A extends class extends {} {}, mixin(A)', 'class A extends B, class extends { a: 1 } {}, mixin(A)', 'class A extends class extends function () {} {}, mixin(A)', 'class A implements class extends {} {}, B()', 'class A extends class B extends class C extends {} {} {}, mixin(A)',
+    'class A extends class extends async function () {} {}, mixin(A)', 'class A extends class extends {} {} implements (B)', 'class A extends new class extends {} {}, mixin(A)', 'class A extends class<T> extends { a: 1 } {}.x, mixin(A)', 'class A extends class extends {} {}, class extends {} {}, mixin(A)',
+    'class A extends class extends B {}, class extends {} {}, mixin(A)', 'class A extends class implements class extends {} {} {}, mixin(A)', 'class A extends new @d class extends {} {}, mixin(A)'];
+  let valid = 0;
+  for (const heritage of heritages) {
+    for (const wrap of [(c) => c, (c) => `const o = { a: ${c}, b: 1 };`, (c) => `function f() { ${c} }`, (c) => `class H { a = ${c} }`, (c) => `f(${c});`]) {
+      const code = pageOf(wrap(`${heritage} { delete<U>(y: U): MARK {} }`), 'U');
+      if (!cleanSourceFile(ts, code)) continue;
+      valid += 1;
+      assertRead(code, 'exact', visible(heritage));
+      assert.ok(readsAsCode(code), `${visible(heritage)}: the method is code`);
+    }
+  }
+  assert.ok(valid >= 40, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
+});
+
+test('a field named `new` that a line break ends, whatever modifier or decorator it has and wherever its class stands, is no operator: the braces of the method after it are its body, and an element in it is read for certain', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  const bodies = ['void <span>(MARK); // details</span>;', 'return <>(MARK) // details</>;', 'x;\nvoid <span>(MARK); // note</span>;', 'const e = <in U>(MARK); // note</in>;'];
+  let valid = 0;
+  for (const field of NEW_FIELDS) {
+    for (const [place, frame] of NEW_FIELD_PLACES) {
+      for (const method of AFTER_NEW_FIELD) {
+        for (const body of bodies) {
+          const code = `${frame(field, method.replace('B', body))}\n${CALL};`;
+          if (!cleanSourceFile(ts, code)) continue;
+          valid += 1;
+          const label = `${place} / ${visible(field)} / ${visible(method)} / ${visible(body)}`;
+          assert.deepStrictEqual(guessesOf(code), [], `${label}: no guess`);
+          assert.ok(!readsAsCode(code), `${label}: the text of the element is text`);
+          assert.strictEqual(readPage(code).rewritten.length, 1, `${label}: the call after it is rewritten`);
+        }
+      }
+    }
+  }
+  assert.ok(valid >= 1500, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
+});
+
+test('the operator `new` of an element of a heritage list, with line breaks around it and after the keyword or the comma, is no field: the braces after its call hold members, in a class too, where a member begins after the keyword that a line break follows', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip(SKIP);
+  const heritages = CLASS_HERITAGES.filter((heritage) => /\bnew\b/.test(heritage));
+  assert.ok(heritages.length >= 20, `${heritages.length} heritages with a new`);
+  let valid = 0;
+  for (const heritage of heritages) {
+    // The braces of a class around the head are where a field named `new` stands, and after `implements` and a line break a member may begin as far as the line break is concerned; the keyword and the comma are what the field's reading must look at.
+    for (const [place, wrap] of [['no wrap', (c) => c], ['a field\'s initializer', (c) => `class H { a = ${c} }`], ['a field\'s initializer after a field', (c) => `class H { b = 1\n  a = ${c} }`], ['a static field\'s initializer', (c) => `class H { static a = ${c} }`],
+      ['the value of a property in a class', (c) => `class H { make() { return { a: ${c}, b: 1 }; } }`], ['a function', (c) => `function f() { ${c} }`]]) {
+      for (const member of ['delete<T>(x: MARK): void {}', 'void<T>(x: MARK): void {}', 'a = 1;\n  delete<T>(x: MARK): void {}']) {
+        const code = pageOf(wrap(`${heritage} { ${member} }`), 'T');
+        if (!cleanSourceFile(ts, code)) continue;
+        valid += 1;
+        assertRead(code, 'exact', `${place} / ${visible(heritage)} / ${visible(member)}`);
+        assert.ok(readsAsCode(code), `${place} / ${visible(heritage)} / ${visible(member)}: the method is code`);
+      }
+    }
+  }
+  assert.ok(valid >= 200, `${valid} pages are valid to TypeScript`);
+  t.diagnostic(`${valid} pages valid to TypeScript`);
 });

@@ -416,6 +416,10 @@ const EVERYDAY = [
   'async function k15() { const e = await\nvoid <span>(value); // note</span>; return e; }', 'class K16 { async m() { const e = await\ndelete <span>(value); // note</span>; } }', 'const k17 = { async m() { return await\ntypeof <span>(value); // note</span>; } };',
   'class K18 extends mixin(B) { async m() { const e = await\nvoid <>(value); // note</>; } }', 'if (a) { const e = await\nvoid <span>(value); // note</span>; }', 'class K19 { @decorate method() { return\nvoid <span>(value); // note</span>; } }',
   'function k20() { try { g(); } catch (e) { return\ndelete <span>(value); // note</span>; } finally { h(); } }', 'class K21 { constructor(a) { this.x = a in\nvoid <span>(value); // note</span>; } }',
+  // A class whose base is a class expression, as the value before a method and as a declaration before a function, and a field named `new` that a line break ends before a method: the braces after the method's `)` are its body, whatever the head before it holds.
+  'const n1 = { a: class extends class {} {}, m() { void <span>(value); // note</span>; } };', 'class N2 extends class {} {}\nfunction n3() { void <span>(value); // note</span>; }', 'class N4 { new\n  m() { void <span>(value); // note</span>; } }',
+  'class N5 { static new\n  m() { return <span>(value) // note</span>; } }', 'const n6 = { a: class extends class {} implements I {}, b: 1, m() { const e = delete <>(value); // note</>; } };', 'class N7 extends class {} { new\n  m() { void <span>(value); // note</span>; } }',
+  'const n8 = { a: class A extends class B extends class {} {} {}, implements() { void <span>(value); // note</span>; } };', 'class N9 { x = 1\n  new\n  m() { typeof <span>(value); // note</span>; } }', 'const n10 = class { new\n  render() { void <span>(value); // note</span>; } };',
 ];
 
 // The pages. Each is { group, name, code }; the test drops those TypeScript does not parse.

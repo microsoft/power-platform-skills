@@ -289,6 +289,10 @@ const KEYWORD_BODIES = ['void <span>(MARK); // note</span>;', 'x;\nvoid <span>(M
 const CLASS_VALUES = [
   'class {}', 'class extends Base {}', 'class Named {}', 'class Named<T> extends Base<T> implements I {}', 'class C implements D {}', 'class extends mixin(A) {}', 'class extends (B) {}', 'class implements A, B() {}', 'class { m() {} }', 'class { a = 1; static b() { return 1; } }',
   'class extends a.b.C<T> {}', 'class extends Base<{ a: 1 }> {}', 'class extends A, B {}', 'class \u00e9 extends B {}', 'class Named<T extends { a: 1 }> {}', 'class<T> {}', 'class implements {}', 'class interface {}', 'class extends Base implements I, J<K> {}', '@dec class {}',
+  // A class expression in the head — the base, an element of `implements`, one after `new`, with decorators and members of its own — has its braces inside the head of the class: the braces of the class come after them, and the head of the class that holds them may hold the same.
+  'class extends class {} {}', 'class extends class A {} {}', 'class A extends class B {} {}', 'class extends class extends B {} {}', 'class extends class extends class {} {} {}', 'class extends class {} implements I {}', 'class implements class {} {}', 'class extends A implements class {} {}',
+  'class extends A implements class {}, class {} {}', 'class extends class {}.x {}', 'class extends class {}() {}', 'class extends class {}! {}', 'class extends new class {} {}', 'class extends new @d class {} {}', 'class extends class { m() { return class {}; } } {}', 'class extends class Named<T> extends Base<T> implements I {} {}',
+  'class extends class {}\n.x {}', 'class\nextends\nclass\n{}\n{}', 'class extends class /* c */ {} /* d */ {}', 'class extends class { a = { b: 1 }; } {}', 'class extends class implements I {} {}', 'class extends class<T> {} {}', 'class extends class {}, class {} {}',
   // The white space and the comments that stand inside a class and after it: every character that the scanner skips between two tokens.
   'class\u00a0extends\u2028Base\u3000{}', 'class /* c */ extends /* d */ Base /* e */ {}', 'class\nextends\nBase\n{}', 'class\ufeffNamed\u200b{}\u0085',
 ];
@@ -296,8 +300,16 @@ const CLASS_VALUES_WRAPPED = [...CLASS_VALUES, ...CLASS_VALUES.map((value) => `(
 const KEYWORD_METHOD_FRAMES = [
   ['a method of a class', (n, b) => `class C { ${n}() { ${b} } }`], ['a method after a method', (n, b) => `class C { a() {} ${n}() { ${b} } }`], ['a method after a field', (n, b) => `class C { a = 1; ${n}() { ${b} } }`],
   ['a method after a field and a line break', (n, b) => `class C { a = 1\n  ${n}() { ${b} } }`], ['a method after a name and a line break', (n, b) => `class C { a\n  ${n}() { ${b} } }`], ['a method after a name and a comment', (n, b) => `class C { a /* c */\n  ${n}() { ${b} } }`],
-  // A field that a keyword names and no initializer or `;` ends, then a method on the next line: the word before the method's name is the name of a field, no keyword (`new` is read as it was: the operator).
-  ['a method after a field that the keyword names', (n, b) => (n === 'new' ? null : `class C { ${n}\n  m() { ${b} } }`)],
+  // A field that a keyword names and no initializer or `;` ends, then a method on the next line: the word before the method's name is the name of a field, no keyword. `new` is no operator there either: it is the operator only in the head of a class, after
+  // `extends`, `implements` or a comma of the list (CLASS_HERITAGES has those), and what stands before a field is a member of the class: the start of its body, a separator, a modifier, a decorator.
+  ['a method after a field that the keyword names', (n, b) => `class C { ${n}\n  m() { ${b} } }`], ['a method after a static field that the keyword names', (n, b) => `class C { static ${n}\n  m() { ${b} } }`], ['a method after a readonly field that the keyword names', (n, b) => `class C { readonly ${n}\n  m() { ${b} } }`],
+  ['a method after a declared field that the keyword names', (n, b) => `class C { declare ${n}\n  m() { ${b} } }`], ['a method after a public field that the keyword names', (n, b) => `class C { public ${n}\n  m() { ${b} } }`], ['a method after a decorated field that the keyword names', (n, b) => `class C { @d ${n}\n  m() { ${b} } }`],
+  ['a method after a field, a comment and a line break', (n, b) => `class C { ${n} // c\n  m() { ${b} } }`], ['a method after a field and a comment that holds the line break', (n, b) => `class C { ${n} /* c\n */ m() { ${b} } }`], ['a method after a field and a CR LF', (n, b) => `class C { ${n}\r\n  m() { ${b} } }`],
+  ['a method after a field after a method', (n, b) => `class C { a() {}\n  ${n}\n  m() { ${b} } }`], ['a method after a field after a field', (n, b) => `class C { a = 1;\n  ${n}\n  m() { ${b} } }`], ['an async method after a field that the keyword names', (n, b) => `class C { ${n}\n  async m() { ${b} } }`],
+  ['a method after a field that the keyword names in a class that extends a name', (n, b) => `class C extends B { ${n}\n  m() { ${b} } }`], ['a method after a field that the keyword names in a class that extends a call', (n, b) => `class C extends mixin(A) { ${n}\n  m() { ${b} } }`],
+  ['a method after a field that the keyword names in a class that extends new', (n, b) => `class C extends new X() { ${n}\n  m() { ${b} } }`], ['a method after a field that the keyword names in a class that implements a call after a comma', (n, b) => `class C implements A, B() { ${n}\n  m() { ${b} } }`],
+  ['a method after a field that the keyword names in a class whose base is a class expression', (n, b) => `class C extends class {} { ${n}\n  m() { ${b} } }`], ['a method after a field that the keyword names in a class expression', (n, b) => `const K = class { ${n}\n  m() { ${b} } };`],
+  ['a method after a field that the keyword names in the class of a property', (n, b) => `const o = { a: class { ${n}\n  m() { ${b} } }, p: 1 };`], ['a method after a field that the keyword names in a class in a function', (n, b) => `function f() { return class { ${n}\n  m() { ${b} } }; }`],
   ['a static method', (n, b) => `class C { static ${n}() { ${b} } }`], ['an async method', (n, b) => `class C { async ${n}() { ${b} } }`], ['a getter', (n, b) => `class C { get ${n}() { ${b} } }`], ['a setter', (n, b) => `class C { set ${n}(v) { ${b} } }`],
   ['a generator', (n, b) => `class C { *${n}() { ${b} } }`], ['an async generator', (n, b) => `class C { async *${n}() { ${b} } }`], ['a decorated method', (n, b) => `class C { @d ${n}() { ${b} } }`], ['a public method', (n, b) => `class C { public ${n}() { ${b} } }`],
   ['a method of a class that extends a name', (n, b) => `class C extends B { ${n}() { ${b} } }`], ['a method of a class that extends a call', (n, b) => `class C extends mixin(A) { ${n}() { ${b} } }`], ['a method of a class that implements a name', (n, b) => `class C implements I { ${n}() { ${b} } }`],
@@ -439,6 +451,9 @@ const CLASS_HERITAGES = [
   'abstract class C implements A, B()', 'export class C implements A, B()', '@dec class C implements B()', 'declare class C implements A, B()', 'class C implements "x", B()', String.raw`class C implements A, \u0042()`, String.raw`class C implements A, a.\u0062()`,
   // What stays as it was: a parenthesis, a `new` and an unread callee after a comma.
   'class C implements A, (B)', 'class C extends A, (B)', 'class C extends A, new B()', 'class C implements A, B<T>()', 'class C extends A, a?.b(c)', 'class C extends A, B.C().d()', 'class C<T> extends A<T>, B() implements I',
+  // The operator `new` of an element, with a line break between it and what it takes or before it, after the keyword or the comma of the list: no field of a class, whatever the class that holds the head has before it (the wrap of a field's initializer).
+  'class C extends new\n  X()', 'class C extends\n  new X()', 'class C extends\n  new\n  X()', 'class C implements new\n  X()', 'class C implements\n  new X()', 'class C implements\n  new\n  X()', 'class C extends A,\n  new X()', 'class C extends A,\n  new\n  X()', 'class C extends A, new\n  X()',
+  'class C implements A,\n  new\n  X()', 'class C extends A implements\n  new\n  X()', 'class C extends new\n  a.b.X()', 'class C implements A,\n  new\n  a.X()', 'class C implements A, B,\n  new\n  X()',
   // A letter beyond ASCII in a name of the list, which the comma is read back through, and the word that begins the list in other heads.
   'class C implements A, caf\u00e9()', 'class C extends caf\u00e9, B()', 'class C extends A, B(), caf\u00e9()', 'class C<T> implements (B)', 'abstract class C implements (B)', 'class C implements caf\u00e9, (B)', 'const K = class extends A, B()', 'class C extends implements, B()', 'class C extends A, implements, B()',
   // A class expression among the elements: its own head and braces stand between the keyword and the call, and are one element. The list that the braces after the call end is the outer class's, whatever words the inner class has.
@@ -451,7 +466,9 @@ const CLASS_HERITAGES = [
   // Each of the elements that ends a list in a `)`, after `implements`, after a comma and after both keywords: the braces after it hold members (the sweep reads a part of them in every wrap).
   ...LAST_ELEMENT_HERITAGES,
 ];
-const CLASS_CONTAINER_WRAPS = [(c) => c, (c) => `export ${c}`, (c) => `function f() { ${c} }`, (c) => `if (a) { b; } else { ${c} }`, (c) => `a(b)\n${c}`, (c) => `async () => { ${c} }`];
+const CLASS_CONTAINER_WRAPS = [(c) => c, (c) => `export ${c}`, (c) => `function f() { ${c} }`, (c) => `if (a) { b; } else { ${c} }`, (c) => `a(b)\n${c}`, (c) => `async () => { ${c} }`,
+  // The braces of a class around the head: what stands before a `new` there is the start of a member, and a field may be named so.
+  (c) => `class H { a = ${c} }`];
 // The same for an interface, which names its bases after `extends` (and, to the parser, after `implements`, which only the checker refuses).
 const INTERFACE_HERITAGES = [
   'interface I extends J', 'interface I extends A, B()', 'interface I extends B()', 'interface I extends A<T>, B()', 'interface I extends A, ns.B()', 'interface I extends A, B(), C()', 'interface I extends B(),\n  C()', 'interface I extends A, /* c */ B()', 'interface I extends A, B(x, y)',
@@ -524,10 +541,15 @@ const NEST_FRAMES = [
   ['stmt', 'stmt', 'const o = { a: class extends B {}, m() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: class {}, implements() { __X__ } };'], ['stmt', 'stmt', 'const o = { a: class Named<T> extends Base<T> implements I {}, m() { __X__ } };'],
   ['stmt', 'stmt', 'const o = { a: (class extends B {}), m() { __X__ } };'], ['stmt', 'stmt', 'class Q {}\nfunction implements() { __X__ }'], ['stmt', 'stmt', 'interface Q {}\nfunction implements() { __X__ }'], ['stmt', 'stmt', 'class Q extends mixin(A) {}\nfunction f() { __X__ }'],
   ['stmt', 'stmt', 'class H { a = class {}\n  implements() { __X__ } }'], ['stmt', 'stmt', 'class H { static a = class extends B {}\n  extends() { __X__ } }'],
+  // A class whose own base is a class expression has the braces of the base inside its head, so that the braces of the class come after a `}`: as the value before a method, and as a declaration before a function. A field named `new` that a line break ends,
+  // before the method on the next line (`new` is the operator only in a heritage).
+  ['stmt', 'stmt', 'const o = { a: class extends class {} {}, m() { __X__ } };'], ['stmt', 'stmt', 'class Q extends class {} {}\nfunction implements() { __X__ }'], ['stmt', 'stmt', 'const o = { a: class A extends class B implements I {} implements J, K() {}, implements() { __X__ } };'],
+  ['stmt', 'stmt', 'class H { a = class extends class {} {}\n  m() { __X__ } }'], ['stmt', 'stmt', 'class C { new\n  m() { __X__ } }'], ['stmt', 'stmt', 'class C { static new\n  m() { __X__ } }'], ['stmt', 'stmt', 'class C extends class {} { new\n  m() { __X__ } }'], ['stmt', 'stmt', 'class C extends mixin(A) { readonly new\n  m() { __X__ } }'],
+  ['stmt', 'stmt', 'const o = { a: class { new\n  m() { __X__ } }, b: 1 };'], ['stmt', 'stmt', 'class C { a() {}\n  @d new\n  implements() { __X__ } }'],
   // Statements inside, an expression.
   ['stmt', 'expr', '(function () { __X__ })'], ['stmt', 'expr', '(() => { __X__ })'], ['stmt', 'expr', '(async () => { __X__ })'], ['stmt', 'expr', '({ m() { __X__ } })'], ['stmt', 'expr', '({ get x() { __X__ } })'], ['stmt', 'expr', '(class { m() { __X__ } })'],
   ['stmt', 'expr', '({ a: 1, m() { __X__ } })'], ['stmt', 'expr', '({ a: caf\u00e9, m() { __X__ } })'], ['stmt', 'expr', '({ implements() { __X__ } })'], ['stmt', 'expr', '({ a: class extends B {}, m() { __X__ } })'],
-  ['stmt', 'expr', '(class extends mixin(A) { m() { __X__ } })'], ['stmt', 'expr', '(function* () { __X__ })'], ['stmt', 'expr', '(class { static { __X__ } })'],
+  ['stmt', 'expr', '(class extends mixin(A) { m() { __X__ } })'], ['stmt', 'expr', '(function* () { __X__ })'], ['stmt', 'expr', '(class { static { __X__ } })'], ['stmt', 'expr', '({ a: class extends class {} {}, m() { __X__ } })'], ['stmt', 'expr', '(class { new\n  m() { __X__ } })'],
   // An expression inside, a statement.
   ['expr', 'stmt', 'f(__X__);'], ['expr', 'stmt', '[__X__];'], ['expr', 'stmt', '(__X__);'], ['expr', 'stmt', 'const e = __X__;'], ['expr', 'stmt', 'a ? __X__ : b;'], ['expr', 'stmt', 'const o = { k: __X__ };'], ['expr', 'stmt', 'const h = () => __X__;'],
   ['expr', 'stmt', 'const t = `${__X__}`;'], ['expr', 'stmt', 'const e = <div a={__X__} />;'], ['expr', 'stmt', 'const e = <div>{__X__}</div>;'], ['expr', 'stmt', 'function g() { return __X__; }'], ['expr', 'stmt', 'x = __X__;'], ['expr', 'stmt', 'for (__X__;;) {}'],
@@ -553,6 +575,8 @@ const NEST_FRAMES = [
 ];
 // What stands before the payload member, by the kind of the braces: a member that a separator or a line break ends.
 const NEST_MEMBER_BEFORE = { body: ['', '', '', 'static ', 'async ', 'get a() { return 1; }\n', 'a = await\n', 'a = 1;\n', 'x;\n', '@dec ', 'a: 1,\n', 'a() {},\n', '*', 'readonly ', '@dec<T> *', '@dec<T> in\n', '@dec<T> instanceof\n', '@1. *', 'a = 1\n', 'a\n',
+  // A field named `new` that a line break ends, before a method named like an operator.
+  'new\n', 'static new\n',
   // A decimal point that ends a number, after white space that is not ASCII.
   '@\u00a01. *', '@\u2028 1.\n', 'a =\u00a01.\n', 'a =\u3000 1.\n'], signature: ['', '', 'a: void\n', 'a: string;\n', 'a(): void\n', 'readonly ', 'a?: T,\n'] };
 const NEST_PRECEDING_WORDS = ['', '', 'void', 'typeof', 'delete', 'await', 'a in', 'a instanceof', 'x ? 1 :', 'a &&', 'a ||'];
