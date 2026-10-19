@@ -876,7 +876,10 @@ recorded it: the worker wrote nothing, and what is there is an earlier attempt's
 or `genpage-worker-output.js` returns `"ok":false`, do not re-dispatch that worker.
 Run the Phase 5b page-builder workflow inline for only the failed page, preserving
 the same plan and dispatch inputs. This is the same inline fallback path for missing
-and invalid worker output. The workers have no shell, so they cannot run the Griffel
+and invalid worker output. A `Task tool: none on this host` line in a worker's result
+is not a report of that kind: task tracking is optional for a worker
+(`references/agent-interaction-contract.md`), and the page is judged by its file and
+this gate. The workers have no shell, so they cannot run the Griffel
 check themselves; run it on every generated page, exactly as in step 9 of Phase 5b,
 
 ```powershell

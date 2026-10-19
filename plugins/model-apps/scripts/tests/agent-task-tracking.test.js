@@ -143,3 +143,15 @@ test('the interaction contract explains that a declared tool is not always a del
   says(/So an agent never \*depends\* on a task tool\./, 'that an agent never depends on a task tool');
   says(/agent-task-tracking\.test\.js/, 'which test pins the wording');
 });
+
+// The page builder's result now says which tool tracked its task. The /genpage orchestrator already sends a worker
+// that reports missing file or process tools to the inline fallback; a worker with no task tool must not be read as
+// one of those, or a page that was written would be written again.
+test('the genpage orchestrator does not treat a worker without a task tool as a failed worker', () => {
+  const skill = squash(readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')));
+  assert.match(skill, /A `Task tool: none on this host` line in a worker's result is not a report of that kind: task tracking is optional for a worker \(`references\/agent-interaction-contract\.md`\), and the page is judged by its file and this gate\./);
+  // It sits in the paragraph that defines the inline fallback, so "that kind" is the missing-tool report just before it.
+  const at = skill.indexOf('A `Task tool: none on this host` line');
+  assert.match(skill.slice(Math.max(0, at - 500), at), /If a worker reported missing declared file\/process tools, produced no file/);
+  assert.match(skill.slice(Math.max(0, at - 500), at), /This is the same inline fallback path for missing and invalid worker output\.\s*$/);
+});
