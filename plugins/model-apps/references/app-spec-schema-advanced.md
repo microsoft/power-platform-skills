@@ -304,7 +304,8 @@ works through.
   chart its parameters describe, which would replace the control wherever the dashboard is created from
   the spec. A rebuild into the environment the spec was downloaded from keeps the dashboard as it is
   (a build never edits an existing dashboard's tiles), so the control stays; in another environment the
-  dashboard is created without that tile, and the tile is added there in Maker. A dashboard whose only
+  dashboard is created without that tile, and the tile is added there in Maker. `--verify` leaves such a tile
+  alone too: it holds only a native chart tile to a chart and view of its table. A dashboard whose only
   tiles are such tiles is dropped with its navigation entry, which the download refuses without
   `--allow-lossy-download`.
 

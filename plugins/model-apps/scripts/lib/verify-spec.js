@@ -32,6 +32,7 @@ const { wantsTimeline, timelineVerifyProblem, FULL_BUILD } = require('./form-tim
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
+const { hostsCustomControl } = require('./dashboard-tiles.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -362,6 +363,14 @@ async function verifySpec(spec, read, opts = {}) {
   // tables made the build produce exactly that — live, with the dashboard present and verify passing.
   // So a dashboard is proven only when each chart tile's view and chart both belong to its table.
   //
+  // That is a check of the tiles the BUILD makes, so it holds native chart tiles only. A tile that is no native chart is skipped,
+  // as it always was: the Assistant, an iframe, a web resource, and any custom control — a grid or a chart a custom control hosts
+  // among them. The SDK types such a chart `chart`, as it does a native one (it used to type every custom-control tile as the
+  // Assistant), but the App Spec cannot describe it and the build never writes or edits it, so the chart and view it carries are
+  // not ones the spec declares: holding it to them failed a dashboard the build had left untouched. It is skipped, not listed
+  // `unverified`, because that is for a check verify sets out to make and cannot decide, and this is one it never makes — the
+  // same answer as before the SDK change. The classification is the download's (lib/dashboard-tiles.js), so the two agree.
+  //
   // Existence is checked for every dashboard. The tile check needs `dashboardComponents` on the
   // reader (additive and reader-gated, like the other content checks); the CLI's reader supplies it.
   // Every read failure is reported as unverified, never as correct.
@@ -434,7 +443,7 @@ async function verifySpec(spec, read, opts = {}) {
       problems.push(`its tiles could not be read (${(e && e.message) || e}) — unverified, not proven correct`);
     }
     for (const c of components || []) {
-      if (!c || c.type !== 'chart') continue;
+      if (!c || c.type !== 'chart' || hostsCustomControl(c)) continue;
       const p = c.parameters || {};
       const table = String(p.TargetEntityType || '').toLowerCase();
       const label = `chart tile '${c.name || '(unnamed)'}'`;

@@ -1561,9 +1561,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dashboard whose tiles cannot be reconstructed is dropped and surfaced in `droppedSubareas`. A tile
   that a custom control hosts (the Power Apps grid, say) is one of those that cannot: the SDK reads it as
   a list or chart with the parameters of a native tile and tells it apart only by its control class, so
-  `readDashboards` (`hostsCustomControl`) leaves it out and names it — never emitting the plain tile that
-  would replace the control wherever a rebuild creates the dashboard (a rebuild into the same environment
-  reuses the pinned dashboard as it is).
+  `readDashboards` leaves it out and names it (`hostsCustomControl`, in `lib/dashboard-tiles.js`, which verify
+  asks too) — never emitting the plain tile that would replace the control wherever a rebuild creates the
+  dashboard (a rebuild into the same environment reuses the pinned dashboard as it is).
   **A URL subarea that TARGETS a web resource round-trips too.** The Site Map Designer's "custom page
   backed by an HTML web resource" writes `$webresource:<name>` (Dataverse also serves it at
   `/WebResources/<name>`) into a URL subarea. Passing that token through used to fail the WHOLE
@@ -1615,10 +1615,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   vendored lookup reads one page of ten in no defined order, so a full page is re-read in full and the
   app's own cannot sort out of sight. The sitemap subarea check asks the same question (one lookup per
   name, shared), so the two cannot pick different dashboards — it used to take the first match, and live
-  a same-named dashboard of another app sorted first and failed a correctly wired nav entry. When the reader supplies `dashboardComponents`, every chart tile's
+  a same-named dashboard of another app sorted first and failed a correctly wired nav entry. When the reader supplies `dashboardComponents`, every native chart tile's
   visualization and view must belong to the tile's `TargetEntityType` — the cross-wiring a same-named
   chart on another table produced. A tile whose owner rows cannot be read is reported unverified, not
-  passed. The tiles are the PUBLISHED dashboard's: the SDK reads them from the saved layer, and the reader
+  passed. Only a NATIVE chart tile is held to that: the Assistant, an iframe, a web resource and any custom
+  control are skipped, a chart a custom control hosts among them. The SDK types such a chart `chart` as it does
+  a native one, but the spec cannot describe it and the build never writes it, so the chart and view it carries
+  are not the spec's to judge — holding it to them failed a dashboard the build had left untouched. It is
+  skipped, as before, and not listed `unverified` (that is for a check verify sets out to make); the
+  classification is the download's (`lib/dashboard-tiles.js`; `verify-dashboard-custom-control.test.js` runs
+  it on the real bundle). The tiles are the PUBLISHED dashboard's: the SDK reads them from the saved layer, and the reader
   takes them only when that layer's FormXML is the published row's, before and after the read, with the
   same `@odata.etag` in between — a dashboard with changes that are not published is unverified. The two
   FormXML reads are compared in the languages the published read carries (`lib/formxml-layers.js`): live,
@@ -2180,6 +2186,7 @@ scripts/
     form-timeline.js           ← pure: the shape Dynamics renders the Notes timeline in (control id, tall cell, spacer rows), what a deployed one lacks, and how to read it in the SDK tree and in published FormXML (shared by the compiler, the build's repair and verify)
     form-subgrid-placement.js  ← pure: where a form's sub-grid sections go (`tab`/`column`/`after`/`before`) — resolving a placement against the declared layout, the order of a column's sections and grids, finding a grid's section in either tree shape (shared by the spec gate, build, verify and the wireframe)
     form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
+    dashboard-tiles.js         ← pure: whether a tile of a deployed dashboard is a grid or chart a custom control hosts and not a native one — the control class decides, as the SDK reads both as `list`/`chart` with the same parameters (shared by the download, which leaves such a tile out of the spec, and verify, which does not hold it to a chart and view of its table)
     form-container-match.js    ← how an authored tab/section is matched to a deployed one, and the moves that put them in the layout's order (shared by build and verify)
     ai-app-settings.js         ← single source of truth for the per-app AI feature contract
     interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
