@@ -88,3 +88,35 @@ test('each skill still names the other in its boundary sentence, so the pair kee
   assert.match(skillDescription('genpage'), /This skill stands alone and does not require \/app-builder/);
   assert.match(skillDescription('app-builder'), /This skill stands alone and does not require \/genpage/);
 });
+
+// ---------- the committed cases that guard those sentences ----------
+
+const CASES = require('../evals.json').evals;
+const NEGATIVES = CASES.filter((c) => c.expect === null);
+const POSITIVES = CASES.filter((c) => c.expect !== null);
+const RULES_OUT_THE_PLATFORM = /\b(?:no|not|nothing to do with)\b[^.]*\b(?:Power Platform|Power Apps|Dataverse|model-driven app)\b/i;
+const NOT_ABOUT_THE_PLATFORM = /\b(?:Do not|not just|not a standalone)\b/;
+
+test('the cases include a generic React request that rules out Power Platform, as a negative', () => {
+  const generic = NEGATIVES.filter((c) => /generic React/i.test(c.prompt) && /\bNo Power Platform\b/.test(c.prompt));
+  assert.equal(generic.length, 1, 'the request the rule-out sentences exist for');
+  assert.ok(generic[0].trap, 'a negative says which mis-route it guards against');
+});
+
+test('the cases include several negatives that rule out the platform in words, and a stack the descriptions are written in', () => {
+  const ruledOut = NEGATIVES.filter((c) => RULES_OUT_THE_PLATFORM.test(c.prompt));
+  assert.ok(ruledOut.length >= 5, `expected at least 5 negatives that rule out Power Platform, Power Apps, Dataverse or a model-driven app, found ${ruledOut.length}`);
+  assert.ok(NEGATIVES.some((c) => /Fluent UI/.test(c.prompt) && /React/.test(c.prompt)), 'a plain web app in the stack /genpage is described with');
+  assert.ok(NEGATIVES.some((c) => /code app/i.test(c.prompt)), 'a Power Apps code app, which the /genpage description names as not its own');
+  assert.ok(NEGATIVES.some((c) => /React/.test(c.prompt) && /app to manage/.test(c.prompt)), 'a generic "app to manage Y", which is the /app-builder trigger phrase');
+});
+
+test('the rule-out example the descriptions quote is in negatives only, and positives that carry a "not" about something else stay', () => {
+  assert.deepEqual(POSITIVES.filter((c) => /\bno Power Platform\b/i.test(c.prompt)).map((c) => c.id), []);
+  // A positive request can say "do not create another app" or "do not change its Dataverse schema". The
+  // rule-out sentence must not be read widely enough to take those away.
+  const withNot = POSITIVES.filter((c) => NOT_ABOUT_THE_PLATFORM.test(c.prompt));
+  assert.ok(withNot.length >= 4, `expected at least 4 positives with a "not" about another skill or the schema, found ${withNot.length}`);
+  assert.ok(withNot.some((c) => c.expect === 'genpage') && withNot.some((c) => c.expect === 'app-builder'), 'from both sides of the boundary');
+  assert.ok(withNot.some((c) => /Dataverse/.test(c.prompt)), 'one that says "not" next to Dataverse');
+});

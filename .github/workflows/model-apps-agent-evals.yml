@@ -4,7 +4,7 @@
 # Why this is NOT part of model-apps-script-tests.yml (the per-PR gate):
 #   * it is non-deterministic (graded as a pass RATE over several trials), so it must not be a
 #     hard merge gate;
-#   * it costs real model usage (~1 turn per trial; 20 cases x 3 trials per full run), billed to
+#   * it costs real model usage (~1 turn per trial; 35 cases x 3 trials per full run), billed to
 #     the organization;
 #   * fork PRs cannot be given Copilot request rights, so a required check would block outside
 #     contributions.

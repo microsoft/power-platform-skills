@@ -4884,10 +4884,12 @@ node evals/model-apps/app-builder/run-app-builder.js
 ### Skill routing — agent in the loop
 
 `evals/model-apps/routing/` grades which skill a real agent CLI (Copilot CLI or
-Claude Code, headless, isolated, only this plugin loaded) invokes for each of 20
+Claude Code, headless, isolated, only this plugin loaded) invokes for each of 35
 prompts: `/genpage` vs `/app-builder` from both sides of their boundary, plus
 negatives that share vocabulary (Power Pages, canvas, Power Automate, a generic
-React dashboard). The offline harnesses above grade what a run *produced* and
+React dashboard, a code app — several of them saying outright that the request
+is not for Power Platform, Dataverse or a model-driven app) and positives that
+carry a "not" about the other skill or the schema. The offline harnesses above grade what a run *produced* and
 cannot see a mis-route; both skill descriptions point at each other, so a
 wording change to one can start stealing the other's prompts. The agent is
 killed at its first plugin-skill call, so a trial costs about one model turn;

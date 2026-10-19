@@ -134,6 +134,111 @@
       "expect": "genpage",
       "accept": ["app-builder"],
       "trap": "genuinely ambiguous: /genpage can create the table it needs, and /app-builder can edit the app; either is acceptable, NEITHER is not"
+    },
+    {
+      "id": 21,
+      "tier": "smoke",
+      "prompt": "Build a generic React dashboard website using mock property data. No Power Platform, Dataverse or model-driven app.",
+      "expect": null,
+      "trap": "a \"no Power Platform\" disclaimer that still uses the plugin's own words (React, dashboard, model-driven app) pulling the request into /genpage or /app-builder. The agent may look at the empty workspace first and, with no tool to build with, ask for a skill in a later turn; that is reported as a later fallback and is not graded"
+    },
+    {
+      "id": 22,
+      "tier": "full",
+      "prompt": "Create a public tenant self-service website with Power Pages where tenants submit maintenance requests. Do not build a model-driven app.",
+      "expect": null,
+      "trap": "a Power Pages request that names a model-driven app only to rule it out"
+    },
+    {
+      "id": 23,
+      "tier": "full",
+      "prompt": "Build a Power Apps canvas app for field inspections, using Power Fx and responsive screens. Not a model-driven app.",
+      "expect": null,
+      "trap": "Power Apps wording pulling a canvas request into /app-builder although it says \"not a model-driven app\""
+    },
+    {
+      "id": 24,
+      "tier": "full",
+      "prompt": "Create a Power Automate scheduled flow that emails tomorrow's lease expirations. Do not create an app or page.",
+      "expect": null,
+      "trap": "\"app or page\" in a flow request, which names what both skills build"
+    },
+    {
+      "id": 25,
+      "tier": "full",
+      "prompt": "Explain the difference between a model-driven app and a generative page. Do not create or edit anything.",
+      "expect": null,
+      "trap": "a knowledge question that names what both skills build triggering one of them"
+    },
+    {
+      "id": 26,
+      "tier": "full",
+      "prompt": "I need a standalone web app to manage equipment loans, built with Node.js, Express and SQLite and a React front end. It has nothing to do with Power Apps or Dataverse.",
+      "expect": null,
+      "trap": "\"an app to manage Y\" read as /app-builder although the user rules out Power Apps and Dataverse"
+    },
+    {
+      "id": 27,
+      "tier": "full",
+      "prompt": "Build a React 18 and TypeScript dashboard with Fluent UI v9 components and mock data, running locally on Vite. This is not for Power Apps.",
+      "expect": null,
+      "trap": "the stack /genpage is described with (React, TypeScript, Fluent UI) pulling a plain web app into it"
+    },
+    {
+      "id": 28,
+      "tier": "full",
+      "prompt": "Create a Power Apps code app with React and Vite that lists Dataverse accounts.",
+      "expect": null,
+      "trap": "a standalone React app on Dataverse, which a different plugin builds, read as a generative page"
+    },
+    {
+      "id": 29,
+      "tier": "stress",
+      "prompt": "We already have a model-driven property management app. Add a generative lease-expiry dashboard page using the existing lease tables. Do not create another app.",
+      "expect": "genpage",
+      "trap": "\"do not create another app\" and \"dashboard\" pulling a page request into /app-builder"
+    },
+    {
+      "id": 30,
+      "tier": "stress",
+      "prompt": "Create a property management model-driven app from scratch: properties, units, tenants and leases, with forms and a generative dashboard page.",
+      "expect": "app-builder",
+      "trap": "\"a generative dashboard page\" inside a whole-app request pulling it into /genpage"
+    },
+    {
+      "id": 31,
+      "tier": "stress",
+      "prompt": "Add a maintenance-request Dataverse table, its main form, view and sitemap entry to our existing model-driven app. This is an app schema edit, not a standalone page.",
+      "expect": "app-builder",
+      "trap": "an edit to an existing app's data model routed to /genpage because the app already exists"
+    },
+    {
+      "id": 32,
+      "tier": "stress",
+      "prompt": "Edit the TSX of the generative maintenance page already deployed in our model-driven app, preserving maker edits and existing connector bindings.",
+      "expect": "genpage",
+      "trap": "an edit of a deployed page read as an edit of the app"
+    },
+    {
+      "id": 33,
+      "tier": "stress",
+      "prompt": "Update our model-driven app to include a hidden Dataverse reference table and restrict which Main forms it offers. Keep all existing data.",
+      "expect": "app-builder",
+      "trap": "an existing app's table membership and form list are app-level changes, not a page"
+    },
+    {
+      "id": 34,
+      "tier": "stress",
+      "prompt": "Add a generative SharePoint-document search page to an existing model-driven app using a connector. Do not change its Dataverse schema.",
+      "expect": "genpage",
+      "trap": "\"do not change its Dataverse schema\" read as ruling out Dataverse, which the descriptions' rule-out sentence is not about"
+    },
+    {
+      "id": 35,
+      "tier": "stress",
+      "prompt": "Create an end-to-end property management model-driven app with a dashboard page and a maintenance process. I need the whole app, not just a page.",
+      "expect": "app-builder",
+      "trap": "\"not just a page\" read as a request for a page"
     }
   ]
 }

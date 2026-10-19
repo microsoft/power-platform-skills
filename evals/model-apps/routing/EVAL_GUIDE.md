@@ -24,15 +24,20 @@ instead" and back), so a wording change to one can silently start stealing the o
 
 | Field | Meaning |
 |-------|---------|
-| `expect` | The model-apps skill the agent must invoke **first** — `genpage`, `app-builder`, `report-issue`, `telemetry` — or `null` for "none of them" (a negative / bleed case) |
+| `expect` | The model-apps skill the agent must invoke **in its first turn** (see [What counts as the decision](#what-counts-as-the-decision)) — `genpage`, `app-builder`, `report-issue`, `telemetry` — or `null` for "none of them" (a negative / bleed case) |
 | `accept` | Optional other outcomes that are also correct, for a genuinely ambiguous prompt. `null` is never implied: "ambiguous" does not mean "anything goes" |
 | `trap` | Optional. The mis-route the case exists to catch; printed when the case fails |
 | `tier` | `smoke` / `full` / `stress`, as in the other suites |
 
-The 20 committed cases cover: positives for every skill; the `/genpage` ↔ `/app-builder` boundary
+The 35 committed cases cover: positives for every skill; the `/genpage` ↔ `/app-builder` boundary
 from both sides ("add a page to my existing app" vs "an app … plus a dashboard page", "add a
 **table** to my existing app"); and negatives that share vocabulary with the plugin — Power Pages,
-canvas/Power Fx, Power Automate, a generic React dashboard, and a pure knowledge question.
+canvas/Power Fx, Power Automate, a generic React dashboard, a plain web app in the stack `/genpage` is
+written in (React, TypeScript, Fluent UI), a Power Apps code app, and a pure knowledge question. Several
+negatives say outright that the request is not for Power Platform, Dataverse or a model-driven app
+(#21–#28). The stress tier also holds positives that carry a "not" about the other skill or about the
+schema ("do not create another app", "do not change its Dataverse schema") (#29–#35): the descriptions
+rule things out, and these are how a rule-out that is read too widely would show.
 
 ## How a trial runs
 
@@ -110,15 +115,15 @@ Exit codes: `0` every case met the threshold · `1` a case failed · `2` harness
 ```
 TAP version 13
 # agent claude · model sonnet · runs 2 · threshold 2/3 · grade initial
-1..20
+1..35
 ok 1 - #1 [smoke] expect genpage — 2/2 (genpage×2)
 not ok 4 - #4 [smoke] expect app-builder — 1/2 (app-builder×1, genpage×1)
   ---
   prompt: "I need a Dataverse app for inventory ..."
   trap: "the word \"page\" pulling a whole-app request into /genpage"
   ...
-# cases 20 (pass 19, fail 1, error 0)
-# trials 40 (errors 0)
+# cases 35 (pass 34, fail 1, error 0)
+# trials 70 (errors 0)
 # cost >= $0.48 (killed trials do not report cost)
 ```
 
@@ -150,7 +155,9 @@ keep those local; they can contain local paths and model output.
 Measured when the suite was added: all 20 cases passed 2/2 on both Claude Code (`--model sonnet`)
 and Copilot CLI (`--model claude-sonnet-5.5`), ~5–15 s per trial. The suite is therefore a
 **regression guard** for the descriptions, not a known-failing backlog — and since every case is
-currently easy for these models, harder boundary prompts are the most useful additions.
+currently easy for these models, harder boundary prompts are the most useful additions. Cases 21–35 were
+added later: run a new one on its own (`--eval <id> --runs 3`) on the agent and model you care about
+before reading a failure as a description problem.
 
 ## Cadence
 
