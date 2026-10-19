@@ -1,8 +1,9 @@
 'use strict';
-// Teardown's row-summary step says what it found. The SDK's `removeRowSummary` answers nothing whether it removed a row summary or found none to remove, and the step took
-// "the call did not throw" for "one was deleted": a table with no row summary was reported `✓ row summary <table> (1 deleted)`, in the line and in the closing count. The step now
-// looks first — with the request the SDK itself makes — and reports what that read found, like every other step. The step stays best-effort, as it always was (a failure of
-// the lookup or of the removal fails nothing), but what it could not do is said on its line instead of being counted as a deletion.
+// Teardown's row-summary step says what the SDK found. `removeRowSummary` looks the table's skill row up itself and answers `{ removed: true }` when the table had a row summary and it is
+// gone, and `{ removed: false }` — deleting nothing — when it had none (cds-maker-sdk 9a0c9f03). The SDK used to answer nothing in both cases, so the step took "the call did not throw" for "one
+// was deleted" and a table with no row summary was reported `✓ row summary <table> (1 deleted)`; 2.16.0 looked for the skill row first, with a read of its own, to tell them apart. The step now
+// reads nothing of its own: what the removal answers is what its line says, like every other step. It stays best-effort, as it always was (a failure of the lookup or of the removal fails nothing),
+// but what it could not do is said on its line instead of being counted as a deletion.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -26,30 +27,34 @@ const SPEC = {
   ai: { summaries: { default: 'auto' } },
 };
 const SKILL_ROW = { aiskillconfigid: '11111111-1111-1111-1111-111111111111' };
-const LOOKUP = "/aiskillconfigs?$select=aiskillconfigid&$filter=uniquename eq 'ais_RowSummary_new_memo'&$top=1";
+const LOOKUP_URL = `${ENV}/api/data/v9.0/aiskillconfigs?$select=aiskillconfigid,_aimodel_value&$filter=uniquename eq 'ais_RowSummary_new_memo'&$top=1`;
 
-// An SDK double whose Dataverse holds `rows` as the skill rows the lookup finds, and which records every call. `lookup` and `remove` replace the answer of the read and the
-// removal (to answer another status, or to throw). `solution: false` is an environment without the spec's solution, so that nothing else of the plan is deleted either.
-function summarySdk({ rows = [], lookup, remove, solution = true } = {}) {
+// An SDK double whose `removeRowSummary` answers `answer` (`{ removed: true }` unless told otherwise, and nothing at all for `answer: undefined`) and records every call. `remove` replaces the
+// answer with a failure to throw. A read through `sdk.dataverse` fails the test: the step makes none. `solution: false` is an environment without the spec's solution, so that nothing else of the
+// plan is deleted either.
+function summarySdk(options = {}) {
+  const { remove, solution = true } = options;
+  const answer = 'answer' in options ? options.answer : { removed: true };
   const calls = [];
   const sdk = {
     resolveArtifact: async (kind) => (kind === 'solution' && solution ? [{ id: 'sol-1', name: 'AiTest' }] : []),
     queryRecords: async () => [],
     dataverse: {
-      get: async (url) => {
-        calls.push({ method: 'get', path: url });
-        return lookup ? lookup() : { status: 200, body: { value: rows } };
-      },
+      get: async (url) => { throw new Error(`the row-summary step must read nothing of its own, and read ${url}`); },
     },
     removeRowSummary: async (args) => {
       calls.push({ method: 'removeRowSummary', ...args });
       if (remove) throw remove();
+      return answer;
     },
     deleteTable: async () => { throw Object.assign(new Error('Could not find an entity with specified id'), { statusCode: 404 }); },
     deleteSolution: async () => {},
   };
   return { sdk, calls, removals: () => calls.filter((c) => c.method === 'removeRowSummary') };
 }
+
+// What the SDK throws when a request of its own is refused: a ConnectionError carrying the url and the status (cds-maker-sdk `ConnectionError`).
+const refusal = (status, words, url = LOOKUP_URL) => Object.assign(new Error(`HTTP ${status} from ${url}: ${words}`), { code: 'CONNECTION_ERROR', statusCode: status, url });
 
 const stepEvents = (events) => events.filter((e) => e.phase === 'ai-summaries' && e.status !== 'start');
 async function run(sdk, spec = SPEC) {
@@ -58,18 +63,18 @@ async function run(sdk, spec = SPEC) {
   return { result, events: stepEvents(events) };
 }
 
-test('a table with no row summary is reported as not found, and nothing is sent to remove one', async () => {
-  const { sdk, removals } = summarySdk({ rows: [] });
+test('a table with no row summary is reported as not found: the SDK deleted nothing, and nothing deleted is counted', async () => {
+  const { sdk, removals } = summarySdk({ answer: { removed: false } });
   const { result, events } = await run(sdk);
   assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
   assert.deepStrictEqual(events.map((e) => [e.status, e.skip, e.label]), [['skip', 'not-found', 'row summary new_memo (not found)']]);
-  assert.deepStrictEqual(removals(), [], 'there is nothing to remove');
+  assert.strictEqual(removals().length, 1, 'the SDK is asked once, and it looks for the row summary itself');
   assert.strictEqual(result.deleted.aiSummary, undefined, 'and nothing deleted is counted');
   assert.ok(result.skipped.includes('row summary new_memo'));
 });
 
 test('a row summary the environment holds is removed once, and reported as deleted', async () => {
-  const { sdk, removals } = summarySdk({ rows: [SKILL_ROW] });
+  const { sdk, removals } = summarySdk({ answer: { removed: true } });
   const { result, events } = await run(sdk);
   assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
   assert.deepStrictEqual(events.map((e) => [e.status, e.label]), [['ok', 'row summary new_memo (1 deleted)']]);
@@ -77,39 +82,54 @@ test('a row summary the environment holds is removed once, and reported as delet
   assert.deepStrictEqual(result.deleted.aiSummary, ['new_memo']);
 });
 
-test('the step looks for the skill row by the SDK\u2019s own request, before it removes anything', async () => {
-  const { sdk, calls } = summarySdk({ rows: [SKILL_ROW] });
-  await run(sdk);
-  assert.deepStrictEqual(calls.filter((c) => c.method === 'get').map((c) => c.path), [LOOKUP]);
-  assert.ok(calls.findIndex((c) => c.method === 'get') < calls.findIndex((c) => c.method === 'removeRowSummary'));
+test('the step makes no request of its own: the SDK\u2019s removal is the only call it makes for a table', async () => {
+  // The double fails the test on any read through `sdk.dataverse`; the plan's other steps read through `resolveArtifact`/`queryRecords`, which this spec's steps do not use for a row summary.
+  for (const answer of [{ removed: true }, { removed: false }]) {
+    const { sdk, calls } = summarySdk({ answer });
+    const { result } = await run(sdk);
+    assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
+    assert.deepStrictEqual(calls.map((c) => c.method), ['removeRowSummary'], JSON.stringify(answer));
+  }
 });
 
-test('an environment that has no AI skill table holds no row summary: not found, not a failure', async () => {
-  const { sdk, removals } = summarySdk({ lookup: () => ({ status: 404, body: { error: { message: "Resource not found for the segment 'aiskillconfigs'." } } }) });
+test('only an explicit { removed: false } says that nothing was there: an answer that says nothing is counted as it always was', async () => {
+  // A double (or an SDK) that answers nothing cannot say that no row summary was found, so the removal that did not throw is a deletion, as it was before the lookup existed.
+  for (const answer of [undefined, null, {}, { removed: undefined }]) {
+    const { sdk } = summarySdk({ answer });
+    const { result, events } = await run(sdk);
+    assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
+    assert.deepStrictEqual(events.map((e) => [e.status, e.label]), [['ok', 'row summary new_memo (1 deleted)']], JSON.stringify(answer));
+  }
+});
+
+test('an environment that has no AI skill table holds no row summary: the SDK\u2019s lookup answers 404, and the step says not found, not failed', async () => {
+  const { sdk, removals } = summarySdk({ remove: () => refusal(404, "Resource not found for the segment 'aiskillconfigs'.") });
   const { result, events } = await run(sdk);
   assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
   assert.deepStrictEqual(events.map((e) => [e.status, e.skip, e.label]), [['skip', 'not-found', 'row summary new_memo (not found)']]);
-  assert.deepStrictEqual(removals(), []);
+  assert.strictEqual(removals().length, 1);
+  assert.strictEqual(result.deleted.aiSummary, undefined);
 });
 
-test('a lookup that cannot be made leaves what is there unknown: said on the step, nothing removed, nothing failed', async () => {
-  for (const [what, lookup, reason] of [
-    ['a refusal', () => ({ status: 403, body: { error: { message: 'no read privilege' } } }), /^row summary new_memo \(not looked up \u2014 the lookup answered HTTP 403; a row summary left behind is reported by the table's delete\)$/],
-    ['an answer that is no list', () => ({ status: 200, body: { value: 'busy' } }), /^row summary new_memo \(not looked up \u2014 the lookup's answer was no list; a row summary left behind is reported by the table's delete\)$/],
-    ['a request that failed', () => { throw new Error('socket hang up'); }, /^row summary new_memo \(not looked up \u2014 socket hang up; a row summary left behind is reported by the table's delete\)$/],
+test('a lookup or a removal that fails leaves what is there unknown: said on the step in the SDK\u2019s words, nothing counted as deleted, nothing failed', async () => {
+  for (const [what, failure, words] of [
+    ['a refusal of the lookup', () => refusal(403, 'no read privilege'), `HTTP 403 from ${LOOKUP_URL}: no read privilege`],
+    ['an answer that is no list', () => Object.assign(refusal(200, "the row-summary skill lookup returned a malformed answer \u2014 expected an OData 'value' array but got a string"), { statusCode: 200 }), `HTTP 200 from ${LOOKUP_URL}: the row-summary skill lookup returned a malformed answer \u2014 expected an OData 'value' array but got a string`],
+    ['a first row that is no row', () => refusal(200, 'the row-summary skill lookup returned a malformed row \u2014 expected an object but got null'), `HTTP 200 from ${LOOKUP_URL}: the row-summary skill lookup returned a malformed row \u2014 expected an object but got null`],
+    ['a request that failed', () => new Error('socket hang up'), 'socket hang up'],
   ]) {
-    const { sdk, removals } = summarySdk({ lookup });
+    const { sdk, removals } = summarySdk({ remove: failure });
     const { result, events } = await run(sdk);
     assert.strictEqual(result.ok, true, `${what}: the step is best-effort, as it was: ${JSON.stringify(result.errors)}`);
-    assert.deepStrictEqual(events.map((e) => [e.status, e.skip]), [['skip', 'kept']], what);
-    assert.match(events[0].label, reason, what);
-    assert.deepStrictEqual(removals(), [], `${what}: the SDK\u2019s own removal would have made the same request`);
+    assert.deepStrictEqual(events.map((e) => [e.status, e.skip, e.label]), [['skip', 'kept', `row summary new_memo (kept \u2014 1 not removed: ${words})`]], what);
+    assert.strictEqual(removals().length, 1, what);
+    assert.strictEqual(result.deleted.aiSummary.length, 0, what);
   }
 });
 
 test('a removal that fails is not a deletion: said on the step in the SDK\u2019s words, kept like a step that left its artifact, and it still fails nothing', async () => {
   const words = "The row summary of 'new_memo' was removed, but its AI model '22222222-2222-2222-2222-222222222222' was not deleted (HTTP 400: refused).";
-  const { sdk, removals } = summarySdk({ rows: [SKILL_ROW], remove: () => Object.assign(new Error(words), { code: 'ROW_SUMMARY_MODEL_NOT_DELETED' }) });
+  const { sdk, removals } = summarySdk({ remove: () => Object.assign(new Error(words), { code: 'ROW_SUMMARY_MODEL_NOT_DELETED' }) });
   const { result, events } = await run(sdk);
   assert.strictEqual(result.ok, true, 'best-effort: the table\u2019s delete that follows reports what still depends on the row summary');
   assert.deepStrictEqual(events.map((e) => [e.status, e.skip, e.label]), [['skip', 'kept', `row summary new_memo (kept \u2014 1 not removed: ${words})`]]);
@@ -126,7 +146,7 @@ const CLOSING_WHEN_NOTHING_WAS_DELETED = /\u2014 0 deleted, 5 not found, 0 faile
 test('a removal that wholly fails is not in the closing count of deleted steps: it is kept, with the table that is kept', async () => {
   const words = 'HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.0/aiskillconfigs(11111111-1111-1111-1111-111111111111): no delete privilege';
   const logs = [];
-  const { sdk } = summarySdk({ rows: [SKILL_ROW], solution: false, remove: () => new Error(words) });
+  const { sdk } = summarySdk({ solution: false, remove: () => new Error(words) });
   const result = await teardownModelApp(RETAINED, { apply: true, allowDestructive: true }, { sdk, log: (m) => logs.push(m) });
   assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
   assert.deepStrictEqual(result.deleted.aiSummary, [], 'the JSON result deletes nothing');
@@ -136,7 +156,7 @@ test('a removal that wholly fails is not in the closing count of deleted steps: 
 
 test('a removal that succeeds is still counted as the deletion it is, beside the table that is kept', async () => {
   const logs = [];
-  const { sdk } = summarySdk({ rows: [SKILL_ROW], solution: false });
+  const { sdk } = summarySdk({ solution: false });
   await teardownModelApp(RETAINED, { apply: true, allowDestructive: true }, { sdk, log: (m) => logs.push(m) });
   assert.match(logs.find((l) => /teardown complete/.test(l)), /\u2014 1 deleted, 5 not found, 0 failed, 1 kept \(7 steps\)$/, logs.join('\n'));
 });
@@ -151,8 +171,8 @@ test('the printed step and the closing counts follow what was found', async () =
     assert.ok(closing, logs.join('\n'));
     return { logs, deleted: Number(closing[1]), notFound: Number(closing[2]), steps: Number(closing[3]) };
   };
-  const none = await tally({ rows: [] });
-  const one = await tally({ rows: [SKILL_ROW] });
+  const none = await tally({ answer: { removed: false } });
+  const one = await tally({ answer: { removed: true } });
   assert.ok(none.logs.some((l) => /^ {2}\[\d+\/\d+\] \u2298 row summary new_memo \(not found\)$/.test(l)), none.logs.join('\n'));
   assert.ok(!none.logs.some((l) => /row summary new_memo \(1 deleted\)/.test(l)));
   assert.ok(one.logs.some((l) => /^ {2}\[\d+\/\d+\] \u2713 row summary new_memo \(1 deleted\)$/.test(l)), one.logs.join('\n'));
@@ -164,9 +184,8 @@ test('the printed step and the closing counts follow what was found', async () =
 
 // --- the real SDK ----------------------------------------------------------------------------------------------------------------------------------------------
 
-// `removeRowSummary` finds the row summary by its skill row — `GET /aiskillconfigs?…$filter=uniquename eq 'ais_RowSummary_<table>'` — and the step must look for the same row, or a
-// row summary the SDK would remove is reported as not there and left to block the table's delete. The unique name is a constant inside the bundle, so the one the step uses is held to what
-// the real bundle asks for, over a fake Dataverse that answers by the filter.
+// The real bundle over a fake Dataverse that answers by the filter: `removeRowSummary` looks the row summary up by its skill row — `GET /aiskillconfigs?…$filter=uniquename eq 'ais_RowSummary_<table>'` — and
+// what the step reports is what that call answers, so these hold the step to the requests the bundle really makes and to the words it really answers in.
 function fakeSkillOrg({ rows = [], status = 200, deleteStatus = 204 } = {}) {
   const requests = [];
   const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -195,20 +214,37 @@ async function realSdk(org) {
 }
 const skillFilters = (requests) => requests.map((r) => /\/aiskillconfigs\?.*\$filter=([^&]+)/.exec(r.path)).filter(Boolean).map((m) => m[1]);
 
-test('REAL BUNDLE: the step\u2019s lookup asks for the unique name the bundle\u2019s own removal asks for', async () => {
-  const bundleOrg = fakeSkillOrg();
-  await (await realSdk(bundleOrg)).removeRowSummary({ entityLogicalName: 'new_memo' });
-  const stepOrg = fakeSkillOrg();
-  assert.deepStrictEqual(await KIND_HANDLERS.aiSummary.resolve(await realSdk(stepOrg), { entityLogicalName: 'new_memo' }), []);
-  assert.deepStrictEqual(skillFilters(bundleOrg.requests), ["uniquename eq 'ais_RowSummary_new_memo'"]);
-  assert.deepStrictEqual(skillFilters(stepOrg.requests), skillFilters(bundleOrg.requests));
-  assert.strictEqual(stepOrg.requests.length, 1, 'one read, and nothing else is asked');
+const withoutPage = { entities: SPEC.entities, ai: SPEC.ai };
+const deleteRequests = (requests) => requests.filter((r) => r.method === 'DELETE').map((r) => r.path.replace(/^\/api\/data\/v9\.\d\//, ''));
+
+test('REAL BUNDLE: the removal of a table with no skill row answers { removed: false }, and the step reports not found after the SDK\u2019s one lookup, sending nothing', async () => {
+  const direct = fakeSkillOrg({ rows: [] });
+  assert.deepStrictEqual(await KIND_HANDLERS.aiSummary.del(await realSdk(direct), { id: 'new_memo', entityLogicalName: 'new_memo' }), { removed: false });
+  const org = fakeSkillOrg({ rows: [] });
+  const { result, events } = await run(await realSdk(org), withoutPage);
+  assert.deepStrictEqual(events.map((e) => [e.status, e.label]), [['skip', 'row summary new_memo (not found)']], JSON.stringify(result.errors));
+  assert.deepStrictEqual(skillFilters(org.requests), ["uniquename eq 'ais_RowSummary_new_memo'"], 'one lookup, by the unique name the build gave the row summary: the SDK\u2019s own');
+  assert.deepStrictEqual(deleteRequests(org.requests).filter((p) => /aiskillconfigs|msdyn_aimodels/.test(p)), [], 'and no row summary was deleted (the table\u2019s own delete, which the plan makes next, is not this step\u2019s)');
+  assert.strictEqual(result.deleted.aiSummary, undefined);
 });
 
-test('REAL BUNDLE: a skill row the environment holds is found, and one it does not hold is not', async () => {
-  const found = await KIND_HANDLERS.aiSummary.resolve(await realSdk(fakeSkillOrg({ rows: [SKILL_ROW] })), { entityLogicalName: 'new_memo' });
-  assert.deepStrictEqual(found, [{ id: 'new_memo', entityLogicalName: 'new_memo' }]);
-  assert.deepStrictEqual(await KIND_HANDLERS.aiSummary.resolve(await realSdk(fakeSkillOrg({ rows: [] })), { entityLogicalName: 'new_memo' }), []);
+test('REAL BUNDLE: a skill row the environment holds is removed by the SDK, which is the one that looks for it: one lookup, one delete, reported as deleted', async () => {
+  const org = fakeSkillOrg({ rows: [SKILL_ROW] });
+  const { result, events } = await run(await realSdk(org), withoutPage);
+  assert.deepStrictEqual(events.map((e) => [e.status, e.label]), [['ok', 'row summary new_memo (1 deleted)']], JSON.stringify(result.errors));
+  assert.deepStrictEqual(skillFilters(org.requests), ["uniquename eq 'ais_RowSummary_new_memo'"], 'the step makes no lookup of its own');
+  assert.deepStrictEqual(deleteRequests(org.requests).filter((p) => /aiskillconfigs|msdyn_aimodels/.test(p)), ['aiskillconfigs(11111111-1111-1111-1111-111111111111)'], 'one delete, of the skill row (the table\u2019s own, which the plan makes next, is not this step\u2019s)');
+  assert.deepStrictEqual(result.deleted.aiSummary, ['new_memo']);
+});
+
+test('REAL BUNDLE: a first row that is no row is a failure of the SDK\u2019s lookup, kept in its words — not a table with no row summary — and no row summary is deleted', async () => {
+  const org = fakeSkillOrg({ rows: [null] });
+  const { result, events } = await run(await realSdk(org), withoutPage);
+  assert.strictEqual(result.ok, true, 'best-effort, as it always was');
+  assert.deepStrictEqual(events.map((e) => [e.status, e.skip]), [['skip', 'kept']]);
+  assert.match(events[0].label, /^row summary new_memo \(kept \u2014 1 not removed: HTTP 200 from https:\/\/contoso\.crm\.dynamics\.com\/api\/data\/v9\.\d\/aiskillconfigs\?[^:]*: the row-summary skill lookup returned a malformed row \u2014 expected an object but got /);
+  assert.deepStrictEqual(deleteRequests(org.requests).filter((p) => /aiskillconfigs|msdyn_aimodels/.test(p)), []);
+  assert.deepStrictEqual(result.deleted.aiSummary, []);
 });
 
 test('REAL BUNDLE: an environment with no AI skill table is reported as not found through the whole teardown', async () => {

@@ -1123,32 +1123,30 @@ const KIND_HANDLERS = {
   aiSummary: {
     // AI row-summary records reference the table and would block its delete; remove them first.
     //
-    // The SDK's removeRowSummary answers nothing, both when it removes a row summary and when it finds none to remove: it looks up the
-    // skill row `ais_RowSummary_<table>` and returns at once without one. A step that only called it reported `(1 deleted)` for every
-    // table that had no row summary. So the step looks first, with the SDK's own request (`GET /aiskillconfigs?…$filter=uniquename eq '…'`,
-    // which teardown-row-summary-lookup.test.js holds to what the real bundle asks for), and a table with none is "not found" like any
-    // other step's. The request is the SDK's own, so a lookup that fails is one the removal would fail too: 404 means the environment has
-    // no such table (so no row summary), and any other answer leaves what is there unknown, which the step says rather than guesses.
+    // The SDK looks the row summary up itself and says what it did: `removeRowSummary` answers `{ removed: true }` when the table had one and it is gone, and `{ removed: false }` —
+    // deleting nothing — when it had none (cds-maker-sdk 9a0c9f03). It used to answer nothing in both cases, so a step that only called it reported `(1 deleted)` for every table that
+    // had no row summary, and 2.16.0 looked for the skill row first with a read of its own. The step makes no read now: it names the table's one candidate, and what the removal
+    // answers decides what its line says (`foundNothing`, see deleteStep): a table with none is "not found" like any other step's, and is not counted as a deletion.
     async resolve(sdk, target) {
-      const name = `ais_RowSummary_${target.entityLogicalName}`;
-      let res;
-      try {
-        res = await sdk.dataverse.get(`/aiskillconfigs?$select=aiskillconfigid&$filter=uniquename eq '${odataStr(name)}'&$top=1`);
-      } catch (err) {
-        if (isNotFound(err)) return [];
-        return { items: [], skipReason: `not looked up — ${errMsg(err)}; a row summary left behind is reported by the table's delete` };
-      }
-      if (res && res.status === 404) return [];
-      const rows = res && res.body && res.body.value;
-      const unknown = (why) => ({ items: [], skipReason: `not looked up — ${why}; a row summary left behind is reported by the table's delete` });
-      if (!res || res.status < 200 || res.status >= 300) return unknown(`the lookup answered ${res && res.status ? `HTTP ${res.status}` : 'nothing'}`);
-      if (!Array.isArray(rows)) return unknown('the lookup\'s answer was no list');
-      return rows.length ? [{ id: target.entityLogicalName, entityLogicalName: target.entityLogicalName }] : [];
+      return [{ id: target.entityLogicalName, entityLogicalName: target.entityLogicalName }];
     },
-    del: (sdk, item) => sdk.removeRowSummary({ entityLogicalName: item.entityLogicalName }),
+    async del(sdk, item) {
+      try {
+        return await sdk.removeRowSummary({ entityLogicalName: item.entityLogicalName });
+      } catch (err) {
+        // An environment without the AI skill table (no AI Builder) answers the SDK's lookup of the skill row 404 — "Resource not found for the segment 'aiskillconfigs'" — so it holds
+        // no row summary either, which the step has always said as "not found", not as a failure:
+        //   HTTP 404 from https://contoso.crm.dynamics.com/api/data/v9.0/aiskillconfigs?$select=aiskillconfigid,_aimodel_value&$filter=uniquename eq 'ais_RowSummary_new_memo'&$top=1: ...
+        // Only the lookup's 404 says that. The same status on another request of the removal says nothing about the skill row, so it stays the failure it is. The request is the SDK's own,
+        // which teardown-row-summary-removal.test.js holds to what the real bundle asks for.
+        if (err && err.statusCode === 404 && /\/aiskillconfigs\?/.test(String(err.url || ''))) return { removed: false };
+        throw err;
+      }
+    },
+    foundNothing: (outcome) => Boolean(outcome) && outcome.removed === false,
     // Best-effort by design: a removal that fails does not fail the teardown — the table's delete that follows reports the dependency if the
-    // skill row is still there. But it is not a deletion either, so it is said on the step's line, in the SDK's own words (a model it could
-    // not delete, a skill row it could not confirm gone), where it used to be swallowed and reported as `(1 deleted)`.
+    // skill row is still there. But it is not a deletion either, so it is said on the step's line, in the SDK's own words (a lookup it could
+    // not make, a model it could not delete, a skill row it could not confirm gone), where it used to be swallowed and reported as `(1 deleted)`.
     tolerateFailure: (err) => errMsg(err),
   },
   solution: {
@@ -1510,13 +1508,18 @@ function planTeardown(spec) {
 // there. `skippedIds` is retained as the union of both for callers that only need the count.
 // A third reason, `failed` (with a `detail`), is a removal the handler tolerates (`tolerateFailure`).
 // A not-found error counts as already-gone. Throws only on a genuine failure.
+//
+// A removal that looks for its artifact itself answers whether there was one: the handler's `foundNothing(outcome)` says so (aiSummary: the SDK's `{ removed: false }`), and that id is
+// answered in `absentIds`. It is neither deleted nor skipped — nothing was there — and runTeardown reports it as a step that found nothing, like one whose resolver finds none.
 async function deleteStep(sdk, handler, items, ctx) {
   const deletedIds = [];
+  const absentIds = [];
   const skipped = [];
   for (const item of items) {
     try {
-      await handler.del(sdk, item, ctx);
-      deletedIds.push(item.id);
+      const outcome = await handler.del(sdk, item, ctx);
+      if (typeof handler.foundNothing === 'function' && handler.foundNothing(outcome)) absentIds.push(item.id);
+      else deletedIds.push(item.id);
     } catch (err) {
       if (handler.tolerateNotFound && isNotFound(err)) {
         // Table delete throws not-found even on success; treat as deleted
@@ -1560,7 +1563,7 @@ async function deleteStep(sdk, handler, items, ctx) {
       throw err;
     }
   }
-  return { deletedIds, skippedIds: skipped.map((s) => s.id), skipped };
+  return { deletedIds, absentIds, skippedIds: skipped.map((s) => s.id), skipped };
 }
 
 // Execute a teardown. Dry-run discovers page candidates when an SDK reader is supplied, without writes.
@@ -1777,7 +1780,13 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
         continue;
       }
-      const { deletedIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' ? deferredResetPublishes : undefined);
+      const { deletedIds, absentIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' ? deferredResetPublishes : undefined);
+      // A removal that looked for its artifact itself and found none is a step that found nothing — the line and the counts a resolver that finds none gets — and not a deletion.
+      if (!deletedIds.length && !skipped.length && absentIds.length) {
+        result.skipped.push(step.label);
+        emit({ phase: step.phase, status: 'skip', skip: 'not-found', label: `${step.label} (not found)`, n: myN, total });
+        continue;
+      }
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
       if (step.kind === 'genpage') {
         completePageDeletions(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);

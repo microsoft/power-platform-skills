@@ -4582,16 +4582,18 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   uses is refused by the platform (HTTP 400, `0x8004f01f`) and KEPT, which is success — a removal that threw
   there would fail the teardown step of every table whose model another component had adopted. What the SDK
   cannot settle throws `ROW_SUMMARY_REMOVAL_UNCONFIRMED` (the skill-row delete's outcome unknown, naming our
-  model) or `ROW_SUMMARY_MODEL_NOT_DELETED` (the model left behind, naming it). Teardown's `aiSummary` step
-  looks for the skill row first, with the SDK's own request, because `removeRowSummary` answers nothing both
-  when it removes a row summary and when it finds none — a step that only called it printed `(1 deleted)` for
-  every table without one — and reports a table with none as not found (`teardown-row-summary-lookup.test.js`
-  holds the lookup to what the bundle asks for). It is still best-effort for failures: a lookup that cannot be
-  made (`not looked up — …`, kept) or a removal that throws (`kept — 1 not removed: <the SDK's words>`) fails
-  nothing, and the closing line counts it with the kept steps, not the deleted ones, as its own step line does.
-  The table delete that follows reports the
-  dependency if the skill row is still there, and a model left behind blocks only a later row summary for the
-  same table, by name.
+  model) or `ROW_SUMMARY_MODEL_NOT_DELETED` (the model left behind, naming it). It looks the skill row up itself and
+  answers `{ removed }`: `true` once the row summary the table had is gone (its skill row deleted, or already gone when
+  the delete arrived), `false` — deleting nothing — when the table had none. Teardown's `aiSummary` step makes no lookup
+  of its own and says what that answer says: `removed` is `(1 deleted)`, and nothing is `(not found)` — counted with the
+  steps that found nothing, never as a deletion — as is an environment with no AI skill table (the SDK's lookup answers
+  404). (The SDK used to answer nothing in both cases, so a step that only called it printed `(1 deleted)` for every
+  table without a row summary, and 2.16.0 looked for the skill row first, with a request of its own.) It is still
+  best-effort for failures: a lookup or a removal that throws (`kept — 1 not removed: <the SDK's words>`; a first row
+  that is no row is one — a failure of the lookup, never "no row summary") fails nothing, and the closing line counts it
+  with the kept steps, not the deleted ones, as its own step line does (`teardown-row-summary-removal.test.js` holds all
+  of it over the real bundle). The table delete that follows reports the dependency if the skill row is still there, and
+  a model left behind blocks only a later row summary for the same table, by name.
 - **Changes in the same SDK release that no plugin path reaches** — read these again before a plugin change
   reaches one. (`importSolution`, which now requires `overwriteUnmanagedCustomizations`
   and `publishWorkflows`, was on this list while no script called it. `solution-settings.js import` does, with

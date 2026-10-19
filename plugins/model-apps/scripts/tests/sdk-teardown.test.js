@@ -2073,7 +2073,7 @@ test('teardown plans an ai-summaries step (before tables) for each candidate and
   assert.strictEqual(plan[aiIdx].phase, 'ai-summaries');
   assert.strictEqual(plan[aiIdx].target.entityLogicalName, 'new_memo');
 
-  // Run with a mock sdk that records removeRowSummary calls. The environment holds a row summary for the table: the step looks for the skill row before it removes one.
+  // Run with a mock sdk that records removeRowSummary calls. The SDK looks the row summary up itself and answers { removed: true } for the one the environment holds.
   const removeCalls = [];
   const sdk = {
     resolveArtifact: async (kind, identity) => {
@@ -2081,14 +2081,14 @@ test('teardown plans an ai-summaries step (before tables) for each candidate and
       if (kind === 'solution') return [{ id: 'sol-1', name: 'AiTest' }];
       return [];
     },
-    dataverse: { get: async (url) => (/^\/aiskillconfigs\?/.test(url) ? { status: 200, body: { value: [{ aiskillconfigid: 'skill-1' }] } } : { status: 200, body: { value: [] } }) },
-    removeRowSummary: async (args) => { removeCalls.push(args); },
+    removeRowSummary: async (args) => { removeCalls.push(args); return { removed: true }; },
     deleteTable: async () => { const e = new Error('not found'); e.statusCode = 404; throw e; },
     deleteSolution: async () => {},
   };
   const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
   assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
   assert.ok(removeCalls.some((c) => c.entityLogicalName === 'new_memo'), 'removeRowSummary called for the candidate table');
+  assert.deepStrictEqual(res.deleted.aiSummary, ['new_memo'], 'and its answer is a deletion');
 });
 
 test('planTeardown omits ai-summaries steps when the spec has no `ai` block at all', () => {
