@@ -1437,6 +1437,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   footer, business-process control, related-entity nav, control parameters, event libraries — and a LOSSY
   form declared in the spec is *worse* than an absent one, because a rebuild into a fresh environment
   recreates it having silently lost those controls while reporting success.)
+  A view whose `<filter>` holds a `<link-entity>` (a condition on related rows, `link-type="any"`) is one more
+  reason not to read a view through the SDK's typed `filters`: the SDK keeps the whole filter — the conditions
+  beside the link-entity too — only in its own copy of the FetchXML, so the typed tree is empty for it. Nothing
+  here reads it that way: the download carries no view and never reads a view's query, and a rebuild changes an
+  existing view's columns and description only, the SDK writing the filter back whole (pinned by
+  `view-related-rows-filter.test.js` and `rebuild-writes-real-bundle.test.js`).
   All four survive on the live app (a rebuild into the SAME environment preserves them), but are absent
   from the downloaded spec, so edit them in Maker or a fresh spec.
   **The omission is reported, not silent** (AB#6686423): every deployed form/view/chart is listed in the
