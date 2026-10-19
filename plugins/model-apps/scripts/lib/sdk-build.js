@@ -6248,6 +6248,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
         try { page = await genpage.read(record.pageId); } catch (e) {
           // Gone since the listing: it is not there now, which settles nothing (see below), so it is resumed like any page that was not listed.
           if (e && e.code === 'GENPAGE_NOT_FOUND') { resume(); continue; }
+          // A read the service throttled and the run's budget had no room to wait for says nothing of the page (genpage-sdk.js reports it as the throttle's own error, which is not marked final): it is not a conflict that the maker has to settle by
+          // deleting a record, but a stop for a later run. The record stays, so the run that can read the page proves it and adopts it. A read that failed any other way is final (`transient: false`) and is the conflict it always was.
+          const judged = judgeFailure(e);
+          if (!judged.never && judged.transientStatus) {
+            throw new BuildHalt(`could not read page ${record.pageId}, which an earlier build started creating for "${key}", because the service throttled the read (${(e && e.message) || e}) — nothing was changed; the record of that create is kept, so a later run reads the page and settles it`, { phase: 'pages', code: 'pages-read-throttled', recoverable: true, ...retryFrom(e) });
+          }
           pendingConflicts.push({ key, reason: 'pending-create-unreadable', pageId: record.pageId, error: String((e && e.message) || e) });
           continue;
         }

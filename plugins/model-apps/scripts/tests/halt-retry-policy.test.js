@@ -68,6 +68,8 @@ const POLICY = {
   'pages-removed': { kinds: ['never'], via: 'sdk-build.test.js' },
   'pages-requires-app': { kinds: ['never'], via: PAGES },
   'pages-existence-failed': { kinds: ['by-failure'], via: PAGES },
+  // The read of a page a pending create left behind, throttled until the run's budget had no room to wait for it: a run again may find the service ready (the build's loop turns it into the budget's halt).
+  'pages-read-throttled': { kinds: ['by-failure'], via: PAGES },
   'pages-manifest-corrupt': { kinds: ['never'], via: 'sdk-build.test.js' },
   'pages-identity-conflict': { kinds: ['never'], via: PAGES },
   'pages-creation-receipt-failed': { kinds: ['never'], via: PAGES },

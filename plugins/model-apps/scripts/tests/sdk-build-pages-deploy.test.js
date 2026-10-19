@@ -4448,6 +4448,27 @@ function movingClock() {
   let at = Date.parse('2026-09-30T10:00:00Z');
   return { now: () => at, advance: (ms) => { at += ms; } };
 }
+// `driveBuild` builds for the page service's own environment, and a build keeps its local page records per environment: `pendingOf` and `receiptsOf` read those of BUILD_ENV, which a driven build never writes.
+const pendingOfDriven = (spec, appDir) => readPendingCreations(path.join(appDir, '.maker-workspace'), appUniqueName(spec), PAGE_SERVICE);
+const receiptsOfDriven = (spec, appDir) => readPageOwnership(path.join(appDir, '.maker-workspace'), appUniqueName(spec), PAGE_SERVICE).created;
+// The production stack under the pages phase: the HTTP client, drawing its waits from the run's budget, over the fake page service on a clock its waits move, and the page backend on it. The requests `refuse` names are answered
+// 429 with a `Retry-After` of `askSeconds`, as a transport answers them. `budget: false` is a run with none: a client and a backend that wait as they always did.
+function budgetedPages(server, { refuse = () => false, askSeconds = 600, budget = true } = {}) {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const clock = movingClock();
+  const waits = [];
+  const warnings = [];
+  const throttle = makeThrottleBudget({ warn: (line) => warnings.push(line) });
+  const transport = pageTransport(server);
+  const sleep = async (ms) => { waits.push(ms); clock.advance(ms); };
+  const httpClient = createAzHttpClient(PAGE_SERVICE, {
+    getToken: () => 'TOK', random: () => 0, now: clock.now, sleep, ...(budget ? { throttle } : {}),
+    request: async (request) => (refuse(request) ? throttledRead(askSeconds) : transport(request)),
+  });
+  const genpage = makeGenpageSdk(PAGE_SERVICE, { httpClient, ...(budget ? { throttle } : {}), random: () => 0, now: clock.now, sleep });
+  return { genpage, throttle, clock, waits, warnings };
+}
 
 // With a budget the production client draws its waits for a throttled read or publish from it — with the backend's waits between the sends of a page write, and the build's own: one five minutes for the run.
 test('deploy: the HTTP client\'s waits for a throttled read are drawn from the run\'s budget with the backend\'s — two reads and two page writes throttled for a minute are waited out inside it, and the build succeeds', async () => {
@@ -4517,7 +4538,7 @@ test('deploy: ten minutes of throttling in all are no longer waited out — five
     assert.strictEqual(budget.spentMs(), 300000);
     assert.strictEqual(server.batches.length, 1, 'the page write was sent once, and refused');
     assert.strictEqual(server.state.projects.size, 0, 'nothing was written');
-    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and no creation is left under way');
+    assert.strictEqual(pendingOfDriven(spec, appDir).size, 0, 'and no creation is left under way');
   } finally {
     await genpage.dispose();
     fs.rmSync(appDir, { recursive: true, force: true });
@@ -4559,8 +4580,162 @@ test('deploy: the budget reaches the HTTP client the pages phase makes for itsel
     assert.strictEqual(budget.declined().count, 1, 'the client told the budget once');
     assert.strictEqual(server.batches.length, 0, 'and nothing was sent');
     assert.strictEqual(server.state.projects.size, 0);
-    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+    assert.strictEqual(pendingOfDriven(spec, appDir).size, 0);
   } finally {
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// ── A read before a write that the run's budget refused ──────────────────────────────────────────────────────────────────────────────────────────
+// The reads that come before a page write — an update's read of the page it is about to change, the read that proves a page a pending create left behind — are requests like any other: when the run's budget has no room for the wait a throttled
+// read asks for, the HTTP client hands the 429 back as it came and tells the budget (lib/throttle-budget.js, `decline`). The SDK reports that 429 as a page that cannot be read, which the backend used to make final (`transient: false`), so the build
+// stopped with `GENPAGE_UNREADABLE` — and, for a pending create, with a conflict that tells the maker to delete a record — instead of the budget's halt that says what the service asked. Nothing was written either way: the refusal is the throttle's.
+const contentRead = ({ method, url }) => method === 'GET' && /\/filecontent\/\$value$/.test(new URL(url).pathname);
+
+test('deploy: the read before an update that the budget has no room to wait for is the throttle\'s refusal and not an unreadable page — the build stops with the budget\'s halt, nothing is written, and the next run updates the page once', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const seed = budgetedPages(server);
+  let id;
+  try {
+    const seeded = await driveBuild(spec, appDir, { genpage: seed.genpage, runOpts: pagesWorkspace(appDir), deps: { throttle: seed.throttle } });
+    assert.strictEqual(seeded.halt, null, 'the page is made');
+    id = seeded.result.created.pages.p;
+  } finally { await seed.genpage.dispose(); }
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE.replace('Page</div>', 'Edited</div>'), 'utf8');
+  const state = () => ({ pages: server.state.projects.size, messages: server.messagesOf(id).length, batches: server.batches.length });
+  const before = state();
+  const refusing = budgetedPages(server, { refuse: contentRead });
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: refusing.genpage, runOpts: pagesWorkspace(appDir), deps: { throttle: refusing.throttle } });
+    assert.ok(out.halt, 'the build stops');
+    assert.strictEqual(out.halt.code, 'throttle-budget-exhausted', 'with the budget\'s halt, and not "the page cannot be read"');
+    assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: a later run goes on from here');
+    assert.match(out.halt.message, /^pages stopped: the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)/);
+    assert.strictEqual(out.attempts, 1, 'and the run is not run again to meet the same answer');
+    assert.deepStrictEqual(refusing.waits, [], 'nothing was waited for');
+    assert.ok(refusing.throttle.declined().count >= 1, 'the client told the budget');
+    assert.deepStrictEqual(state(), before, 'nothing was written: no page, no turn, no change set');
+    assert.strictEqual(pendingOfDriven(spec, appDir).size, 0);
+  } finally { await refusing.genpage.dispose(); }
+  const healthy = budgetedPages(server);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: healthy.genpage, runOpts: pagesWorkspace(appDir), deps: { throttle: healthy.throttle } });
+    assert.strictEqual(out.halt, null);
+    assert.deepStrictEqual(state(), { pages: before.pages, messages: before.messages + 2, batches: before.batches + 1 }, 'the next run updates the page once: one more turn, one more change set');
+    assert.ok(server.rowText(id, 'src/pages/page.tsx').includes('Edited'));
+  } finally {
+    await healthy.genpage.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('the backend: a read of a page that the budget refused to wait for says it is the throttle — HTTP 429, nothing changed, what the service asked — and the same read refused until the sends ran out is as final as it ever was', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const ID = '9d3a77c1-0000-4000-8000-0000000000d1';
+  const edit = { source: PAGE_SOURCE.replace('Page</div>', 'Edited</div>'), prompt: 'edit', agentMessage: 'done' };
+  const attempt = async (options, call) => {
+    const server = new FakeGenPageServer();
+    server.seedPage(ID, { name: 'Overview', source: PAGE_SOURCE });
+    const stack = budgetedPages(server, { refuse: contentRead, ...options });
+    try { return { ...stack, server, error: await call(stack.genpage).then(() => null, (e) => e) }; } finally { await stack.genpage.dispose(); }
+  };
+  const update = (genpage) => genpage.update(ID, edit);
+  const read = (genpage) => genpage.read(ID);
+  // The budget has no room for the ten minutes the service asked.
+  for (const [what, call, message] of [['update', update, /^could not read page \S+ before updating it \(HTTP 429 .*\) — nothing was changed$/], ['read', read, /^could not read page \S+: HTTP 429 /]]) {
+    const refused = await attempt({}, call);
+    const { error } = refused;
+    assert.ok(error, what);
+    assert.strictEqual(error.code, 'GENPAGE_UNREADABLE', what);
+    assert.notStrictEqual(error.transient, false, `${what}: the service's load is not final`);
+    assert.strictEqual(isTransientHalt(error), true, what);
+    assert.strictEqual(error.statusCode, 429, what);
+    assert.strictEqual(error.cause.code, 'CONNECTION_ERROR', `${what}: the SDK's own error is the cause`);
+    assert.strictEqual(error.cause.statusCode, 429, what);
+    assert.strictEqual(error.retryAfterMs, 600000, `${what}: what the service asked, whole`);
+    assert.strictEqual(error.retryNotBefore, refused.clock.now() + 600000, `${what}: and the moment before which nothing may be sent`);
+    assert.match(error.message, message, what);
+    assert.deepStrictEqual(refused.waits, [], `${what}: nothing was waited for`);
+    assert.strictEqual(refused.server.batches.length, 0, `${what}: nothing was written`);
+    if (what === 'update') assert.deepStrictEqual([error.outcome, error.pageId], ['nothing', ID], 'an update says it changed nothing');
+  }
+  // The same refusal where the budget had room: every wait fit, the sends ran out, and the read failed as it always did — final, and no word of the budget.
+  for (const [what, call] of [['update', update], ['read', read]]) {
+    for (const [how, options] of [['with a budget that had room', { askSeconds: 1 }], ['with no budget', { askSeconds: 1, budget: false }]]) {
+      const ran = await attempt(options, call);
+      assert.ok(ran.error, `${what} ${how}`);
+      assert.strictEqual(ran.error.code, 'GENPAGE_UNREADABLE', `${what} ${how}`);
+      assert.strictEqual(ran.error.transient, false, `${what} ${how}: the sends ran out, which this has always been final`);
+      assert.strictEqual(isTransientHalt(ran.error), false, `${what} ${how}`);
+      assert.strictEqual(ran.error.retryAfterMs, undefined, `${what} ${how}`);
+      assert.ok(ran.waits.length > 0, `${what} ${how}: the client waited, as the schedule has it`);
+      assert.strictEqual(ran.throttle.declined().count, 0, `${what} ${how}: no wait was refused`);
+    }
+  }
+});
+
+test('deploy: a page under a pending id whose read the budget refused to wait for is not a conflict — the engine stops with a transient halt, the record stays and nothing is written', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const server = new FakeGenPageServer();
+  const ID = '9d3a77c1-0000-4000-8000-0000000000d2';
+  server.seedPage(ID, { name: 'Overview', source: PAGE_SOURCE });
+  recordPagePending(workspaceDir, appUniqueName(spec), 'p', ID, 'Overview', BUILD_ENV, sha256(PAGE_SOURCE));
+  try {
+    await assert.rejects(buildPages(spec, appDir, budgetedPages(server, { refuse: contentRead }).genpage), (e) => {
+      assert.strictEqual(e.code, 'pages-read-throttled', 'not "pages-identity-conflict", which tells the maker to delete a record');
+      assert.strictEqual(e.phase, 'pages');
+      assert.strictEqual(e.recoverable, true);
+      assert.strictEqual(isTransientHalt(e), true, 'a run again may find the service ready');
+      assert.match(e.message, new RegExp(`^could not read page ${ID}, which an earlier build started creating for "p", because the service throttled the read \\(.*HTTP 429.*\\) — nothing was changed`));
+      return true;
+    });
+    assert.deepStrictEqual(server.writes(), [], 'nothing was written');
+    assert.deepStrictEqual(receiptsOf(spec, appDir), [], 'no receipt was made out of the record');
+    assert.strictEqual(pendingOf(spec, appDir).size, 1, 'and the record stays, for the run that can read the page');
+    // A page that cannot be read for another reason stays the conflict it was: the reading of the 503 is the service's own words and no word of the budget.
+    const unread = new FakeGenPageServer();
+    unread.seedPage(ID, { name: 'Overview', source: PAGE_SOURCE });
+    unread.failOn = rowReadsFail;
+    await assert.rejects(buildPages(spec, appDir, realPageBackend(unread)), (e) => e.code === 'pages-identity-conflict');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: through the build, a page under a pending id whose read the budget refused to wait for stops the build with the budget\'s halt — and the next run reads the page, proves it holds what was sent and adopts it', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const ID = '9d3a77c1-0000-4000-8000-0000000000d3';
+  server.seedPage(ID, { name: 'Overview', source: PAGE_SOURCE });
+  recordPagePending(path.join(appDir, '.maker-workspace'), appUniqueName(spec), 'p', ID, 'Overview', PAGE_SERVICE, sha256(PAGE_SOURCE));
+  const refusing = budgetedPages(server, { refuse: contentRead });
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: refusing.genpage, runOpts: pagesWorkspace(appDir), deps: { throttle: refusing.throttle } });
+    assert.ok(out.halt, 'the build stops');
+    assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+    assert.strictEqual(isTransientHalt(out.halt), true);
+    assert.match(out.halt.message, /^pages stopped: the service asked to wait 600 s before the next send, which does not fit/);
+    assert.strictEqual(out.attempts, 1);
+    assert.deepStrictEqual(refusing.waits, []);
+    assert.deepStrictEqual(server.writes(), [], 'nothing was written');
+    assert.strictEqual(pendingOfDriven(spec, appDir).size, 1, 'the record of the create stays');
+  } finally { await refusing.genpage.dispose(); }
+  const healthy = budgetedPages(server);
+  try {
+    const out = await driveBuild(spec, appDir, { genpage: healthy.genpage, runOpts: pagesWorkspace(appDir), deps: { throttle: healthy.throttle } });
+    assert.strictEqual(out.halt, null);
+    assert.strictEqual(out.result.created.pages.p, ID, 'the page the earlier build started is adopted');
+    assert.deepStrictEqual([...server.state.projects.keys()], [ID], 'one page');
+    assert.deepStrictEqual(receiptsOfDriven(spec, appDir).map((r) => r.pageId), [ID]);
+    assert.strictEqual(pendingOfDriven(spec, appDir).size, 0, 'and the record is consumed on that evidence');
+  } finally {
+    await healthy.genpage.dispose();
     fs.rmSync(appDir, { recursive: true, force: true });
   }
 });
