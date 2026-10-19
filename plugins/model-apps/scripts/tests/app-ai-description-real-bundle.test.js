@@ -181,8 +181,7 @@ test('REAL BUNDLE: an app with none has no key, refuses an update, and gets it A
   assert.strictEqual(res.saved, true, JSON.stringify(res.error && res.error.message));
   const header = headerWrites(writes);
   assert.strictEqual(header.length, 1, 'one header write');
-  assert.strictEqual(header[0].body.aiappdescription, WANT);
-  assert.strictEqual(header[0].body.description, 'Tickets', 'the tile description rides through unchanged');
+  assert.deepStrictEqual(header[0].body, { aiappdescription: WANT }, 'the routing description alone: the tile description the row already holds is not sent again');
 });
 
 test('REAL BUNDLE: a different value is updated in place and written', async () => {
@@ -244,7 +243,7 @@ test('REAL BUNDLE: over another writer\u2019s UNPUBLISHED header change, the hea
   const header = headerWrites(writes).filter((w) => w.verb === 'patch');
   assert.deepStrictEqual(header.map((w) => w.ifMatch), ['W/"5"'], 'the row token, never the content token');
   assert.strictEqual(state.ai, WANT);
-  assert.strictEqual(header[0].body.description, 'Saved in Maker, not published', 'the other writer\u2019s change rides through');
+  assert.deepStrictEqual(header[0].body, { aiappdescription: WANT }, 'the other writer\u2019s unpublished description is not sent again: the routing description is written alone');
 });
 
 test('REAL BUNDLE: a header row moved after the fetch is a concurrent edit: refused, the generic halt, and the copy kept', async () => {

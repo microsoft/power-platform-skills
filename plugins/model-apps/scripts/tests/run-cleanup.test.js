@@ -283,11 +283,10 @@ test('the real SDK refuses a row summary on an org with no AI template before an
   assert.ok(state.warnings.some((w) => /no 'GptPowerPrompt' AI template/.test(w)));
 });
 
-// An org whose template list comes back without a template. The SDK takes the FIRST row of the list and reads its `msdyn_aitemplateid` without checking
-// that there is a row, so it raises ROW_SUMMARY_TEMPLATE_NOT_FOUND for an empty list and for a list whose first row is no row alike:
-//   { "value": [] }    { "value": [ {} ] }    { "value": [ null ] }
-// Only the empty list says the org has no template. The others are answers that cannot be read, and an answer that cannot be read stops the build, as it did
-// before the skip above — so the build asks the template list itself, once, before it skips, and skips only on an empty list.
+// An org whose template list comes back without a template. The SDK reads the FIRST row of the list and raises ROW_SUMMARY_TEMPLATE_NOT_FOUND for an EMPTY list and for
+// nothing else (cds-maker-sdk 9a0c9f03; it raised it for `{ "value": [ {} ] }` and `{ "value": [ null ] }` as well, and these tests held the build to the second read that told
+// them apart). A first row that is no row, or has no GUID `msdyn_aitemplateid`, is a ConnectionError: an answer that cannot be read stops the build like any read that failed, and is
+// not an org without the template. The build asks the template list itself, once, only when the SDK raised the code, and skips only on an empty list.
 const TEMPLATE_LIST = "/msdyn_aitemplates?$select=msdyn_aitemplateid&$filter=msdyn_uniquename eq 'GptPowerPrompt'&$top=1";
 const listOf = (value) => ({ status: 200, headers: {}, body: { value } });
 
@@ -384,16 +383,24 @@ test('an org whose template list is empty skips every summary with one warning a
   assert.deepEqual(org.requests.filter((request) => request.includes("LogicalName='msdyn_aitemplate'")), ["GET /EntityDefinitions(LogicalName='msdyn_aitemplate')?$select=EntitySetName"]);
 });
 
-for (const [what, list] of [['a first row with no id', [{}]], ['a first row that is not a row', [null]]]) {
+for (const [what, list, words] of [['a first row with no id', [{}], /malformed row — expected a GUID 'msdyn_aitemplateid'/], ['a first row that is not a row', [null], /malformed row — expected an object/]]) {
   test(`${what} in the template list is not an org without the template: the build stops with the SDK's error and skips nothing`, async (t) => {
     const org = await orgWithTemplateAnswers(t, [listOf(list)]);
     const warnings = [];
     const events = [];
-    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w), emit: (e) => events.push(e) }), stoppedForGood);
+    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w), emit: (e) => events.push(e) }), (err) => {
+      assert.equal(err.name, 'BuildHalt');
+      assert.equal(err.code, 'CONNECTION_ERROR');
+      assert.equal(err.cause, org.sdkErrors[0], "the SDK's own error is what stopped the build");
+      assert.match(err.message, words);
+      assert.equal(err.retry, 'never');
+      assert.equal(isTransientHalt(err), false);
+      return true;
+    });
     assert.deepEqual(warnings, [], 'nothing was skipped, so nothing says it was');
     assert.deepEqual(events.filter((e) => e.status === 'skip'), []);
     assert.deepEqual(org.writes(), []);
-    assert.equal(org.templateReads().length, 2, 'the SDK read the list, and the build asked it once more');
+    assert.equal(org.templateReads().length, 1, 'the SDK read the list, and the build asked nothing more: it was not the code that says there is no template');
   });
 }
 

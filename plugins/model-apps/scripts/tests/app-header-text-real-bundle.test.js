@@ -5,9 +5,9 @@
 // ONE push that already writes the sitemap writes it too. That leans on SDK behaviour the plugin's own unit tests can only stub:
 //   1. a fetched app carries `name` and `description` (the adapter reads `description` as '' when the row has none), so
 //      `updateElement('/name')` and `updateElement('/description')` have a path to write;
-//   2. the push PATCHes the appmodule header — `name` and `description`, plus `aiappdescription` only when the artifact says
-//      something about it — only when the artifact holds one of them differently from the row, conditioned on the row's token
-//      the fetch read; an equal header is never written, so a rebuild that changes nothing PATCHes no appmodule;
+//   2. the push PATCHes only the appmodule header texts the artifact holds differently from the row — `name`, `description`, and `aiappdescription` only when
+//      the artifact says something about it — in one request conditioned on the row's token the fetch read; an equal header is never written, so a rebuild
+//      that changes nothing PATCHes no appmodule;
 //   3. the header PATCH carries no `webresourceid`: an app's icon is written at create and cannot be changed by a push, even
 //      when the artifact is given one — which is why the build REPORTS an icon the spec names that the app does not have, and
 //      does not pretend to apply it;
@@ -15,10 +15,9 @@
 //      having modified nothing), and it writes the header only when the artifact holds one that differs from the row's — so the
 //      build puts the fetched text back, which makes the next push a sitemap-only push, and reports the edit as not applied
 //      (an explicitly authored routing description cannot be set aside this way, and halts);
-//   5. a header whose name or description is not plain text (a text per language) is never sent: the PATCH always carries BOTH texts, so
-//      while either is not plain the build makes no header edit at all — the other text's, nor a routing description — and reports each as
-//      not applied (the tests at the end of this file). That whole-header hold is the chosen policy, not a stopgap: the SDK has no partial
-//      header write, so the one field that changed cannot be sent alone (the pin below fails if a re-vendored bundle makes the PATCH partial);
+//   5. a header whose name or description is not plain text (a text per language) is never sent: while either is not plain the build makes no
+//      header edit at all — the other text's, nor a routing description — and reports each as not applied (the tests at the end of this file).
+//      The hold is the plugin's own and does not rest on the PATCH carrying both texts: the SDK writes only the texts that changed (the pin below);
 //   6. the hold is on the workspace copy, and the SDK decides for itself whether the header is written: when its OWN comparison read of the
 //      header fails (503, 403, a thrown error, an empty 200) it writes the copy's header as it is. So the client every SDK is made with refuses a
 //      PATCH of an app module row whose name or description is not a string (lib/app-header-text.js): nothing that is not plain text reaches the
@@ -200,7 +199,7 @@ test('REAL BUNDLE: the text and the routing description are written together by 
   assert.strictEqual(changed.routing, true);
   const header = headerWrites(writes);
   assert.strictEqual(header.length, 1);
-  assert.deepStrictEqual(header[0].body, { name: 'Probe', description: 'Track tickets.', aiappdescription: ROUTING });
+  assert.deepStrictEqual(header[0].body, { description: 'Track tickets.', aiappdescription: ROUTING }, 'the texts that changed, and not the name the spec leaves as it is');
 });
 
 test('REAL BUNDLE: the routing description\'s own helper still decides on its own, unchanged by the text edits', async () => {
@@ -345,23 +344,20 @@ test('REAL BUNDLE: a localized header with a changed name is left alone as well,
   }
 });
 
-// WHY a header is held WHOLE — the chosen policy, and the SDK is the reason. The SDK writes the artifact's `name` AND `description` in every
-// header PATCH — whichever of them an edit changed, and for an edit of the routing description alone — because it writes the copy, not the edit,
-// and it has no partial header write: the row token that conditions the PATCH is private to it, and a PATCH of the plugin's own would need a
-// freshly read one (a blind overwrite). So a text that is not plain beside an edit of its sibling would be sent with it: a map in a String column,
-// or a scalar over a text that carries translations. This is the fact the build's hold (applyAppHeader) rests on; if a re-vendored bundle sends
-// only what changed, this fails, and the hold can be narrowed to the one field. Writing only the changed field with this SDK needs a new SDK
-// operation: a follow-up, not something the plugin can do around it.
-test('REAL BUNDLE: a header PATCH always carries the name AND the description — an edit of one sends the other, and a routing edit sends both', async () => {
+// WHAT the SDK writes of the header: only the texts that CHANGED. It used to write the artifact's `name` AND `description` in every header PATCH — whichever of
+// them an edit changed, and for an edit of the routing description alone — because it wrote the copy, not the edit. Since cds-maker-sdk 9a0c9f03 it writes the fields
+// that differ from the row it has just read, in one request still conditioned on the row's token (and every field the copy holds when that read cannot be made).
+// An edit of one text therefore does not send the other. Pinned here: the plugin's build leans on it to write one text of a header whose other text it must not send.
+test('REAL BUNDLE: a header PATCH carries only the texts that changed — an edit of one does not send the other, and a routing edit sends neither', async () => {
   const text = await freshSdk();
   await rebuild(text.sdk, spec({ description: 'Changed' }));
-  assert.deepStrictEqual(headerWrites(text.writes).map((w) => w.body), [{ name: 'Probe', description: 'Changed' }], 'the name the spec did not change rides along');
+  assert.deepStrictEqual(headerWrites(text.writes).map((w) => w.body), [{ description: 'Changed' }], 'the name the spec did not change is not sent');
   const name = await freshSdk();
   await rebuild(name.sdk, spec({ name: 'Help Desk' }));
-  assert.deepStrictEqual(headerWrites(name.writes).map((w) => w.body), [{ name: 'Help Desk', description: 'Tickets' }], 'and so does the description');
+  assert.deepStrictEqual(headerWrites(name.writes).map((w) => w.body), [{ name: 'Help Desk' }], 'and neither is the description');
   const routing = await freshSdk();
   await rebuild(routing.sdk, spec({ aiDescription: ROUTING }));
-  assert.deepStrictEqual(headerWrites(routing.writes).map((w) => w.body), [{ name: 'Probe', description: 'Tickets', aiappdescription: ROUTING }], 'a routing edit sends both texts');
+  assert.deepStrictEqual(headerWrites(routing.writes).map((w) => w.body), [{ aiappdescription: ROUTING }], 'a routing edit sends neither text');
 });
 
 // A header text that is not plain — a text per language (a map keyed by LCID), a list, a number — is never sent, as a map or as a scalar. The
