@@ -102,7 +102,9 @@ const rawAttr = (node, key) => {
  *   - a title where the live node has no `<Titles>` at all: an empty wrapper is added first in the
  *     node (where the SDK puts a synthesized one) for the SDK to fill;
  *   - no title where the live node has one at this language: that `<Title>` is dropped, and the other
- *     languages' titles are kept — the bag-less write this replaces dropped every language.
+ *     languages' titles are kept — the bag-less write this replaces dropped every language. Only an
+ *     entry whose title the spec's baseline shows the author took out ever reaches this: a node the
+ *     spec merely says nothing about keeps its title (adoptLiveSitemap).
  * Bag children are `{ i, node }` with absolute child indices (modeled children fill the gaps), so an
  * insertion shifts every index after it up, and a removal shifts every index after it down — or a
  * modeled child would fill the vacated slot ahead of the kept ones, e.g. a `<SubArea>` written before
@@ -164,8 +166,17 @@ function keepsLiveValue(field, specValue, liveValue, base) {
  * would collide with an adopted id. `notes` lists what happened to existing nodes, for the build to
  * report (`node` is 'area' | 'group' | 'subArea'):
  *   { kind: 'kept', node, target, field, live, spec }    — see `baseChrome`
+ *   { kind: 'kept', node, target, field: 'title', live, spec: '', unspecified: true } — the spec gives
+ *                                                          the node no title, so the live one stays
  *   { kind: 'changed', node, target, field, live, spec, intended? } — the build changes this value;
  *                                                          `intended` when the baseline shows the spec did
+ *
+ * A node's title the spec does not state is KEPT, never cleared. An empty label or title says nothing:
+ * the download of an environment whose base language is not 1033 once wrote every one empty, and an
+ * author who leaves a title out has not asked for the title to go either. The exception is an ENTRY
+ * (subarea) whose title the spec's baseline shows the spec used to state — the author took it out, an
+ * edit like any other, so it is applied. Areas and groups have no target to find a baseline by, so
+ * theirs are always kept; state a title to change one.
  *
  * `opts.baseChrome` (optional) maps a subarea target key to `{ title, icon, vectorIcon }` as the spec
  * last applied to — or downloaded from — this environment described it. With it, a value the spec
@@ -181,6 +192,13 @@ function adoptLiveSitemap(desired, live, opts = {}) {
   const desiredAreas = (desired && Array.isArray(desired.areas)) ? desired.areas : [];
   const kids = (node, key) => (node && Array.isArray(node[key]) ? node[key] : []);
   const notes = [];
+  // The title an adopted node is written with when the spec gives it none and the live node has one (see above): the live one, which the SDK writes back as it is. True when it was kept.
+  const keepUnstatedTitle = (next, liveNode, node, target) => {
+    if (text(next.title) !== '' || text(liveNode.title) === '') return false;
+    next.title = liveNode.title;
+    notes.push({ kind: 'kept', node, target, field: 'title', live: text(liveNode.title), spec: '', unspecified: true });
+    return true;
+  };
 
   // Correspondence is decided in PASSES over a whole level, never node by node in document order: a
   // weaker rule must not let an earlier node take a live node that a later one matches by a stronger
@@ -314,9 +332,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
     if (liveArea) {
       nextArea.id = liveArea.id;
       nextArea.bag = cloneBag(liveArea.bag);
-      reconcileTitleChild(nextArea.bag, area.title, liveArea.title, lcid);
-      if (text(area.title) !== text(liveArea.title)) {
-        notes.push({ kind: 'changed', node: 'area', target: `area "${text(liveArea.title) || liveArea.id}"`, field: 'title', live: text(liveArea.title), spec: text(area.title) });
+      keepUnstatedTitle(nextArea, liveArea, 'area', `area "${text(liveArea.title)}"`);
+      reconcileTitleChild(nextArea.bag, nextArea.title, liveArea.title, lcid);
+      if (text(nextArea.title) !== text(liveArea.title)) {
+        notes.push({ kind: 'changed', node: 'area', target: `area "${text(liveArea.title) || liveArea.id}"`, field: 'title', live: text(liveArea.title), spec: text(nextArea.title) });
       }
     }
     kids(area, 'groups').forEach((group, gi) => {
@@ -325,9 +344,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
       if (liveGroup) {
         nextGroup.id = liveGroup.id;
         nextGroup.bag = cloneBag(liveGroup.bag);
-        reconcileTitleChild(nextGroup.bag, group.title, liveGroup.title, lcid);
-        if (text(group.title) !== text(liveGroup.title)) {
-          notes.push({ kind: 'changed', node: 'group', target: `group "${text(liveGroup.title) || liveGroup.id}"`, field: 'title', live: text(liveGroup.title), spec: text(group.title) });
+        keepUnstatedTitle(nextGroup, liveGroup, 'group', `group "${text(liveGroup.title)}"`);
+        reconcileTitleChild(nextGroup.bag, nextGroup.title, liveGroup.title, lcid);
+        if (text(nextGroup.title) !== text(liveGroup.title)) {
+          notes.push({ kind: 'changed', node: 'group', target: `group "${text(liveGroup.title) || liveGroup.id}"`, field: 'title', live: text(liveGroup.title), spec: text(nextGroup.title) });
         }
       }
       kids(group, 'subAreas').forEach((sub, si) => {
@@ -358,6 +378,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
               if (text(liveSub[f])) nextSub[f] = liveSub[f];
               else delete nextSub[f];
               notes.push({ kind: 'kept', node: 'subArea', target: `nav entry "${label}"`, field: f, live: text(liveSub[f]), spec: text(sub[f]) });
+            } else if (f === 'title' && text(sub.title) === '' && !(base && text(base.title) !== '')) {
+              // No title in the spec, and nothing to show the spec ever stated one: it says nothing, so the live title stays (keepUnstatedTitle). A baseline that states one
+              // is the other case — the author took it out — and falls through to be applied; a baseline with none was handled above.
+              keepUnstatedTitle(nextSub, liveSub, 'subArea', `nav entry "${label}"`);
             } else {
               notes.push({ kind: 'changed', node: 'subArea', target: `nav entry "${label}"`, field: f, live: text(liveSub[f]), spec: text(sub[f]), ...(base ? { intended: true } : {}) });
             }
@@ -468,7 +492,9 @@ function describeSitemapNotes(notes) {
   const shown = (v) => (v ? `'${v}'` : '(none)');
   const lines = [];
   for (const n of notes || []) {
-    if (n.kind === 'kept') {
+    if (n.kind === 'kept' && n.unspecified) {
+      lines.push(`${n.target}: kept the environment's ${n.field} ${shown(n.live)} — the spec has none for it, so it is left as it is. State one in the spec to change it.`);
+    } else if (n.kind === 'kept') {
       lines.push(`${n.target}: kept the environment's ${n.field} ${shown(n.live)} — it changed there after this spec was last applied or downloaded, and the spec still has ${shown(n.spec)}. Change the spec to change it.`);
     } else if (n.kind === 'changed' && n.node === 'subArea' && !n.intended) {
       lines.push(`${n.target}: ${n.field} changes from ${shown(n.live)} to the spec's ${shown(n.spec)}. No baseline in this spec's workspace records the entry, so a change made in the designer cannot be told from one made in the spec.`);

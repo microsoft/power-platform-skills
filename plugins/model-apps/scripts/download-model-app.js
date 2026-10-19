@@ -19,7 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
-const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
@@ -475,6 +475,33 @@ function relationshipsSkippedWarning(skipped) {
   return `${lines.join('\n')}\n`;
 }
 
+// The language the download's SDK reads the app in, which decides what the app's navigation TITLES are. The SDK projects a sitemap in ONE language, the one it is constructed with: a node's title
+// is the `<Title LCID="…">` whose LCID is that language, and "" when the node has none. An SDK built with no language reads 1033, so on an environment whose base language is another — a
+// Spanish-only one holds its titles at 3082 and no other — every area, group and entry came back with no title, and the spec said so: `"label": ""` for an app whose every node has one.
+//
+// It is the language a rebuild of the spec this download writes will resolve, in the order the build resolves it (lib/entity-provision.js resolveLanguageCode): the `languageCode` an author
+// pinned in the spec already on disk (`authored`, which preserveAuthoredLanguageCode carries into the spec this download writes), else the environment's base language. A label is then
+// a plain string in that language — the rule a table's label follows too (labelFromDataverse) — and the language itself is never written into the spec, for the reason
+// preserveAuthoredLanguageCode gives. A title a node holds in another language is not in the spec: a rebuild into this environment leaves it as it is.
+//
+// The base language is read through the download's own HTTP client (the build reads the same row through the transport hatch, readOrgLanguageCode), so one set of credentials, retries and
+// test seams serves the download. Fail-soft in the build's direction: a language that cannot be read leaves the SDK at 1033, as it was, and the download says so — a title held in the
+// environment's own language would be missing from the spec, and silence there is how this went unnoticed.
+// Returns { languageCode } or { note }.
+async function readNavigationLanguage(env, httpClient, authored) {
+  if (authored) return { languageCode: authored };
+  // `readOrgLanguageCode` reads `{ status, data }`, the transport hatch's shape for an answer; the SDK's client answers `{ status, headers, body }` and resolves a non-2xx instead of throwing it.
+  // The answer it reads: `GET organizations?$select=languagecode&$top=1` -> `{ "value": [ { "organizationid": "…", "languagecode": 3082 } ] }`. The client takes a FULL URL under the
+  // environment and refuses anything else (it attaches the access token), so the query is put under the Web API root the way `dataverseRequest` puts it.
+  const viaClient = async (envUrl, _method, query) => {
+    const res = await httpClient.get(webApiUrl(requireDataverseOrigin(envUrl), query));
+    return { status: res.status, data: res.body };
+  };
+  const base = await readOrgLanguageCode(env, viaClient);
+  if (base) return { languageCode: base };
+  return { note: 'the environment\'s base language could not be read, so the navigation titles were read in language 1033: a title held only in another language is missing from the spec (a rebuild into this environment leaves it as it is). Download again once the language can be read.' };
+}
+
 // The SDK a download reads through, on a THROWAWAY workspace that is removed afterwards — never the
 // output folder's `.maker-workspace`, which is the workspace a later build in that folder uses. A
 // download must describe what is DEPLOYED, and reading through that workspace could not promise it: a
@@ -486,6 +513,7 @@ function relationshipsSkippedWarning(skipped) {
 // Construction happens INSIDE the guard: the constructor builds the filesystem adapter and can throw,
 // and the caller's `finally` is not reachable until this function returns (as in build-model-app.js).
 // `deps` is a test seam: the bundle's factories, the HTTP client, and the temp-directory calls.
+// `deps.authoredLanguageCode` is the language the spec on disk pins, if it pins one (readNavigationLanguage); the result's `languageNote`, when there is one, is what the caller tells the operator.
 async function makeDownloadSdk(env, deps = {}) {
   const workspaceDir = makeTempWorkspace('model-app-download-', { mkdtempSync: deps.mkdtempSync });
   const cleanup = () => (deps.rmSync || fs.rmSync)(workspaceDir, { recursive: true, force: true });
@@ -494,9 +522,16 @@ async function makeDownloadSdk(env, deps = {}) {
       ? deps
       : require('./lib/maker-sdk.js');
     const httpClient = deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env);
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+    const language = await readNavigationLanguage(env, httpClient, deps.authoredLanguageCode);
+    const sdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
+      instanceUrl: env,
+      httpClient,
+      // The App, Form and Dashboard adapters bake the language in at construction, as the build gives its own SDK (build-model-app.js).
+      ...(language.languageCode ? { languageCode: language.languageCode } : {}),
+    });
     await sdk.initWorkspace();
-    return { sdk, workspaceDir, cleanup };
+    return { sdk, workspaceDir, cleanup, ...(language.note ? { languageNote: language.note } : {}) };
   } catch (err) {
     cleanup();
     throw err;
@@ -2782,7 +2817,9 @@ async function main(deps = {}) {
   let outcome = null;
   const finish = (ok, payload) => { outcome = [ok, payload]; };
   try {
-    session = await io.makeDownloadSdk(env, deps);
+    session = await io.makeDownloadSdk(env, { ...deps, authoredLanguageCode: readAuthoredLanguageCode(path.join(outDir, 'app-spec.json')) });
+    // What the SDK could not do about the language it reads the navigation in is said once, before anything is read with it.
+    if (session.languageNote) io.stderr.write(`WARNING: ${session.languageNote}\n`);
     const sdk = session.sdk;
     const resolved = await resolveAppId(sdk, appArg);
     if (resolved.error) { finish(false, { ok: false, error: resolved.error }); return; }
@@ -2865,6 +2902,19 @@ async function main(deps = {}) {
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
+  }
+}
+
+// The `languageCode` the spec already at `specPath` pins, or undefined when there is no such spec or it pins none (or a value that is no LCID). It is the value preserveAuthoredLanguageCode (below)
+// carries into the spec this download writes, read first because the SDK has to be built with it: it is the language a rebuild resolves before the environment's, so it is the one the
+// navigation titles are written in. Best-effort like that function: a missing, unreadable or malformed spec just pins nothing.
+function readAuthoredLanguageCode(specPath) {
+  try {
+    if (!fs.existsSync(specPath)) return undefined;
+    const lcid = normalizeLanguageCode(JSON.parse(fs.readFileSync(specPath, 'utf8')).languageCode);
+    return lcid === null ? undefined : lcid;
+  } catch {
+    return undefined;
   }
 }
 

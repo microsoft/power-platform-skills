@@ -329,10 +329,9 @@ test('keepsLiveValue is the keep rule: spec unchanged since the baseline, enviro
   assert.strictEqual(keepsLiveValue('nope', 'a', 'b', base), false);
 });
 
-test('removing a node\u2019s last title keeps its other children ahead of the nodes the spec models', () => {
-  // A group titled only at the SDK's language, with a description: <Titles/><Descriptions/><SubArea/>.
-  // Its title is removed. The Descriptions child must move up to the vacated first slot — the sitemap
-  // schema puts Titles and Descriptions before the SubAreas — rather than a SubArea filling it.
+test('a group the spec gives no label keeps its title, and every child of its bag where the schema wants it', () => {
+  // A group titled only at the SDK's language, with a description: <Titles/><Descriptions/><SubArea/>. The spec gives it no label, so the title stays and the Titles and Descriptions
+  // children keep the slots ahead of the nodes the spec models — the sitemap schema puts them before the SubAreas.
   const groupBag = { a: [['Id', 'group_0_0']], c: [
     { i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Main']] }] } },
     { i: 1, node: { n: 'Descriptions', a: [], c: [{ n: 'Description', a: [['LCID', '1033'], ['Description', 'D']] }] } },
@@ -340,13 +339,14 @@ test('removing a node\u2019s last title keeps its other children ahead of the no
   const live = tree([{ id: 'area_0', title: 'M', bag: bag('area_0'), groups: [{ id: 'group_0_0', title: 'Main', bag: groupBag, subAreas: [entitySub('s', 'new_x', 'X', bag('s'))] }] }]);
   const desired = tree([{ id: 'area_0', title: 'M', groups: [{ id: 'group_0_0', title: undefined, subAreas: [entitySub('sub_0_0_0', 'new_x', 'X')] }] }]);
   const group = adoptLiveSitemap(desired, live).siteMap.areas[0].groups[0];
-  assert.deepStrictEqual(group.bag.c.map((e) => [e.i, e.node.n]), [[0, 'Descriptions']]);
+  assert.strictEqual(group.title, 'Main');
+  assert.deepStrictEqual(group.bag.c.map((e) => [e.i, e.node.n]), [[0, 'Titles'], [1, 'Descriptions']]);
   assert.deepStrictEqual(groupBag.c.map((e) => e.i), [0, 1], 'the live bag is not touched');
-  // A title in another language keeps the wrapper, and every index with it.
+  // A title in another language is beside it, and is not the spec's to touch either.
   groupBag.c[0].node.c.push({ n: 'Title', a: [['LCID', '1036'], ['Title', 'Principal']] });
   const kept = adoptLiveSitemap(desired, live).siteMap.areas[0].groups[0];
   assert.deepStrictEqual(kept.bag.c.map((e) => [e.i, e.node.n]), [[0, 'Titles'], [1, 'Descriptions']]);
-  assert.deepStrictEqual(kept.bag.c[0].node.c.map((t) => t.a[0][1]), ['1036']);
+  assert.deepStrictEqual(kept.bag.c[0].node.c.map((t) => t.a[0][1]), ['1033', '1036']);
 });
 
 test('nothing live (a first write, or an unreadable copy) leaves the desired tree as it is', () => {

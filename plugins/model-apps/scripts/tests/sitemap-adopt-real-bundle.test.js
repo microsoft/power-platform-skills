@@ -180,7 +180,9 @@ test('REAL BUNDLE: a title the spec itself changes is applied, with nothing to r
 // The SDK only PATCHES an existing <Titles> on a node that has a bag, and reads an empty typed title as
 // "no edit" — so a title added to an entry that had none, or removed from one that had it, must be
 // reconciled in the adopted bag, or it would silently not happen (it did happen on the bag-less path).
-test('REAL BUNDLE: a title added to an entry that had none is written; a removed one is dropped, other languages kept', async () => {
+// A title is removed only when the spec's baseline shows the author took it out: a spec that merely
+// says nothing about the title never clears one (nav-titles-base-language-real-bundle.test.js).
+test('REAL BUNDLE: a title added to an entry that had none is written; one the baseline shows the author took out is dropped, other languages kept', async () => {
   const untitled = '<SiteMap IntroducedVersion="7.0.0.0"><Area Id="area_ops" ResourceId="Contoso.AreaRes"><Titles><Title LCID="1033" Title="Operations" /></Titles>'
     + '<Group Id="grp_main"><Titles><Title LCID="1033" Title="Main" /></Titles>'
     + `${LEGACY_DASHBOARD_TAG}<Titles><Title LCID="1033" Title="Event operations" /></Titles></SubArea>`
@@ -191,10 +193,16 @@ test('REAL BUNDLE: a title added to an entry that had none is written; a removed
 
   const spec = specFor();
   delete spec.appShell.areas[0].groups[0].subAreas[0].title; // the dashboard entry's title removed
-  const removed = await rebuild(deployedXml(), spec);
+  const removed = await rebuild(deployedXml(), spec, { baseChrome: chromeByTargetKey(specFor(), CREATED) });
   const dash = removed.xml.slice(removed.xml.indexOf(LEGACY_DASHBOARD_TAG), removed.xml.indexOf('</SubArea>', removed.xml.indexOf(LEGACY_DASHBOARD_TAG)));
   assert.doesNotMatch(dash, /LCID="1033"/, 'the title at the SDK\u2019s language is gone');
   assert.match(dash, /<Title LCID="1036" Title="Opérations \(FR\)" \/>/, 'another language\u2019s title is not the spec\u2019s to drop');
+
+  // With no baseline nothing shows the spec ever stated the title: it says nothing about it, so it stays, with the other language beside it.
+  const kept = await rebuild(deployedXml(), spec);
+  const keptDash = kept.xml.slice(kept.xml.indexOf(LEGACY_DASHBOARD_TAG), kept.xml.indexOf('</SubArea>', kept.xml.indexOf(LEGACY_DASHBOARD_TAG)));
+  assert.match(keptDash, /<Title LCID="1033" Title="Event operations" \/><Title LCID="1036" Title="Opérations \(FR\)" \/>/, keptDash);
+  assert.ok(describeSitemapNotes(kept.notes).some((l) => /^nav entry "Event operations": kept the environment's title 'Event operations' \u2014 the spec has none for it/.test(l)), JSON.stringify(describeSitemapNotes(kept.notes)));
 });
 
 test('REAL BUNDLE: renaming the dashboard in the spec, as the build asks, keeps the baseline lined up', async () => {
@@ -236,10 +244,10 @@ test('REAL BUNDLE: a spec downloaded from another environment lines up by the id
   assert.ok(describeSitemapNotes(notes).some((l) => /kept the environment's title 'Event operations'/.test(l)));
 });
 
-test('REAL BUNDLE: removing a group\u2019s title leaves its description ahead of its entries', async () => {
+test('REAL BUNDLE: a group the spec gives no label keeps its title, with its description still ahead of its entries', async () => {
   // A group an earlier build created (so it corresponds by its id) that the designer gave a description.
-  // Its label is then removed from the spec: the title goes, and the description must stay before the
-  // subareas, where the sitemap schema requires it.
+  // Its label is not in the spec: its title stays, and the title and the description stay before the
+  // subareas, where the sitemap schema requires them.
   const xml = '<SiteMap IntroducedVersion="7.0.0.0"><Area Id="area_0" ShowGroups="true"><Titles><Title LCID="1033" Title="Operations" /></Titles>'
     + '<Group Id="group_0_0"><Titles><Title LCID="1033" Title="Main" /></Titles><Descriptions><Description LCID="1033" Description="Day-to-day work" /></Descriptions>'
     + `${LEGACY_DASHBOARD_TAG}<Titles><Title LCID="1033" Title="Event operations" /></Titles></SubArea>`
@@ -249,8 +257,8 @@ test('REAL BUNDLE: removing a group\u2019s title leaves its description ahead of
   delete spec.appShell.areas[0].groups[0].label;
   const out = await rebuild(xml, spec);
   const group = out.xml.slice(out.xml.indexOf('<Group'), out.xml.indexOf('</Group>'));
-  assert.match(group, /^<Group Id="group_0_0"><Descriptions><Description LCID="1033" Description="Day-to-day work" \/><\/Descriptions><SubArea Id="ops_dashboard"/, group);
-  assert.doesNotMatch(group, /<Titles><Title LCID="1033" Title="Main"/, 'the removed title is gone');
+  assert.match(group, /^<Group Id="group_0_0"><Titles><Title LCID="1033" Title="Main" \/><\/Titles><Descriptions><Description LCID="1033" Description="Day-to-day work" \/><\/Descriptions><SubArea Id="ops_dashboard"/, group);
+  assert.ok(describeSitemapNotes(out.notes).some((l) => /^group "Main": kept the environment's title 'Main' \u2014 the spec has none for it/.test(l)), JSON.stringify(describeSitemapNotes(out.notes)));
 });
 
 // A generative page entry the spec gives no icon holds the page icon the platform gives it — the SDK writes it, as the app designer does — so a rebuild finds an icon live that neither the spec nor its

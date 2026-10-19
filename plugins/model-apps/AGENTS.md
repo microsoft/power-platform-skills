@@ -928,7 +928,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   group by a label its level uses once, then by the navigation entries it holds, then by the id an
   earlier build gave it (a node none of these identifies is written as new rather than guessed); the
   live `id` and `bag` are kept, and only
-  what the spec sets is overlaid — chrome it does not name is still removed, as before. Because the SDK
+  what the spec sets is overlaid — an icon it does not name is still removed, as before. **A title it does
+  not state is kept, never cleared:** an empty or absent `label`/`title` says nothing (the download of an
+  environment whose base language is not 1033 once wrote every one empty, and an author who leaves a
+  title out has not asked for it to go), so the live title is written back as it is and the build says so
+  (`kept the environment's title '…' — the spec has none for it`). The one exception is an entry
+  (subarea) whose title the baseline below shows the spec used to state: the author took it out, and the
+  edit is applied. An area or group has no target to find a baseline by, so its title is always kept —
+  state one to change it. Because the SDK
   only patches an existing `<Titles>` on a node with a bag, and reads an empty title as "no edit", a
   title added to an entry that had none, or removed from one, is reconciled in the adopted bag at the
   SDK's language (other languages' titles are kept). Every dashboard entry carries exactly
@@ -1421,6 +1428,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dashboards, solution). It reads through a throwaway SDK workspace, never the folder's
   `.maker-workspace` — a copy an interrupted build left there made the download fail, or describe edits
   that were never saved to Dataverse — and writes only the baseline (`last-applied.json`) into it.
+  **The navigation titles are read in the language a rebuild of the spec resolves**: the `languageCode` the
+  spec already on disk pins, else the environment's base language (one read through the download's own
+  client, `readNavigationLanguage`, before the SDK is made). The SDK projects a sitemap in the ONE language
+  it is constructed with and reads a node's title as empty when it has none in that language, so an SDK
+  built with no language (1033) wrote `"label": ""` for every area, group and entry of a Spanish-only
+  environment. A label is a plain string, as a single-language table label is, and the language is never
+  written into the spec; a base language that cannot be read leaves the SDK at 1033 and the download says so
+  (`WARNING:`). A title a node holds only in another language is not in the spec, and a rebuild into the same
+  environment leaves it as it is (the rule for a title the spec does not state, under the sitemap above).
   The fetched SDK navigation must agree with the selected current XML's full target multiset:
   entities, generative pages, URLs, dashboards and custom pages, including repeated shortcuts.
   A missing SDK sitemap or a mismatch is refused with publish-then-download guidance, never emitted

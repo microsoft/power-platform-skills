@@ -314,6 +314,10 @@ languages resolves to the same artifact. One option, one value, several names.
 column or option labelled in several languages comes back as a map, and one labelled in a single
 language comes back as a plain string (so no existing spec changes shape). The download emits
 `pluralName` alongside a localized `displayName`, so its own output re-validates.
+A navigation `label` or `title` is always a plain string (the spec has no map form for one), read in the
+language a rebuild writes it in: the `languageCode` the spec already on disk pins, else the environment's
+base language. A title a node holds only in another language is not in the spec, and a rebuild into the
+same environment leaves it as it is.
 
 ## `description` — write one on everything that takes one
 
@@ -1637,6 +1641,10 @@ custom control), but the spec validator emits a warning.
   written onto the live entry it corresponds to (a subarea by its target; an area or group by its
   label), so the live entry's id, its other attributes (`Client`, `Sku`, `AvailableOffline`, …) and its
   titles in other languages survive; only the label, title, target and icons the spec sets are applied.
+  **A title the spec does not give is kept:** an area, group or entry whose `label` / `title` is empty or
+  left out keeps the title it has in the environment, and the build says so — a rebuild never clears one,
+  so state a title to change it. (An entry whose title the baseline below shows the spec used to state,
+  and the spec now leaves out, loses it: that is an edit.)
   A `dashboard` entry is written the way the designer writes one, with
   `Url="/workplace/home_dashboards.aspx"` — without it the app shows a placeholder icon for the entry,
   and `--verify` fails it.
