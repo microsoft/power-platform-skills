@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { THROTTLE_BUDGET_MS, QUIET_WAIT_MS, makeThrottleBudget, waitDoesNotFit, spentNote } = require('../lib/throttle-budget.js');
+const { THROTTLE_BUDGET_MS, QUIET_WAIT_MS, makeThrottleBudget, waitDoesNotFit, refusedWait, spentNote } = require('../lib/throttle-budget.js');
 
 test('the budget is five minutes, and a wait of up to five seconds is not worth a line', () => {
   assert.strictEqual(THROTTLE_BUDGET_MS, 5 * 60 * 1000);
@@ -66,6 +66,27 @@ test('waitDoesNotFit: says what the service asked, how much of the budget is lef
   assert.match(waitDoesNotFit(makeThrottleBudget({ totalMs: 60000 }), { askedMs: 120000, waitMs: 120000 }), /what is left of the 1 minute a run allows itself/);
 });
 
+// The line the HTTP client's refusal leaves on the warn seam is read by callers that have no business with what to run next: the upload script's client refuses a publish AFTER the page was created, where the same command again would create a
+// second page. So it says what happened — what the service asked, that it does not fit, that the request was not sent again — and leaves the advice to the caller that knows its own state.
+test('refusedWait: says what the service asked and that the request was not sent again — and nothing of what to run next', () => {
+  const budget = makeThrottleBudget();
+  budget.spend(245500);
+  assert.strictEqual(
+    refusedWait(budget, { askedMs: 600000, waitMs: 600000 }),
+    'the service asked to wait 600 s before this request is sent again, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service (246 s are spent), so it was not sent again.',
+  );
+  assert.strictEqual(
+    refusedWait(budget, { waitMs: 9000 }),
+    'the next wait before this request is sent again, 9 s, does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service (246 s are spent), so it was not sent again.',
+    'with no request from the service the wait is the schedule\'s',
+  );
+  assert.match(refusedWait(budget, { askedMs: 60001, waitMs: 60001 }), /^the service asked to wait 61 s before this request/, 'rounded up, as the halt\'s sentence is');
+  assert.match(refusedWait(makeThrottleBudget({ totalMs: 90000 }), { askedMs: 120000, waitMs: 120000 }), /what is left of the 90 seconds a run allows itself/, 'a budget that is not whole minutes is said in seconds');
+  for (const said of [refusedWait(budget, { askedMs: 600000, waitMs: 600000 }), refusedWait(budget, { waitMs: 9000 })]) {
+    assert.doesNotMatch(said, /same command|again later|Nothing more is sent now|continues from here/, 'no advice: whether a run of anything again is safe is not the client\'s to say');
+  }
+});
+
 test('spentNote: how much of the budget is gone, in the words of the line that announces a wait', () => {
   const budget = makeThrottleBudget();
   budget.spend(46500);
@@ -120,14 +141,15 @@ test('decline: a wait that did not fit is counted, with the longest ask and wait
   budget.spend(250000);
   budget.decline({ askedMs: 90000, waitMs: 90000 });
   assert.deepStrictEqual(budget.declined(), { count: 1, askedMs: 90000, waitMs: 90000 });
-  assert.deepStrictEqual(lines, [waitDoesNotFit(budget, { askedMs: 90000, waitMs: 90000 })], 'in the words the build\'s halt uses');
+  assert.deepStrictEqual(lines, [refusedWait(budget, { askedMs: 90000, waitMs: 90000 })], 'in the words of a refusal: what the service asked and that the request was not sent again');
+  assert.doesNotMatch(lines[0], /same command|again later|Nothing more is sent now/, 'with no advice the caller that owns the state has to give');
   budget.decline({ askedMs: 60000, waitMs: 60000 });
   assert.deepStrictEqual(budget.declined(), { count: 2, askedMs: 90000, waitMs: 90000 }, 'a shorter one is counted, and the longest stays');
   assert.strictEqual(lines.length, 1, 'and is not said again: four requests that are refused together are one line');
   budget.decline({ waitMs: 120000 });
   assert.deepStrictEqual(budget.declined(), { count: 3, askedMs: 90000, waitMs: 120000 }, 'a longer wait with no ask of the service is the schedule\'s');
   assert.strictEqual(lines.length, 2);
-  assert.match(lines[1], /^the next wait, 120 s, does not fit in what is left of the 5 minutes/);
+  assert.match(lines[1], /^the next wait before this request is sent again, 120 s, does not fit in what is left of the 5 minutes/);
   assert.doesNotThrow(() => makeThrottleBudget().decline({ waitMs: 1000 }), 'a budget with no warn seam says nothing, and is counted all the same');
   assert.strictEqual(makeThrottleBudget().declined().count, 0, 'a budget counts its own declines');
 });

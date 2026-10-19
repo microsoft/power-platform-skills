@@ -1466,7 +1466,7 @@ test('retryAfterMs and batchRetryAfterMs cap what they read at RETRY_AFTER_CAP_M
 // gives one (`deps.throttle`; the pcf plugin, which keeps a copy of this file, has none, and a client made without one waits exactly as it always did). A budgeted client waits what the service asked WHOLE — the cap of a minute is for
 // the client's own bound, which the budget now is — and a wait that does not fit is not taken: the throttled answer comes back as it came, as when the sends run out, and the budget is told what the service asked. What is not
 // throttling keeps its own schedule and is never drawn: a 5xx (a customization lock, a SQL deadlock, a gateway), a transport failure. Every wait here runs on a clock the wait moves, as a real one does.
-const { makeThrottleBudget, waitDoesNotFit } = require('../lib/throttle-budget.js');
+const { makeThrottleBudget, refusedWait } = require('../lib/throttle-budget.js');
 const ORG = 'https://org.crm.dynamics.com';
 const READ = `${ORG}/api/data/v9.2/accounts`;
 const CLOCK_START = Date.parse('2026-09-30T10:00:00Z');
@@ -1534,7 +1534,8 @@ test('budgeted: a wait that does not fit is not taken — the throttled answer c
   assert.strictEqual(res.headers['retry-after'], '120', 'and its headers');
   assert.strictEqual(run.throttle.spentMs(), 250000, 'nothing is spent on a wait that was not taken');
   assert.deepStrictEqual(run.throttle.declined(), { count: 1, askedMs: 120000, waitMs: 120000 });
-  assert.deepStrictEqual(run.lines, [waitDoesNotFit(run.throttle, { askedMs: 120000, waitMs: 120000 })], 'and the line says what the service asked');
+  assert.deepStrictEqual(run.lines, [refusedWait(run.throttle, { askedMs: 120000, waitMs: 120000 })], 'and the line says what the service asked and that the request was not sent again');
+  assert.doesNotMatch(run.lines[0], /same command|again later|Nothing more is sent now/, 'and gives no advice on what to run: the client does not know what the caller has done before this request');
   // An ask longer than the whole budget stops the request at once, with nothing spent.
   const huge = budgeted();
   const th = fakeTransport(throttledAnswer(3600));
@@ -1559,7 +1560,7 @@ test('budgeted: the budget ends a throttled request where the schedule would hav
   assert.deepStrictEqual(run.throttle.declined(), { count: 1, askedMs: 0, waitMs: 8000 }, 'the service asked for nothing: the wait that did not fit is the schedule\'s');
   assert.strictEqual(run.lines.length, 2);
   assert.match(run.lines[0], /^the service throttled GET \/api\/data\/v9\.2\/accounts \(HTTP 429\); waiting 8 s before sending it again \(15 s of the 20 seconds a run allows itself/);
-  assert.match(run.lines[1], /^the next wait, 8 s, does not fit in what is left of the 20 seconds a run allows itself for waiting out a throttled service \(15 s are spent\)/);
+  assert.match(run.lines[1], /^the next wait before this request is sent again, 8 s, does not fit in what is left of the 20 seconds a run allows itself for waiting out a throttled service \(15 s are spent\), so it was not sent again\.$/);
   // When the schedule ends first it is the sends that ran out, as ever, and the budget is not told of anything.
   const roomy = budgeted();
   const t2 = fakeTransport(throttledAnswer());

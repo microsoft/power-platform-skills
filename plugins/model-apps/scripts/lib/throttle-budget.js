@@ -15,7 +15,9 @@
 // is PLACED on the clock (`spend(ms, at)`, `at` the moment it starts) adds only what runs past the end of the waits placed before it. The backend and the build wait one at a time, place nothing, and add whole.
 //
 // A throttled request that the client will not wait for, because the wait does not fit, is handed back as it came: the SDK reports it as the 429 it is, which says nothing of what the service asked or of why nothing more was sent. So the client
-// says so here (`decline`), and the build, which owns the halt, reads it (`declined`).
+// says so here (`decline`), and the build, which owns the halt, reads it (`declined`). The line the client says is the fact alone (`refusedWait`), with no advice on what to run next: the client does not know what its caller did before the request —
+// the upload script's publish comes after a create that has committed, where a run of the same command again would make a second page — so that is the caller's to say: the build's halt (`waitDoesNotFit`), whose run is idempotent, and the upload's
+// result, which names the page that was saved.
 //
 // What is NOT drawn from it is a wait that is not for a throttle: the client keeps its own schedule for a 5xx (a customization lock, a SQL deadlock victim, a gateway), a reset connection and the re-send of a deadlock victim. And a script that
 // gives its client no budget — every script but the build and the page upload — waits as it always did.
@@ -65,7 +67,7 @@ function makeThrottleBudget({ totalMs = THROTTLE_BUDGET_MS, warn } = {}) {
       declinedWaitMs = Math.max(declinedWaitMs, finite(waitMs));
       if (finite(waitMs) > saidWaitMs) {
         saidWaitMs = finite(waitMs);
-        if (typeof warn === 'function') warn(waitDoesNotFit(budget, { askedMs: finite(askedMs), waitMs: finite(waitMs) }));
+        if (typeof warn === 'function') warn(refusedWait(budget, { askedMs: finite(askedMs), waitMs: finite(waitMs) }));
       }
     },
     // How many waits did not fit, and the longest the service asked and the longest wait among them: what the build reads to say that the budget stopped a request.
@@ -89,4 +91,12 @@ function waitDoesNotFit(budget, { askedMs = 0, waitMs }) {
   return `${lead} in what is left of the ${sizeOf(budget.totalMs)} a run allows itself for waiting out a throttled service (${seconds(budget.spentMs())} are spent). Nothing more is sent now: run the same command again later, and it continues from here.`;
 }
 
-module.exports = { THROTTLE_BUDGET_MS, QUIET_WAIT_MS, makeThrottleBudget, waitDoesNotFit, spentNote };
+// What the HTTP client says when it will not wait for a throttled request: the facts of `waitDoesNotFit` — what the service asked, how much of the budget is gone — and that the request was not sent again, and NOTHING of what to run next. A request the
+// client refuses may follow a write that has committed (the upload's publish follows its create), where "run the same command again" would make a second page: the way on is for the caller that knows its state to give, and the client's line must
+// not contradict it. `askedMs` and `waitMs` are as for `waitDoesNotFit`.
+function refusedWait(budget, { askedMs = 0, waitMs }) {
+  const lead = askedMs > 0 ? `the service asked to wait ${seconds(askedMs)} before this request is sent again, which does not fit` : `the next wait before this request is sent again, ${seconds(waitMs)}, does not fit`;
+  return `${lead} in what is left of the ${sizeOf(budget.totalMs)} a run allows itself for waiting out a throttled service (${seconds(budget.spentMs())} are spent), so it was not sent again.`;
+}
+
+module.exports = { THROTTLE_BUDGET_MS, QUIET_WAIT_MS, makeThrottleBudget, waitDoesNotFit, refusedWait, spentNote };

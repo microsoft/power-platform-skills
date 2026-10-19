@@ -2199,6 +2199,67 @@ test('REAL SDK: a throttle that asks for longer than the budget stops the upload
   assert.strictEqual(fs.existsSync(markerPath(file)), false, 'and no base is recorded for a page that was not written');
 });
 
+// The page server as the transport under the production HTTP client — the one that decides whether a wait fits — with the requests `refuse` answers refused instead.
+function serverTransport(server, refuse = () => undefined) {
+  const raw = server.http();
+  return async ({ url, method, headers, body }) => {
+    const refused = refuse(method, new URL(url).pathname);
+    if (refused) return refused;
+    const answer = method === 'POST' && url.endsWith('/$batch') ? await raw.postRaw(url, body, { headers })
+      : method === 'GET' ? await raw.get(url, { headers })
+        : method === 'DELETE' ? await raw.delete(url, { headers })
+          : method === 'PATCH' && Buffer.isBuffer(body) ? await raw.patchRaw(url, body, { headers })
+            : await raw[method.toLowerCase()](url, typeof body === 'string' ? JSON.parse(body) : body, { headers });
+    const text = typeof answer.body === 'string' || Buffer.isBuffer(answer.body) ? answer.body : JSON.stringify(answer.body === undefined ? null : answer.body);
+    return { statusCode: answer.status, headers: answer.headers || {}, body: text };
+  };
+}
+
+// A publish the budget has no room to wait for comes AFTER the create has committed, so a run of the same command again would create a second page. The HTTP client's line on stderr is the fact alone — what the service asked, and that the
+// request was not sent again — and the way to finish is the result's: the same command with the page that was saved named. These run it as a caller would, against the service once it answers.
+test('REAL SDK: a publish the budget has no room to wait for is said on stderr with no advice — the result names the page that was saved, and its advice, run as given, finishes that page and makes no second', async (t) => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const server = serverWithAccount();
+  let throttled = true;
+  const slept = [];
+  const written = [];
+  t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+  const refusePublish = (method, requestPath) => {
+    if (!(throttled && method === 'POST' && /\/PublishXml$/.test(requestPath))) return undefined;
+    throttled = false;
+    return { statusCode: 429, headers: { 'retry-after': '600' }, body: '{"error":{"message":"throttled"}}' };
+  };
+  const backend = (env, fromScript = {}) => {
+    const httpClient = createAzHttpClient(env, {
+      getToken: () => 'TOK', random: () => 0, throttle: fromScript.throttle, sleep: async (ms) => { slept.push(ms); }, request: serverTransport(server, refusePublish),
+    });
+    return realBackend(server, { deps: { httpClient, random: () => 0 } })(env, fromScript);
+  };
+  const file = codeFile(SOURCE);
+  const args = ['--env', INSTANCE, '--code-file', file, '--name', 'Throttled publish', ...P, '--agent-message', 'm'];
+  const first = await run(args, backend);
+  assert.strictEqual(first.ok, false, JSON.stringify(first.payload));
+  const id = first.payload.pageId;
+  assert.deepStrictEqual(slept, [], 'nothing was waited for: ten minutes do not fit in five');
+  assert.deepStrictEqual(written.filter((line) => /^WARNING: /.test(line)), [
+    'WARNING: the service asked to wait 600 s before this request is sent again, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service (0 s are spent), so it was not sent again.\n',
+  ]);
+  assert.doesNotMatch(written.join(''), /same command|again later|Nothing more is sent now/, 'stderr says nothing of what to run: the create has committed');
+  assert.deepStrictEqual([...server.state.projects.keys()], [id], 'the page was created');
+  assert.deepStrictEqual(server.published, [], 'and not published');
+  assert.strictEqual(readMarker(file).unfinished, 'publish');
+  const advised = /run the same command again with --page-id (\S+) added and nothing else changed/.exec(first.payload.error);
+  assert.ok(advised, first.payload.error);
+  assert.strictEqual(advised[1], id, 'the advice names the page that was saved');
+
+  const second = await run([...args, '--page-id', advised[1]], backend);
+  assert.strictEqual(second.ok, true, JSON.stringify(second.payload));
+  assert.deepStrictEqual([second.payload.pageId, second.payload.unchanged], [id, true]);
+  assert.deepStrictEqual([...server.state.projects.keys()], [id], 'one page, the one the first run made');
+  assert.deepStrictEqual(server.published, [id], 'and it is published now');
+  assert.strictEqual(readMarker(file).unfinished, undefined);
+});
+
 // The upload is a run of one write, and the budget that bounds its waiting is one object: the write's resends and the backend's own HTTP client — whose reads and publish wait out a throttle too — draw from the same five minutes, so the
 // script hands its backend the budget, with the seam that writes its long waits on stderr as WARNING lines.
 test('REAL SDK: the upload hands its backend ONE budget, whose long waits are WARNING lines on stderr — the write and the backend\'s own HTTP client draw from it', async (t) => {
