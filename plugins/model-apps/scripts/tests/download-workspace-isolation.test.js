@@ -468,7 +468,7 @@ test('main wires the real download SDK factory to a throwaway workspace and stil
     stderr: { write: () => {} },
     emitResult: (ok, payload) => emitResults.push({ ok, payload }),
     preflightAuth: async () => ({ ok: true }),
-    createHttpClient: () => ({}),
+    createHttpClient: () => ({ get: async () => ({ status: 200, headers: {}, body: { value: [{ languagecode: 1033 }] } }) }),
     createNodeWorkspaceStorage: (workspaceDir) => {
       constructed.push(workspaceDir);
       return { workspaceDir };

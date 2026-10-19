@@ -1428,15 +1428,23 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dashboards, solution). It reads through a throwaway SDK workspace, never the folder's
   `.maker-workspace` — a copy an interrupted build left there made the download fail, or describe edits
   that were never saved to Dataverse — and writes only the baseline (`last-applied.json`) into it.
-  **The navigation titles are read in the language a rebuild of the spec resolves**: the `languageCode` the
-  spec already on disk pins, else the environment's base language (one read through the download's own
-  client, `readNavigationLanguage`, before the SDK is made). The SDK projects a sitemap in the ONE language
+  **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
+  download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
+  already on disk pins, else the environment's base language (one read through the download's own client,
+  `readNavigationLanguage`, before the SDK is made). The SDK projects a sitemap in the ONE language
   it is constructed with and reads a node's title as empty when it has none in that language, so an SDK
   built with no language (1033) wrote `"label": ""` for every area, group and entry of a Spanish-only
   environment. A label is a plain string, as a single-language table label is, and the language is never
-  written into the spec; a base language that cannot be read leaves the SDK at 1033 and the download says so
-  (`WARNING:`). A title a node holds only in another language is not in the spec, and a rebuild into the same
-  environment leaves it as it is (the rule for a title the spec does not state, under the sitemap above).
+  written into the spec: the flag decides what is read, not what is pinned, and a flag that names another
+  language than the spec on disk pins is refused (`navigation-language-conflict`). When none of the three
+  gives a language — the base language could not be read — the download stops before it writes anything
+  (`navigation-language-unknown`; the spec and the baseline on disk are as they were) and says how to go on:
+  run it again, pass `--language-code`, or pin `languageCode` in the spec. It does not fall back to 1033 as the
+  build does: the spec it writes is rebuilt later, perhaps where the language can be read, and on a bilingual
+  environment whose base language is not English the English titles of a guessed 1033 are non-empty labels,
+  which that rebuild writes over the right ones. `--verify` makes the same choice. A title a node holds only in
+  another language is not in the spec, and a rebuild into the same environment leaves it as it is (the rule
+  for a title the spec does not state, under the sitemap above).
   The fetched SDK navigation must agree with the selected current XML's full target multiset:
   entities, generative pages, URLs, dashboards and custom pages, including repeated shortcuts.
   A missing SDK sitemap or a mismatch is refused with publish-then-download guidance, never emitted
@@ -2159,7 +2167,7 @@ scripts/
   write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
   promote-intent-pages.js      ← app-builder Phase 1.5: validates every generated page, then atomically flips source: intent → tsx
   build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code)
-  download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow)
+  download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow; takes the build's --language-code: the language the navigation titles are read in, when the spec on disk pins none and the base language cannot be read)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in)
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review

@@ -692,7 +692,12 @@ Then:
    earlier `app-spec.json` gives one key to two pages (or one page two keys) and **nothing was written**: show
    the user the message, which names the pages and keys, and either correct the file and pull again or —
    only when the user says so, because fresh keys can make a copy deployed elsewhere update the wrong
-   pages — pull again with `--reset-page-keys`, which re-keys exactly those pages.
+   pages — pull again with `--reset-page-keys`, which re-keys exactly those pages. If it answers
+   `"code": "navigation-language-unknown"`, the environment's base language could not be read, so the
+   language of the app's navigation titles is not known, and **nothing was written**: pull again, or pass
+   `--language-code <lcid>` (the environment's base language — the flag the build takes; a spec already in
+   the folder that pins `languageCode` needs neither). Do not guess it: a spec whose titles were read in the
+   wrong language writes them over the right ones on the next build.
 2. Edit `app-spec.json` (and any page `.tsx`) for the requested change. A page you edit by hand is
    checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx>`
    on it before you rebuild (the rule and the ten shorthands are in Phase 1.5, step 5) and fix what it

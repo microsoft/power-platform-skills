@@ -315,8 +315,11 @@ column or option labelled in several languages comes back as a map, and one labe
 language comes back as a plain string (so no existing spec changes shape). The download emits
 `pluralName` alongside a localized `displayName`, so its own output re-validates.
 A navigation `label` or `title` is always a plain string (the spec has no map form for one), read in the
-language a rebuild writes it in: the `languageCode` the spec already on disk pins, else the environment's
-base language. A title a node holds only in another language is not in the spec, and a rebuild into the
+language a rebuild writes it in: `--language-code`, else the `languageCode` the spec already on disk pins,
+else the environment's base language. When none of the three gives one — the base language could not be
+read — the download writes nothing (`"code": "navigation-language-unknown"`) rather than guess one: run it
+again, or pass `--language-code <lcid>` (it decides the language the titles are read in and is not written
+into the spec). A title a node holds only in another language is not in the spec, and a rebuild into the
 same environment leaves it as it is.
 
 ## `description` — write one on everything that takes one

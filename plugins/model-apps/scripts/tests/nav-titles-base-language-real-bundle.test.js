@@ -57,7 +57,7 @@ async function download(org, deps = {}) {
       solution: async () => ({ uniqueName: 'ContosoCases', publisherPrefix: 'contoso' }),
       dashboards: async () => [{ id: DASH, name: DASHBOARD_NAME, tiles: [] }],
     });
-    return { app, spec, shell: spec.appShell, languageNote: made.languageNote };
+    return { app, spec, shell: spec.appShell, languageUnresolved: made.languageUnresolved };
   } finally {
     made.cleanup();
   }
@@ -76,18 +76,18 @@ const BOTH = { area: { 1033: 'Work', 3082: 'Trabajo' }, group: { 1033: 'Cases', 
 
 test('REAL BUNDLE: a download of a Spanish-only environment writes the navigation titles it holds', async () => {
   const org = createSitemapOrg({ xml: sitemapXml(SPANISH), baseLanguage: 3082 });
-  const { shell, languageNote } = await download(org);
+  const { shell, languageUnresolved } = await download(org);
   assert.deepStrictEqual(labels(shell), { area: 'Trabajo', group: 'Casos', entries: ['', 'Panel de casos'] });
   // The shape is the App Spec's own and carries no language: the table entry has no title of its own (the app shows the table's name), the dashboard entry names its dashboard.
   assert.deepStrictEqual(shell, { areas: [{ label: 'Trabajo', groups: [{ label: 'Casos', subAreas: [{ title: '', entity: 'contoso_case' }, { title: 'Panel de casos', dashboard: DASHBOARD_NAME }] }] }] });
-  assert.strictEqual(languageNote, undefined, 'nothing to say: the language was read');
+  assert.strictEqual(languageUnresolved, undefined, 'the language was read');
 });
 
 test('REAL BUNDLE: an English environment downloads exactly the titles it always did', async () => {
   const org = createSitemapOrg({ xml: sitemapXml(ENGLISH), baseLanguage: 1033 });
-  const { shell, languageNote } = await download(org);
+  const { shell, languageUnresolved } = await download(org);
   assert.deepStrictEqual(shell, { areas: [{ label: 'Work', groups: [{ label: 'Cases', subAreas: [{ title: '', entity: 'contoso_case' }, { title: 'Case dashboard', dashboard: DASHBOARD_NAME }] }] }] });
-  assert.strictEqual(languageNote, undefined);
+  assert.strictEqual(languageUnresolved, undefined);
 });
 
 test('REAL BUNDLE: a download asks the environment for its base language once', async () => {
@@ -111,37 +111,25 @@ test('REAL BUNDLE: a language an author pinned in the spec on disk is the one th
   assert.deepStrictEqual(asksForLanguage(org), [], 'a rebuild resolves the pinned language before the environment\u2019s, so the download does too');
 });
 
-test('REAL BUNDLE: a base language that cannot be read leaves the download in 1033, and says so', async () => {
-  for (const [what, answer] of [
-    ['a server error', () => json(500, { error: { message: 'busy' } })],
-    ['an answer with no organization', () => json(200, { value: [] })],
-    ['a language that is no LCID', () => json(200, { value: [{ languagecode: 'es-ES' }] })],
-    ['a request that failed', () => ({ error: 'socket hang up' })],
-  ]) {
-    const org = createSitemapOrg({ xml: sitemapXml(ENGLISH), baseLanguage: 1033, organizationAnswer: answer });
-    const { shell, languageNote } = await download(org);
-    assert.deepStrictEqual(labels(shell), { area: 'Work', group: 'Cases', entries: ['', 'Case dashboard'] }, `${what}: 1033 is what it was`);
-    assert.match(languageNote, /base language.*1033/, `${what}: ${languageNote}`);
-  }
-});
+// A base language that cannot be read is no language: download-navigation-language.test.js holds what the download does then (it stops and writes nothing).
 
 // --- what `main` hands it ---------------------------------------------------------------------------------------------------------------------------------------
 
-function mainDeps(outDir, seen) {
+function mainDeps(outDir, seen, extraArgv = []) {
   const stderr = [];
   const results = [];
   return {
     stderr,
     results,
     deps: {
-      argv: ['--env', ENV, '--app', APP_UNIQUE, '--out', outDir],
+      argv: ['--env', ENV, '--app', APP_UNIQUE, '--out', outDir, ...extraArgv],
       stderr: { write: (text) => { stderr.push(String(text)); } },
       emitResult: (ok, payload) => results.push({ ok, payload }),
       preflightAuth: async () => ({ ok: true }),
       makeGenpageSdk: () => ({}),
       makeDownloadSdk: async (env, passed) => {
         seen.push(passed);
-        return { sdk: { queryRecords: async (_set, opts = {}) => (/uniquename eq/.test(opts.filter || '') ? [{ appmoduleid: APP_ID }] : [{ uniquename: APP_UNIQUE }]) }, cleanup() {}, languageNote: passed.noteToReturn };
+        return { sdk: { queryRecords: async (_set, opts = {}) => (/uniquename eq/.test(opts.filter || '') ? [{ appmoduleid: APP_ID }] : [{ uniquename: APP_UNIQUE }]) }, cleanup() {} };
       },
       runDownload: async () => ({
         ok: true,
@@ -153,17 +141,19 @@ function mainDeps(outDir, seen) {
   };
 }
 
-test('main hands the download SDK the language pinned in the spec already on disk, and prints what the SDK says about the language it could not read', async () => {
+test('main hands the download SDK the language pinned in the spec already on disk, and the language it was given', async () => {
   const outDir = tmp('nav-main-');
   fs.writeFileSync(path.join(outDir, 'app-spec.json'), JSON.stringify({ languageCode: 3082 }));
   const seen = [];
-  const { deps, stderr } = mainDeps(outDir, seen);
-  const original = deps.makeDownloadSdk;
-  deps.makeDownloadSdk = async (env, passed) => original(env, { ...passed, noteToReturn: 'the environment\u2019s base language could not be read, so navigation titles were read in 1033' });
+  const { deps } = mainDeps(outDir, seen);
   await main(deps);
   assert.strictEqual(seen.length, 1);
   assert.strictEqual(seen[0].authoredLanguageCode, 3082);
-  assert.ok(stderr.some((line) => /^WARNING: the environment\u2019s base language could not be read/.test(line)), stderr.join(''));
+  assert.strictEqual(seen[0].languageCode, undefined, 'no flag, no language of the operator\u2019s');
+  const flagged = [];
+  await main(mainDeps(tmp('nav-main-'), flagged, ['--language-code', '1036']).deps);
+  assert.strictEqual(flagged[0].languageCode, 1036);
+  assert.strictEqual(flagged[0].authoredLanguageCode, undefined);
 });
 
 test('main pins no language for a spec that has none, an unreadable one, or one whose language is not an LCID', async () => {
@@ -180,7 +170,7 @@ test('main pins no language for a spec that has none, an unreadable one, or one 
     await main(deps);
     assert.strictEqual(seen.length, 1, what);
     assert.strictEqual(seen[0].authoredLanguageCode, undefined, what);
-    assert.ok(!stderr.some((line) => /base language/.test(line)), `${what}: nothing is said when the SDK has nothing to say`);
+    assert.ok(!stderr.some((line) => /base language/.test(line)), `${what}: nothing is said about a language nobody asked about`);
   }
 });
 

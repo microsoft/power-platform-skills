@@ -7,7 +7,7 @@
 // pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
 // earlier download of the SAME app gave it (the app-spec.json already in --out, when its app.uniqueName is this app's). If that earlier spec gives a page keys that
@@ -15,11 +15,17 @@
 // `{ ok: false, code: 'page-keys-ambiguous', error, pages }`. Correct the file and download again, or pass --reset-page-keys to give exactly those pages fresh
 // keys (minted in page-id order; every other page keeps its key). The switch is a decision about every environment that holds a copy of the earlier spec: it
 // binds each key to the page it built there, so a fresh key can make that copy update another page.
+//
+// The app's navigation titles are written in the language a rebuild resolves, and a download writes them only in a language it KNOWS: --language-code <lcid> (read as the build and verify
+// read it), else the `languageCode` the app-spec.json already in --out pins, else the environment's base language. When none of the three gives one — the base language could not be read —
+// the download stops without writing anything, `{ ok: false, code: 'navigation-language-unknown', error }`: titles read in a guessed language could overwrite the right ones on the next
+// rebuild. Run it again, or pass --language-code. The flag only decides the language the titles are read in: it is not written into the spec (a pin there is the author's), and a flag that
+// names another language than the spec on disk pins is refused (`navigation-language-conflict`).
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
-const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
@@ -479,27 +485,47 @@ function relationshipsSkippedWarning(skipped) {
 // is the `<Title LCID="…">` whose LCID is that language, and "" when the node has none. An SDK built with no language reads 1033, so on an environment whose base language is another — a
 // Spanish-only one holds its titles at 3082 and no other — every area, group and entry came back with no title, and the spec said so: `"label": ""` for an app whose every node has one.
 //
-// It is the language a rebuild of the spec this download writes will resolve, in the order the build resolves it (lib/entity-provision.js resolveLanguageCode): the `languageCode` an author
-// pinned in the spec already on disk (`authored`, which preserveAuthoredLanguageCode carries into the spec this download writes), else the environment's base language. A label is then
-// a plain string in that language — the rule a table's label follows too (labelFromDataverse) — and the language itself is never written into the spec, for the reason
+// It is the language a rebuild of the spec this download writes will resolve, in the order the build resolves it (lib/entity-provision.js resolveLanguageCode): `--language-code` (`flag`), else the
+// `languageCode` an author pinned in the spec already on disk (`authored`, which preserveAuthoredLanguageCode carries into the spec this download writes), else the environment's base language.
+// A label is then a plain string in that language — the rule a table's label follows too (labelFromDataverse) — and the language itself is never written into the spec, for the reason
 // preserveAuthoredLanguageCode gives. A title a node holds in another language is not in the spec: a rebuild into this environment leaves it as it is.
 //
 // The base language is read through the download's own HTTP client (the build reads the same row through the transport hatch, readOrgLanguageCode), so one set of credentials, retries and
-// test seams serves the download. Fail-soft in the build's direction: a language that cannot be read leaves the SDK at 1033, as it was, and the download says so — a title held in the
-// environment's own language would be missing from the spec, and silence there is how this went unnoticed.
-// Returns { languageCode } or { note }.
-async function readNavigationLanguage(env, httpClient, authored) {
-  if (authored) return { languageCode: authored };
+// test seams serves the download.
+//
+// There is NO fallback. The build, when it cannot read the base language, warns and uses 1033 (resolveLanguageCode), and `--verify`, which describes a deployment as a download does, refuses to
+// assume one (its `undetermined` hook). A download is the stricter of the two: the spec it writes is consumed by a build that may well read the language this one could not, and on a bilingual
+// environment whose base language is not English the English titles of a guessed 1033 are non-empty labels, which that build writes over the right ones. So a language that cannot be established
+// is returned as `unresolved` — the reason — and whoever asked refuses.
+// Returns { languageCode, source: 'flag' | 'spec' | 'environment' } or { unresolved }.
+async function readNavigationLanguage(env, httpClient, { flag, authored } = {}) {
+  if (flag) return { languageCode: flag, source: 'flag' };
+  if (authored) return { languageCode: authored, source: 'spec' };
+  let why = 'the answer named no language';
   // `readOrgLanguageCode` reads `{ status, data }`, the transport hatch's shape for an answer; the SDK's client answers `{ status, headers, body }` and resolves a non-2xx instead of throwing it.
   // The answer it reads: `GET organizations?$select=languagecode&$top=1` -> `{ "value": [ { "organizationid": "…", "languagecode": 3082 } ] }`. The client takes a FULL URL under the
-  // environment and refuses anything else (it attaches the access token), so the query is put under the Web API root the way `dataverseRequest` puts it.
+  // environment and refuses anything else (it attaches the access token), so the query is put under the Web API root the way `dataverseRequest` puts it. The reason a read fails is kept
+  // here, because readOrgLanguageCode answers only null for every one of them and the operator needs to know which: a refusal (HTTP 403) is not the service being down (HTTP 503).
   const viaClient = async (envUrl, _method, query) => {
-    const res = await httpClient.get(webApiUrl(requireDataverseOrigin(envUrl), query));
+    let res;
+    try {
+      res = await httpClient.get(webApiUrl(requireDataverseOrigin(envUrl), query));
+    } catch (err) {
+      why = (err && err.message) || String(err);
+      throw err;
+    }
+    if (res.status < 200 || res.status >= 300) why = `HTTP ${res.status}`;
     return { status: res.status, data: res.body };
   };
   const base = await readOrgLanguageCode(env, viaClient);
-  if (base) return { languageCode: base };
-  return { note: 'the environment\'s base language could not be read, so the navigation titles were read in language 1033: a title held only in another language is missing from the spec (a rebuild into this environment leaves it as it is). Download again once the language can be read.' };
+  return base ? { languageCode: base, source: 'environment' } : { unresolved: why };
+}
+
+// What the download says when no language is known, and how to go on: run it again (the read may only have failed for a moment), name the language, or pin it in the spec.
+function navigationLanguageRefusal(why, specPath) {
+  return `the environment's base language could not be read (${why}), so the language the app's navigation titles are written in is not known, and a spec written with the titles of a guessed language `
+    + 'could overwrite the right ones on the next rebuild. Nothing was written. Run the download again; or name the language with --language-code <lcid> (the flag the build and verify take): '
+    + `the environment's base language, for example 1033 or 3082; or pin "languageCode" in ${specPath}.`;
 }
 
 // The SDK a download reads through, on a THROWAWAY workspace that is removed afterwards — never the
@@ -513,7 +539,9 @@ async function readNavigationLanguage(env, httpClient, authored) {
 // Construction happens INSIDE the guard: the constructor builds the filesystem adapter and can throw,
 // and the caller's `finally` is not reachable until this function returns (as in build-model-app.js).
 // `deps` is a test seam: the bundle's factories, the HTTP client, and the temp-directory calls.
-// `deps.authoredLanguageCode` is the language the spec on disk pins, if it pins one (readNavigationLanguage); the result's `languageNote`, when there is one, is what the caller tells the operator.
+// `deps.languageCode` is the `--language-code` the operator gave and `deps.authoredLanguageCode` the language the spec on disk pins, if either is there (readNavigationLanguage). The result
+// says where the language came from (`languageCode`, `languageSource`) or that there is none (`languageUnresolved`, the reason): the SDK is made either way, in the SDK's own default when there
+// is none, and it is the caller's to refuse — whatever it reads with that default is a guess.
 async function makeDownloadSdk(env, deps = {}) {
   const workspaceDir = makeTempWorkspace('model-app-download-', { mkdtempSync: deps.mkdtempSync });
   const cleanup = () => (deps.rmSync || fs.rmSync)(workspaceDir, { recursive: true, force: true });
@@ -522,7 +550,7 @@ async function makeDownloadSdk(env, deps = {}) {
       ? deps
       : require('./lib/maker-sdk.js');
     const httpClient = deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env);
-    const language = await readNavigationLanguage(env, httpClient, deps.authoredLanguageCode);
+    const language = await readNavigationLanguage(env, httpClient, { flag: deps.languageCode, authored: deps.authoredLanguageCode });
     const sdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
       instanceUrl: env,
@@ -531,7 +559,12 @@ async function makeDownloadSdk(env, deps = {}) {
       ...(language.languageCode ? { languageCode: language.languageCode } : {}),
     });
     await sdk.initWorkspace();
-    return { sdk, workspaceDir, cleanup, ...(language.note ? { languageNote: language.note } : {}) };
+    return {
+      sdk,
+      workspaceDir,
+      cleanup,
+      ...(language.languageCode ? { languageCode: language.languageCode, languageSource: language.source } : { languageUnresolved: language.unresolved }),
+    };
   } catch (err) {
     cleanup();
     throw err;
@@ -2766,12 +2799,12 @@ async function main(deps = {}) {
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys]';
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]';
   // `--allow-lossy-download` and `--reset-page-keys` are real boolean switches, so they stay out of needValue; everything else
-  // feeds a URL, an app id, or a path and must not receive `true`.
+  // feeds a URL, an app id, a path or an LCID and must not receive `true`.
   const flagError = validateFlags(argv, {
-    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys'],
-    needValue: ['env', 'app', 'out', 'output'],
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode'],
+    needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode'],
   });
   if (flagError) {
     io.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
@@ -2789,6 +2822,16 @@ async function main(deps = {}) {
     io.exit(1);
     return;
   }
+  // The language the navigation titles are read in, when the operator names one: read exactly as the build and verify read the flag. A value that is no LCID, or a pair that disagrees, is refused
+  // here, before anything is opened — titles read in a language the operator did not mean would be written into the spec as if they were the app's.
+  let languageFlag;
+  try {
+    languageFlag = readLanguageCodeFlag(flags);
+  } catch (e) {
+    io.stderr.write(`✗ ${e.message}\n${USAGE}\n`);
+    io.exit(1);
+    return;
+  }
   const outDir = path.resolve(outArg || '.');
   // Before auth and before the SDK. A link at --out would make the spec and the pages land
   // outside the directory that was named; a real directory is created if it is missing.
@@ -2796,6 +2839,20 @@ async function main(deps = {}) {
     assertSafeOutputDir(outDir, { create: true });
   } catch (e) {
     io.emitResult(false, { ok: false, error: (e && e.message) || String(e) });
+    return;
+  }
+  // The spec this download may overwrite, and the language it pins (readAuthoredLanguageCode): the other source of the language the titles are read in.
+  const specOnDisk = path.join(outDir, 'app-spec.json');
+  const pinnedLanguage = readAuthoredLanguageCode(specOnDisk);
+  // The flag outranks the pin, as it does for the build, but the spec this download writes keeps the pin (preserveAuthoredLanguageCode) and the flag is not written into it: titles read in the
+  // flag's language and a spec that pins another would be rebuilt in the pin's, which writes one language's text as the other's. So the two must agree.
+  if (languageFlag && pinnedLanguage && languageFlag !== pinnedLanguage) {
+    io.emitResult(false, {
+      ok: false,
+      code: 'navigation-language-conflict',
+      error: `--language-code ${languageFlag} names another language than the one the app-spec.json in ${outDir} pins ("languageCode": ${pinnedLanguage}): the titles would be read in one language and a rebuild `
+        + 'would write them in the other. Pass the same language, or change the pin. Nothing was written.',
+    });
     return;
   }
   // AB#6686427 — prove the ambient Azure CLI identity can actually reach this org BEFORE any read.
@@ -2817,9 +2874,13 @@ async function main(deps = {}) {
   let outcome = null;
   const finish = (ok, payload) => { outcome = [ok, payload]; };
   try {
-    session = await io.makeDownloadSdk(env, { ...deps, authoredLanguageCode: readAuthoredLanguageCode(path.join(outDir, 'app-spec.json')) });
-    // What the SDK could not do about the language it reads the navigation in is said once, before anything is read with it.
-    if (session.languageNote) io.stderr.write(`WARNING: ${session.languageNote}\n`);
+    session = await io.makeDownloadSdk(env, { ...deps, languageCode: languageFlag, authoredLanguageCode: pinnedLanguage });
+    // No language known — the flag, the spec on disk and the environment all gave none — means nothing has been read with a guess yet, and nothing is: the refusal is the result, before the app is
+    // resolved, and the spec and baseline on disk are as they were (navigationLanguageRefusal says how to go on).
+    if (typeof session.languageUnresolved === 'string') {
+      finish(false, { ok: false, code: 'navigation-language-unknown', error: navigationLanguageRefusal(session.languageUnresolved, specOnDisk) });
+      return;
+    }
     const sdk = session.sdk;
     const resolved = await resolveAppId(sdk, appArg);
     if (resolved.error) { finish(false, { ok: false, error: resolved.error }); return; }
