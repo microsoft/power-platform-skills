@@ -29,11 +29,11 @@ const SKILL_ROW = { aiskillconfigid: '11111111-1111-1111-1111-111111111111' };
 const LOOKUP = "/aiskillconfigs?$select=aiskillconfigid&$filter=uniquename eq 'ais_RowSummary_new_memo'&$top=1";
 
 // An SDK double whose Dataverse holds `rows` as the skill rows the lookup finds, and which records every call. `lookup` and `remove` replace the answer of the read and the
-// removal (to answer another status, or to throw).
-function summarySdk({ rows = [], lookup, remove } = {}) {
+// removal (to answer another status, or to throw). `solution: false` is an environment without the spec's solution, so that nothing else of the plan is deleted either.
+function summarySdk({ rows = [], lookup, remove, solution = true } = {}) {
   const calls = [];
   const sdk = {
-    resolveArtifact: async (kind) => (kind === 'solution' ? [{ id: 'sol-1', name: 'AiTest' }] : []),
+    resolveArtifact: async (kind) => (kind === 'solution' && solution ? [{ id: 'sol-1', name: 'AiTest' }] : []),
     queryRecords: async () => [],
     dataverse: {
       get: async (url) => {
@@ -107,15 +107,38 @@ test('a lookup that cannot be made leaves what is there unknown: said on the ste
   }
 });
 
-test('a removal that fails is not a deletion: said on the step in the SDK\u2019s words, and it still fails nothing', async () => {
+test('a removal that fails is not a deletion: said on the step in the SDK\u2019s words, kept like a step that left its artifact, and it still fails nothing', async () => {
   const words = "The row summary of 'new_memo' was removed, but its AI model '22222222-2222-2222-2222-222222222222' was not deleted (HTTP 400: refused).";
   const { sdk, removals } = summarySdk({ rows: [SKILL_ROW], remove: () => Object.assign(new Error(words), { code: 'ROW_SUMMARY_MODEL_NOT_DELETED' }) });
   const { result, events } = await run(sdk);
   assert.strictEqual(result.ok, true, 'best-effort: the table\u2019s delete that follows reports what still depends on the row summary');
-  assert.deepStrictEqual(events.map((e) => [e.status, e.label]), [['ok', `row summary new_memo (0 deleted, 1 not removed: ${words})`]]);
+  assert.deepStrictEqual(events.map((e) => [e.status, e.skip, e.label]), [['skip', 'kept', `row summary new_memo (kept \u2014 1 not removed: ${words})`]]);
   assert.strictEqual(removals().length, 1);
   assert.deepStrictEqual(result.deleted.aiSummary, []);
   assert.deepStrictEqual(result.skipped.filter((s) => /^row summary new_memo/.test(s)), [`row summary new_memo (1 not removed: ${words} \u2014 skipped)`]);
+});
+
+// The review's case: the table is kept (`existing: true`) and every other artifact is absent, so nothing at all is deleted. The closing line counts the events the engine emitted, so a wholly failed
+// removal that was emitted as a step that deleted something put a deletion in the total that the step line and the JSON result both deny.
+const RETAINED = { ...SPEC, entities: [{ ...SPEC.entities[0], existing: true }] };
+const CLOSING_WHEN_NOTHING_WAS_DELETED = /\u2014 0 deleted, 5 not found, 0 failed, 2 kept \(7 steps\)$/;
+
+test('a removal that wholly fails is not in the closing count of deleted steps: it is kept, with the table that is kept', async () => {
+  const words = 'HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.0/aiskillconfigs(11111111-1111-1111-1111-111111111111): no delete privilege';
+  const logs = [];
+  const { sdk } = summarySdk({ rows: [SKILL_ROW], solution: false, remove: () => new Error(words) });
+  const result = await teardownModelApp(RETAINED, { apply: true, allowDestructive: true }, { sdk, log: (m) => logs.push(m) });
+  assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
+  assert.deepStrictEqual(result.deleted.aiSummary, [], 'the JSON result deletes nothing');
+  assert.ok(logs.some((l) => l === `  [3/7] \u2298 row summary new_memo (kept \u2014 1 not removed: ${words})`), logs.join('\n'));
+  assert.match(logs.find((l) => /teardown complete/.test(l)), CLOSING_WHEN_NOTHING_WAS_DELETED, logs.join('\n'));
+});
+
+test('a removal that succeeds is still counted as the deletion it is, beside the table that is kept', async () => {
+  const logs = [];
+  const { sdk } = summarySdk({ rows: [SKILL_ROW], solution: false });
+  await teardownModelApp(RETAINED, { apply: true, allowDestructive: true }, { sdk, log: (m) => logs.push(m) });
+  assert.match(logs.find((l) => /teardown complete/.test(l)), /\u2014 1 deleted, 5 not found, 0 failed, 1 kept \(7 steps\)$/, logs.join('\n'));
 });
 
 test('the printed step and the closing counts follow what was found', async () => {
@@ -144,13 +167,18 @@ test('the printed step and the closing counts follow what was found', async () =
 // `removeRowSummary` finds the row summary by its skill row — `GET /aiskillconfigs?…$filter=uniquename eq 'ais_RowSummary_<table>'` — and the step must look for the same row, or a
 // row summary the SDK would remove is reported as not there and left to block the table's delete. The unique name is a constant inside the bundle, so the one the step uses is held to what
 // the real bundle asks for, over a fake Dataverse that answers by the filter.
-function fakeSkillOrg({ rows = [], status = 200 } = {}) {
+function fakeSkillOrg({ rows = [], status = 200, deleteStatus = 204 } = {}) {
   const requests = [];
   const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   async function request({ url, method }) {
     const where = decodeURIComponent(new URL(url).pathname + new URL(url).search);
     requests.push({ method, path: where });
     if (method === 'GET' && /\/aiskillconfigs\?/.test(where)) return json(status, status === 200 ? { value: rows } : { error: { message: "Resource not found for the segment 'aiskillconfigs'." } });
+    // The skill row's own delete, and the read the bundle makes to settle one that failed: the row is still there.
+    if (method === 'DELETE' && /\/aiskillconfigs\(/.test(where)) return deleteStatus >= 400 ? json(deleteStatus, { error: { message: 'no delete privilege' } }) : { statusCode: deleteStatus, headers: {}, body: '' };
+    if (method === 'GET' && /\/aiskillconfigs\(/.test(where)) return json(200, { aiskillconfigid: SKILL_ROW.aiskillconfigid });
+    const table = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(where);
+    if (method === 'GET' && table) return json(200, { LogicalName: table[1], EntitySetName: `${table[1]}s`, MetadataId: '55555555-5555-5555-5555-555555555555' });
     return method === 'GET' ? json(200, { value: [] }) : { statusCode: 204, headers: {}, body: '' };
   }
   const httpClient = createAzHttpClient(ENV, { getToken: () => 'token', request, sleep: async () => {} });
@@ -188,4 +216,16 @@ test('REAL BUNDLE: an environment with no AI skill table is reported as not foun
   // No app and no solution in the plan: what the real SDK would be asked about them is not this test's.
   const { result, events } = await run(sdk, { entities: SPEC.entities, ai: SPEC.ai });
   assert.deepStrictEqual(events.map((e) => [e.status, e.label]), [['skip', 'row summary new_memo (not found)']], JSON.stringify(result.errors));
+});
+
+test('REAL BUNDLE: a skill row the caller may not delete is kept, with the platform\u2019s refusal, and the closing counts say that nothing was deleted', async () => {
+  const org = fakeSkillOrg({ rows: [SKILL_ROW], deleteStatus: 403 });
+  const logs = [];
+  const result = await teardownModelApp(RETAINED, { apply: true, allowDestructive: true }, { sdk: await realSdk(org), log: (m) => logs.push(m) });
+  assert.strictEqual(result.ok, true, `${JSON.stringify(result.errors)}\n${logs.join('\n')}`);
+  assert.deepStrictEqual(result.deleted.aiSummary, []);
+  const line = logs.find((l) => /row summary new_memo/.test(l));
+  assert.match(line, /^ {2}\[3\/7\] \u2298 row summary new_memo \(kept \u2014 1 not removed: HTTP 403 from https:\/\/contoso\.crm\.dynamics\.com\/api\/data\/v9\.0\/aiskillconfigs\(11111111-1111-1111-1111-111111111111\): no delete privilege\)$/, line);
+  assert.match(logs.find((l) => /teardown complete/.test(l)), CLOSING_WHEN_NOTHING_WAS_DELETED, logs.join('\n'));
+  assert.deepStrictEqual(org.requests.filter((r) => r.method === 'DELETE').map((r) => r.path.replace(/^\/api\/data\/v9\.\d\//, '')), ['aiskillconfigs(11111111-1111-1111-1111-111111111111)'], 'the delete was sent once and its refusal was the answer');
 });

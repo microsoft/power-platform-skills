@@ -1802,6 +1802,13 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       if (parts.length) {
         result.skipped.push(`${step.label} (${parts.join(', ')} — skipped)`);
       }
+      // A tolerated removal that wholly failed (`tolerateFailure`) deleted nothing, so it is not an `ok` step: the
+      // closing line counts `ok` steps as deleted, and so would count a row summary that is still there. It is a
+      // kept step — non-fatal, as before, but said as what it is.
+      if (!deletedIds.length && notRemoved.length) {
+        emit({ phase: step.phase, status: 'skip', skip: 'kept', label: `${step.label} (kept — ${parts.join(', ')})`, n: myN, total });
+        continue;
+      }
       const summary = [`${deletedIds.length} deleted`, ...parts].join(', ');
       emit({ phase: step.phase, status: 'ok', label: `${step.label} (${summary})`, n: myN, total });
     } catch (err) {

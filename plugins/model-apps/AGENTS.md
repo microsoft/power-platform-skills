@@ -4542,8 +4542,9 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   when it removes a row summary and when it finds none — a step that only called it printed `(1 deleted)` for
   every table without one — and reports a table with none as not found (`teardown-row-summary-lookup.test.js`
   holds the lookup to what the bundle asks for). It is still best-effort for failures: a lookup that cannot be
-  made (`not looked up — …`, kept) or a removal that throws (`1 not removed: <the SDK's words>`) fails nothing
-  and is not counted as a deletion. The table delete that follows reports the
+  made (`not looked up — …`, kept) or a removal that throws (`kept — 1 not removed: <the SDK's words>`) fails
+  nothing, and the closing line counts it with the kept steps, not the deleted ones, as its own step line does.
+  The table delete that follows reports the
   dependency if the skill row is still there, and a model left behind blocks only a later row summary for the
   same table, by name.
 - **Changes in the same SDK release that no plugin path reaches** — read these again before a plugin change
