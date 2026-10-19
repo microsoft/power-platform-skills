@@ -14,6 +14,7 @@
 // token taken out of it, and so does a transport failure's text (see "The access token, taken out of what a
 // service says"): the SDK quotes such a body in the message a script prints. A success is returned untouched.
 const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = require('./dataverse-auth.js');
+const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 
 // How Dataverse reports that SQL Server chose a request's transaction as a deadlock VICTIM and rolled
 // it back. Two live captures, both HTTP 500 (a process-flow delete during a teardown, and PublishXml):
@@ -536,18 +537,8 @@ function transportError(res, message) {
 // never touched: its bytes are the caller's data. The same rule keeps the Power Apps client's answers clean (lib/power-apps-service-client.js takes `scrub` and `scrubAnswer` from here, which is
 // why they are exported: there is one scrubber).
 //
-// Not the token alone: what an error or a gateway repeats of a bearer token is often one part of it. A token is `header.payload.signature` (three base64url parts joined by dots;
-// https://www.rfc-editor.org/rfc/rfc7519#section-3), so each part long enough to be distinctive is taken out too.
-const MIN_TOKEN_PART_LENGTH = 24;
-// What takes the place of a token, or of a part of one, in a text.
-const TOKEN_MARKER = '<token>';
-// The texts of one token that are taken out of a message: the token itself and each of its parts that is long enough to be distinctive, the longest first, once each. The one list the Dataverse client's scrubber
-// and the SDK factory's guard (lib/sdk-failure-scrub.js) both read, so what one takes out the other takes out.
-function needlesOf(token) {
-  const needles = new Set([token]);
-  for (const part of token.split('.')) if (part.length >= MIN_TOKEN_PART_LENGTH) needles.add(part);
-  return [...needles].sort((a, b) => b.length - a.length);
-}
+// Not the token alone: what an error or a gateway repeats of a bearer token is often one part of it, so `needlesOf` (lib/output-redaction.js, the one list of what is taken out of a token: the token and each of its dot-separated
+// parts that is long enough to be distinctive — https://www.rfc-editor.org/rfc/rfc7519#section-3) is what this scrubber takes out, as what the process writes is kept free of it by the same list.
 function scrub(text, token) {
   const message = String(text);
   if (!token) return message;
@@ -570,17 +561,6 @@ function scrubAnswer(value, token, depth = 0) {
 // A value shorter than this is no access token (the Azure CLI's are JWTs of hundreds of characters), and taking it out of a message would blank every place the message has the same few letters.
 // The Power Apps client has no such floor: it is given a token by one function, and a short one there is a test's.
 const MIN_SCRUBBED_TOKEN_LENGTH = 16;
-
-// Every access token a client of this PROCESS has sent, kept for the one place that cannot be handed the client: what an SDK raises is cleaned where it leaves the SDK (lib/sdk-failure-scrub.js, applied by the factory every
-// script makes its SDK with), because a failure the service quotes from inside a SUCCESSFUL answer — a change set it refuses as a whole is answered HTTP 200 with the part that failed — is quoted into the SDK's error after
-// this client has returned the answer, and an answer that is a success is returned exactly as it came (the strict readers of a `$batch` count its bytes). A token joins the list when a request that carries it is about to
-// be sent, never before, and only if it is long enough to be one: the same floor the client's own scrubbing has. The list is not per client on purpose — a service may repeat a token it was sent by any of them, and a wrapper
-// over a client or a copy of it (a spread, a Proxy) must not hide the list from the factory.
-const tokensSentByProcess = new Set();
-/** Every access token a client of this process has sent, once each, the first sent first. */
-function sentTokens() {
-  return [...tokensSentByProcess];
-}
 
 /** `text` with the access token that `headers` carry (`Authorization: Bearer <token>`) taken out of it, for a caller that has the words of a transport failure and the request it was sending. */
 function scrubBearer(text, headers) {
@@ -795,10 +775,9 @@ function createAzHttpClient(orgUrl, deps = {}) {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const last = attempt === maxAttempts - 1;
       const bearer = ensureToken();
-      if (bearer.length >= MIN_SCRUBBED_TOKEN_LENGTH) {
-        tokensSent.add(bearer);
-        tokensSentByProcess.add(bearer);
-      }
+      if (bearer.length >= MIN_SCRUBBED_TOKEN_LENGTH) tokensSent.add(bearer);
+      // Noted for everything the process writes, not only for this client's answers: a service may repeat a token it was sent by any client, in an answer that is a success (lib/output-redaction.js).
+      noteToken(bearer);
       const headers = {
         Authorization: `Bearer ${bearer}`,
         Accept: 'application/json',
@@ -929,4 +908,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, needlesOf, sentTokens, TOKEN_MARKER, MIN_SCRUBBED_TOKEN_LENGTH };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };

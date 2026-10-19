@@ -8,6 +8,9 @@
 const { nearestName } = require('./nearest-name.js');
 const { execFileAsync, runSync, killProcessTree } = require('./process-runner.js');
 const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./cli-failure.js');
+// Every access token read from the Azure CLI below is noted, so that nothing the process writes can carry it (lib/output-redaction.js). That module requires nothing, so it can be required here at the top, which
+// lib/sdk-http-client.js — it requires this file — cannot be.
+const outputRedaction = require('./output-redaction.js');
 
 // Dataverse environment hosts, one family per cloud (the same families power-pages accepts in
 // scripts/lib/validation-helpers.js, plus the non-numbered `crm<ring>` labels such as crmtest):
@@ -138,7 +141,7 @@ function readAzToken(resource, opts = {}) {
     // re-call returns the same MSAL-cached token (see the ensureOk 401 note below). Reusing that
     // non-null token within this Node process removes repeated CLI cold-starts without changing
     // Dataverse semantics; a caller that just saw a 401 passes `{ fresh: true }` to replace it.
-    if (token) { authTokenMemo.set(resource, token); tokenFailures.delete(resource); }
+    if (token) { authTokenMemo.set(resource, token); tokenFailures.delete(resource); outputRedaction.noteToken(token); }
     else { authTokenMemo.delete(resource); noteTokenFailure(resource, null); }
     return token;
   } catch (e) {
@@ -191,7 +194,7 @@ function readAzTokenAsync(resource, opts = {}) {
           // Shares the synchronous helper's memo deliberately: check-auth can pre-warm the token
           // without blocking the event loop, and later synchronous Dataverse callers in the same
           // process still avoid a second Azure CLI cold start.
-          if (token) { authTokenMemo.set(resource, token); tokenFailures.delete(resource); }
+          if (token) { authTokenMemo.set(resource, token); tokenFailures.delete(resource); outputRedaction.noteToken(token); }
           else { authTokenMemo.delete(resource); noteTokenFailure(resource, null); }
           resolve(token);
         }
@@ -505,6 +508,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
   const maxRetries = 2;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (token.length >= MIN_SCRUBBED_TOKEN_LENGTH) tokensSent.add(token);
+    outputRedaction.noteToken(token);
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',

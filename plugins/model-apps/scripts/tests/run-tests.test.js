@@ -269,6 +269,7 @@ const PCF_COPY_SYNC_PATHS = new Set([
   'scripts/validate-plugin-copies.js',
   'plugins/pcf/scripts/lib/process-runner.js',
   'plugins/pcf/scripts/lib/sdk-http-client.js',
+  'plugins/pcf/scripts/lib/output-redaction.js',
   'plugins/pcf/scripts/lib/odata.js',
   'plugins/pcf/scripts/lib/source-literals.js',
   'plugins/pcf/scripts/lib/interaction-mode.js',

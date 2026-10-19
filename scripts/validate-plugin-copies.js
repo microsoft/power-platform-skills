@@ -25,6 +25,7 @@ const COPY_SETS = [
     verbatim: [
       ['scripts/lib/process-runner.js', 'scripts/lib/process-runner.js'],
       ['scripts/lib/sdk-http-client.js', 'scripts/lib/sdk-http-client.js'],
+      ['scripts/lib/output-redaction.js', 'scripts/lib/output-redaction.js'],
       ['scripts/lib/odata.js', 'scripts/lib/odata.js'],
       ['scripts/lib/source-literals.js', 'scripts/lib/source-literals.js'],
       ['scripts/lib/interaction-mode.js', 'scripts/lib/interaction-mode.js'],

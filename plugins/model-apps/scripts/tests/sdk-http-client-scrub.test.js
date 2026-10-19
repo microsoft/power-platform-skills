@@ -146,7 +146,7 @@ test('a SUCCESS is never touched: its JSON, its raw text and its bytes are retur
   assert.equal((await headed.client.get(`${API}/WhoAmI`)).headers['x-echo'], TOKEN);
 });
 
-test('a change set the service refuses as a whole is a SUCCESS to the client — HTTP 200, the failed part inside — and is returned as it came, token and all: the strict readers count its bytes, and the token is taken out of what the SDK makes of it (lib/sdk-failure-scrub.js)', async () => {
+test('a change set the service refuses as a whole is a SUCCESS to the client — HTTP 200, the failed part inside — and is returned as it came, token and all: the strict readers count its bytes, and the token is taken out of what the process writes (lib/output-redaction.js)', async () => {
   const detail = JSON.stringify({ error: { code: '0x80040220', message: `Principal user rejected bearer ${TOKEN} for this write` } });
   const refused = ['--batchresponse_x', 'Content-Type: multipart/mixed; boundary=changesetresponse_x', '', '--changesetresponse_x', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', 'Content-ID: 1', '',
     'HTTP/1.1 403 Forbidden', 'Content-Type: application/json', `Content-Length: ${Buffer.byteLength(detail)}`, '', detail, '--changesetresponse_x--', '--batchresponse_x--', ''].join('\r\n');

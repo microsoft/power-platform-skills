@@ -26,6 +26,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+// Everything this module writes has the access tokens the process obtained taken out first: it is the one writer of the build's journal and status file, of what a download writes, of a page's file and its deployed copy
+// (tests/output-token-writers.test.js lists every other write in the plugin and why none of them can carry a token). Text only: bytes a caller gives are written as they are.
+const { redactOutput } = require('./output-redaction.js');
 
 const UNSAFE = 'UNSAFE_OUTPUT';
 
@@ -231,6 +234,7 @@ function assertPlainFileTarget(filePath, opts) {
 
 function writeFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
+  data = redactOutput(data);
   const fsImpl = (opts && opts.fs) || fs;
   const resolved = path.resolve(filePath);
   const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
@@ -440,6 +444,7 @@ function removeTreeWithRetry(dir, opts) {
 
 function appendFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to append: no path was given', 'uninspectable');
+  data = redactOutput(data);
   const fsImpl = (opts && opts.fs) || fs;
   const resolved = path.resolve(filePath);
   const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });

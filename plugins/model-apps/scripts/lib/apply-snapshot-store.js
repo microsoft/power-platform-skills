@@ -25,6 +25,9 @@ const {
 } = require('./apply-snapshot.js');
 // The one liveness check, shared with the pages lock and the temporary workspaces (lib/process-owner.js); re-exported below as it always was.
 const { processAlive } = require('./process-owner.js');
+// The one writer of the snapshot, the baseline (`last-applied.json`) and the page ownership and publish records is `writeFileAtomic`, and the text it writes has the access tokens the process obtained taken out first
+// (lib/output-redaction.js). The leases, claims and markers this module writes hold process ids, times and random ids, and a reason built from a file system's own words.
+const { redactOutput } = require('./output-redaction.js');
 
 const SNAPSHOT_FILE = 'apply-snapshot.json';
 const LEASE_FILE = 'apply-snapshot.lock';
@@ -66,7 +69,7 @@ function writeFileAtomic(target, text) {
   try {
     const fd = fs.openSync(tmp, 'w');
     try {
-      fs.writeFileSync(fd, text);
+      fs.writeFileSync(fd, redactOutput(text));
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);

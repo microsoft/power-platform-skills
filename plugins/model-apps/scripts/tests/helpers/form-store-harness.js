@@ -29,8 +29,8 @@ const onlyLanguages = (formxml, languages) => String(formxml).replace(/<label\b[
 
 // `languageCode` is the organization's base language, what a read of the organization answers. `sdkLanguageCode` is the language the SDK is MADE
 // for — the one the build writes its labels in, which `--language-code` can set apart from the organization's — and is the SDK's own default
-// when it is left out.
-function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES, languageCode = 1033, sdkLanguageCode } = {}) {
+// when it is left out. `createSdk` makes the SDK (the raw bundle's factory unless a test names another: the production factory over the production HTTP client, say).
+function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES, languageCode = 1033, sdkLanguageCode, createSdk = createMakerSdk } = {}) {
   const dirs = [];
   const store = { row: { formid: formId, name: formName, objecttypecode: entity, type: 2, isdefault: true } };
   // A form as a read returns it: whole, unless `store.readLanguages` (a list of LCIDs) limits the languages its labels are shown in.
@@ -89,7 +89,7 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
   const freshSdk = async (workspaceDir) => {
     const dir = workspaceDir || fs.mkdtempSync(path.join(os.tmpdir(), 'form-layout-rt-'));
     if (!workspaceDir) dirs.push(dir);
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir),
+    const sdk = createSdk({ workspaceStorage: createNodeWorkspaceStorage(dir),
       instanceUrl: 'https://contoso.crm.dynamics.com', httpClient, ...(sdkLanguageCode ? { languageCode: sdkLanguageCode } : {}) });
     await sdk.initWorkspace();
     const mutations = [];

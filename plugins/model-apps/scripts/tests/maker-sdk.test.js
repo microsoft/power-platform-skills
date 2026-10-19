@@ -70,6 +70,33 @@ test('a powerAppsServiceClient the caller names wins, as an explicit compiler do
   assert.strictEqual(create({ powerAppsServiceClient: own, connectivity: true }).powerAppsServiceClient, own);
 });
 
+// --- the workspace storage: every file the SDK writes is written without the access tokens the process obtained (lib/output-redaction.js) ----------------------
+
+test('the workspaceStorage a caller names is handed to the SDK guarded — it is the storage in everything but the text it is asked to write — and a caller that names none is given none', async () => {
+  const { withVendoredCompiler } = require('../lib/maker-sdk.js');
+  const create = withVendoredCompiler((options) => options);
+  const written = [];
+  const storage = {
+    root: '/workspace',
+    getRoot() { return this.root; },
+    pathFor(key) { return `${this.root}/${key.join('/')}`; },
+    async writeTextAtomic(key, text) { written.push([key, text]); },
+    async readText() { return null; },
+    async deleteFile() {},
+    async deleteByPrefix() {},
+  };
+  const made = create({ instanceUrl: ORG, workspaceStorage: storage });
+  assert.notStrictEqual(made.workspaceStorage, storage, 'a wrapper');
+  assert.strictEqual(Object.getPrototypeOf(made.workspaceStorage), storage, 'with the storage for its prototype: its folder, its paths and every other member are its own');
+  assert.strictEqual(made.workspaceStorage.getRoot(), '/workspace');
+  assert.strictEqual(made.workspaceStorage.pathFor(['forms', 'one.json']), '/workspace/forms/one.json');
+  assert.strictEqual(await made.workspaceStorage.readText(['forms', 'one.json']), null);
+  await made.workspaceStorage.writeTextAtomic(['forms', 'one.json'], '{"a":1}');
+  assert.deepStrictEqual(written, [[['forms', 'one.json'], '{"a":1}']], 'a text that holds no token is written as it is');
+  assert.deepStrictEqual(Object.keys(create({ instanceUrl: ORG })).sort(), ['instanceUrl', 'typescript'], 'none named, none given');
+  assert.strictEqual(create({ instanceUrl: ORG, workspaceStorage: null }).workspaceStorage, null, 'and one that is no storage is what it was');
+});
+
 test('the client module is loaded only when connectivity is asked for — an instance that reads no connections pays nothing', () => {
   const { spawnSync } = require('node:child_process');
   const probe = [

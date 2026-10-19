@@ -704,7 +704,7 @@ test('PROCESS: a refused read of the connection references prints no Dataverse t
   assert.strictEqual(run.requests.filter((r) => r.path.endsWith('/connectionreferences')).length, 1, 'the read was made once: a 403 is not retried');
 });
 
-test('PROCESS control: a read of the connection references that SUCCEEDS is printed as it came, even when a value in it is the token\'s own text — a success is the caller\'s data and is never altered', () => {
+test('PROCESS control: a read of the connection references that SUCCEEDS is read as it came, and is printed without the token when a value in it is the token\'s own text — a success is the caller\'s data until a script writes it', () => {
   const run = runScript('list-connections.js', [ORG], {
     platform: {
       tokens: { dataverse: DATAVERSE_ECHO },
@@ -715,7 +715,11 @@ test('PROCESS control: a read of the connection references that SUCCEEDS is prin
   });
   assert.strictEqual(run.status, 0, run.stderr);
   const out = JSON.parse(run.lines[0]);
-  assert.deepStrictEqual(out.connectionReferences, [{ logicalName: 'new_weather', connectorId: WEATHER, connectionId: DATAVERSE_ECHO }]);
+  // The client hands the answer over as it came (tests/sdk-http-client-scrub.test.js); what the process WRITES holds no token it obtained (lib/output-redaction.js), the data of a success included.
+  assert.deepStrictEqual(out.connectionReferences, [{ logicalName: 'new_weather', connectorId: WEATHER, connectionId: '<token>' }]);
+  for (const text of [run.stdout, run.stderr]) {
+    for (const secret of [DATAVERSE_ECHO, ...DATAVERSE_ECHO.split('.')]) assert.ok(!text.includes(secret), `the Dataverse token (or a part of it) was printed: ${text}`);
+  }
 });
 
 test('PROCESS: a usage error of list-connections.js — no environment URL, a flag it does not take — is the problem on stderr alone: exit 1, nothing on stdout, nothing asked of anyone', () => {

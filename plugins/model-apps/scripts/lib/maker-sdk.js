@@ -28,15 +28,14 @@
 // can leave an app push unguarded (tests/maker-sdk.test.js pins that no script makes one another way); the refusal is an SdkError (APP_HEADER_NOT_PLAIN_TEXT), which the bundle rethrows as it is. No request
 // is added or changed: only writes of that row are looked at, and every other member of the client runs on the client itself, so a client whose methods keep private state still works.
 //
-// One more guard, on the SDK itself and not on the client (lib/sdk-failure-scrub.js): what the SDK raises — and an Error it returns in a result — has the access tokens this process sent taken out of it, wherever it holds
-// them. The client takes the token out of every answer that is not a success, but a change set the service refuses as a whole is answered HTTP 200 with the part that failed, and the SDK quotes that part into the error it raises:
-// an answer that is a success is returned exactly as it came (the strict readers of a `$batch` count its bytes), so the token is taken out of the text the SDK decoded, where the error leaves it. Applied here, once, so no script that
-// makes an SDK can forget it: an SDK that comes out of `createMakerSdk` is the SDK as the bundle ships it, seen through that guard, and `withVendoredCompiler` — the plain wiring a test hands its own `create` — is not.
+// The `workspaceStorage` the caller names is handed to the SDK with one addition too (lib/output-redaction.js): every text it is asked to write has the access tokens this process obtained taken out of it. The SDK writes each file
+// of its workspace — an artifact, its metadata, the manifest — through the storage's `writeTextAtomic`, and through nothing else, so a token a service repeated in an answer (which is the caller's data and is returned as it came) cannot
+// land in a file. The folder, the paths and every other member are the storage's own: the wrapper has it for a prototype, so a caller's `instanceof` and the SDK's own look for a file-system storage still hold.
 const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
 const { guardTableLists } = require('./collection-answers.js');
 const { guardAppHeaderWrites } = require('./app-header-text.js');
-const { guardSdkFailures } = require('./sdk-failure-scrub.js');
+const { guardWorkspaceStorage } = require('./output-redaction.js');
 
 // `create` given the vendored compiler unless the options name one, and — only for a caller that asked — the Power Apps service client
 // (a seam for the test: the bundle's own exports are read-only). The `connectivity` request itself is the factory's, never the SDK's.
@@ -46,6 +45,7 @@ function withVendoredCompiler(create) {
     const made = { typescript: () => loadVendoredTypeScript(), ...forSdk };
     if (made.httpClient) made.httpClient = guardTableLists(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.httpClient) made.httpClient = guardAppHeaderWrites(made.httpClient, (code, message) => new bundle.SdkError(code, message));
+    if (made.workspaceStorage) made.workspaceStorage = guardWorkspaceStorage(made.workspaceStorage);
     if (connectivity && made.powerAppsServiceClient === undefined) {
       // Required here, not at the top: the client pulls in the Azure CLI token code, which an instance that never reads connections does not need.
       const { createPowerAppsServiceClient } = require('./power-apps-service-client.js');
@@ -55,9 +55,4 @@ function withVendoredCompiler(create) {
   };
 }
 
-const createWired = withVendoredCompiler(bundle.createMakerSdk);
-function createMakerSdk(options) {
-  return guardSdkFailures(createWired(options));
-}
-
-module.exports = { ...bundle, createMakerSdk, withVendoredCompiler };
+module.exports = { ...bundle, createMakerSdk: withVendoredCompiler(bundle.createMakerSdk), withVendoredCompiler };
