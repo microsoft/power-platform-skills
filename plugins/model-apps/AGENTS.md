@@ -1552,7 +1552,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   round-trip** too — `readDashboards` reconstructs each into `dashboards[]` with **id-passthrough tiles**
   (every tile carries the deployed view/chart ids), so a rebuild recreates the dashboard against the
   existing views/charts without re-declaring them (genpage/entity/URL subareas round-trip losslessly). A
-  dashboard whose tiles cannot be reconstructed is dropped and surfaced in `droppedSubareas`.
+  dashboard whose tiles cannot be reconstructed is dropped and surfaced in `droppedSubareas`. A tile
+  that a custom control hosts (the Power Apps grid, say) is one of those that cannot: the SDK reads it as
+  a list or chart with the parameters of a native tile and tells it apart only by its control class, so
+  `readDashboards` (`hostsCustomControl`) leaves it out and names it — never emitting the plain tile that
+  would replace the control wherever a rebuild creates the dashboard (a rebuild into the same environment
+  reuses the pinned dashboard as it is).
   **A URL subarea that TARGETS a web resource round-trips too.** The Site Map Designer's "custom page
   backed by an HTML web resource" writes `$webresource:<name>` (Dataverse also serves it at
   `/WebResources/<name>`) into a URL subarea. Passing that token through used to fail the WHOLE

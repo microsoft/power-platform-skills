@@ -298,6 +298,15 @@ works through.
   An id-based chart tile needs `viewId` **and** `entity` (a visualization with no view has nothing
   to plot); an id-based list tile needs `viewId` and `entity`. Author specs by name; let downloads
   use ids.
+- **A tile a custom control hosts is not expressible.** A grid or chart that a custom control hosts (the
+  Power Apps grid, say) reads like a native tile, but the spec describes only the four tile types
+  above. A download leaves such a tile out and names it in a warning — it never emits the plain grid or
+  chart its parameters describe, which would replace the control wherever the dashboard is created from
+  the spec. A rebuild into the environment the spec was downloaded from keeps the dashboard as it is
+  (a build never edits an existing dashboard's tiles), so the control stays; in another environment the
+  dashboard is created without that tile, and the tile is added there in Maker. A dashboard whose only
+  tiles are such tiles is dropped with its navigation entry, which the download refuses without
+  `--allow-lossy-download`.
 
 ## roleGrants[] (optional — extend a role you did NOT author)
 

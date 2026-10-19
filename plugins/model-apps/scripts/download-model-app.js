@@ -77,6 +77,23 @@ function compareNotes(a, b) {
   return 0;
 }
 
+// The control class of a dashboard's native grid and chart tiles, in the bare upper-case form `bareClassId` makes of any spelling.
+const NATIVE_GRID_CLASS_ID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+const bareClassId = (id) => String(id || '').replace(/[{}]/g, '').toUpperCase();
+// A tile typed `list` or `chart` whose control is not the native grid and chart control: a grid or a chart that a CUSTOM control
+// hosts (the Power Apps grid, say). The SDK types a tile by its control's class, and reads one the custom-control class hosts by
+// the grid parameters it carries (`ChartGridMode`, or `indicationOfSubgrid`) — so the tile has the same `TargetEntityType`,
+// `ViewId` and `ChartGridMode` as a native one, and only its class tells them apart:
+//   <control id="Component1" classid="{E7A81278-8635-4d9e-8D4D-59480B391C5B}" indicationOfSubgrid="true">                       native
+//   <control id="Component2" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}" uniqueid="{GUID}" indicationOfSubgrid="true">    hosted
+// The platform writes the GUID in either case, and with its braces, so the class is compared without them and ignoring case.
+// Documented dashboards hold charts, grids, iframes and web resources, which is all the App Spec expresses; a control of another
+// class is not among them, and emitting it as the plain grid or chart its parameters describe replaces the control on a rebuild.
+// A component with no class at all (a hand-made one, in a test) is read as native.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/understand-dashboards-dashboard-components-formxml
+const hostsCustomControl = (component) => (component.type === 'chart' || component.type === 'list')
+  && bareClassId(component.classId) !== '' && bareClassId(component.classId) !== NATIVE_GRID_CLASS_ID;
+
 // Reconstruct the app's dashboards (declared as DashBoard sitemap subareas) into app-spec
 // dashboards[] entries. Each tile is reconstructed with ID PASSTHROUGH — it carries the deployed
 // view/chart ids (+ target entity) directly, so a rebuild recreates the dashboard against the
@@ -129,6 +146,18 @@ async function readDashboards(sdk, app, warn) {
       const p = c.parameters || {};
       const entity = p.TargetEntityType;
       const viewId = strip(p.ViewId);
+      // A grid or chart a custom control hosts reads exactly like a native one (see hostsCustomControl), so it must be
+      // told apart BEFORE the branches below build a plain tile from its parameters. It is left out, and named — never
+      // emitted as the plain tile that would replace the control when a rebuild creates the dashboard. A rebuild into
+      // this environment is not touched either way: the spec pins the dashboard by its id, and the build reuses a
+      // dashboard that exists without applying its tile edits (so it never replaces or removes a tile).
+      if (hostsCustomControl(c)) {
+        if (typeof warn === 'function') {
+          warn(`dashboard '${name}' tile '${c.name || '(unnamed)'}' hosts a custom control, which the App Spec cannot express, so it is omitted from dashboards[]. `
+            + 'A rebuild into this environment keeps the dashboard as it is, so the control stays; a rebuild into another environment creates it without this tile — add the tile there in Maker.');
+        }
+        continue;
+      }
       if (c.type === 'chart' || c.type === 'list') {
         // The two id-passthrough tile shapes, gated together because they share their required
         // parameters. EVERY one of these ids is load-bearing: a chart renders a visualization OVER a
