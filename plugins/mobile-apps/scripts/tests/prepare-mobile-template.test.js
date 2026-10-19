@@ -251,6 +251,29 @@ test('exclusive guidance creation and rollback do not claim a concurrent custome
   assert.ok(fs.statSync(path.join(projectRoot, '.github')).isDirectory());
 });
 
+test('guidance rollback preserves a customer replacement made after exclusive copy', (t) => {
+  const projectRoot = copyTemplate();
+  removeGuidance(projectRoot);
+  const layoutPath = path.join(projectRoot, 'app', '_layout.tsx');
+  fs.writeFileSync(layoutPath, fs.readFileSync(layoutPath, 'utf8')
+    .replace('<Slot />', '<SafeAreaView><Slot /></SafeAreaView>'));
+  const before = fileSnapshot(projectRoot);
+  const customerPath = path.join(projectRoot, 'AGENTS.md');
+  const customerContent = Buffer.from('Customer replaced guidance after copy\n');
+  const originalCopy = fs.copyFileSync;
+  t.mock.method(fs, 'copyFileSync', (source, destination, flags) => {
+    const result = originalCopy(source, destination, flags);
+    if (destination === customerPath) fs.writeFileSync(customerPath, customerContent);
+    return result;
+  });
+
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot, ...guidanceOptions,
+  }), /rollback failed: customer-modified guidance preserved: AGENTS\.md/);
+  before.set('AGENTS.md', customerContent);
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
+
 test('guidance rollback retains new parent directories containing unrelated customer files', (t) => {
   const projectRoot = copyTemplate();
   removeGuidance(projectRoot);

@@ -210,12 +210,10 @@ function copyMissingGuidance(projectRoot, state) {
     }
     // Exclusive creation preserves even a customer file appearing after preflight.
     // Track successful copies, not planned targets, so rollback owns only our files.
-    fs.copyFileSync(
-      path.join(__dirname, '..', 'template', relativePath),
-      path.join(projectRoot, relativePath),
-      fs.constants.COPYFILE_EXCL,
-    );
+    const sourcePath = path.join(__dirname, '..', 'template', relativePath);
+    fs.copyFileSync(sourcePath, path.join(projectRoot, relativePath), fs.constants.COPYFILE_EXCL);
     state.createdGuidanceFiles.add(relativePath);
+    state.createdGuidanceContents.set(relativePath, fs.readFileSync(sourcePath));
     copied.push(relativePath);
   }
   return { copied, preserved };
@@ -580,10 +578,17 @@ function capturePreparationState(projectRoot) {
       existed: fs.existsSync(path.join(projectRoot, relativePath)),
     }));
 
-  return { directories, files, createdGuidanceFiles: new Set(), guidanceDirectoryCreated: false };
+  return {
+    directories,
+    files,
+    createdGuidanceFiles: new Set(),
+    createdGuidanceContents: new Map(),
+    guidanceDirectoryCreated: false,
+  };
 }
 
 function restorePreparationState(projectRoot, state) {
+  const rollbackConflicts = [];
   for (const [relativePath, snapshot] of state.files) {
     if (GUIDANCE_FILES.includes(relativePath) && !state.createdGuidanceFiles.has(relativePath)) {
       continue;
@@ -596,6 +601,13 @@ function restorePreparationState(projectRoot, state) {
       fs.chmodSync(filePath, snapshot.mode);
     } else if (fs.existsSync(filePath)) {
       const stat = fs.lstatSync(filePath);
+      if (GUIDANCE_FILES.includes(relativePath) && state.createdGuidanceFiles.has(relativePath)) {
+        const expectedContent = state.createdGuidanceContents.get(relativePath);
+        if (!stat.isFile() || !expectedContent || !fs.readFileSync(filePath).equals(expectedContent)) {
+          rollbackConflicts.push(relativePath);
+          continue;
+        }
+      }
       if (!stat.isFile()) {
         throw new Error(`Cannot roll back non-file preparation target: ${relativePath}`);
       }
@@ -613,6 +625,9 @@ function restorePreparationState(projectRoot, state) {
   const guidanceDirectory = path.join(projectRoot, '.github');
   if (state.guidanceDirectoryCreated && fs.readdirSync(guidanceDirectory).length === 0) {
     fs.rmdirSync(guidanceDirectory);
+  }
+  if (rollbackConflicts.length > 0) {
+    throw new Error(`customer-modified guidance preserved: ${rollbackConflicts.join(', ')}`);
   }
 }
 
