@@ -7146,25 +7146,28 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // `{ "value": [ null ] }` all raise it. Only the empty list says the org has no template; the other two are answers that cannot be read, and an answer that cannot be
     // read stops the build (as it did before the skip) instead of passing for an environment gate. So the first time the code is seen, the build asks the same question
     // through `queryRecords` — which refuses an answer without its `value` array — and skips only on an empty list. Rows, a row that is no row and a read that fails leave
-    // the SDK's own error to stop the build. The answer is kept: every table's lookup is the same question, so one read settles the whole build.
+    // the SDK's own error to stop the build. The verdict is kept: every table's lookup is the same question, so one read settles the whole build.
     // This mirrors the SDK's lookup (its template name, its select) and can go once the SDK raises the code for an empty list only and answers a malformed first row with a
     // ConnectionError. If the SDK ever looks for another template, this read can only fail to confirm, which stops the build: the safe side.
     // `msdyn_aitemplate` is the table behind the SDK's `/msdyn_aitemplates` set:
     // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/msdyn_aitemplate
+    // The verdict is `{ absent }` — true only for an empty list — and, when the read itself failed, `{ absent: false, failure }`, what it threw. The read is two requests, the first time:
+    // the one that names the template table's set (the SDK looks it up once and keeps it) and the one that reads the list; either can fail.
     const ROW_SUMMARY_TEMPLATE_NAME = 'GptPowerPrompt';
-    let noTemplateConfirmed;
+    let templateVerdict;
     const confirmNoTemplate = async () => {
-      if (noTemplateConfirmed !== undefined) return noTemplateConfirmed;
-      try {
-        const rows = await provision.queryRecords('msdyn_aitemplate', { select: ['msdyn_aitemplateid'], filter: `msdyn_uniquename eq '${ROW_SUMMARY_TEMPLATE_NAME}'`, top: 1 });
-        noTemplateConfirmed = Array.isArray(rows) && rows.length === 0;
-      } catch {
-        noTemplateConfirmed = false;
+      if (templateVerdict === undefined) {
+        try {
+          const rows = await provision.queryRecords('msdyn_aitemplate', { select: ['msdyn_aitemplateid'], filter: `msdyn_uniquename eq '${ROW_SUMMARY_TEMPLATE_NAME}'`, top: 1 });
+          templateVerdict = { absent: Array.isArray(rows) && rows.length === 0 };
+        } catch (failure) {
+          templateVerdict = { absent: false, failure };
+        }
       }
-      return noTemplateConfirmed;
+      return templateVerdict;
     };
     const aiSummaryUnsupported = (err) => {
-      if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') return noTemplateConfirmed === true ? NO_TEMPLATE_REASON : false;
+      if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') return templateVerdict && templateVerdict.absent ? NO_TEMPLATE_REASON : false;
       const detail = `${(err && err.message) || ''} ${JSON.stringify((err && err.cause) || '')}`;
       // Match the platform's own error CODE, not the prose: the message is localized and the status
       // alone (403/400) is also what a plain privilege or validation failure returns, which must
@@ -7220,8 +7223,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
             res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
           } catch (err) {
             // `skipIf` is synchronous, so the read that confirms the template is absent is made here, before the error reaches it. The error is never replaced: when the
-            // read does not confirm it, it stops the build as it is.
-            if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') await confirmNoTemplate();
+            // read does not confirm it, it stops the build as it is — the SDK's own error, whole, as the halt's own cause.
+            if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') {
+              const { failure } = await confirmNoTemplate();
+              // A read that FAILED is kept beneath the SDK's error. The runner decides from the chain of causes whether the build may run this attempt again (lib/retry-policy.js, judgeFailure): a throttle, an
+              // unavailable service or a reset connection that stopped the read has to be on that chain, or the halt is final whatever the read failed with — and the halt's text says that the read failed, and why
+              // (operatorRemedy). It is only a failure of the SERVICE that makes the halt transient: a missing template on its own, and a read that answered, however wrongly, stay final. The SDK's error has no
+              // cause of its own, so the one it has here is this one. `withCause` is the link a result carries for the same reason (a failure reported by value); an error that cannot take it (a frozen one)
+              // stops the build as it did before, final.
+              if (failure !== undefined) {
+                try { withCause(err, failure); } catch { /* nothing to carry it on */ }
+              }
+            }
             throw err;
           }
           result.created.ai.summaries[logical] = res;

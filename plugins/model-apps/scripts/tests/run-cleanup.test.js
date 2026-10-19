@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild } = require('../lib/sdk-build.js');
+const { isTransientHalt } = require('../build-model-app.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 
 const OLDEST = '11111111-1111-4111-8111-111111111111';
@@ -290,14 +291,22 @@ test('the real SDK refuses a row summary on an org with no AI template before an
 const TEMPLATE_LIST = "/msdyn_aitemplates?$select=msdyn_aitemplateid&$filter=msdyn_uniquename eq 'GptPowerPrompt'&$top=1";
 const listOf = (value) => ({ status: 200, headers: {}, body: { value } });
 
-// The real SDK over a transport that answers the template list from `answers` (one answer per request for it, the last one repeating) and records every request,
-// writes included. The mock SDK the build drives gets the real `configureRowSummary` and `queryRecords`.
-async function orgWithTemplateAnswers(t, answers) {
+// The real SDK over a transport that answers the template list from `answers` and the template table's set from `entitySet` (one answer per request for each, the last one
+// repeating) and records every request, writes included. An answer that is an Error is what the transport throws: the request got no answer at all, as when a connection is reset.
+// The mock SDK the build drives gets the real `configureRowSummary` (the errors it throws are kept, `sdkErrors`) and `queryRecords`.
+async function orgWithTemplateAnswers(t, answers, entitySet = [{ status: 200, headers: {}, body: { EntitySetName: 'msdyn_aitemplates' } }]) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-summary-confirm-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const requests = [];
+  const sdkErrors = [];
   let templateReads = 0;
+  let entitySetReads = 0;
+  const scripted = (list, n) => {
+    const answer = list[Math.min(n, list.length - 1)];
+    if (answer instanceof Error) throw answer;
+    return answer;
+  };
   const seen = (method, url) => requests.push(`${method} ${decodeURIComponent(url.replace(/^https:\/\/contoso\.crm\.dynamics\.com\/api\/data\/v9\.\d+/, ''))}`);
   const write = (method) => async (url) => { seen(method, url); return { status: 200, headers: {}, body: {} }; };
   const real = createMakerSdk({
@@ -307,8 +316,8 @@ async function orgWithTemplateAnswers(t, answers) {
       get: async (url) => {
         seen('GET', url);
         if (url.includes('/aiskillconfigs?')) return listOf([]);
-        if (url.includes('/msdyn_aitemplates?')) return answers[Math.min(templateReads++, answers.length - 1)];
-        if (url.includes("/EntityDefinitions(LogicalName='msdyn_aitemplate')")) return { status: 200, headers: {}, body: { EntitySetName: 'msdyn_aitemplates' } };
+        if (url.includes('/msdyn_aitemplates?')) return scripted(answers, templateReads++);
+        if (url.includes("/EntityDefinitions(LogicalName='msdyn_aitemplate')")) return scripted(entitySet, entitySetReads++);
         if (/\/EntityDefinitions\(LogicalName='contoso_\w+'\)/.test(url)) return { status: 200, headers: {}, body: { MetadataId: OLDEST } };
         throw new Error(`unexpected offline GET ${url}`);
       },
@@ -317,10 +326,13 @@ async function orgWithTemplateAnswers(t, answers) {
   });
   await real.initWorkspace();
   const { sdk } = makeSimpleMockSdk();
-  sdk.configureRowSummary = real.configureRowSummary.bind(real);
+  sdk.configureRowSummary = async (...args) => {
+    try { return await real.configureRowSummary(...args); } catch (err) { sdkErrors.push(err); throw err; }
+  };
   sdk.queryRecords = real.queryRecords.bind(real);
   return {
     sdk,
+    sdkErrors,
     requests,
     templateReads: () => requests.filter((request) => request.startsWith('GET /msdyn_aitemplates?')),
     writes: () => requests.filter((request) => !request.startsWith('GET ')),
@@ -340,6 +352,17 @@ const stoppedBySdkError = (err) => {
   assert.equal(err.code, 'ROW_SUMMARY_TEMPLATE_NOT_FOUND');
   assert.equal(err.cause.code, 'ROW_SUMMARY_TEMPLATE_NOT_FOUND', "the SDK's own error is what stopped the build");
   assert.match(err.message, /^ai-features failed: Cannot configure the row summary of 'contoso_ticket'/);
+  return true;
+};
+
+// ...and for good, when the confirming read ANSWERED, however wrongly: nothing says that a run again could help (the halt's policy is `never`, and so is the check the build's own retry makes), and there is no
+// failure of the read to keep or to explain, so the halt carries the SDK's words alone.
+const stoppedForGood = (err) => {
+  stoppedBySdkError(err);
+  assert.equal(err.retry, 'never');
+  assert.equal(isTransientHalt(err), false);
+  assert.equal(err.cause.cause, undefined);
+  assert.equal(err.message, `ai-features failed: ${err.cause.message}`);
   return true;
 };
 
@@ -366,7 +389,7 @@ for (const [what, list] of [['a first row with no id', [{}]], ['a first row that
     const org = await orgWithTemplateAnswers(t, [listOf(list)]);
     const warnings = [];
     const events = [];
-    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w), emit: (e) => events.push(e) }), stoppedBySdkError);
+    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w), emit: (e) => events.push(e) }), stoppedForGood);
     assert.deepEqual(warnings, [], 'nothing was skipped, so nothing says it was');
     assert.deepEqual(events.filter((e) => e.status === 'skip'), []);
     assert.deepEqual(org.writes(), []);
@@ -377,19 +400,74 @@ for (const [what, list] of [['a first row with no id', [{}]], ['a first row that
 test("a template that the build finds when it asks again, after the SDK read none, is not an org without one: the build stops with the SDK's error", async (t) => {
   const org = await orgWithTemplateAnswers(t, [listOf([]), listOf([{ msdyn_aitemplateid: TEMPLATE }])]);
   const warnings = [];
-  await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), stoppedBySdkError);
+  await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), stoppedForGood);
   assert.deepEqual(warnings, []);
   assert.deepEqual(org.writes(), []);
 });
 
-for (const [what, answer] of [['without its rows', { status: 200, headers: {}, body: {} }], ['refused', { status: 403, headers: {}, body: { error: { message: 'Contoso permission denied' } } }]]) {
-  test(`when the read that confirms the absence comes back ${what}, the build stops with the SDK's error`, async (t) => {
-    const org = await orgWithTemplateAnswers(t, [listOf([]), answer]);
-    const warnings = [];
-    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), stoppedBySdkError);
-    assert.deepEqual(warnings, []);
-    assert.deepEqual(org.writes(), []);
-  });
+// What a FAILURE of the confirming read does to the halt. The build runs this attempt again, by itself, for a failure the SERVICE calls transient — a throttle (429), a service that is down or overloaded
+// (503), a connection that was reset — and reads that from the errors along the halt's causes (lib/retry-policy.js, judgeFailure). So the read's failure has to be on that chain, under the SDK's error, which
+// stays the halt's own cause: a halt that kept only the SDK's refusal was final whatever the read had failed with. Either request of the confirming read can fail: the one that names the template table's set
+// (the SDK looks it up once) and the one that reads the list. Each is scripted to fail once and then to answer, so that a second attempt can finish.
+const refusedWith = (status, message) => ({ status, headers: {}, body: { error: { message } } });
+const connectionReset = () => Object.assign(new Error('Request failed: read ECONNRESET'), { code: 'ECONNRESET' });
+const confirmingRequests = [
+  ["the read that names the template table's set", (failure) => ({ answers: [listOf([])], entitySet: [failure, { status: 200, headers: {}, body: { EntitySetName: 'msdyn_aitemplates' } }] }), /could not resolve EntitySetName/],
+  ['the read of the template list', (failure) => ({ answers: [listOf([]), failure, listOf([])] }), /malformed page/],
+];
+// The halt of a failed confirmation: the SDK's error itself is its cause, the read's failure is kept under that error, and the halt's text says that the read failed, and why.
+const stoppedByFailedConfirmation = (org) => (err) => {
+  stoppedBySdkError(err);
+  assert.equal(err.cause, org.sdkErrors[0], "the halt's own cause is the SDK's error itself, not a copy of it");
+  assert.ok(err.cause.cause, "the read's failure is kept under the SDK's error");
+  assert.match(err.message, /, to confirm that before skipping the row summaries, and that read failed \(/);
+  assert.ok(err.message.includes(err.cause.cause.message), `the halt says why the read failed: ${err.message}`);
+  return true;
+};
+
+for (const [where, scriptFor, malformedWords] of confirmingRequests) {
+  for (const [what, make, status] of [['a throttle', () => refusedWith(429, 'Contoso throttled'), 429], ['an unavailable service', () => refusedWith(503, 'Contoso unavailable'), 503], ['a reset connection', connectionReset, 0]]) {
+    test(`${what} on ${where} that confirms the absence is a transient halt, which a second attempt can finish`, async (t) => {
+      const { answers, entitySet } = scriptFor(make());
+      const org = await orgWithTemplateAnswers(t, answers, entitySet);
+      const options = (warnings) => ({ sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) });
+      const warnings = [];
+      await assert.rejects(runSdkBuild(spec(), options(warnings)), (err) => {
+        assert.equal(isTransientHalt(err, { spec: spec() }), true, 'the build runs this attempt again');
+        assert.equal(err.retry, 'service');
+        assert.equal(err.cause.cause.code, 'CONNECTION_ERROR');
+        assert.equal(err.cause.cause.statusCode, status);
+        return stoppedByFailedConfirmation(org)(err);
+      });
+      assert.deepEqual(warnings, [], 'nothing was skipped, so nothing says it was');
+      assert.deepEqual(org.writes(), []);
+      // The attempt after it asks again, and this time the org answers: the list is empty, so the summary is skipped, as it is for any org without the template.
+      const again = [];
+      const r = await runSdkBuild(spec(), options(again));
+      assert.equal(r.ok, true);
+      assert.deepEqual(r.skipped.aiSummaries, ['contoso_ticket']);
+      assert.equal(again.length, 1);
+      assert.match(again[0], /no 'GptPowerPrompt' AI template/);
+    });
+  }
+
+  // A refusal, and an answer with nothing in it (a 200 whose body has no list, no table set): neither is the service saying that a run again can help.
+  for (const [what, answer, words] of [['a refusal (403)', refusedWith(403, 'Contoso permission denied'), /Contoso permission denied/], ['an answer with nothing in it (a 200 without its content)', { status: 200, headers: {}, body: {} }, malformedWords]]) {
+    test(`${what} on ${where} that confirms the absence is final, and the halt says the read failed and why`, async (t) => {
+      const { answers, entitySet } = scriptFor(answer);
+      const org = await orgWithTemplateAnswers(t, answers, entitySet);
+      const warnings = [];
+      await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), (err) => {
+        assert.equal(err.retry, 'never');
+        assert.equal(isTransientHalt(err, { spec: spec() }), false);
+        stoppedByFailedConfirmation(org)(err);
+        assert.match(err.message, words);
+        return true;
+      });
+      assert.deepEqual(warnings, []);
+      assert.deepEqual(org.writes(), []);
+    });
+  }
 }
 
 test('the build confirms the absence of the template with the question the SDK asks, and asks it once for the whole build', async () => {
@@ -402,16 +480,19 @@ test('the build confirms the absence of the template with the question the SDK a
   assert.deepEqual(reads, [['msdyn_aitemplate', { select: ['msdyn_aitemplateid'], filter: "msdyn_uniquename eq 'GptPowerPrompt'", top: 1 }]]);
 });
 
-test("every answer to the confirming read but an empty list leaves the SDK's own error to stop the build", async () => {
+test("every answer to the confirming read but an empty list leaves the SDK's own error to stop the build, and a missing template is never a transient halt", async () => {
+  // [what the read does, what it answers (or throws), the reason a failed read gives]
   const answers = [
-    ['a first row with no id', () => [{}]],
-    ['a first row that is not a row', () => [null]],
-    ['a template', () => [{ msdyn_aitemplateid: TEMPLATE }]],
-    ['no list', () => undefined],
-    ['a list that is not one', () => 'bad'],
-    ['a read that fails', () => { throw new Error('Contoso template read failed'); }],
+    ['a first row with no id', () => [{}], null],
+    ['a first row that is not a row', () => [null], null],
+    ['a template', () => [{ msdyn_aitemplateid: TEMPLATE }], null],
+    ['no list', () => undefined, null],
+    ['a list that is not one', () => 'bad', null],
+    ['a read that fails', () => { throw new Error('Contoso template read failed'); }, 'Contoso template read failed'],
+    // Only what the SERVICE answered (a status, a reset) can make a halt transient: the words of a failure that has none are not read, so this is no more transient than the read above.
+    ['a read that fails in words that say to try again', () => { throw new Error('Please try again later.'); }, 'Please try again later.'],
   ];
-  for (const [what, answer] of answers) {
+  for (const [what, answer, failed] of answers) {
     const { sdk } = makeSimpleMockSdk();
     const refusal = Object.assign(new Error("Cannot configure the row summary of 'contoso_ticket': this org has no AI template 'GptPowerPrompt' (msdyn_aitemplates), which a row-summary model is built from. Nothing was written."), { code: 'ROW_SUMMARY_TEMPLATE_NOT_FOUND' });
     sdk.configureRowSummary = async () => { throw refusal; };
@@ -421,10 +502,30 @@ test("every answer to the confirming read but an empty list leaves the SDK's own
       assert.equal(err.name, 'BuildHalt', what);
       assert.equal(err.code, 'ROW_SUMMARY_TEMPLATE_NOT_FOUND', what);
       assert.equal(err.cause, refusal, `${what}: the SDK's error itself is the cause`);
+      assert.equal(err.retry, 'never', what);
+      assert.equal(isTransientHalt(err), false, what);
+      // A read that threw is kept under the SDK's error and named in the halt's text; one that answered, however wrongly, has failed at nothing, and the halt is the SDK's words alone.
+      assert.equal(refusal.cause && refusal.cause.message, failed || undefined, what);
+      assert.equal(err.message, `ai-features failed: ${refusal.message}${failed ? ` — the build then read the template list itself, to confirm that before skipping the row summaries, and that read failed (${failed}), so they were not skipped.` : ''}`, what);
       return true;
     });
     assert.deepEqual(warnings, [], what);
   }
+});
+
+test('an SDK error that cannot carry the failure of the confirming read still stops the build with the SDK\'s own words, and says nothing about a read it cannot attach', async () => {
+  const { sdk } = makeSimpleMockSdk();
+  const refusal = Object.freeze(Object.assign(new Error("Cannot configure the row summary of 'contoso_ticket': this org has no AI template 'GptPowerPrompt' (msdyn_aitemplates), which a row-summary model is built from. Nothing was written."), { code: 'ROW_SUMMARY_TEMPLATE_NOT_FOUND' }));
+  sdk.configureRowSummary = async () => { throw refusal; };
+  sdk.queryRecords = async () => { throw Object.assign(new Error('HTTP 503 from https://contoso.crm.dynamics.com/api/data/v9.0/msdyn_aitemplates: Contoso unavailable'), { code: 'CONNECTION_ERROR', statusCode: 503 }); };
+  await assert.rejects(runSdkBuild(spec(), { sdk, apply: true, phases: ['ai-features'], warn: () => {} }), (err) => {
+    assert.equal(err.name, 'BuildHalt');
+    assert.equal(err.cause, refusal, "the SDK's error itself is the cause");
+    assert.equal(refusal.cause, undefined, 'nothing could be attached to it');
+    assert.equal(err.retry, 'never', 'as before: the failure of the read is not on the chain');
+    assert.equal(err.message, `ai-features failed: ${refusal.message}`);
+    return true;
+  });
 });
 
 test('only the exact template code starts the confirming read: a refusal of another kind is skipped or stops the build as it always did, with no read of the template list', async () => {

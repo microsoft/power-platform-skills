@@ -1344,9 +1344,18 @@ const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-works
 // PRIMARY_COLUMN_REQUIRED_NOT_APPLIED: the table WAS created, but the required level asked of its name column could not be confirmed, and the
 // message ends with "Do NOT re-run the create" and the SDK call that sets the level. Running this build again is the fix: it finds the table (it
 // is not created twice) and sets the level the way it does for any existing column with an explicit `required`.
+//
+// ROW_SUMMARY_TEMPLATE_NOT_FOUND: the SDK found no row-summary AI template. The build skips the summaries only for an org that really has none, so it
+// reads the template list itself before it does (sdk-build.js, confirmNoTemplate). When that read FAILED, its failure is the cause the build kept
+// beneath the SDK's error (the SDK's error has no cause of its own), and this says so: the SDK's words alone read as if the org had been found to have
+// no template, when the build could not find out. No step is named: whether a run again helps is the failure's to say (a throttle, an unavailable service
+// or a reset connection is run again by the build itself; a refusal is not), not this text's.
 function operatorRemedy(err) {
   if (err && err.code === 'PRIMARY_COLUMN_REQUIRED_NOT_APPLIED') {
     return ' — the table exists. Run the build again: it finds the table, does not create it again, and sets the required level of its primary name column (the call the message names is made for you).';
+  }
+  if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND' && err.cause && typeof err.cause === 'object') {
+    return ` — the build then read the template list itself, to confirm that before skipping the row summaries, and that read failed (${err.cause.message || err.cause.code || 'no reason was given'}), so they were not skipped.`;
   }
   if (err && err.code === 'ARTIFACT_PROJECTION_STALE') {
     return ` — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). To reset it, ${RESET_WORKSPACE}, and re-run: the build re-reads the copies and re-applies every edit from the spec.`;
