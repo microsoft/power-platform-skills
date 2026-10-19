@@ -20,11 +20,8 @@ removes its temporary folders.
     with a message instead of reporting success, and a flow's security that names an access level its table cannot grant is
     refused before any role is written;
   - a command bar control copied with another control's id fails the push instead of overwriting that control;
-  - a view whose filter holds a related-rows condition (a `<link-entity>` inside the filter) keeps that condition whole when a
-    rebuild changes the view's columns, and a filter condition without a value (`eq-userid`, `this-week`) or a sitemap entry
-    without a target is no longer written again by every rebuild;
   - a generative page whose source holds text that only looks like an import of `./RuntimeTypes` (in a string, a template or a
-    comment) is refused with a message that points at it, instead of having that text removed;
+    comment) is refused with a message that names that text's line and column;
   - an answer that lacks the rows or the record it should carry is an error, not an empty result;
   - a workspace copy that an interrupted build of an earlier release left with edits it never pushed is refused at its next push
     and asks for the documented reset (a copy without such edits is simply read again);
