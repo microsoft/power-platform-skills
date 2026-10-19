@@ -319,7 +319,9 @@ language a rebuild writes it in: `--language-code`, else the `languageCode` the 
 else the environment's base language. When none of the three gives one — the base language could not be
 read — the download writes nothing (`"code": "navigation-language-unknown"`) rather than guess one: run it
 again, or pass `--language-code <lcid>` (it decides the language the titles are read in and is not written
-into the spec). A title a node holds only in another language is not in the spec, and a rebuild into the
+into the spec, so a language other than the environment's base language must be passed to the build and to
+`verify-model-app.js` too, or pinned as the spec's `languageCode`, or a rebuild writes those titles as
+base-language titles). A title a node holds only in another language is not in the spec, and a rebuild into the
 same environment leaves it as it is.
 
 ## `description` — write one on everything that takes one

@@ -1445,7 +1445,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   language than the spec on disk pins is refused (`navigation-language-conflict`). When none of the three
   gives a language — the base language could not be read — the download stops before it writes anything
   (`navigation-language-unknown`; the spec and the baseline on disk are as they were) and says how to go on:
-  run it again, pass `--language-code`, or pin `languageCode` in the spec. It does not fall back to 1033 as the
+  run it again, pass `--language-code`, or pin `languageCode` in the spec. A `--language-code` that names another
+  language than the environment's base language is read-time only, so the build and `verify-model-app.js` must be
+  given the same flag — or the spec must pin it as `languageCode` — or a rebuild writes those titles as base-language
+  titles. It does not fall back to 1033 as the
   build does: the spec it writes is rebuilt later, perhaps where the language can be read, and on a bilingual
   environment whose base language is not English the English titles of a guessed 1033 are non-empty labels,
   which that rebuild writes over the right ones. `--verify` makes the same choice. A title a node holds only in

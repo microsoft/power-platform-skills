@@ -10,10 +10,17 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 The bundled SDK is updated to power-platform-ux 537cef3c, and a new table's primary (name) column is now created required when the
 spec says so. The spec gate refuses two values the build used to misread — an `AutoNumber` column without a format and a `required`
 that is not `true`, `false` or `"recommended"` — before anything is written, and `--verify` of an app an earlier release built only
-warns about them. Teardown keeps what only a kept table blocks instead of reporting the platform's refusals, and a run cut short
-removes its temporary folders.
+warns about them. Navigation titles survive a download and rebuild on an environment whose base language is not English. Teardown
+keeps what only a kept table blocks instead of reporting the platform's refusals, and a run cut short removes its temporary folders.
 
 ### Changed
+
+- **A download reads the environment's base language** (one more read, made only when the spec on disk pins no `languageCode` and
+  `--language-code` — new on `download-model-app.js`, read-time only — is not given) and reads the navigation titles in that
+  language. When it cannot establish the language it stops without writing anything (`navigation-language-unknown`) instead of
+  guessing 1033: run it again, or pass `--language-code <lcid>`. A language other than the base language given that way must be
+  given to the build and to `verify-model-app.js` too, or pinned as the spec's `languageCode`. On a bilingual environment whose base
+  language is not 1033, dashboard tile names are read in the base language.
 
 - **The bundled SDK is updated (power-platform-ux 537cef3c).** What a maker can see of it:
   - a business process flow edit the flow cannot hold (a binding with no value, `required` on a step that has no slot for it) fails
@@ -58,6 +65,18 @@ removes its temporary folders.
   created. When the level cannot be confirmed the table still exists: the build stops once (or, for a table found after the answer
   to its create was lost, or whose columns could not be read, warns and goes on), and running it again finds the table and sets the
   level. The table is never created twice.
+- **Navigation titles survive a download and rebuild on an environment whose base language is not 1033** (a Spanish-only one, say).
+  The download read every title in 1033, a language such an environment does not hold, so it wrote an empty `label`/`title` for every
+  area, group and entry, and a rebuild of that spec cleared the titles; on a bilingual environment with another base language it
+  wrote the English titles, which a rebuild then wrote over the base-language ones. The download now reads them in the language a
+  rebuild resolves (see Changed).
+- **A rebuild never clears a navigation title the spec does not state.** An area or a group without a title in the spec keeps the
+  title it has, and so does an entry, unless the baseline shows the spec used to state one (then the title is removed, as before); a
+  stated title is applied as before. An empty group (or area) of a spec an earlier release wrote is matched to the environment's one
+  empty group; where more than one could be meant, none is paired by position and the build names each title it does not keep.
+- **Teardown no longer reports a row summary it did not delete.** A table with none reads `⊘ row summary <table> (not found)`
+  instead of `✓ … (1 deleted)`, and the closing counts follow. A lookup or a removal that fails is said on the step's line and
+  counted as kept, never as a deletion; it still does not fail the teardown.
 - **Teardown keeps what only a kept table blocks, instead of reporting the platform's refusals.** When a business rule could not be
   deleted, teardown keeps its table until a re-run (the rule's activated copy can only be deleted while the table exists), but it
   still tried the deletes that follow the tables — the table's icon web resource and a global choice one of its columns binds,
