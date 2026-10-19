@@ -2265,7 +2265,7 @@ scripts/
   apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder run (`pac-replaced-docs.test.js` pins that their text names this script, not the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. The default public view of each table the pages read (the tables come from each page's own configuration, the views from the page backend: the definition `placeInApp` pins with) joins the app's components in the create itself — `components.views` of the app the SDK creates, written by the same AddAppComponents that adds the sitemap — as `pac model genpage upload --app-id` pinned them; the output says what was pinned (`dataSources`, `pinnedViews`), a table with no default public view or a page held as raw files is named in `warnings`, and a page that cannot be read refuses the create before the first write. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left of this create (its rows are recognised by their ids, and a row that holds the unique name under another id is named apart)
   list-tables.js               ← the replacement for `pac model list-tables` (the skills' and agents' text runs this script: `pac-replaced-docs.test.js`): the environment's tables — the SDK's `findTables(term)` for each comma-separated `--search` term, a few reads at a time, joined without repeats; `--exact` keeps the tables whose logical name IS a term and names the terms no table has (`missing`), from one read of every table; `--type custom|standard|all` is `pac`'s own filter, `custom` through the SDK's `customOnly` option. One pure-ASCII JSON line of `{ logicalName, displayName, schemaName, isCustom }` rows. An answer that is no list of tables — a 2xx with no `value` list: a sign-in page, `{}`, `null` — fails `TABLES_UNREADABLE` (exit 1) instead of reading as "no tables, every searched one missing" (`lib/collection-answers.js`)
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
-  solution-settings.js         ← Deployment settings: `template` writes the settings file of a solution or a package (pac's own format), `import` imports a package and applies the settings in the same import — the SDK first, `pac solution create-settings` / `import --settings-file` only where it refuses (pac is given a private copy of the settings the run read, owner-only on every platform and removed however the process ends, never the file's path); ExportSolution, StageSolution and ImportSolution are each sent exactly once — but for an ImportSolution the platform refused to start because another operation held its customization lock (HTTP 429 with one of the customization-lock error codes whose documented text is "Cannot start …"), which is sent again under a new job id once `importjobs(<id>)` shows the refused send's job does not exist (at most five sends and five minutes in all, a `Retry-After` waited whole or the retry ended; `importAttempts` / `importRefusals` in the output) — every text it prints has the settings file's values taken out, and everything it prints or writes the access tokens the run sent (an HTTP 200 can be a failed staging whose message quotes what it was given), and a failed import names its job and the job log's reason; one pure-ASCII JSON line with `source`
+  solution-settings.js         ← Deployment settings: `template` writes the settings file of a solution or a package (pac's own format), `import` imports a package and applies the settings in the same import — the SDK first, `pac solution create-settings` / `import --settings-file` only where it refuses (pac is given a private copy of the settings the run read, owner-only on every platform and removed however the process ends, never the file's path); ExportSolution, StageSolution and ImportSolution are each sent exactly once — but for an ImportSolution the platform refused to start because another operation held its customization lock (HTTP 429 with one of the customization-lock error codes whose documented text is "Cannot start …", or with `0x80071151` and "Cannot start …" words), which is sent again under a new job id once the refused send's job proves that nothing of the package was applied — `importjobs(<id>)` does not exist (404) or, for `0x80071151`, read once at once, is a finished job whose log says the import failed with that error before it processed the solution or any component (`lib/import-job-proof.js`); a job that proves nothing ends the retry with a sentence that says why and what to do (at most five sends and five minutes in all, a `Retry-After` waited whole or the retry ended; `importAttempts` / `importRefusals` in the output) — every text it prints has the settings file's values taken out, and everything it prints or writes the access tokens the run sent (an HTTP 200 can be a failed staging whose message quotes what it was given), and a failed import names its job and the job log's reason; one pure-ASCII JSON line with `source`
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data; --language-code)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
   write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
@@ -2339,6 +2339,7 @@ scripts/
     power-apps-service-client.js ← the HttpClient for the SDK's connection and connector reads: GET only, https only, a host allowlist that is exactly the hosts the SDK's connectivity code calls, redirects never followed, the Azure CLI token for the Power Apps service read only for a request that passed and never in a message, a body, a header or a key the service answers with (it is scrubbed, in whole and by part)
     sdk-first.js               ← the rule `list-connections.js`, `connector.js` and `solution-settings.js` share: read through the SDK, and through `pac` for the SDK's typed refusals (`sdkFirst`, `CONNECTIVITY_REFUSALS`) — an error counts only when it IS the bundle's `SdkError` (an HTTP body that carries a refusal's code does not); any other failure is thrown with the SDK's own code. An environment outside the Public cloud is judged from its host first (`connectivityCloudOf`, pinned to the bundle by a table of hosts) and answered by `pac` at once, with the code the SDK would give. What the SDK could not clean up before it refused (`readCleanupWarnings`: a staged copy of the package it could not delete, with its upload id) is carried across the fallback — as `warnings` on the answer, or attached to the error `pac` throws when it fails — so `solution-settings.js` shows it for `template` and `import` alike (an import's, sanitized once)
     pac-fallback.js            ← runs a `pac` fallback command through `process-runner.js` (`spawnResultTree`) within a fixed time limit (`PAC_READ_TIMEOUT_MS`, 3 minutes; `PAC_IMPORT_TIMEOUT_MS`, 60) — a call that runs out has its whole process tree ended before it is reported, and the message says what the runner confirmed — "`pac` and every process that held its output were stopped" — and, when the pipes did not close, that a process `pac` started may still be running — reads the JSON `pac` prints after its header, and keeps pac's sign-in banner and version lines out of every failure text (`pacErrorText`)
+    import-job-proof.js        ← what the import JOB of an import the platform refused to start proves about whether it applied anything, for `solution-settings.js`' resend of an import refused with `0x80071151` ("Cannot start …"): `proveRefusedImport({ status, body })` — a 404 is proof (the job never existed), a 200 is proof only through `refusedBeforeAnyComponent(row)`: `completedon` set, `data` read as ONE XML document by `strict-xml.js` (a pattern would miss a `processed="true"` after a `>` in a value) with the root `importexportxml` saying `succeeded="failure"` and `errorcode="-2147020463"` exactly, at least one `solutionManifest` and every one `processed="false"`, and no other element but `upgradeHandler` / `validateHandler` marked anything but `"false"`; anything else is `{ proven: false, why, reason }` with the reason in fixed words and numbers, never a text the platform wrote. Never throws; a log of more than 8 MiB is not read. `tests/import-job-proof.test.js` holds it to twins of the 347 captured job-row states (`tests/helpers/import-job-logs.js`) — it accepts exactly the 8 final rows of refused imports — and to each clause
     private-folder.js          ← a folder, and a file in it, that only the current user can use — the copy of a settings file that `pac solution import` is given: POSIX modes 0700 and 0600, set and read back; Windows an access list with the current user's SID as its ONE entry (`icacls /reset`, `/inheritance:r`, `/grant:r *<SID>:(OI)(CI)F`, read back as SDDL through `icacls /save`, the file's too before a byte is written; the SDDL aliases of the system accounts are compared as the SIDs they stand for, and `LA`/`LG` — the machine's own Administrator and Guest — only when the machine itself writes the user's SID that way, `spellingOf`), `whoami` and `icacls` looked up in the Windows folder's System32 alone through `process-runner.js`; whatever cannot be set or read back is an error with a `reason` (a tool, a step, a number — never a path or a value) and nothing is written
     exit-cleanup.js            ← a synchronous cleanup that runs if the process ends while a run's work is going — `process.exit`, an uncaught error, SIGINT, SIGTERM, SIGHUP, SIGBREAK — after which the process ends as it would have: BY the signal on POSIX (raised again once our listeners are off), with STATUS_CONTROL_C_EXIT (0xC000013A, 3221225786) on Windows, where a Ctrl+C is a console event and `process.kill` would end it with the status 1 of a failure; a program that has a handler of its own for the signal — one-shot and self-removing ones included, however they were put on the list — keeps the decision (ours is first in line, so that it sees them all, and stays first: a handler the program PREPENDS later is put behind it again before the call returns, `keepFirst`, which never puts back a cleanup that was released while it was being moved); a KILLED process runs nothing, which is its stated limit
     typescript-compiler.js     ← loads the vendored TypeScript 5.8.3 compiler (vendor/typescript/) for the SDK's page compile: lazily, once, only after its bytes match PROVENANCE.json
@@ -4398,44 +4399,73 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
     deadlock): a request that is named once is sent once, whatever the answer.
   - **The one exception: an import the platform refused to start** (`sendImport` in `solution-settings.js`; the
     client itself stays absolute). While a publish, or another import, holds the environment's customization lock the
-    platform answers `ImportSolution` with HTTP 429 and a Dataverse error code of the lock family. The codes are the
-    customization-lock codes of the platform's error reference whose DOCUMENTED text says the operation could not be
-    started — `0x8004F061`, `0x8004F062`, `0x8004F063`, `0x8004F064` and `0x8004F067`, the `CustomizationLockEx_*` codes
-    ("Cannot start the requested operation …", and, for `0x8004F063`, "Cannot start another … because there is a previous …
-    running") — pinned as an exact set. `0x80071151` (`SolutionConcurrencyFailure`) is NOT one of them: its documented text
-    says the installation or removal FAILED, which does not say that nothing started, and an answer with that code is sent
-    once and reported as it always was, whatever words come with it. Matched on the code, never on the words. Measured
-    on a Public-cloud environment, `0x80071151` is what the platform answers an import that meets another import or a
-    publish — with the "Cannot start the requested operation [Import] because there is another [Publish] running" words
-    — and the refused import's job exists by then (it reads back with its progress at 37.5%), so neither the code nor
-    the 404 proof below would let it be sent again: in practice the exception has not been seen to apply, and a resend
-    for `0x80071151` would need a proof built on the job row's own state. An answer with one of the five codes
-    is the one that says the
-    import did not start, and it is the one send that may be repeated — with two conditions, both shown before the
-    second copy leaves. The status and the code must be the lock's (a service protection 429, `0x80072321`/`22`/`26`,
-    is another kind and is sent once, like `0x80071154`, an operation that FAILED because of another, which had
-    started); and `GET importjobs(<id>)` for the id the refused send carried must answer **404** — "the ID of the import
-    job that will be created to perform the import" does not exist, so nothing started. Any other answer to that read
-    (the job exists, 401, 403, 5xx, 429, no answer, no token) is not proof, and the run ends as it always did. The wait
-    comes first (10 s, then 20, 40 and 60 — or the platform's `Retry-After` when that is longer, in either of its forms and
-    WHOLE: the client's own retries cap it at a minute, this one does not, since a send before the time the platform asked
-    for is a send it has said it will refuse), so the proof is the latest evidence before the send, and the send carries a
-    NEW job id (the body is otherwise byte for byte the same, the package included, and the SDK does not stage again: the
-    retry is below it, in the transport). At most five sends in all, and one budget of **five minutes** of elapsed time
-    for the whole retry, from the first refusal to the last send (`IMPORT_RETRY_BUDGET_MS`: every wait and every proof
-    read in between; not the time an import the platform ACCEPTED takes, which is the action's own hour, and a refused
-    send is answered in moments). Before each wait the run asks whether it fits in what is left; when it does not (a
-    `Retry-After` of ten minutes) the retry ENDS there — never an early send to make it fit — and so it does when the
-    proof read leaves nothing of the budget: the platform's refusal is the failure, with the sends so far, and a sentence
-    of the plugin's own that says why (`ImportSolution was not sent again: the next wait, …`), told by
+    platform answers `ImportSolution` with HTTP 429, in one of two forms, each with a proof of its own that nothing
+    of the package was applied.
+    **A customization-lock code.** The codes are the customization-lock codes of the platform's error reference whose
+    DOCUMENTED text says the operation could not be started — `0x8004F061`, `0x8004F062`, `0x8004F063`, `0x8004F064` and
+    `0x8004F067`, the `CustomizationLockEx_*` codes ("Cannot start the requested operation …", and, for `0x8004F063`,
+    "Cannot start another … because there is a previous … running") — pinned as an exact set. An answer with one of the
+    five codes is the one that says the import did not start, with two conditions, both shown before the second copy
+    leaves. The status and the code must be the lock's (a service protection 429, `0x80072321`/`22`/`26`, is another kind
+    and is sent once, like `0x80071154`, an operation that FAILED because of another, which had started); and
+    `GET importjobs(<id>)` for the id the refused send carried must answer **404** — "the ID of the import job that will be
+    created to perform the import" does not exist, so nothing started. Any other answer to that read (the job exists,
+    401, 403, 5xx, 429, no answer, no token) is not proof, and the run ends as it always did. The wait comes first (10 s,
+    then 20, 40 and 60 — or the platform's `Retry-After` when that is longer, in either of its forms and WHOLE: the
+    client's own retries cap it at a minute, this one does not, since a send before the time the platform asked for is a
+    send it has said it will refuse), so the proof is the latest evidence before the send.
+    **`0x80071151` with "Cannot start" words.** `0x80071151` (`SolutionConcurrencyFailure`) is NOT in that set: its
+    documented text says the installation or removal FAILED, which does not say that nothing started. But it is what the
+    platform was measured to answer an import that meets another import or a publish — "Cannot start another [Import]
+    because there is a previous [Import] running at this moment …", or "Cannot start the requested operation [Import]
+    because there is another [Publish] running …" — so an answer with HTTP 429, that code (either case of its hex digits)
+    AND a message that begins `Cannot start` (`concurrencyRefusalOf`) is looked into, and any other answer with the code
+    is sent once and reported as it always was (the words only select what is looked into; they prove nothing). The
+    proof is the refused send's own job, read ONCE and AT ONCE — before the wait: a refused send's job is final when the
+    answer is in hand and is not written again, and a job that proves nothing makes the wait pointless — with
+    `GET importjobs(<id>)?$select=importjobid,completedon,data` (`readRefusedImportJob`; `progress` is the same for a
+    running import and a refused one, and `solutionid` is set for a solution that was never made, so neither is read).
+    `lib/import-job-proof.js` holds the rule and the measurements it rests on. The job **does not exist** (404): the
+    refusal came at the first lock check, before the platform made a job, and nothing started. Or it **exists** — two
+    imports started together, refused at the second check — and is finished (`completedon` set) and its `data`, read as
+    ONE XML document by `lib/strict-xml.js` (a log it cannot read is no proof: a pattern over the text misses a
+    `processed="true"` after a `>` in an attribute value and finds the attributes in a comment), is an `importexportxml`
+    whose root says `succeeded="failure"` and `errorcode="-2147020463"` (0x80071151 as a signed 32-bit integer), every
+    `solutionManifest` (at least one) is `processed="false"` and no other element but the package's own checks
+    (`upgradeHandler`, `validateHandler`) is marked anything but `"false"`: the import stopped at the lock before it
+    applied a solution, a table or a form. Every comparison is exact (`"Failure"`, `-2147020463.0`, `"True"` are no
+    proof), a log of more than 8 MiB is not read, and anything else — a job still running, one that failed AFTER it
+    began (`errorcode="-2147188685"`, the manifest processed), a log of another shape, a read that answers 401, 403,
+    429, 5xx or nothing — is NOT proven: the import is sent once, and the failure carries a sentence of the plugin's
+    own — told by `observe.onImportRetryUnproven` — that says why in fixed words and numbers (never a text the
+    platform wrote) and what to do: look up the import job (`importjobs(<id>)`, or the solution history in Maker), and
+    run the import again only when it shows nothing was imported and the other operation has finished. All 347 states
+    of a job's row that the measurement captured — twenty imports read every 250–500 ms until nothing changed — were
+    put through the rule: it accepts exactly the 8 final rows of refused imports and none of the other 339 (running
+    imports, imports that applied the package, a refused import's row before its final write, imports that failed
+    after they began); `import-job-proof.test.js` holds it to a twin of each kind of state and to every clause.
+    **Both kinds**: the send carries a NEW job id (the body is otherwise byte for byte the same, the package included, and
+    the SDK does not stage again: the retry is below it, in the transport). At most five sends in all, and one budget of
+    **five minutes** of elapsed time for the whole retry, from the first refusal to the last send
+    (`IMPORT_RETRY_BUDGET_MS`: every wait and every proof read in between; not the time an import the platform ACCEPTED
+    takes, which is the action's own hour, and a refused send is answered in moments). The same sends, waits and budget
+    serve both kinds: they are one lock, and the measured holders are short — a publish of six tables 3–12 s, an
+    import of a package of six tables 48–127 s — against the 130 s that the four waits add up to; at most four reads of
+    a refused send's job are made, one for each refusal that is not the last (the fifth send's refusal is the sends
+    running out, and is not looked into). Before each wait the run asks whether it fits in what is left; when it does
+    not (a `Retry-After` of ten minutes) the retry ENDS there — never an early send to make it fit — and so it does when
+    the proof read leaves nothing of the budget: the platform's refusal is the failure, with the sends so far, and a
+    sentence of the plugin's own that says why (`ImportSolution was not sent again: the next wait, …`), told by
     `observe.onImportRetryStopped`. A send that follows a refusal is judged like a first send, so a gateway's
     answer to it is the failure, "the last send was not sent again", naming ITS job. The output names the job that ran
     (`importJobId`), how many sends it took (`importAttempts`) and each refused send with the wait after it
-    (`importRefusals`); when the sends run out the failure is the platform's refusal with that count added. The retry is
-    opt-in (`observe.onImportRefused`, which only `runImport` gives), so the client of any other caller sends once.
-    It happens inside the SDK's call, so it can neither become the `pac` fallback nor follow one: a refusal is not a
-    fallback code, and the fallbacks all come before the first `ImportSolution`. Pinned in `solution-settings.test.js`
-    (the allowlist, the waits, the budget over a clock that only the waits and the reads move),
+    (`importRefusals`; a refusal with `0x80071151` also has `proof`: `job-absent` or `job-refused-before-any-component`,
+    and the failure's sentence says which); when the sends run out the failure is the platform's refusal with that count
+    added. The retry is opt-in (`observe.onImportRefused`, which only `runImport` gives), so the client of any other
+    caller sends once. It happens inside the SDK's call, so it can neither become the `pac` fallback nor follow one: a
+    refusal is not a fallback code, and the fallbacks all come before the first `ImportSolution`. Pinned in
+    `solution-settings.test.js` (the allowlist, the waits, the budget over a clock that only the waits and the reads move,
+    the order of the read and the wait for each kind), `import-job-proof.test.js` (the rule),
     `solution-settings-real-bundle.test.js` (the real SDK and client over a fake platform that refuses chosen sends and
     keeps a count of what it took) and in a child process (`instantWaits` in the preload).
   - **`pac`'s time limit** (`lib/pac-fallback.js`): two fixed constants, in the way `PAC_PROBE_TIMEOUT_MS` bounds

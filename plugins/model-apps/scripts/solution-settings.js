@@ -43,14 +43,20 @@
 // first one did. The first answer is the SDK's, with its status and code. When it does not say how the import ended (no answer, 401, 408, any 5xx) the failure says
 // the import was sent once and names its job, and the job's log is read once for the platform's own reason (never failing the report if it cannot be read).
 //
-// The one exception is an ImportSolution the platform REFUSED TO START: HTTP 429 with a customization-lock Dataverse error code whose documented text says the operation "Cannot start" — "Cannot start the requested
-// operation … because there is another … running at this moment" (for 0x8004F063: "Cannot start another … because there is a previous … running") — (LOCK_REFUSAL_CODES: 0x8004F061, 0x8004F062, 0x8004F063, 0x8004F064,
-// 0x8004F067): a publish, or another import, holds the environment's customization lock. Such an import is
-// sent again, under a NEW job id, but only after `GET importjobs(<id>)` for the id the refused send carried answers 404, which proves it never started: at most five sends in all, after 10, 20, 40 and 60 s, or
-// the platform's Retry-After when that asks for longer — waited WHOLE, in either of its forms — and inside one budget of five minutes of elapsed time from the first refusal to the last send (IMPORT_RETRY_BUDGET_MS:
-// the waits and the proof reads together; the time an accepted import takes is not in it). A wait that does not fit in what is left of the budget ends the retry there: the platform's refusal is the failure, with
-// the sends so far, and the import is never sent early to make it fit. Any other answer — another status, another kind of 429, the generic solution-concurrency code 0x80071151 (whose documented text says an
-// operation FAILED), a gateway's 5xx, no answer, a job that exists or a read that fails — is the first and the last send, as above. See `sendImport`.
+// The one exception is an ImportSolution the platform REFUSED TO START: a publish, or another import, holds the environment's customization lock. Such an import is sent again, under a NEW job id, when the refused
+// send's import job proves that nothing of the package was applied. Two answers are refusals to start, each with its own proof:
+//   - HTTP 429 with a customization-lock Dataverse error code whose documented text says the operation "Cannot start" — "Cannot start the requested operation … because there is another … running at this moment"
+//     (for 0x8004F063: "Cannot start another … because there is a previous … running") — (LOCK_REFUSAL_CODES: 0x8004F061, 0x8004F062, 0x8004F063, 0x8004F064, 0x8004F067). Its proof is `GET importjobs(<id>)`
+//     for the id the refused send carried answering 404 — which proves it never started — read after the wait;
+//   - HTTP 429 with the generic solution-concurrency code 0x80071151 (SolutionConcurrencyFailure) and a message that begins "Cannot start": what the platform was measured to answer an import that meets another
+//     import or a publish. The code alone does not say that nothing started — its documented text says an installation or removal FAILED — so the refused send's job is read ONCE and AT ONCE (the row is final
+//     when the answer arrives), and the rule of lib/import-job-proof.js decides: the job does not exist (404), or it is finished and its log — read as one XML document, strictly — says that the import failed
+//     with that error (`errorcode="-2147020463"`, `succeeded="failure"`) with the solution manifest and every component unprocessed (only the package's own checks processed). A job that is still running, one
+//     that failed after it began, a log that is not exactly that, or a read that fails is NOT proof: the import is sent once, and the failure says why, and to look up the import job before importing again.
+// At most five sends in all, after 10, 20, 40 and 60 s, or the platform's Retry-After when that asks for longer — waited WHOLE, in either of its forms — and inside one budget of five minutes of elapsed time from
+// the first refusal to the last send (IMPORT_RETRY_BUDGET_MS: the waits and the proof reads together; the time an accepted import takes is not in it). A wait that does not fit in what is left of the budget ends the
+// retry there: the platform's refusal is the failure, with the sends so far, and the import is never sent early to make it fit. Any other answer — another status, another kind of 429, 0x80071151 with
+// any other words, a gateway's 5xx, no answer, a job that exists or a read that fails — is the first and the last send, as above. See `sendImport`.
 //
 // What the output holds of the settings file: entry NAMES, and what the sanitizer lets through of a text that quotes a value — which is less than every value, as follows. The file is read from
 // and written to disk only, and every text another party wrote — the SDK's, the platform's, pac's, a job log's — goes through `sanitizer`, WHOLE, before it is shown. What it does with a value depends
@@ -89,8 +95,9 @@
 //   template  { "ok": true, "source": "sdk", "out": "<absolute path>", "environmentVariables": 2, "connectionReferences": 1 }
 //   import    { "ok": true, "source": "sdk", "importJobId": "<guid>", "applied": { "environmentVariables": ["new_Url"], "connectionReferences": ["new_Dataverse"] } }
 //   and, when the platform refused the import (another operation held its lock) and it was sent again: the same, with `importJobId` the job of the send that ran, "importAttempts": <sends>, and
-//   "importRefusals": [ { "importJobId": "<guid>", "status": 429, "code": "0x8004F064", "waitedMs": 10000 } ] — each refused send and the wait the run made after it. A first send that is taken
-//   prints none of these two.
+//   "importRefusals": [ { "importJobId": "<guid>", "status": 429, "code": "0x8004F064", "waitedMs": 10000 } ] — each refused send and the wait the run made after it; a refusal with 0x80071151 also says
+//   how its job proved that nothing was applied — "proof": "job-absent" (the job does not exist) or "proof": "job-refused-before-any-component" (its log says the import was refused at the lock before it
+//   processed anything). A first send that is taken prints none of these two.
 //   and, when pac answered because the SDK refused, "source": "pac" and "fallback": { "code": "<the SDK's code>", "message": "…" } — the SDK's own words, so
 //   the "Nothing was imported" in one is about the SDK's attempt, which stopped before any request; pac then did the work;
 //   "warnings": [...] when something the run made could not be cleaned up: the SDK could not delete the staged copy of the package it made, or `template` could not remove the temporary name its
@@ -101,8 +108,9 @@
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
 //   { "ok": false, "error": "<message>", "code": "<the SDK's or the PAC step's code>" [, "status": <HTTP status of the answer>] [, "fallback": { … }, "importJobId": "<guid>"]
 //     [, "importAttempts": <sends>, "importRefusals": [ … ] — when the import was sent again after a refusal, the same two fields as on success; the failure is then the platform's own refusal or the
-//     failure of the last send, with the count added — and, when the sends ran out, or the retry ended because the wait the platform asked for did not fit in its five minutes, a sentence of the plugin's own
-//     that says which] [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
+//     failure of the last send, with the count added — and, when the sends ran out, or the retry ended because the wait the platform asked for did not fit in its five minutes, or because the job of a
+//     refusal with 0x80071151 did not prove that nothing was applied (and what to do then: look up the import job before importing again), a sentence of the plugin's own that says which]
+//     [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -110,6 +118,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl, getAuthToken } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient, retryAfterMs, scrub, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
+const { proveRefusedImport, PROOF_LOG } = require('./lib/import-job-proof.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
 const { makeTempWorkspace, pruneWorkspaceParents } = require('./lib/temp-workspace.js');
@@ -153,11 +162,13 @@ const LONG_ACTION = /\/(ExportSolution|StageSolution|ImportSolution)$/;
 //   0x8004F063  CustomizationLockEx_BothKnownSame     "Cannot start another [{0}] because there is a previous [{1}] running at this moment. Use Solution History for more details."
 //   0x8004F064  CustomizationLockEx_BothKnownDifferent "Cannot start the requested operation [{0}] because there is another [{1}] running at this moment. Use Solution History for more details."
 //   0x8004F067  CustomizationLockEx_BlockingUnknown   "Cannot start the requested operation [{0}] because there is a customization running at this moment. Use Solution History for more details."
-// Left out on purpose — those answers are sent once, and reported as every answer to an import was before this retry existed:
+// Left out of the list on purpose — an answer with one of these is sent once, and reported as every answer to an import was before this retry existed — the first of them with ONE exception (concurrencyRefusalOf):
 //   0x80071151  SolutionConcurrencyFailure  "The solution installation or removal failed due to the installation or removal of another solution at the same time. Please try again later." An operation that
-//               failed is not one the platform says it refused to start. Answers that begin "Cannot start the requested operation" and end with that sentence have been seen with this code; this list follows what
-//               the reference documents for a code, not what a few answers suggest about it. Measured on a Public-cloud environment: an import that met another import or a publish was
-//               refused with this code and those words, and its import job existed by then (read back with its progress at 37.5%), so importJobIsAbsent could not have proved it either.
+//               failed is not one the platform says it refused to start, so the code alone sends nothing again. Measured on a Public-cloud environment, though, this is the code an import that meets another import
+//               or a publish is refused with, and its message begins "Cannot start another [Import] because there is a previous [Import] running at this moment" (a publish: "Cannot start the requested operation
+//               [Import] because there is another [Publish] running"): an answer with this code AND those words is looked into — the refused send's job is read once, at once, and sent again when it proves that
+//               nothing was applied (lib/import-job-proof.js has the rule and the measurements: a job that never existed, or one whose log says the import was refused at the lock before it processed anything).
+//               The words alone prove nothing; the job does. Any other words under this code are sent once.
 //   0x80071154  ConcurrentOperationFailure  "The current {0} operation failed due to another concurrent operation running at the same time": an operation that failed had started.
 //   0x8004F077, 0x80090412 (the customization lock of other services) and the service protection limits 0x80072321, 0x80072322, 0x80072326: a 429 of another kind, with another remedy.
 // A code in this list says the import was refused; it is the job that proves it (importJobIsAbsent), because a refusal is what the platform SAYS and a gateway can say a good deal.
@@ -170,7 +181,9 @@ const IMPORT_RESEND_WAITS_MS = Object.freeze([10 * 1000, 20 * 1000, 40 * 1000, 6
 // second more than five minutes. Before each wait the run asks whether it fits in what is left; when it does not (a `Retry-After` of ten minutes, say) the retry ENDS there and the platform's refusal is the
 // failure — the import is never sent early to make it fit. What is not in the budget is the time an import that the platform ACCEPTED takes: it runs for as long as it runs (ACTION_TIMEOUT_MS), and a send the
 // platform refuses is answered in moments. A publish of all customizations, the usual holder of the lock, is over in a minute or two; an import that holds it can run much longer, and the run then ends as it
-// always did, with the platform's refusal.
+// always did, with the platform's refusal. The same sends, waits and budget serve both kinds of refusal (a lock code, and 0x80071151 with its job read at once): they are one lock, and the measured holders are
+// short — a publish of six tables took 3–12 s, an import of a package of six tables 48–127 s — against the 130 s the four waits add up to; the budget is never the limit of the default schedule, only of a
+// `Retry-After`. At most four reads of a refused send's job are made for the retry, one for each refusal that is not the last.
 const IMPORT_RETRY_BUDGET_MS = 5 * 60 * 1000;
 
 const REDACTED = '<redacted>';
@@ -702,12 +715,18 @@ const COMPOSED_MESSAGE = new WeakSet();
 // (importJobIsAbsent) and the log of a failed one (readImportJobFailure) — are made through it, over the same seams as the import's own client (`http`: getToken, request, sleep, now).
 const readOnceClient = (env, http = {}) => createAzHttpClient(env, { ...http, sendOnce: () => true });
 
+// The Dataverse error code of the generic solution-concurrency failure (`SolutionConcurrencyFailure`). It is what the platform was MEASURED to answer an import that meets another import or a publish — never one of
+// LOCK_REFUSAL_CODES — with "Cannot start …" words; see concurrencyRefusalOf for why the words matter and lib/import-job-proof.js for what decides.
+const CONCURRENCY_REFUSAL_CODE = '0x80071151';
+// How the message of such a refusal begins: "Cannot start another [Import] because there is a previous [Import] running at this moment. …", or "Cannot start the requested operation [Import] because there is
+// another [Publish] running …". The documented text of the code alone ("The solution installation or removal failed due to …") does not begin so.
+const CANNOT_START = /^\s*Cannot start\b/i;
+
 /**
- * The platform's refusal to START an import, from a raw transport answer: `{ status: 429, code }` — the code spelled as the error reference spells it — when the answer is HTTP 429 and its Dataverse
- * error body (`{ "error": { "code": "0x80071151", "message": "…" } }`) carries one of LOCK_REFUSAL_CODES, in either case of its hex digits; else null. Anything that does not say so — another status,
- * another code, a body that is not JSON or has no `error.code` text, the lock's English words under another code — is not a refusal to start, and the import is not sent again.
+ * The Dataverse error of a raw transport answer that is an HTTP 429 — `{ "error": { "code": "0x80071151", "message": "…" } }` — as `{ code, message }`, each the text the body gives or null when it gives
+ * none; null for any other answer (another status, a body that is not JSON, a transport failure).
  */
-function lockRefusalOf(res) {
+function errorOf429(res) {
   if (!res || res.error || res.statusCode !== 429) return null;
   let body = res.body;
   try {
@@ -715,9 +734,32 @@ function lockRefusalOf(res) {
   } catch {
     return null;
   }
-  const code = body && body.error && typeof body.error.code === 'string' ? body.error.code : null;
-  const known = code === null ? undefined : LOCK_REFUSAL_CODES.find((candidate) => candidate.toLowerCase() === code.toLowerCase());
+  const error = body && body.error;
+  return { code: error && typeof error.code === 'string' ? error.code : null, message: error && typeof error.message === 'string' ? error.message : null };
+}
+
+/**
+ * The platform's refusal to START an import, from a raw transport answer: `{ status: 429, code }` — the code spelled as the error reference spells it — when the answer is HTTP 429 and its Dataverse
+ * error body (`{ "error": { "code": "0x8004F064", "message": "…" } }`) carries one of LOCK_REFUSAL_CODES, in either case of its hex digits; else null. Anything that does not say so — another status,
+ * another code, a body that is not JSON or has no `error.code` text, the lock's English words under another code — is not a refusal to start, and the import is not sent again.
+ */
+function lockRefusalOf(res) {
+  const error = errorOf429(res);
+  const known = error && error.code !== null ? LOCK_REFUSAL_CODES.find((candidate) => candidate.toLowerCase() === error.code.toLowerCase()) : undefined;
   return known ? { status: 429, code: known } : null;
+}
+
+/**
+ * The other refusal that can be a refusal to start: `{ status: 429, code: '0x80071151' }` when the answer is HTTP 429, the code is SolutionConcurrencyFailure (in either case of its hex digits) AND the message
+ * begins "Cannot start". The code alone says only that an installation or removal FAILED because another ran at the same time, which an operation that had started can say too, so the platform's own
+ * words are required as well — but they are not what proves anything: the refused send's job does (readRefusedImportJob, lib/import-job-proof.js), and an answer whose words are another language's, or
+ * whose message is missing, is sent once as every answer to an import was.
+ */
+function concurrencyRefusalOf(res) {
+  const error = errorOf429(res);
+  return error && error.code !== null && error.code.toLowerCase() === CONCURRENCY_REFUSAL_CODE && error.message !== null && CANNOT_START.test(error.message)
+    ? { status: 429, code: CONCURRENCY_REFUSAL_CODE }
+    : null;
 }
 
 // The job id an ImportSolution request carries, and the same request under another one. The body is the SDK's JSON text, and the package — a base64 string, up to ~170 MB — is nearly all of it, so the id is
@@ -746,28 +788,62 @@ async function importJobIsAbsent(env, importJobId, http) {
 }
 
 /**
- * Sends one ImportSolution request — and sends it AGAIN, under a NEW import job id, only while the platform's answer PROVES the import did not start. An import the platform may have accepted is
- * never sent twice (a gateway answers 502, 504 or 401 for an import it accepted and is running: the rule of solutionHttpClient); what is sent again is the one answer that says the platform
- * did not start it: its refusal because another operation holds the environment's customization lock (lockRefusalOf — the status and the Dataverse error code, not words), together with the
- * import job the refused send carried not existing (importJobIsAbsent), read after the wait, so that it is the latest evidence before a second copy leaves. Then, for at most IMPORT_MAX_SENDS sends and
- * inside IMPORT_RETRY_BUDGET_MS of elapsed time from the first refusal:
- *   wait the step of IMPORT_RESEND_WAITS_MS, or the platform's `Retry-After` when that asks for longer — WHOLE, uncapped  →  read the job  →  tell the listener  →  send again with a job id that was never used.
+ * What the job of a send refused with SolutionConcurrencyFailure proves — `{ proven: true, proof }` or `{ proven: false, why, reason }` (lib/import-job-proof.js has the rule, with what it rests on). One read, `sendOnce`,
+ * of the three columns the rule looks at and no others: `progress` is the same for a running import and a refused one, and `solutionid` names a solution that was never made. A read that fails, answers
+ * anything that is neither the job nor a 404, or gets no answer (a transport failure, no token) proves nothing: `answer` is then null.
+ */
+async function readRefusedImportJob(env, importJobId, http) {
+  let answer = null;
+  try {
+    answer = await readOnceClient(env, http).get(webApiUrl(env, `importjobs(${importJobId})?$select=importjobid,completedon,data`));
+  } catch {
+    // No answer: the verdict says so.
+  }
+  return proveRefusedImport(answer);
+}
+
+/**
+ * Sends one ImportSolution request — and sends it AGAIN, under a NEW import job id, only while the platform's answer PROVES the import did not apply anything. An import the platform may have accepted is
+ * never sent twice (a gateway answers 502, 504 or 401 for an import it accepted and is running: the rule of solutionHttpClient); what is sent again is an answer that says the platform refused to
+ * start it because another operation holds the environment's customization lock, in one of two forms:
+ *   - one of LOCK_REFUSAL_CODES (lockRefusalOf — the status and the Dataverse error code, not words), together with the import job the refused send carried not existing (importJobIsAbsent), read AFTER the wait, so
+ *     that it is the latest evidence before a second copy leaves;
+ *   - SolutionConcurrencyFailure with "Cannot start …" words (concurrencyRefusalOf), which is what the platform was measured to answer an import that meets another import or a publish. Its job is read ONCE and AT
+ *     ONCE (readRefusedImportJob) — the row of a refused send is final when the answer is in hand — and the rule of lib/import-job-proof.js decides: the job does not exist, or it is finished and its log says
+ *     the import failed with that error before it processed the solution or any component. A job that proves nothing ends the retry there (`onUnproven`), without a wait: the platform's refusal is the failure.
+ * Then, for at most IMPORT_MAX_SENDS sends and inside IMPORT_RETRY_BUDGET_MS of elapsed time from the first refusal (the read of the job counts in it):
+ *   [read the job — SolutionConcurrencyFailure]  →  wait the step of IMPORT_RESEND_WAITS_MS, or the platform's `Retry-After` when that asks for longer — WHOLE, uncapped  →  [read the job — a lock code]  →
+ *   tell the listener  →  send again with a job id that was never used.
  * A wait that does not fit in what is left of the budget ends the retry BEFORE it is waited, and so does a read of the job that leaves nothing of it: the refusal that was last answered is returned as it came
  * and the import is not sent again — never early, to make it fit. `onStopped({ importJobId, waitMs, spentMs })` says so (`waitMs` is the wait that did not fit, or null when the budget ran out during the read).
+ * `onUnproven({ importJobId, status, code, why, reason })` says that the job of a refusal with SolutionConcurrencyFailure proves nothing, and in what words. The refusal of the LAST send (the fifth) is not looked into:
+ * it is the sends running out.
  * Whatever else answers — any other status, a 429 of another kind, a gateway's 5xx, no answer, a job that exists or cannot be read — is returned as it came, and the send is the last.
  * Returns `{ res, sent }`: the last answer, and the request that got it, whose job id is the one to look up.
  */
-async function sendImport(send, options, { env, http, sleep, onRefused, onStopped }) {
+async function sendImport(send, options, { env, http, sleep, onRefused, onStopped, onUnproven }) {
   // The same clock reads the HTTP-date form of Retry-After, and the budget: a test moves both at once.
   const clock = http.now || Date.now;
   let sent = options;
   let firstRefusedAt = null;
   for (let sends = 1; ; sends += 1) {
     const res = await send({ ...sent, timeout: ACTION_TIMEOUT_MS });
-    const refusal = sends < IMPORT_MAX_SENDS ? lockRefusalOf(res) : null;
+    const lockRefusal = sends < IMPORT_MAX_SENDS ? lockRefusalOf(res) : null;
+    const concurrencyRefusal = sends < IMPORT_MAX_SENDS && !lockRefusal ? concurrencyRefusalOf(res) : null;
+    const refusal = lockRefusal || concurrencyRefusal;
     const refusedId = refusal && importJobIdOf(sent.body);
     if (!refusedId) return { res, sent };
     if (firstRefusedAt === null) firstRefusedAt = clock();
+    // The job of a refusal with SolutionConcurrencyFailure is read now, before the wait: it is the proof, and a job that proves nothing makes the wait pointless. Its row does not change while the run waits.
+    let proof;
+    if (concurrencyRefusal) {
+      const verdict = await readRefusedImportJob(env, refusedId, http);
+      if (!verdict.proven) {
+        onUnproven({ importJobId: refusedId, status: refusal.status, code: refusal.code, why: verdict.why, reason: verdict.reason });
+        return { res, sent };
+      }
+      proof = verdict.proof;
+    }
     // `Infinity`: the client's own retries cap a Retry-After at a minute (RETRY_AFTER_CAP_MS) so that a throttled build is not stalled for minutes per attempt; here the platform's request is taken as it is, and
     // the budget below decides whether it can be waited. A cap would turn "wait 180 s" into a send after 60, which the platform has said it will refuse.
     const waitMs = Math.max(IMPORT_RESEND_WAITS_MS[sends - 1], retryAfterMs(res.headers, clock(), Infinity));
@@ -777,15 +853,18 @@ async function sendImport(send, options, { env, http, sleep, onRefused, onStoppe
       return { res, sent };
     }
     await sleep(waitMs);
-    if (!(await importJobIsAbsent(env, refusedId, http))) return { res, sent };
-    // The read took time too (its own timeout is a minute): the budget is for the whole retry, so a send is not made after it.
-    const spentAfterMs = clock() - firstRefusedAt;
-    if (spentAfterMs > IMPORT_RETRY_BUDGET_MS) {
-      onStopped({ importJobId: refusedId, waitMs: null, spentMs: spentAfterMs });
-      return { res, sent };
+    if (lockRefusal) {
+      if (!(await importJobIsAbsent(env, refusedId, http))) return { res, sent };
+      // The read took time too (its own timeout is a minute): the budget is for the whole retry, so a send is not made after it.
+      const spentAfterMs = clock() - firstRefusedAt;
+      if (spentAfterMs > IMPORT_RETRY_BUDGET_MS) {
+        onStopped({ importJobId: refusedId, waitMs: null, spentMs: spentAfterMs });
+        return { res, sent };
+      }
     }
     const nextImportJobId = crypto.randomUUID();
-    onRefused({ importJobId: refusedId, status: refusal.status, code: refusal.code, waitedMs: waitMs, nextImportJobId });
+    // `proof` is told only for the refusals that were proven by their job's read AT ONCE; a lock code's is the 404 after the wait, as it always was.
+    onRefused({ importJobId: refusedId, status: refusal.status, code: refusal.code, waitedMs: waitMs, nextImportJobId, ...(proof ? { proof } : {}) });
     sent = { ...sent, body: withImportJobId(sent.body, refusedId, nextImportJobId) };
   }
 }
@@ -801,10 +880,12 @@ async function sendImport(send, options, { env, http, sleep, onRefused, onStoppe
  * variable is) are in it, and an import needs them to know what is a secret (secrecyOf). It only listens — the answer goes on to the SDK untouched.
  * `observe.sanitize(text, what)` is given the transport's own words in the error of a request that got no answer ("Request timed out", a socket error): they are another party's text, so they are
  * looked at where they are read, and the sentence the plugin puts around them is its own and is marked as composed (COMPOSED_MESSAGE) so that it is not looked at again.
- * `observe.onImportRefused({ importJobId, status, code, waitedMs, nextImportJobId })` is what turns the one exception on, and the only caller that gives it is the import, which reports what it hears:
- * an ImportSolution the platform REFUSED TO START — HTTP 429 with a lock code (LOCK_REFUSAL_CODES) — is sent again when the import job its refused send carried does not exist (sendImport), and the
- * listener is told of each such send before it is made. Every other answer to ImportSolution, and every answer to the other two actions, is the first and the last send.
+ * `observe.onImportRefused({ importJobId, status, code, waitedMs, nextImportJobId[, proof] })` is what turns the one exception on, and the only caller that gives it is the import, which reports what it hears:
+ * an ImportSolution the platform REFUSED TO START — HTTP 429 with a lock code (LOCK_REFUSAL_CODES), or with SolutionConcurrencyFailure and "Cannot start …" words — is sent again when the import job its refused
+ * send carried proves that nothing was applied (sendImport), and the listener is told of each such send before it is made — with `proof` (lib/import-job-proof.js: PROOF_ABSENT or PROOF_LOG) for the refusals
+ * that were proven by the read of the job at once. Every other answer to ImportSolution, and every answer to the other two actions, is the first and the last send.
  * `observe.onImportRetryStopped({ importJobId, waitMs, spentMs })` is told when that retry ends for want of time, with the refusal it ends on (IMPORT_RETRY_BUDGET_MS, see sendImport).
+ * `observe.onImportRetryUnproven({ importJobId, status, code, why, reason })` is told when it ends because the job of a refusal with SolutionConcurrencyFailure does not prove that nothing was applied.
  */
 function solutionHttpClient(env, deps = {}, observe = {}) {
   const send = deps.request || makeRequest;
@@ -816,7 +897,7 @@ function solutionHttpClient(env, deps = {}, observe = {}) {
       const action = LONG_ACTION.exec(new URL(options.url).pathname);
       if (!action) return send(options);
       const { res, sent } = action[1] === 'ImportSolution' && typeof observe.onImportRefused === 'function'
-        ? await sendImport(send, options, { env, http: deps, sleep, onRefused: observe.onImportRefused, onStopped: observe.onImportRetryStopped || (() => {}) })
+        ? await sendImport(send, options, { env, http: deps, sleep, onRefused: observe.onImportRefused, onStopped: observe.onImportRetryStopped || (() => {}), onUnproven: observe.onImportRetryUnproven || (() => {}) })
         : { res: await send({ ...options, timeout: ACTION_TIMEOUT_MS }), sent: options };
       if (!res.error) {
         if (action[1] === 'StageSolution' && observe.onStageReply) observe.onStageReply(res.body);
@@ -1274,21 +1355,39 @@ async function importFailure(err, { sanitize, settings, importJobId, env, deps, 
   // The plugin's own sentences, appended after the platform's words were sanitized and, like the ones above, not looked at again: they hold counts, ids it minted and the code it matched — no value.
   if (resent) failure.message += ` ${resendSentence(sends)}${original.statusCode === 429 && sends.refusals.length + 1 === IMPORT_MAX_SENDS ? ` It sends at most ${IMPORT_MAX_SENDS} times: run the import again when the other operation has finished.` : ''}`;
   if (sends && sends.stopped) failure.message += ` ${stoppedSentence(sends.stopped)}`;
+  if (sends && sends.unproven) failure.message += ` ${unprovenSentence(sends.unproven)}`;
   return failure;
 }
 
 // What a run that sent its import again reports, in the output: how many sends it took (`importAttempts`), and each send that was refused and waited out (`importRefusals`) — the job it carried,
-// the status and the code of the refusal, and how long the run waited before the next send. The last send is the output's own `importJobId`. Nothing but numbers, ids the plugin minted and the
-// code it matched: no word of the platform's, so nothing in it needs the sanitizer.
+// the status and the code of the refusal, how long the run waited before the next send and, for a refusal with SolutionConcurrencyFailure, how its job proved that nothing was applied (`proof`: PROOF_ABSENT
+// or PROOF_LOG, see lib/import-job-proof.js). The last send is the output's own `importJobId`. Nothing but numbers, ids the plugin minted and the code it matched: no word of the platform's, so nothing in it
+// needs the sanitizer.
 const resendReport = (sends) => (sends.refusals.length > 0 ? { importAttempts: sends.refusals.length + 1, importRefusals: sends.refusals } : {});
 const secondsOf = (ms) => `${Math.round(ms / 100) / 10} s`;
-const resendSentence = (sends) => `ImportSolution was sent ${sends.refusals.length + 1} times. Each send before the last was refused before it started (HTTP 429, code ${[...new Set(sends.refusals.map((refusal) => refusal.code))].join(', ')}: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${sends.refusals.map((refusal) => secondsOf(refusal.waitedMs)).join(', ')} before sending again.`;
+// Why each send before the last was safe to repeat. A refusal whose job did not exist says what it always said. One whose job EXISTED — two imports that started together: the job is made once the lock is held
+// for the first time and says, in its log, that the import failed with the concurrency error before it processed the solution or any component — says that, and a run that met both says both.
+const LOG_SHOWED = 'held the log of an import that failed with that error before it processed the solution or any component';
+const resendSentence = (sends) => {
+  const codes = [...new Set(sends.refusals.map((refusal) => refusal.code))].join(', ');
+  const waits = sends.refusals.map((refusal) => secondsOf(refusal.waitedMs)).join(', ');
+  const total = sends.refusals.length + 1;
+  if (!sends.refusals.some((refusal) => refusal.proof === PROOF_LOG)) {
+    return `ImportSolution was sent ${total} times. Each send before the last was refused before it started (HTTP 429, code ${codes}: another operation held the environment's customization lock) and the job it named did not exist (importjobs(<id>) answered 404). The run waited ${waits} before sending again.`;
+  }
+  const alsoAbsent = sends.refusals.some((refusal) => refusal.proof !== PROOF_LOG);
+  const shown = alsoAbsent ? `importjobs(<id>) answered 404, or ${LOG_SHOWED}` : `importjobs(<id>) ${LOG_SHOWED}`;
+  return `ImportSolution was sent ${total} times. Each send before the last was refused at the environment's customization lock (HTTP 429, code ${codes}: another operation held it) before any of the package was applied, and its import job showed it: ${shown}. The run waited ${waits} before sending again.`;
+};
 // Why a retry that the platform's refusal asked for was not made: the wait it asks for does not fit in what is left of IMPORT_RETRY_BUDGET_MS (`waitMs`), or the time went on the read that proves the refused send did not
 // start (`waitMs` null). Numbers only, like the sentences above.
 const RETRY_BUDGET_TEXT = `${IMPORT_RETRY_BUDGET_MS / 60000} minutes`;
 const stoppedSentence = ({ waitMs, spentMs }) => `ImportSolution was not sent again: ${waitMs === null
   ? `the ${RETRY_BUDGET_TEXT} this run spends in all on sending it again were used up (${secondsOf(spentMs)}) before the next send`
   : `the next wait, ${secondsOf(waitMs)}, does not fit in what is left of the ${RETRY_BUDGET_TEXT} this run spends in all on sending it again (${secondsOf(spentMs)} are spent)`}. Run the import again when the other operation has finished.`;
+// Why a refusal with SolutionConcurrencyFailure was not sent again: the platform refused it, but its job does not prove that the refused send applied nothing of the package (`reason`: lib/import-job-proof.js, fixed
+// words and numbers only). The sentence says what to do — look at the job, and import again only when it shows nothing was imported — because the import may have started: sending it again would be a second copy.
+const unprovenSentence = ({ importJobId, code, reason }) => `ImportSolution was not sent again: the platform refused it (HTTP 429, code ${code}: another operation held the environment's customization lock), but ${reason}, so it is not proven that the refused send applied nothing of the package. Look up import job ${importJobId} (importjobs(${importJobId}) in the Web API, or the solution history in Maker) and run the import again only when that shows nothing was imported and the other operation has finished.`;
 
 // `text` with every access token in `tokens` taken out of it, whole and by each long part of it (the Dataverse client's own scrubber: lib/sdk-http-client.js).
 const scrubTokens = (text, tokens) => [...tokens].reduce((out, token) => scrub(out, token), String(text));
@@ -1373,17 +1472,19 @@ async function runImport(asked, given = {}) {
   const { base64 } = inspectPackage(request.packagePath, { withBytes: true });
   const importJobId = deps.importJobId || crypto.randomUUID();
   // The import's sends, as the client tells of them (solutionHttpClient's `onImportRefused`): `jobId` is the job the last send carried — the first send's until a refusal is sent again. `stopped` is what it
-  // says when the retry ends for want of time (`onImportRetryStopped`): the refusal it ended on is then the failure, and the sentence that says why is added to it (importFailure).
-  const sends = { jobId: importJobId, refusals: [], stopped: null };
-  const onImportRefused = ({ importJobId: refused, status, code, waitedMs, nextImportJobId }) => {
-    sends.refusals.push({ importJobId: refused, status, code, waitedMs });
+  // says when the retry ends for want of time (`onImportRetryStopped`), and `unproven` what it says when it ends because the job of a refusal proves nothing (`onImportRetryUnproven`): the refusal it ended on
+  // is then the failure, and the sentence that says why is added to it (importFailure).
+  const sends = { jobId: importJobId, refusals: [], stopped: null, unproven: null };
+  const onImportRefused = ({ importJobId: refused, status, code, waitedMs, nextImportJobId, proof }) => {
+    sends.refusals.push({ importJobId: refused, status, code, waitedMs, ...(proof ? { proof } : {}) });
     sends.jobId = nextImportJobId;
   };
   const onImportRetryStopped = (event) => { sends.stopped = event; };
+  const onImportRetryUnproven = (event) => { sends.unproven = event; };
   try {
     const outcome = await (deps.sdkFirst || sdkFirst)(request.env, {
       refusal: (error) => importRefusal(error, settings),
-      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize, onImportRefused, onImportRetryStopped }),
+      httpClient: (env) => solutionHttpClient(env, deps.http, { onStageReply: (body) => recordStagedTypes(definitions, body), sanitize, onImportRefused, onImportRetryStopped, onImportRetryUnproven }),
       fromSdk: (sdk) => sdk.importSolution({
         base64,
         // pac's defaults: --force-overwrite and --activate-plugins are off. Both are required by the SDK, which no longer defaults them.
@@ -1487,6 +1588,7 @@ module.exports = {
   pacOnlyFeatureMessages,
   solutionHttpClient,
   lockRefusalOf,
+  concurrencyRefusalOf,
   LOCK_REFUSAL_CODES,
   IMPORT_MAX_SENDS,
   IMPORT_RESEND_WAITS_MS,
