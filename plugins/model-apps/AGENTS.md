@@ -4538,7 +4538,12 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   there would fail the teardown step of every table whose model another component had adopted. What the SDK
   cannot settle throws `ROW_SUMMARY_REMOVAL_UNCONFIRMED` (the skill-row delete's outcome unknown, naming our
   model) or `ROW_SUMMARY_MODEL_NOT_DELETED` (the model left behind, naming it). Teardown's `aiSummary` step
-  still treats every failure as best-effort and does not surface these: the table delete that follows reports the
+  looks for the skill row first, with the SDK's own request, because `removeRowSummary` answers nothing both
+  when it removes a row summary and when it finds none — a step that only called it printed `(1 deleted)` for
+  every table without one — and reports a table with none as not found (`teardown-row-summary-lookup.test.js`
+  holds the lookup to what the bundle asks for). It is still best-effort for failures: a lookup that cannot be
+  made (`not looked up — …`, kept) or a removal that throws (`1 not removed: <the SDK's words>`) fails nothing
+  and is not counted as a deletion. The table delete that follows reports the
   dependency if the skill row is still there, and a model left behind blocks only a later row summary for the
   same table, by name.
 - **Changes in the same SDK release that no plugin path reaches** — read these again before a plugin change

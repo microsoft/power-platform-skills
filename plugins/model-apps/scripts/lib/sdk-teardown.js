@@ -1122,15 +1122,34 @@ const KIND_HANDLERS = {
   },
   aiSummary: {
     // AI row-summary records reference the table and would block its delete; remove them first.
-    // removeRowSummary is a no-op when the record is absent, so this is safe/idempotent.
+    //
+    // The SDK's removeRowSummary answers nothing, both when it removes a row summary and when it finds none to remove: it looks up the
+    // skill row `ais_RowSummary_<table>` and returns at once without one. A step that only called it reported `(1 deleted)` for every
+    // table that had no row summary. So the step looks first, with the SDK's own request (`GET /aiskillconfigs?…$filter=uniquename eq '…'`,
+    // which teardown-row-summary-lookup.test.js holds to what the real bundle asks for), and a table with none is "not found" like any
+    // other step's. The request is the SDK's own, so a lookup that fails is one the removal would fail too: 404 means the environment has
+    // no such table (so no row summary), and any other answer leaves what is there unknown, which the step says rather than guesses.
     async resolve(sdk, target) {
-      return [{ id: target.entityLogicalName, entityLogicalName: target.entityLogicalName }];
-    },
-    async del(sdk, item) {
-      if (sdk.removeRowSummary) {
-        try { await sdk.removeRowSummary({ entityLogicalName: item.entityLogicalName }); } catch { /* best-effort */ }
+      const name = `ais_RowSummary_${target.entityLogicalName}`;
+      let res;
+      try {
+        res = await sdk.dataverse.get(`/aiskillconfigs?$select=aiskillconfigid&$filter=uniquename eq '${odataStr(name)}'&$top=1`);
+      } catch (err) {
+        if (isNotFound(err)) return [];
+        return { items: [], skipReason: `not looked up — ${errMsg(err)}; a row summary left behind is reported by the table's delete` };
       }
+      if (res && res.status === 404) return [];
+      const rows = res && res.body && res.body.value;
+      const unknown = (why) => ({ items: [], skipReason: `not looked up — ${why}; a row summary left behind is reported by the table's delete` });
+      if (!res || res.status < 200 || res.status >= 300) return unknown(`the lookup answered ${res && res.status ? `HTTP ${res.status}` : 'nothing'}`);
+      if (!Array.isArray(rows)) return unknown('the lookup\'s answer was no list');
+      return rows.length ? [{ id: target.entityLogicalName, entityLogicalName: target.entityLogicalName }] : [];
     },
+    del: (sdk, item) => sdk.removeRowSummary({ entityLogicalName: item.entityLogicalName }),
+    // Best-effort by design: a removal that fails does not fail the teardown — the table's delete that follows reports the dependency if the
+    // skill row is still there. But it is not a deletion either, so it is said on the step's line, in the SDK's own words (a model it could
+    // not delete, a skill row it could not confirm gone), where it used to be swallowed and reported as `(1 deleted)`.
+    tolerateFailure: (err) => errMsg(err),
   },
   solution: {
     async resolve(sdk, target) {
@@ -1489,6 +1508,7 @@ function planTeardown(spec) {
 //
 // Reporting both as "undeletable" would send an operator hunting a platform problem that isn't
 // there. `skippedIds` is retained as the union of both for callers that only need the count.
+// A third reason, `failed` (with a `detail`), is a removal the handler tolerates (`tolerateFailure`).
 // A not-found error counts as already-gone. Throws only on a genuine failure.
 async function deleteStep(sdk, handler, items, ctx) {
   const deletedIds = [];
@@ -1530,6 +1550,11 @@ async function deleteStep(sdk, handler, items, ctx) {
         // A system/managed artifact (e.g. an auto-generated "Active <Entity>" view that shares
         // the spec view's name) — not ours to remove. Record it as skipped without failing.
         skipped.push({ id: item.id, reason: 'undeletable' });
+        continue;
+      }
+      if (typeof handler.tolerateFailure === 'function') {
+        // A step that is best-effort by design (aiSummary): not a failure of the teardown, and not a deletion either. The reason is the handler's words.
+        skipped.push({ id: item.id, reason: 'failed', detail: handler.tolerateFailure(err) });
         continue;
       }
       throw err;
@@ -1768,10 +1793,12 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       // a different (possibly no) follow-up.
       const referenced = skipped.filter((s) => s.reason === 'referenced').length;
       const undeletable = skipped.filter((s) => s.reason === 'undeletable').length;
+      const notRemoved = skipped.filter((s) => s.reason === 'failed');
       const parts = [];
       if (keptLabels.length) parts.push(`${keptLabels.length} kept: ${keptLabels.join('; ')}`);
       if (undeletable) parts.push(`${undeletable} undeletable`);
       if (referenced) parts.push(`${referenced} still referenced`);
+      if (notRemoved.length) parts.push(`${notRemoved.length} not removed: ${notRemoved.map((s) => s.detail).join('; ')}`);
       if (parts.length) {
         result.skipped.push(`${step.label} (${parts.join(', ')} — skipped)`);
       }

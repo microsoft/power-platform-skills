@@ -2073,7 +2073,7 @@ test('teardown plans an ai-summaries step (before tables) for each candidate and
   assert.strictEqual(plan[aiIdx].phase, 'ai-summaries');
   assert.strictEqual(plan[aiIdx].target.entityLogicalName, 'new_memo');
 
-  // Run with a mock sdk that records removeRowSummary calls
+  // Run with a mock sdk that records removeRowSummary calls. The environment holds a row summary for the table: the step looks for the skill row before it removes one.
   const removeCalls = [];
   const sdk = {
     resolveArtifact: async (kind, identity) => {
@@ -2081,6 +2081,7 @@ test('teardown plans an ai-summaries step (before tables) for each candidate and
       if (kind === 'solution') return [{ id: 'sol-1', name: 'AiTest' }];
       return [];
     },
+    dataverse: { get: async (url) => (/^\/aiskillconfigs\?/.test(url) ? { status: 200, body: { value: [{ aiskillconfigid: 'skill-1' }] } } : { status: 200, body: { value: [] } }) },
     removeRowSummary: async (args) => { removeCalls.push(args); },
     deleteTable: async () => { const e = new Error('not found'); e.statusCode = 404; throw e; },
     deleteSolution: async () => {},
