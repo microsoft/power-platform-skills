@@ -926,7 +926,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   therefore pass appDef's tree through `adoptLiveSitemap` (`scripts/lib/sitemap-merge.js`) first: a
   subarea corresponds by navigation target (a URL keeps the case of its path and query), an area or
   group by a label its level uses once, then by the navigation entries it holds, then by the id an
-  earlier build gave it (a node none of these identifies is written as new rather than guessed); the
+  earlier build gave it, then — for an unlabelled one with no entries, which is all an earlier download
+  wrote for each empty group of an environment whose base language is not 1033 — by elimination: one such
+  node and one live node with no entries that nothing else paired are each other. A node none of these
+  identifies is written as new rather than guessed; when that drops a live node with no entries and its
+  title (the spec has more than one unlabelled empty node, or the environment more than one empty live
+  one, so which is which would be a guess by position), the build names it (`has no entries, and the
+  spec's unlabelled empty groups cannot be matched …`) — label the spec's node to keep it. The
   live `id` and `bag` are kept, and only
   what the spec sets is overlaid — an icon it does not name is still removed, as before. **A title it does
   not state is kept, never cleared:** an empty or absent `label`/`title` says nothing (the download of an

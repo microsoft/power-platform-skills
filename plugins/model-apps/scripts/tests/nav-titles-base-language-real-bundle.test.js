@@ -18,7 +18,7 @@ const { makeDownloadSdk, main } = require('../download-model-app.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { appDef } = require('../lib/sdk-build.js');
 const { adoptLiveSitemap, describeSitemapNotes, chromeByTargetKey } = require('../lib/sitemap-merge.js');
-const { createSitemapOrg, createSdk, sitemapXml, json, ENV, APP_ID, APP_UNIQUE, DASH } = require('./helpers/app-sitemap-org.js');
+const { createSitemapOrg, createSdk, sitemapXml, titles, json, ENV, APP_ID, APP_UNIQUE, DASH } = require('./helpers/app-sitemap-org.js');
 
 const DASHBOARD_NAME = 'Case overview';
 const CREATED = { dashboards: { [DASHBOARD_NAME]: DASH } };
@@ -254,4 +254,63 @@ test('REAL BUNDLE: the baseline a download writes for the spec it wrote keeps a 
   const { xml: written, notes } = await rebuild(createSitemapOrg({ xml: renamed, baseLanguage: 3082 }), shell, { languageCode: 3082, baseChrome: chromeByTargetKey(baseline, CREATED) });
   assert.deepStrictEqual(heldTitles(written).dashboard, { 3082: 'Panel de expedientes' }, 'the designer\u2019s rename survives a rebuild of the stale spec');
   assert.ok(describeSitemapNotes(notes).some((line) => /kept the environment's title 'Panel de expedientes'/.test(line)), JSON.stringify(describeSitemapNotes(notes)));
+});
+
+// --- a group with no entries -----------------------------------------------------------------------------------------------------------------------------------
+// The spec an earlier download wrote on such an environment holds a group for each EMPTY group the environment has too, with its label left out; and the live group has an id the
+// designer gave it (`designer_future`), which a spec cannot name. With no label and no entries it has nothing to be recognized by, so a rebuild wrote a new, untitled group
+// in its place and the title was gone.
+const emptyGroupXml = (id, byLanguage) => `<Group Id="${id}" ResourceId="SitemapDesigner.NewGroup" DescriptionResourceId="SitemapDesigner.NewGroup" ToolTipResourseId="SitemapDesigner.Unknown" IntroducedVersion="7.0.0.0" IsProfile="false">${titles(byLanguage)}</Group>`;
+const withEmptyGroups = (xml, ...groups) => xml.replace('</Area>', `${groups.join('')}</Area>`);
+// The titles the group `id` holds in the sitemap XML the SDK wrote, by language; null when the group is not in it.
+const groupTitles = (xml, id) => {
+  const group = new RegExp(`<Group\\b[^>]*Id="${id}"[^>]*?(?:/>|>(.*?)</Group>)`).exec(xml);
+  return group ? Object.fromEntries([...String(group[1] || '').matchAll(/<Title LCID="(\d+)" Title="([^"]*)" \/>/g)].map((m) => [m[1], m[2]])) : null;
+};
+const downloadedBefore = (...emptyGroupLabels) => ({ areas: [{ label: '', groups: [
+  { label: '', subAreas: [{ title: '', entity: 'contoso_case' }, { title: '', dashboard: DASHBOARD_NAME }] },
+  ...emptyGroupLabels.map((label) => ({ label, subAreas: [] })),
+] }] });
+const noEntries = (lines) => lines.filter((line) => /has no entries/.test(line));
+
+test('REAL BUNDLE: the spec an earlier download wrote, with an unlabelled empty group beside the environment\u2019s one empty group, rebuilds with that group and its title as they were', async () => {
+  const xml = withEmptyGroups(sitemapXml(SPANISH), emptyGroupXml('designer_future', { 3082: 'Futuro' }));
+  const emptied = downloadedBefore('');
+  const { xml: written, notes } = await rebuild(createSitemapOrg({ xml, baseLanguage: 3082 }), emptied, { languageCode: 3082, baseChrome: chromeByTargetKey(specFor(emptied), CREATED) });
+  assert.deepStrictEqual(groupTitles(written, 'designer_future'), { 3082: 'Futuro' }, `the empty group is as it was:\n${written}`);
+  assert.strictEqual(groupTitles(written, 'group_0_1'), null, 'and no new group stands in its place');
+  assert.deepStrictEqual(heldTitles(written).group, { 3082: 'Casos' }, 'the group beside it is as it was too');
+  assert.ok(describeSitemapNotes(notes).includes('group "Futuro": kept the environment\'s title \'Futuro\' \u2014 the spec has none for it, so it is left as it is. State one in the spec to change it.'), JSON.stringify(describeSitemapNotes(notes)));
+});
+
+test('REAL BUNDLE: with two unlabelled empty groups and two empty groups in the environment nothing is paired by position, and the rebuild names the titles it does not keep', async () => {
+  const xml = withEmptyGroups(sitemapXml(SPANISH), emptyGroupXml('designer_future', { 3082: 'Futuro' }), emptyGroupXml('designer_past', { 3082: 'Pasado' }));
+  const emptied = downloadedBefore('', '');
+  const { xml: written, notes } = await rebuild(createSitemapOrg({ xml, baseLanguage: 3082 }), emptied, { languageCode: 3082, baseChrome: chromeByTargetKey(specFor(emptied), CREATED) });
+  assert.strictEqual(groupTitles(written, 'designer_future'), null, `neither empty group is kept:\n${written}`);
+  assert.strictEqual(groupTitles(written, 'designer_past'), null);
+  assert.deepStrictEqual([groupTitles(written, 'group_0_1'), groupTitles(written, 'group_0_2')], [{}, {}], 'the spec\u2019s two groups are written as new, untitled ones');
+  assert.deepStrictEqual(heldTitles(written).group, { 3082: 'Casos' });
+  const said = noEntries(describeSitemapNotes(notes));
+  assert.strictEqual(said.length, 2, JSON.stringify(said));
+  assert.match(said[0], /^group "Futuro": has no entries, and the spec's unlabelled empty groups cannot be matched to the environment's empty groups one to one \(2 against 2\), so the spec's are written as new, untitled groups and this one, with its title 'Futuro', is not kept\. Label the spec's group 'Futuro' to keep it\.$/);
+  assert.match(said[1], /^group "Pasado": has no entries, .*\(2 against 2\).*, with its title 'Pasado', is not kept\. Label the spec's group 'Pasado' to keep it\.$/);
+});
+
+test('REAL BUNDLE: labelling the spec\u2019s group, as the note says, keeps that title by its label and settles the other group by elimination', async () => {
+  const xml = withEmptyGroups(sitemapXml(SPANISH), emptyGroupXml('designer_future', { 3082: 'Futuro' }), emptyGroupXml('designer_past', { 3082: 'Pasado' }));
+  const labelled = downloadedBefore('Futuro', '');
+  const { xml: written, notes } = await rebuild(createSitemapOrg({ xml, baseLanguage: 3082 }), labelled, { languageCode: 3082 });
+  assert.deepStrictEqual(groupTitles(written, 'designer_future'), { 3082: 'Futuro' });
+  assert.deepStrictEqual(groupTitles(written, 'designer_past'), { 3082: 'Pasado' });
+  assert.deepStrictEqual(noEntries(describeSitemapNotes(notes)), []);
+});
+
+test('REAL BUNDLE: an empty group of the environment that the spec does not list is dropped, as the spec says, and nothing is said of it', async () => {
+  const xml = withEmptyGroups(sitemapXml(SPANISH), emptyGroupXml('designer_future', { 3082: 'Futuro' }));
+  const listed = downloadedBefore();
+  const { xml: written, notes } = await rebuild(createSitemapOrg({ xml, baseLanguage: 3082 }), listed, { languageCode: 3082, baseChrome: chromeByTargetKey(specFor(listed), CREATED) });
+  assert.strictEqual(groupTitles(written, 'designer_future'), null);
+  assert.deepStrictEqual(noEntries(describeSitemapNotes(notes)), []);
+  assert.ok(!describeSitemapNotes(notes).some((line) => /Futuro/.test(line)), JSON.stringify(describeSitemapNotes(notes)));
 });

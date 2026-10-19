@@ -170,6 +170,10 @@ function keepsLiveValue(field, specValue, liveValue, base) {
  *                                                          the node no title, so the live one stays
  *   { kind: 'changed', node, target, field, live, spec, intended? } — the build changes this value;
  *                                                          `intended` when the baseline shows the spec did
+ *   { kind: 'replaced', node, target, live, unlabelled, empty } — an area or group with no entries whose title
+ *                                                          the rebuild does not keep: the spec's `unlabelled` empty
+ *                                                          nodes could not be matched one to one to the environment's
+ *                                                          `empty` ones, and is written as new (see the passes below)
  *
  * A node's title the spec does not state is KEPT, never cleared. An empty label or title says nothing:
  * the download of an environment whose base language is not 1033 once wrote every one empty, and an
@@ -216,7 +220,12 @@ function adoptLiveSitemap(desired, live, opts = {}) {
   //      node with no entries to go by is recognized — but never a live node whose label an unpaired spec
   //      node still wants, nor two nodes whose entries all differ;
   //   4. with no label at the SDK's language (a downloaded app titled only in another language) and no
-  //      entries on either side, the next such live node in document order.
+  //      entries on either side, the next such live node in document order;
+  //   5. an unlabelled node with no entries, and a live node with none that nothing above paired — what is
+  //      left of the empty nodes an earlier download wrote with no label, beside a live one the designer
+  //      gave an id of its own and a title at the SDK's language. One on each side can only be each other.
+  //      More than one on either side is a choice by position, which is never made: the live node is
+  //      replaced, and its title goes with it, so that is said (a `replaced` note).
   // A repeated label, or none, decides nothing by position where entries can speak. Taking the first
   // live "Main", or the one whose id appDef's numbering happened to repeat, or the next unlabelled one,
   // gave a new or reordered node another node's id and bag — with two live "Main"s and the first renamed
@@ -264,7 +273,7 @@ function adoptLiveSitemap(desired, live, opts = {}) {
     }
     return tied ? null : at;
   };
-  const correspond = (want, have, targetsOfNode) => {
+  const correspond = (want, have, targetsOfNode, node) => {
     const live = have.filter((n) => n && typeof n === 'object');
     const taken = new Set();
     const match = new Array(want.length);
@@ -301,10 +310,24 @@ function adoptLiveSitemap(desired, live, opts = {}) {
       const l = live.find((n) => !taken.has(n) && text(n.title) === '' && !haveTargets.get(n).size);
       if (l) pair(i, l);
     });
+    // An unlabelled node with no entries that pass 4 left unpaired means no live node with no entries and no title was free for it, so each live node with no entries that is still free has a
+    // title at the SDK's language, and one it is dropped for takes that title with it.
+    const bare = [];
+    unpaired((d, i) => { if (text(d.title) === '' && !wantTargets[i].size) bare.push(i); });
+    if (bare.length) {
+      const left = live.filter((n) => !taken.has(n) && !haveTargets.get(n).size && !stillWanted(labelKey(n)));
+      if (bare.length === 1 && left.length === 1) {
+        pair(bare[0], left[0]);
+      } else {
+        for (const n of left) {
+          if (text(n.title) !== '') notes.push({ kind: 'replaced', node, target: `${node} "${text(n.title)}"`, live: text(n.title), unlabelled: bare.length, empty: left.length });
+        }
+      }
+    }
     return match;
   };
-  const areaMatch = correspond(desiredAreas, liveAreas, areaTargets);
-  const groupMatch = desiredAreas.map((a, ai) => correspond(kids(a, 'groups'), kids(areaMatch[ai], 'groups'), groupTargets));
+  const areaMatch = correspond(desiredAreas, liveAreas, areaTargets, 'area');
+  const groupMatch = desiredAreas.map((a, ai) => correspond(kids(a, 'groups'), kids(areaMatch[ai], 'groups'), groupTargets, 'group'));
 
   // Subareas correspond by navigation target: first within the live group their own group adopted (an
   // entry that stayed put), then anywhere (an entry that moved). Each live node is adopted at most once.
@@ -500,6 +523,10 @@ function describeSitemapNotes(notes) {
       lines.push(`${n.target}: ${n.field} changes from ${shown(n.live)} to the spec's ${shown(n.spec)}. No baseline in this spec's workspace records the entry, so a change made in the designer cannot be told from one made in the spec.`);
     } else if (n.kind === 'changed' && n.node !== 'subArea') {
       lines.push(`${n.target}: ${n.field} changes from ${shown(n.live)} to the spec's ${shown(n.spec)}.`);
+    } else if (n.kind === 'replaced') {
+      // A node with no entries gives nothing to tell it by, and the spec gave it no label: with more than one candidate on either side, which is which would be a guess.
+      lines.push(`${n.target}: has no entries, and the spec's unlabelled empty ${n.node}s cannot be matched to the environment's empty ${n.node}s one to one (${n.unlabelled} against ${n.empty}), `
+        + `so the spec's are written as new, untitled ${n.node}s and this one, with its title ${shown(n.live)}, is not kept. Label the spec's ${n.node} ${shown(n.live)} to keep it.`);
     }
   }
   return lines;

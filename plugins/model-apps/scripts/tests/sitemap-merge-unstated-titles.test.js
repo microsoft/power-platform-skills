@@ -104,3 +104,102 @@ test('removing an entry\u2019s last title keeps its other children where the sch
   assert.deepStrictEqual(siteMap.areas[0].groups[0].subAreas[0].bag.c.map((e) => [e.i, e.node.n]), [[0, 'Privilege']], 'the wrapper goes with its last title and the next child moves up');
   assert.deepStrictEqual(only.areas[0].groups[0].subAreas[0].bag.c.map((e) => e.i), [0, 1], 'the live bag is not touched');
 });
+
+// --- a group or area with no entries ---------------------------------------------------------------------------------------------------------------------------
+// A node with no entries has nothing to correspond to a live node by, and a spec that gives it no label has not said which one it is. The spec an earlier download wrote for an
+// environment whose base language is not 1033 holds exactly that for every empty group the environment has (`label: ""`, no entries), beside a live group the designer gave an id
+// of its own (`designer_future`) and a title in the environment's language. The two are paired only when nothing else could be meant: one such node on each side. When more than one
+// could be, nothing is paired by position, and the live node a rebuild then replaces is named, with its title.
+const emptyGroup = (id, title) => ({ id, title, bag: bag(id, [titlesChild(0, { 3082: title })]), subAreas: [] });
+const liveWithGroups = (...groups) => {
+  const t = live();
+  t.areas[0].groups.push(...groups);
+  return t;
+};
+// What an earlier download wrote: the populated group, and a group per empty one, each given the label in `labels`.
+const downloadedGroups = (...labels) => tree([{ id: 'area_0', title: '', groups: [
+  { id: 'group_0_0', title: '', subAreas: [entry('sub_0_0_0', 'contoso_case', '')] },
+  ...labels.map((title, k) => ({ id: `group_0_${k + 1}`, title, subAreas: [] })),
+] }]);
+const groupsOf = (siteMap) => siteMap.areas[0].groups;
+const replaced = (notes) => notes.filter((n) => n.kind === 'replaced');
+const lost = (node, unlabelled, empty, title) => `${node} "${title}": has no entries, and the spec's unlabelled empty ${node}s cannot be matched to the environment's empty ${node}s one to one (${unlabelled} against ${empty}), `
+  + `so the spec's are written as new, untitled ${node}s and this one, with its title '${title}', is not kept. Label the spec's ${node} '${title}' to keep it.`;
+
+test('an unlabelled empty group beside the one empty group the environment holds is that group: its id, its titles and its title stay', () => {
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups(''), liveWithGroups(emptyGroup('designer_future', 'Futuro')), { lcid: 3082 });
+  const future = groupsOf(siteMap)[1];
+  assert.deepStrictEqual([future.id, future.title], ['designer_future', 'Futuro']);
+  assert.deepStrictEqual(future.bag.c.map((e) => e.node.n), ['Titles'], 'and its titles are still there to be written back');
+  assert.deepStrictEqual(replaced(notes), []);
+  assert.ok(describeSitemapNotes(notes).includes('group "Futuro": kept the environment\'s title \'Futuro\' \u2014 the spec has none for it, so it is left as it is. State one in the spec to change it.'), JSON.stringify(describeSitemapNotes(notes)));
+});
+
+test('two unlabelled empty groups and two empty groups of the environment are not paired by position: the notes name both titles', () => {
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups('', ''), liveWithGroups(emptyGroup('designer_future', 'Futuro'), emptyGroup('designer_past', 'Pasado')), { lcid: 3082 });
+  assert.deepStrictEqual(groupsOf(siteMap).map((g) => [g.id, g.title, g.bag !== undefined]), [['group_0_0', 'Casos', true], ['group_0_1', '', false], ['group_0_2', '', false]], 'new, untitled groups: neither took a live group\u2019s id or bag');
+  assert.deepStrictEqual(replaced(notes).map((n) => [n.node, n.target, n.live]), [['group', 'group "Futuro"', 'Futuro'], ['group', 'group "Pasado"', 'Pasado']]);
+  assert.deepStrictEqual(describeSitemapNotes(notes).filter((l) => /has no entries/.test(l)), [lost('group', 2, 2, 'Futuro'), lost('group', 2, 2, 'Pasado')]);
+});
+
+test('one unlabelled empty group beside two empty groups of the environment is no better told: neither is paired, and both are named', () => {
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups(''), liveWithGroups(emptyGroup('designer_future', 'Futuro'), emptyGroup('designer_past', 'Pasado')), { lcid: 3082 });
+  assert.deepStrictEqual(groupsOf(siteMap).map((g) => [g.id, g.title, g.bag !== undefined]), [['group_0_0', 'Casos', true], ['group_0_1', '', false]]);
+  assert.deepStrictEqual(describeSitemapNotes(notes).filter((l) => /has no entries/.test(l)), [lost('group', 1, 2, 'Futuro'), lost('group', 1, 2, 'Pasado')]);
+});
+
+test('two unlabelled empty groups beside one empty group of the environment: it is paired with neither, and named', () => {
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups('', ''), liveWithGroups(emptyGroup('designer_future', 'Futuro')), { lcid: 3082 });
+  assert.deepStrictEqual(groupsOf(siteMap).map((g) => [g.id, g.title, g.bag !== undefined]), [['group_0_0', 'Casos', true], ['group_0_1', '', false], ['group_0_2', '', false]]);
+  assert.deepStrictEqual(describeSitemapNotes(notes).filter((l) => /has no entries/.test(l)), [lost('group', 2, 1, 'Futuro')]);
+});
+
+test('an empty group of the environment that the spec has no unlabelled empty group for is not paired, and nothing is said of it: the spec does not list it', () => {
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups(), liveWithGroups(emptyGroup('designer_future', 'Futuro')), { lcid: 3082 });
+  assert.deepStrictEqual(groupsOf(siteMap).map((g) => g.id), ['group_0_0']);
+  assert.deepStrictEqual(replaced(notes), []);
+  assert.ok(!describeSitemapNotes(notes).some((l) => /Futuro/.test(l)), JSON.stringify(describeSitemapNotes(notes)));
+});
+
+test('a group the spec labels with another label than the environment\u2019s empty group does is its own, and the environment\u2019s is not paired with it or said to be lost', () => {
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups('Nuevo'), liveWithGroups(emptyGroup('designer_future', 'Futuro')), { lcid: 3082 });
+  assert.deepStrictEqual(groupsOf(siteMap).map((g) => [g.id, g.title, g.bag !== undefined]), [['group_0_0', 'Casos', true], ['group_0_1', 'Nuevo', false]]);
+  assert.deepStrictEqual(replaced(notes), []);
+});
+
+test('an empty group the spec labels takes its own live group, and an unlabelled one beside it has nothing left to be paired with, so nothing is said', () => {
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups('Futuro', ''), liveWithGroups(emptyGroup('designer_future', 'Futuro')), { lcid: 3082 });
+  assert.deepStrictEqual(groupsOf(siteMap).map((g) => [g.id, g.title]), [['group_0_0', 'Casos'], ['designer_future', 'Futuro'], ['group_0_2', '']]);
+  assert.deepStrictEqual(replaced(notes), []);
+});
+
+test('an unlabelled empty group is still paired with a live one that has no title at the build\u2019s language, as before, and neither says anything', () => {
+  const french = { id: 'designer_fr', title: '', bag: bag('designer_fr', [titlesChild(0, { 1036: 'Futur' })]), subAreas: [] };
+  const { siteMap, notes } = adoptLiveSitemap(downloadedGroups(''), liveWithGroups(french), { lcid: 3082 });
+  const paired = groupsOf(siteMap)[1];
+  assert.strictEqual(paired.id, 'designer_fr');
+  assert.deepStrictEqual(paired.bag.c[0].node.c.map((t) => t.a[0][1]), ['1036'], 'its other language is as it was');
+  assert.deepStrictEqual(replaced(notes), []);
+  assert.ok(!describeSitemapNotes(notes).some((l) => /Futur/.test(l)));
+});
+
+// An area with no entries at all is the same case one level up.
+const emptyArea = (id, title) => ({ id, title, bag: bag(id, [titlesChild(0, { 3082: title })]), groups: [] });
+const liveWithAreas = (...areas) => {
+  const t = live();
+  t.areas.push(...areas);
+  return t;
+};
+const downloadedAreas = (...labels) => tree([
+  { id: 'area_0', title: '', groups: [{ id: 'group_0_0', title: '', subAreas: [entry('sub_0_0_0', 'contoso_case', '')] }] },
+  ...labels.map((title, k) => ({ id: `area_${k + 1}`, title, groups: [] })),
+]);
+
+test('an unlabelled empty area beside the one empty area the environment holds is that area; with two on each side nothing is paired and both are named', () => {
+  const one = adoptLiveSitemap(downloadedAreas(''), liveWithAreas(emptyArea('designer_future', 'Futuro')), { lcid: 3082 });
+  assert.deepStrictEqual(one.siteMap.areas.map((a) => [a.id, a.title]), [['area_0', 'Trabajo'], ['designer_future', 'Futuro']]);
+  assert.deepStrictEqual(replaced(one.notes), []);
+  const two = adoptLiveSitemap(downloadedAreas('', ''), liveWithAreas(emptyArea('designer_future', 'Futuro'), emptyArea('designer_past', 'Pasado')), { lcid: 3082 });
+  assert.deepStrictEqual(two.siteMap.areas.map((a) => [a.id, a.title, a.bag !== undefined]), [['area_0', 'Trabajo', true], ['area_1', '', false], ['area_2', '', false]]);
+  assert.deepStrictEqual(describeSitemapNotes(two.notes).filter((l) => /has no entries/.test(l)), [lost('area', 2, 2, 'Futuro'), lost('area', 2, 2, 'Pasado')]);
+});

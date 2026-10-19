@@ -1648,6 +1648,11 @@ custom control), but the spec validator emits a warning.
   left out keeps the title it has in the environment, and the build says so — a rebuild never clears one,
   so state a title to change it. (An entry whose title the baseline below shows the spec used to state,
   and the spec now leaves out, loses it: that is an edit.)
+  **An area or group with no entries and no label** — what an earlier download wrote for each empty group of an
+  environment whose base language is not 1033 — is the environment's empty group when there is one of each. With more than
+  one on either side, which is which cannot be told, so none is paired: the spec's are written as new, untitled
+  ones, and the build names each environment group it does not keep, with its title. Give the spec's group the
+  label it has in the environment to keep it.
   A `dashboard` entry is written the way the designer writes one, with
   `Url="/workplace/home_dashboards.aspx"` — without it the app shows a placeholder icon for the entry,
   and `--verify` fails it.
