@@ -48,8 +48,8 @@
 //                      is KEPT — reported as a `(kept — …)` skip — until a re-run deletes the rule. What only
 //                      that table's existence blocks is kept with it, each as a `(kept — …)` skip naming the
 //                      table: its icon web resource (step 9), a global choice one of its columns binds (step 10)
-//                      and a relationship from the table to itself (planned after the tables). The platform would
-//                      refuse each of those deletes, and the run would report the refusal as one more failure.
+//                      and a relationship from the table to itself (planned after the tables). The platform refuses the
+//                      first two while the table exists, the third while its lookup is still referenced (one more failure).
 //   9. web-resources — webresourceset rows (form/command JS, table-icon SVG/raster images, and the
 //                      build's generated default app icon) — deleted AFTER tables: a table's icon
 //                      web resource is referenced by the TABLE itself, so it can't be removed until
@@ -1652,8 +1652,8 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   // table is the only one that turns a failure a re-run could finish into a permanent leftover, so it alone
   // waits. The solution is already kept after any failure. What only the kept table's existence blocks — its
   // icon web resource, a global choice one of its columns binds, a relationship from the table to itself — is
-  // kept with it (`keptTables`, below), reported as a `(kept — …)` skip: the platform's own dependency check
-  // would refuse each of those deletes, and each refusal would be one more reported failure, not a leftover.
+  // kept with it (`keptTables`, below), reported as a `(kept — …)` skip: the platform refuses the first two while
+  // the table exists and the third while its lookup is still referenced — one more reported failure each, not a leftover.
   //
   // Keyed by the table's lower-cased logical name, as the rule step's target names it; the value is the
   // names of the rules that failed on it. ANY failure of the rule step counts — an unreadable rule, the

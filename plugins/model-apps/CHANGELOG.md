@@ -63,8 +63,9 @@ removes its temporary folders.
   level. The table is never created twice.
 - **Teardown keeps what only a kept table blocks, instead of reporting the platform's refusals.** When a business rule could not be
   deleted, teardown keeps its table until a re-run (the rule's activated copy can only be deleted while the table exists), but it
-  still tried the deletes that follow the tables — the table's icon web resource, a global choice one of its columns binds and a
-  relationship from the table to itself — and the platform refused each, so one failure was reported as up to four. Those steps are
+  still tried the deletes that follow the tables — the table's icon web resource and a global choice one of its columns binds,
+  which the platform refuses while the table exists, and a relationship from the table to itself, which it refuses while the table
+  still holds something that refers to its lookup — so one failure was reported as up to four. Those steps are
   now kept with the table, each a `(kept — …)` skip that names it, and the re-run deletes them once the table goes. The run still
   ends as a failure and keeps the solution. The dependency is read from the spec, so an icon or a binding made by hand in the
   environment is still tried and refused as before. A rule whose deactivation succeeded and whose delete failed stays deactivated
