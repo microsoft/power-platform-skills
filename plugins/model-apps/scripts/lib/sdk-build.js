@@ -7140,8 +7140,31 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // code (`configureRowSummary`: ROW_SUMMARY_TEMPLATE_NOT_FOUND, "Nothing was written"), where it used to publish a model that named no template and let the
     // platform answer. It is the same kind of environment gate as the licence refusal below — nothing in the spec can fix it — so it skips the same way.
     const NO_TEMPLATE_REASON = 'no row-summary AI template in this environment';
+    // The code alone does not prove that the org has no template, though. The SDK's lookup is
+    //   GET /msdyn_aitemplates?$select=msdyn_aitemplateid&$filter=msdyn_uniquename eq 'GptPowerPrompt'&$top=1   ->   { "value": [ { "msdyn_aitemplateid": "<guid>" } ] }
+    // and it raises the code whenever the FIRST row has no `msdyn_aitemplateid`, without checking that there is a row: `{ "value": [] }`, `{ "value": [ {} ] }` and
+    // `{ "value": [ null ] }` all raise it. Only the empty list says the org has no template; the other two are answers that cannot be read, and an answer that cannot be
+    // read stops the build (as it did before the skip) instead of passing for an environment gate. So the first time the code is seen, the build asks the same question
+    // through `queryRecords` — which refuses an answer without its `value` array — and skips only on an empty list. Rows, a row that is no row and a read that fails leave
+    // the SDK's own error to stop the build. The answer is kept: every table's lookup is the same question, so one read settles the whole build.
+    // This mirrors the SDK's lookup (its template name, its select) and can go once the SDK raises the code for an empty list only and answers a malformed first row with a
+    // ConnectionError. If the SDK ever looks for another template, this read can only fail to confirm, which stops the build: the safe side.
+    // `msdyn_aitemplate` is the table behind the SDK's `/msdyn_aitemplates` set:
+    // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/msdyn_aitemplate
+    const ROW_SUMMARY_TEMPLATE_NAME = 'GptPowerPrompt';
+    let noTemplateConfirmed;
+    const confirmNoTemplate = async () => {
+      if (noTemplateConfirmed !== undefined) return noTemplateConfirmed;
+      try {
+        const rows = await provision.queryRecords('msdyn_aitemplate', { select: ['msdyn_aitemplateid'], filter: `msdyn_uniquename eq '${ROW_SUMMARY_TEMPLATE_NAME}'`, top: 1 });
+        noTemplateConfirmed = Array.isArray(rows) && rows.length === 0;
+      } catch {
+        noTemplateConfirmed = false;
+      }
+      return noTemplateConfirmed;
+    };
     const aiSummaryUnsupported = (err) => {
-      if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') return NO_TEMPLATE_REASON;
+      if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') return noTemplateConfirmed === true ? NO_TEMPLATE_REASON : false;
       const detail = `${(err && err.message) || ''} ${JSON.stringify((err && err.cause) || '')}`;
       // Match the platform's own error CODE, not the prose: the message is localized and the status
       // alone (403/400) is also what a plain privilege or validation failure returns, which must
@@ -7192,7 +7215,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const override = summaryOverrides.get(String(logical).toLowerCase());
         await runner.run('ai-features', `row summary for ${logical}`, async () => {
           const promptSpec = buildPromptSpec(ent, { spec, override });
-          const res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
+          let res;
+          try {
+            res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
+          } catch (err) {
+            // `skipIf` is synchronous, so the read that confirms the template is absent is made here, before the error reaches it. The error is never replaced: when the
+            // read does not confirm it, it stops the build as it is.
+            if (err && err.code === 'ROW_SUMMARY_TEMPLATE_NOT_FOUND') await confirmNoTemplate();
+            throw err;
+          }
           result.created.ai.summaries[logical] = res;
           return res.modelId;
         }, {

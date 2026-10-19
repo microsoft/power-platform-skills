@@ -281,3 +281,173 @@ test('the real SDK refuses a row summary on an org with no AI template before an
   assert.deepEqual(state.queries, [], 'no model inventory read: nothing was written for it to report');
   assert.ok(state.warnings.some((w) => /no 'GptPowerPrompt' AI template/.test(w)));
 });
+
+// An org whose template list comes back without a template. The SDK takes the FIRST row of the list and reads its `msdyn_aitemplateid` without checking
+// that there is a row, so it raises ROW_SUMMARY_TEMPLATE_NOT_FOUND for an empty list and for a list whose first row is no row alike:
+//   { "value": [] }    { "value": [ {} ] }    { "value": [ null ] }
+// Only the empty list says the org has no template. The others are answers that cannot be read, and an answer that cannot be read stops the build, as it did
+// before the skip above — so the build asks the template list itself, once, before it skips, and skips only on an empty list.
+const TEMPLATE_LIST = "/msdyn_aitemplates?$select=msdyn_aitemplateid&$filter=msdyn_uniquename eq 'GptPowerPrompt'&$top=1";
+const listOf = (value) => ({ status: 200, headers: {}, body: { value } });
+
+// The real SDK over a transport that answers the template list from `answers` (one answer per request for it, the last one repeating) and records every request,
+// writes included. The mock SDK the build drives gets the real `configureRowSummary` and `queryRecords`.
+async function orgWithTemplateAnswers(t, answers) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-summary-confirm-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const requests = [];
+  let templateReads = 0;
+  const seen = (method, url) => requests.push(`${method} ${decodeURIComponent(url.replace(/^https:\/\/contoso\.crm\.dynamics\.com\/api\/data\/v9\.\d+/, ''))}`);
+  const write = (method) => async (url) => { seen(method, url); return { status: 200, headers: {}, body: {} }; };
+  const real = createMakerSdk({
+    workspaceStorage: createNodeWorkspaceStorage(dir),
+    instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: {
+      get: async (url) => {
+        seen('GET', url);
+        if (url.includes('/aiskillconfigs?')) return listOf([]);
+        if (url.includes('/msdyn_aitemplates?')) return answers[Math.min(templateReads++, answers.length - 1)];
+        if (url.includes("/EntityDefinitions(LogicalName='msdyn_aitemplate')")) return { status: 200, headers: {}, body: { EntitySetName: 'msdyn_aitemplates' } };
+        if (/\/EntityDefinitions\(LogicalName='contoso_\w+'\)/.test(url)) return { status: 200, headers: {}, body: { MetadataId: OLDEST } };
+        throw new Error(`unexpected offline GET ${url}`);
+      },
+      post: write('POST'), patch: write('PATCH'), put: write('PUT'), delete: write('DELETE'),
+    },
+  });
+  await real.initWorkspace();
+  const { sdk } = makeSimpleMockSdk();
+  sdk.configureRowSummary = real.configureRowSummary.bind(real);
+  sdk.queryRecords = real.queryRecords.bind(real);
+  return {
+    sdk,
+    requests,
+    templateReads: () => requests.filter((request) => request.startsWith('GET /msdyn_aitemplates?')),
+    writes: () => requests.filter((request) => !request.startsWith('GET ')),
+  };
+}
+
+const bothTables = () => {
+  const s = spec();
+  s.entities.push({ ...s.entities[0], schemaName: 'contoso_request' });
+  s.ai.summaries.tables.contoso_request = { enabled: true };
+  return s;
+};
+
+// The build stops with the SDK's own error, whole: the halt's code and words are the SDK's, and the SDK's error is its cause.
+const stoppedBySdkError = (err) => {
+  assert.equal(err.name, 'BuildHalt');
+  assert.equal(err.code, 'ROW_SUMMARY_TEMPLATE_NOT_FOUND');
+  assert.equal(err.cause.code, 'ROW_SUMMARY_TEMPLATE_NOT_FOUND', "the SDK's own error is what stopped the build");
+  assert.match(err.message, /^ai-features failed: Cannot configure the row summary of 'contoso_ticket'/);
+  return true;
+};
+
+test('an org whose template list is empty skips every summary with one warning and writes nothing, and the build confirms it with one read of the list, however many tables ask', async (t) => {
+  const org = await orgWithTemplateAnswers(t, [listOf([])]);
+  const warnings = [];
+  const events = [];
+  const r = await runSdkBuild(bothTables(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w), emit: (e) => events.push(e) });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.skipped.aiSummaries, ['contoso_ticket', 'contoso_request']);
+  assert.deepEqual(events.filter((e) => e.status === 'skip' && /^row summary for /.test(e.label)).map((e) => e.label),
+    ['row summary for contoso_ticket (no row-summary AI template in this environment)', 'row summary for contoso_request (no row-summary AI template in this environment)']);
+  assert.equal(warnings.length, 1, `one warning for two tables, got ${JSON.stringify(warnings)}`);
+  assert.match(warnings[0], /no 'GptPowerPrompt' AI template/);
+  assert.deepEqual(org.writes(), []);
+  // The SDK reads the list for each table (two reads) and the build asks it once more, for the first table only; every one of the three is the same request,
+  // so the build asks exactly what the SDK asked. The one other read names the template table's set, which the SDK looks up once and keeps.
+  assert.deepEqual(org.templateReads(), Array(3).fill(`GET ${TEMPLATE_LIST}`));
+  assert.deepEqual(org.requests.filter((request) => request.includes("LogicalName='msdyn_aitemplate'")), ["GET /EntityDefinitions(LogicalName='msdyn_aitemplate')?$select=EntitySetName"]);
+});
+
+for (const [what, list] of [['a first row with no id', [{}]], ['a first row that is not a row', [null]]]) {
+  test(`${what} in the template list is not an org without the template: the build stops with the SDK's error and skips nothing`, async (t) => {
+    const org = await orgWithTemplateAnswers(t, [listOf(list)]);
+    const warnings = [];
+    const events = [];
+    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w), emit: (e) => events.push(e) }), stoppedBySdkError);
+    assert.deepEqual(warnings, [], 'nothing was skipped, so nothing says it was');
+    assert.deepEqual(events.filter((e) => e.status === 'skip'), []);
+    assert.deepEqual(org.writes(), []);
+    assert.equal(org.templateReads().length, 2, 'the SDK read the list, and the build asked it once more');
+  });
+}
+
+test("a template that the build finds when it asks again, after the SDK read none, is not an org without one: the build stops with the SDK's error", async (t) => {
+  const org = await orgWithTemplateAnswers(t, [listOf([]), listOf([{ msdyn_aitemplateid: TEMPLATE }])]);
+  const warnings = [];
+  await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), stoppedBySdkError);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(org.writes(), []);
+});
+
+for (const [what, answer] of [['without its rows', { status: 200, headers: {}, body: {} }], ['refused', { status: 403, headers: {}, body: { error: { message: 'Contoso permission denied' } } }]]) {
+  test(`when the read that confirms the absence comes back ${what}, the build stops with the SDK's error`, async (t) => {
+    const org = await orgWithTemplateAnswers(t, [listOf([]), answer]);
+    const warnings = [];
+    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), stoppedBySdkError);
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(org.writes(), []);
+  });
+}
+
+test('the build confirms the absence of the template with the question the SDK asks, and asks it once for the whole build', async () => {
+  const { sdk } = makeSimpleMockSdk();
+  const reads = [];
+  sdk.configureRowSummary = async () => { throw Object.assign(new Error("Cannot configure the row summary of 'contoso_ticket': this org has no AI template"), { code: 'ROW_SUMMARY_TEMPLATE_NOT_FOUND' }); };
+  sdk.queryRecords = async (entity, query) => { reads.push([entity, query]); return []; };
+  const r = await runSdkBuild(bothTables(), { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  assert.deepEqual(r.skipped.aiSummaries, ['contoso_ticket', 'contoso_request']);
+  assert.deepEqual(reads, [['msdyn_aitemplate', { select: ['msdyn_aitemplateid'], filter: "msdyn_uniquename eq 'GptPowerPrompt'", top: 1 }]]);
+});
+
+test("every answer to the confirming read but an empty list leaves the SDK's own error to stop the build", async () => {
+  const answers = [
+    ['a first row with no id', () => [{}]],
+    ['a first row that is not a row', () => [null]],
+    ['a template', () => [{ msdyn_aitemplateid: TEMPLATE }]],
+    ['no list', () => undefined],
+    ['a list that is not one', () => 'bad'],
+    ['a read that fails', () => { throw new Error('Contoso template read failed'); }],
+  ];
+  for (const [what, answer] of answers) {
+    const { sdk } = makeSimpleMockSdk();
+    const refusal = Object.assign(new Error("Cannot configure the row summary of 'contoso_ticket': this org has no AI template 'GptPowerPrompt' (msdyn_aitemplates), which a row-summary model is built from. Nothing was written."), { code: 'ROW_SUMMARY_TEMPLATE_NOT_FOUND' });
+    sdk.configureRowSummary = async () => { throw refusal; };
+    sdk.queryRecords = async () => answer();
+    const warnings = [];
+    await assert.rejects(runSdkBuild(spec(), { sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), (err) => {
+      assert.equal(err.name, 'BuildHalt', what);
+      assert.equal(err.code, 'ROW_SUMMARY_TEMPLATE_NOT_FOUND', what);
+      assert.equal(err.cause, refusal, `${what}: the SDK's error itself is the cause`);
+      return true;
+    });
+    assert.deepEqual(warnings, [], what);
+  }
+});
+
+test('only the exact template code starts the confirming read: a refusal of another kind is skipped or stops the build as it always did, with no read of the template list', async () => {
+  for (const code of ['DuplicateRecordKey', 'ModelNotSupported']) {
+    const { sdk, state } = summarySdk(code);
+    const entities = [];
+    const inventory = sdk.queryRecords;
+    sdk.queryRecords = async (entity, query) => { entities.push(entity); return inventory(entity, query); };
+    const r = await runSdkBuild(spec(), { sdk, apply: true, phases: ['ai-features'], warn: (w) => state.warnings.push(w) });
+    assert.equal(r.ok, true, code);
+    assert.deepEqual(entities, ['msdyn_aimodel'], `${code}: only the model inventory that the skip reports`);
+  }
+  const lookalikes = [
+    ['a longer code', () => Object.assign(new Error('not available'), { code: 'ROW_SUMMARY_TEMPLATE_NOT_FOUND_EXTRA' })],
+    ['a mention in the message', () => Object.assign(new Error('ROW_SUMMARY_TEMPLATE_NOT_FOUND'), { code: 'CONNECTION_ERROR' })],
+    ['a code in the cause', () => Object.assign(new Error('permission denied'), { code: 'CONNECTION_ERROR', cause: { code: 'ROW_SUMMARY_TEMPLATE_NOT_FOUND' } })],
+  ];
+  for (const [what, make] of lookalikes) {
+    const { sdk } = makeSimpleMockSdk();
+    const entities = [];
+    sdk.configureRowSummary = async () => { throw make(); };
+    sdk.queryRecords = async (entity) => { entities.push(entity); return []; };
+    await assert.rejects(runSdkBuild(spec(), { sdk, apply: true, phases: ['ai-features'], warn: () => {} }), (err) => err.name === 'BuildHalt', what);
+    assert.deepEqual(entities, [], `${what}: no read of the template list`);
+  }
+});
