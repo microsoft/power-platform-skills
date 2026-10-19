@@ -24,6 +24,7 @@ const { runSdkBuild } = require('../lib/sdk-build.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { createHarness, seedForm, verifyForms } = require('./helpers/form-store-harness.js');
 const { readLanguageCodeFlag } = require('../lib/dataverse-auth.js');
+const { workbookXml, zipOf, exportZip, exportAnswer } = require('./helpers/translation-export.js');
 
 const harnesses = [];
 test.after(() => { for (const h of harnesses) h.cleanup(); });
@@ -242,4 +243,140 @@ test('REAL BUNDLE: a {1033, 3082} label map over that form — the English capti
   assert.match(topology(stale).detail, /tab 'tab_main' is deployed with label "Old overview" in language 1033, the spec declares label: "Overview" in language 1033/);
   assert.doesNotMatch(topology(stale).detail, /3082/, 'a language the read cannot show is not reported missing');
   assert.match(stale.unverified[0], MAP_ENTRY, 'and it is still listed');
+});
+
+// --- The same form, read with ONE translation export -------------------------------------------------------------------------------------------
+//
+// What the form read cannot show a translation export can: it carries every provisioned language, the published layer, and a tab's or a section's captions are the rows whose
+// Object ID is the `id` the element has in the FormXML. The harness answers the export for the form it stores (`exportOfStoredForm`: a row per tab and section, with the captions
+// the store holds in each language — what the platform would write), and the reader that asks for it is the plugin's own (`readerFor`, over the real SDK's Dataverse client).
+const idsOf = (h) => Object.fromEntries([...h.store.row.formxml.matchAll(/<(tab|section)\b([^>]*)>/g)].map((m) => [/\bname="([^"]*)"/.exec(m[2])[1], /\bid="([^"]+)"/.exec(m[2])[1]]));
+function exportOfStoredForm(h, { override = {}, languages = [1033, 3082] } = {}) {
+  const ids = idsOf(h);
+  const captions = [];
+  for (const m of h.store.row.formxml.matchAll(/<(tab|section)\b([^>]*)>\s*<labels>([\s\S]*?)<\/labels>/g)) {
+    const id = /\bid="([^"]+)"/.exec(m[2])[1];
+    const texts = {};
+    for (const l of m[3].matchAll(/<label description="([^"]*)" languagecode="(\d+)" \/>/g)) texts[Number(l[2])] = l[1];
+    captions.push({ entity: h.entity, id, texts: { ...texts, ...(override[Object.keys(ids).find((name) => ids[name] === id)] || {}) } });
+  }
+  return exportAnswer(exportZip(workbookXml({ languages, captions })));
+}
+const EXPORT_URL = /\/api\/data\/v9\.\d\/solutions\/Microsoft\.Dynamics\.CRM\.ExportTranslation$/;
+
+test('REAL BUNDLE: a form built in Spanish in an English organization, whose read shows English only, is VERIFIED from one translation export — after the build, with either flag, and with a spec pin', async () => {
+  const { h, spec } = await publishedInSpanish();
+  assert.deepStrictEqual(Object.keys(idsOf(h)), ['tab_main', 'sec_main'], 'the SDK gave the tab and the section the ids a translation export keys their captions by');
+  h.store.exportTranslation = exportOfStoredForm(h);
+  // The same form read as the store holds it: the baseline the export must neither add to nor take from.
+  h.store.readLanguages = undefined;
+  const whole = await verifyForms(h, spec, { languageCode: 3082 });
+  assert.strictEqual(h.exportsAsked.length, 0, 'a read that carries Spanish needs no export');
+  h.store.readLanguages = [1033];
+
+  const logs = [];
+  let handed;
+  const built = await buildModelApp(spec, { apply: true, verify: true, env: 'https://contoso.crm.dynamics.com', languageCode: 3082, preResolvedLanguageCode: 3082 }, {
+    log: (m) => logs.push(m),
+    runBuild: async () => ({ ok: true, dryRun: false, created: {}, skipped: {} }),
+    verify: async (s, options) => { handed = options; return verifyForms(h, s, options); },
+  });
+  assert.strictEqual(built.ok, true);
+  assert.strictEqual(handed.languageCode, 3082);
+  assert.deepStrictEqual(built.verify.missing, whole.missing.map(asBuildReports), 'the build\u2019s own verify finds what a read that shows Spanish finds, and no caption more');
+  assert.strictEqual(built.verify.unverified, undefined, 'the Spanish captions are no longer left unverified');
+  assert.doesNotMatch(logs.join('\n'), /could not be verified/);
+  assert.strictEqual(h.exportsAsked.length, 1, 'one export for the two captions of the form');
+  assert.match(h.exportsAsked[0].url, EXPORT_URL);
+  assert.deepStrictEqual(h.exportsAsked[0].body, { SolutionName: 'FormProbe' });
+
+  for (const [what, options, over] of [
+    ['--language-code', { languageCode: readLanguageCodeFlag({ 'language-code': '3082' }) }, {}],
+    ['--languageCode', { languageCode: readLanguageCodeFlag({ languageCode: '3082' }) }, {}],
+    ['the language the build\u2019s SDK was made for', { preResolvedLanguageCode: 3082 }, {}],
+    ['a languageCode the spec pins', undefined, { languageCode: 3082 }],
+  ]) {
+    h.exportsAsked.length = 0;
+    const verification = await verifyForms(h, { ...spec, ...over }, options);
+    assert.strictEqual(topology(verification).present, true, `${what}: ${topology(verification).detail}`);
+    assert.deepStrictEqual(verification.missing, whole.missing, `${what}: the same failures the whole form has`);
+    assert.strictEqual(verification.unverified, undefined, `${what}: settled by the export`);
+    assert.strictEqual(h.exportsAsked.length, 1, what);
+  }
+});
+
+test('REAL BUNDLE: a Spanish caption the export shows stale, or not at all, fails — the tab or the section by name, and the right one beside it passes', async () => {
+  const { h, spec } = await publishedInSpanish();
+  const opts = { languageCode: 3082 };
+  h.store.exportTranslation = exportOfStoredForm(h, { override: { tab_main: { 3082: 'Antiguo' } } });
+  const stale = await verifyForms(h, spec, opts);
+  assert.strictEqual(topology(stale).present, false);
+  assert.match(topology(stale).detail, /tab 'tab_main' is deployed with label "Antiguo" in language 3082 \(the translation export of solution 'FormProbe' shows it; the form read does not carry language 3082\), the spec declares label: "Resumen" in language 3082/);
+  assert.doesNotMatch(topology(stale).detail, /section 'sec_main'/, 'the section\u2019s caption is right');
+  assert.strictEqual(stale.unverified, undefined, 'the export settled both captions');
+  h.store.exportTranslation = exportOfStoredForm(h, { override: { sec_main: { 3082: '' } } });
+  const empty = await verifyForms(h, spec, opts);
+  assert.strictEqual(topology(empty).present, false);
+  assert.match(topology(empty).detail, /section 'sec_main' is deployed with no label in language 3082 \(the translation export of solution 'FormProbe' has none, only "Basics" in 1033; the form read does not carry language 3082\), the spec declares label: "Detalles" in language 3082/);
+  assert.doesNotMatch(topology(empty).detail, /tab 'tab_main'/);
+  // An export that has the language as a column and nothing in the cells says the same of every caption.
+  h.store.exportTranslation = exportOfStoredForm(h, { override: { tab_main: { 3082: '' }, sec_main: { 3082: '' } } });
+  assert.strictEqual((topology(await verifyForms(h, spec, opts)).detail.match(/is deployed with no label in language 3082/g) || []).length, 2);
+});
+
+test('REAL BUNDLE: an export that fails, or that cannot be read, leaves the Spanish captions unverified with the reason — it never passes them', async () => {
+  const { h, spec } = await publishedInSpanish();
+  const opts = { languageCode: 3082 };
+  const baseline = await verifyForms(h, spec, opts);
+  assert.strictEqual(baseline.unverified.length, 1, 'with no export to ask for, the captions are listed as they always were');
+  assert.match(baseline.unverified[0], SPANISH_ENTRY);
+  assert.strictEqual(h.exportsAsked.length, 0);
+  for (const [what, answer, reason] of [
+    ['a refusal', { status: 403, headers: {}, body: { error: { code: '0x80040220', message: 'Principal user is missing prvExportTranslation privilege' } } }, /could not be read \(HTTP 403: Principal user is missing prvExportTranslation privilege\)/],
+    ['a server error', { status: 500, headers: {}, body: { error: { message: 'An unexpected error occurred' } } }, /could not be read \(HTTP 500: An unexpected error occurred\)/],
+    ['an answer that is no export', { status: 200, headers: {}, body: { value: [] } }, /could not be read \(the answer holds no ExportTranslationFile\)/],
+    ['bytes that are no zip', exportAnswer(Buffer.from('this is some text that goes on and on and is no zip archive at all')), /could not be read \(the archive of the export is not readable: the archive has no end-of-central-directory record\)/],
+    ['an archive without the workbook', exportAnswer(zipOf([{ name: 'Other.xml', data: '<a/>' }])), /could not be read \(the archive of the export is not readable: the archive has no entry named 'CrmTranslations\.xml'\)/],
+    ['a workbook that is not the platform\u2019s', exportAnswer(zipOf([{ name: 'CrmTranslations.xml', data: '<html>sign in</html>' }])), /could not be read \(the workbook of the export is not readable: it is not a spreadsheet workbook/],
+  ]) {
+    h.store.exportTranslation = answer;
+    h.exportsAsked.length = 0;
+    const res = await verifyForms(h, spec, opts);
+    assert.strictEqual(topology(res).present, true, `${what}: nothing says a caption is wrong: ${topology(res).detail}`);
+    assert.deepStrictEqual(res.missing, baseline.missing, `${what}: unverified is not a failure`);
+    assert.strictEqual(res.ok, baseline.ok, what);
+    assert.strictEqual(res.unverified.length, 1, `${what}: ${JSON.stringify(res.unverified)}`);
+    assert.match(res.unverified[0], /^form-labels:new_ticket\.Main \(the labels of tab 'tab_main', section 'sec_main' in language 3082 were not compared: the environment's form read returns labels only in 1033, so labels written in 3082 cannot be read back from it\. A translation export of solution 'FormProbe' /, what);
+    assert.match(res.unverified[0], reason, what);
+    assert.strictEqual(h.exportsAsked.length, 1, `${what}: asked once`);
+  }
+});
+
+test('REAL BUNDLE: an export without a row for the form, or with the language missing, leaves the captions unverified with what it lacks', async () => {
+  const { h, spec } = await publishedInSpanish();
+  const opts = { languageCode: 3082 };
+  // No caption row for this form: the table has others (the export holds every form of the table), but not this form's.
+  h.store.exportTranslation = exportAnswer(exportZip(workbookXml({ captions: [{ entity: h.entity, id: '0a0a0a0a-0000-4000-8000-0000000000ff', texts: { 1033: 'Another form\u2019s tab', 3082: 'La pesta\u00f1a de otro formulario' } }] })));
+  const noRow = await verifyForms(h, spec, opts);
+  assert.strictEqual(topology(noRow).present, true, topology(noRow).detail);
+  assert.strictEqual(noRow.unverified.length, 1);
+  assert.match(noRow.unverified[0], /A translation export of solution 'FormProbe' was read, but it cannot settle them: the export has no caption row for tab 'tab_main' \(id [0-9a-f-]{36}, table new_ticket\); the export has no caption row for section 'sec_main' \(id [0-9a-f-]{36}, table new_ticket\)\. Check them in Power Apps/);
+  // An environment that has not provisioned Spanish has no column for it, and nothing in the export can say what the form holds in it.
+  h.store.exportTranslation = exportOfStoredForm(h, { languages: [1033] });
+  const noColumn = await verifyForms(h, spec, opts);
+  assert.strictEqual(topology(noColumn).present, true, topology(noColumn).detail);
+  assert.match(noColumn.unverified[0], /was read, but it cannot settle them: the export has no column for language 3082\. Check them/);
+});
+
+test('REAL BUNDLE: a form whose read carries the Spanish captions asks for no export at all — a wrong caption fails from the read, as before', async () => {
+  const { h, spec } = await publishedInSpanish();
+  h.store.exportTranslation = exportOfStoredForm(h);
+  h.store.readLanguages = [1033, 3082];
+  const right = await verifyForms(h, spec, { languageCode: 3082 });
+  assert.strictEqual(topology(right).present, true, topology(right).detail);
+  h.store.row.formxml = h.store.row.formxml.replace('<label description="Resumen" languagecode="3082" />', '<label description="Antiguo" languagecode="3082" />');
+  const stale = await verifyForms(h, spec, { languageCode: 3082 });
+  assert.strictEqual(topology(stale).present, false);
+  assert.doesNotMatch(topology(stale).detail, /translation export/, 'a caption the read shows is judged by the read');
+  assert.strictEqual(h.exportsAsked.length, 0);
 });

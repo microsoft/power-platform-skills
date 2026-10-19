@@ -20,10 +20,14 @@
 // A language is also one the form's READ may not carry. The platform decides which languages' labels go into the FormXML a caller reads, and it can
 // return fewer than the form stores (live: a form built with Spanish captions in an English-language organization, the Spanish captions stored, reads
 // back with every label in English). When no label of the form's FormXML is in the language a label is compared in, that label is not missing — the read
-// cannot show it — and it is listed under `unverified` as well, with the languages the read does carry and what to do (check it in Power Apps with that
-// language, or, for a label written as a string, verify in a language the read carries); a label map is compared at the languages the read carries and
-// listed for the others. A language the read does carry is compared strictly, as ever. Translations are not read another way (a translation export,
-// RetrieveLocLabels): what a caller's FormXML cannot show is not verified.
+// cannot show it — so it is read from a TRANSLATION EXPORT of the app's solution instead: one `ExportTranslation` request (readerFor's translationLabels,
+// lib/translation-labels.js), made only when such a caption is there to check and shared by the whole run, which carries every provisioned language — the
+// published layer — keyed by the id of each tab and section. A caption it shows right passes and one it shows different, or not at all, is a mismatch.
+// What it cannot settle (the export fails or cannot be read, or has no row for the element) is listed under `unverified` as before, with the reason, the
+// languages the read does carry and what to do (check it in Power Apps with that language, or, for a label written as a string, verify in a language the
+// read carries); a label map is compared at the languages the read carries, and for the others the same way. A language the read does carry is compared
+// strictly, as ever, from the read. COST: the export is one request — 7.5–11.2 s for a solution of one table, more as the solution grows, because it
+// exports every label of it — sent once and never again on a throttled or unavailable answer; a run with no such caption makes none.
 //
 // Result JSON: { ok, present, total, missing, errors } and, only when a check could not be decided, `unverified: [ "<kind>:<name> (<reason>)" ]`.
 // `unverified` does not change `ok` or the exit status.
@@ -43,6 +47,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, readLanguageCodeFlag, readJsonArg, emitResult, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { readTranslationLabels, isTranslationExport } = require('./lib/translation-labels.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readBaseline } = require('./lib/deployed-baseline.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
@@ -336,6 +341,11 @@ function readerFor(sdk, appUnique, opts) {
       const row = rows && rows[0];
       return (row && row.formxml) || null;
     },
+    // translationLabels(solutionUniqueName): the captions of the solution's forms in EVERY provisioned language, from ONE translation export of the solution
+    // (lib/translation-labels.js) — what a tab's or a section's caption is compared with in a language the form's own read does not carry. Answers
+    // { ok: true, languages, lookup } or { ok: false, reason } and never throws. verifySpec asks for it at most once a pass, and only when a caption needs it; it is not cached
+    // here, because the reader is reused across verifies and the export is the published layer, which a later verify must see change.
+    translationLabels: (solutionUniqueName) => readTranslationLabels(sdk.dataverse, solutionUniqueName),
     // servedMainForms(entity): the Main forms the platform serves the user running verify for a table,
     // first to last — the order a user without a remembered form opens them in (AB#6736948). The public
     // RetrieveFilteredForms function is the platform's own answer to "which forms may this user open,
@@ -645,7 +655,8 @@ async function main() {
       return;
     }
   }
-  const httpClient = createAzHttpClient(env);
+  // The one request this run sends once whatever answers it is the translation export (isTranslationExport): a long action, which a re-send would run a second time.
+  const httpClient = createAzHttpClient(env, { sendOnce: isTranslationExport });
   // The SDK works in a throwaway workspace (see throwawaySdk), never the app folder's `.maker-workspace`: verify
   // must run against any environment the app is deployed to, whichever one that folder was built against.
   const session = await throwawaySdk(env, httpClient, 'verify-');

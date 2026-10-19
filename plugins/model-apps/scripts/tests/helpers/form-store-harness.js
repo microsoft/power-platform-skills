@@ -12,6 +12,7 @@ const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../../vendor/cds-maker-sdk.cjs');
 const { verifySpec } = require('../../lib/verify-spec.js');
 const { readerFor } = require('../../verify-model-app.js');
+const { EXPORT_PATH } = require('./translation-export.js');
 
 const guid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -36,6 +37,9 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
   const shown = (row) => (store.readLanguages && row.formxml ? { ...clone(row), formxml: onlyLanguages(row.formxml, store.readLanguages) } : clone(row));
   const writes = [];
   const reads = [];
+  // The translation exports a verify asked for. `store.exportTranslation` is what the platform answers one with — an `{ status, headers, body }`, or a function of the request body
+  // that gives one — and a verify is given the reader's translationLabels only when it is set (see verifyForms), so a test that does not configure an export never reaches it.
+  const exportsAsked = [];
   let revision = 1;
   const response = (body, status = 200) => ({ status, headers: { etag: `W/"${revision}"` }, body });
   const httpClient = {
@@ -58,6 +62,11 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
       assert.fail(`unexpected GET: ${url}`);
     },
     post: async (url, body) => {
+      if (EXPORT_PATH.test(url)) {
+        exportsAsked.push({ url, body: clone(body) });
+        assert.ok(store.exportTranslation, 'a translation export was asked for, and this harness has none to answer with');
+        return typeof store.exportTranslation === 'function' ? store.exportTranslation(body) : store.exportTranslation;
+      }
       writes.push({ method: 'post', url, body: clone(body) });
       if (/\/systemforms(?:\?|$)/i.test(url)) {
         store.row = { ...store.row, ...body, formid: formId };
@@ -99,7 +108,7 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
     return { sdk, mutations, dir };
   };
   const cleanup = () => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); };
-  return { store, writes, reads, freshSdk, cleanup, formId, entity, attributes };
+  return { store, writes, reads, exportsAsked, freshSdk, cleanup, formId, entity, attributes };
 }
 
 // Put a form on the server the way the engine's create does — a minimal artifact, each compiled tab added
@@ -114,7 +123,8 @@ async function seedForm(h, tabs, { name = 'Main', entity = h.entity } = {}) {
   return h.formId;
 }
 
-// `--verify` over what the server holds, through the plugin's own reader (the published formxml query). `opts` are verifySpec's own.
+// `--verify` over what the server holds, through the plugin's own reader (the published formxml query). `opts` are verifySpec's own. The reader also asks for a translation
+// export (its translationLabels) when the harness has one to answer with (`store.exportTranslation`).
 async function verifyForms(h, spec, opts) {
   const fetched = await h.freshSdk();
   const live = readerFor(fetched.sdk, spec.app.uniqueName);
@@ -124,6 +134,7 @@ async function verifyForms(h, spec, opts) {
     sitemapXml: async () => '',
     queryRecords: live.queryRecords,
     formTopology: live.formTopology,
+    ...(h.store.exportTranslation ? { translationLabels: live.translationLabels } : {}),
   };
   return verifySpec(spec, read, opts);
 }

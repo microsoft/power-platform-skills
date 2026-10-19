@@ -192,29 +192,49 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   declares; a translation the spec leaves out is never required or changed. A caption the published form holds only
   in ANOTHER language does not stand in for the declared one: a missing caption is a mismatch, not a pass, and so is
   a caption missing in a language the form's read carries (a language the read carries no label in at all is
-  unverified, below); a label the spec does not write is not compared. **A string label is never held to a guessed
+  read from a translation export, below); a label the spec does not write is not compared. **A string label is never held to a guessed
   language.** A build run with `--language-code` in an organization whose base language is another one publishes its
   captions in the flag's language, so verify it with the same flag (or pin `languageCode` in the spec): told nothing,
   verify holds them to the organization's language, and either the failure says so or, when the read carries no
-  label in that language, the captions are listed as unverified. When no language can be established at all —
+  label in that language, the export is asked for them (below). When no language can be established at all —
   the organization cannot be read — the string labels are listed under `unverified` (the output, and the result
   JSON beside `missing`), neither passed nor failed, with the reason and the flag that settles it: the build's
   fallback to 1033 is a choice for a build, and for verify it would be a guess that passes a stale caption as
   readily as it fails a correct one (`resolveLanguageCode`'s `undetermined` hook replaces it). Everything else is
-  still checked, label maps included. **A language the form's read does not carry is never reported missing.** The platform
+  still checked, label maps included. **A language the form's read does not carry is never reported missing — a
+  translation export reads it.** The platform
   decides which languages' labels go into the FormXML a caller reads, and it can return fewer than the form stores —
   measured: a form built and published with Spanish (3082) captions in an organization whose base language is English
-  (1033) keeps both languages (a translation export finds them), yet its published FormXML, with or without an
-  `Accept-Language` for the other language, carries every label in 1033 alone. When no label of the form's FormXML — on any
-  element, a field's included — is in the language a label is compared in, the labels compared in that language are listed
-  under `unverified` too (`form-labels:<table>.<form> (… in language 3082 … not compared: the environment's form read
-  returns labels only in 1033, so labels written in 3082 cannot be read back from it. Check … in Power Apps with that
-  language, or verify in a language the read carries)`), neither passed nor failed, with `ok` and the exit status unchanged;
-  a label map is compared at the languages the read carries and the others are listed the same way (`verifySpec`'s
-  `carriedLanguages`, `parseFormTopology`). A language the read does carry is compared exactly as above — a stale caption in
-  it still fails — and a form whose read carries no label at all names no language, so its missing caption is a
-  mismatch as ever. Translations are not read another way (a translation export, `RetrieveLocLabels`): what a caller's
-  FormXML cannot show is not verified. Field order and anchor adjacency are not verified. A field's `readOnly`/`hidden` flag goes on
+  (1033) keeps both languages, yet its published FormXML, with or without an
+  `Accept-Language` for the other language, carries every label in 1033 alone (nor does `RetrieveLocLabels` apply to a form's
+  `formxml`: HTTP 400). When no label of the form's FormXML — on any
+  element, a field's included — is in the language a label is compared in, the labels compared in that language are looked up in
+  ONE translation export of the app's solution (`lib/translation-labels.js`; `POST …/solutions/Microsoft.Dynamics.CRM.ExportTranslation`
+  with `{ "SolutionName": "<uniquename>" }` — bound to the `solutions` collection, the unbound action answers 404 — whose answer is a
+  base64 zip holding `CrmTranslations.xml`, an Excel 2003 XML spreadsheet; its `Localized Labels` sheet has one row per caption,
+  `Entity name | Object ID | Object Column Name | <one column per provisioned language, headed by its LCID>`, a tab's or section's row being
+  the one whose Object ID is the `id` the element has in the FormXML and whose column is `displayname`, an empty cell meaning no caption in that
+  language). They are matched by the table and the `id` of the tab or section the form's read matched (`parseFormTopology` keeps it), in the
+  language the spec declares: the text it holds is the declared one → the caption passes; another text, or an empty cell, is a
+  `form-topology` mismatch (`… is deployed with label "Antiguo" in language 3082 (the translation export of solution 'S' shows it; the form
+  read does not carry language 3082), the spec declares label: "Resumen" in language 3082`); a label map is compared the same way, language
+  by language, and the languages the read carries stay compared from the read (`verifySpec`'s `carriedLanguages`). **What the export cannot
+  settle stays unverified, as it was before verify read exports, and never passes:** it fails or is not readable with certainty (an
+  HTTP error, an answer that holds no archive, an archive or a workbook that is damaged or is not the platform's — `lib/zip-read.js` reads
+  the archive and `lib/strict-xml.js` the workbook, both strict and dependency-free, and a row or cell they do not recognise makes the
+  WHOLE export unreadable, never a skipped row), the FormXML gives the element no GUID id, the export has no row for it (the
+  solution's tables are exported, not only its forms, but a form of another table is no proof of this one) or more than one, or no column
+  for the language (it is not provisioned): the entry then says why — `A translation export of solution 'S' could not be read (…)` or
+  `… was read, but it cannot settle them: …` — before what to check in Power Apps; `ok` and the exit status are unchanged. **What it
+  costs:** one `ExportTranslation` request, made only when some caption needs it (a build and verify in the language the read carries, or a spec with no labels, make
+  none), once per verify pass whatever the number of forms (the pass shares one promise), and sent ONCE — never again on a throttled,
+  unavailable or timed-out answer (`isTranslationExport` is the `sendOnce` rule of the verify and build HTTP clients), because it is a long
+  action and a re-send would start a second export beside the first. Measured live: 7.5–11.2 s and a 5 KB zip (44 KB of XML) for a solution
+  of one table, more as the solution grows — it exports every label of every form of its tables — and it reads the PUBLISHED layer (a caption
+  saved and not published is not in it, which is what verify checks); Microsoft Learn documents the export for an unmanaged solution, which is what the build makes. A workbook of more than 32 MiB (about
+  75,000 rows; reading it costs ~15 bytes of memory per byte of XML) is not read. A language the read does carry is compared exactly as
+  above, from the read — a stale caption in it still fails — and a form whose read carries no label at all names no language, so its missing
+  caption is a mismatch as ever, with no export. Field order and anchor adjacency are not verified. A field's `readOnly`/`hidden` flag goes on
   **every** cell the form holds of the field — in a section, in a maker's tab or section, in the form
   **header and footer**, and in a tab's own header and footer (`tabheader`/`tabfooter`): on a form a maker placed a
   field on twice, the first cell alone left the second editable or visible. `applyFieldControlOptions` visits each
@@ -2373,6 +2393,8 @@ scripts/
     sitemap-pages.js           ← pure GenPageId extractors (the TEXT readers `sitemapGenPages` / `sitemapGenPageIds`, which only refuse or report; `navigationGenPageIds`, which reads the navigation ELEMENTS through `strict-xml.js` and is what a page is deleted by) + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof, read as navigation, from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries); a read that fails is reported by value with the error itself as a non-enumerable `cause` (`withCause`), for the halt raised around it to decide from
     strict-xml.js              ← `readXmlElements(xml, wanted, { spans? })`: ONE strict reader of ONE XML document, in one pass, no dependency — comments, CDATA sections, processing instructions and attribute values are data, never elements; anything that is not exactly one well-formed document (or that the SDK's own xmldom would read differently) is `{ ok:false, detail }` with no element at all. With `spans`, each element also says where it is in the text (`start`, `end`), for `formxml-layers.js`. `tests/strict-xml-oracle.test.js` holds it to xmldom over a generated corpus
     formxml-layers.js          ← `sameFormXmlAcrossLayers(published, saved, versions?)`: whether a systemform's saved FormXML (RetrieveUnpublished) is its published one in the languages the published read carries — a caption in another language is set aside, anything else that differs (and a FormXML that is not one well-formed document, read by `strict-xml.js`) is a change; and, for a published read that carries more than one language (the read of a user whose own language is the organization's second one, which orders and words the captions its own way) whose `versions` say the published row and the saved read answer the same `@odata.etag` (the saved layer has not been written since the publish), in everything but the captions, of any language; what verify's dashboard check decides "published" by
+    zip-read.js                ← `readZipEntry(archive, name, { maxArchiveBytes?, maxEntryBytes? })`: ONE strict reader of ONE entry of a ZIP archive held in memory, no dependency (`node:zlib`). The archive has to agree with itself — end record, central directory, local header, sizes, CRC-32 — and holds a stored or deflated entry; ZIP64, an archive in parts, an encrypted entry, a name twice, data that inflates past the size the archive declares: a `ZipReadError`. The data is found from the LOCAL header's own lengths (the platform's export has an extra field there that its central directory does not). What `translation-labels.js` opens a translation export with
+    translation-labels.js      ← the captions of a solution's forms in EVERY provisioned language, from ONE translation export: `readTranslationLabels(sdk.dataverse, solutionName)` → `{ ok: true, languages, lookup(table, id) }` or `{ ok: false, reason }` (it never throws); `parseTranslationWorkbook(xml)` reads `CrmTranslations.xml`, an Excel 2003 XML spreadsheet, with `strict-xml.js` and rules of its own (a row, cell or type it does not recognise makes the WHOLE workbook unreadable); `settleCaption(export, { entity, id, lcid, text })` judges one caption (same, different, or unsettled with the reason); `isTranslationExport(method, url)` is the `sendOnce` rule that keeps the request from being sent twice. What `verify-spec.js` compares a tab's or a section's caption with in a language the form's own read does not carry (`readerFor`'s `translationLabels`)
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
     deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there, each page with the hash of the source the pages phase read and sent (what the build's Griffel check compares a later source with)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode

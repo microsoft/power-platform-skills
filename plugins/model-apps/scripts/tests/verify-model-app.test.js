@@ -11,6 +11,7 @@ const { verifySpec } = require('../lib/verify-spec.js');
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 const { appSpec, column, nameColumn } = require('./helpers/column-gate-specs.js');
 const dashboardReads = require('./helpers/dashboard-two-language-reads.js');
+const { workbookXml, exportZip, exportAnswer } = require('./helpers/translation-export.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -344,8 +345,9 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
       };
     }
     if (id === './lib/sdk-http-client.js') {
-      // One client is made for the run; the page backend must be given that same one (its token is shared), so each is recorded.
-      return { createAzHttpClient: (env) => { const client = { env }; events.push({ type: 'createAzHttpClient', client }); return client; } };
+      // One client is made for the run; the page backend must be given that same one (its token is shared), so each is recorded — with what it was made with, which is how a test
+      // can tell the one request the run sends only once (the translation export).
+      return { createAzHttpClient: (env, deps) => { const client = { env }; events.push({ type: 'createAzHttpClient', client, deps }); return client; } };
     }
     if (!realGates && id === './lib/verify-spec.js') {
       return {
@@ -578,12 +580,13 @@ const spanishFormSpec = (over = {}) => ({
     tabs: [{ name: 'tab_main', label: 'Resumen', sections: [{ name: 'sec_main', label: 'Detalles', columns: 1, fields: ['new_name'] }] }] }],
   ...over,
 });
-// The published form as a read returns it, with the captions `tab` and `section` (each `<label …/>` markup).
-const spanishFormXml = ({ tab, section }) => `<form><tabs><tab id="{1}" name="tab_main" expanded="true" visible="true"><labels>${tab}</labels><columns><column width="100%"><sections>`
-  + `<section id="{2}" name="sec_main" showlabel="true" visible="true" columns="1"><labels>${section}</labels><rows><row><cell id="{3}"><control id="new_name" classid="{4273EDBD-AC1D-40D3-9FB2-095C621B552D}" datafieldname="new_name" /></cell></row></rows></section>`
+// The published form as a read returns it, with the captions `tab` and `section` (each `<label …/>` markup), and the ids the tab and the section have in the FormXML.
+const spanishFormXml = ({ tab, section, ids = { tab: '{1}', section: '{2}' } }) => `<form><tabs><tab id="${ids.tab}" name="tab_main" expanded="true" visible="true"><labels>${tab}</labels><columns><column width="100%"><sections>`
+  + `<section id="${ids.section}" name="sec_main" showlabel="true" visible="true" columns="1"><labels>${section}</labels><rows><row><cell id="{3}"><control id="new_name" classid="{4273EDBD-AC1D-40D3-9FB2-095C621B552D}" datafieldname="new_name" /></cell></row></rows></section>`
   + '</sections></column></columns></tab></tabs><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
 const englishLabels = { tab: '<label description="Overview" languagecode="1033" />', section: '<label description="Basics" languagecode="1033" />' };
-const formSdk = (formxml) => () => ({
+// `post` is the SDK's Dataverse client's `post`, which a translation export is asked for through: with none, the SDK has no client that can ask.
+const formSdk = (formxml, { post } = {}) => () => ({
   initWorkspace: async () => {},
   findTables: async () => [{ logicalName: 'new_ticket' }],
   findColumns: async () => [{ logicalName: 'new_name' }],
@@ -597,20 +600,21 @@ const formSdk = (formxml) => () => ({
       if (/RetrieveFilteredForms/.test(String(p))) return { status: 200, body: { value: [{ formid: SPANISH_FORM_ID }] } };
       return { status: 200, body: { value: [] } };
     },
+    ...(post ? { post } : {}),
   },
 });
-const runSpanishVerify = async (flags, { spec = spanishFormSpec(), labels = englishLabels } = {}) => {
+const runSpanishVerify = async (flags, { spec = spanishFormSpec(), labels = englishLabels, ids, post } = {}) => {
   const harness = loadVerifyCli({
     parseResult: { positional: [], flags: { ...SPEC_FLAGS, ...flags } },
     realGates: true,
     specObject: spec,
-    sdkFactory: formSdk(spanishFormXml(labels)),
+    sdkFactory: formSdk(spanishFormXml({ ...labels, ...(ids ? { ids } : {}) }), { post }),
   });
   await harness.main();
   return { harness, emitted: harness.events.find((e) => e.type === 'emitResult') };
 };
 
-test('verify CLI over a form read that carries only English — --language-code 3082, --languageCode 3082 and a spec pin — lists the Spanish captions unverified and exits clean', async () => {
+test('verify CLI over a form read that carries only English — --language-code 3082, --languageCode 3082 and a spec pin — lists the Spanish captions unverified and exits clean, whose translation export cannot be asked for', async () => {
   for (const [what, flags, spec] of [
     ['--language-code 3082', { 'language-code': '3082' }, spanishFormSpec()],
     ['--languageCode 3082', { languageCode: '3082' }, spanishFormSpec()],
@@ -623,11 +627,88 @@ test('verify CLI over a form read that carries only English — --language-code 
     assert.deepStrictEqual(emitted.payload.missing, [], `${what}: no caption is reported missing`);
     assert.strictEqual(emitted.payload.present, emitted.payload.total, what);
     assert.strictEqual(emitted.payload.unverified.length, 1, `${what}: ${JSON.stringify(emitted.payload.unverified)}`);
-    assert.match(emitted.payload.unverified[0], /^form-labels:new_ticket\.Main \(the labels of tab 'tab_main', section 'sec_main' in language 3082 were not compared: the environment's form read returns labels only in 1033, so labels written in 3082 cannot be read back from it\. Check them in Power Apps with that language, or verify in a language the read carries\)$/, what);
+    assert.match(emitted.payload.unverified[0], /^form-labels:new_ticket\.Main \(the labels of tab 'tab_main', section 'sec_main' in language 3082 were not compared: the environment's form read returns labels only in 1033, so labels written in 3082 cannot be read back from it\. A translation export of solution 'FormProbe' could not be read \(the SDK has no Dataverse client that can post a translation export request\)\. Check them in Power Apps with that language, or verify in a language the read carries\)$/, what);
     assert.match(stderr, /✓ verify PASS/, what);
     assert.match(stderr, /⊘ 1 check could not be verified — it is neither passed nor failed/, what);
     assert.ok(stderr.includes(`⊘ ${emitted.payload.unverified[0]}`), `${what}: the entry is named, with its reason`);
   }
+});
+
+// The form's tab and section as the platform keeps them: GUIDs, in braces and capitals as a classic form writes them, and the export that has the Spanish captions of both.
+const SPANISH_IDS = { tab: '{0A0A0A0A-0000-4000-8000-000000000001}', section: '{0A0A0A0A-0000-4000-8000-000000000002}' };
+const spanishExport = (over = {}) => exportAnswer(exportZip(workbookXml({ captions: [
+  { entity: 'new_ticket', id: SPANISH_IDS.tab.slice(1, -1).toLowerCase(), texts: { 1033: 'Overview', 3082: 'Resumen', ...(over.tab || {}) } },
+  { entity: 'new_ticket', id: SPANISH_IDS.section.slice(1, -1).toLowerCase(), texts: { 1033: 'Basics', 3082: 'Detalles', ...(over.section || {}) } },
+] })));
+
+test('verify CLI settles the Spanish captions from ONE translation export asked for through the SDK\'s Dataverse client — the run passes with nothing left unverified', async () => {
+  for (const [what, flags, spec] of [
+    ['--language-code 3082', { 'language-code': '3082' }, spanishFormSpec()],
+    ['languageCode pinned in the spec', {}, spanishFormSpec({ languageCode: 3082 })],
+  ]) {
+    const asked = [];
+    const { harness, emitted } = await runSpanishVerify(flags, { spec, ids: SPANISH_IDS, post: async (p, body) => { asked.push({ p, body }); return spanishExport(); } });
+    assert.strictEqual(emitted.ok, true, `${what}: ${JSON.stringify(emitted.payload)}`);
+    assert.deepStrictEqual(emitted.payload.missing, [], what);
+    assert.ok(!('unverified' in emitted.payload), `${what}: the export settled both captions`);
+    assert.deepStrictEqual(asked, [{ p: '/solutions/Microsoft.Dynamics.CRM.ExportTranslation', body: { SolutionName: 'FormProbe' } }], `${what}: one request, to the bound action`);
+    assert.doesNotMatch(harness.stderr.join(''), /⊘/, what);
+  }
+  // A caption the export shows differently fails the run, by name.
+  const stale = await runSpanishVerify({ 'language-code': '3082' }, { ids: SPANISH_IDS, post: async () => spanishExport({ tab: { 3082: 'Antiguo' } }) });
+  assert.strictEqual(stale.emitted.ok, false);
+  assert.match(stale.emitted.payload.missing[0], /^form-topology:new_ticket\.Main \(deployed layout does not match the authored one — tab 'tab_main' is deployed with label "Antiguo" in language 3082 \(the translation export of solution 'FormProbe' shows it; the form read does not carry language 3082\), the spec declares label: "Resumen" in language 3082\)$/);
+  assert.match(stale.harness.stderr.join(''), /✗ verify FAIL — 1 missing/);
+  assert.ok(!('unverified' in stale.emitted.payload));
+});
+
+test('verify CLI lists the captions unverified, and exits clean, when the translation export fails — the reason is in the entry', async () => {
+  const refused = await runSpanishVerify({ 'language-code': '3082' }, { ids: SPANISH_IDS, post: async () => ({ status: 403, headers: {}, body: { error: { message: 'Principal user is missing prvExportTranslation privilege' } } }) });
+  assert.strictEqual(refused.emitted.ok, true, JSON.stringify(refused.emitted.payload));
+  assert.strictEqual(refused.emitted.payload.unverified.length, 1);
+  assert.match(refused.emitted.payload.unverified[0], /A translation export of solution 'FormProbe' could not be read \(HTTP 403: Principal user is missing prvExportTranslation privilege\)\. Check them in Power Apps/);
+  assert.match(refused.harness.stderr.join(''), /✓ verify PASS/);
+  const thrown = await runSpanishVerify({ 'language-code': '3082' }, { ids: SPANISH_IDS, post: async () => { throw new Error('socket hang up'); } });
+  assert.strictEqual(thrown.emitted.ok, true);
+  assert.match(thrown.emitted.payload.unverified[0], /could not be read \(the request failed: socket hang up\)/);
+  // A form read that carries the language asks for no export.
+  let asked = 0;
+  const carries = await runSpanishVerify({ 'language-code': '3082' }, { ids: SPANISH_IDS, post: async () => { asked += 1; return spanishExport(); }, labels: { tab: '<label description="Overview" languagecode="1033" /><label description="Resumen" languagecode="3082" />', section: '<label description="Basics" languagecode="1033" /><label description="Detalles" languagecode="3082" />' } });
+  assert.strictEqual(carries.emitted.ok, true);
+  assert.strictEqual(asked, 0);
+});
+
+test('verify CLI makes its HTTP client send the translation export once — and nothing else differently', async () => {
+  const { harness } = await runSpanishVerify({ 'language-code': '3082' });
+  const clients = harness.events.filter((e) => e.type === 'createAzHttpClient');
+  assert.strictEqual(clients.length, 1, 'one client for the run');
+  const { sendOnce } = clients[0].deps;
+  assert.strictEqual(typeof sendOnce, 'function');
+  const base = 'https://org.example/api/data/v9.2';
+  assert.strictEqual(sendOnce('POST', `${base}/solutions/Microsoft.Dynamics.CRM.ExportTranslation`), true, 'a long action: a re-send would run it twice');
+  for (const [method, url] of [['GET', `${base}/systemforms`], ['POST', `${base}/$batch`], ['POST', `${base}/ExportSolution`], ['PATCH', `${base}/systemforms(1)`]]) {
+    assert.strictEqual(sendOnce(method, url), false, `${method} ${url} keeps the client's usual retry`);
+  }
+});
+
+test('readerFor.translationLabels asks the SDK\'s Dataverse client for ONE export of the named solution, and answers { ok, languages, lookup } — or why it cannot', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async () => [],
+    dataverse: { post: async (p, body, options) => { calls.push({ p, body, options }); return spanishExport(); } },
+  };
+  const read = readerFor(sdk, 'contoso_app', {});
+  const answer = await read.translationLabels('Contoso_Tickets');
+  assert.strictEqual(answer.ok, true, JSON.stringify(answer));
+  assert.deepStrictEqual(answer.languages, [1033, 3082]);
+  assert.strictEqual(answer.lookup('new_ticket', SPANISH_IDS.tab).texts.get(3082), 'Resumen');
+  assert.deepStrictEqual(calls.map(({ p, body }) => ({ p, body })), [{ p: '/solutions/Microsoft.Dynamics.CRM.ExportTranslation', body: { SolutionName: 'Contoso_Tickets' } }]);
+  // Not kept between asks: the export is the published layer, and a later verify must see it change.
+  await read.translationLabels('Contoso_Tickets');
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(await readerFor({ queryRecords: async () => [] }, 'contoso_app', {}).translationLabels('Contoso_Tickets'), { ok: false, reason: 'the SDK has no Dataverse client that can post a translation export request' });
+  const refused = await readerFor({ queryRecords: async () => [], dataverse: { post: async () => ({ status: 404, headers: {}, body: { error: { message: 'Resource not found for the segment \'ExportTranslation\'.' } } }) } }, 'contoso_app', {}).translationLabels('Contoso_Tickets');
+  assert.deepStrictEqual(refused, { ok: false, reason: 'HTTP 404: Resource not found for the segment \'ExportTranslation\'.' });
 });
 
 test('verify CLI compares the Spanish captions strictly when the read carries them — a stale one still fails the run', async () => {

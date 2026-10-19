@@ -214,14 +214,15 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   flag, and a build run with it needs it there**: the build writes a form's tab and section captions in that
   language, and `--verify` holds them to the language it is told (the flag, else this field, else the
   organization's base language) — so without the flag, or this field pinned in the spec, such a form is held to
-  the organization's language and its captions cannot be confirmed: they are reported missing, or listed as
-  unverified when the form's read carries no label in that language (below). (The build's own `--verify` is told
+  the organization's language and its captions cannot be confirmed: they are reported missing, or, when the form's
+  read carries no label in that language, looked up in a translation export (below). (The build's own `--verify` is told
   the language the build used.)
   When no language can be established at all — the organization cannot be read — those captions are listed
-  as **unverified**, neither passed nor failed. So are the captions compared in a language the environment's form
-  read does not carry: the platform decides which languages' labels the FormXML it returns carries (a form built
-  with Spanish captions in an English-language organization reads back with its labels in English only), and a
-  language no label of the form is in cannot be read back, whatever the form stores.
+  as **unverified**, neither passed nor failed. A caption compared in a language the environment's form
+  read does not carry is read from a **translation export** of the app's solution instead: the platform decides which
+  languages' labels the FormXML it returns carries (a form built with Spanish captions in an English-language organization
+  reads back with its labels in English only), and the export is the one read that carries them all. It is one request,
+  made only when such a caption is there to check; the captions it cannot settle stay **unverified**.
   If the organization has **not** provisioned the LCID you pin, the build stops at the start of the
   data-model phase and lists the ones it does have — Dataverse would otherwise accept the table and
   Choice labels (silently storing them under the org's base language) and then reject the first
@@ -1296,12 +1297,16 @@ The same goes for a language the environment's form read does not carry: the pla
 into the FormXML it returns, and it can return fewer than the form stores (measured: a form built and published with Spanish
 (`3082`) captions in an English-language (`1033`) organization keeps both languages, yet its published FormXML carries every label in
 `1033` alone). When no label of the form — on any element — is in the language a label is compared in, while the read carries labels
-in other languages, the labels compared in it
-are reported **unverified** (what the read does carry, and what to do: check them in Power Apps with that language), a label map
-`{ "1033": …, "3082": … }` is compared at the languages the read carries and the others are listed the same way, and `ok` and the exit
-status are those of everything that could be compared. A language the read does carry is compared strictly: a stale caption in it
-fails. A form whose read carries no label at all names no language that could be missing from the read: the captions the spec
-declares for it are missing, and fail. Translations are not read another way (a translation export, `RetrieveLocLabels`).
+in other languages, the labels compared in it are read from **one translation export of the app's solution** — the one read that
+carries every provisioned language — by the `id` the tab or section has in the FormXML: the caption the spec declares passes, another
+text or an empty cell is a mismatch and fails, and a label map `{ "1033": …, "3082": … }` is compared language by language. What the
+export cannot settle (it fails or cannot be read, the form gives the element no id, the export has no row for it or no column for the
+language) is reported **unverified** with the reason (what to do: check those captions in Power Apps with that language), and `ok`
+and the exit status are those of everything that could be compared. **Cost:** one request per verify, made only when there is such
+a caption to check — measured at 7.5–11.2 s for a solution of one table, more as the solution grows (it exports every label of it) —
+and it shows the published layer: a caption saved and not published is not in it. A language the read does carry is compared
+strictly, from the read: a stale caption in it fails. A form whose read carries no label at all names no language that could be
+missing from the read: the captions the spec declares for it are missing, and fail.
 A label the spec does not write is not compared. Auto forms also require readable
 FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
 It does **not** check field order or `after` adjacency.

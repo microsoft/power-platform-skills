@@ -44,6 +44,7 @@ const { envTruthy } = require('./lib/interaction-mode.js');
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
+const { isTranslationExport } = require('./lib/translation-labels.js');
 const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
@@ -83,7 +84,9 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   assertWorkspaceDir(workspaceDir, { create: persistent });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   // The one client of both SDK instances and of verify's isolated reader draws its waits for a throttled answer from the run's budget (`throttle`, made by main()).
-  const httpClient = createAzHttpClient(env, { throttle });
+  // The build's own `--verify` reads a form's captions in a language the form read does not carry from a translation export (verify-model-app.js readerFor), through this client:
+  // that request is sent once whatever answers it (isTranslationExport), as in the standalone verify — a long action, which a re-send would run a second time.
+  const httpClient = createAzHttpClient(env, { throttle, sendOnce: isTranslationExport });
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });

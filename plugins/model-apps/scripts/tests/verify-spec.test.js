@@ -4,6 +4,8 @@ const assert = require('node:assert');
 const { verifySpec, hasElement, parseFetchXml, liveNavEntries, subareaDashboardHasLauncher } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
+const { parseTranslationWorkbook } = require('../lib/translation-labels.js');
+const { workbookXml } = require('./helpers/translation-export.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
 const idFor = (set) => ({ savedquery: 'savedqueryid', savedqueryvisualization: 'savedqueryvisualizationid', systemform: 'formid' }[set] || 'id');
@@ -3321,4 +3323,242 @@ test('verifySpec: when the typed read cannot see the holder, relationshipHolder 
   const rc = r.checks.find((c) => c.kind === 'relationship');
   assert.strictEqual(rc.present, false);
   assert.match(rc.detail, /contoso_project_contoso_task exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
+});
+
+// --- A language the form READ does not carry is read from ONE translation export of the app's solution ---------------------------------------------
+//
+// The form reads cannot show a caption in a language their FormXML does not carry, and a translation export can: it holds every provisioned language,
+// the published layer, one row per tab or section keyed by the `id` the element has in the FormXML. So the captions compared in such a language are
+// compared there — by the id of the tab or section the form's read matched — and are reported like any other: a right one passes, a stale or an
+// empty one is a mismatch. An export that cannot be used, or that cannot say, leaves them UNVERIFIED as they were: never a pass. The export is one
+// request, made when some caption needs it and not otherwise, and shared by every form of the pass.
+const TAB_ID = '0a0a0a0a-0000-4000-8000-000000000001';
+const LEFT_ID = '0a0a0a0a-0000-4000-8000-000000000002';
+const RIGHT_ID = '0a0a0a0a-0000-4000-8000-000000000003';
+// The form as the live read shows it — every caption in English, none in Spanish — with the ids a platform form's tabs and sections have.
+const readsEnglishWithIds = (over = {}) => layoutXml([overview({ tab: { id: TAB_ID }, left: { id: LEFT_ID }, right: { id: RIGHT_ID }, ...over })]);
+// What the export holds for TOPO_SPEC's three containers: the English captions the form read shows and the Spanish ones `inSpanish` asks for. `over` replaces
+// the texts of a row by its id, and drops the row when it is `null`.
+const spanishRows = (over = {}) => [
+  { entity: 'new_ticket', id: TAB_ID, texts: { 1033: 'Overview', 3082: 'Resumen' } },
+  { entity: 'new_ticket', id: LEFT_ID, texts: { 1033: 'L', 3082: 'Izquierda' } },
+  { entity: 'new_ticket', id: RIGHT_ID, texts: { 1033: 'R', 3082: 'Derecha' } },
+].filter((row) => over[row.id] !== null).map((row) => (over[row.id] ? { ...row, texts: over[row.id] } : row));
+const exportOf = (captions = spanishRows(), languages = [1033, 3082]) => {
+  const read = parseTranslationWorkbook(workbookXml({ languages, captions }));
+  assert.strictEqual(read.ok, true, JSON.stringify(read));
+  return read;
+};
+// A reader that can ask for the export: it answers `answer` (or what a function of the solution's name answers) a moment later, and records the solution asked for.
+const asking = (answer, seen = []) => ({ translationLabels: async (solution) => {
+  seen.push(solution);
+  await new Promise((resolve) => setImmediate(resolve));
+  return typeof answer === 'function' ? answer(solution) : answer;
+} });
+const inOrgAsking = (answer, seen, languagecode = 1033) => ({ ...inOrg(languagecode), ...asking(answer, seen) });
+const SOLUTION_EXPORT = 'the translation export of solution \'s\'';
+
+test('verify compares the captions a form read does not carry with ONE translation export of the app\'s solution — the right ones pass and nothing is left unverified', async () => {
+  // The English build, compared in 1033, is what the fixture reports by itself (it publishes no form order): the export neither adds to it nor takes from it.
+  const baseline = await checkWith(readsOnlyEnglish(), () => {}, inOrg(1033));
+  for (const [what, mutate, opts] of [
+    ['the --language-code the build was given', inSpanish, { languageCode: 3082 }],
+    ['the language the build\'s SDK was made for', inSpanish, { preResolvedLanguageCode: 3082 }],
+    ['both, as the build\'s own verify is handed them', inSpanish, { languageCode: 3082, preResolvedLanguageCode: 3082 }],
+    ['a languageCode the spec pins', (spec) => { inSpanish(spec); spec.languageCode = 3082; }, undefined],
+  ]) {
+    const seen = [];
+    const { res, chk } = await checkWith(readsEnglishWithIds(), mutate, inOrgAsking(exportOf(), seen), opts);
+    assert.strictEqual(chk.present, true, `${what}: ${chk.detail}`);
+    assert.strictEqual(res.unverified, undefined, `${what}: the export settled all three captions`);
+    assert.deepStrictEqual(res.missing, baseline.res.missing, `${what}: nothing is added to the failures the fixture has by itself`);
+    assert.strictEqual(res.ok, baseline.res.ok, what);
+    assert.deepStrictEqual(seen, ['s'], `${what}: one export, of the spec's solution`);
+    assert.ok(!res.checks.some((c) => /label/i.test(c.kind)), `${what}: no label check of its own is recorded`);
+  }
+});
+
+test('verify reports a caption the translation export shows differently, or not at all — by the id of its tab or section, and only that one', async () => {
+  const opts = { languageCode: 3082 };
+  const baseline = await checkWith(readsEnglishWithIds(), () => {}, inOrg(1033));
+  assert.strictEqual(baseline.chk.present, true, 'the English build of the same form is right');
+  // A stale caption in the tab: the section captions are right, and are not mentioned.
+  const stale = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows({ [TAB_ID]: { 1033: 'Overview', 3082: 'Antiguo' } }))), opts);
+  assert.strictEqual(stale.chk.present, false);
+  assert.match(stale.chk.detail, new RegExp(`tab 'tab_overview' is deployed with label "Antiguo" in language 3082 \\(${SOLUTION_EXPORT} shows it; the form read does not carry language 3082\\), the spec declares label: "Resumen" in language 3082`));
+  assert.doesNotMatch(stale.chk.detail, /sec_left|sec_right/);
+  assert.strictEqual(stale.res.unverified, undefined, 'a caption the export settled is no longer unverified, right or wrong');
+  assert.ok(stale.res.missing.some((m) => m.kind === 'form-topology'), 'it is a failure of the form, as any wrong caption is');
+  // An empty cell is a caption that is not there; what the row holds in other languages is said.
+  const empty = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows({ [LEFT_ID]: { 1033: 'L' } }))), opts);
+  assert.strictEqual(empty.chk.present, false);
+  assert.match(empty.chk.detail, new RegExp(`section 'sec_left' is deployed with no label in language 3082 \\(${SOLUTION_EXPORT} has none, only "L" in 1033; the form read does not carry language 3082\\), the spec declares label: "Izquierda" in language 3082`));
+  assert.doesNotMatch(empty.chk.detail, /tab 'tab_overview'|sec_right/);
+  const bare = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows({ [RIGHT_ID]: {} }))), opts);
+  assert.match(bare.chk.detail, new RegExp(`section 'sec_right' is deployed with no label in language 3082 \\(${SOLUTION_EXPORT} has none; the form read does not carry language 3082\\), the spec declares label: "Derecha" in language 3082`));
+  // Every wrong caption is reported, each once.
+  const all = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows({ [TAB_ID]: { 3082: 'a' }, [LEFT_ID]: { 3082: 'b' }, [RIGHT_ID]: { 3082: 'c' } }))), opts);
+  assert.strictEqual((all.chk.detail.match(/in language 3082 \(/g) || []).length, 3, all.chk.detail);
+  // Text is compared exactly: the case of a letter is a different caption.
+  const cased = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows({ [TAB_ID]: { 1033: 'Overview', 3082: 'resumen' } }))), opts);
+  assert.strictEqual(cased.chk.present, false);
+});
+
+test('verify makes ONE translation export for every form and every caption — forms that ask at the same moment share it', async () => {
+  const spec = TOPO_SPEC();
+  inSpanish(spec);
+  spec.forms.push({ ...JSON.parse(JSON.stringify(spec.forms[0])), name: 'Ticket Second' });
+  const SECOND = { tab: 'a1b2c3d4-0000-4000-8000-000000000001', left: 'a1b2c3d4-0000-4000-8000-000000000002', right: 'a1b2c3d4-0000-4000-8000-000000000003' };
+  const secondRows = (tabText) => [
+    { entity: 'new_ticket', id: SECOND.tab, texts: { 1033: 'Overview', 3082: tabText } },
+    { entity: 'new_ticket', id: SECOND.left, texts: { 1033: 'L', 3082: 'Izquierda' } },
+    { entity: 'new_ticket', id: SECOND.right, texts: { 1033: 'R', 3082: 'Derecha' } },
+  ];
+  const reads = (answer, seen) => topoRead(null, {
+    ...asking(answer, seen),
+    queryRecords: async (set, o) => {
+      if (set === 'organization') return [{ languagecode: 1033 }];
+      if (set !== 'systemform') return [];
+      const asked = /name eq '([^']*)'/.exec((o && o.filter) || '');
+      const name = asked ? asked[1] : 'Ticket Main';
+      return [{ formid: name === 'Ticket Main' ? 'f1' : 'f2', name, objecttypecode: 'new_ticket', type: 2, isdefault: false }];
+    },
+    formTopology: async (_entity, id) => (id === 'f1' ? readsEnglishWithIds() : readsEnglishWithIds({ tab: { id: SECOND.tab }, left: { id: SECOND.left }, right: { id: SECOND.right } })),
+  });
+  const topologies = (res) => res.checks.filter((c) => c.kind === 'form-topology').map((c) => [c.name, c.present]);
+  const seen = [];
+  const passing = await verifySpec(spec, reads(exportOf([...spanishRows(), ...secondRows('Resumen')]), seen), { languageCode: 3082 });
+  assert.deepStrictEqual(topologies(passing), [['new_ticket.Ticket Main', true], ['new_ticket.Ticket Second', true]]);
+  assert.strictEqual(passing.unverified, undefined);
+  assert.deepStrictEqual(seen, ['s'], 'six captions of two forms, one export');
+  // Each form is judged by its own rows: the second form\'s stale caption fails it, and the first stays right.
+  const again = [];
+  const failing = await verifySpec(spec, reads(exportOf([...spanishRows(), ...secondRows('Antiguo')]), again), { languageCode: 3082 });
+  assert.deepStrictEqual(topologies(failing), [['new_ticket.Ticket Main', true], ['new_ticket.Ticket Second', false]]);
+  assert.strictEqual(again.length, 1);
+  // …and an export of another pass is another export: the answer is kept for ONE pass, as a form read is.
+  const passes = [];
+  const reader = reads(exportOf([...spanishRows(), ...secondRows('Resumen')]), passes);
+  await verifySpec(spec, reader, { languageCode: 3082 });
+  await verifySpec(spec, reader, { languageCode: 3082 });
+  assert.strictEqual(passes.length, 2);
+});
+
+test('verify asks for no translation export when every caption can be compared from the form read, or none can be compared at all', async () => {
+  const seen = [];
+  const reader = inOrgAsking(exportOf(), seen);
+  // The read carries the Spanish captions: they are compared there, as before — a wrong one fails, with no export.
+  const carried = await checkWith(readsSpanishToo(), inSpanish, reader, { languageCode: 3082 });
+  assert.strictEqual(carried.chk.present, true, carried.chk.detail);
+  const wrong = await checkWith(readsSpanishToo({ tabLabel: [{ text: 'Overview', lcid: 1033 }, { text: 'Antiguo', lcid: 3082 }] }), inSpanish, reader, { languageCode: 3082 });
+  assert.strictEqual(wrong.chk.present, false);
+  assert.doesNotMatch(wrong.chk.detail, /translation export/);
+  // The English build: the language is one the read carries.
+  assert.strictEqual((await checkWith(readsEnglishWithIds(), () => {}, reader)).chk.present, true);
+  // A layout that authors no caption has nothing to look up.
+  assert.strictEqual((await checkWith(readsEnglishWithIds(), unlabelled, reader)).chk.present, true);
+  // A form that publishes no label at all names no language that is missing from the read: what it lacks is a caption, and a mismatch as ever.
+  const none = layoutXml([overview({ tabLabel: null, leftLabel: null, rightLabel: null, tab: { id: TAB_ID }, left: { id: LEFT_ID }, right: { id: RIGHT_ID } })]);
+  const bare = await checkWith(none, inSpanish, reader, { languageCode: 3082 });
+  assert.strictEqual(bare.chk.present, false);
+  assert.match(bare.chk.detail, /tab 'tab_overview' is deployed with no label, the spec declares label: "Resumen" in language 3082/);
+  // A string caption whose language cannot be established is not compared in any: there is nothing to look up.
+  const unreadable = { ...asking(exportOf(), seen), queryRecords: async (set) => { if (set === 'organization') throw new Error('503'); return set === 'systemform' ? FORM_ROW : []; } };
+  const unknown = await checkWith(readsEnglishWithIds(), () => {}, unreadable);
+  assert.strictEqual(unknown.res.unverified.length, 1);
+  assert.match(unknown.res.unverified[0], /the language the build wrote them in could not be established/);
+  assert.deepStrictEqual(seen, [], 'no export was asked for');
+});
+
+test('verify compares a label MAP language by language — the languages the read carries in the read, the others in the export', async () => {
+  const declared = (spec) => { unlabelled(spec); spec.forms[0].tabs[0].label = { 1033: 'Overview', 3082: 'Resumen' }; };
+  const seen = [];
+  const right = await checkWith(readsEnglishWithIds(), declared, inOrgAsking(exportOf(), seen));
+  assert.strictEqual(right.chk.present, true, right.chk.detail);
+  assert.strictEqual(right.res.unverified, undefined);
+  assert.deepStrictEqual(seen, ['s']);
+  // The English caption is held strictly by the read, the Spanish one by the export, and each is reported by itself.
+  const both = await checkWith(readsEnglishWithIds({ tabLabel: { text: 'Old', lcid: 1033 } }), declared, inOrgAsking(exportOf(spanishRows({ [TAB_ID]: { 1033: 'Overview', 3082: 'Antiguo' } }))));
+  assert.strictEqual(both.chk.present, false);
+  assert.match(both.chk.detail, /tab 'tab_overview' is deployed with label "Old" in language 1033, the spec declares label: "Overview" in language 1033/);
+  assert.match(both.chk.detail, /tab 'tab_overview' is deployed with label "Antiguo" in language 3082 \(the translation export of solution 's' shows it; /);
+  // Only the language the read lacks goes to the export: an English-only map has none, and asks for none.
+  const englishOnly = (spec) => { unlabelled(spec); spec.forms[0].tabs[0].label = { 1033: 'Overview' }; };
+  const before = [];
+  assert.strictEqual((await checkWith(readsEnglishWithIds(), englishOnly, inOrgAsking(exportOf(), before))).chk.present, true);
+  assert.deepStrictEqual(before, []);
+});
+
+test('verify leaves the captions UNVERIFIED — as before, with the reason — when the translation export cannot be used, and never passes them', async () => {
+  const baseline = await checkWith(readsOnlyEnglish(), () => {}, inOrg(1033));
+  const opts = { languageCode: 3082 };
+  const entry = (why) => SPANISH_STRINGS_ENTRY.replace('from it. Check', `from it. A translation export of solution 's' could not be read (${why}). Check`);
+  for (const [what, answer, why] of [
+    ['an export the platform refused', { ok: false, reason: 'HTTP 403: Principal user is missing prvExportTranslation privilege' }, 'HTTP 403: Principal user is missing prvExportTranslation privilege'],
+    ['a reader that throws', () => { throw new Error('socket hang up'); }, 'socket hang up'],
+    ['a reader that answers nothing', undefined, 'the reader gave no answer'],
+    ['an answer that is neither a failure nor an export', { ok: true }, 'the reader\'s answer is not an export'],
+    ['a failure with no reason', { ok: false }, 'no reason was given'],
+  ]) {
+    const { res, chk } = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(answer), opts);
+    assert.strictEqual(chk.present, true, `${what}: nothing says a caption is wrong: ${chk.detail}`);
+    assert.deepStrictEqual(res.missing, baseline.res.missing, `${what}: unverified is not a failure`);
+    assert.strictEqual(res.ok, baseline.res.ok, what);
+    assert.deepStrictEqual(res.unverified, [entry(why)], what);
+    assert.ok(!res.checks.some((c) => /label/i.test(c.kind)), `${what}: no label check was recorded as passed`);
+  }
+});
+
+test('verify leaves a caption unverified, and says why, when the export cannot settle it — no id, no row, a row twice, no column — and settles the others', async () => {
+  const opts = { languageCode: 3082 };
+  const settles = (res) => (res.unverified || []).join(' | ');
+  // The FormXML gives its tab and sections no id: nothing to look them up by.
+  const noIds = await checkWith(readsOnlyEnglish(), inSpanish, inOrgAsking(exportOf()), opts);
+  assert.strictEqual(noIds.chk.present, true, noIds.chk.detail);
+  assert.strictEqual(noIds.res.unverified.length, 1);
+  assert.match(noIds.res.unverified[0], /^form-labels:new_ticket\.Ticket Main \(the labels of tab 'tab_overview', section 'sec_left', section 'sec_right' in language 3082 were not compared: the environment's form read returns labels only in 1033, so labels written in 3082 cannot be read back from it\. A translation export of solution 's' was read, but it cannot settle them: the form's FormXML gives a tab or section no id to look it up by\. Check them in Power Apps with that language, or verify in a language the read carries\)$/);
+  // The export has no row for the tab: it stays unverified, and the sections are compared — a right one passes, a stale one fails.
+  const noTab = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows({ [TAB_ID]: null }))), opts);
+  assert.strictEqual(noTab.chk.present, true, noTab.chk.detail);
+  assert.strictEqual(noTab.res.unverified.length, 1);
+  assert.match(noTab.res.unverified[0], new RegExp(`the label of tab 'tab_overview' in language 3082 was not compared: .*it cannot settle it: the export has no caption row for tab 'tab_overview' \\(id ${TAB_ID}, table new_ticket\\)\\. Check it in Power Apps`));
+  assert.doesNotMatch(noTab.res.unverified[0], /sec_left|sec_right/);
+  const noTabStale = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows({ [TAB_ID]: null, [LEFT_ID]: { 1033: 'L', 3082: 'Viejo' } }))), opts);
+  assert.strictEqual(noTabStale.chk.present, false);
+  assert.match(noTabStale.chk.detail, /section 'sec_left' is deployed with label "Viejo" in language 3082/);
+  assert.strictEqual(noTabStale.res.unverified.length, 1, 'the tab is still unverified');
+  // The id of another table\'s form is not this form\'s.
+  const otherTable = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows().map((row) => ({ ...row, entity: 'new_other' })))), opts);
+  assert.strictEqual(otherTable.res.unverified.length, 1);
+  assert.match(otherTable.res.unverified[0], /the export has no caption row for tab 'tab_overview' \(id [0-9a-f-]+, table new_ticket\)/);
+  // Two rows for one id: the export cannot say which is the form\'s.
+  const twice = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf([...spanishRows(), { entity: 'new_ticket', id: TAB_ID, texts: { 1033: 'Overview', 3082: 'Otro' } }])), opts);
+  assert.strictEqual(twice.chk.present, true, twice.chk.detail);
+  assert.match(settles(twice.res), new RegExp(`the export has more than one caption row for tab 'tab_overview' \\(id ${TAB_ID}, table new_ticket\\)`));
+  // The export has no column for the language: it cannot show it either.
+  const noColumn = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(spanishRows(), [1033])), opts);
+  assert.strictEqual(noColumn.chk.present, true, noColumn.chk.detail);
+  assert.match(settles(noColumn.res), /it cannot settle them: the export has no column for language 3082\. Check them/);
+});
+
+test('verify tells a maker what the flag is for when a string caption is compared in the ORGANIZATION\'s language and the export shows others', async () => {
+  // A French build in a Spanish-language organization, verified with no flag: the captions are held to the organization's Spanish, which the read does not
+  // carry, and the export has no Spanish caption — the French ones are in 1036. The detail carries the advice a read-carried mismatch carries.
+  const french = exportOf([
+    { entity: 'new_ticket', id: TAB_ID, texts: { 1033: 'Overview', 1036: 'Apercu' } },
+    { entity: 'new_ticket', id: LEFT_ID, texts: { 1033: 'L', 1036: 'Gauche' } },
+    { entity: 'new_ticket', id: RIGHT_ID, texts: { 1033: 'R', 1036: 'Droite' } },
+  ], [1033, 1036, 3082]);
+  const told = await checkWith(readsEnglishWithIds(), inFrench, inOrgAsking(french, undefined, 3082));
+  assert.strictEqual(told.chk.present, false);
+  assert.match(told.chk.detail, /tab 'tab_overview' is deployed with no label in language 3082 \(the translation export of solution 's' has none, only "Overview" in 1033, "Apercu" in 1036; the form read does not carry language 3082\), the spec declares label: "Apercu" in language 3082/);
+  assert.match(told.chk.detail, /the labels were compared in the organization's base language \(3082\), because verify was told no other: if the build was run with --language-code, give verify the same flag \(or pin "languageCode" in the spec\)/);
+  // Told the language the build was run in, the export settles them.
+  const given = await checkWith(readsEnglishWithIds(), inFrench, inOrgAsking(french, undefined, 3082), { languageCode: 1036 });
+  assert.strictEqual(given.chk.present, true, given.chk.detail);
+  assert.strictEqual(given.res.unverified, undefined);
+  // A right caption in the organization\'s language is not blamed on a guess.
+  const spanish = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(), undefined, 3082));
+  assert.strictEqual(spanish.chk.present, true, spanish.chk.detail);
+  assert.strictEqual(spanish.res.unverified, undefined);
 });

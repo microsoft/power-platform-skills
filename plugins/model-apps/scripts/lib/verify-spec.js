@@ -24,6 +24,7 @@ const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported, mapLimit, resolveLanguageCode } = require('./entity-provision.js');
+const { settleCaption } = require('./translation-labels.js');
 const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl, formFieldLogicals, declaredSectionByField } = require('./artifact-intent.js');
 // The fields an explicit layout prunes, as the destructive gate and the build's prune pass both name them.
 const { formRemovals } = require('./op-diff.js');
@@ -730,7 +731,7 @@ async function verifySpec(spec, read, opts = {}) {
   // Read once per pass, and only when a form authors a string label.
   //
   // A language that is known is not always one the form's READ can show (labelProblem says why): a label compared in a language no label of the
-  // form is in is listed `unverified` too, whichever way the language was learnt.
+  // form is in is listed `unverified` too, whichever way the language was learnt — unless the translation export of the app's solution (below) can settle it.
   let authoringLanguageP;
   const authoringLanguage = () => authoringLanguageP || (authoringLanguageP = (async () => {
     let fromOrganization = false;
@@ -743,6 +744,25 @@ async function verifySpec(spec, read, opts = {}) {
     });
     return lcid ? { lcid, fromOrganization } : { reason };
   })());
+  // The translation export of the app's solution: the one read that carries a tab's and a section's caption in EVERY provisioned language, where the form's own read carries the
+  // languages the platform chooses to show (labelProblem). It is a request that takes seconds (7.5–11.2 s measured, for a solution of one table, and more as the solution grows),
+  // so it is made only when some caption needs it — the settling step of the form loop, below, is the one place that asks — and once for the whole pass: every form's task awaits the same
+  // promise. `reason` is why there is no export; a reader that cannot ask for one (`translationLabels` is optional, like the other reads) is treated as no export at all, with no reason
+  // to give, so the captions are listed exactly as they were before an export was read.
+  const solutionName = spec.solution && spec.solution.uniqueName;
+  const canReadTranslations = typeof read.translationLabels === 'function' && typeof solutionName === 'string' && solutionName !== '';
+  const translations = once(async () => {
+    let answer;
+    try {
+      answer = await read.translationLabels(solutionName);
+    } catch (e) {
+      return { ok: false, reason: (e && e.message) || String(e) };
+    }
+    if (!answer || typeof answer !== 'object') return { ok: false, reason: 'the reader gave no answer' };
+    if (answer.ok === false) return { ok: false, reason: typeof answer.reason === 'string' && answer.reason !== '' ? answer.reason : 'no reason was given' };
+    if (answer.ok !== true || !Array.isArray(answer.languages) || typeof answer.lookup !== 'function') return { ok: false, reason: 'the reader\'s answer is not an export' };
+    return answer;
+  });
   {
     plan.each(spec.forms || [], async ({ add, unverified }, forms) => {
     for (const f of forms) {
@@ -869,7 +889,9 @@ async function verifySpec(spec, read, opts = {}) {
       // that some label does carry is compared exactly as above, strictly — a stale caption in it fails. `carriedLanguages` is empty only for a form
       // that publishes no label at all, which names no language to be missing from: what such a form lacks is a caption, and is a mismatch as ever
       // (the read measured live carried every label of the form, in the base language).
-      // Translations are not read another way (a translation export, RetrieveLocLabels): what a caller's FormXML does not carry is not verified.
+      // RetrieveLocLabels cannot read them either (a form's `formxml` "does not support localized labels": HTTP 400). A translation export can — it carries every provisioned
+      // language, the published layer, one row per tab or section keyed by the id the element has in the FormXML — so the captions a read cannot show are looked up there
+      // (the settling step below, which asks for the export once per pass and only when there is such a caption), and only the ones the export cannot settle stay `unverified`.
       const unverifiedLabels = [];
       const unshownLabels = new Map();
       let comparedInOrganizationLanguage;
@@ -879,12 +901,11 @@ async function verifySpec(spec, read, opts = {}) {
         const have = (container && container.labels) || [];
         for (const [lcid, text] of declaredLabels(authored, known)) {
           if (carriedLanguages.length && !carriedLanguages.includes(lcid)) {
-            if (!unshownLabels.has(lcid)) unshownLabels.set(lcid, { whats: [], string: false });
-            const held = unshownLabels.get(lcid);
-            held.whats.push(what);
-            // A string label is compared in the language verify is told, so a read that carries others is something a maker can act on by telling it
-            // one of them; a map names its languages itself, and there is nothing to tell.
-            if (typeof authored === 'string') held.string = true;
+            if (!unshownLabels.has(lcid)) unshownLabels.set(lcid, { items: [] });
+            // Each caption is kept with the id of the deployed tab or section it was compared against and the text the spec declares: all a translation export needs to settle it.
+            // A string label is compared in the language verify is told, so a read that carries others is something a maker can act on by telling it one of them;
+            // a map names its languages itself, and there is nothing to tell.
+            unshownLabels.get(lcid).items.push({ what, id: container && container.id, text, string: typeof authored === 'string' });
             continue;
           }
           if (have.some((l) => l.lcid === lcid && l.text === text)) continue;
@@ -1151,6 +1172,38 @@ async function verifySpec(spec, read, opts = {}) {
       });
       orderProblem(tabOrder, 'the tabs');
 
+      // The captions the form's read cannot show (`unshownLabels`) are looked up in the translation export of the app's solution — by the id of the tab or section each was compared
+      // against, in the language the spec declares it in — and judged like any other: the same text is right, and anything else is a mismatch (an empty cell is a caption that is not
+      // there). What the export cannot say stays in `unshownLabels`, with the reason, to be listed `unverified` as it was before an export was read; `held.note` is what the entry
+      // says of the export then — that it could not be read, or what it could not settle. A mismatch is a problem of THIS form, so this runs before its check is reported.
+      if (unshownLabels.size && canReadTranslations) {
+        const exported = await translations();
+        for (const [lcid, held] of unshownLabels) {
+          const whys = [];
+          held.items = held.items.filter((item) => {
+            if (!exported.ok) return true;
+            const settled = settleCaption(exported, { entity, id: item.id, lcid, text: item.text, what: item.what });
+            if (settled.state === 'same') return false;
+            if (settled.state === 'unsettled') {
+              if (!whys.includes(settled.why)) whys.push(settled.why);
+              return true;
+            }
+            const declared = `the spec declares label: ${JSON.stringify(item.text)} in language ${lcid}`;
+            const others = settled.others.map((other) => `${JSON.stringify(other.text)} in ${other.lcid}`).join(', ');
+            const source = `the translation export of solution '${solutionName}'`;
+            const absent = `the form read does not carry language ${lcid}`;
+            problems.push(settled.have === ''
+              ? `${item.what} is deployed with no label in language ${lcid} (${source} has none${others ? `, only ${others}` : ''}; ${absent}), ${declared}`
+              : `${item.what} is deployed with label ${JSON.stringify(settled.have)} in language ${lcid} (${source} shows it; ${absent}), ${declared}`);
+            // A string label held to the language the organization has is held to a guess when the build was run in another: the detail below says what to give verify.
+            if (item.string && labelLanguage && labelLanguage.fromOrganization) comparedInOrganizationLanguage = lcid;
+            return false;
+          });
+          if (held.items.length === 0) unshownLabels.delete(lcid);
+          else held.note = exported.ok ? { whys } : { failed: exported.reason };
+        }
+      }
+
       add('form-topology', `${entity}.${name}`, problems.length === 0,
         problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}${
           comparedInOrganizationLanguage === undefined ? '' : ` — the labels were compared in the organization's base language (${comparedInOrganizationLanguage}), because verify was told no other: if the build was run with --language-code, give verify the same flag (or pin "languageCode" in the spec)`}` : '');
@@ -1164,13 +1217,20 @@ async function verifySpec(spec, read, opts = {}) {
       // label's language is the one verify was told, so the maker may also tell it another the read carries — and where it was not told but inferred from
       // the organization, the flag that gives it the build's own is what most likely settles it.
       for (const [lcid, held] of unshownLabels) {
-        const n = held.whats.length;
-        const inferred = held.string && labelLanguage && labelLanguage.fromOrganization
+        const whats = held.items.map((item) => item.what);
+        const n = whats.length;
+        const string = held.items.some((item) => item.string);
+        const inferred = string && labelLanguage && labelLanguage.fromOrganization
           ? ` (verify used the organization's base language, because it was told no other: if the build was run with --language-code, give verify the same flag, or pin "languageCode" in the spec)`
           : '';
-        unverified.push(`form-labels:${entity}.${name} (${n === 1 ? 'the label' : 'the labels'} of ${held.whats.slice(0, 6).join(', ')}${n > 6 ? `, +${n - 6} more` : ''} in language ${lcid} ${n === 1 ? 'was' : 'were'} not compared: `
+        // What the translation export, asked for these captions, could not do about them: be read at all, or settle them.
+        const exportNote = !held.note ? '' : held.note.failed !== undefined
+          ? `A translation export of solution '${solutionName}' could not be read (${held.note.failed}). `
+          : `A translation export of solution '${solutionName}' was read, but it cannot settle ${n === 1 ? 'it' : 'them'}: ${held.note.whys.join('; ')}. `;
+        unverified.push(`form-labels:${entity}.${name} (${n === 1 ? 'the label' : 'the labels'} of ${whats.slice(0, 6).join(', ')}${n > 6 ? `, +${n - 6} more` : ''} in language ${lcid} ${n === 1 ? 'was' : 'were'} not compared: `
           + `the environment's form read returns labels only in ${carriedLanguages.join(', ')}, so labels written in ${lcid} cannot be read back from it. `
-          + `Check ${n === 1 ? 'it' : 'them'} in Power Apps with that language${held.string ? `, or verify in a language the read carries${inferred}` : ''})`);
+          + exportNote
+          + `Check ${n === 1 ? 'it' : 'them'} in Power Apps with that language${string ? `, or verify in a language the read carries${inferred}` : ''})`);
       }
       placedGridChecks({
         tab: (i) => matchedTabs[i],
@@ -2597,7 +2657,8 @@ function authorsStringLabel(f) {
 //   a section's is, and the build flags it (artifact-intent.js findFieldOuterCells), so verify must see it.
 //   `languages` is every language a label of the form is in — a tab's, a section's, a field's, a header cell's alike — as the LCIDs the labels name,
 //   ascending: `<label description="Overview" languagecode="1033" />` adds 1033, and a label that names no language adds none. It is what the READ
-//   carries of the form (see labelProblem, which is where it matters).
+//   carries of the form (see labelProblem, which is where it matters). A tab and a section also carry their `id`, when the FormXML gives them one: the key a translation
+//   export has their captions by.
 //
 // Written as a depth scanner rather than nested non-greedy regexes: tabs contain columns contain
 // sections contain rows contain cells, and a non-greedy `<section>[\s\S]*?</section>` stops at the
@@ -2626,6 +2687,9 @@ function parseFormTopology(xml) {
     const v = String(attr(raw, name) === undefined ? '' : attr(raw, name)).trim().toLowerCase();
     return v === 'true' || v === '1' ? true : (v === 'false' || v === '0' ? false : undefined);
   };
+  // The `id` of a tab or a section as the FormXML writes it (`<tab id="0a0a0a0a-…" name="tab_one" …>`), kept only when the element has one. It is what a translation
+  // export keys the element's captions by (lib/translation-labels.js), so the captions a read of this form cannot show can be found there.
+  const idOf = (raw) => { const id = attr(raw, 'id'); return id === undefined ? {} : { id }; };
   let m;
   while ((m = re.exec(s)) !== null) {
     const closing = m[1] === '/';
@@ -2642,14 +2706,14 @@ function parseFormTopology(xml) {
       continue;
     }
     if (isPart(tag)) { part = selfClosing ? null : tag; continue; }
-    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, expanded: flag(raw, 'expanded'), visible: flag(raw, 'visible'), columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
+    if (tag === 'tab') { tab = { name: attr(raw, 'name'), ...idOf(raw), label: undefined, expanded: flag(raw, 'expanded'), visible: flag(raw, 'visible'), columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
     else if (tag === 'section' && column) {
       const ratio = attr(raw, 'columns');
       // `columns` is a width RATIO string, not a count: "11" is two equal columns, "1111" is four.
       // ABSENT means the width is UNKNOWN — left undefined so the occupancy check skips rather than
       // assuming a 1-column grid and inventing an overflow that is not there.
-      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, visible: flag(raw, 'visible'), showLabel: flag(raw, 'showlabel'), rows: [], fields: [] };
+      section = { name: attr(raw, 'name'), ...idOf(raw), label: undefined, columns: ratio ? String(ratio).length : undefined, visible: flag(raw, 'visible'), showLabel: flag(raw, 'showlabel'), rows: [], fields: [] };
       column.sections.push(section);
       if (selfClosing) section = null;
     }

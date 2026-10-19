@@ -1903,7 +1903,7 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle \}\);/, 'one client, made with the run\u2019s throttle budget');
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: isTranslationExport \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export once');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
   assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
