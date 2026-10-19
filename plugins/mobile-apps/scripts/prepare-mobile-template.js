@@ -204,8 +204,12 @@ function copyMissingGuidance(projectRoot, state) {
         const guidanceDirectory = path.join(projectRoot, '.github');
         fs.mkdirSync(guidanceDirectory);
         state.guidanceDirectoryCreated = true;
-        const stat = fs.lstatSync(guidanceDirectory);
-        state.guidanceDirectoryIdentity = { dev: stat.dev, ino: stat.ino };
+        const stat = fs.lstatSync(guidanceDirectory, { bigint: true });
+        state.guidanceDirectoryIdentity = {
+          dev: stat.dev,
+          ino: stat.ino,
+          birthtimeNs: stat.birthtimeNs,
+        };
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
         assertPreparationPath(projectRoot, relativePath);
@@ -628,13 +632,14 @@ function restorePreparationState(projectRoot, state) {
   }
   const guidanceDirectory = path.join(projectRoot, '.github');
   if (state.guidanceDirectoryCreated) {
-    const stat = fs.lstatSync(guidanceDirectory, { throwIfNoEntry: false });
+    const stat = fs.lstatSync(guidanceDirectory, { bigint: true, throwIfNoEntry: false });
     const sameDirectory = stat
       && stat.isDirectory()
       && !stat.isSymbolicLink()
       && state.guidanceDirectoryIdentity
       && stat.dev === state.guidanceDirectoryIdentity.dev
-      && stat.ino === state.guidanceDirectoryIdentity.ino;
+      && stat.ino === state.guidanceDirectoryIdentity.ino
+      && stat.birthtimeNs === state.guidanceDirectoryIdentity.birthtimeNs;
     if (stat && !sameDirectory) {
       rollbackConflicts.push('.github');
     } else if (sameDirectory && fs.readdirSync(guidanceDirectory).length === 0) {
