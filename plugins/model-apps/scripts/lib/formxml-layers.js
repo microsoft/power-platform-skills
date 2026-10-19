@@ -22,6 +22,25 @@
 //
 // What this cannot see is a change to a label in a language the published read does not carry (a translation saved and not published): no read
 // verify makes shows it, and it changes nothing verify proves of a dashboard — its tiles' tables, views and charts.
+//
+// THE ROW'S OWN VERSION. The rule above reads two texts, and a text is a PROJECTION for its reader. Measured live in the same organization, for a
+// user whose own language (usersettings.uilanguageid) is the second one, 3082, on a dashboard nothing had written since its publish, the published
+// read carried BOTH languages, the user's own first, and the saved read the stored order, base language first — in every cell:
+//   published  <labels><label description="Customers" languagecode="3082" /><label description="Gold Customers" languagecode="1033" /></labels>
+//   saved      <labels><label description="Gold Customers" languagecode="1033" /><label description="Work Orders" languagecode="3082" /></labels>
+// (the other three cells differ in that order alone). Both languages are carried, so none is set aside, and the texts differ in an order and in one
+// caption's wording: "not published", for that user, on a dashboard that is. No rule over the two texts can say which of two captions is "the"
+// caption — the published reads of forms nobody had edited differed between the two users the same way — but the platform can say whether the saved
+// layer has been written since the publish. The published row and the saved read each answer an `@odata.etag`, the SAME token after a publish,
+// whoever reads; a write to the saved layer moves its token and not the row's, even a write that puts the content back (measured: four writes, four
+// new tokens, the row's unmoved; a publish moved both to one new token). So when `versions` says the two reads answer the same token, the saved
+// layer IS the published row, and the texts can differ only in what each reader is shown of the captions. They are then compared with every caption
+// set aside, of any language: a tile, a cell, an element, an attribute, any text and a comment are not captions and are still compared byte for
+// byte. That is only for a published read that carries MORE THAN ONE language, which is what the platform gives a user whose own language is not
+// the base one (the user's own and the base): the rule above is premised on one language set whoever reads, and this is for a read where that
+// premise fails. With another token, with none, or for a published read of one language — the base-language user's — the texts decide as above,
+// and the earlier results are as they were by construction: this only adds a way for two reads to be the same dashboard, never a way to differ.
+// See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
 const { readXmlElements } = require('./strict-xml.js');
 const { normalizeLanguageCode } = require('./app-spec.js');
 
@@ -30,6 +49,8 @@ const isLabel = (name) => name === 'label';
 // a control's parameter, say — is not one, and is compared like any other element.
 const isCaption = (element) => element.path === 'labels' || element.path.endsWith('/labels');
 const languageOf = (caption) => normalizeLanguageCode(caption.attrs.languagecode);
+// The token is opaque text (W/"7067996"): equal or not, never parsed or ordered. A read that answers none, or an empty one, has no word to give.
+const sameVersion = (versions) => !!versions && typeof versions.published === 'string' && versions.published !== '' && versions.published === versions.saved;
 
 // The captions of one FormXML, each with where it is in the text, or null when the text is not one well-formed XML document.
 function captionsOf(xml) {
@@ -55,17 +76,24 @@ function withoutCaptionsOutside(xml, captions, carried) {
 
 /**
  * Whether `saved` (a systemform's FormXML as RetrieveUnpublished answers it) is `published` (the FormXML a plain read of the row answers), in the
- * languages the published read carries.
+ * languages the published read carries — or, when the published read carries more than one language and `versions` says the two reads answer the
+ * same `@odata.etag`, in everything but the captions.
  *
  *   sameFormXmlAcrossLayers('<form>…<labels><label description="Open" languagecode="1033" /></labels>…</form>',
  *                           '<form>…<labels><label description="Open" languagecode="1033" /><label description="Abierto" languagecode="3082" /></labels>…</form>')
  *     → true   (the published read carries 1033 alone, so the 3082 caption is set aside)
  *
+ *   sameFormXmlAcrossLayers('<form>…<labels><label description="Abiertos" languagecode="3082" /><label description="Open" languagecode="1033" /></labels>…</form>',
+ *                           '<form>…<labels><label description="Open" languagecode="1033" /><label description="Abierto" languagecode="3082" /></labels>…</form>',
+ *                           { published: 'W/"1001"', saved: 'W/"1001"' })
+ *     → true   (both languages are carried and the captions differ, but it is one row at one version)
+ *
  * @param {*} published the published read's FormXML
  * @param {*} saved the saved read's FormXML
+ * @param {{ published: *, saved: * }} [versions] the `@odata.etag` of the published row and of the saved read
  * @returns {boolean} false for anything that is not text, and for a text that is not one well-formed XML document unless the two are equal
  */
-function sameFormXmlAcrossLayers(published, saved) {
+function sameFormXmlAcrossLayers(published, saved, versions) {
   if (typeof published !== 'string' || typeof saved !== 'string') return false;
   if (published === saved) return true;
   const publishedCaptions = captionsOf(published);
@@ -74,7 +102,14 @@ function sameFormXmlAcrossLayers(published, saved) {
   const carried = new Set(publishedCaptions.map(languageOf).filter((lcid) => lcid !== null));
   if (!carried.size) return false;
   // Set aside from both reads, as the rule says — the published read has, by what `carried` is, no caption in another language to set aside.
-  return withoutCaptionsOutside(published, publishedCaptions, carried) === withoutCaptionsOutside(saved, savedCaptions, carried);
+  if (withoutCaptionsOutside(published, publishedCaptions, carried) === withoutCaptionsOutside(saved, savedCaptions, carried)) return true;
+  // A read of one language is the base-language user's, and the texts alone decide it at any version; the token is for a published read that carries
+  // more than one language (the second-language user's), where the texts cannot.
+  if (carried.size < 2 || !sameVersion(versions)) return false;
+  // The same row: no language is "carried" any more, so every caption of a valid language goes, from both reads. A caption that cannot be taken out
+  // (one with content or an end tag, or with no valid language) stays in the text and is compared, so it is a change as before.
+  const none = new Set();
+  return withoutCaptionsOutside(published, publishedCaptions, none) === withoutCaptionsOutside(saved, savedCaptions, none);
 }
 
 module.exports = { sameFormXmlAcrossLayers };

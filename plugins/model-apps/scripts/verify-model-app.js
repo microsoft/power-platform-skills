@@ -410,6 +410,14 @@ function readerFor(sdk, appUnique, opts) {
     // differs — a tile, a cell, an attribute, a label in a language it carries — is a change, and a FormXML that is not
     // one well-formed XML document is one too. Two equal texts are the same dashboard, as before.
     //
+    // For a user whose own language is the organization's second one, the published read carries both languages, the
+    // user's own first, and words a caption another way than the draft read does, on a dashboard nothing has written since
+    // its publish — so no text says that it is the published one. The platform does: the published row and the draft each
+    // answer an `@odata.etag`, the same one until the draft is written (live-measured; the row's `queryRecords` answer carries
+    // it beside the FormXML). When the two are the same and the published read carries more than one language, the reads
+    // are compared in everything but their captions: a tile that differs is still a change. With another token, none, or a
+    // published read of one language (a user of the base language), the rule above decides, as it always did.
+    //
     // Equal FormXML before and after does not prove the fetch between them read it: a draft saved and then put
     // back (A, then B, then A again) leaves both checks reading A while the fetch read B, and B's tiles passed. So
     // each check also takes the draft's `@odata.etag`, which RetrieveUnpublished returns in the body and which
@@ -427,8 +435,8 @@ function readerFor(sdk, appUnique, opts) {
         if (!draft || draft.status < 200 || draft.status >= 300) throw new Error(`the draft of dashboard ${dashboardId} could not be read (HTTP ${draft && draft.status})`);
         const draftXml = draft.body && draft.body.formxml;
         if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
-        if (!sameFormXmlAcrossLayers(row.formxml, draftXml)) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
         const version = draft.body['@odata.etag'];
+        if (!sameFormXmlAcrossLayers(row.formxml, draftXml, { published: row['@odata.etag'], saved: version })) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
         if (typeof version !== 'string' || version === '') throw new Error(`the version of dashboard ${dashboardId} could not be read`);
         return { xml: row.formxml, version };
       };

@@ -1679,10 +1679,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the published read carries none of is set aside; a tile, a cell, an attribute, any text, a caption in a
   language it carries, and a FormXML that is not one well-formed XML document are still changes, and two
   equal texts are the same dashboard as before. That is the read of a user whose own language is the
-  base one; live, for a user whose language was the other one, the published read carried both languages,
-  in another order than the saved read, and one cell's caption in that language differed between the two
-  layers — so for that user the dashboard stays unverified, as it was: it fails closed, never passed without
-  proof. **App membership is checked on the published layer:** sitemap tables union `app.tables`
+  base one. For a user whose own language is the other one, live, the published read carried both
+  languages, that user's own first, and one cell's caption in that language was worded another way than the
+  saved read's, on a dashboard nothing had written since its publish — a read is the platform's projection
+  for its reader, and no text says which of two captions is the caption. The platform's own token does: the
+  published row (`queryRecords` answers its `@odata.etag` beside the FormXML) and the saved read answer the
+  same `@odata.etag` until the saved layer is written (live-measured: a write moves the saved read's token
+  and not the row's, even a write that puts the content back; a publish moves both to one new token). When
+  the two answer the same token and the published read carries more than one language (the base-language
+  user's never does), the saved layer IS the published row, and the reads are compared in everything but
+  their captions: a tile, a cell, an element, an attribute and any other text still differ. With another
+  token, none, or a published read of one language, the texts decide as above. So that user's published
+  dashboard is verified, one with a change saved and not published (a new token) is not, and the
+  base-language user's result is as it was. It fails closed where the token cannot say: a row that answers
+  none, or a dashboard saved after its publish and put back, is unverified until it is published. **App
+  membership is checked on the published layer:** sitemap tables union `app.tables`
   must have type-1 rows; each `app.mainForms` table gets an `app-main-forms` check comparing resolved
   active Main IDs with classified type-60 members. Missing members fail with “re-run the build”,
   extras fail with the Maker Forms remedy, and unreadable/unclassifiable membership is unverified,
@@ -2286,7 +2297,7 @@ scripts/
     page-manifest.js           ← durable <app>_pagemanifest read/write
     sitemap-pages.js           ← pure GenPageId extractors (the TEXT readers `sitemapGenPages` / `sitemapGenPageIds`, which only refuse or report; `navigationGenPageIds`, which reads the navigation ELEMENTS through `strict-xml.js` and is what a page is deleted by) + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof, read as navigation, from either app layer — or from the saved layer alone, for an app that was never published and so has no published one) + cross-app scan (every other app's published AND saved navigation — the saved layer in one request — and the apps that were never published, listed in one more; a never-published app with no sitemap component is looked up by the name its sitemap carries); a read that fails is reported by value with the error itself as a non-enumerable `cause` (`withCause`), for the halt raised around it to decide from
     strict-xml.js              ← `readXmlElements(xml, wanted, { spans? })`: ONE strict reader of ONE XML document, in one pass, no dependency — comments, CDATA sections, processing instructions and attribute values are data, never elements; anything that is not exactly one well-formed document (or that the SDK's own xmldom would read differently) is `{ ok:false, detail }` with no element at all. With `spans`, each element also says where it is in the text (`start`, `end`), for `formxml-layers.js`. `tests/strict-xml-oracle.test.js` holds it to xmldom over a generated corpus
-    formxml-layers.js          ← `sameFormXmlAcrossLayers(published, saved)`: whether a systemform's saved FormXML (RetrieveUnpublished) is its published one in the languages the published read carries — a caption in another language is set aside, anything else that differs (and a FormXML that is not one well-formed document, read by `strict-xml.js`) is a change; what verify's dashboard check decides "published" by
+    formxml-layers.js          ← `sameFormXmlAcrossLayers(published, saved, versions?)`: whether a systemform's saved FormXML (RetrieveUnpublished) is its published one in the languages the published read carries — a caption in another language is set aside, anything else that differs (and a FormXML that is not one well-formed document, read by `strict-xml.js`) is a change; and, for a published read that carries more than one language (the read of a user whose own language is the organization's second one, which orders and words the captions its own way) whose `versions` say the published row and the saved read answer the same `@odata.etag` (the saved layer has not been written since the publish), in everything but the captions, of any language; what verify's dashboard check decides "published" by
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
     deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there, each page with the hash of the source the pages phase read and sent (what the build's Griffel check compares a later source with)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode

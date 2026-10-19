@@ -10,6 +10,7 @@ const { readerFor, appIdFor } = require('../verify-model-app.js');
 const { verifySpec } = require('../lib/verify-spec.js');
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 const { appSpec, column, nameColumn } = require('./helpers/column-gate-specs.js');
+const dashboardReads = require('./helpers/dashboard-two-language-reads.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -1521,8 +1522,10 @@ const DASH_SPEC = { solution: { publisherPrefix: 'new' }, app: { name: 'Field Op
   personas: [{ persona: 'Dispatcher', jobs: [{ name: 'Watch the field', surfaces: ['Field Ops Overview'] }] }] };
 // An SDK whose published read of the dashboard answers `published` and whose saved read answers `draft` — or, from the third read on
 // (the bracket's second pair), `laterPublished` / `laterDraft` / `laterVersion` when given. `chartOwner` is the table a tile's chart
-// belongs to. `owners` records each read of a tile's chart and view, which is the tile check running.
-function dashboardLayers({ published, draft, laterPublished, laterDraft, laterVersion, chartOwner = 'new_workorder' }) {
+// belongs to. `owners` records each read of a tile's chart and view, which is the tile check running. `version` is the saved read's
+// `@odata.etag`, and `publishedVersion` the published row's (a row that carries none, as in the reads above, when it is not given);
+// `laterPublishedVersion` is the row's from the third read on.
+function dashboardLayers({ published, draft, laterPublished, laterDraft, laterVersion, version = 'W/"1"', publishedVersion, laterPublishedVersion, chartOwner = 'new_workorder' }) {
   let reads = 0;
   const owners = [];
   const fetches = [];
@@ -1534,7 +1537,8 @@ function dashboardLayers({ published, draft, laterPublished, laterDraft, laterVe
     queryRecords: async (set, o) => {
       if (set === 'systemform' && o && o.select && o.select.includes('formxml')) {
         reads += 1;
-        return [{ formid: 'dash-1', formxml: laterPublished !== undefined && reads > 2 ? laterPublished : published }];
+        const token = reads > 2 && laterPublishedVersion !== undefined ? laterPublishedVersion : publishedVersion;
+        return [{ formid: 'dash-1', formxml: laterPublished !== undefined && reads > 2 ? laterPublished : published, ...(token === undefined ? {} : { '@odata.etag': token }) }];
       }
       if (set === 'systemform') return [{ formid: 'dash-1', name: 'Field Ops Overview' }];
       if (set === 'savedqueryvisualization') { owners.push(set); return [{ primaryentitytypecode: chartOwner }]; }
@@ -1546,7 +1550,7 @@ function dashboardLayers({ published, draft, laterPublished, laterDraft, laterVe
       assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
       reads += 1;
       const later = reads > 2;
-      return { status: 200, body: { formxml: later && laterDraft !== undefined ? laterDraft : draft, '@odata.etag': later && laterVersion ? laterVersion : 'W/"1"' } };
+      return { status: 200, body: { formxml: later && laterDraft !== undefined ? laterDraft : draft, '@odata.etag': later && laterVersion ? laterVersion : version } };
     } },
     fetchArtifact: async (type, id) => { fetches.push([type, id]); },
     getArtifact: async () => ({ components: DASH_TILES }),
@@ -1652,43 +1656,47 @@ test('readerFor + verifySpec: on two layers in two languages, a dashboard that c
 });
 
 // The same two reads through the REAL bundle: the reader's own reads and the SDK's deserializer, over a stub of the HTTP client. What
-// the reader hands verify is the tiles the SDK reads out of the saved layer — here the live shape, a 3082 caption in every cell.
-test('readerFor REAL BUNDLE: the tiles of a published dashboard whose saved read carries a second language are read, and a real change is refused', async (t) => {
+// the reader hands verify is the tiles the SDK reads out of the saved layer. `publishedVersion` is the published row's `@odata.etag`
+// when given (the row answers none otherwise) and `version` the saved layer's; `reads` is the order the stub was asked in.
+async function readDashboardThroughRealBundle(t, id, published, draft, { publishedVersion, version = 'W/"7"' } = {}) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
-  const id = '33333333-0000-4000-8000-000000000001';
-  const run = async (published, draft) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dash-layers-'));
-    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-    const reads = [];
-    const ok = (body) => ({ status: 200, headers: {}, body });
-    const httpClient = {
-      get: async (url) => {
-        const u = decodeURIComponent(url);
-        if (/EntityDefinitions\(LogicalName='systemform'\)/.test(u)) return ok({ EntitySetName: 'systemforms' });
-        if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`) && !u.includes(',')) {
-          reads.push('saved formxml');
-          return ok({ formxml: draft, '@odata.etag': 'W/"7"' });
-        }
-        if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()`)) {
-          reads.push('the SDK\u2019s fetch');
-          return ok({ formid: id, name: 'Field Ops Overview', description: null, formxml: draft, type: 0, objecttypecode: 'none', componentstate: 1, '@odata.etag': 'W/"7"' });
-        }
-        if (/\/systemforms\?/.test(u) && u.includes(`formid eq ${id}`)) {
-          reads.push('published formxml');
-          return ok({ value: [{ formid: id, formxml: published }] });
-        }
-        assert.fail(`unexpected GET ${u}`);
-      },
-      post: async (url) => assert.fail(`unexpected POST ${url}`),
-      patch: async (url) => assert.fail(`unexpected PATCH ${url}`),
-      put: async (url) => assert.fail(`unexpected PUT ${url}`),
-      delete: async (url) => assert.fail(`unexpected DELETE ${url}`),
-    };
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
-    await sdk.initWorkspace();
-    const settled = await readerFor(sdk, 'new_fieldops', {}).dashboardComponents(id).then((tiles) => ({ tiles }), (error) => ({ error }));
-    return { ...settled, reads };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dash-layers-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const reads = [];
+  const ok = (body) => ({ status: 200, headers: {}, body });
+  const httpClient = {
+    get: async (url) => {
+      const u = decodeURIComponent(url);
+      if (/EntityDefinitions\(LogicalName='systemform'\)/.test(u)) return ok({ EntitySetName: 'systemforms' });
+      if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`) && !u.includes(',')) {
+        reads.push('saved formxml');
+        return ok({ formxml: draft, '@odata.etag': version });
+      }
+      if (u.includes(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()`)) {
+        reads.push('the SDK\u2019s fetch');
+        return ok({ formid: id, name: 'Field Ops Overview', description: null, formxml: draft, type: 0, objecttypecode: 'none', componentstate: 1, '@odata.etag': version });
+      }
+      if (/\/systemforms\?/.test(u) && u.includes(`formid eq ${id}`)) {
+        reads.push('published formxml');
+        return ok({ value: [{ ...(publishedVersion === undefined ? {} : { '@odata.etag': publishedVersion }), formid: id, formxml: published }] });
+      }
+      assert.fail(`unexpected GET ${u}`);
+    },
+    post: async (url) => assert.fail(`unexpected POST ${url}`),
+    patch: async (url) => assert.fail(`unexpected PATCH ${url}`),
+    put: async (url) => assert.fail(`unexpected PUT ${url}`),
+    delete: async (url) => assert.fail(`unexpected DELETE ${url}`),
   };
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
+  const settled = await readerFor(sdk, 'new_fieldops', {}).dashboardComponents(id).then((tiles) => ({ tiles }), (error) => ({ error }));
+  return { ...settled, reads };
+}
+
+// Here the live shape of the first language pair: a 3082 caption in every cell of the saved read.
+test('readerFor REAL BUNDLE: the tiles of a published dashboard whose saved read carries a second language are read, and a real change is refused', async (t) => {
+  const id = '33333333-0000-4000-8000-000000000001';
+  const run = (published, draft) => readDashboardThroughRealBundle(t, id, published, draft);
   const live = await run(PUBLISHED_DASHBOARD, withCellCaptionsIn(PUBLISHED_DASHBOARD));
   assert.ifError(live.error);
   assert.deepStrictEqual(live.tiles.map((c) => [c.type, c.name, c.parameters.TargetEntityType, c.parameters.ViewId, c.parameters.VisualizationId]), [
@@ -1702,6 +1710,147 @@ test('readerFor REAL BUNDLE: the tiles of a published dashboard whose saved read
   const moved = await run(PUBLISHED_DASHBOARD, withCellCaptionsIn(dashboardXml([[DASH_CELLS.status, DASH_CELLS.priority], [DASH_CELLS.critical, DASH_CELLS.gold]])));
   assert.match(moved.error && moved.error.message, /^dashboard 33333333-0000-4000-8000-000000000001 has changes that are not published — publish it, then verify$/);
   assert.deepStrictEqual(moved.reads, ['published formxml', 'saved formxml']);
+});
+
+// ── A dashboard read by a user whose own language is the organization's second one ───────────────────────────────────────────────
+// Live, the published read of such a user carries both languages, the user's own first, and words one caption another way than the saved
+// layer does — while the published row and the saved layer are at the very same version (`@odata.etag`) and nothing has written either.
+// A read is the platform's projection for its reader, so the two texts cannot say whether the saved layer is the published row; the version
+// can, and verify takes it for that (lib/formxml-layers.js) — for the captions alone: the tiles must still be the same. The reads are the live
+// ones (helpers/dashboard-two-language-reads.js), the published row's version and the saved layer's the same token, or not.
+const { BASE_LANGUAGE_USER, SECOND_LANGUAGE_USER, ROW_VERSION, MOVED_VERSION, cellOf, swapFirstTwoCells } = dashboardReads;
+const AT_ROW_VERSION = { publishedVersion: ROW_VERSION, version: ROW_VERSION };
+const AFTER_A_SAVE = { publishedVersion: ROW_VERSION, version: MOVED_VERSION };
+
+test('readerFor + verifySpec: a published dashboard read by a user whose own language is the second one verifies — its tiles are checked, and its job passes with it', async () => {
+  const { published, saved } = SECOND_LANGUAGE_USER;
+  const sdk = dashboardLayers({ published, draft: saved, ...AT_ROW_VERSION });
+  const r = await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}));
+  const check = r.checks.find((c) => c.kind === 'dashboard');
+  assert.deepStrictEqual([check.present, check.detail], [true, '']);
+  assert.deepStrictEqual(sdk.fetches, [['dashboard', 'dash-1']], 'the tiles were read');
+  assert.deepStrictEqual(sdk.owners, ['savedqueryvisualization', 'savedquery', 'savedqueryvisualization', 'savedquery'], 'and each chart tile\u2019s chart and view were checked');
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind === 'job-surface'), [], 'the job whose surface the dashboard is passes with it');
+  // It is still the tiles that decide: a chart tile cross-wired to another table fails over the same two reads.
+  const crossed = await dashboardVerify({ published, draft: saved, ...AT_ROW_VERSION, chartOwner: 'new_customer' });
+  assert.strictEqual(crossed.check.present, false);
+  assert.match(crossed.check.detail, /chart tile 'By Priority' shows new_workorder, but its chart belongs to new_customer/);
+  assert.match(crossed.jobs[0] && crossed.jobs[0].detail, /surface "Field Ops Overview" is not deployed \(Field Ops Overview\)/);
+  // A published row that answers no version has no word to give: the two reads are compared by their text alone, as they were, and differ.
+  const noVersion = await dashboardVerify({ published, draft: saved, version: ROW_VERSION });
+  assert.strictEqual(noVersion.check.present, false);
+  assert.match(noVersion.check.detail, NOT_PUBLISHED);
+});
+
+test('readerFor + verifySpec: a dashboard saved and not published after its publish is not published, for a user of either language', async () => {
+  for (const [user, { published, saved }] of [['a base-language user', BASE_LANGUAGE_USER], ['a second-language user', SECOND_LANGUAGE_USER]]) {
+    for (const [what, draft] of [
+      ['a tile moved', swapFirstTwoCells(saved)],
+      ['a tile\u2019s view changed', saved.replace(`<ViewId>${DASH_VIEW_CRITICAL}</ViewId>`, `<ViewId>${DASH_VIEW_GOLD}</ViewId>`)],
+      ['a tile\u2019s table changed', saved.replace('<TargetEntityType>new_customer</TargetEntityType>', '<TargetEntityType>new_workorder</TargetEntityType>')],
+      ['a 1033 caption changed', saved.replace('description="By Priority" languagecode="1033"', 'description="By Owner" languagecode="1033"')],
+      ['a 1033 caption removed', saved.replace('<label description="By Status" languagecode="1033" />', '')],
+    ]) {
+      assert.notStrictEqual(draft, saved, `${user}: ${what}`);
+      const sdk = dashboardLayers({ published, draft, ...AFTER_A_SAVE });
+      const r = await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}));
+      const check = r.checks.find((c) => c.kind === 'dashboard');
+      assert.strictEqual(check.present, false, `${user}: ${what}`);
+      assert.match(check.detail, NOT_PUBLISHED, `${user}: ${what}`);
+      assert.deepStrictEqual(sdk.fetches, [], `${user}: ${what}: no tile is read`);
+      assert.strictEqual(r.checks.filter((c) => c.kind === 'job-surface').length, 1, `${user}: ${what}: the job fails with its dashboard`);
+    }
+  }
+  // A second-language caption alone: the base-language user's published read carries none, so it is not seen (the documented limit, as since the
+  // first fix); the second-language user's read carries them, so it is a change.
+  const pedidos = (xml) => xml.replace('description="Work Orders" languagecode="3082"', 'description="Pedidos" languagecode="3082"');
+  const base = await dashboardVerify({ published: BASE_LANGUAGE_USER.published, draft: pedidos(BASE_LANGUAGE_USER.saved), ...AFTER_A_SAVE });
+  assert.deepStrictEqual([base.check.present, base.check.detail], [true, '']);
+  const second = await dashboardVerify({ published: SECOND_LANGUAGE_USER.published, draft: pedidos(SECOND_LANGUAGE_USER.saved), ...AFTER_A_SAVE });
+  assert.strictEqual(second.check.present, false);
+  assert.match(second.check.detail, NOT_PUBLISHED);
+});
+
+test('readerFor + verifySpec: for a user of the base language the dashboard check is as it was, whatever versions the two reads carry', async () => {
+  const { published, saved } = BASE_LANGUAGE_USER;
+  for (const [what, versions] of [
+    ['a published row that answers no version', {}],
+    ['one version on both layers', AT_ROW_VERSION],
+    ['a saved layer written since the publish, a second language\u2019s captions alone differing', AFTER_A_SAVE],
+  ]) {
+    const sdk = dashboardLayers({ published, draft: saved, ...versions });
+    const r = await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}));
+    const check = r.checks.find((c) => c.kind === 'dashboard');
+    assert.deepStrictEqual([check.present, check.detail], [true, ''], what);
+    assert.deepStrictEqual(sdk.fetches, [['dashboard', 'dash-1']], `${what}: the tiles were read`);
+  }
+  // The published read of this user carries one language, so its caption in that language is the text rule's alone: a 1033 caption saved and not
+  // published is a change whatever the two versions say.
+  const renamed = saved.replace('description="By Priority" languagecode="1033"', 'description="By Owner" languagecode="1033"');
+  for (const [what, versions] of [['no version', {}], ['one version on both layers', AT_ROW_VERSION], ['a saved layer written since the publish', AFTER_A_SAVE]]) {
+    const { check } = await dashboardVerify({ published, draft: renamed, ...versions });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+  }
+});
+
+test('readerFor + verifySpec: the same version excuses captions only — a tile that differs between the two reads is not published, and no tile is read', async () => {
+  const { published, saved } = SECOND_LANGUAGE_USER;
+  for (const [what, draft] of [
+    ['a tile moved', swapFirstTwoCells(saved)],
+    ['a tile\u2019s view changed', saved.replace(`<ViewId>${DASH_VIEW_GOLD}</ViewId>`, `<ViewId>${DASH_VIEW_OPEN}</ViewId>`)],
+    ['a cell removed', saved.replace(cellOf(saved, 4), '')],
+  ]) {
+    assert.notStrictEqual(draft, saved, what);
+    const sdk = dashboardLayers({ published, draft, ...AT_ROW_VERSION });
+    const check = (await verifySpec(DASH_SPEC, readerFor(sdk, 'new_fieldops', {}))).checks.find((c) => c.kind === 'dashboard');
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, NOT_PUBLISHED, what);
+    assert.deepStrictEqual(sdk.fetches, [], `${what}: no tile is read`);
+  }
+});
+
+test('readerFor + verifySpec: for a user of the second language, a dashboard that changes while its tiles are read is still caught', async () => {
+  const { published, saved } = SECOND_LANGUAGE_USER;
+  for (const [what, later, detail] of [
+    // Moved and published again: both layers are at the new version, so the second check passes, and the published FormXML is not the first one.
+    ['published again with a tile moved', { laterPublished: swapFirstTwoCells(published), laterDraft: swapFirstTwoCells(saved), laterPublishedVersion: MOVED_VERSION, laterVersion: MOVED_VERSION },
+      /dashboard dash-1 changed while it was being read — verify again/],
+    // A draft saved while the tiles were read moves the saved layer's version off the published row's: the second check no longer has its word.
+    ['a draft saved while it was read', { laterVersion: MOVED_VERSION }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
+  ]) {
+    const { check } = await dashboardVerify({ published, draft: saved, ...AT_ROW_VERSION, ...later });
+    assert.strictEqual(check.present, false, what);
+    assert.match(check.detail, detail, what);
+  }
+});
+
+test('readerFor REAL BUNDLE: the tiles of a published dashboard are read for a user of the second language, and a saved change is refused', async (t) => {
+  const id = '33333333-0000-4000-8000-000000000001';
+  const { published, saved } = SECOND_LANGUAGE_USER;
+  const live = await readDashboardThroughRealBundle(t, id, published, saved, { publishedVersion: ROW_VERSION, version: ROW_VERSION });
+  assert.ifError(live.error);
+  // The SDK reads the same tiles, with the same names, out of this saved read as out of the base-language user's.
+  assert.deepStrictEqual(live.tiles.map((c) => [c.type, c.name, c.parameters.TargetEntityType, c.parameters.ViewId, c.parameters.VisualizationId]), [
+    ['chart', 'By Priority', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_PRIORITY],
+    ['chart', 'By Status', 'new_workorder', DASH_VIEW_OPEN, DASH_CHART_STATUS],
+    ['list', 'Critical Queue', 'new_workorder', DASH_VIEW_CRITICAL, undefined],
+    ['list', 'Gold Customers', 'new_customer', DASH_VIEW_GOLD, undefined],
+  ]);
+  assert.deepStrictEqual(live.reads, ['published formxml', 'saved formxml', 'the SDK\u2019s fetch', 'published formxml', 'saved formxml'], 'the tiles are read between the two checks');
+  // A saved layer written since the publish — its version moved — is not the published row: refused before the SDK reads anything.
+  const written = await readDashboardThroughRealBundle(t, id, published, saved, { publishedVersion: ROW_VERSION, version: MOVED_VERSION });
+  assert.match(written.error && written.error.message, /^dashboard 33333333-0000-4000-8000-000000000001 has changes that are not published — publish it, then verify$/);
+  assert.deepStrictEqual(written.reads, ['published formxml', 'saved formxml']);
+  // So is one whose published row answers no version, as before: the two texts alone cannot say.
+  const unversioned = await readDashboardThroughRealBundle(t, id, published, saved);
+  assert.match(unversioned.error && unversioned.error.message, /^dashboard 33333333-0000-4000-8000-000000000001 has changes that are not published — publish it, then verify$/);
+  // The base-language user's reads are read whether or not the row answers a version.
+  for (const options of [{}, { publishedVersion: ROW_VERSION, version: ROW_VERSION }]) {
+    const base = await readDashboardThroughRealBundle(t, id, BASE_LANGUAGE_USER.published, BASE_LANGUAGE_USER.saved, options);
+    assert.ifError(base.error);
+    assert.deepStrictEqual(base.tiles.map((c) => c.name), ['By Priority', 'By Status', 'Critical Queue', 'Gold Customers']);
+  }
 });
 
 // A client per isolated read ran `az account get-access-token` once per dashboard. One client serves every read of a
