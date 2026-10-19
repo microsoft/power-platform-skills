@@ -295,6 +295,33 @@ test('guidance rollback retains new parent directories containing unrelated cust
   assertSnapshotsEqual(before, fileSnapshot(projectRoot));
 });
 
+test('guidance rollback preserves an empty replacement of its created parent directory', (t) => {
+  const projectRoot = copyTemplate();
+  removeGuidance(projectRoot);
+  const guidanceDirectory = path.join(projectRoot, '.github');
+  fs.rmdirSync(guidanceDirectory);
+  const layoutPath = path.join(projectRoot, 'app', '_layout.tsx');
+  fs.writeFileSync(layoutPath, fs.readFileSync(layoutPath, 'utf8')
+    .replace('<Slot />', '<SafeAreaView><Slot /></SafeAreaView>'));
+  const before = fileSnapshot(projectRoot);
+  const copilotPath = path.join(guidanceDirectory, 'copilot-instructions.md');
+  const originalCopy = fs.copyFileSync;
+  t.mock.method(fs, 'copyFileSync', (source, destination, flags) => {
+    const result = originalCopy(source, destination, flags);
+    if (destination === copilotPath) {
+      fs.rmSync(guidanceDirectory, { recursive: true });
+      fs.mkdirSync(guidanceDirectory);
+    }
+    return result;
+  });
+
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot, ...guidanceOptions,
+  }), /rollback failed: customer-modified guidance preserved: \.github/);
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+  assert.ok(fs.lstatSync(guidanceDirectory).isDirectory());
+});
+
 test('preparation rejects a symlinked project root without mutations', (t) => {
   const projectRoot = copyTemplate();
   const before = fileSnapshot(projectRoot);
