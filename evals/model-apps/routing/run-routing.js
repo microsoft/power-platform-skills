@@ -210,20 +210,32 @@ function copilotSkillInventory({ bin, binArgs = [], pluginDir, env, cwd }) {
 }
 
 /**
- * Launch one agent run and resolve when it ROUTED, finished, timed out, or failed to start.
+ * Launch one agent run and resolve when it ROUTED, finished, timed out, or failed to start — and,
+ * for a run the harness had to kill, once the agent has closed, so the caller may remove the trial's
+ * working directory at once. A kill takes effect a moment after it is sent, and until then the agent
+ * still holds that directory (on Windows removing it failed with `EBUSY`); so the wait is for the
+ * process to exit and its pipes to end. It is bounded (`closeWaitMs`): an agent that will not die, or a
+ * grandchild that keeps a pipe open, must not hold the whole run, and the result is the same either way.
  * Never rejects: every failure becomes `trial.error`, which grading excludes from the pass rate.
  * `loadedSkills` / `loadError` carry a preflight's skill inventory for agents whose transcript does
  * not report it (Copilot); a `loadError` fails the trial before any model call is made.
  *
- * Two seams exist for the tests, and neither changes what a run does:
+ * Four seams exist for the tests, and none changes what a run does:
  *   `clock`    the timer pair the `timeoutMs` deadline runs on. A test that must fire the deadline at
  *              a chosen moment (after the agent has printed its first event, say) passes its own,
  *              rather than racing a real timer against how long a loaded machine takes to start Node.
  *   `onStart`  called once, right after the process is launched, with `{ child, parser }`, so a test
  *              can tell when the parser has seen a line and when the killed process has really exited.
+ *   `kill`     what ends the agent (default `killTree`). A test that must have an agent die late, or not
+ *              at all, passes its own to see that the trial waits for the close and that the wait ends.
+ *   `closeWaitMs`  the bound on that wait (default `CLOSE_WAIT_MS`); a test shortens it. It runs on the
+ *              real timer, never on `clock`, which stays the trial's deadline alone.
  */
 const REAL_CLOCK = { setTimeout, clearTimeout };
-function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent, loadedSkills = null, loadError = null, clock = REAL_CLOCK, onStart = null }) {
+// A killed process closes within tens of milliseconds (40 ms at most in 40 measured runs of an agent stand-in on
+// Windows), so seconds are ample; a longer bound only costs a run whose agent really cannot be ended.
+const CLOSE_WAIT_MS = 5000;
+function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent, loadedSkills = null, loadError = null, clock = REAL_CLOCK, onStart = null, kill = killTree, closeWaitMs = CLOSE_WAIT_MS }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const parser = new TranscriptParser(agent, plugin);
@@ -251,11 +263,22 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
     let buf = '';
     let timedOut = false;
     let settled = false;
+    // `closed`: the 'close' event has fired, so the process has exited and its pipes have ended. finish() can run
+    // long before that (at the routing decision, at the deadline), right after it sends the kill.
+    let closed = false;
+    let afterClose = null;
+    const resolveWhenClosed = (outcome) => {
+      if (closed) { resolve(outcome); return; }
+      // The outcome is already decided, so the wait changes nothing but WHEN the caller hears of it. It runs on the
+      // real timer: `clock` is the trial's deadline, and a test that controls it must not control this.
+      const giveUp = setTimeout(() => { afterClose = null; resolve(outcome); }, closeWaitMs);
+      afterClose = () => { clearTimeout(giveUp); resolve(outcome); };
+    };
     const finish = (extra = {}) => {
       if (settled) return;
       settled = true;
       clock.clearTimeout(timer);
-      killTree(child);
+      kill(child);
       let error = extra.error || null;
       // "none" is a DECISION only when the run ended on its own without choosing a plugin skill.
       // A run cut off by the timeout has not decided anything — even if it streamed events (an
@@ -282,7 +305,7 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
         const missing = plugin.pluginSkills.filter((s) => !loaded.includes(`${plugin.pluginName}:${s}`) && !loaded.includes(s));
         if (missing.length) error = `plugin skills not loaded: ${missing.join(', ')} (check --plugin-dir)`;
       }
-      resolve({
+      resolveWhenClosed({
         routedTo: parser.routedTo,
         skillCalls: parser.skillCalls,
         loadedSkills: loaded,
@@ -309,6 +332,7 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
     child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
     child.on('error', (err) => finish({ error: `could not start ${bin}: ${err.message}` }));
     child.on('close', (code) => {
+      closed = true;
       if (buf) parser.push(buf);
       const tail = stderr.trim().split(/\r?\n/).slice(-3).join(' | ');
       // A run that ends without routing is a valid "none" outcome only if it ended SUCCESSFULLY.
@@ -319,6 +343,8 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
       } else {
         finish();
       }
+      // A trial that finished earlier is waiting for exactly this.
+      if (afterClose) afterClose();
     });
     child.stdin.on('error', () => { /* agent exited before reading the prompt; 'close' reports it */ });
     child.stdin.end(prompt);
