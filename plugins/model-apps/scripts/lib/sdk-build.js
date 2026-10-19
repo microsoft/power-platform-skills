@@ -2673,7 +2673,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
   // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
-  const runner = makeRunner({ emit, total: plan.length });
+  // The runner stops the run at the next step once the budget has refused a wait (entity-provision.js, makeRunner): the build's retry loop does not run the phases again to meet the same answer.
+  const runner = makeRunner({ emit, total: plan.length, throttle: opts.throttle });
   const sol = spec.solution;
 
   // ADO 6691114: a view-filter label the environment already shows to be wrong stops the build here, before it

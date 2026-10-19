@@ -41,6 +41,8 @@ const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-a
 // The build's retry policy (see the header of retry-policy.js): every halt below says what a run again may do, decided where it is raised, and every failure this engine raises itself is made by
 // refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service) — never a bare `new Error`, whose message the build's retry would read.
 const { RETRY, retryPolicyFor, refusal, serviceFailure } = require('./retry-policy.js');
+// What the run's throttle budget says when it refuses a wait (the words of the build's own halt for it), for the step guard in makeRunner.
+const { waitDoesNotFit } = require('./throttle-budget.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -622,7 +624,8 @@ async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical,
     },
     warn,
     `could not set the length of the primary name column ${logical}.${primaryLogical} to ${asked} — it keeps the length the platform gave it, and ${afterwards}`,
-    { skipIf: (err) => (err && err.leftAlone ? `${gone.step} — kept` : false) }
+    // A phase that halted has stopped before this step (`halted`): the step settles what the halt left, and is not a step of the phase a refused budget stops (makeRunner).
+    { skipIf: (err) => (err && err.leftAlone ? `${gone.step} — kept` : false), settling: halted }
   );
   if (vanished) {
     warnKept(gone.why);
@@ -869,12 +872,18 @@ function outcomeUnknown(err) {
 // never sends it again after another transient status or a lost answer, because a change set can commit behind those. A change set
 // still refused with a 429 when that schedule is spent was not a defect of the request, so the warning says the table was throttled
 // instead of blaming the request, and the one-by-one path then takes its own turn at the lock.
-async function createColumnsInOneRequest({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep }) {
+//
+// One more refusal is not the platform's: a run's throttle budget (lib/throttle-budget.js) that had no room for the wait a throttled change set asks. The HTTP client hands the 429 back as it came
+// and tells the budget; the service has asked the run to hold back, so the columns are NOT then created one by one — each would be one more request to a service that said to wait — and the phase stops
+// with the budget's halt. `stop`, when there is a budget, is the check that says so (the runner's `stopIfRefused`): it throws when the budget has refused, and does nothing otherwise, so a change
+// set that was refused by anything else, or whose sends ran out while the budget still had room, falls back exactly as it always did.
+async function createColumnsInOneRequest({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep, stop }) {
   try {
     // The options are built inside the try: a column the options cannot be built for fails the way it always did, in its own step
     // on the per-column path, instead of failing the phase from here.
     await sdk.createColumns(table.logicalName, columns.map(optionsFor));
   } catch (err) {
+    if (typeof stop === 'function') stop();
     if (outcomeUnknown(err)) {
       // ONE read, and only an answer that shows EVERY column counts: the change set is atomic, so a table that has only some of them
       // did not get them from it (a column the platform makes itself under the name of one the spec asks for is there either way).
@@ -960,6 +969,12 @@ class BuildHalt extends Error {
     if (retryText !== undefined) this.retryText = String(retryText);
     if (statusCode !== undefined) this.statusCode = statusCode;
   }
+}
+
+// The halt a run's throttle budget makes when it has refused to wait for a throttled request (lib/throttle-budget.js, `declined`): the service asked for longer than the run may wait, so the run ends here and a later one goes on from where it stopped —
+// a transient halt, which is what the build's retry loop reports as `throttle-budget-exhausted` (build-model-app.js) in the same words, instead of running the phases again to meet the same answer. See makeRunner.
+function budgetStop(throttle, phase) {
+  return new BuildHalt(`${phase ? `${phase} stopped` : 'the build stopped'}: ${waitDoesNotFit(throttle, throttle.declined())}`, { phase, code: 'throttle-budget-exhausted', recoverable: true, retry: RETRY.SERVICE, statusCode: 429 });
 }
 
 // Collect every `code` along an error's `cause` chain, outermost first.
@@ -1277,9 +1292,22 @@ async function mapLimit(items, limit, fn, { firstInOrder = false } = {}) {
 // A Runner owns the emit/counter/BuildHalt machinery so both consumers produce the
 // identical { phase, status, label, n, total } event stream. `total` is supplied by the
 // consumer (each computes its own plan length), so counting stays consumer-scoped.
-function makeRunner({ emit, total }) {
+//
+// `throttle` is the run's throttle budget (lib/throttle-budget.js), for the runner of a build. Once it has refused to wait for a throttled request (`declined`) the run is over — the build's
+// retry loop stops with `throttle-budget-exhausted` rather than run the phases again to meet the same answer — but the refusal can be swallowed on its way up: a best-effort step reports a failure
+// and goes on, and a fallback answers a refused request with others (createColumnsInOneRequest). The run would then keep sending requests to a service that asked it to hold back, and could even end as a
+// success. So after a refusal no step STARTS: `run` and each item of `mapLimit` stop the phase with the budget's halt (budgetStop), and `stopIfRefused` is the same check for code that must decide before it
+// writes. A step that is already running finishes (a request is never cut off), and a step that settles what a halted phase left (`settling`: the name column's length it still owes, which the halt
+// would otherwise leave at the platform's default for good, as a run that finds the table leaves it alone) is let through. One runner is one run of the phases (runSdkBuild makes one for each), so only
+// refusals made after it was made count; a runner given no budget — or one that cannot say what it refused — never stops, as before.
+function makeRunner({ emit, total, throttle }) {
   let n = 0;
-  const run = async (phase, label, fn, { recoverable = false, skipIf } = {}) => {
+  const budgeted = Boolean(throttle) && typeof throttle.declined === 'function';
+  const refusals = () => (budgeted ? throttle.declined().count : 0);
+  const refusedBefore = refusals();
+  const stopIfRefused = (phase) => { if (refusals() > refusedBefore) throw budgetStop(throttle, phase); };
+  const run = async (phase, label, fn, { recoverable = false, skipIf, settling = false } = {}) => {
+    if (!settling) stopIfRefused(phase);
     const myN = (n += 1);
     emit({ phase, status: 'start', label, n: myN, total });
     try {
@@ -1305,7 +1333,9 @@ function makeRunner({ emit, total }) {
     }
   };
   const skip = (phase, label) => { emit({ phase, status: 'skip', label, n: (n += 1), total }); };
-  return { run, mapLimit, skip, emit, total };
+  // The one limiter, with each item's start guarded when there is a budget to ask: a runner without one is handed the module's own function, as it always was.
+  const limited = budgeted ? (items, limit, fn, options) => mapLimit(items, limit, (item, index) => { stopIfRefused(); return fn(item, index); }, options) : mapLimit;
+  return { run, mapLimit: limited, skip, emit, total, stopIfRefused };
 }
 
 // How an operator resets a workspace by hand, where the build cannot do it itself. Most of `.maker-workspace`
@@ -1969,6 +1999,8 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           optionsFor: (c) => columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode),
           warn,
           sleep,
+          // A runner without the check (a stand-in for one) never stops here.
+          stop: typeof runner.stopIfRefused === 'function' ? () => runner.stopIfRefused('data-model') : undefined,
         });
       }
     }

@@ -788,7 +788,7 @@ test('only an answer that leaves the outcome unknown is followed by a read of th
 // The plugin's own HTTP client over the same stub — what a real build sends: its `postRaw` (the verbatim body a change set needs; the
 // SDK's DataverseClient.supportsAtomicBatch is true exactly when the client has it), its headers and its retry policy. `slept` records
 // the waits between attempts (without waiting); the jitter is off, so they are the schedule itself.
-function throughAzHttpClient(dv) {
+function throughAzHttpClient(dv, clientOptions = {}) {
   const { createAzHttpClient } = require('../lib/sdk-http-client.js');
   const sent = [];
   const slept = [];
@@ -802,7 +802,7 @@ function throughAzHttpClient(dv) {
     else throw new Error(`unexpected ${method} ${url}`);
     return { statusCode: res.status, headers: res.headers || {}, body: typeof res.body === 'string' ? res.body : (res.body === null || res.body === undefined ? '' : JSON.stringify(res.body)) };
   };
-  const httpClient = createAzHttpClient(ORG, { getToken: () => 'test-token', request, sleep: async (ms) => { slept.push(ms); }, random: () => 0 });
+  const httpClient = createAzHttpClient(ORG, { getToken: () => 'test-token', request, sleep: async (ms) => { slept.push(ms); }, random: () => 0, ...clientOptions });
   return { httpClient, sent, slept };
 }
 
@@ -881,6 +881,89 @@ test('a table still locked after the HTTP client has spent its attempts: the cha
   const baseline = await provisionOver(spec, { inlineColumns: false });
   assert.deepStrictEqual(result, baseline.result);
   assert.deepStrictEqual(events, baseline.events);
+});
+
+// ── A change set the run's throttle budget has no room to wait for ────────────────────────────────────────────────────────────────────────────
+// With a run's budget (lib/throttle-budget.js) the HTTP client does not send the change set again when the wait the service asks for does not fit what is left: it hands the 429 back as it came and tells the budget. The service has asked the
+// run to hold back, so the columns are NOT then created one by one — each would be one more request to a service that said to wait — and the phase halts with the budget's halt before any request of a column's own. What the halted phase still owes
+// (the length of the name column of the table this run created) is settled as it is for any halt. A refusal the budget did not make — the client's sends ran out while the budget had room — is the fallback it always was.
+test('a change set the budget has no room to wait for (HTTP 429, Retry-After ten minutes) stops the phase before any column request — no column is created one by one — and the length the halted phase owes is still set', async () => {
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const { isTransientHalt } = require('../build-model-app.js');
+  const dv = fakeDataverse({ batchFails: () => ({ status: 429, headers: { 'retry-after': '600' }, body: TABLE_LOCKED_BODY }) });
+  const throttle = makeThrottleBudget();
+  const { httpClient, sent, slept } = throughAzHttpClient(dv, { throttle });
+  const sdk = await realSdk(httpClient);
+  const events = [];
+  const warnings = [];
+  const spec = oneTable([textColumn('new_a'), { schemaName: 'new_b', type: 'Integer' }], asksFor(120));
+  await assert.rejects(
+    provisionDataModel({ sdk, provision: sdk, runner: makeRunner({ emit: (e) => events.push(e), total: 99, throttle }), spec, apply: true, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033], sleep: async () => {}, warn: (m) => warnings.push(m) }),
+    (error) => {
+      assert.ok(error instanceof BuildHalt);
+      assert.strictEqual(error.code, 'throttle-budget-exhausted');
+      assert.strictEqual(error.phase, 'data-model');
+      assert.strictEqual(error.recoverable, true);
+      assert.strictEqual(isTransientHalt(error), true, 'a later run goes on from here');
+      assert.match(error.message, /^data-model stopped: the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)\./);
+      return true;
+    },
+  );
+  assert.strictEqual(sent.filter((s) => /\/\$batch$/.test(s.url)).length, 1, 'the change set was sent once');
+  assert.deepStrictEqual(slept, [], 'and nothing was waited for');
+  assert.deepStrictEqual(sent.filter((s) => /\/Attributes$/.test(s.url) && s.method === 'POST'), [], 'no column was created by a request of its own');
+  assert.deepStrictEqual(['new_a', 'new_b'].filter((name) => dv.tables.get('new_ticket').columns.has(name)), [], 'and neither column exists');
+  assert.deepStrictEqual(warnings.filter((w) => /one by one/.test(w)), [], 'no fallback is announced');
+  assert.strictEqual(throttle.declined().count, 1, 'the client told the budget once');
+  assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 120, 'the table this run created has the name length the spec asks for: a halted phase still settles it');
+  assert.deepStrictEqual(lengthEvents({ events }).map((e) => [e.status, e.label]), [['ok', 'primary column length new_ticket.new_name -> 120']]);
+});
+
+test('a change set the budget had room to wait for and the client\'s sends ran out on is not the budget\'s refusal — the columns are created one by one, as before, with the table-was-throttled warning', async () => {
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const dv = fakeDataverse({ batchFails: () => ({ status: 429, headers: { 'retry-after': '1' }, body: TABLE_LOCKED_BODY }) });
+  const throttle = makeThrottleBudget();
+  const { httpClient, sent, slept } = throughAzHttpClient(dv, { throttle });
+  const sdk = await realSdk(httpClient);
+  const events = [];
+  const warnings = [];
+  const spec = oneTable([textColumn('new_a'), textColumn('new_b')]);
+  const result = await provisionDataModel({ sdk, provision: sdk, runner: makeRunner({ emit: (e) => events.push(e), total: 99, throttle }), spec, apply: true, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033], sleep: async () => {}, warn: (m) => warnings.push(m) });
+  assert.strictEqual(sent.filter((s) => /\/\$batch$/.test(s.url)).length, 6, 'six attempts in all');
+  assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000], 'each wait fit what was left');
+  assert.strictEqual(throttle.declined().count, 0, 'so the budget refused nothing');
+  assert.strictEqual(sent.filter((s) => /\/Attributes$/.test(s.url) && s.method === 'POST').length, 2, 'and each column was created by its own request');
+  assert.deepStrictEqual(warnings, [`table new_ticket was throttled (${LOCKED_REASON}), so its 2 ordinary column(s) are created one by one instead of in one request`]);
+  const baseline = await provisionOver(spec, { inlineColumns: false });
+  assert.deepStrictEqual(result, baseline.result);
+  assert.deepStrictEqual(events, baseline.events);
+});
+
+test('through the build, a change set the budget has no room to wait for halts the build once with the budget\'s halt — it is not run again, waits for nothing and creates no column one by one', async () => {
+  const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const dv = fakeDataverse({ batchFails: () => ({ status: 429, headers: { 'retry-after': '600' }, body: TABLE_LOCKED_BODY }) });
+  const warnings = [];
+  const waits = [];
+  const throttle = makeThrottleBudget({ warn: (line) => warnings.push(line) });
+  const { httpClient, sent, slept } = throughAzHttpClient(dv, { throttle });
+  const sdk = await realSdk(httpClient);
+  const spec = { schemaVersion: 2, ...oneTable([textColumn('new_a'), textColumn('new_b')]), app: { name: 'Budget app' } };
+  let attempts = 0;
+  const error = await buildModelApp(spec, { apply: true, env: ORG, preResolvedLanguageCode: 1033 }, {
+    sdk, provisionSdk: sdk, throttle, log: () => {}, warn: (m) => warnings.push(m), provisionedLanguages: async () => [1033], sleep: async (ms) => { waits.push(ms); },
+    discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+    runBuild: (s, o) => { attempts += 1; return runSdkBuild(s, { ...o, phases: ['data-model'] }); },
+  }).then(() => null, (e) => e);
+  assert.ok(error, 'the build did not report a success: the service asked it to wait ten minutes');
+  assert.strictEqual(error.code, 'throttle-budget-exhausted');
+  assert.strictEqual(isTransientHalt(error), true);
+  assert.match(error.message, /^data-model stopped: the service asked to wait 600 s before the next send, which does not fit/);
+  assert.strictEqual(attempts, 1, 'the phase was not run again to meet the same answer');
+  assert.deepStrictEqual([...waits, ...slept], [], 'nothing was waited for, by the client or by the build');
+  assert.deepStrictEqual(sent.filter((s) => /\/Attributes$/.test(s.url) && s.method === 'POST'), [], 'no column was created by a request of its own');
+  assert.deepStrictEqual(warnings.filter((w) => /one by one/.test(w)), []);
 });
 
 // A column whose options cannot even be built (a spec the validator would have refused) must not turn into a different failure for
