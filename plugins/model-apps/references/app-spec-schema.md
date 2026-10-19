@@ -1874,8 +1874,17 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 ## personas[] (optional — security roles)
 
 Authors one **security role per persona**, sized to the entity access that persona's
-**jobs-to-be-done** need. Without at least one role the generated app runs only for system
-administrators; `personas[]` produces a working access model so the app opens for real users.
+**jobs-to-be-done** need, and associates the app with it. A **new** app is associated with the System
+Administrator role only, so without a persona role users who have no maker-level role cannot open it;
+`personas[]` produces a working access model so the app opens for real users.
+
+An app that **already exists** keeps the roles associated with it: a spec with no `personas[]` leaves
+them as they are, which is how an extension of such an app is written (a download carries none). Do
+not list an existing role as a persona to silence the lint — a persona's role is converged to exactly
+the privileges declared, and a role the build did not author is refused. Give an existing role access
+to a table the spec adds with `roleGrants[]` (below). Opening the app and using a table are two
+questions: lint and `write-app-spec-doc.js` keep them apart, and flag a new table that no persona job
+and no `roleGrants[]` entry grants a privilege on ("no access declared").
 
 `personas[]` is captured **first** during authoring (Level (a0), before the data model): the jobs
 are what the app exists to do, so they drive which tables and surfaces exist. `privileges[]` is

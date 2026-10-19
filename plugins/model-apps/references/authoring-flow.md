@@ -701,6 +701,14 @@ The builder authors **one role per persona**, unioning every job's declared acce
 per entity+access), and grants the app to that role so it **opens for that persona, not just for
 system administrators** (`appAccess: false` opts a role out).
 
+**Extending an app that already has roles** (a downloaded spec): leave `personas[]` out. The roles
+associated with an existing app are not changed by a spec that authors none, and a persona's role is
+converged to exactly the privileges declared (so naming an existing role there is the opposite of
+leaving it alone). Give an existing role access to a new table with a `roleGrants[]` entry instead —
+it adds privileges and removes none (see [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)
+→ `roleGrants[]`). The lint's "no access declared" warning names each new table that no persona job
+and no grant covers.
+
 **Render the proposed roles and their per-entity access as a table in your chat reply**, then
 confirm with `AskUserQuestion` — the user cannot approve an access model they cannot see, and
 tool output is collapsed and invisible to them.

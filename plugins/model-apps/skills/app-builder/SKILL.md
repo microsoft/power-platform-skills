@@ -260,8 +260,12 @@ unless destructive authority was supplied independently.
    ```
    It writes `<working-dir>/model-app-plan.md` (jobs → surfaces traceability, data model, every
    surface, navigation, access model, sample data) and prints `{ ok, docPath, bytes, warnings }`.
-   **Surface those `warnings`** — they name design gaps such as a job with no covering surface or an
-   app with no generative pages. Tell the user where the document is; it's theirs to keep, and it's
+   **Surface those `warnings`** — they name design gaps such as a job with no covering surface, an
+   app with no generative pages, or a new table that no persona and no `roleGrants[]` entry grants a
+   privilege on. With `--env` the document also lists, read-only, the roles the app already has
+   associated with it, apart from the privileges on the tables the spec adds (opening the app and using
+   a table are two questions); a read that fails is reported in the document as "not checked" and does
+   not fail the command. Tell the user where the document is; it's theirs to keep, and it's
    regenerable after any spec edit.
 
 ### Phase 1.5 — Generate pages (main loop, headless workers)
@@ -685,6 +689,13 @@ not everything:**
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty.
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.
+- **Roles are not in the spec, and a rebuild leaves them as they are.** A download carries no
+  `personas[]`: the roles associated with the app stay as the environment has them. Keep `personas[]`
+  out when you extend an app whose roles somebody else owns — a persona's role is converged to exactly
+  the privileges declared, and a role the build did not author is refused. Give an existing role a new
+  table with a `roleGrants[]` entry (additive; it does not associate the role with the app). Lint and
+  the design document name each new table no persona and no grant covers, and `write-app-spec-doc.js
+  --env` lists the roles the app has.
 
 Then:
 

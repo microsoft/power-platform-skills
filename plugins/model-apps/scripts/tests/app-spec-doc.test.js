@@ -53,7 +53,7 @@ function realisticSpec() {
         {
           name: 'Triage new tickets',
           description: 'See what came in overnight',
-          privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'user' }],
+          privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'user' }, { entity: 'new_customer', access: ['read'], scope: 'organization' }],
           surfaces: ['Active Tickets', 'overview'],
         },
         {

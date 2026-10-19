@@ -323,7 +323,11 @@ works through.
 Adds privileges for a table to a security role that **already exists** — typically the roles an
 existing solution ships. Use it when you add a table to an app whose access model somebody else owns:
 without it the table, its forms and its navigation deploy while every non-admin persona still cannot
-open the table, and nothing reports it.
+open the table, and nothing reports it. (Lint now does: a new table that no persona job and no
+`roleGrants[]` entry grants a privilege on is a "no access declared" warning, and a grant that covers it
+satisfies the check.) A grant is about **tables**: it does not associate the role with the app, and a
+spec with no `personas[]` leaves the roles an existing app has as they are — `write-app-spec-doc.js
+--env` lists them.
 
 ```jsonc
 "roleGrants": [

@@ -134,7 +134,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `scripts/write-page-plan.js` for why the app-builder page plan is not `genpage-*`.
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
-  collision Dataverse rejects), warnings teach.
+  collision Dataverse rejects), warnings teach. The access advice is worded for what a spec can
+  know (`lib/app-access.js`): no `personas[]` says the spec authors no security role and who can
+  open the app only as a condition — a spec for a new app and an extension of an app that already
+  has roles look alike, and the app's own roles are the ones associated with it, which a spec with
+  no personas leaves as they are — except that the marks a download writes (`app.uniqueName`, a
+  page or dashboard id) make it say the spec most likely edits an existing app. A new table (an `entities[]`
+  entry not marked `existing`) that no persona privilege and no `roleGrants[]` entry covers gets
+  one "no access declared" warning, the check an extension that leaves `personas[]` out on purpose
+  still needs.
 - **`scripts/lib/app-source-path.js`** — shared resolver for page `codeFile` and web-resource
   `contentPath` reads/uploads and hashing. Validation/lint share its lexical rule; the resolver
   requires a relative, regular file inside the canonical app folder and refuses source symlinks
@@ -1798,7 +1806,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   an ASCII console preview for the in-conversation approval gate, this is durable Markdown for review
   and archival. It is **rendered, never hand-written** — the freehand version drifted from the spec
   and shrank to a counts summary. Also returns `warnings[]` naming design gaps (no jobs captured, a
-  job with no covering surface, no generative pages) so the orchestrator surfaces them in chat.
+  job with no covering surface, no generative pages, a new table no persona and no `roleGrants[]`
+  entry grants a privilege on) so the orchestrator surfaces them in chat. Its Security section keeps
+  two questions apart — who can open the APP (the roles associated with it) and who can use the
+  TABLES the spec introduces (privileges) — and never calls the app administrator-only on the
+  strength of a spec with no personas alone: that is a claim about the deployed app. With `--env` it
+  reads, read-only, the roles the app has associated with it (`lib/app-roles.js`: the build's own
+  app probe, then `GET appmodules(<id>)/appmoduleroles_association`) and lists them, marks the
+  persona and `roleGrants[]` roles among them, and draws the administrator-only conclusion only
+  from that read — an app the environment has with no role, or one it does not have yet that the
+  spec gives none. A read that fails is reported in the document and in `warnings` as "not
+  checked"; it never fails the command.
 - **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
@@ -2207,7 +2225,7 @@ scripts/
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in; its result JSON is pure ASCII and lists every `WARNING:` line it printed in an optional `warnings` array)
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review
   preview-app.js               ← app-builder: ASCII whole-app design preview (data model + sitemap + forms + page-intents + design)
-  write-app-spec-doc.js        ← app-builder: renders the readable model-app-plan.md design doc from app-spec.json
+  write-app-spec-doc.js        ← app-builder: renders the readable model-app-plan.md design doc from app-spec.json (`--env` also reads, read-only, the roles the app has associated with it; a read that fails is reported in the document, never fatal)
   ai-preflight.js              ← app-builder: preflight AI feature availability (admin-gate report)
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
@@ -2295,6 +2313,8 @@ scripts/
     form-preview.js            ← form wireframe renderer
     app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design)
     app-spec-doc.js            ← pure App Spec → readable Markdown design doc (model-app-plan.md)
+    app-access.js              ← pure: what an App Spec says about who can open the APP (the roles associated with it) and who can use the TABLES it introduces (`personas[]` and `roleGrants[]` privileges): the marks of an existing app a download writes (`existingAppMarkers`), the new tables nothing grants (`uncoveredTables`), the sentences the lint and the design document share, and the model of what a read of the environment means for the spec (`appAccessModel`)
+    app-roles.js               ← read-only: the roles associated with an app (`appmoduleroles`) — verify's `appIdFor` / `appRoleIdsFor` (moved here unchanged), and `appRolesOf` for the design document: `{ state: 'read' | 'absent' | 'unreadable' }`, never a throw, found with the probe the build uses for "does the app exist"
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write

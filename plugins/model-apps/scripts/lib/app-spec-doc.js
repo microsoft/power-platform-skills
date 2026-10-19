@@ -17,6 +17,7 @@
 
 const lc = (s) => String(s || '').toLowerCase();
 const { labelText, lookupLabelFor } = require('./app-spec.js');
+const { appAccessCondition, appAccessModel, uncoveredTables, uncoveredTablesCallout } = require('./app-access.js');
 
 // Every collection read below goes through these. The renderer runs against WORK-IN-PROGRESS specs
 // during authoring — a half-typed `jobs: "x"`, a null entry left by an edit, a `dataSources` written
@@ -89,10 +90,12 @@ function jobsSection(spec) {
   const personas = objs(spec.personas);
   const out = ['## Jobs to be done', ''];
   if (!personas.length) {
+    // All the spec can say here is what it does NOT author: who can open the app is decided by the roles associated with it, and a spec with no
+    // personas[] leaves those as they are (the Security section says what that means, and what the environment holds when it was read).
     out.push(
-      '> ⚠ No `personas[]` were captured, so this app has no recorded jobs-to-be-done and no security',
-      '> roles — it will open only for system administrators. Capture who uses the app and what each',
-      "> of them needs to get done, then regenerate this document.",
+      '> ⚠ No `personas[]` were captured, so this app has no recorded jobs-to-be-done and this spec authors no security role.',
+      '> That does not say who can open the app — see **Security**. Capture who uses the app and what each of them needs',
+      '> to get done, then regenerate this document.',
       ''
     );
     return out;
@@ -324,51 +327,123 @@ const scopeRank = (s) => {
   return r === undefined ? 0 : r;
 };
 
-function security(spec) {
+// The privileges a list declares, per table and per ACCESS: table -> access -> most permissive declared scope.
+function unionPrivileges(privileges) {
+  const byEntity = new Map();
+  for (const pr of privileges) {
+    if (!pr || typeof pr !== 'object') continue;
+    const entity = lc(pr.entity);
+    if (!entity) continue;
+    let byAccess = byEntity.get(entity);
+    if (!byAccess) { byAccess = new Map(); byEntity.set(entity, byAccess); }
+    const scope = String(pr.scope || 'user');
+    for (const a of Array.isArray(pr.access) ? pr.access : []) {
+      const prev = byAccess.get(a);
+      if (prev === undefined || scopeRank(scope) > scopeRank(prev)) byAccess.set(a, scope);
+    }
+  }
+  return byEntity;
+}
+
+// The rows of a privilege table, one per (table, scope). The accesses that share a scope are grouped so the common case stays one row, while a genuine
+// split (read@organization + write@user) renders as two — visibly different access levels.
+function privilegeRows(byEntity) {
+  const rows = [];
+  for (const [entity, byAccess] of byEntity) {
+    const byScope = new Map();
+    for (const [access, scope] of byAccess) {
+      if (!byScope.has(scope)) byScope.set(scope, []);
+      byScope.get(scope).push(access);
+    }
+    const scopes = [...byScope.keys()].sort((a, b) => scopeRank(b) - scopeRank(a));
+    for (const scope of scopes) rows.push({ entity, access: byScope.get(scope).join(', '), scope });
+  }
+  return rows;
+}
+
+// WHO CAN OPEN THE APP, kept apart from who can use a table. The roles associated with the app decide which users see it; a spec with no personas[]
+// authors none and leaves an existing app's as they are, so it says what the SPEC can say — and, when the environment was read (--env), what the
+// ENVIRONMENT holds. The administrator-only claim the document used to make for every spec without personas is made here only on that evidence: an
+// app the environment has, with no role associated with it, or one it does not have yet that this spec gives no role.
+function appAccessSection(spec, personas, model, opts) {
+  const out = ['### Access to the app', ''];
+  const where = opts.envUrl ? text(opts.envUrl) : 'the environment';
+  const app = model.appUnique ? `The app \`${model.appUnique}\`` : 'The app';
+  if (model.state === 'read' && model.roles.length) {
+    out.push(`${app} already exists in ${where} and these roles are associated with it, so their users can open it:`, '', '| Role | In this spec |', '|---|---|');
+    for (const r of model.roles) {
+      const inSpec = r.source === 'persona' ? 'persona (authored by this spec)' : r.source === 'roleGrant' ? 'extended by `roleGrants[]`' : 'not touched by this spec';
+      out.push(`| ${cell(r.name || r.roleId)} | ${inSpec} |`);
+    }
+    const authored = personas.length ? ', apart from the roles a persona authors (it associates a persona\'s role with the app, and removes the association when the persona sets `appAccess: false`)' : '';
+    out.push('', `A build with this spec leaves these associations as they are${authored}. Opening the app is one thing and using a table another: the privileges on the tables this spec introduces are declared separately, below.`, '');
+  } else if (model.state === 'read') {
+    out.push(`${app} exists in ${where}, but no role is associated with it, so only administrators and other makers (System Customizer, Environment Maker) can open it. ${personas.length ? 'A build with this spec associates the roles authored above with it.' : 'This spec authors no role to change that.'}`, '');
+  } else if (model.state === 'absent') {
+    out.push(personas.length
+      ? `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it, and the roles authored above.`
+      : `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it; this spec authors no role, so users without a maker-level role cannot open it until a role is associated with it.`, '');
+  } else if (model.state === 'unreadable') {
+    out.push(`> ⚠ The roles associated with the app could not be read from ${where} (${text(model.reason)}), so who can open it was not checked.`, '', appAccessCondition(spec), '');
+  } else {
+    out.push(appAccessCondition(spec), '', 'The roles associated with the app were not read: pass `--env <envUrl>` to read them.', '');
+  }
+  return out;
+}
+
+// roleGrants[]: privileges ADDED to roles that already exist. Shown with the role they extend — the persona sections above show the roles this spec owns — and,
+// when the environment was read, with the roles that are not among the app's: a grant gives a role a table, not the app.
+function roleGrantsSection(spec, model) {
+  const grants = objs(spec.roleGrants);
+  if (!grants.length) return [];
+  const rows = [];
+  for (const g of grants) {
+    const role = typeof g.role === 'string' && g.role.trim() ? g.role.trim() : (typeof g.roleId === 'string' ? g.roleId.trim() : '');
+    for (const r of privilegeRows(unionPrivileges(arr(g.privileges)))) rows.push({ role, ...r });
+  }
+  const out = ['### Roles extended by `roleGrants[]`', '', 'These roles already exist. The build ADDS the privileges below and removes none, and a grant does not associate the role with the app. After a build, `verify-model-app.js` checks that each role holds them.', ''];
+  if (rows.length) {
+    out.push('| Role | Table | Access | Scope |', '|---|---|---|---|');
+    for (const r of rows) out.push(`| ${cell(r.role)} | ${cell(r.entity)} | ${cell(r.access)} | ${cell(r.scope)} |`);
+  } else {
+    out.push('_No privileges declared._');
+  }
+  out.push('');
+  if (model.state === 'read') {
+    for (const role of model.missingGrantRoles) out.push(`> ⚠ Role "${text(role)}" is not among the roles associated with the app, so its users get these privileges but may not be able to open the app.`, '');
+  }
+  return out;
+}
+
+function security(spec, opts) {
   const personas = Array.isArray(spec.personas) ? spec.personas.filter((p) => p && typeof p === 'object') : [];
-  if (!personas.length) return [];
+  const model = appAccessModel(spec, opts.appAccess);
   const out = ['## Security', ''];
+  if (!personas.length) out.push('This spec authors no security role (`personas[]` is empty).', '');
   for (const p of personas) {
     out.push(`### Role: ${text(p.persona)}`, '');
     out.push(p.appAccess === false ? '_Data-only — the app is **not** granted to this role._' : 'The app is granted to this role, so it opens for this persona.', '');
 
-    // entity -> access -> most permissive declared scope
-    const byEntity = new Map();
-    const add = (pr) => {
-      if (!pr || typeof pr !== 'object') return;
-      const entity = lc(pr.entity);
-      if (!entity) return;
-      let byAccess = byEntity.get(entity);
-      if (!byAccess) { byAccess = new Map(); byEntity.set(entity, byAccess); }
-      const scope = String(pr.scope || 'user');
-      for (const a of Array.isArray(pr.access) ? pr.access : []) {
-        const prev = byAccess.get(a);
-        if (prev === undefined || scopeRank(scope) > scopeRank(prev)) byAccess.set(a, scope);
-      }
-    };
+    const privileges = [];
     for (const j of Array.isArray(p.jobs) ? p.jobs : []) {
-      if (j && typeof j === 'object') for (const pr of Array.isArray(j.privileges) ? j.privileges : []) add(pr);
+      if (j && typeof j === 'object') privileges.push(...(Array.isArray(j.privileges) ? j.privileges : []));
     }
-    for (const pr of Array.isArray(p.additionalPrivileges) ? p.additionalPrivileges : []) add(pr);
-
-    if (byEntity.size) {
+    privileges.push(...(Array.isArray(p.additionalPrivileges) ? p.additionalPrivileges : []));
+    const rows = privilegeRows(unionPrivileges(privileges));
+    if (rows.length) {
       out.push('| Table | Access | Scope |', '|---|---|---|');
-      for (const [entity, byAccess] of byEntity) {
-        // Group the accesses that share a scope so the common case stays one row, while a genuine
-        // split (read@organization + write@user) renders as two — visibly different access levels.
-        const byScope = new Map();
-        for (const [access, scope] of byAccess) {
-          if (!byScope.has(scope)) byScope.set(scope, []);
-          byScope.get(scope).push(access);
-        }
-        const scopes = [...byScope.keys()].sort((a, b) => scopeRank(b) - scopeRank(a));
-        for (const scope of scopes) out.push(`| ${cell(entity)} | ${cell(byScope.get(scope).join(', '))} | ${cell(scope)} |`);
-      }
+      for (const r of rows) out.push(`| ${cell(r.entity)} | ${cell(r.access)} | ${cell(r.scope)} |`);
       out.push('');
     } else {
       out.push('_No privileges declared._', '');
     }
   }
+  // The persona sections already say, per role, whether the app is granted to it; the section on the app is for what they cannot: a spec that authors
+  // no role, and what the environment says.
+  if (!personas.length || model.state !== 'unread') out.push(...appAccessSection(spec, personas, model, opts));
+  out.push(...roleGrantsSection(spec, model));
+  const withoutAccess = uncoveredTables(spec);
+  if (withoutAccess.length) out.push('### Tables with no access declared', '', `> ⚠ ${uncoveredTablesCallout(withoutAccess)}`, '');
   return out;
 }
 
@@ -408,7 +483,7 @@ function aiFeatures(spec) {
 /**
  * Render an App Spec as a readable Markdown design document.
  * @param {object} spec migrated App Spec
- * @param {object} [opts] { envUrl }
+ * @param {object} [opts] { envUrl, appAccess } `appAccess` is the answer of lib/app-roles.js `appRolesOf` for the app when the environment was read, else absent
  * @returns {string} markdown
  */
 function renderAppSpecDoc(spec, opts = {}) {
@@ -420,7 +495,7 @@ function renderAppSpecDoc(spec, opts = {}) {
     ...dataModel(s),
     ...surfaces(s),
     ...navigation(s),
-    ...security(s),
+    ...security(s, opts),
     ...sampleData(s),
     ...designContract(s),
     ...aiFeatures(s),

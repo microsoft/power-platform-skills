@@ -58,6 +58,8 @@ const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
 const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
+// The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
+const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
 //
@@ -119,36 +121,6 @@ async function sitemapXmlFor(sdk, appUnique) {
   if (!smId) return '';
   const sms = await sdk.queryRecords('sitemap', { select: ['sitemapxml'], filter: `sitemapid eq ${smId}`, top: 1 });
   return (sms && sms[0] && sms[0].sitemapxml) || '';
-}
-
-// Resolve the app module id from its unique name.
-async function appIdFor(sdk, appUnique) {
-  const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
-  return rows && rows[0] && rows[0].appmoduleid;
-}
-
-async function appRoleIdsFor(sdk, appUnique) {
-  try {
-    const appId = await appIdFor(sdk, appUnique);
-    if (!appId) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
-    if (!sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'SDK dataverse reader is unavailable' };
-    // The SDK has associate/disassociate helpers for `appmoduleroles_association`, but no modeled
-    // read for that N:N membership. Read the relationship navigation property directly so verify
-    // proves the deployed app<->role rows the model-driven app launcher uses, rather than inferring
-    // access from role existence or from the build result.
-    // See appmodule relationships: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
-    const res = await sdk.dataverse.get(`/appmodules(${appId})/appmoduleroles_association?$select=roleid`);
-    if (!res || res.status < 200 || res.status >= 300) return { ok: false, reason: `HTTP ${res && res.status}` };
-    return {
-      ok: true,
-      roleIds: ((res.body && res.body.value) || [])
-        .map((r) => r && r.roleid)
-        .filter(Boolean)
-        .map((id) => String(id).toLowerCase()),
-    };
-  } catch (err) {
-    return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
-  }
 }
 
 // How many pages readerFor's pageCodes reads at once. A page read is its rows' bytes and its conversation, a handful of requests, so a few at a
