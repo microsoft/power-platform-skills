@@ -65,6 +65,9 @@
 //      Windows holds a file — leaves a folder that is still recorded, and that a later run's sweep takes). A LENT workspace is not one of them: the program it was lent to may still be writing in it, and a lent workspace is taken
 //      only when it is old (LENT_KEEP_MS), by a sweep;
 //   2. the plugin's folder, with `rmdir`.
+// A caller that lends a workspace removes it itself, in a cleanup it registers for the end of the process (lib/exit-cleanup.js; solution-settings.js does), and that cleanup runs AFTER this listener, which found the lent workspace
+// in the plugin's folder and so left the folder. The cleanup therefore calls `pruneWorkspaceParents()` once its workspace is gone: the same `rmdir` of the plugin's folder, which takes it only when it is empty, so nothing that is not
+// the run's own is ever taken, and nothing is removed recursively. (A signal ends a POSIX process with no `exit` event at all; the cleanup that exit-cleanup.js runs for it, and this call, are then all that takes the folder.)
 // Why neither takes what another run is using, or is about to use:
 //   * A workspace of this process is named for its pid and six random characters, so no other run makes, opens or removes it. A sweep never opens a folder whose pid runs (on Linux it reads its record, and a run that is going
 //     is "alive" there), and this process runs until the last listener of its `exit` event has returned.
@@ -267,13 +270,18 @@ function removeOwnWorkspace(dir, fsx) {
   // A folder whose record could not be written has none to move aside, and removeWorkspace leaves it empty.
   try { fsx.rmdirSync(dir); } catch { /* gone, or not empty */ }
 }
+// The plugin's folder, taken when nothing is left in it: every folder this process used, with `rmdir`, which takes a folder only when it is empty (see above). The end of the process does it after the workspaces it removes, and a caller
+// that removes a LENT workspace in a cleanup of its own — which runs after that listener, see THE END OF A RUN — does it again when the workspace is gone. It never throws, and asking again, or for a folder that is gone, costs nothing.
+function pruneWorkspaceParents() {
+  for (const [folder, fsx] of pruneAtExit) {
+    try { fsx.rmdirSync(folder); } catch { /* not empty (another run's workspace, or one that could not be removed), or already gone */ }
+  }
+}
 function prune(parent, deps) {
   if (pruneAtExit.size === 0) {
     process.once('exit', () => {
       for (const [dir, fsx] of ownWorkspaces) removeOwnWorkspace(dir, fsx);
-      for (const [folder, fsx] of pruneAtExit) {
-        try { fsx.rmdirSync(folder); } catch { /* not empty (another run's workspace, or one that could not be removed), or already gone */ }
-      }
+      pruneWorkspaceParents();
     });
   }
   pruneAtExit.set(parent, deps.fs || fs);
@@ -625,4 +633,4 @@ function makeTempWorkspace(prefix, deps = {}) {
   return mkdtemp(path.join((deps.os || os).tmpdir(), prefix));
 }
 
-module.exports = { PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning };
+module.exports = { PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, pruneWorkspaceParents };

@@ -179,3 +179,32 @@ test('a run that lends its workspace to a program and finishes normally removes 
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(work, 'settings-out.json'), 'utf8')), { EnvironmentVariables: [], ConnectionReferences: [] }, 'and wrote what pac wrote, at --out');
   assert.deepStrictEqual(fs.readdirSync(root).filter((name) => name !== path.basename(work)), [], 'nothing of the plugin\'s is left in the temp folder');
 });
+
+// The end of a run takes the plugin's folder when nothing is left in it (lib/temp-workspace.js), but a workspace that is LENT is not the maker's to take: the cleanup that solution-settings.js registers for the end of the
+// process (lib/exit-cleanup.js) removes it. That cleanup runs after the maker's own listener, which has by then found the lent workspace still in the plugin's folder and left the folder — so the folder was left behind, empty,
+// by every run that was cut short while pac ran. REAL processes, over a fake pac that cuts the run short.
+for (const [what, how, status] of [['process.exit(7)', 'exit', 7], ['an error nothing catches', 'throw', 1]]) {
+  test(`a run that ends by ${what} while pac runs takes the workspace it lent to pac and the plugin's folder with it, and ends with the status it would have had`, async (t) => {
+    const root = privateTempRoot(t);
+    const work = fs.mkdtempSync(path.join(root, 'work-'));
+    const run = startTarget(t, ['pac-template-abort', work, how], { env: tempEnv(root) });
+    const folder = (await run.waitFor(/^workspace /, WORKER_TIME)).slice('workspace '.length);
+    assert.strictEqual(path.dirname(folder), workspaceParent({ os: { tmpdir: () => root } }), 'pac was given a folder in the plugin\'s own folder');
+    const ended = await run.exited;
+    assert.deepStrictEqual([ended.code, ended.signal], [status, null], 'the status is the one the run would have ended with');
+    assert.ok(!fs.existsSync(folder), 'the workspace lent to pac is removed: it held the settings file pac was writing');
+    assert.deepStrictEqual(fs.readdirSync(root), [path.basename(work)], 'and the temp folder is as the run found it: the plugin\'s folder is not left behind, empty');
+  });
+}
+
+// A signal ends a POSIX process with no `exit` event, so the maker's listener never runs: the cleanup of solution-settings.js (the signal handler of lib/exit-cleanup.js) is all that runs, and it takes the folder too.
+test('POSIX: a run that is signalled while pac runs takes the workspace it lent to pac and the plugin\'s folder with it, and ends BY the signal', { skip: process.platform === 'win32' && 'a signal is TerminateProcess on Windows: nothing runs' }, async (t) => {
+  const root = privateTempRoot(t);
+  const work = fs.mkdtempSync(path.join(root, 'work-'));
+  const run = startTarget(t, ['pac-template-abort', work, 'wait'], { env: tempEnv(root) });
+  const folder = (await run.waitFor(/^workspace /, WORKER_TIME)).slice('workspace '.length);
+  const ended = await run.signal('SIGTERM');
+  assert.deepStrictEqual([ended.code, ended.signal], [null, 'SIGTERM'], 'ended by the signal, and not by an exit status');
+  assert.ok(!fs.existsSync(folder), 'the workspace lent to pac is removed');
+  assert.deepStrictEqual(fs.readdirSync(root), [path.basename(work)], 'and so is the plugin\'s folder');
+});

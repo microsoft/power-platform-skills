@@ -112,7 +112,7 @@ const { createAzHttpClient, retryAfterMs, scrub, scrubBearer, MIN_SCRUBBED_TOKEN
 const { sdkFirst } = require('./lib/sdk-first.js');
 const { runPac } = require('./lib/pac-fallback.js');
 const { assertPlainFileTarget, assertSafeOutputDir, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
-const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeTempWorkspace, pruneWorkspaceParents } = require('./lib/temp-workspace.js');
 const { createPrivateFile } = require('./lib/private-folder.js');
 const { onProcessEnd } = require('./lib/exit-cleanup.js');
 
@@ -915,6 +915,10 @@ async function inWorkFolder(holds, work, { empty, prepare = null, prepareFailure
   const releaseCleanup = onProcessEnd(() => {
     const note = removeWorkFolder(dir, holds, empty);
     if (note) writeNote(note, leaving);
+    // This runs after the maker's own listener for the end of the process (lib/temp-workspace.js registered it first), which found this LENT workspace in the plugin's folder and left the folder. The workspace is gone now,
+    // so the folder is taken too when nothing else is in it — the same plain `rmdir`, which takes a folder only when it is empty, so nothing that is not this run's is touched. A signal ends a POSIX process with no `exit` event
+    // at all, and then this is all that takes the folder.
+    pruneWorkspaceParents();
   }, proc ? { process: proc } : undefined);
   let value;
   let failure;

@@ -36,6 +36,10 @@
 //   node kill-target.js pac-worker <settingsFile> <workDir>
 //        the fake pac's program: writes the first half of <settingsFile>, writes its pid to <workDir>/worker.json, waits for <workDir>/resume, writes the rest and
 //        <workDir>/worker-result.json (what its write said), and ends.
+//   node kill-target.js pac-template-abort <workDir> <how>
+//        runs the deployment-settings template through pac as `pac-template` does, over a fake pac that starts no program: it writes the first half of the settings file in the folder it was given,
+//        says `workspace <folder>`, and then the run is cut short while pac "runs" — <how> `exit` is process.exit(7), `throw` an error nothing catches (thrown from a timer, which ends the process with
+//        status 1), `wait` nothing: the process waits to be signalled or killed.
 //   node kill-target.js lent-worker <workDir>
 //        makes a workspace LENT (`makeTempWorkspace(prefix, { lent: true })`, as solution-settings.js does for pac), says `workspace <folder>`, waits for <workDir>/go — a test that wants
 //        to do something to the record meanwhile (hold it exclusively) does it then — and starts the `pac-worker` program, detached, in the folder: `worker <pid>`. Then waits to be killed.
@@ -206,6 +210,22 @@ async function main() {
     await runTemplate({ command: 'template', packagePath, outPath: path.join(workDir, 'settings-out.json'), force: false }, { pac: { spawn } });
     say('done');
     process.exit(0);
+  } else if (mode === 'pac-template-abort') {
+    const [workDir, how] = args;
+    const { runTemplate } = require('../../solution-settings.js');
+    const packagePath = path.join(workDir, 'package.zip');
+    fs.writeFileSync(packagePath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x01]));
+    const spawn = (_name, pacArgs) => {
+      const settingsFile = pacArgs[pacArgs.indexOf('--settings-file') + 1];
+      fs.writeFileSync(settingsFile, '{"EnvironmentVariables":');
+      say(`workspace ${path.dirname(settingsFile)}`);
+      if (how === 'exit') process.exit(7);
+      // From a timer, so that nothing in this file catches it: the process ends as it does for any error that nothing catches.
+      if (how === 'throw') setImmediate(() => { throw new Error('an error nothing catches'); });
+      return new Promise(() => {});
+    };
+    wait();
+    await runTemplate({ command: 'template', packagePath, outPath: path.join(workDir, 'settings-out.json'), force: false }, { pac: { spawn } });
   } else if (mode === 'lent-worker') {
     const [workDir] = args;
     const { makeTempWorkspace } = require('../../lib/temp-workspace.js');

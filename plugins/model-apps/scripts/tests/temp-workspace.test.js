@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning,
+  PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, pruneWorkspaceParents,
 } = require('../lib/temp-workspace.js');
 const { ownerStamp, isOwnerStamp } = require('../lib/process-owner.js');
 const { privateTempRoot, tempEnv, startTarget, deadPid, pause, waitUntil } = require('./helpers/kill-target-client.js');
@@ -637,6 +637,25 @@ test('when a process ends it removes the plugin\'s folder if nothing is left in 
   await clean.waitFor(/^done$/);
   await clean.exited;
   assert.deepStrictEqual(fs.readdirSync(root), [], 'a normal run leaves the temp folder as it found it');
+});
+
+// A cleanup of a caller's own — the one solution-settings.js registers with lib/exit-cleanup.js, which removes the workspace it LENT — runs after the maker's listener for the end of the process, so it asks for the same removal of
+// the plugin's folder once the workspace is gone. The removal is the same one: a plain `rmdir`, which takes a folder only when it is empty.
+test('pruneWorkspaceParents takes the plugin\'s folder when nothing is left in it, and only then — a workspace in it, lent or not, keeps it, whole', (t) => {
+  const { deps } = tempRoot(t);
+  const lent = makeTempWorkspace('solution-settings-', { ...deps, lent: true });
+  const own = makeTempWorkspace('genpage-', deps);
+  const parent = workspaceParent(deps);
+  pruneWorkspaceParents();
+  assert.deepStrictEqual(entriesOf(parent), [path.basename(lent), path.basename(own)].sort(), 'the folder holds two workspaces: it is not taken, and neither of them is');
+  assert.ok(fs.existsSync(path.join(lent, OWNER_FILE)) && fs.existsSync(path.join(own, OWNER_FILE)), 'whole, and still recorded');
+  fs.rmSync(own, { recursive: true, force: true });
+  pruneWorkspaceParents();
+  assert.deepStrictEqual(entriesOf(parent), [path.basename(lent)], 'one workspace left in it: the folder stays');
+  fs.rmSync(lent, { recursive: true, force: true });
+  pruneWorkspaceParents();
+  assert.ok(!fs.existsSync(parent), 'nothing left in it: it is taken');
+  assert.doesNotThrow(() => pruneWorkspaceParents(), 'and asking again, with the folder gone, is no failure');
 });
 
 // ── A run that is cut short ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
