@@ -2039,9 +2039,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     a run will not set either).
     Last, because `updateColumn` starts by reading the column WITH its labels, and a label-bearing metadata read ahead of
     a labelled create is what strips non-base languages (measured; see `findExistingColumns`): within one attempt, nothing
-    labelled in more than one language is created after it (the one thing that is, an alternate key over the name column —
-    below — carries one label, which a read cannot strip). The build's automatic retry of a transient halt (a 429, a
-    lock) runs the phase again as a second attempt. The attempt that created the table sets its length in the halt path
+    labelled in more than one language is created after it, except one kind of alternate key over the name column (below): the
+    key labelled in several languages that cannot fit beside the name column before the step, which is made after it because it
+    cannot be made before. (A key with one label, which is also made after it, has nothing for a read to strip.) The build's
+    automatic retry of a transient halt (a 429, a lock) runs the phase again as a second attempt. The attempt that created the table sets its length in the halt path
     too; when that step fails as well (the lock that stopped the phase can still be held), the table is **owed** its
     length. `provisionDataModel` records it (`owedLengths`, a Map of `{ table, column, asked, tried, tableId, columnId? }`,
     which `runSdkBuild` hands to the phase and puts on the halt it throws, the way it carries the publishes an attempt owes
@@ -2174,12 +2175,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     only: a recommended column is not a Business Required field) and the plan document (`required`, `recommended`). A downloaded spec carries no
     `required` at all (`download-model-app.js` reads no `RequiredLevel`), so it passes whatever the live columns hold.
     Pinned by `column-required-gate.test.js`.
-  - **Alternate keys over the name column.** The platform validates a key when it is created, and a key may hold at
-    most 900 bytes — 2 for each character of a text column
-    ([Dataverse alternate keys](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys)) —
-    so a key over a name column an environment made 850 characters long is refused. A key that holds a table's primary
+  - **Alternate keys over the name column.** The platform validates a key when it is created, and the size it holds is bounded: the
+    platform's own answer to a key that is too large names the limit (HTTP 400, code `0x80060895`, "Index size exceeded the size limit of
+    1700 bytes. The key is too large. Try removing some columns or making the strings in string columns shorter."), 2 bytes for each
+    character of a text column ([Dataverse alternate keys](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys)
+    documents 900; 1,700 is what the environment this was measured on enforced, so the build uses the number only to know that a key
+    cannot fit — `KEY_BYTES_LIMIT`, `lib/app-spec.js` — and the platform does the refusing). The 850 characters an environment may make of a
+    new name column are 1,700 bytes by themselves: measured, a key over that column **alone** is accepted, and one that holds **any other
+    column** beside it is refused (a column of one character, of a hundred). A key that holds a table's primary
     name column, when the spec gives that column a length and the key's label **goes out in one language**
-    (`keyWaitsForNameLength`, `lib/app-spec.js`), is therefore made after the length steps and not with its
+    (`keyWaitsForNameLength`, `lib/app-spec.js`), is made after the length steps and not with its
     table, for a table whose length is still to be set: one this attempt created, or one an earlier attempt left owed.
     What counts is what is sent — not the shape of the value, and not the language the build is authored in: the SDK writes
     a string as one `LocalizedLabels` entry in the build's language, and a language map as one entry per language it names,
@@ -2203,17 +2208,33 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     holds, `keyWaitsForNameLength` does not), as every multi-language create in this file does: it cannot follow the read
     that sets the length without risking the other
     languages, and the length cannot be set without that read (the SDK's update needs the column's whole definition,
-    which only that read provides). So its first build can still stop where the platform refuses the key for the length
-    of its column, and then `alternateKeyAheadOfLength` warns — only when the key fails — naming the key, the languages its
-    label goes out in, why it was made first, and what to do: run the build again (the length is set as the build stops, so
+    which only that read provides). **Except** where the environment made the name column too long for the key to fit beside the
+    others: the platform refuses such a key ahead of the step, and the first build used to stop there for the run that followed to
+    make it. `keyHasRoomOnlyAfterLength` (`lib/app-spec.js`) says from the spec when the length can decide that — the key holds the name
+    column, cannot fit while that column is 850 characters, and may fit at the length the spec asks; the size is a floor
+    (`keyBytesAtLeast`: a text column counts 2 bytes a character, at its `maxLength` or the SDK's default of 100, and any other column one byte,
+    so that what it shows is certain) — and only for such a key does the build read the column, with one typed
+    `…/StringAttributeMetadata?$select=MaxLength` GET (no labels: the kind of read the build keeps ahead of its labelled creates), before it asks for
+    the key (`keyMustWaitForShorterNameColumn`, `lib/entity-provision.js`). Where the column reads too long for the key, the key waits for the
+    length step like a key labelled in one language and is made after it, with both labels; where the environment kept the length asked, or the read
+    fails, the key is made ahead of the step, where it always was. A key over the name column alone fits even at 850 characters, and one too large at
+    the length the spec asks would be refused after the step as well, so neither is read for. **Why only then, and not every key over the name
+    column:** the loss that keeps such a key ahead of the step did not reproduce in the live measurement (0 of 18 creates made right after a read
+    that carries labels lost a language), while a key made after the length step kept both languages (9 of 9, and 2 of 2 in a new process) — so
+    "after the step" cannot be shown safe where the loss does exist, and a key that fits keeps the place that never risked it; the one key that
+    cannot be made there is the one that moves. A key that was not known to be too large and that the platform then refuses for its size (an
+    environment whose limit is smaller, or a read that failed) is made where it always was, and `alternateKeyAheadOfLength` warns — only when the key fails — naming the
+    key, the languages its label goes out in, why it was made first and what to do: run the build again (the length is set as the build stops, so
     the run that follows finds the table with it and makes the key), or label the key in one language. Where the environment
     keeps the length asked, the key is made and nothing is said. Every other key —
     over another column, over the name column of a table that already existed or was found after its create (never
     written to), or in a spec that gives no length — is made with its table, as it always was; a spec that keys a name
     column without a `primaryAttribute.maxLength` leaves the column as the environment made it, so the reference tells
     an author to give one. `planFor` and the provision-entities plan list a waiting key after the length steps, where a
-    table the build creates has it; the count is unchanged. `table-columns-in-create.test.js` pins the order (against a
-    stub that refuses a key over 900 bytes), the failure, the language rule, the warning, and the retry.
+    table the build creates has it, and a key labelled in several languages with its table — whether the environment makes the build move
+    it is known only to the build, and the count is the same either way. `table-columns-in-create.test.js` pins the order (against a
+    stub that answers a key that is too large as the platform does: at 1,700 bytes, and at 900 for an environment that enforces the documented
+    limit), the failure, the language rule, the warning, the read and the retry; `app-spec-key-size.test.js` pins the size rule.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an

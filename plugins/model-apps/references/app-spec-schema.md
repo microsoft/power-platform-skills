@@ -555,23 +555,29 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   length the spec asks for (or cannot be read). A build that stops because the table was created but cannot
   be read back yet (`TABLE_METADATA_NOT_VISIBLE`) warns that the length may not have been applied, since a
   re-run leaves an existing table's name column alone.
-- **A key over the name column — give the column a `maxLength`.** A key may hold at most 900 bytes (2 for
-  each character of text), and some environments make a new name column 850 characters long whatever length
-  the table's create asks for, so Dataverse refuses a key over it. When the spec gives the name column a
-  `maxLength` and a table's `alternateKeys[]` entry holds that column, the build makes the key after it has
+- **A key over the name column — give the column a `maxLength`.** A key may hold only so many bytes (2 for
+  each character of text) and Dataverse refuses one that is too large: Microsoft Learn documents 900 bytes, and the
+  platform's own answer on the environment this was measured on named 1,700. Some environments make a new name
+  column 850 characters long whatever length the table's create asks for — 1,700 bytes by itself, so a key over that
+  column alone is accepted there, and a key that holds any other column beside it is refused. When the spec gives the
+  name column a `maxLength` and a table's `alternateKeys[]` entry holds that column, the build makes the key after it has
   set the length — so the first build succeeds — and does not send it when the length could not be set: it stops
-  with a message that says why and what to do instead of the platform's refusal. Keep the key within 900 bytes
-  (at most 450 characters when the name column is its only column). Without a `maxLength` the build leaves the
+  with a message that says why and what to do instead of the platform's refusal. Keep the key within 900 bytes to be
+  safe on every environment (at most 450 characters when the name column is its only column). Without a `maxLength` the build leaves the
   column as the environment made it and makes the key with its table, so on such an environment the key is
   refused: give one. This holds for a key whose `displayName` goes out in one language: a string, or a language
   map that names exactly one language, whichever it is — the SDK sends either as one label, the same request, and
   where the key is made does not depend on the language the build writes in. A key labelled in several languages
   (`{ "1033": "…", "3082": "…" }`) is made **before** the length is set,
   because the update that sets the length reads the column with its labels, and Dataverse keeps only the base
-  language of a create that comes straight after such a read. So where the platform refuses such a key for the
-  length of its column, the first build stops there; the build then **warns**, naming the key and what to do: run it
-  again (the length is set as the build stops, so the key is made then), or label the key in one language so that it
-  is made after the length. Nothing is said where the environment keeps the length asked and the key is made.
+  language of a create that comes straight after such a read. The exception is a key that holds the name column **and
+  another column** where the environment made the name column too long for it (the key then cannot fit beside the
+  column, and shortening the column is what lets it): the build reads the column's length once, before it asks for such
+  a key, and makes the key after the length is set — with both labels, so the first build succeeds. A key labelled in several
+  languages over the name column alone is made before the length is set whatever the column's length. Where the platform refuses a key made before
+  the length is set for its size all the same, the first build stops there; the build then **warns**, naming the key and what
+  to do: run it again (the length is set as the build stops, so the key is made then), or label the key in one language so
+  that it is made after the length. Nothing is said where the environment keeps the length asked and the key is made.
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
 

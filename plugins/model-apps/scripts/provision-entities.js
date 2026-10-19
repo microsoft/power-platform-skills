@@ -131,7 +131,8 @@ function buildPlan(input, opts) {
   }
   // Then the alternate keys over a name column whose length is set: the apply makes such a key once that length is right
   // (keyWaitsForNameLength, which depends on what the key's label is sent as and not on the language), where a table it creates has it.
-  // computeTotal counts them with the other keys.
+  // A key labelled in several languages that the environment made the name column too long to fit beside is made there too, which only the
+  // environment can say, so the plan lists it with its table and the apply makes it after the length step. computeTotal counts them with the other keys.
   for (const e of input.entities || []) {
     for (const k of e.alternateKeys || []) {
       if (keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);

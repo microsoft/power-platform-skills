@@ -24,6 +24,8 @@ const {
   askedPrimaryNameLength,
   keyNeedsNameLength,
   keyWaitsForNameLength,
+  keyHasRoomOnlyAfterLength,
+  keyCannotFitAt,
   PRIMARY_NAME_MAX_LENGTH,
 } = require('./app-spec.js');
 const { readColumnLabels, makeTableLabelReader, lookupKey } = require('./lookup-labels.js');
@@ -1747,10 +1749,12 @@ function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
 // An alternate key over the name column of a table whose length is still to be set that cannot wait for it, because its label goes out in
 // several languages (keyWaitsForNameLength): it is made where it always was, ahead of the length step, so that the read that carries
 // labels, which setting the length starts with, does not come before a create that carries several languages. Where the platform then
-// refuses it — a key may hold at most 900 bytes, which a name column of the 850 characters some environments give a new table is far
-// over — the build says why this key was made first and what to do, because the platform's refusal says nothing of the length. The build
+// refuses it — a key may hold at most 1,700 bytes, which a name column of the 850 characters some environments give a new table fills by
+// itself — the build says why this key was made first and what to do, because the platform's refusal says nothing of the length. The build
 // sets the length as the last step before it stops (provisionDataModel), so the run that follows finds the table with it and makes the key.
-// Said only when the key fails: where the environment keeps the length asked the key is made, and nothing is wrong.
+// Said only when the key fails: where the environment keeps the length asked the key is made, and nothing is wrong. What reaches here is
+// a key that was not known to be too large — a key over the name column alone fits even at 850 characters, and a read of the length that
+// failed leaves a key that would not fit as undecided (keyMustWaitForShorterNameColumn) — or one the platform refused for another reason.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, languageCode, warn }) {
   try {
@@ -1766,17 +1770,43 @@ async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, la
         `alt key ${entity.schemaName}.${key.schemaName} was not created. It is over the name column ${column} of a table this build created, and its label is ${named}, `
         + `so the build creates it before it sets that column to ${askedPrimaryNameLength(entity)} characters `
         + '(setting the length reads the column with its labels, which would keep only one of the languages). If the platform refused it for its size — a key may hold '
-        + 'at most 900 bytes, 2 for each character of text, and some environments make a new name column 850 characters long — run the build again: the length is set '
-        + 'as the build stops, so the key is created then. A key labelled in one language is created after the length is set.',
+        + 'at most 1,700 bytes, 2 for each character of text, so the 850 characters some environments make of a new name column fill it by themselves, and no other column fits beside it — '
+        + 'run the build again: the length is set as the build stops, so the key is created then. A key labelled in one language is created after the length is set.',
       );
     }
     throw err;
   }
 }
 
-// The alternate keys that waited for their table's name column length (keyWaitsForNameLength), in the order the phase met them, made
-// once every length step has run. A key whose table's step did not come right is not asked for: the platform would refuse it for the
-// length it is left at — a key may hold at most 900 bytes, which a name column of 850 characters is far over — in words that say
+// Whether a key labelled in several languages over the name column of a table whose length is still to be set must wait for that step all the
+// same: the environment made the column too long for the key to fit beside the others, so the platform would refuse it ahead of the step, and
+// shortening the column is the one thing that changes its answer. The platform's refusal is HTTP 400, code 0x80060895, "Index size exceeded the size
+// limit of 1700 bytes" (KEY_BYTES_LIMIT, lib/app-spec.js), and it stopped the first build at the key, for the run that followed to make it.
+//
+// Decided from the length the environment made of the column — 850 characters where it ignores the length asked of the table's create
+// (DEFAULT_PRIMARY_NAME_LENGTH), which is every byte a key may hold, the length asked where it keeps it — read with one typed request that selects MaxLength
+// and nothing else (readTextColumn): no labels, the kind of read this build keeps ahead of its labelled creates, which does not do to the key what the read that
+// carries labels, at the length step, would. A read is made only for a key that the spec shows can be in that position at all (keyHasRoomOnlyAfterLength): a
+// key over the name column alone fits even at 850 characters, and a key that cannot fit at the length asked either would be refused after the step as well.
+//
+// Nothing else changes for such a key: it is the one key labelled in several languages that is made after a read that carries labels, which is what the rule that
+// keeps the others ahead of the step avoids — and it is made there only because the platform leaves no other way to make it. Measured live, a key made right after
+// that read keeps both of its labels (the SDK's update of the column, then its create of the key).
+//
+// A read that fails answers no: the key is asked for where it always was, and the platform decides, as it did before the build read the column.
+async function keyMustWaitForShorterNameColumn({ provision, entity, logical, key, sleep }) {
+  if (!keyHasRoomOnlyAfterLength(entity, key)) return false;
+  try {
+    const { maxLength } = await readTextColumn(provision, logical, String(entity.primaryAttribute.schemaName).toLowerCase(), { sleep });
+    return keyCannotFitAt(entity, key, maxLength);
+  } catch {
+    return false;
+  }
+}
+
+// The alternate keys that waited for their table's name column length (keyWaitsForNameLength, keyMustWaitForShorterNameColumn), in the order the phase met them, made
+// once every length step has run. A key whose table's step did not come right is not asked for: the platform may refuse it for the
+// length it is left at — a key may hold at most 1,700 bytes, which a name column of 850 characters fills by itself — in words that say
 // nothing of the length, and the step that failed has already said why in its own. So the key is a failed step of its own, naming
 // both, and the build stops there as it does for a key the platform refuses. A table that turned out not to be the one the length was
 // owed for (`left`, see checkOwedTable) is not one the build set the length of at all: its key is made as the key on any table the build
@@ -1801,7 +1831,7 @@ async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
       const status = chain.map((e) => e.statusCode || e.status).find(Boolean);
       const halt = new BuildHalt(
         `alt key ${entity.schemaName}.${key.schemaName} was not created: it is over the name column ${column}, whose length the build could not set to ${asked} (${why}) — `
-        + 'a key may hold at most 900 bytes, 2 for each character of text, so Dataverse refuses one over a name column left at the 850 characters some environments give a new table. '
+        + 'a key may hold at most 1,700 bytes, 2 for each character of text, and a name column left at the 850 characters some environments give a new table fills that by itself, so Dataverse refuses a key that holds any other column beside it. '
         + `Nothing was sent for the key. Set ${column} to ${asked} characters in Maker, or clear the cause above, then run the build again: it creates the key.`,
         { phase: 'data-model', code: 'alt-key-name-length-not-set', recoverable: true, cause: outcome.error, retry: retryPolicyFor(outcome.error), ...(Number.isInteger(status) ? { statusCode: status } : {}) },
       );
@@ -2216,16 +2246,21 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // already-exists error is treated as a skip (not a halt) via skipIf.
     //
     // A key over the name column of a table whose length is still to be set waits for that step when its label goes out in ONE language
-    // (keyWaitsForNameLength): it is made at the end of the phase, once the length is right, because a key over the column an environment made
-    // 850 characters long is refused for its size. A key over that column whose label goes out in several languages cannot wait — the read that
-    // sets the length carries labels — and is made here, ahead of the step, where the build says what to do if the platform refuses it
-    // (alternateKeyAheadOfLength). Every other key is made here, with its table, as it always was.
+    // (keyWaitsForNameLength): it is made at the end of the phase, once the length is right. A key over that column whose label goes out in
+    // several languages cannot wait — the read that sets the length carries labels — and is made here, ahead of the step, where the build says
+    // what to do if the platform refuses it (alternateKeyAheadOfLength) — unless the environment made the column too long for the key to fit
+    // beside the others: the platform would refuse it here, so it waits too, whatever its label (keyMustWaitForShorterNameColumn).
+    // Every other key is made here, with its table, as it always was.
     for (const k of e.alternateKeys || []) {
       if (lengthPending && keyWaitsForNameLength(e, k)) {
         waitingKeys.push({ entity: e, logical, key: k, languageCode: resolvedLanguageCode });
         continue;
       }
       if (lengthPending && keyNeedsNameLength(e, k)) {
+        if (await keyMustWaitForShorterNameColumn({ provision, entity: e, logical, key: k, sleep })) {
+          waitingKeys.push({ entity: e, logical, key: k, languageCode: resolvedLanguageCode });
+          continue;
+        }
         await alternateKeyAheadOfLength({ runner, sdk, entity: e, logical, key: k, languageCode: resolvedLanguageCode, warn });
         continue;
       }

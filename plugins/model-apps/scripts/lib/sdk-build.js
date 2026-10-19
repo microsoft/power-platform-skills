@@ -574,7 +574,9 @@ function planFor(spec, opts) {
     // (keyWaitsForNameLength, which depends on what the key's label is sent as and not on the language the build writes in, so the plan and the
     // apply cannot disagree about it). The plan lists it
     // where a table the build creates has it; a table that already exists is not written to, and
-    // its keys are made with the table — the same steps, in another place, so the count holds.
+    // its keys are made with the table — the same steps, in another place, so the count holds. The same goes for a key labelled in several
+    // languages that the environment made the name column too long to fit beside (keyMustWaitForShorterNameColumn, lib/entity-provision.js):
+    // only the environment can say, so the plan lists such a key with its table, and the apply makes it after the length step.
     for (const e of spec.entities) {
       for (const k of e.alternateKeys || []) {
         if (keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
