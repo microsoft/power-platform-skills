@@ -76,15 +76,19 @@ test('the check finds a step that uses a task tool with no alternative, and pass
   assert.deepEqual(unconditionalTaskToolSections(half), ['## Step 4']);
 });
 
-// Agents whose task-tracking steps already say what to do without a tool.
-const CONDITIONAL_AGENTS = ['genpage-page-builder.md'];
+const AGENT_FILES = fs.readdirSync(AGENTS).filter((f) => f.endsWith('.md')).sort();
 
-test('an agent that tracks its work with a task tool says what to do when it has none', () => {
-  for (const file of CONDITIONAL_AGENTS) {
+test('every agent that tracks its work with a task tool says what to do when it has none', () => {
+  const tracking = [];
+  const offenders = [];
+  for (const file of AGENT_FILES) {
     const instructions = instructionsOf(readDoc(path.join(AGENTS, file)));
-    assert.match(instructions, /\bTaskCreate\b/, `${file} names the task tool, so the check below has something to judge`);
-    assert.deepEqual(unconditionalTaskToolSections(instructions), [], `${file}: a step names TaskCreate/TaskUpdate without saying what to do with no task tool`);
+    if (/\bTaskCreate\b/.test(instructions)) tracking.push(file);
+    for (const heading of unconditionalTaskToolSections(instructions)) offenders.push(`${file}: ${heading}`);
   }
+  assert.deepEqual(offenders, [], 'these steps name TaskCreate/TaskUpdate without saying what to do with no task tool');
+  // The check had something to judge: a set of agents that stopped naming the tool would pass it for nothing.
+  assert.ok(tracking.includes('genpage-page-builder.md'), `the page builder names the task tool (agents that do: ${tracking.join(', ')})`);
 });
 
 test('the page builder tracks its page with a task tool only if it has one, and in plain words when it has none', () => {

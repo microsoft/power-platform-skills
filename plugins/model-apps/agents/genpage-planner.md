@@ -517,7 +517,8 @@ the user before continuing:
 
 ## Step 5 — Hand the Plan Back for Approval
 
-Create tasks via `TaskCreate`:
+If you have a task tool (`TaskCreate`, or `todo`), create tasks; if you have none, skip this
+and never say you created a task:
 1. "Design page plan and data strategy"
 2. "Write plan document (genpage-plan.md)"
 

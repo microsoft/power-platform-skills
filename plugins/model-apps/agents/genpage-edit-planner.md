@@ -134,7 +134,8 @@ you want to confirm the file layout before reading.
 
 ## Step 2 — Gather Change Requirements
 
-Create tasks via `TaskCreate`:
+If you have a task tool (`TaskCreate`, or `todo`), create tasks; if you have none, skip this
+and never say you created a task:
 1. "Analyze existing page and gather edit requirements"
 2. "Design edit plan"
 3. "Write edit plan document (genpage-edit-plan.md)"
