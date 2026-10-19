@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createAzHttpClient, scrub, scrubAnswer } = require('../lib/sdk-http-client.js');
+const { createAzHttpClient, scrub, scrubAnswer, completeBatchStatus } = require('../lib/sdk-http-client.js');
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const API = `${ORIGIN}/api/data/v9.0`;
@@ -144,6 +144,19 @@ test('a SUCCESS is never touched: its JSON, its raw text and its bytes are retur
   // The headers of a success are left as they are, too.
   const headed = clientOver([answer(200, {}, { 'x-echo': TOKEN })]);
   assert.equal((await headed.client.get(`${API}/WhoAmI`)).headers['x-echo'], TOKEN);
+});
+
+test('a change set the service refuses as a whole is a SUCCESS to the client — HTTP 200, the failed part inside — and is returned as it came, token and all: the strict readers count its bytes, and the token is taken out of what the SDK makes of it (lib/sdk-failure-scrub.js)', async () => {
+  const detail = JSON.stringify({ error: { code: '0x80040220', message: `Principal user rejected bearer ${TOKEN} for this write` } });
+  const refused = ['--batchresponse_x', 'Content-Type: multipart/mixed; boundary=changesetresponse_x', '', '--changesetresponse_x', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', 'Content-ID: 1', '',
+    'HTTP/1.1 403 Forbidden', 'Content-Type: application/json', `Content-Length: ${Buffer.byteLength(detail)}`, '', detail, '--changesetresponse_x--', '--batchresponse_x--', ''].join('\r\n');
+  const { client, sent } = clientOver([answer(200, refused)]);
+  const res = await client.postRaw(`${API}/$batch`, 'x');
+  assert.equal(sent.length, 1, 'it is sent once');
+  assert.equal(res.status, 200);
+  assert.equal(res.body, refused, 'the very text the service sent');
+  assert.ok(res.body.includes(TOKEN), 'with the token in it');
+  assert.equal(completeBatchStatus({ body: res.body }), 403, 'and the strict reader proves the refusal from it, as it does from the service\'s own');
 });
 
 test('an answer that is not a success is scrubbed in every mode the client reads in — raw text and bytes as well — and one that holds no token is returned as the same text and the same Buffer', async () => {
