@@ -5,6 +5,77 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.16.0]
+
+The bundled SDK is updated to power-platform-ux 537cef3c, and a new table's primary (name) column is now created required when the
+spec says so. The spec gate refuses two values the build used to misread — an `AutoNumber` column without a format and a `required`
+that is not `true`, `false` or `"recommended"` — before anything is written, and `--verify` of an app an earlier release built only
+warns about them. Teardown keeps what only a kept table blocks instead of reporting the platform's refusals, and a run cut short
+removes its temporary folders.
+
+### Changed
+
+- **The bundled SDK is updated (power-platform-ux 537cef3c).** What a maker can see of it:
+  - a business process flow edit the flow cannot hold (a binding with no value, `required` on a step that has no slot for it) fails
+    with a message instead of reporting success, and a flow's security that names an access level its table cannot grant is
+    refused before any role is written;
+  - a command bar control copied with another control's id fails the push instead of overwriting that control;
+  - a view whose filter holds a related-rows condition (a `<link-entity>` inside the filter) keeps that condition whole when a
+    rebuild changes the view's columns, and a filter condition without a value (`eq-userid`, `this-week`) or a sitemap entry
+    without a target is no longer written again by every rebuild;
+  - a generative page whose source holds text that only looks like an import of `./RuntimeTypes` (in a string, a template or a
+    comment) is refused with a message that points at it, instead of having that text removed;
+  - an answer that lacks the rows or the record it should carry is an error, not an empty result;
+  - a workspace copy that an interrupted build of an earlier release left with edits it never pushed is refused at its next push
+    and asks for the documented reset (a copy without such edits is simply read again);
+  - a dashboard tile that hosts a custom control (the Power Apps grid control, say) is still left out of a download, named in its
+    warning, and out of `--verify`: the SDK now reads such a tile as a list or a chart, and the plugin tells it apart by its
+    control, so it is never written into `dashboards[]` as a plain tile.
+- **An `AutoNumber` column without a usable `autoNumberFormat` is refused when the spec is validated** — by the build and by the
+  input gate of `provision-entities.js` that `/genpage` and `/app-builder` go through — before anything is written. The SDK no longer
+  creates such a column (it made a plain text column), so the build would have stopped at it after the solution and the tables were
+  made. The error names the table and the column and both ways out: a format such as `"C-{SEQNUM:5}"`, or `type: "Text"` for a
+  plain text column — which is also what such a column an earlier release built is. A blank format, or one that is not a string, is
+  refused the same way. A primary name column without `autoNumberFormat` is still a plain text name column.
+- **A column's — or the primary name column's — `required` must be `true`, `false` or `"recommended"`.** Every other value
+  (`"ApplicationRequired"`, `"true"`, `"required"`, `"Recommended"`, `1`, `null`) was read as "not required": a new column was
+  created not required, and an existing column was written down to None, demoting one a maker had made Business Required. It is now
+  refused at validation, naming the table, the column and the value and what to write instead; leaving `required` out still leaves
+  an existing column as it is. Both rules are warnings, not errors, for `verify-model-app.js` — which creates and changes nothing —
+  so an app built from a spec an earlier release accepted can still be verified, and teardown still accepts such a spec.
+- **The forms phase writes the order of every Main form it orders, the first of a table included.** The SDK now creates a form with
+  no form order (it wrote `Order="0"`), so on the build that creates a table's Main forms the first of them is written once more. A
+  rebuild finds every order in place and writes none.
+- **An environment without the row-summary AI template skips the row summaries with one warning.** The SDK now looks the template
+  up before it writes anything and refuses an environment that has none (it published a model that named no template and let the
+  platform answer). The build confirms that the template list is empty with one read of its own before it skips — a list it
+  cannot read as a list of templates stops the build as before — and a throttled or interrupted confirmation read is retried like any
+  other read the build makes.
+
+### Fixed
+
+- **A `required` on a new table's primary (name) column is applied when the table is created.** The create sent the name column as
+  not required — a plain text name column is stored not required whatever the create asks — and the build still reported
+  `required <table>.<column> (applied on create)`; only a rebuild set it. The table's create now asks for the level, the SDK reads
+  it back and sets it with one update, and the build says it was applied only when the SDK confirms it for a table the build saw
+  created. When the level cannot be confirmed the table still exists: the build stops once (or, for a table found after the answer
+  to its create was lost, or whose columns could not be read, warns and goes on), and running it again finds the table and sets the
+  level. The table is never created twice.
+- **Teardown keeps what only a kept table blocks, instead of reporting the platform's refusals.** When a business rule could not be
+  deleted, teardown keeps its table until a re-run (the rule's activated copy can only be deleted while the table exists), but it
+  still tried the deletes that follow the tables — the table's icon web resource, a global choice one of its columns binds and a
+  relationship from the table to itself — and the platform refused each, so one failure was reported as up to four. Those steps are
+  now kept with the table, each a `(kept — …)` skip that names it, and the re-run deletes them once the table goes. The run still
+  ends as a failure and keeps the solution. The dependency is read from the spec, so an icon or a binding made by hand in the
+  environment is still tried and refused as before. A rule whose deactivation succeeded and whose delete failed stays deactivated
+  until the re-run.
+- **A run cut short by `process.exit` or an error nothing catches removes the workspaces it made and did not lend, and then the
+  plugin's temporary folder (`power-platform-skills-model-apps`) when it is empty**, instead of leaving both for the next run. A
+  POSIX signal still ends a run as before, and the next run's sweep removes what it left.
+- The plan document shows a `"recommended"` column as recommended, not required.
+- The test suite no longer leaves `plugins/model-apps/.maker-workspace` behind, and `scripts/run-tests.js` fails a run that makes
+  one there (removing it only when it is empty).
+
 ## [2.15.0]
 
 Generative pages, the environment's apps and tables, connections, connector metadata and deployment settings now go through the
