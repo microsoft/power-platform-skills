@@ -19,7 +19,7 @@ const ROLE_PM = '00000000-0000-4000-8000-000000000001';
 const ROLE_VIEWER = '00000000-0000-4000-8000-000000000002';
 const ADMIN_ONLY = /only for (system )?admin|opens only|administrator-only|admin-only|only administrators/i;
 
-// Runs main() over a folder holding `spec`. `sdk` is what the throwaway SDK is: { findArtifact, dataverse: { get } } — a method the command may not
+// Runs main() over a folder holding `spec`. `sdk` is what the throwaway SDK is: { resolveArtifact, dataverse: { get } } — a method the command may not
 // call is simply not there, so a stray call is a TypeError. The stubbed emitResult ends the run as the real one does.
 async function run({ spec = extensionSpec(), argv = ['--env', ENV], sdk, clientError } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'appdoc-env-'));
@@ -80,26 +80,28 @@ async function run({ spec = extensionSpec(), argv = ['--env', ENV], sdk, clientE
   }
 }
 
-// The SDK of an environment where the app exists with these roles. Every call is recorded.
-const sdkWith = ({ appId = APP_ID, rows = [{ roleid: ROLE_PM, name: 'Contoso PM - Project Manager', ismanaged: true }, { roleid: ROLE_VIEWER, name: 'Contoso PM - Viewer', ismanaged: false }], status = 200, find, get } = {}) => (events) => ({
-  findArtifact: async (type, query) => {
-    events.push({ type: 'findArtifact', kind: type, query });
-    return find ? find(type, query) : appId;
+// The SDK of an environment where the app exists with these roles. Every call is recorded. `resolve` answers the SDK's lookup of the app in the saved layer (what a
+// draft is found by): the rows it answers, [] for no app. `body` is the whole body of the association answer, when a test needs one that is no list.
+const sdkWith = ({ appId = APP_ID, rows = [{ roleid: ROLE_PM, name: 'Contoso PM - Project Manager', ismanaged: true }, { roleid: ROLE_VIEWER, name: 'Contoso PM - Viewer', ismanaged: false }], body, status = 200, resolve, get } = {}) => (events) => ({
+  resolveArtifact: async (type, query) => {
+    events.push({ type: 'resolveArtifact', kind: type, query });
+    return resolve ? resolve(type, query) : [{ id: appId, name: 'Contoso PM', appModuleIdUnique: '33333333-3333-4333-8333-333333333333' }];
   },
   dataverse: {
     get: async (url) => {
       events.push({ type: 'get', url });
-      return get ? get(url) : { status, headers: {}, body: status < 300 ? { value: rows } : { error: { message: 'denied' } } };
+      if (get) return get(url);
+      return { status, headers: {}, body: status >= 300 ? { error: { message: 'denied' } } : (body !== undefined ? body : { value: rows }) };
     },
   },
 });
-const reads = (r) => r.events.filter((e) => e.type === 'findArtifact' || e.type === 'get');
+const reads = (r) => r.events.filter((e) => e.type === 'resolveArtifact' || e.type === 'get');
 
-test('with --env it finds the app as the build does, reads the roles associated with it, and reads nothing else', async () => {
+test('with --env it finds the app in the saved layer, reads the roles associated with it, and reads nothing else', async () => {
   const r = await run({ sdk: sdkWith() });
   assert.strictEqual(r.exitCode, 0, r.stderr);
   assert.deepStrictEqual(reads(r), [
-    { type: 'findArtifact', kind: 'app', query: { uniqueName: 'contoso_pm' } },
+    { type: 'resolveArtifact', kind: 'app', query: { uniqueName: 'contoso_pm' } },
     { type: 'get', url: `/appmodules(${APP_ID})/appmoduleroles_association?$select=roleid,name,ismanaged` },
   ]);
   assert.strictEqual(r.events.find((e) => e.type === 'client').env, ENV);
@@ -132,12 +134,36 @@ test('the output of a successful run is still { ok, docPath, bytes, warnings }',
   assert.strictEqual(r.payload.ok, true);
 });
 
-test('an app the environment has no row for is a new app: nothing more is read, and the document says so', async () => {
-  const r = await run({ sdk: sdkWith({ find: async () => null }) });
+test('an app neither layer has is a new app: nothing more is read, and the document says so', async () => {
+  const r = await run({ sdk: sdkWith({ resolve: async () => [] }) });
   assert.strictEqual(r.exitCode, 0, r.stderr);
-  assert.deepStrictEqual(reads(r).map((e) => e.type), ['findArtifact'], 'no app, no association to read');
+  assert.deepStrictEqual(reads(r).map((e) => e.type), ['resolveArtifact'], 'no app, no association to read');
   assert.match(r.doc, /The app `contoso_pm` does not exist in https:\/\/contoso\.crm\.dynamics\.com yet/);
   assert.ok(r.payload.warnings.some((w) => /does not exist in https:\/\/contoso\.crm\.dynamics\.com yet/.test(w)), JSON.stringify(r.payload.warnings));
+});
+
+test('an app that was saved and never published exists: its roles are read if the platform answers, and the access is "not checked" if it does not — never "does not exist"', async () => {
+  // The saved layer holds the draft; the platform answers a read of its roles with 404 while it has no published row.
+  const refused = await run({ sdk: sdkWith({ status: 404 }) });
+  assert.strictEqual(refused.exitCode, 0, refused.stderr);
+  assert.doesNotMatch(refused.doc, /does not exist/);
+  assert.match(refused.doc, /could not be read from https:\/\/contoso\.crm\.dynamics\.com \(HTTP 404\), so who can open it was not checked/);
+  assert.ok(refused.payload.warnings.some((w) => /\(HTTP 404\) — who can open it was not checked/.test(w)), JSON.stringify(refused.payload.warnings));
+  assert.ok(!refused.payload.warnings.some((w) => /does not exist|opens only for administrators/.test(w)), JSON.stringify(refused.payload.warnings));
+  const answered = await run({ sdk: sdkWith() });
+  assert.match(answered.doc, /already exists in https:\/\/contoso\.crm\.dynamics\.com and these roles are associated with it/);
+});
+
+test('an answer that carries no list of roles is "not checked": the document and the warnings say no role is associated only when the platform said so', async () => {
+  for (const body of [{}, { value: 'malformed' }, { value: [{}] }, null]) {
+    const r = await run({ sdk: sdkWith({ get: async () => ({ status: 200, headers: {}, body }) }) });
+    assert.strictEqual(r.exitCode, 0, r.stderr);
+    assert.match(r.doc, /could not be read from https:\/\/contoso\.crm\.dynamics\.com \(.+\), so who can open it was not checked/, JSON.stringify(body));
+    assert.doesNotMatch(r.doc, /no role is associated with it/, JSON.stringify(body));
+    assert.ok(!r.payload.warnings.some((w) => /with no role associated with it/.test(w)), JSON.stringify(r.payload.warnings));
+  }
+  const none = await run({ sdk: sdkWith({ rows: [] }) });
+  assert.match(none.doc, /no role is associated with it, so only administrators and other makers/);
 });
 
 test('an app with no role associated with it is reported, with the evidence the read gave', async () => {
@@ -157,7 +183,7 @@ test('a read the platform refuses does not fail the document: it says the access
 
 test('a read that throws — in the SDK, the lookup of the app, or the token — does not fail the document either', async () => {
   const cases = {
-    'the lookup of the app': { sdk: sdkWith({ find: async () => { throw new Error('two apps share the unique name'); } }), reason: /two apps share the unique name/ },
+    'the lookup of the app': { sdk: sdkWith({ resolve: async () => { throw new Error('the lookup was refused'); } }), reason: /the lookup was refused/ },
     'the roles read': { sdk: sdkWith({ get: async () => { throw new Error('socket hang up'); } }), reason: /socket hang up/ },
     'the HTTP client': { sdk: sdkWith(), clientError: new Error('az is not signed in'), reason: /az is not signed in/ },
   };

@@ -67,20 +67,26 @@ function designGaps(spec, opts = {}) {
   const withoutAccess = uncoveredTables(s);
   if (withoutAccess.length) out.push(uncoveredTablesWarning(withoutAccess));
 
-  // What the environment said (--env). The administrator-only conclusion is drawn here, and only here, on that evidence.
+  // What the environment said (--env), from the same model the document is written from. The administrator-only conclusion is drawn here, and only here, on that
+  // evidence: the app has no role (or does not exist yet) AND no persona of this spec gets it — a persona that opts out (`appAccess: false`) is a role the build
+  // does not associate.
   const model = appAccessModel(s, opts && opts.appAccess);
   const where = opts && typeof opts.envUrl === 'string' && opts.envUrl.trim() ? opts.envUrl.trim() : 'the environment';
   const app = model.appUnique ? `app '${model.appUnique}'` : 'the app';
+  const noPersonaGetsApp = model.personas.gets.length === 0;
   if (model.state === 'unreadable') {
     out.push(`the roles associated with ${app} could not be read from ${where} (${model.reason}) — who can open it was not checked`);
-  } else if (model.state === 'absent' && !personas.length) {
-    out.push(`${app} does not exist in ${where} yet and this spec authors no role, so once built it opens only for administrators and other makers until a role is associated with it`);
+  } else if (model.state === 'absent' && noPersonaGetsApp) {
+    out.push(`${app} does not exist in ${where} yet and this spec associates no role with it, so once built it opens only for administrators and other makers until a role is associated with it`);
   } else if (model.state === 'read') {
-    if (!model.roles.length && !personas.length) {
-      out.push(`${app} exists in ${where} with no role associated with it, so only administrators and other makers can open it, and this spec authors no role to change that`);
+    if (!model.roles.length && noPersonaGetsApp) {
+      out.push(`${app} exists in ${where} with no role associated with it, so only administrators and other makers can open it, and this spec associates none with it`);
     }
-    for (const role of model.missingGrantRoles) {
-      out.push(`roleGrants[] role "${role}" is not among the roles associated with ${app}, so its users get the privileges but may not be able to open the app`);
+    // A grant whose role is certainly not among the app's. One that names only a name and has a role of that name among them is not said: which role it is cannot be told.
+    for (const grant of model.grants) {
+      if (grant.status === 'not-associated') {
+        out.push(`roleGrants[] role "${grant.label}" is not among the roles associated with ${app}, so its users get the privileges but may not be able to open the app`);
+      }
     }
   }
   return out;

@@ -100,18 +100,62 @@ function uncoveredTables(spec) {
   });
 }
 
+// --- the personas' share of who can open the app ----------------------------------------------------------------------------------------------
+
+/**
+ * Which personas get the app and which opt out, by the names their roles are made with (the canonical, trimmed ones: once each, in any letter case, in spec
+ * order). The build associates a persona's role with the app unless `appAccess` is `false`, and REMOVES the association of a role whose persona opts out — sdk-build.js,
+ * the security phase: `persona.appAccess !== false`, else the dissociate. So "this spec authors roles" is not "this spec gives the app to roles": every sentence about
+ * what a build associates follows this, not whether there are personas.
+ * @returns {{ gets: string[], optedOut: string[] }}
+ */
+function personaAppAccess(spec) {
+  const out = { gets: [], optedOut: [] };
+  const seen = new Set();
+  for (const p of arr(isObject(spec) ? spec.personas : [])) {
+    if (!isObject(p)) continue;
+    const name = canonicalPersonaName(p);
+    if (!filled(name) || seen.has(lc(name))) continue;
+    seen.add(lc(name));
+    (p.appAccess === false ? out.optedOut : out.gets).push(name);
+  }
+  return out;
+}
+
+// "the role of persona `A`", "the roles of personas `A` and `B`".
+function rolesOfPersonas(names) {
+  const many = names.length > 1;
+  return `the role${many ? 's' : ''} of persona${many ? 's' : ''} ${list(names.map((n) => `\`${n}\``))}`;
+}
+
 // --- what the lint and the document say ---------------------------------------------------------------------------------------------------
 
 /**
- * Who can open the app, as far as the SPEC can say: the sentence the lint and the document share for a spec with no personas[]. With a mark of an
- * existing app it says the spec edits one and leaves its roles alone; without one it is a condition — nothing in a spec proves the app is new.
+ * Who can open the app, as far as the SPEC can say: first what a build does for the personas (their roles get the app, or lose it), then what it leaves to the
+ * environment — the sentence the lint (a spec with no personas) and the document (an answer from the environment that is missing or unreadable) share. With a mark
+ * of an existing app it says the spec most likely edits one, whose other roles a build leaves alone; without one it is a condition — nothing in a spec proves the app
+ * is new.
  */
 function appAccessCondition(spec) {
+  const { gets, optedOut } = personaAppAccess(spec);
   const marks = existingAppMarkers(spec);
+  const hasPersonas = gets.length > 0 || optedOut.length > 0;
+  let personas = '';
+  if (gets.length && optedOut.length) personas = `A build associates the app with ${rolesOfPersonas(gets)}, and removes it from ${rolesOfPersonas(optedOut)} (\`appAccess: false\`) if it has it.`;
+  else if (gets.length) personas = `A build associates the app with ${rolesOfPersonas(gets)}.`;
+  else if (optedOut.length) personas = `No persona gets the app: a build removes the app from ${rolesOfPersonas(optedOut)} (\`appAccess: false\`) if it has it.`;
+  let rest;
   if (marks.length) {
-    return `It carries ${list(marks)}, which a download writes, so it most likely edits an app that already exists — and a build leaves the roles associated with an existing app as they are: who can open the app is decided by the environment, not by this spec.`;
+    const download = `It carries ${list(marks)}, which a download writes, so it most likely edits an app that already exists — and a build`;
+    rest = hasPersonas
+      ? `${download} changes the roles associated with an existing app only for its personas: who else can open the app is decided by the environment, not by this spec.`
+      : `${download} leaves the roles associated with an existing app as they are: who can open the app is decided by the environment, not by this spec.`;
+  } else {
+    rest = hasPersonas
+      ? 'Beyond that, a new app is associated with the System Administrator role only, and an existing app keeps the roles it has.'
+      : 'If the app is new, it is associated with the System Administrator role only, so users without a maker-level role cannot open it until a role is associated with it (personas[] does that); if it already exists, it keeps the roles it has.';
   }
-  return 'If the app is new, it is associated with the System Administrator role only, so users without a maker-level role cannot open it until a role is associated with it (personas[] does that); if it already exists, it keeps the roles it has.';
+  return personas ? `${personas} ${rest}` : rest;
 }
 
 /** The lint's warning for a spec with no personas[]: the jobs are not recorded, no role is authored, and what that does and does not say about access. */
@@ -147,41 +191,64 @@ function uncoveredTablesCallout(names) {
 // --- what the environment says ----------------------------------------------------------------------------------------------------------------
 
 /**
- * What a read of the environment (lib/app-roles.js `appRolesOf`) means for this spec — one model for the document and its warnings.
- *   { state: 'unread' }                                       the environment was not asked (no --env), or the answer is not one this knows
- *   { state: 'absent', appUnique }                            the app does not exist yet: a build creates it
- *   { state: 'unreadable', appUnique, reason }                nothing is known of its roles
- *   { state: 'read', appUnique, roles, missingGrantRoles }    `roles`: { roleId, name, managed, source } with `source` 'persona' (the spec authors it), 'roleGrant'
- *                                                             (the spec extends it) or null (it touches neither); `missingGrantRoles`: the roleGrants[] roles that are
- *                                                             not among the app's, by the label they are written with
- * A role is matched to a persona or a grant by name in any letter case, and a grant also by id. Names are all the answer has of a role in a business unit,
- * so a match by name is a match of names, and the wording that depends on it says "may".
+ * What a read of the environment (lib/app-roles.js `appRolesOf`) means for this spec — ONE model, from which the document and its warnings take every sentence, so
+ * that what they say of who gets the app, of which role is which and of whether the app is administrator-only cannot differ.
+ *   { state: 'unread', personas }                          the environment was not asked (no --env), or the answer is not one this knows
+ *   { state: 'absent', appUnique, personas }               neither layer has the app: a build creates it
+ *   { state: 'unreadable', appUnique, reason, personas }   nothing is known of its roles — a refusal, an answer that holds no list, a row that names no role
+ *   { state: 'read', appUnique, personas, roles, grants }  what the app has
+ * `personas` is personaAppAccess(spec): the personas that get the app and those that opt out.
+ * `roles`: { roleId, name, managed, sources }, one per associated role, in the order of the answer. `sources` says what in the spec may be that role:
+ *     { kind: 'roleGrant', label, by: 'id', certain: true }      a roleGrants[] entry that names this role's id: the one case it IS the role the grant extends
+ *     { kind: 'roleGrant', label, by: 'name', certain: false }   an entry that names only a name — a role is one of (name, business unit), the answer carries no business
+ *                                                                unit, and the build resolves the grant's role by name AND business unit, so any role of that name may be it
+ *     { kind: 'persona', label, getsApp, certain: false }        a persona of that name: its role is made in the persona's business unit, so it too is matched by name only
+ *   `getsApp` is what the persona asks of the app; the build keeps the association of one that gets it and removes that of one that opts out.
+ * `grants`: one per roleGrants[] entry that names a role, { label, by: 'id' | 'name', status, candidates: [{ roleId, name }] }. `status`:
+ *     'associated'      named by id, and that role is associated with the app — certain
+ *     'maybe'           named by name, and every candidate has that name: which of them (if any) is the grant's role the answer cannot say
+ *     'not-associated'  no associated role has that id (or that name) — certain: such a grant gives its role the table, not the app
+ * A role is never claimed as a grant's or a persona's by a match of names alone. A match by id is exact, and a grant that gives an id is matched by it alone.
  */
 function appAccessModel(spec, appAccess) {
-  if (!isObject(appAccess)) return { state: 'unread' };
+  const personas = personaAppAccess(spec);
+  if (!isObject(appAccess)) return { state: 'unread', personas };
   const appUnique = typeof appAccess.appUnique === 'string' ? appAccess.appUnique : '';
-  if (appAccess.state === 'absent') return { state: 'absent', appUnique };
-  if (appAccess.state === 'unreadable') return { state: 'unreadable', appUnique, reason: filled(appAccess.reason) ? appAccess.reason : 'unknown' };
-  if (appAccess.state !== 'read') return { state: 'unread' };
-  if (!Array.isArray(appAccess.roles)) return { state: 'unreadable', appUnique, reason: 'the answer held no list of roles' };
+  if (appAccess.state === 'absent') return { state: 'absent', appUnique, personas };
+  if (appAccess.state === 'unreadable') return { state: 'unreadable', appUnique, reason: filled(appAccess.reason) ? appAccess.reason : 'unknown', personas };
+  if (appAccess.state !== 'read') return { state: 'unread', personas };
+  // An answer is a list of roles, every one of them a role: a list that is none, or has a row that names no role, is not read as a list with nothing in it.
+  if (!Array.isArray(appAccess.roles)) return { state: 'unreadable', appUnique, reason: 'the answer held no list of roles', personas };
+  if (appAccess.roles.some((r) => !isObject(r) || !filled(r.roleId))) return { state: 'unreadable', appUnique, reason: 'an association row names no role', personas };
 
   const s = isObject(spec) ? spec : {};
-  const personaNames = new Set(arr(s.personas).filter(isObject).map((p) => lc(canonicalPersonaName(p))).filter(Boolean));
-  const grants = arr(s.roleGrants).filter(isObject).map((g) => ({
-    name: filled(g.role) ? lc(g.role.trim()) : '',
-    id: filled(g.roleId) ? lc(g.roleId.trim()) : '',
-    label: filled(g.role) ? g.role.trim() : (filled(g.roleId) ? g.roleId.trim() : ''),
-  })).filter((g) => g.label);
-  const roles = appAccess.roles.filter(isObject).map((r) => {
-    const name = typeof r.name === 'string' ? r.name : '';
-    const roleId = typeof r.roleId === 'string' ? r.roleId : '';
-    const granted = grants.some((g) => (g.id && g.id === lc(roleId)) || (g.name && g.name === lc(name)));
-    return { roleId, name, managed: r.managed === true, source: personaNames.has(lc(name)) && name ? 'persona' : (granted ? 'roleGrant' : null) };
+  const named = arr(s.personas).filter(isObject)
+    .map((p) => ({ name: canonicalPersonaName(p), getsApp: p.appAccess !== false }))
+    .filter((p) => filled(p.name));
+  const wanted = arr(s.roleGrants).filter(isObject).map((g) => {
+    if (filled(g.roleId)) return { by: 'id', key: lc(g.roleId.trim()), label: g.roleId.trim() };
+    if (filled(g.role)) return { by: 'name', key: lc(g.role.trim()), label: g.role.trim() };
+    return null;
+  }).filter(Boolean);
+  const isTarget = (grant, role) => (grant.by === 'id' ? grant.key === lc(role.roleId) : grant.key === lc(role.name));
+
+  const roles = appAccess.roles.map((r) => {
+    const role = { roleId: r.roleId, name: typeof r.name === 'string' ? r.name : '' };
+    const sources = [];
+    for (const grant of wanted) {
+      if (isTarget(grant, role)) sources.push({ kind: 'roleGrant', label: grant.label, by: grant.by, certain: grant.by === 'id' });
+    }
+    for (const persona of named) {
+      if (role.name && lc(persona.name) === lc(role.name)) sources.push({ kind: 'persona', label: persona.name, getsApp: persona.getsApp, certain: false });
+    }
+    return { ...role, managed: r.managed === true, sources };
   });
-  const ids = new Set(roles.map((r) => lc(r.roleId)).filter(Boolean));
-  const names = new Set(roles.map((r) => lc(r.name)).filter(Boolean));
-  const missingGrantRoles = grants.filter((g) => !((g.id && ids.has(g.id)) || (g.name && names.has(g.name)))).map((g) => g.label);
-  return { state: 'read', appUnique, roles, missingGrantRoles };
+  const grants = wanted.map((grant) => {
+    const candidates = roles.filter((role) => isTarget(grant, role)).map((role) => ({ roleId: role.roleId, name: role.name }));
+    const status = !candidates.length ? 'not-associated' : (grant.by === 'id' ? 'associated' : 'maybe');
+    return { label: grant.label, by: grant.by, status, candidates };
+  });
+  return { state: 'read', appUnique, personas, roles, grants };
 }
 
 module.exports = {
@@ -189,6 +256,8 @@ module.exports = {
   introducedTables,
   tablePrivileges,
   uncoveredTables,
+  personaAppAccess,
+  rolesOfPersonas,
   appAccessCondition,
   noPersonasWarning,
   uncoveredTablesWarning,

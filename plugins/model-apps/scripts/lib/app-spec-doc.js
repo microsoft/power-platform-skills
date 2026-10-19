@@ -17,7 +17,7 @@
 
 const lc = (s) => String(s || '').toLowerCase();
 const { labelText, lookupLabelFor } = require('./app-spec.js');
-const { appAccessCondition, appAccessModel, uncoveredTables, uncoveredTablesCallout } = require('./app-access.js');
+const { appAccessCondition, appAccessModel, rolesOfPersonas, uncoveredTables, uncoveredTablesCallout } = require('./app-access.js');
 
 // Every collection read below goes through these. The renderer runs against WORK-IN-PROGRESS specs
 // during authoring — a half-typed `jobs: "x"`, a null entry left by an edit, a `dataSources` written
@@ -361,28 +361,45 @@ function privilegeRows(byEntity) {
   return rows;
 }
 
-// WHO CAN OPEN THE APP, kept apart from who can use a table. The roles associated with the app decide which users see it; a spec with no personas[]
-// authors none and leaves an existing app's as they are, so it says what the SPEC can say — and, when the environment was read (--env), what the
-// ENVIRONMENT holds. The administrator-only claim the document used to make for every spec without personas is made here only on that evidence: an
-// app the environment has, with no role associated with it, or one it does not have yet that this spec gives no role.
-function appAccessSection(spec, personas, model, opts) {
+// What in the spec may be an associated role, for the table of the roles the app has. A role is one of (name, business unit) and the read carries no business unit,
+// so a grant that names only a name, and a persona (whose role is made in its own business unit), match a role by name alone: "may be", never "is". Only a grant that
+// names the role's id says what the role is — and what a build does for a persona is said of the persona's role ("if it is"), not of the role a name happens to match.
+function roleSources(role) {
+  if (!role.sources.length) return 'not touched by this spec';
+  return role.sources.map((s) => {
+    if (s.kind === 'roleGrant') return s.certain ? 'extended by `roleGrants[]`' : 'may be the role `roleGrants[]` extends (matched by name only)';
+    return s.getsApp
+      ? `may be the role of persona \`${s.label}\` (matched by name); if it is, a build keeps this association`
+      : `may be the role of persona \`${s.label}\` (matched by name, \`appAccess: false\`); if it is, a build removes this association`;
+  }).join('; ');
+}
+
+// WHO CAN OPEN THE APP, kept apart from who can use a table. The roles associated with the app decide which users see it. A build associates the roles of the
+// personas that get the app (`appAccess` is not false), removes the association of those that opt out, and leaves every other role's as it is; the SPEC alone says
+// nothing more, and — when the environment was read (--env) — the ENVIRONMENT says what the app has. Every sentence here follows the model (lib/app-access.js
+// appAccessModel): which personas get the app, which role is which, whether the app is known to be administrator-only. That claim is made only on the evidence of a
+// read — an app the environment has with no role associated with it, or one neither layer has yet — and only while no persona gets the app.
+function appAccessSection(spec, model, opts) {
+  const { gets, optedOut } = model.personas;
   const out = ['### Access to the app', ''];
   const where = opts.envUrl ? text(opts.envUrl) : 'the environment';
   const app = model.appUnique ? `The app \`${model.appUnique}\`` : 'The app';
+  // Why a build associates no role of its own with the app, when no persona gets it.
+  const noneBecause = optedOut.length ? 'its personas are data-only: `appAccess: false`' : 'it authors no role';
   if (model.state === 'read' && model.roles.length) {
     out.push(`${app} already exists in ${where} and these roles are associated with it, so their users can open it:`, '', '| Role | In this spec |', '|---|---|');
-    for (const r of model.roles) {
-      const inSpec = r.source === 'persona' ? 'persona (authored by this spec)' : r.source === 'roleGrant' ? 'extended by `roleGrants[]`' : 'not touched by this spec';
-      out.push(`| ${cell(r.name || r.roleId)} | ${inSpec} |`);
-    }
-    const authored = personas.length ? ', apart from the roles a persona authors (it associates a persona\'s role with the app, and removes the association when the persona sets `appAccess: false`)' : '';
-    out.push('', `A build with this spec leaves these associations as they are${authored}. Opening the app is one thing and using a table another: the privileges on the tables this spec introduces are declared separately, below.`, '');
+    for (const r of model.roles) out.push(`| ${cell(r.name || r.roleId)} | ${cell(roleSources(r))} |`);
+    const changes = [];
+    if (gets.length) changes.push(`associates the app with ${rolesOfPersonas(gets)}`);
+    if (optedOut.length) changes.push(`removes it from ${rolesOfPersonas(optedOut)} (\`appAccess: false\`) where it is associated`);
+    const build = changes.length ? `A build with this spec ${changes.join(', ')}, and leaves every other association as it is.` : 'A build with this spec leaves these associations as they are.';
+    out.push('', `${build} Opening the app is one thing and using a table another: the privileges on the tables this spec introduces are declared separately, below.`, '');
   } else if (model.state === 'read') {
-    out.push(`${app} exists in ${where}, but no role is associated with it, so only administrators and other makers (System Customizer, Environment Maker) can open it. ${personas.length ? 'A build with this spec associates the roles authored above with it.' : 'This spec authors no role to change that.'}`, '');
+    out.push(`${app} exists in ${where}, but no role is associated with it, so only administrators and other makers (System Customizer, Environment Maker) can open it. ${gets.length ? `A build with this spec associates the app with ${rolesOfPersonas(gets)}.` : `This spec associates none with it (${noneBecause}), so that does not change.`}`, '');
   } else if (model.state === 'absent') {
-    out.push(personas.length
-      ? `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it, and the roles authored above.`
-      : `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it; this spec authors no role, so users without a maker-level role cannot open it until a role is associated with it.`, '');
+    out.push(gets.length
+      ? `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it, and ${rolesOfPersonas(gets)}.`
+      : `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it; this spec associates no other role (${noneBecause}), so users without a maker-level role cannot open it until a role is associated with it.`, '');
   } else if (model.state === 'unreadable') {
     out.push(`> ⚠ The roles associated with the app could not be read from ${where} (${text(model.reason)}), so who can open it was not checked.`, '', appAccessCondition(spec), '');
   } else {
@@ -391,8 +408,16 @@ function appAccessSection(spec, personas, model, opts) {
   return out;
 }
 
+// A grant that names a role only by name, beside the roles of that name the app has: which of them the grant extends, if any, is for the business unit to say.
+function namedGrantNote(grant) {
+  const n = grant.candidates.length;
+  const have = n === 1 ? '1 associated role has that name' : `${n} associated roles have that name`;
+  const ids = `${n === 1 ? 'id' : 'ids'} ${grant.candidates.map((c) => text(c.roleId)).join(', ')}`;
+  return `Role "${text(grant.label)}" is named without a role id: ${have} (${ids}), and roles are per business unit, so ${n === 1 ? 'it may not be' : 'at most one of them is'} the role this grant extends. Pin the role with \`roleId\` to be sure.`;
+}
+
 // roleGrants[]: privileges ADDED to roles that already exist. Shown with the role they extend — the persona sections above show the roles this spec owns — and,
-// when the environment was read, with the roles that are not among the app's: a grant gives a role a table, not the app.
+// when the environment was read, with how each grant stands to the roles the app has: a grant gives a role a table, not the app.
 function roleGrantsSection(spec, model) {
   const grants = objs(spec.roleGrants);
   if (!grants.length) return [];
@@ -410,7 +435,10 @@ function roleGrantsSection(spec, model) {
   }
   out.push('');
   if (model.state === 'read') {
-    for (const role of model.missingGrantRoles) out.push(`> ⚠ Role "${text(role)}" is not among the roles associated with the app, so its users get these privileges but may not be able to open the app.`, '');
+    for (const g of model.grants) {
+      if (g.status === 'not-associated') out.push(`> ⚠ Role "${text(g.label)}" is not among the roles associated with the app, so its users get these privileges but may not be able to open the app.`, '');
+      else if (g.status === 'maybe') out.push(namedGrantNote(g), '');
+    }
   }
   return out;
 }
@@ -438,9 +466,9 @@ function security(spec, opts) {
       out.push('_No privileges declared._', '');
     }
   }
-  // The persona sections already say, per role, whether the app is granted to it; the section on the app is for what they cannot: a spec that authors
+  // The persona sections already say, per role, whether the app is granted to it; the section on the app is for what they cannot: a spec that gives the app to
   // no role, and what the environment says.
-  if (!personas.length || model.state !== 'unread') out.push(...appAccessSection(spec, personas, model, opts));
+  if ((!model.personas.gets.length && !model.personas.optedOut.length) || model.state !== 'unread') out.push(...appAccessSection(spec, model, opts));
   out.push(...roleGrantsSection(spec, model));
   const withoutAccess = uncoveredTables(spec);
   if (withoutAccess.length) out.push('### Tables with no access declared', '', `> ⚠ ${uncoveredTablesCallout(withoutAccess)}`, '');

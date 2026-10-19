@@ -64,12 +64,16 @@ function persona(name, privileges, extra = {}) {
   return { persona: name, jobs: [{ name: `${name} work`, privileges, surfaces: ['Records'] }], ...extra };
 }
 
-// What a read of the environment answers for an app that has these roles associated: the shape lib/app-roles.js returns.
+// What a read of the environment answers for an app that has these roles associated: the shape lib/app-roles.js returns. A role is a name, or
+// `{ name, roleId, managed }` when a test needs two roles of one name, or a role of a chosen id.
 function appWithRoles(...roles) {
   return {
     state: 'read',
     appUnique: 'contoso_pm',
-    roles: roles.map((name, i) => ({ roleId: `00000000-0000-4000-8000-00000000000${i + 1}`, name, managed: false })),
+    roles: roles.map((role, i) => {
+      const row = typeof role === 'string' ? { name: role } : role;
+      return { roleId: row.roleId || `00000000-0000-4000-8000-00000000000${i + 1}`, name: row.name, managed: row.managed === true };
+    }),
   };
 }
 

@@ -1811,12 +1811,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   two questions apart — who can open the APP (the roles associated with it) and who can use the
   TABLES the spec introduces (privileges) — and never calls the app administrator-only on the
   strength of a spec with no personas alone: that is a claim about the deployed app. With `--env` it
-  reads, read-only, the roles the app has associated with it (`lib/app-roles.js`: the build's own
-  app probe, then `GET appmodules(<id>)/appmoduleroles_association`) and lists them, marks the
-  persona and `roleGrants[]` roles among them, and draws the administrator-only conclusion only
-  from that read — an app the environment has with no role, or one it does not have yet that the
-  spec gives none. A read that fails is reported in the document and in `warnings` as "not
-  checked"; it never fails the command.
+  reads, read-only, the roles the app has associated with it (`lib/app-roles.js`: the SDK's
+  saved-layer app lookup — which finds an app that was saved and never published, so a draft is not
+  reported as one that does not exist — then the association rows,
+  `appmodules(<id>)/appmoduleroles_association`, through `collectionRows`, the plugin's one reader of
+  a paged collection) and lists them. A persona's role counts as associated with the app unless the
+  persona opts out (`appAccess: false`): a build removes that association, so the document says so
+  rather than listing the role as one the app will have. A `roleGrants[]` entry that gives `roleId`
+  is matched to the role of that id, and is certain; an entry that names only a role, and a persona,
+  are matched by name only, as "may be", with every role of that name listed — role names repeat
+  across business units, so a name alone is never certain. The administrator-only conclusion is
+  drawn only from that read — an app the environment has with no role, or one it does not have yet
+  that the spec gives none. A read that fails or answers something that is no list of roles (a
+  refusal, a 404 for a draft's roles, a row that names no role) is reported in the document and in
+  `warnings` as "not checked", never as "no roles"; it never fails the command.
 - **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
@@ -2313,8 +2321,8 @@ scripts/
     form-preview.js            ← form wireframe renderer
     app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design)
     app-spec-doc.js            ← pure App Spec → readable Markdown design doc (model-app-plan.md)
-    app-access.js              ← pure: what an App Spec says about who can open the APP (the roles associated with it) and who can use the TABLES it introduces (`personas[]` and `roleGrants[]` privileges): the marks of an existing app a download writes (`existingAppMarkers`), the new tables nothing grants (`uncoveredTables`), the sentences the lint and the design document share, and the model of what a read of the environment means for the spec (`appAccessModel`)
-    app-roles.js               ← read-only: the roles associated with an app (`appmoduleroles`) — verify's `appIdFor` / `appRoleIdsFor` (moved here unchanged), and `appRolesOf` for the design document: `{ state: 'read' | 'absent' | 'unreadable' }`, never a throw, found with the probe the build uses for "does the app exist"
+    app-access.js              ← pure: what an App Spec says about who can open the APP (the roles associated with it) and who can use the TABLES it introduces (`personas[]` and `roleGrants[]` privileges): the marks of an existing app a download writes (`existingAppMarkers`), the new tables nothing grants (`uncoveredTables`), which personas get the app and which opt out with `appAccess: false` (`personaAppAccess`), the sentences the lint and the design document share, and the model of what a read of the environment means for the spec (`appAccessModel`: the roles read, each with what in the spec may be it — a `roleGrants[]` entry that gives `roleId` is matched by id and is certain, an entry that names only a role and a persona are matched by name only, as "maybe" — and the grants no associated role matches)
+    app-roles.js               ← read-only: the roles associated with an app (`appmoduleroles`) — verify's `appIdFor` / `appRoleIdsFor` (moved here unchanged), and `appRolesOf` for the design document: `{ state: 'read' | 'absent' | 'unreadable' }`, never a throw; the app is found in the saved layer (`resolveArtifact`, which finds a draft), the roles are read through `collectionRows`, and an answer that is no list of roles is `unreadable`, never "no roles"
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write

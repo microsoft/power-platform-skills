@@ -78,3 +78,106 @@ test('the sentences the lint and the document share say the same thing in both',
   assert.ok(flagged && gap, 'both flag the table');
   assert.equal(gap, flagged, 'in the same words');
 });
+
+// --- the personas' share of who can open the app ------------------------------------------------------------------------------------------
+
+const { personaAppAccess, appAccessModel, appAccessCondition } = access;
+const ID_1 = '00000000-0000-4000-8000-000000000001';
+const ID_2 = '00000000-0000-4000-8000-000000000002';
+const ID_3 = '00000000-0000-4000-8000-000000000003';
+const roleRows = (...rows) => ({ state: 'read', appUnique: 'contoso_pm', roles: rows.map(([roleId, name]) => ({ roleId, name, managed: false })) });
+
+test('a persona gets the app unless its appAccess is false — the build\u2019s own rule — and is named by its trimmed name, once', () => {
+  const s = newAppSpec();
+  s.personas = [
+    persona(' Agent ', []), persona('Planner', [], { appAccess: true }), persona('Reader', [], { appAccess: false }),
+    persona('agent', []), persona('Odd', [], { appAccess: 'false' }),
+    null, 'x', { persona: '  ' }, { jobs: [] },
+  ];
+  assert.deepEqual(personaAppAccess(s), { gets: ['Agent', 'Planner', 'Odd'], optedOut: ['Reader'] }, 'only a boolean false opts out, as in sdk-build.js: persona.appAccess !== false');
+  for (const bad of [null, undefined, 'x', {}, { personas: {} }, { personas: 'x' }]) assert.deepEqual(personaAppAccess(bad), { gets: [], optedOut: [] });
+});
+
+test('the sentence on who can open the app says what a build does for the personas, and what it leaves, whether the spec has personas or not', () => {
+  const marked = (spec) => { spec.app.uniqueName = 'contoso_support'; return spec; };
+  const withPersonas = (...personas) => { const spec = newAppSpec(); spec.personas = personas; return spec; };
+  // No personas: nothing is said of them.
+  assert.match(appAccessCondition(newAppSpec()), /^If the app is new, it is associated with the System Administrator role only/);
+  assert.doesNotMatch(appAccessCondition(newAppSpec()), /persona `/);
+  // Personas that get the app, those that opt out, both: what a build does for them, then what it does for every other role.
+  const gets = appAccessCondition(withPersonas(persona('Agent', [])));
+  assert.match(gets, /^A build associates the app with the role of persona `Agent`\. Beyond that, a new app is associated with the System Administrator role only, and an existing app keeps the roles it has\.$/);
+  assert.doesNotMatch(gets, /personas\[\] does that/, 'it has one');
+  const out = appAccessCondition(withPersonas(persona('Reader', [], { appAccess: false })));
+  assert.match(out, /^No persona gets the app: a build removes the app from the role of persona `Reader` \(`appAccess: false`\) if it has it\./);
+  const both = appAccessCondition(withPersonas(persona('Agent', []), persona('Planner', []), persona('Reader', [], { appAccess: false })));
+  assert.match(both, /^A build associates the app with the roles of personas `Agent` and `Planner`, and removes it from the role of persona `Reader` \(`appAccess: false`\) if it has it\./);
+  // An app that carries a download's marks: the roles are left as they are, but for the personas'.
+  assert.match(appAccessCondition(marked(withPersonas(persona('Agent', [])))), /A build associates the app with the role of persona `Agent`\. It carries app\.uniqueName, which a download writes, so it most likely edits an app that already exists — and a build changes the roles associated with an existing app only for its personas: who else can open the app is decided by the environment, not by this spec\.$/);
+  assert.match(appAccessCondition(marked(newAppSpec())), /and a build leaves the roles associated with an existing app as they are: who can open the app is decided by the environment, not by this spec\.$/);
+});
+
+test('without an answer from the environment — or one that is not one — the model says so, and still says who gets the app', () => {
+  const s = newAppSpec();
+  s.personas = [persona('Agent', []), persona('Reader', [], { appAccess: false })];
+  for (const answer of [undefined, null, 'x', 7, [], {}, { state: 'nonsense' }]) {
+    assert.deepEqual(appAccessModel(s, answer), { state: 'unread', personas: { gets: ['Agent'], optedOut: ['Reader'] } }, JSON.stringify(answer));
+  }
+  assert.deepEqual(appAccessModel(s, { state: 'absent', appUnique: 'x' }), { state: 'absent', appUnique: 'x', personas: { gets: ['Agent'], optedOut: ['Reader'] } });
+  assert.deepEqual(appAccessModel(s, { state: 'unreadable', appUnique: 'x', reason: 'HTTP 403' }), { state: 'unreadable', appUnique: 'x', reason: 'HTTP 403', personas: { gets: ['Agent'], optedOut: ['Reader'] } });
+  assert.equal(appAccessModel(s, { state: 'unreadable' }).reason, 'unknown');
+});
+
+// --- which associated role a grant or a persona is --------------------------------------------------------------------------------------
+
+test('a role a grant names by its id is that role; a role it names only by name is a candidate — never a certain match, and every candidate is listed', () => {
+  const spec = extensionSpec();
+  spec.roleGrants = [
+    grant(ID_1, 'contoso_baseline'),
+    { ...grant('Viewer', 'contoso_baseline'), businessUnitId: '11111111-1111-4111-8111-111111111111' },
+  ];
+  const model = appAccessModel(spec, roleRows([ID_1, 'Project Manager'], [ID_2, 'Viewer'], [ID_3, 'viewer'], ['00000000-0000-4000-8000-000000000004', 'Auditor']));
+  assert.equal(model.state, 'read');
+  assert.deepEqual(model.roles.map((r) => [r.name, r.sources]), [
+    ['Project Manager', [{ kind: 'roleGrant', label: ID_1, by: 'id', certain: true }]],
+    ['Viewer', [{ kind: 'roleGrant', label: 'Viewer', by: 'name', certain: false }]],
+    ['viewer', [{ kind: 'roleGrant', label: 'Viewer', by: 'name', certain: false }]],
+    ['Auditor', []],
+  ]);
+  assert.deepEqual(model.grants, [
+    { label: ID_1, by: 'id', status: 'associated', candidates: [{ roleId: ID_1, name: 'Project Manager' }] },
+    { label: 'Viewer', by: 'name', status: 'maybe', candidates: [{ roleId: ID_2, name: 'Viewer' }, { roleId: ID_3, name: 'viewer' }] },
+  ]);
+});
+
+test('a grant by id never matches a role by its name, and a grant by name never matches by id: a role of that name in another business unit is not that role', () => {
+  const spec = extensionSpec();
+  spec.roleGrants = [grant(ID_1, 'contoso_baseline')];
+  const model = appAccessModel(spec, roleRows([ID_2, 'Viewer']));
+  assert.deepEqual(model.roles[0].sources, []);
+  assert.deepEqual(model.grants, [{ label: ID_1, by: 'id', status: 'not-associated', candidates: [] }]);
+  const byName = extensionSpec();
+  byName.roleGrants = [grant('Auditor', 'contoso_baseline')];
+  assert.deepEqual(appAccessModel(byName, roleRows([ID_2, 'Viewer'])).grants, [{ label: 'Auditor', by: 'name', status: 'not-associated', candidates: [] }]);
+  assert.deepEqual(appAccessModel(byName, roleRows([ID_2, 'Auditor'])).grants.map((g) => g.status), ['maybe'], 'the id is no way to tell that grant\u2019s role from this one');
+});
+
+test('a persona is matched to an associated role by name only, so it is never a certain match, and what the build does to it follows the persona\u2019s appAccess', () => {
+  const spec = newAppSpec();
+  spec.personas = [persona('Agent', []), persona('Reader', [], { appAccess: false })];
+  const model = appAccessModel(spec, roleRows([ID_1, 'AGENT'], [ID_2, 'reader'], [ID_3, 'Other']));
+  assert.deepEqual(model.roles.map((r) => r.sources), [
+    [{ kind: 'persona', label: 'Agent', getsApp: true, certain: false }],
+    [{ kind: 'persona', label: 'Reader', getsApp: false, certain: false }],
+    [],
+  ]);
+});
+
+test('an answer that lists a role with no usable id is no answer: the model says it was not read, never that there are no roles', () => {
+  for (const roles of ['x', [null], [{}], [{ name: 'Viewer' }], [{ roleId: 5, name: 'Viewer' }], [{ roleId: ID_1, name: 'Viewer' }, null]]) {
+    const model = appAccessModel(extensionSpec(), { state: 'read', appUnique: 'contoso_pm', roles });
+    assert.equal(model.state, 'unreadable', JSON.stringify(roles));
+    assert.match(model.reason, /list of roles|names no role/, JSON.stringify(roles));
+  }
+  assert.deepEqual(appAccessModel(extensionSpec(), { state: 'read', appUnique: 'contoso_pm', roles: [] }).roles, [], 'a list with nothing in it is the one answer that says there are none');
+});
