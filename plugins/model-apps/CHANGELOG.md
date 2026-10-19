@@ -7,7 +7,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.16.0]
 
-The bundled SDK is updated to power-platform-ux 537cef3c, and a new table's primary (name) column is now created required when the
+The bundled SDK is updated to power-platform-ux ccf2c1a1, and a new table's primary (name) column is now created required when the
 spec says so. The spec gate refuses two values the build used to misread — an `AutoNumber` column without a format and a `required`
 that is not `true`, `false` or `"recommended"` — before anything is written, and `--verify` of an app an earlier release built only
 warns about them. Navigation titles survive a download and rebuild on an environment whose base language is not English. Teardown
@@ -22,7 +22,7 @@ keeps what only a kept table blocks instead of reporting the platform's refusals
   given to the build and to `verify-model-app.js` too, or pinned as the spec's `languageCode`. On a bilingual environment whose base
   language is not 1033, dashboard tile names are read in the base language.
 
-- **The bundled SDK is updated (power-platform-ux 537cef3c).** What a maker can see of it:
+- **The bundled SDK is updated (power-platform-ux ccf2c1a1).** What a maker can see of it:
   - a business process flow edit the flow cannot hold (a binding with no value, `required` on a step that has no slot for it) fails
     with a message instead of reporting success, and a flow's security that names an access level its table cannot grant is
     refused before any role is written;
