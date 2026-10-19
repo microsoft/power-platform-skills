@@ -111,7 +111,10 @@ Phase 1 specified an unreachable interactive flow for ~2.5 months. The same vali
 **one-sided tool declaration**: tool names are host-specific and every host silently ignores a name
 it does not recognize, so a capability named only in one scheme is absent on the other host and the
 agent launches without it. `TaskCreate`/`TaskUpdate`/`TaskList` are the live example — no published
-alias table lists them, so `todo` must be declared alongside. Both skills also support **unattended
+alias table lists them, so `todo` must be declared alongside. Recognizing a name is not delivering the
+tool, though: a Copilot CLI session gave `genpage-page-builder` no task tool at all, so an agent's
+task-tracking step says what to do without one (`references/agent-interaction-contract.md`, pinned by
+`scripts/tests/agent-task-tracking.test.js`). Both skills also support **unattended
 runs** (Copilot autopilot / Claude auto-accept) via
 `scripts/resolve-interaction-mode.js`; suppressing a prompt never authorizes destructive work.
 For the end-to-end flow,
@@ -2198,7 +2201,7 @@ references/                    ← Shared reference docs
   app-spec-schema.md           ← The App Spec contract (always-present fields) — /app-builder
   app-spec-schema-advanced.md  ← Conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants)
   authoring-flow.md            ← /app-builder Phase 1 authoring playbook, run in the main loop (not a subagent)
-  agent-interaction-contract.md ← Agents are headless: no AskUserQuestion / plan mode inside a Task subagent
+  agent-interaction-contract.md ← Agents are headless: no AskUserQuestion / plan mode inside a Task subagent; a declared tool is not always a delivered one (task tracking is optional)
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages

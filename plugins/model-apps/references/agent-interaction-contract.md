@@ -92,9 +92,27 @@ tools:
 `scripts/validate-agent-interactivity.js` fails the build on a one-sided
 declaration, in either direction.
 
+## A declared tool is not always a delivered one
+
+Declaring a capability in both schemes makes a host *recognize* it. It does not make
+the host *hand it to a subagent*. Task tracking is the live example. The `todo` alias
+is documented as supported in VS Code and not in the cloud agent; a Copilot CLI
+session gave `genpage-page-builder` only `view`, `create`, `edit` and `grep` although
+its frontmatter declares `TaskCreate`, `TaskUpdate` and `todo`; and Claude Code
+provides `TaskCreate`, `TaskUpdate` and `TaskList` by default only on some models.
+Nothing an agent declares can change that.
+
+So an agent never *depends* on a task tool. A step that uses one says to check the
+toolset first, and says what to do with none: skip the tool, do not search for one,
+do not call a tool that was not given, never say a task was created, and keep the
+progress in its own words. `agents/genpage-page-builder.md` Step 4 and Step 7 are the
+reference wording; `scripts/tests/agent-task-tracking.test.js` fails an agent that
+tells its reader to use `TaskCreate` without it.
+
 References:
 [Copilot tool aliases](https://docs.github.com/en/copilot/reference/custom-agents-configuration#tool-aliases)
 · [Claude Code ignores unknown tool names](https://github.com/anthropics/claude-code/issues/93171)
+· [Claude Code tools reference](https://code.claude.com/docs/en/tools-reference)
 
 ## Logging is unchanged
 

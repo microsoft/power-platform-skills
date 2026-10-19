@@ -12,6 +12,9 @@ color: green
 # search and todo tools even on a host that does not implement the compatible-
 # alias table. `TaskCreate`/`TaskUpdate` are NOT aliases anywhere — `todo` is
 # the portable name. No `execute`/`Bash`: this agent only authors page source.
+# Declaring a tool makes a host recognize it, not hand it to a subagent: a
+# Copilot CLI session gave this agent no task tool at all, so Steps 4 and 7 say
+# what to do without one.
 # See references/agent-interaction-contract.md.
 tools:
   - Read
@@ -250,11 +253,18 @@ mount, the data-fetching reference is authoritative for the in-flight de-dupe +
 `window` cache + readiness-dep pattern that survives the host double-mount.
 **Never put `dataApi` in a dependency array** (see rules.md Rule 15).
 
-## Step 4 — Create a Task
+## Step 4 — Track the Page
 
-Call `TaskCreate` for: "Generate [Page Name] page"
+Your progress on this page is one task: "Generate [Page Name] page". A host can hand a
+subagent no task tool (a Copilot CLI session gives this agent only its file and search
+tools), so check the tools you were actually given, once:
 
-Mark it as in_progress immediately.
+- **If you have a task tool** (`TaskCreate`/`TaskUpdate` on Claude Code, `todo` where
+  Copilot provides it): create the task and mark it `in_progress`.
+- **If you have none**: do not search for one, do not call a tool you were not given, and
+  never say you created a task. Open your first message with
+  `Task: Generate [Page Name] page — in progress` instead; Step 7 closes it. The page is
+  judged by the orchestrator's completeness gate, so nothing else about the work changes.
 
 ## Step 5 — Generate the Complete .tsx File
 
@@ -550,12 +560,15 @@ Write the complete `.tsx` file to the working directory at the target file path.
 
 ## Step 7 — Return Result
 
-Mark the task as complete. Return a concise result to the orchestrating skill:
+Close the task from Step 4 (mark it complete if you have a task tool). Return a concise
+result to the orchestrating skill:
 
 ```
 Page: [Page Name]
 File: [working directory]/[filename].tsx
 Status: Written
+Task: Generate [Page Name] page — complete
+Task tool: [TaskCreate/TaskUpdate | todo | none on this host]
 ```
 
 ## Critical Constraints
