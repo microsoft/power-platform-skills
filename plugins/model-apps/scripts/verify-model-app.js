@@ -34,6 +34,10 @@
 // A caller that reads only the JSON would otherwise lose what a person reads on stderr. `warnings` does not change `ok` or the exit status, and it is there
 // on a failed verification and on a refused spec ({ ok: false, errors, warnings }) as on a passed one. A run that stops on an unexpected error prints that
 // error on stderr and no JSON, as ever.
+//
+// The result is pure ASCII: every character above U+007E — the em dash of a warning, a Spanish label or a Japanese form name in a message, an accented folder name — is a `\uXXXX`
+// escape, which any JSON parser reads back as the original text. A raw one is garbled by the code page of the console that captures it (Windows PowerShell 5.1 reads a child's
+// stdout as OEM text), and an agent reads this off a console. stderr is for people and is not escaped.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -590,6 +594,11 @@ function readerFor(sdk, appUnique, opts) {
   return base;
 }
 
+// An agent reads the result off a console, and Windows PowerShell 5.1 decodes a child's stdout with the OEM code page: the UTF-8 bytes of an em dash in a warning reach it as three other
+// characters, and a Spanish label or a Japanese form name in a message as others still. `ascii` writes every character above U+007E as a `\uXXXX` escape instead — the same JSON to any
+// parser, and nothing a code page can garble (asciiJson in lib/dataverse-auth.js). It is for the result only: stderr is for people and is written as it is.
+const RESULT_AS_ASCII = { ascii: true };
+
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
@@ -643,7 +652,7 @@ async function main() {
     process.stderr.write(`WARNING: ${message}\n`);
   };
   for (const w of v.warnings || []) warn(w);
-  if (!v.ok) { emitResult(false, { ok: false, errors: v.errors, ...(warnings.length ? { warnings } : {}) }); return; }
+  if (!v.ok) { emitResult(false, { ok: false, errors: v.errors, ...(warnings.length ? { warnings } : {}) }, RESULT_AS_ASCII); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
   // Only the build's baseline is READ from here, so nothing is created: a folder that does not exist (or cannot be
   // inspected) is simply one with no baseline. A LINK at the folder is still refused, as everywhere else the plugin
@@ -703,7 +712,7 @@ async function main() {
   const missing = r.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`);
   // `warnings` repeats the `WARNING:` lines printed above for a caller that reads only this JSON. Like `unverified` it is left out when there is none, and it changes
   // neither `ok` nor the exit status.
-  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing, ...(unverified.length ? { unverified } : {}), ...(warnings.length ? { warnings } : {}) });
+  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing, ...(unverified.length ? { unverified } : {}), ...(warnings.length ? { warnings } : {}) }, RESULT_AS_ASCII);
 }
 
 if (require.main === module) {

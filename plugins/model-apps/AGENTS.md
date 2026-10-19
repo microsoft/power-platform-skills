@@ -1628,8 +1628,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   workspace it could not remove — is also in the result JSON's optional `warnings` array** (the same messages, without the prefix, in the order
   printed; left out when there is none, as `unverified` is), so a caller that reads only the JSON loses none of them. It is there on a failed
   verification and on a refused spec (`{ ok: false, errors, warnings }`, whose warnings are printed too) as on a passed one, and changes neither
-  `ok` nor the exit status; a run that stops on an unexpected error prints that error on stderr and no JSON, as ever
-  (pinned by `verify-model-app.test.js`, which runs the CLI and, for a refused spec, the process). It works through a throwaway SDK workspace, never the folder's `.maker-workspace` (which belongs to
+  `ok` nor the exit status; a run that stops on an unexpected error prints that error on stderr and no JSON, as ever. **The result JSON is pure ASCII**
+  (`emitResult`'s `{ ascii: true }`): every character above U+007E — the em dash of a warning, a Spanish label or a Japanese form name in a
+  message — is a `\uXXXX` escape that any JSON parser reads back as the original text, because Windows PowerShell 5.1 decodes a child's stdout
+  with the OEM code page and garbles a raw one; stderr is for people and is not escaped (`verify-model-app.test.js` pins both on the process, for a
+  refused spec and, over `tests/helpers/fake-verify-preload.js`, for a completed verification). It works through a throwaway SDK workspace, never the folder's `.maker-workspace` (which belongs to
   the environment it was first opened for): every read it makes goes to the server, so it verifies any
   environment the app is deployed to and creates or binds nothing in the folder. It only READS the build's
   baseline, `last-applied.json`, from `--workspace`, and only when that baseline describes this
@@ -2183,7 +2186,7 @@ scripts/
   build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow; takes the build's --language-code: the language the navigation titles are read in, when the spec on disk pins none and the base language cannot be read)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
-  verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in; its result JSON lists every `WARNING:` line it printed in an optional `warnings` array)
+  verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in; its result JSON is pure ASCII and lists every `WARNING:` line it printed in an optional `warnings` array)
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review
   preview-app.js               ← app-builder: ASCII whole-app design preview (data model + sitemap + forms + page-intents + design)
   write-app-spec-doc.js        ← app-builder: renders the readable model-app-plan.md design doc from app-spec.json
@@ -3387,6 +3390,11 @@ answer to a change set: the fake's own, when it applies one, and the refusal a t
 answer replies with a 502 JSON body itself). It can also refuse chosen requests (`refuseWhen`: a method, a path
 pattern and, with `nth`, only the nth such request), so a run that fails half way — the second
 `AddSolutionComponent`, say — can be driven end to end.
+
+`fake-verify-preload.js` is the smallest of them: it replaces the four things `verify-model-app.js` would reach an environment with — the
+HTTP client, the SDK factory, the page backend and the verification itself (`FAKE_VERIFY`: what the verification answers, and the folders
+the page backend says it could not remove) — so `verify-model-app.test.js` runs a completed verification as a process (the real script, spec
+validation, throwaway workspace and printer) and reads the bytes it wrote, which a refused spec alone cannot show.
 
 `scripts/tests/helpers/run-with-fakes.js` (`runScript(script, argv, { platform, pac, files, read })`) is the wider
 form, for a script that reads connections, connector metadata or deployment settings. The child runs over a fake

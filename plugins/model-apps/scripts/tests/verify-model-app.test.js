@@ -335,7 +335,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
           events.push({ type: 'readJsonArg', arg });
           return specObject || { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
         },
-        emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
+        emitResult: (ok, payload, options) => events.push({ type: 'emitResult', ok, payload, options }),
         // Pure, so the real one — the CLI uses it to identify the environment's baseline.
         dataverseOrigin: require('../lib/dataverse-auth.js').dataverseOrigin,
         // Pure as well: the `--language-code` flag, read the way the build reads it.
@@ -1016,26 +1016,106 @@ test('verify CLI that stops on an unexpected error still prints its warnings on 
   assert.ok(harness.stderr.join('').includes('WARNING: a spec warning\n'), 'the line a person reads is still printed');
 });
 
-// The same as a process: what a caller that reads only stdout gets, what a person reads on stderr, and the exit status. A refused spec needs no environment.
-test('verify-model-app as a process prints the warnings in the JSON of a refused spec, the same lines on stderr, and exits 1', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-warnings-'));
+// --- the script as a process: what a caller that reads only stdout gets, what a person reads on stderr, and the exit status ---------------------------------------
+// stdout comes back as the bytes the process wrote, because the console that captures it decodes them with a code page of its own (Windows PowerShell 5.1 reads a child's stdout as
+// OEM text); stderr as text. The spec is a file the run makes and removes. A refused spec needs no environment; `fake` (FAKE_VERIFY, helpers/fake-verify-preload.js) lets a
+// verification complete without one — the real script, validation, throwaway workspace and printer over a fake verification.
+const FAKE_VERIFY_PRELOAD = path.join(__dirname, 'helpers', 'fake-verify-preload.js');
+function runVerifyProcess(spec, fake) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-process-'));
   try {
     const specPath = path.join(dir, 'app-spec.json');
-    fs.writeFileSync(specPath, JSON.stringify(appSpec({ columns: [column({ type: 'AutoNumber' }), column({ schemaName: 'new_bad', type: 'Nope' })] })));
-    const run = spawnSync(process.execPath, [path.join(__dirname, '..', 'verify-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`], {
-      encoding: 'utf8',
+    fs.writeFileSync(specPath, JSON.stringify(spec));
+    const run = spawnSync(process.execPath, [
+      ...(fake ? ['--require', FAKE_VERIFY_PRELOAD] : []),
+      path.join(__dirname, '..', 'verify-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`,
+    ], {
       timeout: 60000,
-      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', ...(fake ? { FAKE_VERIFY: JSON.stringify(fake) } : {}) },
     });
-    assert.strictEqual(run.status, 1, run.stderr);
-    assert.deepStrictEqual(JSON.parse(run.stdout), {
-      ok: false,
-      errors: ["entity new_ticket: column new_bad has unknown type 'Nope'"],
-      warnings: [AUTONUMBER_WARNING],
-    });
-    assert.deepStrictEqual(printedWarnings(run.stderr), [AUTONUMBER_WARNING]);
+    if (run.error) throw run.error;
+    return { status: run.status, stdout: run.stdout, stderr: run.stderr.toString('utf8') };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('verify-model-app as a process prints the warnings in the JSON of a refused spec, the same lines on stderr, and exits 1', () => {
+  const run = runVerifyProcess(appSpec({ columns: [column({ type: 'AutoNumber' }), column({ schemaName: 'new_bad', type: 'Nope' })] }));
+  assert.strictEqual(run.status, 1, run.stderr);
+  assert.deepStrictEqual(JSON.parse(run.stdout.toString('utf8')), {
+    ok: false,
+    errors: ["entity new_ticket: column new_bad has unknown type 'Nope'"],
+    warnings: [AUTONUMBER_WARNING],
+  });
+  assert.deepStrictEqual(printedWarnings(run.stderr), [AUTONUMBER_WARNING]);
+});
+
+// --- the JSON result is pure ASCII ------------------------------------------------------------------------------------------------------------------------------------
+// An agent reads verify's stdout off a console, and Windows PowerShell 5.1 decodes a child's stdout with the OEM code page: the UTF-8 bytes of an em dash arrive as three other
+// characters, and a Japanese form name or a Spanish label as others still — in a warning that names them, in a `missing` entry, anywhere. Every character above U+007E is a
+// `\uXXXX` escape instead (`emitResult`'s `ascii` option, as in the scripts an agent already reads off a console): the same JSON to any parser, and nothing a code page can garble.
+// stderr is for people and is not escaped.
+const JAPANESE_FORM = '\u65e5\u5831';
+const FORM_WARNING = `form '${JAPANESE_FORM}': prune: false has no effect on an auto layout \u2014 an auto layout is already additive and never removes a field`;
+// An AutoNumber column with no format (an em dash in its warning) and a form with a Japanese name that asks for an effect an auto layout cannot have (the name in its warning).
+const nonAsciiSpec = (moreColumns = []) => ({
+  ...appSpec({ columns: [column({ type: 'AutoNumber' }), ...moreColumns] }),
+  forms: [{ entity: 'new_ticket', name: JAPANESE_FORM, layout: 'auto', prune: false, notes: false }],
+});
+const isAscii = (bytes) => bytes.every((byte) => byte < 0x80);
+
+test('verify CLI asks emitResult for pure ASCII on every JSON result it prints — a passed verdict, a failed one and a refused spec', async () => {
+  const missing = { kind: 'view', name: 'new_ticket.Open Tickets', present: false };
+  const run = async (options) => {
+    const harness = loadVerifyCli({ parseResult: { positional: [], flags: SPEC_FLAGS }, ...options });
+    await harness.main();
+    return harness.events.find((e) => e.type === 'emitResult');
+  };
+  const passed = await run({});
+  assert.strictEqual(passed.ok, true);
+  assert.ok(passed.options && passed.options.ascii === true, 'a passed verdict');
+  const failed = await run({ verifyResult: { ok: false, checks: [{ kind: 'entity', name: 'new_ticket', present: true }, missing], missing: [missing] } });
+  assert.strictEqual(failed.ok, false);
+  assert.ok(failed.options && failed.options.ascii === true, 'a failed verdict');
+  const refused = await run({ validateResult: { ok: false, errors: ['entities must be a non-empty array'] } });
+  assert.strictEqual(refused.ok, false);
+  assert.ok(refused.options && refused.options.ascii === true, 'a refused spec');
+});
+
+test('verify-model-app as a process prints the JSON of a refused spec as pure ASCII that reads back as the original text, and leaves stderr as it was written', () => {
+  const run = runVerifyProcess(nonAsciiSpec([column({ schemaName: 'new_bad', type: 'Nop\u00e9' })]));
+  assert.strictEqual(run.status, 1, run.stderr);
+  assert.ok(isAscii(run.stdout), `every byte of stdout is ASCII: ${run.stdout.toString('utf8')}`);
+  const asText = run.stdout.toString('latin1');
+  assert.strictEqual(asText, run.stdout.toString('utf8'), 'so the code page that decodes it does not matter');
+  assert.ok(asText.includes('\\u2014') && asText.includes('\\u65e5\\u5831') && asText.includes('\\u00e9'), 'a character beyond ASCII is an escape, not itself');
+  assert.deepStrictEqual(JSON.parse(asText), {
+    ok: false,
+    errors: ["entity new_ticket: column new_bad has unknown type 'Nop\u00e9'"],
+    warnings: [AUTONUMBER_WARNING, FORM_WARNING],
+  });
+  assert.deepStrictEqual(printedWarnings(run.stderr), [AUTONUMBER_WARNING, FORM_WARNING], 'the lines a person reads carry the characters themselves');
+});
+
+test('verify-model-app as a process prints the JSON of a completed verification as pure ASCII — a warning, a missing check, an unverified one and a page workspace with Spanish, Japanese and em-dash text read back as themselves', () => {
+  const left = 'C:\\Users\\Jos\u00e9\\AppData\\Local\\Temp\\genpage-x1y2z3';
+  const absent = { kind: 'form-labels', name: 'new_ticket.Principal', detail: 'la etiqueta de la pesta\u00f1a "Descripci\u00f3n" no est\u00e1 \u2014 \u65e5\u5831' };
+  const unverified = ['form-labels:new_ticket.Ventas (la etiqueta "Cr\u00e9dito" no se compar\u00f3)'];
+  const warnings = [AUTONUMBER_WARNING, FORM_WARNING, `the page workspace could not be removed, so page source may be left on disk: ${left} \u2014 delete the folder by hand`];
+  for (const ok of [true, false]) {
+    const checks = [{ kind: 'entity', name: 'new_ticket', present: true }, ...(ok ? [] : [{ ...absent, present: false }])];
+    const run = runVerifyProcess(nonAsciiSpec(), { result: { ok, checks, missing: ok ? [] : [absent], unverified }, left: [left] });
+    assert.strictEqual(run.status, ok ? 0 : 1, `ok=${ok}: ${run.stderr}`);
+    assert.ok(isAscii(run.stdout), `ok=${ok}: every byte of stdout is ASCII: ${run.stdout.toString('utf8')}`);
+    const asText = run.stdout.toString('latin1');
+    assert.strictEqual(asText, run.stdout.toString('utf8'), `ok=${ok}: so the code page that decodes it does not matter`);
+    const escapes = ['\\u2014', '\\u65e5\\u5831', '\\u00e9', ...(ok ? [] : ['\\u00f1'])];
+    assert.ok(escapes.every((escape) => asText.includes(escape)), `ok=${ok}: a character beyond ASCII is an escape, not itself: ${asText}`);
+    const missing = ok ? [] : ['form-labels:new_ticket.Principal (la etiqueta de la pesta\u00f1a "Descripci\u00f3n" no est\u00e1 \u2014 \u65e5\u5831)'];
+    assert.deepStrictEqual(JSON.parse(asText), { ok, present: 1, total: ok ? 1 : 2, missing, errors: missing, unverified, warnings }, `ok=${ok}: the same document, decoded`);
+    assert.deepStrictEqual(printedWarnings(run.stderr), warnings, `ok=${ok}: stderr carries the characters themselves`);
+    assert.ok(run.stderr.includes(`  \u2298 ${unverified[0]}\n`), `ok=${ok}: and so does the unverified line`);
   }
 });
 
