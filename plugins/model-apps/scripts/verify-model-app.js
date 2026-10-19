@@ -27,6 +27,13 @@
 //
 // Result JSON: { ok, present, total, missing, errors } and, only when a check could not be decided, `unverified: [ "<kind>:<name> (<reason>)" ]`.
 // `unverified` does not change `ok` or the exit status.
+//
+// Every `WARNING:` line this prints on stderr is also in the result, as the optional `warnings: [ "<message>" ]`: the same messages, without the prefix,
+// in the order they were printed, and left out when there is none. They are the spec's own (validateAppSpec's — among them the findings that verification
+// alone downgrades from errors to warnings: a relationship-name collision and the two column rules) and, last, a page workspace the run could not remove.
+// A caller that reads only the JSON would otherwise lose what a person reads on stderr. `warnings` does not change `ok` or the exit status, and it is there
+// on a failed verification and on a refused spec ({ ok: false, errors, warnings }) as on a passed one. A run that stops on an unexpected error prints that
+// error on stderr and no JSON, as ever.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -628,8 +635,15 @@ async function main() {
   // `required: "true"` made not required) must still reach its deployment. The warning names the column and the fix for the next build. Not the
   // structural profile: that would also skip the checks of pages and forms that verification relies on.
   const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn' });
-  if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
-  for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
+  // A warning is printed for a person and kept for the result JSON in one step, so the two cannot differ: a caller that reads only the JSON must not
+  // lose what stderr says. The spec's are found before it is judged, so a spec that is refused reports the warnings it also has.
+  const warnings = [];
+  const warn = (message) => {
+    warnings.push(message);
+    process.stderr.write(`WARNING: ${message}\n`);
+  };
+  for (const w of v.warnings || []) warn(w);
+  if (!v.ok) { emitResult(false, { ok: false, errors: v.errors, ...(warnings.length ? { warnings } : {}) }); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
   // Only the build's baseline is READ from here, so nothing is created: a folder that does not exist (or cannot be
   // inspected) is simply one with no baseline. A LINK at the folder is still refused, as everywhere else the plugin
@@ -668,7 +682,7 @@ async function main() {
     try {
       if (genpage && typeof genpage.dispose === 'function') {
         const leftOnDisk = leftOnDiskWarning(await genpage.dispose({ waitMs: PAGE_READS_END_WAIT_MS }));
-        if (leftOnDisk) process.stderr.write(`WARNING: ${leftOnDisk}\n`);
+        if (leftOnDisk) warn(leftOnDisk);
       }
     } catch { /* best-effort */ }
     session.dispose();
@@ -687,7 +701,9 @@ async function main() {
   }
   // Include `errors` (alias of missing) so emitResult's failure note reports an accurate count.
   const missing = r.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`);
-  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing, ...(unverified.length ? { unverified } : {}) });
+  // `warnings` repeats the `WARNING:` lines printed above for a caller that reads only this JSON. Like `unverified` it is left out when there is none, and it changes
+  // neither `ok` nor the exit status.
+  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing, ...(unverified.length ? { unverified } : {}), ...(warnings.length ? { warnings } : {}) });
 }
 
 if (require.main === module) {

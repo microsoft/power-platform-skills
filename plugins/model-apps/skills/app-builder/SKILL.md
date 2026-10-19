@@ -532,6 +532,12 @@ was and what settles it — the language of the captions, which `--language-code
 form read does not carry, whose captions only Power Apps can show — never report the run as "everything deployed" while
 one is listed.
 
+A `WARNING:` line on stderr — each one is repeated in the JSON result's `warnings` list, which is absent when there is
+none — is advice, not a verdict: a spec an earlier release accepted that the build would now refuse (it names the column
+or relationship and the fix for the next build), or a page workspace the run could not remove (it names the folder to
+delete by hand). It changes neither `ok` nor the exit status, so a run that passes can still carry one: pass each on to
+the user. A run that stops on an unexpected error prints that error and no JSON.
+
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a

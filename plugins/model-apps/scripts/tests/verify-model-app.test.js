@@ -5,6 +5,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { spawnSync } = require('node:child_process');
 const { readerFor, appIdFor } = require('../verify-model-app.js');
 const { verifySpec } = require('../lib/verify-spec.js');
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
@@ -732,9 +733,9 @@ test('verify CLI accepts a positional spec, leaves the default workspace alone, 
   assert.ok(!harness.events.some((e) => e.type === 'mkdirSync' && e.dir === defaultWorkspace), 'the default workspace is not created');
 });
 
-test('verify CLI still verifies an older colliding spec and names the holder', async () => {
-  // Dropping relationshipCollisions: 'warn' makes validateAppSpec refuse this spec before any
-  // read. The relationship line is the proof verification actually ran.
+// An older spec whose 1:N and N:N relationships share a schema name, over an environment that holds the 1:N: what verify must still read (the collision
+// is a warning for it, an error everywhere else) and then fail on, naming the holder.
+async function verifyCollidingSpec() {
   const specObject = {
     solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
     app: { name: 'Projects', uniqueName: 'contoso_projects' },
@@ -774,8 +775,13 @@ test('verify CLI still verifies an older colliding spec and names the holder', a
   });
 
   await harness.main();
-  const stderr = harness.stderr.join('');
-  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  return { stderr: harness.stderr.join(''), emitted: harness.events.find((e) => e.type === 'emitResult') };
+}
+
+test('verify CLI still verifies an older colliding spec and names the holder', async () => {
+  // Dropping relationshipCollisions: 'warn' makes validateAppSpec refuse this spec before any
+  // read. The relationship line is the proof verification actually ran.
+  const { stderr, emitted } = await verifyCollidingSpec();
   assert.match(stderr, /WARNING:.*both use the schema name 'contoso_project_contoso_task'/);
   assert.match(stderr, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
   assert.ok(emitted && Array.isArray(emitted.payload.missing), 'a validation refusal returns errors and never a missing list');
@@ -787,12 +793,13 @@ test('verify CLI still verifies an older colliding spec and names the holder', a
 // "recommended". Verification creates and updates nothing and only reads whether each column exists, so the spec of an app an earlier release built — an
 // AutoNumber column made as plain text, a `required: "true"` made not required — must still reach the deployment. The CLI passes columnValues: 'warn', as it
 // passes relationshipCollisions: 'warn': the findings are warnings that name the column and the fix, and the verdict is the deployment's.
-async function verifyOlderSpec(specObject) {
+async function verifyOlderSpec(specObject, harnessOptions = {}) {
   const reads = [];
   const harness = loadVerifyCli({
     parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-older-spec' } },
     realGates: true,
     specObject,
+    ...harnessOptions,
     sdkFactory: () => ({
       initWorkspace: async () => {},
       findTables: async () => { reads.push('tables'); return [{ logicalName: 'new_ticket' }]; },
@@ -868,6 +875,168 @@ test('verify CLI still refuses a spec that is invalid for another reason — bef
   assert.strictEqual(emitted.ok, false);
   assert.deepStrictEqual(emitted.payload.errors, ["entity new_ticket: column new_bad has unknown type 'Nope'"]);
   assert.deepStrictEqual(reads, [], 'nothing was read');
+});
+
+// --- the result JSON carries what stderr warns -----------------------------------------------------------------------------------------
+// A person reads the `WARNING:` lines verify prints, but a caller that reads only the JSON result — a skill, a pipeline — lost them. The result's optional
+// `warnings` array holds the same messages, without the prefix and in the order they were printed, and is left out when there is none, as `unverified` is.
+// The result is compared as the process prints it (a JSON round trip): the CLI runs in a context of its own, whose arrays are not this one's.
+const printedWarnings = (stderr) => stderr.split('\n').filter((line) => line.startsWith('WARNING: ')).map((line) => line.slice('WARNING: '.length));
+const resultOf = (emitted) => JSON.parse(JSON.stringify(emitted.payload));
+const AUTONUMBER_WARNING = 'entity new_ticket: column new_ref is an AutoNumber column but its autoNumberFormat is missing — give it a format such as "C-{SEQNUM:5}", or use type "Text" for a plain text column';
+
+test('verify CLI puts the warning it prints for an older spec into the result JSON, and moves no other field', async () => {
+  for (const [label, parts, finding] of OLDER_SPECS) {
+    const { emitted, stderr } = await verifyOlderSpec(appSpec(parts));
+    const result = resultOf(emitted);
+    assert.strictEqual(emitted.ok, true, `${label}: ${JSON.stringify(result)}`);
+    assert.deepStrictEqual(result.warnings, [`entity new_ticket: ${finding}`], `${label}: the result carries the warning, naming the column and the fix`);
+    assert.deepStrictEqual(result.warnings, printedWarnings(stderr), `${label}: it is the very line stderr printed`);
+    assert.ok(stderr.includes(`WARNING: entity new_ticket: ${finding}\n`), `${label}: and stderr keeps its line`);
+    assert.deepStrictEqual(result, { ok: true, present: result.total, total: result.total, missing: [], errors: [], warnings: result.warnings }, `${label}: no other field moved`);
+  }
+});
+
+test('verify CLI lists every warning of an older spec in the result, in the order of the lines on stderr', async () => {
+  const spec = appSpec({
+    columns: [column({ type: 'AutoNumber', required: 'true' }), column({ schemaName: 'new_status', type: 'Text', required: null })],
+    primaryAttribute: nameColumn({ required: 'ApplicationRequired' }),
+  });
+  const { emitted, stderr } = await verifyOlderSpec(spec);
+  const printed = printedWarnings(stderr);
+  assert.strictEqual(printed.length, 4, stderr);
+  assert.deepStrictEqual(resultOf(emitted).warnings, printed);
+});
+
+test('verify CLI leaves `warnings` out of the result when it warned of nothing — the result is what it always was', async () => {
+  const spec = appSpec({ columns: [column({ type: 'AutoNumber', autoNumberFormat: 'C-{SEQNUM:5}', required: 'recommended' })], primaryAttribute: nameColumn({ required: false }) });
+  const { emitted, stderr } = await verifyOlderSpec(spec);
+  const result = resultOf(emitted);
+  assert.ok(!/WARNING:/.test(stderr), stderr);
+  assert.ok(!('warnings' in result), JSON.stringify(result));
+  assert.deepStrictEqual(result, { ok: true, present: result.total, total: result.total, missing: [], errors: [] });
+});
+
+test('verify CLI that fails for another reason still carries its warnings — the colliding spec names the holder in `missing` and the collision in `warnings`', async () => {
+  const { stderr, emitted } = await verifyCollidingSpec();
+  const result = resultOf(emitted);
+  assert.strictEqual(emitted.ok, false);
+  assert.ok(result.missing.some((m) => /not as the declared N:N/.test(m)), JSON.stringify(result));
+  assert.deepStrictEqual(result.errors, result.missing, '`errors` is still the alias of `missing`');
+  assert.strictEqual(result.warnings.length, 1, JSON.stringify(result.warnings));
+  assert.match(result.warnings[0], /both use the schema name 'contoso_project_contoso_task'/);
+  assert.deepStrictEqual(result.warnings, printedWarnings(stderr));
+});
+
+test('a failing verdict carries the warnings beside the fields it always had', async () => {
+  const missing = { kind: 'view', name: 'new_ticket.Open Tickets', present: false };
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: SPEC_FLAGS },
+    validateResult: { ok: true, warnings: ['first warning', 'second warning'] },
+    verifyResult: { ok: false, checks: [{ kind: 'entity', name: 'new_ticket', present: true }, missing], missing: [missing] },
+  });
+  await harness.main();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, false);
+  assert.deepStrictEqual(resultOf(emitted), {
+    ok: false, present: 1, total: 2, missing: ['view:new_ticket.Open Tickets'], errors: ['view:new_ticket.Open Tickets'], warnings: ['first warning', 'second warning'],
+  });
+  assert.ok(harness.stderr.join('').includes('WARNING: first warning\nWARNING: second warning\n'), 'stderr keeps its lines');
+});
+
+test('verify CLI reports `warnings` and `unverified` independently — each only when it has something to say', async () => {
+  const unverified = ["form-labels:new_ticket.Ticket Main (the label of tab 'tab_overview' was not compared)"];
+  const warnings = ['column new_ref needs a format'];
+  const run = async (specWarnings, notDecided) => {
+    const harness = loadVerifyCli({
+      parseResult: { positional: [], flags: SPEC_FLAGS },
+      validateResult: { ok: true, warnings: specWarnings },
+      verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [], ...(notDecided ? { unverified: notDecided } : {}) },
+    });
+    await harness.main();
+    return resultOf(harness.events.find((e) => e.type === 'emitResult'));
+  };
+  const base = { ok: true, present: 1, total: 1, missing: [], errors: [] };
+  assert.deepStrictEqual(await run(warnings, unverified), { ...base, unverified, warnings });
+  assert.deepStrictEqual(await run(warnings, null), { ...base, warnings });
+  assert.deepStrictEqual(await run([], unverified), { ...base, unverified });
+  assert.deepStrictEqual(await run(undefined, null), base, 'a validation that reports no list of warnings at all is no warning');
+});
+
+test('verify CLI puts the page workspace warning into the result JSON, after the spec\'s own', async () => {
+  const left = 'C:\\temp\\genpage-x1y2z3';
+  const stuck = `the page workspace could not be removed, so page source may be left on disk: ${left} — delete the folder by hand`;
+  const disposeOutcome = { left: [left] };
+
+  const alone = await verifyOlderSpec(appSpec({ columns: [column({ type: 'Text' })] }), { disposeOutcome });
+  const aloneResult = resultOf(alone.emitted);
+  assert.deepStrictEqual(aloneResult.warnings, [stuck], 'the run succeeded, with a page workspace left on disk');
+  assert.strictEqual(alone.emitted.ok, true, 'it does not fail the run');
+  assert.deepStrictEqual(printedWarnings(alone.stderr), [stuck], 'stderr says the same');
+  assert.deepStrictEqual(aloneResult, { ok: true, present: aloneResult.total, total: aloneResult.total, missing: [], errors: [], warnings: [stuck] });
+
+  const both = await verifyOlderSpec(appSpec({ columns: [column({ type: 'AutoNumber' })] }), { disposeOutcome });
+  assert.deepStrictEqual(resultOf(both.emitted).warnings, [AUTONUMBER_WARNING, stuck], 'the spec\'s warning was found first, and the workspace is known last');
+  assert.deepStrictEqual(printedWarnings(both.stderr), [AUTONUMBER_WARNING, stuck], 'in the order stderr printed them');
+
+  const clean = await verifyOlderSpec(appSpec({ columns: [column({ type: 'Text' })] }), { disposeOutcome: { left: [] } });
+  assert.ok(!('warnings' in resultOf(clean.emitted)), 'nothing left on disk, nothing to warn of');
+});
+
+test('verify CLI refuses an invalid spec with the warnings it found beside the errors, and prints them too', async () => {
+  const spec = appSpec({ columns: [column({ type: 'AutoNumber' }), column({ schemaName: 'new_bad', type: 'Nope' })] });
+  const { reads, emitted, stderr } = await verifyOlderSpec(spec);
+  assert.strictEqual(emitted.ok, false);
+  assert.deepStrictEqual(resultOf(emitted), { ok: false, errors: ["entity new_ticket: column new_bad has unknown type 'Nope'"], warnings: [AUTONUMBER_WARNING] });
+  assert.deepStrictEqual(printedWarnings(stderr), [AUTONUMBER_WARNING], 'the refusal prints what the result carries');
+  assert.deepStrictEqual(reads, [], 'nothing was read');
+});
+
+test('verify CLI refuses an invalid spec that has nothing to warn of with the result it always had, and prints no warning', async () => {
+  const spec = appSpec({ columns: [column({ schemaName: 'new_bad', type: 'Nope' })] });
+  const { reads, emitted, stderr } = await verifyOlderSpec(spec);
+  assert.strictEqual(emitted.ok, false);
+  assert.deepStrictEqual(resultOf(emitted), { ok: false, errors: ["entity new_ticket: column new_bad has unknown type 'Nope'"] });
+  assert.ok(!/WARNING:/.test(stderr), stderr);
+  assert.deepStrictEqual(reads, []);
+});
+
+test('verify CLI that stops on an unexpected error still prints its warnings on stderr, and prints no JSON — as before', async () => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: SPEC_FLAGS },
+    validateResult: { ok: true, warnings: ['a spec warning'] },
+    sdkThrows: new Error('SDK unavailable'),
+    invokeAsMain: true,
+  });
+  await harness.settle();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, false);
+  assert.match(emitted.payload.message, /SDK unavailable/);
+  assert.ok(!('warnings' in emitted.payload), 'the failure is the error itself: there is no JSON result to add the field to');
+  assert.ok(harness.stderr.join('').includes('WARNING: a spec warning\n'), 'the line a person reads is still printed');
+});
+
+// The same as a process: what a caller that reads only stdout gets, what a person reads on stderr, and the exit status. A refused spec needs no environment.
+test('verify-model-app as a process prints the warnings in the JSON of a refused spec, the same lines on stderr, and exits 1', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-warnings-'));
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(appSpec({ columns: [column({ type: 'AutoNumber' }), column({ schemaName: 'new_bad', type: 'Nope' })] })));
+    const run = spawnSync(process.execPath, [path.join(__dirname, '..', 'verify-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`], {
+      encoding: 'utf8',
+      timeout: 60000,
+      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+    });
+    assert.strictEqual(run.status, 1, run.stderr);
+    assert.deepStrictEqual(JSON.parse(run.stdout), {
+      ok: false,
+      errors: ["entity new_ticket: column new_bad has unknown type 'Nope'"],
+      warnings: [AUTONUMBER_WARNING],
+    });
+    assert.deepStrictEqual(printedWarnings(run.stderr), [AUTONUMBER_WARNING]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {
