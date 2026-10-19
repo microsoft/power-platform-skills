@@ -4232,10 +4232,10 @@ test('deploy: an edited page whose update the service throttles is waited out an
   }
 });
 
-// ── What the service asked crosses to the build, and the waits the build's own layers add are one budget ───────────────────────────────────────────────
+// ── What the service asked crosses to the build, and the waits of the run's layers are one budget ─────────────────────────────────────────────────────
 // The backend waits out a throttled page write between its sends; when its six sends are not enough it hands the build what the last answer asked, as a moment before which nothing may be sent, and the build waits for THAT before
-// it runs the pages phase again — not for its own shorter backoff. The waiting those two layers add is one budget of five minutes (lib/throttle-budget.js) — NOT all the waiting of a run: the HTTP client's own re-sends of a throttled read or
-// publish keep their own schedule and are not drawn from it (pinned below). A wait that does not fit stops the run with a halt that says what the service asked and that a later run continues. These tests drive the real build, its retry loop,
+// it runs the pages phase again — not for its own shorter backoff. The waiting those two layers do, and the HTTP client's own waits for a throttled read or publish (pinned at the end of this file), are one budget of five minutes
+// (lib/throttle-budget.js). A wait that does not fit stops the run with a halt that says what the service asked and that a later run continues. These tests drive the real build, its retry loop,
 // the real backend and the real SDK, with each layer's waits recorded in one list.
 const waitsOf = (events) => events.filter((e) => e.ms !== undefined);
 const totalWait = (events) => waitsOf(events).reduce((sum, e) => sum + e.ms, 0);
@@ -4373,10 +4373,9 @@ test('deploy: a throttle that never says how long keeps the waits it always had 
   }
 });
 
-// The budget bounds what the BUILD's own layers add — the page backend's waits between the sends of a page write, which is a `$batch` the HTTP client never re-sends, and the build's waits before it runs a phase again. It does not bound
-// the production HTTP client's own re-sends of a throttled read or publish: those keep the schedule they always had (at most five re-sends, honouring a `Retry-After` of up to a minute), and charging them to the run would halt a build that is
-// throttled for a while and succeeds today. This pins that decision, so a later change that starts charging the client has to make it on purpose.
-test('deploy: the HTTP client\'s own waits for a throttled read are not drawn from the run\'s budget — five reads throttled for a minute are waited out by the client, five page writes by the backend, and the build succeeds', async () => {
+// The HTTP client draws its waits for a throttled answer from the run's budget when it is given one (lib/sdk-http-client.js); a client that is given none — the pcf plugin's, which has no budget — waits as it always did: at most five re-sends of
+// a throttled read or publish, each honouring a `Retry-After` of up to a minute. This pins that, with the same ten minutes of throttling the budgeted tests below cannot wait out.
+test('deploy: a client that is given no budget waits as it always did — five reads throttled for a minute are waited out by the client, five page writes by the backend, and the build succeeds', async () => {
   const { createAzHttpClient } = require('../lib/sdk-http-client.js');
   const { makeThrottleBudget } = require('../lib/throttle-budget.js');
   const { appDir, spec } = onePageApp('Overview');
@@ -4417,9 +4416,151 @@ test('deploy: the HTTP client\'s own waits for a throttled read are not drawn fr
     assert.deepStrictEqual(events.filter((e) => e.who === 'client').map((e) => e.ms), [60000, 60000, 60000, 60000, 60000], 'the client waited out the five throttled reads on its own, a minute each');
     assert.deepStrictEqual(events.filter((e) => e.who === 'backend').map((e) => e.ms), [60000, 60000, 60000, 60000, 60000], 'the backend waited out the five throttled page writes');
     assert.deepStrictEqual(events.filter((e) => e.who === 'build'), [], 'and the build had nothing to wait for');
-    assert.strictEqual(budget.spentMs(), 300000, 'the budget holds the backend\'s waits and not the client\'s: ten minutes were waited in all, five of them inside it');
+    assert.strictEqual(budget.spentMs(), 300000, 'the client was given no budget, so the budget holds the backend\'s waits alone: ten minutes were waited in all, five of them inside it');
   } finally {
     await genpage.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// The transport under the production client: the answers of the fake page service as a transport hands them over, with the nth read throttled when `refuseRead(n)` answers.
+function pageTransport(server, refuseRead = () => undefined) {
+  const raw = server.http();
+  let reads = 0;
+  return async ({ url, method, headers, body }) => {
+    if (method === 'GET') {
+      reads += 1;
+      const refused = refuseRead(reads);
+      if (refused) return refused;
+    }
+    const answer = method === 'POST' && url.endsWith('/$batch') ? await raw.postRaw(url, body, { headers })
+      : method === 'GET' ? await raw.get(url, { headers })
+        : method === 'DELETE' ? await raw.delete(url, { headers })
+          : method === 'PATCH' && Buffer.isBuffer(body) ? await raw.patchRaw(url, body, { headers })
+            : await raw[method.toLowerCase()](url, typeof body === 'string' ? JSON.parse(body) : body, { headers });
+    const text = typeof answer.body === 'string' || Buffer.isBuffer(answer.body) ? answer.body : JSON.stringify(answer.body === undefined ? null : answer.body);
+    return { statusCode: answer.status, headers: answer.headers || {}, body: text };
+  };
+}
+const throttledRead = (seconds) => ({ statusCode: 429, headers: { 'retry-after': String(seconds) }, body: '{"error":{"message":"throttled"}}' });
+// A clock that every wait of the run moves, as a real wait does: the HTTP client places its waits on it.
+function movingClock() {
+  let at = Date.parse('2026-09-30T10:00:00Z');
+  return { now: () => at, advance: (ms) => { at += ms; } };
+}
+
+// With a budget the production client draws its waits for a throttled read or publish from it — with the backend's waits between the sends of a page write, and the build's own: one five minutes for the run.
+test('deploy: the HTTP client\'s waits for a throttled read are drawn from the run\'s budget with the backend\'s — two reads and two page writes throttled for a minute are waited out inside it, and the build succeeds', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const events = [];
+  const clock = movingClock();
+  const budget = makeThrottleBudget();
+  const httpClient = createAzHttpClient(PAGE_SERVICE, {
+    getToken: () => 'TOK', random: () => 0, throttle: budget, now: clock.now,
+    sleep: async (ms) => { events.push({ who: 'client', ms }); clock.advance(ms); },
+    request: pageTransport(server, (n) => (n <= 2 ? throttledRead(60) : undefined)),
+  });
+  server.failBatch = (n) => (n <= 2 ? { status: 429, headers: { 'retry-after': '60' } } : undefined);
+  const genpage = makeGenpageSdk(PAGE_SERVICE, { httpClient, random: () => 0, sleep: async (ms) => { events.push({ who: 'backend', ms }); clock.advance(ms); } });
+  try {
+    const out = await driveBuild(spec, appDir, {
+      genpage, runOpts: pagesWorkspace(appDir), opts: { retryDelayMs: undefined },
+      deps: { throttle: budget, sleep: async (ms) => { events.push({ who: 'build', ms }); } },
+    });
+    assert.strictEqual(out.halt, null);
+    assert.strictEqual(out.result.ok, true);
+    assert.strictEqual(out.attempts, 1);
+    assert.strictEqual(server.state.projects.size, 1, 'one page');
+    assert.deepStrictEqual(events.filter((e) => e.who === 'client').map((e) => e.ms), [60000, 60000], 'the client waited out the two throttled reads');
+    assert.deepStrictEqual(events.filter((e) => e.who === 'backend').map((e) => e.ms), [60000, 60000], 'the backend the two throttled page writes');
+    assert.deepStrictEqual(events.filter((e) => e.who === 'build'), []);
+    assert.strictEqual(budget.spentMs(), 240000, 'and all four are the budget\'s: four of the five minutes');
+  } finally {
+    await genpage.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test('deploy: ten minutes of throttling in all are no longer waited out — five reads throttled for a minute take the whole budget, and the page write that is throttled after them stops the build with the budget\'s halt', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const events = [];
+  const clock = movingClock();
+  const budget = makeThrottleBudget();
+  const httpClient = createAzHttpClient(PAGE_SERVICE, {
+    getToken: () => 'TOK', random: () => 0, throttle: budget, now: clock.now,
+    sleep: async (ms) => { events.push({ who: 'client', ms }); clock.advance(ms); },
+    request: pageTransport(server, (n) => (n <= 5 ? throttledRead(60) : undefined)),
+  });
+  server.failBatch = (n) => (n <= 5 ? { status: 429, headers: { 'retry-after': '60' } } : undefined);
+  const genpage = makeGenpageSdk(PAGE_SERVICE, { httpClient, random: () => 0, sleep: async (ms) => { events.push({ who: 'backend', ms }); clock.advance(ms); } });
+  try {
+    const out = await driveBuild(spec, appDir, {
+      genpage, runOpts: pagesWorkspace(appDir), opts: { retryDelayMs: undefined },
+      deps: { throttle: budget, sleep: async (ms) => { events.push({ who: 'build', ms }); } },
+    });
+    assert.ok(out.halt, 'the build stops: the service throttled for ten minutes, and a run waits five at most');
+    assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+    assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: a later run goes on from here');
+    assert.match(out.halt.message, /the service asked to wait 60 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(300 s are spent\)\. Nothing more is sent now: run the same command again later, and it continues from here\./);
+    assert.strictEqual(out.attempts, 1, 'and the run is not run again to be refused again');
+    assert.deepStrictEqual(events.filter((e) => e.who === 'client').map((e) => e.ms), [60000, 60000, 60000, 60000, 60000], 'the client waited out the five throttled reads — five minutes');
+    assert.deepStrictEqual(events.filter((e) => e.who !== 'client'), [], 'and nothing else was waited for');
+    assert.strictEqual(budget.spentMs(), 300000);
+    assert.strictEqual(server.batches.length, 1, 'the page write was sent once, and refused');
+    assert.strictEqual(server.state.projects.size, 0, 'nothing was written');
+    assert.strictEqual(pendingOf(spec, appDir).size, 0, 'and no creation is left under way');
+  } finally {
+    await genpage.dispose();
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+// The pages phase makes its page backend itself, and the backend its own HTTP client: this is the production path, with the budget the build was given reaching the client through the engine and the backend, and nothing injected
+// but the transport under the client (the module's `createAzHttpClient` is the one thing replaced, so that the client it makes talks to the fake page service on a clock the test holds).
+test('deploy: the budget reaches the HTTP client the pages phase makes for itself — a read the service throttles for ten minutes is not waited for, nothing is written, and the build stops with the budget\'s halt, naming what the service asked', async (t) => {
+  const clientModule = require('../lib/sdk-http-client.js');
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { appDir, spec } = onePageApp('Overview');
+  fs.writeFileSync(path.join(appDir, 'p.tsx'), PAGE_SOURCE, 'utf8');
+  const server = new FakeGenPageServer();
+  const events = [];
+  const made = [];
+  const create = clientModule.createAzHttpClient;
+  t.mock.method(clientModule, 'createAzHttpClient', (env, deps) => {
+    made.push(deps);
+    return create(env, { ...deps, getToken: () => 'TOK', random: () => 0, sleep: async (ms) => { events.push({ who: 'client', ms }); }, request: pageTransport(server, () => throttledRead(600)) });
+  });
+  const budget = makeThrottleBudget();
+  try {
+    const out = await driveBuild(spec, appDir, {
+      runOpts: pagesWorkspace(appDir), opts: { retryDelayMs: undefined },
+      deps: { throttle: budget, sleep: async (ms) => { events.push({ who: 'build', ms }); } },
+    });
+    assert.strictEqual(made.length, 1, 'the pages phase made one backend, and the backend one client');
+    assert.strictEqual(made[0].throttle, budget, 'with the very budget the build was given');
+    assert.ok(out.halt, 'the build stops');
+    assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+    assert.strictEqual(out.halt.phase, 'pages');
+    assert.strictEqual(isTransientHalt(out.halt), true);
+    assert.match(out.halt.message, /^pages stopped: the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)\. Nothing more is sent now: run the same command again later, and it continues from here\.$/);
+    assert.strictEqual(out.attempts, 1, 'the run is not run again to meet the same answer');
+    assert.deepStrictEqual(events, [], 'nothing was waited for, by the client or by the build');
+    assert.strictEqual(budget.spentMs(), 0);
+    assert.strictEqual(budget.declined().count, 1, 'the client told the budget once');
+    assert.strictEqual(server.batches.length, 0, 'and nothing was sent');
+    assert.strictEqual(server.state.projects.size, 0);
+    assert.strictEqual(pendingOf(spec, appDir).size, 0);
+  } finally {
     fs.rmSync(appDir, { recursive: true, force: true });
   }
 });

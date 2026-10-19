@@ -48,6 +48,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf } = require('./lib/genpage-sdk.js');
+const { makeThrottleBudget } = require('./lib/throttle-budget.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
 const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
@@ -393,9 +394,10 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   });
   if (styleProblems.length && !flags['page-id']) return emit(false, stylesRefusal(styleProblems));
 
-  // A throttled page write is waited out for up to five minutes (lib/throttle-budget.js). A wait of more than a few seconds is announced on stderr — stdout carries the JSON result — so that
-  // a command that is silent for minutes is not mistaken for a hung one.
-  const genpage = makeBackend(flags.env, { warn: (message) => process.stderr.write(`WARNING: ${message}\n`) });
+  // The waiting a run does for a throttled service is bounded at five minutes (lib/throttle-budget.js): this one budget is the page write's and the backend's HTTP client's alike — its reads and its publish wait out a throttle too. A wait of more
+  // than a few seconds is announced on stderr — stdout carries the JSON result — so that a command that is silent for minutes is not mistaken for a hung one.
+  const warn = (message) => process.stderr.write(`WARNING: ${message}\n`);
+  const genpage = makeBackend(flags.env, { warn, throttle: makeThrottleBudget({ warn }) });
   // The backend's workspace is removed BEFORE anything is reported: emitResult calls process.exit, so a cleanup placed after an emit never
   // runs, and that workspace holds the page's source. dispose() answers when the storage calls the backend had under way have settled and the
   // folder is gone — or says, in `{ left }`, which folder is not (a handle a scanner holds), and that is reported with the result: a success that left

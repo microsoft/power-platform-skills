@@ -2199,6 +2199,23 @@ test('REAL SDK: a throttle that asks for longer than the budget stops the upload
   assert.strictEqual(fs.existsSync(markerPath(file)), false, 'and no base is recorded for a page that was not written');
 });
 
+// The upload is a run of one write, and the budget that bounds its waiting is one object: the write's resends and the backend's own HTTP client — whose reads and publish wait out a throttle too — draw from the same five minutes, so the
+// script hands its backend the budget, with the seam that writes its long waits on stderr as WARNING lines.
+test('REAL SDK: the upload hands its backend ONE budget, whose long waits are WARNING lines on stderr — the write and the backend\'s own HTTP client draw from it', async (t) => {
+  const server = serverWithAccount();
+  const handed = [];
+  const written = [];
+  t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+  const backend = realBackend(server);
+  const r = await run(['--env', INSTANCE, '--code-file', codeFile(SOURCE), '--name', 'Budgeted page', ...P, '--agent-message', 'm'], (env, fromScript = {}) => { handed.push(fromScript); return backend(env, fromScript); });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(handed.length, 1, 'one backend');
+  const { throttle } = handed[0];
+  assert.ok(throttle && ['fits', 'spend', 'announce', 'decline', 'declined', 'note'].every((name) => typeof throttle[name] === 'function'), 'with a budget');
+  throttle.announce('a long wait', 60000);
+  assert.deepStrictEqual(written.filter((line) => /a long wait/.test(line)), ['WARNING: a long wait\n'], 'whose announcements are the WARNING lines the script writes');
+});
+
 // The page is normalized once: a file that starts with TWO byte order marks loses the encoding marker only, in the check, the hash and the page.
 test('REAL SDK: a file that starts with two byte order marks is checked, hashed and stored as the same text — one mark is the encoding, the other is content', async () => {
   const server = serverWithAccount();

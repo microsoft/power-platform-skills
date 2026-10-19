@@ -6143,9 +6143,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // also avoids spinning up genpage enumeration for every page-less app build).
   if (has('pages') && ((spec.pages || []).length || appWasExisting)) {
     // The page backend: the SDK on a throwaway workspace of its own, removed in the finally below (never the app folder's, whose copies of a
-    // page would be stale the moment anyone saved it). `opts.genpage` is a seam for the tests, and is the caller's to dispose.
+    // page would be stale the moment anyone saved it). `opts.genpage` is a seam for the tests, and is the caller's to dispose. The run's throttle budget
+    // (`opts.throttle`) is handed to it, so the HTTP client it makes draws its waits for a throttled read or publish from the same five minutes as the page writes do.
     const ownGenpage = !opts.genpage;
-    const genpage = opts.genpage || makeGenpageSdk(opts.env);
+    const genpage = opts.genpage || makeGenpageSdk(opts.env, { throttle: opts.throttle });
     const appUnique = appUniqueName(spec);
     // Recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun.

@@ -76,13 +76,14 @@ function assertWorkspaceDir(workspaceDir, { create }) {
 //                  which environment it belongs to, and the answer comes back as `folderNote` so the
 //                  preview can warn that an --apply would stop. Construction is offline (no token
 //                  until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true } = {}) {
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle } = {}) {
   // A link at the workspace root would make the provision SDK's storage follow it. Refuse
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
   assertWorkspaceDir(workspaceDir, { create: persistent });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
-  const httpClient = createAzHttpClient(env);
+  // The one client of both SDK instances and of verify's isolated reader draws its waits for a throttled answer from the run's budget (`throttle`, made by main()).
+  const httpClient = createAzHttpClient(env, { throttle });
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -417,10 +418,11 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
-  // One budget for the waiting the BUILD'S OWN retry layers add when a service throttles — the page backend's waits between the sends of a page write (a `$batch` the HTTP client never re-sends) and this loop's own waits before it runs
-  // a phase again — so the run can neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js). It is NOT a bound on all the waiting a run does:
-  // the production HTTP client re-sends a throttled read, publish, delete or column create on a schedule of its own (at most five re-sends, honouring a `Retry-After` of up to a minute), exactly as it did before there was a budget, and
-  // that is not charged to it — a throttled build that succeeds today would otherwise halt. `now` is the clock the page backend stamps the moment before which nothing may be sent on (`retryNotBefore`): a test seam, with `sleep`.
+  // One budget for all the waiting a run does when a service throttles — the HTTP client's waits before it sends a throttled read, publish, delete or column create again, the page backend's waits between the sends of a page write (a `$batch` the
+  // client never re-sends) and this loop's own waits before it runs a phase again — so the run can neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js).
+  // main() makes it before the SDK and hands it to the client the SDK is made over, to the page backend (through the engine's `throttle`) and here (`deps.throttle`); a caller that gives none gets one of its own, which only the layers it is handed to
+  // draw from. The waits that are not for a throttle — a 5xx, a reset connection, a deadlock victim — keep the clients' own schedules and are not drawn. `now` is the clock the page backend stamps the moment before which nothing may be sent on
+  // (`retryNotBefore`): a test seam, with `sleep`.
   const throttle = deps.throttle || makeThrottleBudget({ warn: deps.warn });
   const now = deps.now || Date.now;
   let authorizedFormRemovals;
@@ -648,8 +650,11 @@ async function buildModelApp(spec, opts, deps) {
   // no list (one thrown before the engine, or by a stand-in for it) leaves it as it was.
   let owedLengths = [];
   let r;
+  // How many waits the HTTP client has been refused by the budget (lib/throttle-budget.js, `declined`): the count at the start of a run of the phases says whether one happened in it.
+  const declinedCount = () => (typeof throttle.declined === 'function' ? throttle.declined().count : 0);
   for (let attempt = 1; ; attempt++) {
     counts.ok = counts.skip = counts.error = 0; // summary reflects the final (successful) attempt
+    const declinedBefore = declinedCount();
     try {
       r = await runBuild(spec, {
         sdk: deps.sdk,
@@ -690,18 +695,27 @@ async function buildModelApp(spec, opts, deps) {
       collectOwedPublishes(owedAcrossAttempts, err && err.owedPublishes);
       if (err && Array.isArray(err.owedLengths)) owedLengths = err.owedLengths;
       let halted = err;
-      if (attempt <= maxRetries && isTransientHalt(err, { spec })) {
+      const transient = isTransientHalt(err, { spec });
+      const ask = transient ? throttleAskOf(err) : null;
+      // The words of the halt for a wait that does not fit: stop, and say what the service asked. The build is idempotent, so a later run goes on from here.
+      const budgetHalt = (askedMs, waitMs) => new BuildHalt(`${err && err.phase ? `${err.phase} stopped` : 'the build stopped'}: ${waitDoesNotFit(throttle, { askedMs, waitMs })}`, {
+        phase: err && err.phase, code: 'throttle-budget-exhausted', recoverable: true, cause: err, retry: retryPolicyFor(err), statusCode: 429,
+      });
+      // A throttle that stopped a request in THIS run of the phases: the HTTP client draws its waits from the budget too, and a wait that does not fit is not taken — the answer comes back as the 429 it is, which carries nothing of what the service
+      // asked (the SDK's error holds no headers), and the client tells the budget instead (`declined`, lib/throttle-budget.js). The service said it was not ready for longer than the run may wait, so running the phases again would meet the
+      // same answer: stop here, as for a wait of the build's own that does not fit — and so on the last run as on the first.
+      const refused = transient && ask.throttled && declinedCount() > declinedBefore ? throttle.declined() : null;
+      if (refused) {
+        halted = budgetHalt(Math.max(ask.askedMs, refused.askedMs), refused.waitMs);
+      } else if (attempt <= maxRetries && transient) {
         const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
         // What the service asked of the next send, carried across the layers (retry-policy.js, throttleAskOf): when the page backend's sends ran out it handed over the moment before which nothing may be
         // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
-        const ask = throttleAskOf(err);
         const asked = ask.notBefore > 0 ? Math.ceil(Math.min(ask.askedMs || Infinity, Math.max(0, ask.notBefore - now())) / 1000) * 1000 : 0;
         const delay = Math.max(backoff, asked);
         if (ask.throttled && !throttle.fits(delay)) {
-          // The wait does not fit what is left of the run's budget: stop, and say what the service asked. The build is idempotent, so a later run goes on from here.
-          halted = new BuildHalt(`${err && err.phase ? `${err.phase} stopped` : 'the build stopped'}: ${waitDoesNotFit(throttle, { askedMs: ask.askedMs || asked, waitMs: delay })}`, {
-            phase: err && err.phase, code: 'throttle-budget-exhausted', recoverable: true, cause: err, retry: retryPolicyFor(err), statusCode: 429,
-          });
+          // The wait does not fit what is left of the run's budget.
+          halted = budgetHalt(ask.askedMs || asked, delay);
         } else {
           if (ask.throttled) throttle.spend(delay);
           if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
@@ -1151,7 +1165,10 @@ async function main() {
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
   // Only an apply opens (and so binds) the app folder's workspace; a dry run works in a throwaway one and
   // hands back a note when the folder would stop an --apply.
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply });
+  // The run's budget for waiting out a throttled service (lib/throttle-budget.js), made before anything that sends so that every layer draws from the one: the HTTP client the SDK is made over, the page backend (through the engine's
+  // `throttle`) and the build's own retry loop (`deps.throttle`). A wait of more than a few seconds is announced on stderr — stdout carries the JSON result.
+  const throttle = makeThrottleBudget({ warn: (m) => process.stderr.write(`⚠ ${m}\n`) });
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle });
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -1206,7 +1223,7 @@ async function main() {
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
-      sdk, provisionSdk, journal,
+      sdk, provisionSdk, journal, throttle,
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to
       // need the raw client plus the org URL — omitting them degraded silently, so `--apply --verify`
@@ -1216,7 +1233,7 @@ async function main() {
       verify: async (s, verifyOpts) => {
         // The page reads go through a backend of their own, in a throwaway workspace — not the app folder's `.maker-workspace`, which
         // would be left holding a copy of every page read — removed as soon as this verify ends.
-        const genpage = makeGenpageSdk(env);
+        const genpage = makeGenpageSdk(env, { throttle });
         try {
           return await verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir, isolatedReader }), verifyOpts);
         } finally {

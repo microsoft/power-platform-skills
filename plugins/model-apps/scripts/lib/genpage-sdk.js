@@ -689,7 +689,7 @@ function makeGenpageSdk(env, deps = {}) {
             // The SDK's transport, limited for a page edit of an app (see appScope above and `pushApp`), and watched, so a refused page write's Retry-After reaches this backend, and so does what a change set
             // refused as a whole proved (watchThrottles): the SDK's error for either carries no headers and no part. The watch is the inner layer, next to the transport, so what it hears is what the service
             // answered: a post the limit answers itself (an AddAppComponents left with nothing to add) never reached the service.
-            httpClient: appScope.wrap(watchThrottles(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env), (ms) => { asked = Math.max(asked, ms); }, deps.now, (found) => { refusal = found; })),
+            httpClient: appScope.wrap(watchThrottles(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env, { throttle: deps.throttle }), (ms) => { asked = Math.max(asked, ms); }, deps.now, (found) => { refusal = found; })),
             // A page's file downloads overlap (four at a time): a read of a page is its rows' bytes, one request each.
             readConcurrency: 4,
             ...(options.languageCode ? { languageCode: options.languageCode } : {}),
@@ -774,7 +774,7 @@ function makeGenpageSdk(env, deps = {}) {
 
   // A first send the service REFUSED with a throttle (HTTP 429) — as a whole request, or as the one failing part of a change set it answered with HTTP 200 — waited out and sent again — at most THROTTLE_RESENDS times, six sends in
   // all — and the answer of the last one. The wait is the HTTP client's schedule for every other throttled request (throttleBackoffMs), or what the answer's Retry-After asks when that is longer, WHOLE (watchThrottles): what
-  // fits is the budget's to say. Every wait comes out of the run's throttle budget (lib/throttle-budget.js), the same one the build's own waits come out of; the wait that does not fit is not taken, nothing more is sent, and the
+  // fits is the budget's to say. Every wait comes out of the run's throttle budget (lib/throttle-budget.js), the same one the build's own waits and the HTTP client's come out of; the wait that does not fit is not taken, nothing more is sent, and the
   // answer comes back marked `stopped` for the caller to say so. Why a send that follows a 429 is safe, and why it is made here and not by the HTTP client re-sending the request (as it does for a conditional delete):
   //  - A 429 is the service declining to START the request: the change set is atomic, so nothing in it committed. The page is as unsent as it was.
   //  - And even a request that had been processed could not write a page twice. A create's ids — the page's, and those of its rows — are minted before the first send, so a second send meets the first and is rolled back whole (the
@@ -817,8 +817,9 @@ function makeGenpageSdk(env, deps = {}) {
     : messageOf(pushed.error));
   // What an operation says of a write that was throttled and then taken: why it was slow, and that the page was written once. `waited` is what pushThroughThrottle recorded.
   const throttleNote = (what, waited) => `the service throttled the write of ${what} (HTTP 429) ${waited.length === 1 ? 'once' : `${waited.length} times`}: a refused request writes nothing, so it was sent again after waiting ${waited.map((ms) => `${Math.round(ms / 100) / 10} s`).join(', ')}, and written once`;
-  // The budget an operation spends its waits from: the run's, which the build hands to every page write (`args.throttle`), or — for a caller that has none, such as the upload script — one of its own for this write.
-  const budgetOf = (args) => (args && args.throttle && typeof args.throttle.fits === 'function' ? args.throttle : makeThrottleBudget({ warn: deps.warn }));
+  // The budget an operation spends its waits from: the run's, which the build hands to every page write (`args.throttle`); else the one the backend was handed (`deps.throttle`: the upload script's, which hands it to its backend because it is a
+  // run of one write, and which the backend's own HTTP client draws from as well); else — for a caller that has none — one of its own for this write.
+  const budgetOf = (args) => (args && args.throttle && typeof args.throttle.fits === 'function' ? args.throttle : deps.throttle && typeof deps.throttle.fits === 'function' ? deps.throttle : makeThrottleBudget({ warn: deps.warn }));
 
   // Publish the page and prove the published copy is the one just written. The SDK answers `publish.kind`:
   //   'verified'      the published projection serves exactly what was saved

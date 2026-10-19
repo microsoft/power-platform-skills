@@ -50,7 +50,8 @@ const DEADLOCK_RESENDS = 3;
 // The longest `Retry-After` honoured in full. Dataverse's service protection limits answer 429 with
 // `Retry-After` in seconds and ask the caller to wait that long; a request sent sooner is refused again
 // and spends one of the few attempts. The cap keeps a large value from stalling a build or a teardown
-// for minutes per attempt.
+// for minutes per attempt. A client given a run's throttle budget (`deps.throttle`) does not use it for a throttled answer: the budget
+// bounds all of its waits together, and what the service asked is waited whole when it fits and not at all when it does not.
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations
 const RETRY_AFTER_CAP_MS = 60000;
 
@@ -65,8 +66,8 @@ const RAW_VALUE = /\/\$value(?:\?|$)/;
  *   Retry-After: Wed, 30 Sep 2026 10:00:20 GMT
  * Node lowercases response header names; a test double may not, so the name is matched case-insensitively.
  * The cap is for this client's own retries, which must not stall a build for minutes per attempt. A caller that has a bound of its own on the whole of what it waits passes `Infinity` and gets the
- * service's request as it is, to decide for itself whether it fits: solution-settings.js, when it sends a refused import again, inside one budget for the whole retry; and the page backend, which spends a
- * run's throttle budget (lib/throttle-budget.js).
+ * service's request as it is, to decide for itself whether it fits: solution-settings.js, when it sends a refused import again, inside one budget for the whole retry; the page backend, which spends a
+ * run's throttle budget (lib/throttle-budget.js); and this client itself when it was given that budget, for the throttled answers it waits out (waitOutThrottle).
  * See: https://www.rfc-editor.org/rfc/rfc9110#field.retry-after
  */
 function retryAfterMs(headers, now = Date.now(), cap = RETRY_AFTER_CAP_MS) {
@@ -572,8 +573,10 @@ function scrubBearer(text, headers) {
 /**
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
- * @param {object} [deps] - test seam: { getToken(orgUrl)->string|null, request(opts)->Promise }, and one policy a caller may set:
- *   `sendOnce(method, url)` -> true for a request that must be sent exactly once, whatever answers it (see `once` in `call`).
+ * @param {object} [deps] - test seam: { getToken(orgUrl)->string|null, request(opts)->Promise }, and two things a caller may set:
+ *   `sendOnce(method, url)` -> true for a request that must be sent exactly once, whatever answers it (see `once` in `call`); and
+ *   `throttle`, the budget a run allows itself for waiting out a throttled service (lib/throttle-budget.js: `fits`, `spend`, `announce`, `decline`, `note`), which every wait this client takes for a throttled answer (HTTP 429) is
+ *   then drawn from — see `waitOutThrottle`. A client given none waits exactly as it always did, and the pcf plugin, which has none, never passes one.
  * @returns {{get,post,patch,delete,put,postRaw,patchRaw}}
  */
 function createAzHttpClient(orgUrl, deps = {}) {
@@ -635,6 +638,33 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // The wait before re-sending an answered request: the backoff above, or longer when the answer asks
   // for longer in `Retry-After` (retryAfterMs, capped).
   const retryWaitMs = (res, attempt) => Math.max(backoffMs(attempt), retryAfterMs(res.headers, now()));
+
+  // The run's budget for waiting out a throttle (lib/throttle-budget.js), when the caller gave one — and it must have everything this client calls on it, or it is no budget. This file is copied into the pcf plugin, which has no
+  // budget and no such module, so the budget is something a caller hands in and never something this file loads: a client made without one waits exactly as it always did.
+  const throttle = ['fits', 'spend', 'announce', 'decline', 'note'].every((name) => deps.throttle && typeof deps.throttle[name] === 'function') ? deps.throttle : null;
+  // What THROTTLING is here: the service refusing a request because of its limits — HTTP 429, alone or as every operation of a `$batch`. A 5xx is not: a customization lock or a SQL deadlock victim is a 500, and a gateway's hiccup a 502, 503
+  // or 504, each is re-sent on its own schedule (with the Retry-After it carries, capped at a minute), and neither is a reset connection. None of those waits is the budget's.
+  //
+  // The wait before a throttled request is sent again, for a client that has a budget: the schedule's wait or what the service asked in `Retry-After`, whichever is longer — and the ask WHOLE, not capped at a minute. The cap keeps a large value
+  // from stalling a run for minutes on every attempt, which the budget now does for all the attempts together, and a request sent before the service is ready is refused again and spends one of its six attempts. The wait is drawn from the budget,
+  // placed on the clock (`at`: the requests this client sends at once are throttled alike and wake together, and what the run waited is the time it spent waiting, not the sum of their waits), and announced when it is long.
+  // Resolves true when the wait was taken. It resolves false when the wait does not fit: nothing is waited for, and the caller hands the throttled answer back as it came — as it does when the sends run out — so what the SDK reports is the 429 it is, a
+  // refusal that started nothing. That answer says nothing of what the service asked (the SDK's error holds no headers) or of why no more was sent, so the budget is told (`decline`), and the build, which owns the halt, says it.
+  // See https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations for what a service protection limit asks of the caller.
+  async function waitOutThrottle({ res, attempt, method, url, batch }) {
+    const at = now();
+    // `batch`: an operation refused inside a `$batch` answer carries its own Retry-After, which the outer response need not repeat.
+    const asked = Math.max(retryAfterMs(res.headers, at, Infinity), batch ? batchRetryAfterMs(res, at, Infinity) : 0);
+    const wait = Math.max(backoffMs(attempt), asked);
+    if (!throttle.fits(wait, at)) {
+      throttle.decline({ askedMs: asked, waitMs: wait });
+      return false;
+    }
+    const added = throttle.spend(wait, at);
+    throttle.announce(`the service throttled ${method} ${new URL(url).pathname} (HTTP 429); waiting ${Math.ceil(wait / 1000)} s before sending it again (${throttle.note()})`, added);
+    await sleep(wait);
+    return true;
+  }
 
   // Every access token this client has sent — the one a 401 refresh replaced as well as the one that replaced it, because a service may repeat either — for taking it out of an answer that is not a success
   // and out of a transport failure's text (the scrubber above). A success is never given to these.
@@ -722,6 +752,24 @@ function createAzHttpClient(orgUrl, deps = {}) {
     // (429, 5xx) keeps the status retry above; that trade-off is unchanged.
     const conditional = isWrite && Object.keys((options && options.headers) || {}).some((h) => h.toLowerCase() === 'if-match');
 
+    // What the caller is given for an answer that is not sent again — the last the loop got, or a throttled one a budgeted client did not wait for. An answer that is not a success is what an SDK makes an error message of (it quotes the body, and the
+    // scripts print that message), so the token is taken out of it first — the body in whatever mode it is read in, and the headers. A success is the caller's data and is returned exactly as it came.
+    const deliver = (res) => {
+      if (!(res.statusCode >= 200 && res.statusCode < 300)) {
+        const text = (value) => (typeof value === 'string' ? scrubText(value) : value);
+        return {
+          status: res.statusCode,
+          headers: scrubValue(res.headers || {}),
+          body: ctl.bytes ? scrubBytes(res.body) : ctl.rawBody ? text(res.body) : scrubValue(parseBody(text(res.body))),
+        };
+      }
+      return {
+        status: res.statusCode,
+        headers: res.headers || {},
+        body: ctl.rawBody || ctl.bytes ? res.body : parseBody(res.body),
+      };
+    };
+
     // Retry: refresh the token once on 401 (no backoff); back off on transient 5xx/429.
     // 6 attempts with capped jittered backoff rides out a per-entity customization lock that
     // can stay held for ~20s while a prior metadata op or publish settles.
@@ -775,6 +823,12 @@ function createAzHttpClient(orgUrl, deps = {}) {
         continue;
       }
       if (TRANSIENT.has(res.statusCode) && !last && !noRetry) {
+        // A throttle (HTTP 429) is waited out inside the run's budget when the client has one, and handed back as it came when the wait does not fit (waitOutThrottle). What else is re-sent here — a customization lock or a deadlock
+        // victim (500), a gateway (502, 503, 504) — is not throttling, and keeps its own schedule.
+        if (throttle && res.statusCode === 429) {
+          if (await waitOutThrottle({ res, attempt, method: method_, url })) continue;
+          return deliver(res);
+        }
         await sleep(retryWaitMs(res, attempt));
         continue;
       }
@@ -803,6 +857,10 @@ function createAzHttpClient(orgUrl, deps = {}) {
       // has not said that of.
       const throttled = !once && ((recordDelete && res.statusCode === 429) || ((conditionalDeleteBatch || columnCreateBatch) && isBatchThrottled(res)));
       if (throttled && !last) {
+        if (throttle) {
+          if (await waitOutThrottle({ res, attempt, method: method_, url, batch: isBatch })) continue;
+          return deliver(res);
+        }
         // A batch refused operation by operation may carry the wait in that operation's own headers.
         await sleep(Math.max(retryWaitMs(res, attempt), isBatch ? batchRetryAfterMs(res, now()) : 0));
         continue;
@@ -813,21 +871,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         await sleep(1000 * 2 ** attempt);
         continue;
       }
-      // An answer that is not a success is what an SDK makes an error message of (it quotes the body, and the scripts print that message), so the token is taken out of it first — the body in whatever
-      // mode it is read in, and the headers. A success is the caller's data and is returned exactly as it came.
-      if (!(res.statusCode >= 200 && res.statusCode < 300)) {
-        const text = (value) => (typeof value === 'string' ? scrubText(value) : value);
-        return {
-          status: res.statusCode,
-          headers: scrubValue(res.headers || {}),
-          body: ctl.bytes ? scrubBytes(res.body) : ctl.rawBody ? text(res.body) : scrubValue(parseBody(text(res.body))),
-        };
-      }
-      return {
-        status: res.statusCode,
-        headers: res.headers || {},
-        body: ctl.rawBody || ctl.bytes ? res.body : parseBody(res.body),
-      };
+      return deliver(res);
     }
     /* istanbul ignore next */
     throw new Error('Unreachable retry loop');

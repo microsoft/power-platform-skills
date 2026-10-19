@@ -1461,6 +1461,259 @@ test('retryAfterMs and batchRetryAfterMs cap what they read at RETRY_AFTER_CAP_M
   assert.strictEqual(batchRetryAfterMs({ body: part }, NOW, Infinity), 600000);
 });
 
+// ── A run's throttle budget ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// The client's waits for a THROTTLED answer — HTTP 429, alone or as every operation of a `$batch` — are drawn from the budget a run allows itself for waiting out a throttled service (lib/throttle-budget.js) when the caller
+// gives one (`deps.throttle`; the pcf plugin, which keeps a copy of this file, has none, and a client made without one waits exactly as it always did). A budgeted client waits what the service asked WHOLE — the cap of a minute is for
+// the client's own bound, which the budget now is — and a wait that does not fit is not taken: the throttled answer comes back as it came, as when the sends run out, and the budget is told what the service asked. What is not
+// throttling keeps its own schedule and is never drawn: a 5xx (a customization lock, a SQL deadlock, a gateway), a transport failure. Every wait here runs on a clock the wait moves, as a real one does.
+const { makeThrottleBudget, waitDoesNotFit } = require('../lib/throttle-budget.js');
+const ORG = 'https://org.crm.dynamics.com';
+const READ = `${ORG}/api/data/v9.2/accounts`;
+const CLOCK_START = Date.parse('2026-09-30T10:00:00Z');
+// A budget, and the deps of a client that waits on a clock its waits move: what the waits were, and the lines the budget said.
+function budgeted({ totalMs, spent = 0 } = {}) {
+  let clock = CLOCK_START;
+  const lines = [];
+  const slept = [];
+  const throttle = makeThrottleBudget({ ...(totalMs ? { totalMs } : {}), warn: (message) => lines.push(message) });
+  if (spent) throttle.spend(spent);
+  return { throttle, lines, slept, clock: () => clock, deps: { throttle, now: () => clock, random: () => 0, sleep: async (ms) => { slept.push(ms); clock += ms; } } };
+}
+const throttledAnswer = (retryAfter) => ({
+  statusCode: 429,
+  headers: retryAfter === undefined ? {} : { 'retry-after': String(retryAfter) },
+  body: JSON.stringify({ error: { code: '0x80072322', message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.' } }),
+});
+const taken = { statusCode: 200, headers: {}, body: '{"ok":true}' };
+const clientOf = (transport, run, extra = {}) => createAzHttpClient(ORG, { getToken: () => 'TOK', request: transport.request, ...run.deps, ...extra });
+const partRefused = (retryAfter) => ['HTTP/1.1 429 Too Many Requests' + (retryAfter ? `\r\nRetry-After: ${retryAfter}` : ''), '{}'];
+// Lets the requests that are under way run to the point where they wait: each of them takes a few turns of the event loop to get its answer.
+const settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+
+test('budgeted: a throttled read draws each wait from the budget — the schedule\'s, or the answer\'s Retry-After WHOLE even past the client\'s cap — and the long ones are said on the warn seam', async () => {
+  // No Retry-After: the schedule (1 s, 2 s), which is quiet.
+  const quiet = budgeted();
+  const t1 = fakeTransport(() => (t1.calls.length <= 2 ? throttledAnswer() : taken));
+  assert.strictEqual((await clientOf(t1, quiet).get(READ)).status, 200);
+  assert.deepStrictEqual(quiet.slept, [1000, 2000]);
+  assert.strictEqual(quiet.throttle.spentMs(), 3000, 'each wait is counted, and the budget holds exactly what was waited');
+  assert.deepStrictEqual(quiet.lines, [], 'waits of up to five seconds are not worth a line');
+  // A minute and a half: longer than the cap of a minute the client keeps for itself, and it is waited whole.
+  const long = budgeted();
+  const t2 = fakeTransport(() => (t2.calls.length <= 1 ? throttledAnswer(90) : taken));
+  assert.strictEqual((await clientOf(t2, long).get(READ)).status, 200);
+  assert.deepStrictEqual(long.slept, [90000], 'what the service asked, whole');
+  assert.strictEqual(long.throttle.spentMs(), 90000);
+  assert.deepStrictEqual(long.lines, ['the service throttled GET /api/data/v9.2/accounts (HTTP 429); waiting 90 s before sending it again (90 s of the 5 minutes a run allows itself for waiting out a throttled service are spent)']);
+  // The date form of Retry-After is read against the clock of the client.
+  const dated = budgeted();
+  const t3 = fakeTransport(() => (t3.calls.length <= 1 ? { ...throttledAnswer(), headers: { 'retry-after': 'Wed, 30 Sep 2026 10:01:15 GMT' } } : taken));
+  await clientOf(t3, dated).get(READ);
+  assert.deepStrictEqual(dated.slept, [75000]);
+  assert.strictEqual(dated.throttle.spentMs(), 75000);
+  // The schedule is the floor: a short ask waits the schedule's wait, as ever.
+  const short = budgeted();
+  const t4 = fakeTransport(() => (t4.calls.length <= 1 ? throttledAnswer(1) : taken));
+  await clientOf(t4, short).get(READ);
+  assert.deepStrictEqual(short.slept, [1000]);
+  const longer = budgeted();
+  const t5 = fakeTransport(() => (t5.calls.length <= 3 ? throttledAnswer(1) : taken));
+  await clientOf(t5, longer).get(READ);
+  assert.deepStrictEqual(longer.slept, [1000, 2000, 4000], 'the schedule goes on growing under a short ask, and the budget holds all of it');
+  assert.strictEqual(longer.throttle.spentMs(), 7000);
+});
+
+test('budgeted: a wait that does not fit is not taken — the throttled answer comes back as it came, nothing is sent again, and the budget is told what the service asked', async () => {
+  const run = budgeted({ spent: 250000 });
+  const t = fakeTransport(throttledAnswer(120));
+  const res = await clientOf(t, run).get(READ);
+  assert.strictEqual(t.calls.length, 1, 'the request was sent once, and not again');
+  assert.deepStrictEqual(run.slept, [], 'and nothing was waited for');
+  assert.strictEqual(res.status, 429, 'the answer is the 429 the service gave, which the SDK reports as what it is');
+  assert.deepStrictEqual(res.body, JSON.parse(throttledAnswer().body), 'its body is as it came, parsed as any answer\'s is');
+  assert.strictEqual(res.headers['retry-after'], '120', 'and its headers');
+  assert.strictEqual(run.throttle.spentMs(), 250000, 'nothing is spent on a wait that was not taken');
+  assert.deepStrictEqual(run.throttle.declined(), { count: 1, askedMs: 120000, waitMs: 120000 });
+  assert.deepStrictEqual(run.lines, [waitDoesNotFit(run.throttle, { askedMs: 120000, waitMs: 120000 })], 'and the line says what the service asked');
+  // An ask longer than the whole budget stops the request at once, with nothing spent.
+  const huge = budgeted();
+  const th = fakeTransport(throttledAnswer(3600));
+  assert.strictEqual((await clientOf(th, huge).get(READ)).status, 429);
+  assert.strictEqual(th.calls.length, 1);
+  assert.deepStrictEqual([huge.slept, huge.throttle.spentMs(), huge.throttle.declined().askedMs], [[], 0, 3600000]);
+  // The same answer from a client with no budget is waited out on the schedule it always had: a minute at most per wait.
+  const slept = [];
+  const plain = fakeTransport(() => (plain.calls.length <= 1 ? throttledAnswer(3600) : taken));
+  const unbudgeted = createAzHttpClient(ORG, { getToken: () => 'TOK', request: plain.request, random: () => 0, sleep: async (ms) => { slept.push(ms); } });
+  assert.strictEqual((await unbudgeted.get(READ)).status, 200);
+  assert.deepStrictEqual(slept, [RETRY_AFTER_CAP_MS]);
+});
+
+test('budgeted: the budget ends a throttled request where the schedule would have gone on — what fits is waited, the first wait that does not fit is not, and the sends that were left are not made', async () => {
+  const run = budgeted({ totalMs: 20000 });
+  const t = fakeTransport(throttledAnswer());
+  const res = await clientOf(t, run).get(READ);
+  assert.deepStrictEqual(run.slept, [1000, 2000, 4000, 8000], '1, 2, 4 and 8 s are 15 of the 20 s');
+  assert.strictEqual(t.calls.length, 5, 'five sends; the sixth is not made, because the 8 s before it do not fit in the 5 that are left');
+  assert.strictEqual(res.status, 429);
+  assert.deepStrictEqual(run.throttle.declined(), { count: 1, askedMs: 0, waitMs: 8000 }, 'the service asked for nothing: the wait that did not fit is the schedule\'s');
+  assert.strictEqual(run.lines.length, 2);
+  assert.match(run.lines[0], /^the service throttled GET \/api\/data\/v9\.2\/accounts \(HTTP 429\); waiting 8 s before sending it again \(15 s of the 20 seconds a run allows itself/);
+  assert.match(run.lines[1], /^the next wait, 8 s, does not fit in what is left of the 20 seconds a run allows itself for waiting out a throttled service \(15 s are spent\)/);
+  // When the schedule ends first it is the sends that ran out, as ever, and the budget is not told of anything.
+  const roomy = budgeted();
+  const t2 = fakeTransport(throttledAnswer());
+  assert.strictEqual((await clientOf(t2, roomy).get(READ)).status, 429);
+  assert.strictEqual(t2.calls.length, 6, 'six sends in all');
+  assert.deepStrictEqual(roomy.slept, [1000, 2000, 4000, 8000, 8000]);
+  assert.strictEqual(roomy.throttle.spentMs(), 23000);
+  assert.strictEqual(roomy.throttle.declined().count, 0, 'the budget did not stop it');
+});
+
+test('budgeted: every wait of a throttled request is drawn — a record delete refused with 429, and a $batch of conditional deletes or of column creates refused in either shape, whole or by the Retry-After of one operation', async () => {
+  const batchHeaders = { headers: { 'Content-Type': 'multipart/mixed;boundary=batch_b' } };
+  const sends = [
+    ['a record delete', (http) => http.delete(`${ORG}/api/data/v9.0/solutions(1)`), UNINSTALL_429, 204],
+    ['conditional deletes, the whole request refused', (http) => postBatch(http, APP_DELETE), { statusCode: 429, headers: {}, body: '' }, 200],
+    ['conditional deletes, every operation refused', (http) => postBatch(http, APP_DELETE), { statusCode: 200, headers: {}, body: batchAnswer(partRefused(), partRefused()) }, 200],
+    ['column creates, the whole request refused', (http) => postBatch(http, COLUMNS), TABLE_LOCKED_429, 200],
+    ['column creates, every operation refused', (http) => postBatch(http, COLUMNS), { statusCode: 429, headers: {}, body: batchAnswer(partRefused(), partRefused()) }, 200],
+  ];
+  for (const [what, send, refused, then] of sends) {
+    const run = budgeted();
+    const t = fakeTransport(() => (t.calls.length <= 2 ? refused : { statusCode: then, headers: {}, body: then === 204 ? '' : BATCH_RESPONSE }));
+    const res = await send(clientOf(t, run));
+    assert.strictEqual(res.status, then, what);
+    assert.strictEqual(t.calls.length, 3, `${what}: sent again twice`);
+    assert.deepStrictEqual(run.slept, [1000, 2000], `${what}: on the schedule`);
+    assert.strictEqual(run.throttle.spentMs(), 3000, `${what}: and drawn from the budget`);
+  }
+  // The wait a refused operation asks for in its own headers is honoured whole, as the outer one is.
+  for (const [kind, batch] of [['conditional deletes', APP_DELETE], ['column creates', COLUMNS]]) {
+    const run = budgeted();
+    const t = fakeTransport(() => (t.calls.length <= 1 ? { statusCode: 429, headers: { 'retry-after': '10' }, body: batchAnswer(partRefused('150')) } : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
+    await postBatch(clientOf(t, run), batch);
+    assert.deepStrictEqual(run.slept, [150000], `${kind}: the longer of the outer and the operation's, whole, past the cap of a minute`);
+    assert.strictEqual(run.throttle.spentMs(), 150000);
+    // And one that does not fit comes back as it came, with what it asked said.
+    const full = budgeted({ spent: 200000 });
+    const t2 = fakeTransport({ statusCode: 429, headers: {}, body: batchAnswer(partRefused('150')) });
+    const res = await postBatch(clientOf(t2, full), batch);
+    assert.strictEqual(t2.calls.length, 1, `${kind}: not sent again`);
+    assert.strictEqual(res.status, 429);
+    assert.strictEqual(res.body, batchAnswer(partRefused('150')), `${kind}: and the answer is the raw envelope, as it came`);
+    assert.deepStrictEqual(full.throttle.declined(), { count: 1, askedMs: 150000, waitMs: 150000 });
+  }
+});
+
+test('budgeted: what is not throttling keeps its own schedule and is never drawn — a 5xx whatever Retry-After it carries, a transport failure, a SQL deadlock victim — even when the budget has nothing left', async () => {
+  const spentAll = () => budgeted({ spent: 300000 });
+  // A 5xx waits as it did: the schedule, or the Retry-After it carries up to the cap of a minute, and the budget does not hear of it.
+  for (const status of [500, 502, 503, 504]) {
+    const run = spentAll();
+    const t = fakeTransport(() => (t.calls.length <= 2 ? { statusCode: status, headers: { 'retry-after': '30' }, body: '' } : taken));
+    assert.strictEqual((await clientOf(t, run).get(READ)).status, 200, String(status));
+    assert.deepStrictEqual(run.slept, [30000, 30000], `${status}: the Retry-After it carried, capped as ever`);
+    assert.deepStrictEqual([run.throttle.spentMs(), run.throttle.declined().count], [300000, 0], `${status}: nothing was drawn, and nothing declined`);
+    const capped = spentAll();
+    const t2 = fakeTransport(() => (t2.calls.length <= 1 ? { statusCode: status, headers: { 'retry-after': '600' }, body: '' } : taken));
+    await clientOf(t2, capped).get(READ);
+    assert.deepStrictEqual(capped.slept, [RETRY_AFTER_CAP_MS], `${status}: a long Retry-After is capped at a minute, because it is not a throttle's`);
+  }
+  // A transport failure (a reset) waits the schedule and sends again.
+  const reset = spentAll();
+  const t3 = fakeTransport(() => (t3.calls.length <= 2 ? { error: 'read ECONNRESET', code: 'ECONNRESET' } : taken));
+  assert.strictEqual((await clientOf(t3, reset).get(READ)).status, 200);
+  assert.deepStrictEqual(reset.slept, [1000, 2000]);
+  assert.strictEqual(reset.throttle.spentMs(), 300000);
+  // A record delete and a change set of conditional deletes that lost a SQL deadlock are sent again on the deadlock's own schedule.
+  for (const [what, send, lost] of [['a record delete', (http) => http.delete(`${ORG}/api/data/v9.0/workflows(1)`), DEADLOCK_500], ['conditional deletes', (http) => postBatch(http, APP_DELETE), BATCH_DEADLOCK_500]]) {
+    const run = spentAll();
+    const t4 = fakeTransport(() => (t4.calls.length <= 3 ? lost : { statusCode: 204, headers: {}, body: '' }));
+    await send(clientOf(t4, run));
+    assert.strictEqual(t4.calls.length, 4, what);
+    assert.deepStrictEqual(run.slept, [1000, 2000, 4000], `${what}: 1 s, 2 s and 4 s`);
+    assert.deepStrictEqual([run.throttle.spentMs(), run.throttle.declined().count], [300000, 0], `${what}: none of it drawn`);
+  }
+});
+
+test('budgeted: a request the caller sends once is sent once — a 429 is handed back with nothing waited for, nothing drawn and nothing declined', async () => {
+  const run = budgeted();
+  const t = fakeTransport(() => (t.calls.length <= 1 ? throttledAnswer(30) : taken));
+  const res = await clientOf(t, run, { sendOnce: () => true }).get(READ);
+  assert.strictEqual(res.status, 429);
+  assert.strictEqual(t.calls.length, 1);
+  assert.deepStrictEqual([run.slept, run.throttle.spentMs(), run.throttle.declined().count], [[], 0, 0]);
+});
+
+test('budgeted: a client given nothing that is a budget waits as it always did', async () => {
+  for (const throttle of [undefined, null, {}, 'five minutes', { fits: true }]) {
+    const slept = [];
+    const t = fakeTransport(() => (t.calls.length <= 1 ? throttledAnswer(600) : taken));
+    const http = createAzHttpClient(ORG, { getToken: () => 'TOK', request: t.request, random: () => 0, sleep: async (ms) => { slept.push(ms); }, throttle });
+    assert.strictEqual((await http.get(READ)).status, 200, String(throttle));
+    assert.deepStrictEqual(slept, [RETRY_AFTER_CAP_MS], `${JSON.stringify(throttle)}: the cap of a minute, as ever`);
+  }
+});
+
+test('budgeted: requests that are throttled together wake together — their waits overlap, and the budget is charged for the time the run waited and not for the sum', async () => {
+  let clock = CLOCK_START;
+  const pending = [];
+  const throttle = makeThrottleBudget({ totalMs: 100000 });
+  // The first send of each read is refused with a minute to wait; the send that follows the wait is taken.
+  const seen = new Set();
+  const request = async (opts) => (seen.has(opts.url) ? taken : (seen.add(opts.url), throttledAnswer(60)));
+  const http = createAzHttpClient(ORG, { getToken: () => 'TOK', request, throttle, now: () => clock, random: () => 0, sleep: (ms) => new Promise((resolve) => pending.push({ ms, resolve })) });
+  const reads = [1, 2, 3, 4].map((n) => http.get(`${READ}${n}`));
+  await settle();
+  assert.deepStrictEqual(pending.map((p) => p.ms), [60000, 60000, 60000, 60000], 'all four are waiting a minute');
+  assert.strictEqual(throttle.spentMs(), 60000, 'which is a minute of the run\'s waiting, and not four');
+  clock += 60000;
+  for (const p of pending.splice(0)) p.resolve();
+  assert.deepStrictEqual((await Promise.all(reads)).map((r) => r.status), [200, 200, 200, 200]);
+  assert.strictEqual(throttle.spentMs(), 60000);
+  assert.strictEqual(throttle.declined().count, 0);
+});
+
+test('budgeted: requests throttled together are each judged by what they would add — the ones that end inside the wait under way fit, the one that runs past what is left does not', async () => {
+  let clock = CLOCK_START;
+  const pending = [];
+  const throttle = makeThrottleBudget({ totalMs: 100000 });
+  const asks = { a: 60, b: 90, c: 120 };
+  const seen = new Set();
+  const request = async (opts) => {
+    const key = opts.url.slice(-1);
+    if (seen.has(key)) return taken;
+    seen.add(key);
+    return throttledAnswer(asks[key]);
+  };
+  const http = createAzHttpClient(ORG, { getToken: () => 'TOK', request, throttle, now: () => clock, random: () => 0, sleep: (ms) => new Promise((resolve) => pending.push({ ms, resolve })) });
+  const reads = ['a', 'b', 'c'].map((key) => http.get(`${READ}/${key}`));
+  await settle();
+  assert.deepStrictEqual(pending.map((p) => p.ms), [60000, 90000], 'a minute, and a minute and a half, which ends 30 s after the first');
+  assert.strictEqual(throttle.spentMs(), 90000, '60 s, and the 30 s the second runs past the first');
+  assert.deepStrictEqual(throttle.declined(), { count: 1, askedMs: 120000, waitMs: 120000 }, 'the third would run 30 s more past the second, and only 10 s are left');
+  clock += 90000;
+  for (const p of pending.splice(0)) p.resolve();
+  assert.deepStrictEqual((await Promise.all(reads)).map((r) => r.status), [200, 200, 429], 'the third was handed back as it came');
+});
+
+test('budgeted: the answer a declined wait hands back is cleaned like any answer that is not a success — the token is out of its body and its headers', async () => {
+  const TOKEN = `tok-${'x'.repeat(40)}`;
+  const run = budgeted({ spent: 300000 });
+  const answer = { statusCode: 429, headers: { 'retry-after': '30', 'x-echo': `Bearer ${TOKEN}` }, body: JSON.stringify({ error: { message: `rejected ${TOKEN}` } }) };
+  const t = fakeTransport(answer);
+  const res = await clientOf(t, run, { getToken: () => TOKEN }).get(READ);
+  assert.strictEqual(t.calls.length, 1);
+  assert.strictEqual(res.status, 429);
+  assert.doesNotMatch(JSON.stringify(res), new RegExp(TOKEN));
+  assert.strictEqual(res.body.error.message, 'rejected <token>');
+  // A raw answer (a `$batch`, whose answer the SDK reads as text) is cleaned the same way.
+  const raw = fakeTransport({ statusCode: 429, headers: {}, body: `${TOKEN} refused` });
+  const refused = await postBatch(clientOf(raw, budgeted({ spent: 300000 }), { getToken: () => TOKEN }), COLUMNS);
+  assert.strictEqual(refused.body, '<token> refused');
+});
+
 test('postRaw still refreshes the token once on 401 (rejected before processing, so it is safe)', async () => {
   const { request, calls } = fakeTransport(() =>
     calls.length <= 1 ? { statusCode: 401, headers: {}, body: '' } : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }

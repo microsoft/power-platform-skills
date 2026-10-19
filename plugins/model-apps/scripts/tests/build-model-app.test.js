@@ -546,7 +546,7 @@ test('transient auto-retry: a non-transient halt is NOT retried', async () => {
   assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
 });
 
-// ── A throttle's wait crosses the layers, and what the build's own layers add is one budget ──────────────────────────────────────────────────────────
+// ── A throttle's wait crosses the layers, and the waits the build's own layers add are one budget with the HTTP client's ─────────────────────────────────
 // The page backend sends a throttled page write again up to six times, waiting what the service asked; when that is not enough it raises an error that carries the last ask (`retryAfterMs`) and the moment before which
 // nothing may be sent (`retryNotBefore`). The loop that runs the build again then waits for THAT — never its own, shorter, backoff — and every wait it spends on a throttle comes out of the budget the backend spends from:
 // five minutes for the whole run (lib/throttle-budget.js). A wait that does not fit ends the run with a halt that says what the service asked, and that a later run continues.
@@ -571,7 +571,7 @@ const throttleDriver = async ({ failures, budget, retryDelayMs, spec = desk, onR
       runBuild: async (s, o) => {
         attempts += 1;
         budgets.push(o.throttle);
-        if (onRun) onRun(attempts, () => clock, (ms) => { clock += ms; });
+        if (onRun) onRun(attempts, () => clock, (ms) => { clock += ms; }, o.throttle);
         const failure = failures(attempts, clock);
         if (failure) throw new BuildHalt(`pages failed: ${failure.message}`, { phase: 'pages', code: 'CONNECTION_ERROR', recoverable: true, cause: failure });
         return { ok: true };
@@ -667,6 +667,55 @@ test('retry loop: the budget is the run\'s — the backend\'s waits count, so wh
   const own = await throttleDriver({ failures: (n) => (n === 1 ? throttledFailure(0, 0) : null) });
   assert.ok(own.budgets.length === 2 && own.budgets[0] === own.budgets[1], 'a run with no budget given makes one, the same for every run of the engine');
   assert.ok(own.budgets[0].spentMs() >= 3000, 'and a throttle that asked for nothing still waited the build\'s backoff, which is a throttle wait too');
+});
+
+// The HTTP client draws its waits for a throttled answer from this same budget (lib/sdk-http-client.js). A wait that does not fit is not taken: the answer comes back as the 429 it is — the SDK's error carries none of what the service asked, nor
+// that nothing more was sent — and the client tells the budget (`decline`). The loop reads that, so a request the budget stopped ends the run as the budget's halt does, with what the service asked, and is not run again to be refused again.
+const declinedBy = (askedMs, waitMs = askedMs, spent = 250000) => (n, clock, advance, throttle) => { if (n === 1) { throttle.spend(spent); throttle.decline({ askedMs, waitMs }); } };
+const sdkThrottle = () => throttledFailure(0, 0);
+
+test('retry loop: a request the HTTP client did not wait for — the budget had no room for what the service asked — ends the run with the budget\'s halt, naming what the service asked, and is not run again', async () => {
+  const out = await throttleDriver({ onRun: declinedBy(90000), failures: (n) => (n === 1 ? sdkThrottle() : null) });
+  assert.strictEqual(out.attempts, 1, 'the run is not run again to meet the same answer: the service said it was not ready');
+  assert.deepStrictEqual(out.sleeps, [], 'and nothing was waited for');
+  assert.ok(out.halt, 'the build stops');
+  assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+  assert.strictEqual(out.halt.phase, 'pages');
+  assert.strictEqual(out.halt.recoverable, true);
+  assert.strictEqual(out.halt.statusCode, 429);
+  assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: nothing is wrong with the build, and a later run can go on');
+  assert.strictEqual(out.halt.message, 'pages stopped: the service asked to wait 90 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service (250 s are spent). Nothing more is sent now: run the same command again later, and it continues from here.');
+  assert.strictEqual(out.halt.cause.cause.statusCode, 429, 'the failure itself is its cause');
+  assert.deepStrictEqual([out.closed[0].status, out.closed[0].code, out.closed[0].recoverable], ['halt', 'throttle-budget-exhausted', true], 'the journal says where the run stopped');
+  // A decline whose service asked for nothing — the wait that did not fit was the schedule's — says so in the words of the budget's other halt.
+  const bare = await throttleDriver({ onRun: declinedBy(0, 8000, 296000), failures: (n) => (n === 1 ? sdkThrottle() : null) });
+  assert.strictEqual(bare.halt.code, 'throttle-budget-exhausted');
+  assert.match(bare.halt.message, /^pages stopped: the next wait, 8 s, does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(296 s are spent\)/);
+  // What the failure itself asked, when it carries an ask (the page backend's), counts too: the longer of the two is said.
+  const both = await throttleDriver({ onRun: declinedBy(90000), failures: (n, clock) => (n === 1 ? throttledFailure(clock, 120000) : null) });
+  assert.strictEqual(both.attempts, 1);
+  assert.match(both.halt.message, /^pages stopped: the service asked to wait 120 s before the next send, which does not fit/);
+});
+
+test('retry loop: a request the client did not wait for ends the run on the last run as on the first — the failure the retries ran out on is the budget\'s halt, not a bare 429', async () => {
+  // Three runs end in a throttle that asked for nothing (the build waits 3, 6 and 12 s between them); in the fourth the client is refused a wait.
+  const out = await throttleDriver({ onRun: (n, clock, advance, throttle) => { if (n === 4) throttle.decline({ askedMs: 0, waitMs: 9000 }); }, failures: () => sdkThrottle() });
+  assert.strictEqual(out.attempts, 4, 'the retries were spent');
+  assert.strictEqual(out.halt.code, 'throttle-budget-exhausted', 'and what stopped the last one was the budget');
+  assert.match(out.halt.message, /^pages stopped: the next wait, 9 s, does not fit in what is left of the 5 minutes/);
+});
+
+test('retry loop: a request the client did not wait for changes nothing for a failure that is not a throttle, nor for a later run in which nothing was refused', async () => {
+  // A 503 that follows a refused wait is the service's gateway, not a throttle: the build runs again after its own backoff, as it does for any 503, and the budget's halt is not for it.
+  const gateway = await throttleDriver({ onRun: declinedBy(90000), failures: (n) => (n === 1 ? Object.assign(new Error('the service is unavailable'), { statusCode: 503 }) : null) });
+  assert.strictEqual(gateway.halt, null);
+  assert.strictEqual(gateway.attempts, 2);
+  assert.ok(gateway.sleeps.length === 1 && gateway.sleeps[0] >= 3000 && gateway.sleeps[0] < 4000, `the build's backoff: ${gateway.sleeps}`);
+  // What was refused in one run is not read again in the next: a throttle in the second run, with nothing refused in it, is waited for as any other.
+  const later = await throttleDriver({ onRun: declinedBy(0, 8000, 0), failures: (n) => (n === 1 ? Object.assign(new Error('the service is unavailable'), { statusCode: 503 }) : n === 2 ? sdkThrottle() : null) });
+  assert.strictEqual(later.halt, null, 'the third run got through');
+  assert.strictEqual(later.attempts, 3);
+  assert.deepStrictEqual(later.sleeps.map((ms) => Math.floor(ms / 1000)), [3, 6], 'the build\'s own backoff before each run, and no halt for a refusal of the first');
 });
 
 test('retry loop: only a throttle spends the budget — the backoff of any other transient failure is the build\'s own, as it was', async () => {
@@ -1854,7 +1903,7 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env\);/);
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle \}\);/, 'one client, made with the run\u2019s throttle budget');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
   assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
