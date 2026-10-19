@@ -1,6 +1,6 @@
 {
   "skill_name": "model-apps-routing",
-  "eval_instructions": "Each case is one user prompt sent to a headless agent with only the model-apps plugin loaded. `expect` is the model-apps skill the agent must invoke FIRST (genpage | app-builder | report-issue | telemetry), or null when it must invoke none of them. `accept` lists other outcomes that are also correct for a genuinely ambiguous prompt. `trap` names the mis-route the case exists to catch. Graded by run-routing.js over N trials against a pass-rate threshold.",
+  "eval_instructions": "Each case is one user prompt sent to a headless agent with only the model-apps plugin loaded. `expect` is the model-apps skill the agent must invoke in its FIRST TURN (genpage | app-builder | report-issue | telemetry), or null when it must invoke none of them in that turn; a skill asked for only after a first turn that chose none is reported as a later fallback and is not graded (--grade eventual counts it). `accept` lists other outcomes that are also correct for a genuinely ambiguous prompt. `trap` names the mis-route the case exists to catch. Graded by run-routing.js over N trials against a pass-rate threshold.",
   "evals": [
     {
       "id": 1,

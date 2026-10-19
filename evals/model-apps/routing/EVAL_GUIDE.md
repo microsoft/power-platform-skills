@@ -83,7 +83,8 @@ so a case is graded on the **first turn** and a later request is reported beside
 
 A case that expects a skill needs it in the first turn: a late request is shown and never credited. The
 first turn is the model's first response; a skill asked for in the same response as a `view` is still a
-first-turn decision.
+first-turn decision. A model that habitually looks at the workspace before it acts will show its positive
+cases as failures with a `later:` count; grade such a model with `--grade eventual`.
 
 ```
 ok 21 - #21 [smoke] expect none — 3/3 (none×3) · later: genpage×2
