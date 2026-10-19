@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { readerFor, appIdFor } = require('../verify-model-app.js');
 const { verifySpec } = require('../lib/verify-spec.js');
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
+const { appSpec, column, nameColumn } = require('./helpers/column-gate-specs.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -779,6 +780,94 @@ test('verify CLI still verifies an older colliding spec and names the holder', a
   assert.match(stderr, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
   assert.ok(emitted && Array.isArray(emitted.payload.missing), 'a validation refusal returns errors and never a missing list');
   assert.ok(emitted.payload.missing.some((m) => /not as the declared N:N/.test(m)), JSON.stringify(emitted.payload));
+});
+
+// --- an app deployed from a spec an earlier release accepted can still be verified ----------------------------------------------------
+// Two rules keep a BUILD from misreading a column's declaration (lib/app-spec.js): an AutoNumber column needs a format, and `required` is true, false or
+// "recommended". Verification creates and updates nothing and only reads whether each column exists, so the spec of an app an earlier release built — an
+// AutoNumber column made as plain text, a `required: "true"` made not required — must still reach the deployment. The CLI passes columnValues: 'warn', as it
+// passes relationshipCollisions: 'warn': the findings are warnings that name the column and the fix, and the verdict is the deployment's.
+async function verifyOlderSpec(specObject) {
+  const reads = [];
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-older-spec' } },
+    realGates: true,
+    specObject,
+    sdkFactory: () => ({
+      initWorkspace: async () => {},
+      findTables: async () => { reads.push('tables'); return [{ logicalName: 'new_ticket' }]; },
+      findColumns: async (name) => { reads.push(`columns ${name}`); return [{ logicalName: 'new_name' }, { logicalName: 'new_ref' }, { logicalName: 'new_status' }]; },
+      queryRecords: async (set) => (set === 'appmodule' ? [{ appmoduleid: '11111111-2222-3333-4444-555555555555' }] : []),
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    }),
+  });
+  await harness.main();
+  return { reads, emitted: harness.events.find((e) => e.type === 'emitResult'), stderr: harness.stderr.join('') };
+}
+
+const OMIT_THE_KEY = "omit the key to leave an existing column's level as it is";
+const OLDER_SPECS = [
+  ['an AutoNumber column with no format', { columns: [column({ type: 'AutoNumber' })] },
+    'column new_ref is an AutoNumber column but its autoNumberFormat is missing — give it a format such as "C-{SEQNUM:5}", or use type "Text" for a plain text column'],
+  ['an AutoNumber column with a blank format', { columns: [column({ type: 'AutoNumber', autoNumberFormat: '  ' })] },
+    'column new_ref is an AutoNumber column but its autoNumberFormat is blank — give it a format such as "C-{SEQNUM:5}", or use type "Text" for a plain text column'],
+  ['a column whose required is null', { columns: [column({ type: 'Text', required: null })] },
+    `column new_ref required must be true, false or "recommended" (got null) — true makes a column required, "recommended" makes it recommended and false makes it not required; ${OMIT_THE_KEY}`],
+  ['a column whose required is the string "true"', { columns: [column({ type: 'Text', required: 'true' })] },
+    `column new_ref required must be true, false or "recommended" (got "true") — write true for a required column; ${OMIT_THE_KEY}`],
+  ['a column whose required is "ApplicationRequired"', { columns: [column({ type: 'Text', required: 'ApplicationRequired' })] },
+    `column new_ref required must be true, false or "recommended" (got "ApplicationRequired") — write true for a required column; ${OMIT_THE_KEY}`],
+  ['a primary name column whose required is "ApplicationRequired"', { primaryAttribute: nameColumn({ required: 'ApplicationRequired' }) },
+    `primaryAttribute.required must be true, false or "recommended" (got "ApplicationRequired") — write true for a required column; ${OMIT_THE_KEY}`],
+];
+
+test('verify CLI still verifies the deployment of a spec an earlier release accepted — and warns, naming the column and the fix', async () => {
+  for (const [label, parts, finding] of OLDER_SPECS) {
+    const { reads, emitted, stderr } = await verifyOlderSpec(appSpec(parts));
+    assert.ok(emitted, `${label}: a result is emitted`);
+    assert.strictEqual(emitted.ok, true, `${label}: verification ran and passed — ${JSON.stringify(emitted.payload)}`);
+    assert.ok(emitted.payload.total > 0 && emitted.payload.present === emitted.payload.total, `${label}: the deployment was checked — ${JSON.stringify(emitted.payload)}`);
+    assert.ok(!('errors' in emitted.payload) || emitted.payload.errors.length === 0, `${label}: no schema error stops it — ${JSON.stringify(emitted.payload)}`);
+    assert.ok(reads.includes('columns new_ticket'), `${label}: the deployed columns were read — ${JSON.stringify(reads)}`);
+    assert.ok(stderr.includes(`WARNING: entity new_ticket: ${finding}\n`), `${label}: the warning names the column and the fix\n${stderr}`);
+    assert.match(stderr, /✓ verify PASS/, label);
+  }
+});
+
+test('verify CLI warns once for each finding of an older spec, in the spec\'s order, and still reaches the deployment', async () => {
+  const spec = appSpec({
+    columns: [column({ type: 'AutoNumber', required: 'true' }), column({ schemaName: 'new_status', type: 'Text', required: null })],
+    primaryAttribute: nameColumn({ required: 'ApplicationRequired' }),
+  });
+  const { emitted, stderr } = await verifyOlderSpec(spec);
+  assert.strictEqual(emitted.ok, true, JSON.stringify(emitted.payload));
+  const warnings = stderr.split('\n').filter((line) => line.startsWith('WARNING: '));
+  assert.deepStrictEqual(warnings.map((line) => line.slice(0, line.indexOf(' — '))), [
+    'WARNING: entity new_ticket: primaryAttribute.required must be true, false or "recommended" (got "ApplicationRequired")',
+    'WARNING: entity new_ticket: column new_ref is an AutoNumber column but its autoNumberFormat is missing',
+    'WARNING: entity new_ticket: column new_ref required must be true, false or "recommended" (got "true")',
+    'WARNING: entity new_ticket: column new_status required must be true, false or "recommended" (got null)',
+  ]);
+});
+
+test('verify CLI says nothing about these rules for a spec that satisfies them, and gives the same verdict', async () => {
+  const spec = appSpec({ columns: [column({ type: 'AutoNumber', autoNumberFormat: 'C-{SEQNUM:5}', required: 'recommended' })], primaryAttribute: nameColumn({ required: false }) });
+  const { reads, emitted, stderr } = await verifyOlderSpec(spec);
+  assert.strictEqual(emitted.ok, true, JSON.stringify(emitted.payload));
+  assert.ok(emitted.payload.total > 0 && emitted.payload.present === emitted.payload.total, JSON.stringify(emitted.payload));
+  assert.ok(reads.includes('columns new_ticket'), JSON.stringify(reads));
+  assert.ok(!/WARNING:/.test(stderr), `no warning: ${stderr}`);
+  assert.match(stderr, /✓ verify PASS/);
+});
+
+test('verify CLI still refuses a spec that is invalid for another reason — before any read — and the column rules are no part of that refusal', async () => {
+  const spec = appSpec({ columns: [column({ type: 'AutoNumber' }), column({ schemaName: 'new_bad', type: 'Nope' })] });
+  const { reads, emitted } = await verifyOlderSpec(spec);
+  assert.strictEqual(emitted.ok, false);
+  assert.deepStrictEqual(emitted.payload.errors, ["entity new_ticket: column new_bad has unknown type 'Nope'"]);
+  assert.deepStrictEqual(reads, [], 'nothing was read');
 });
 
 test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {

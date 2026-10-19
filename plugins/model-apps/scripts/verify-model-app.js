@@ -622,7 +622,12 @@ async function main() {
   // error instead of a later throw when dereferencing spec.entities / schemaName.
   // 'warn' is verify-only. A spec built before the collision gate must still be verifiable; the
   // endpoint check below names the holder. Every other entry point keeps the error.
-  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn' });
+  // `columnValues: 'warn'` is the same arrangement for the two column rules (an AutoNumber column needs a format; `required` is true, false or
+  // "recommended"). They keep a BUILD from misreading a column's declaration, and verification creates and updates nothing — it only reads whether
+  // each column exists — so the spec of an app an earlier release built from a value they refuse (an AutoNumber column made as plain text, a
+  // `required: "true"` made not required) must still reach its deployment. The warning names the column and the fix for the next build. Not the
+  // structural profile: that would also skip the checks of pages and forms that verification relies on.
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');

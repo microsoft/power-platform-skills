@@ -1574,7 +1574,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dropped and counted in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
-  builds. It works through a throwaway SDK workspace, never the folder's `.maker-workspace` (which belongs to
+  builds. It validates the spec first under the `deploy` profile, with two compatibility downgrades
+  (`relationshipCollisions: 'warn'` and `columnValues: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
+  that share a schema name, an AutoNumber column with no format, a `required` that is not `true`, `false` or `"recommended"` — is
+  verified, with a warning that names the fix, and is never refused before anything is read (the build, the lint and the
+  provisioning gate keep these as errors). It works through a throwaway SDK workspace, never the folder's `.maker-workspace` (which belongs to
   the environment it was first opened for): every read it makes goes to the server, so it verifies any
   environment the app is deployed to and creates or binds nothing in the folder. It only READS the build's
   baseline, `last-applied.json`, from `--workspace`, and only when that baseline describes this
@@ -1976,8 +1980,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     (`lib/app-spec.js`) refuses a column of type `AutoNumber` whose format is missing, blank or not a string, in `validateAppSpec` AND in the
     provision-entities input gate that `/genpage` and `/app-builder` pass through (`lib/provision-input.js`), before anything is written; the
     message names the table and the column and both ways out (a format such as `"C-{SEQNUM:5}"`, or `type: "Text"`, which is also what a
-    column an earlier release made from such a spec is). The structural profile — the one teardown validates under — does not apply it: a spec
-    an earlier release built must still tear down (the arrangement relationship-name collisions have). Measured against the real bundle
+    column an earlier release made from such a spec is). The structural profile — the one teardown validates under — does not apply it, and
+    read-only verification (`verify-model-app.js`) gets a warning in place of the error, as it does for a relationship-name collision
+    (`columnValues: 'warn'`): a spec an earlier release built must still tear down and still be verified, and verification creates and
+    updates nothing — it only reads whether each column exists. Every other path (the build, the plan, the lint, the provision-entities gate)
+    keeps the error; `column-rules-authoring-gates.test.js` pins that and `verify-model-app.test.js` runs the CLI over older specs. Measured against the real bundle
     (`table-columns-in-create.test.js`): a spec that got past the gate halts the data-model phase at that column, after the table is made; a
     REBUILD that finds the column already there never reaches the refusal (`columnOptions` runs only for a column the build creates, and the
     updates the build makes to an existing column carry no format). The primary name column keeps its meaning: an absent or blank
@@ -1990,7 +1997,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     `requiredValueProblem` (`lib/app-spec.js`) refuses them, on a column and on `primaryAttribute`, in `validateAppSpec` AND in the provision-entities
     input gate (`lib/provision-input.js`): the message names the table, the column and the value, says what to write for the usual slips
     (`"ApplicationRequired"`, `"true"`, `"required"` → `true`; `"Recommended"` → `"recommended"`) and that omitting the key leaves an existing column
-    as it is. The structural profile (teardown's) does not apply it, for the reason given for the AutoNumber format. `undefined` states nothing, here and
+    as it is. Neither the structural profile (teardown's) nor verification (a warning) holds a spec to it, for the reason given for the AutoNumber format. `undefined` states nothing, here and
     in the build (`hasExplicitRequired`), so a spec built in code with `required: undefined` is not an explicit `None` that demotes an existing column.
     The other `required`s are untouched: a business process flow step's (a boolean, gated where the flow is), a business rule's `SetBusinessRequired`
     action's, a form field's. What reads a column's `required` takes exactly the accepted set: the build, the form fields and the schema facts (`true`

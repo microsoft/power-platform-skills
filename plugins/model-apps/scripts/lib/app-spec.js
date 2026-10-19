@@ -2338,6 +2338,11 @@ function validateAppSpec(spec, opts = {}) {
   // Non-blocking advisories (e.g. a PRE-EXISTING duplicate page name the current run did not create).
   // Additive to the return shape — callers that only read { ok, errors } are unaffected.
   const warnings = [];
+  // Where the two column rules' findings go: errors, or — for read-only verification, which passes `columnValues: 'warn'` — warnings. Verification creates
+  // and updates nothing and only reads whether each column exists, so rules that keep a BUILD from misreading a column's declaration have nothing to
+  // protect there, and the spec of an app an earlier release built from a value they refuse must still reach its deployment. The same arrangement as
+  // `relationshipCollisions: 'warn'` at the end of this function; every other caller keeps the error.
+  const columnValueFindings = opts.columnValues === 'warn' ? warnings : errors;
   if (!VALIDATION_PROFILES.includes(profile)) {
     return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings };
   }
@@ -2522,7 +2527,7 @@ function validateAppSpec(spec, opts = {}) {
       if (lengthProblem) errors.push(`entity ${e.schemaName}: ${lengthProblem}`);
       if (checksColumnValues) {
         const requiredProblem = requiredValueProblem(e.primaryAttribute.required);
-        if (requiredProblem) errors.push(`entity ${e.schemaName}: primaryAttribute.required ${requiredProblem}`);
+        if (requiredProblem) columnValueFindings.push(`entity ${e.schemaName}: primaryAttribute.required ${requiredProblem}`);
       }
     }
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
@@ -2562,9 +2567,9 @@ function validateAppSpec(spec, opts = {}) {
       // An AutoNumber column needs a format, and `required` is true, false or "recommended" (see checksColumnValues).
       if (checksColumnValues) {
         const formatProblem = autoNumberFormatProblem(c);
-        if (formatProblem) errors.push(`entity ${e.schemaName}: column ${c.schemaName} ${formatProblem}`);
+        if (formatProblem) columnValueFindings.push(`entity ${e.schemaName}: column ${c.schemaName} ${formatProblem}`);
         const requiredProblem = requiredValueProblem(c.required);
-        if (requiredProblem) errors.push(`entity ${e.schemaName}: column ${c.schemaName} required ${requiredProblem}`);
+        if (requiredProblem) columnValueFindings.push(`entity ${e.schemaName}: column ${c.schemaName} required ${requiredProblem}`);
       }
       if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
         errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
