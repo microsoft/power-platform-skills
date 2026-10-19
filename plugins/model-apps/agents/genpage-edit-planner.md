@@ -6,7 +6,10 @@ description: >-
   the user's edit intent, and returns a proposed edit plan for the orchestrator to
   present for approval. Writes genpage-edit-plan.md, for the orchestrator to
   execute, once it is re-invoked with the approval outcome. Called by the genpage
-  skill — not invoked directly by users.
+  skill — not invoked directly by users. Works only on generative pages in a Power
+  Apps model-driven app. Never use it for a generic React or web app, or when the
+  user rules out Power Platform, Dataverse, or model-driven apps (for example "no
+  Power Platform").
 color: cyan
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it

@@ -5,6 +5,9 @@ description: >-
   in genpage-plan.md using the plugin's Node.js Web API scripts. Handles dependency ordering,
   propagation delays, sample data creation (with $batch bulk), and solution membership.
   Called by the genpage skill when new entities need creating — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: yellow
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it

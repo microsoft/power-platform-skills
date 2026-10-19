@@ -6,6 +6,9 @@ description: >-
   connection references when needed, and produces the ## Connector Bindings
   contract. Invoked only by the top-level genpage orchestrator from BOTH the
   create and edit flows; never invoked by planners or directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for
+  a generic React or web app, or when the user rules out Power Platform, Dataverse,
+  or model-driven apps (for example "no Power Platform").
 color: green
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it

@@ -5,6 +5,9 @@ description: >-
   Reads genpage-plan.md for page specification, RuntimeTypes.ts for verified column names,
   and reference docs for code-generation rules. Writes one .tsx file per invocation.
   Called by the genpage skill in parallel — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: green
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it

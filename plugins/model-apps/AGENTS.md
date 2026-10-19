@@ -4902,6 +4902,13 @@ workflow's own `GITHUB_TOKEN` (`copilot-requests: write`) — no secret to
 provision. Its parsing/grading/process code is unit-tested on every PR against a
 fake agent. See [`evals/model-apps/routing/EVAL_GUIDE.md`](../../evals/model-apps/routing/EVAL_GUIDE.md).
 
+A skill `description:` has to stay under 1,024 characters (GitHub Copilot's limit, enforced by
+`scripts/validate-skill-descriptions.js`), so say what a request needs and leave process detail to the skill
+body. The descriptions of `/genpage`, `/app-builder` and every agent also say what they are **not** for: a
+generic or standalone React or web app, the other Power Platform products, and a request that rules out
+Power Platform, Dataverse and model-driven apps. `evals/model-apps/routing/tests/descriptions.test.js`
+pins those sentences and the trigger phrases the positive cases route on.
+
 ```bash
 node evals/model-apps/routing/run-routing.js --dry-run                 # what would launch
 node evals/model-apps/routing/run-routing.js --tier smoke --runs 1     # quick local check

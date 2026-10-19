@@ -1,7 +1,7 @@
 ---
 name: genpage
 version: 2.3.1
-description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux". This skill stands alone and does not require /app-builder — but if the user wants a whole app built (tables, forms, views, sitemap) rather than pages for an app that already exists, use /app-builder instead.
+description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux". Do not use it for a generic or standalone React or web app, website, or dashboard (including a Power Apps code app), for Power Pages, canvas apps, or Power Automate, or when the user rules out Power Platform, Dataverse, or model-driven apps (for example "no Power Platform"). A generative page only runs inside a model-driven app, and this skill cannot scaffold a standalone project. This skill stands alone and does not require /app-builder — but if the user wants a whole app built (tables, forms, views, sitemap) rather than pages for an app that already exists, use /app-builder instead.
 author: Microsoft Corporation
 argument-hint: "<page description> | edit"
 user-invocable: true
