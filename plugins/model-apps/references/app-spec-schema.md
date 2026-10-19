@@ -84,13 +84,12 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   is put back to the spec's. Two cases leave the text as it is, and **warn that it was not applied** while the rest of
   the build goes ahead: an app that was **never published** (Dataverse takes no write to its name or description until
   it is — publish it in Power Apps and re-run), and a name or description that is **localized** (held as one text per
-  language), which a rebuild never replaces with one text: change it in Power Apps. The SDK writes the name and the
-  description in one request, so while either is localized (or is any other value that is not plain text) the app's
-  header is **not edited at all**: a changed plain text beside it, and an `app.aiDescription`, are reported as not
-  applied too, with the reason — a warning, never a halt; the navigation is written as ever. (The SDK has no partial
-  header write, so the one plain field that changed cannot be sent alone; that would need a new SDK operation.) And if the
-  SDK's own read of the header fails while a text is not plain, the build stops with `APP_HEADER_NOT_PLAIN_TEXT` before
-  anything is sent or written — the SDK writes the header it holds when that read fails — and a re-run normally succeeds.
+  language, or any other value that is not plain text), which a rebuild never replaces with one text: change it in
+  Power Apps. Only that one text is held back: the SDK writes just the texts that changed, so the other text, and an
+  `app.aiDescription`, are applied as usual — a localized name beside a changed plain description writes the
+  description alone and leaves every translation of the name as it is. A text that is not plain is never sent, even
+  when the SDK's own read of the header fails (the build takes it off the copy it pushes); the HTTP client still
+  refuses a write of one, with `APP_HEADER_NOT_PLAIN_TEXT`, for a push the build did not make itself.
 - **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
   Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
   **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
@@ -199,9 +198,8 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   those texts saved in Maker and not yet published is kept: the build's push is saved with it. If the app
   changes while the build runs, the push is refused as a concurrent edit (`version-conflict`): download
   the app again and rebuild, which never overwrites the other edit.
-  While the app's name or description is **localized** (or otherwise not plain text) this is **not applied**
-  and the build warns — it is written in the same request as those two texts, which a rebuild never sends
-  in that state; it does not halt.
+  While the app's name or description is **localized** (or otherwise not plain text) that text is left as it is, and
+  this is still **applied**: the SDK writes only what changed, so the routing description is written alone.
   **Rules:** a non-empty string of at most 1,048,576 characters, the column's maximum.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
   stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status

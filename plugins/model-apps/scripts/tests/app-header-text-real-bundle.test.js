@@ -15,13 +15,15 @@
 //      having modified nothing), and it writes the header only when the artifact holds one that differs from the row's — so the
 //      build puts the fetched text back, which makes the next push a sitemap-only push, and reports the edit as not applied
 //      (an explicitly authored routing description cannot be set aside this way, and halts);
-//   5. a header whose name or description is not plain text (a text per language) is never sent: while either is not plain the build makes no
-//      header edit at all — the other text's, nor a routing description — and reports each as not applied (the tests at the end of this file).
-//      The hold is the plugin's own and does not rest on the PATCH carrying both texts: the SDK writes only the texts that changed (the pin below);
-//   6. the hold is on the workspace copy, and the SDK decides for itself whether the header is written: when its OWN comparison read of the
-//      header fails (503, 403, a thrown error, an empty 200) it writes the copy's header as it is. So the client every SDK is made with refuses a
-//      PATCH of an app module row whose name or description is not a string (lib/app-header-text.js): nothing that is not plain text reaches the
-//      wire, the push fails with APP_HEADER_NOT_PLAIN_TEXT before the navigation is written, and a re-run finishes (the last tests of this file).
+//   5. a header whose name or description is not plain text (a text per language) is never sent, and the one text does not hold the other back. The SDK
+//      writes only the texts that changed, and neither compares nor writes a text REMOVED from the copy (`removeElement('app', id, '/name')`). So the build
+//      edits the plain text beside a localized one on its own — the localized text keeps every translation — and takes the text that is not plain off the
+//      copy right before the push (pushAppHeader), which is the one place that pushes a copy. Only that text's OWN edit is held back, with a warning, and the
+//      routing description is applied as usual (the tests at the end of this file);
+//   6. the SDK decides for itself whether the header is written: when its OWN comparison read of the header fails (503, 403, a thrown error, an empty 200)
+//      it writes every text the copy holds. A text taken off the copy is not on it, so it is not written even then. And the client every SDK is made with
+//      still refuses a PATCH of an app module row whose name or description is not a string (lib/app-header-text.js), for a copy the build did not clean:
+//      nothing that is not plain text reaches the wire, and the push fails with APP_HEADER_NOT_PLAIN_TEXT before the navigation is written (the last tests of this file).
 // A re-vendor could change any of them with every plugin test still green, so each is pinned here against the real bundle over a
 // fake Dataverse, the way app-ai-description-real-bundle.test.js pins the routing description.
 const test = require('node:test');
@@ -127,13 +129,14 @@ const spec = (app = {}) => ({
 });
 const headerWrites = (writes) => writes.filter((w) => w.verb === 'patch' && /\/appmodules\(/.test(w.url));
 const sitemapWrites = (writes) => writes.filter((w) => w.verb === 'patch' && /\/sitemaps\(/.test(w.url));
-// What a rebuild of an existing app does: edit the fetched copy, rewrite its sitemap, push once. `changed` is what the header edit
-// answered (applyAppHeader: { changed, routing, replaced }).
+// What a rebuild of an existing app does: edit the fetched copy, rewrite its sitemap, push once — through pushAppHeader, the one place the build pushes a
+// copy, so that a text of the header that is not plain is taken off the copy as it is in a build. `changed` is what the header edit answered (applyAppHeader:
+// { changed, routing, replaced, held }).
 async function rebuild(sdk, s, apply = applyAppHeader) {
   await sdk.fetchArtifact('app', APP_ID);
   const changed = await apply(sdk, s, APP_ID);
   await sdk.updateElement('app', APP_ID, '/siteMap', appDef(s, { forms: {}, views: {}, charts: {} }).siteMap);
-  const pushed = await sdk.pushArtifact('app', APP_ID);
+  const pushed = await pushAppHeader(sdk, APP_ID, s.app.name, changed);
   return { changed, pushed };
 }
 
@@ -360,50 +363,120 @@ test('REAL BUNDLE: a header PATCH carries only the texts that changed — an edi
   assert.deepStrictEqual(headerWrites(routing.writes).map((w) => w.body), [{ aiappdescription: ROUTING }], 'a routing edit sends neither text');
 });
 
-// A header text that is not plain — a text per language (a map keyed by LCID), a list, a number — is never sent, as a map or as a scalar. The
-// adapter hands back one string per column for a real app, so this is a safety net for a shape the SDK may return, served here by the fake;
-// what it must guarantee is the same in every case: an edit that would put the text on the wire is held back and reported, and the push that
-// follows is the navigation alone.
+// A header text that is not plain — a text per language (a map keyed by LCID), a list, a number — is never sent, as a map or as a scalar. The adapter hands
+// back one string per column for a real app, so this is a safety net for a shape the SDK may return, served here by the fake. What it must guarantee is the same
+// in every case: the text is neither edited nor sent, and its own edit — only that — is held back and reported. The other text and the routing description are
+// applied as usual and written alone (the SDK sends only what changed), with the navigation.
 const localizedText = (english, french) => ({ 1033: english, 1036: french });
+// [what, the header the environment holds, the spec's app, the header PATCH bodies the build sends, the text its edits replaced, the warnings it gives]
 const HELD_CASES = [
   ['a localized name beside a changed description', { name: localizedText('Probe', 'Sonde') }, { description: 'Changed' },
-    [/^app "Probe": its description was not applied: the app's name is localized \(2 languages: 1033, 1036\), and the app's name and description are written in one request, so changing its description would send the name too — a rebuild never sends a text that is not plain\. Change it in Power Apps\.$/]],
+    [{ description: 'Changed' }], { description: 'Tickets' }, []],
   ['a localized description beside a changed name', { description: localizedText('Tickets', 'Billets') }, { name: 'Help Desk' },
-    [/^app "Help Desk": its name was not applied: the app's description is localized \(2 languages: 1033, 1036\), and the app's name and description are written in one request, so changing its name would send the description too — a rebuild never sends a text that is not plain\. Change it in Power Apps\.$/]],
+    [{ name: 'Help Desk' }], { name: 'Probe' }, []],
   ['a localized description beside a changed name and a changed description', { description: localizedText('Tickets', 'Billets') }, { name: 'Help Desk', description: 'Changed' },
-    [/^app "Help Desk": its name was not applied: the app's description is localized/, /^app "Help Desk": its description was not applied: it is localized \(2 languages: 1033, 1036\)/]],
+    [{ name: 'Help Desk' }], { name: 'Probe' },
+    [/^app "Help Desk": its description was not applied: it is localized \(2 languages: 1033, 1036\), and a rebuild does not replace a localized text — it cannot tell which language the spec's text is for, nor that the other translations would be kept\. Change it in Power Apps\.$/]],
   ['two localized texts beside a routing description', { name: localizedText('Probe', 'Sonde'), description: localizedText('Tickets', 'Billets') }, { aiDescription: ROUTING },
-    [/^app "Probe": its routing description \(app\.aiDescription\) was not applied: the app's name is localized \(2 languages: 1033, 1036\) and its description is localized \(2 languages: 1033, 1036\), and the app's name, description and routing description are written in one request, so changing it would send both too — a rebuild never sends a text that is not plain\. Change it in Power Apps\.$/]],
+    [{ aiappdescription: ROUTING }], {}, []],
   ['a localized name beside a routing description', { name: localizedText('Probe', 'Sonde') }, { aiDescription: ROUTING },
-    [/^app "Probe": its routing description \(app\.aiDescription\) was not applied: the app's name is localized/]],
+    [{ aiappdescription: ROUTING }], {}, []],
   ['a list for the name beside a changed description', { name: ['Probe'] }, { description: 'Changed' },
-    [/^app "Probe": its description was not applied: the app's name could not be read as plain text \(it came back as a list\), and the app's name and description are written in one request/,
-      /^app "Probe": its name was not applied: the app's name could not be read as plain text \(it came back as a list\), so a rebuild does not replace it/]],
+    [{ description: 'Changed' }], { description: 'Tickets' },
+    [/^app "Probe": its name was not applied: the app's name could not be read as plain text \(it came back as a list\), so a rebuild does not replace it\. Change it in Power Apps\.$/]],
   ['a number for the description beside a changed name', { description: 7 }, { name: 'Help Desk' },
-    [/^app "Help Desk": its name was not applied: the app's description could not be read as plain text \(it came back as a number\), and the app's name and description are written in one request/,
-      /^app "Help Desk": its description was not applied: the app's description could not be read as plain text \(it came back as a number\), so a rebuild does not replace it/]],
+    [{ name: 'Help Desk' }], { name: 'Probe' },
+    [/^app "Help Desk": its description was not applied: the app's description could not be read as plain text \(it came back as a number\), so a rebuild does not replace it\. Change it in Power Apps\.$/]],
 ];
 
-for (const [what, initial, app, expected] of HELD_CASES) {
-  test(`REAL BUNDLE: ${what} — no text is sent for the edit, the navigation still is, and the build says what it left`, async () => {
+for (const [what, initial, app, bodies, replaced, expected] of HELD_CASES) {
+  test(`REAL BUNDLE: ${what} — what changed is written alone, the text that is not plain is never sent, and the build says what it left`, async () => {
     const { sdk, writes, state } = await freshSdk(initial);
-    const fetched = JSON.parse(JSON.stringify(await sdk.fetchArtifact('app', APP_ID)));
+    await sdk.fetchArtifact('app', APP_ID);
     const warnings = [];
     const s = spec(app);
     const header = await applyAppHeader(sdk, s, APP_ID, { warn: (m) => warnings.push(m) });
     await sdk.updateElement('app', APP_ID, '/siteMap', appDef(s, { forms: {}, views: {}, charts: {} }).siteMap);
     const pushed = await pushAppHeader(sdk, APP_ID, 'Probe', header, undefined, (m) => warnings.push(m));
     assert.strictEqual(pushed.saved, true, JSON.stringify(pushed.error && pushed.error.message));
-    assert.deepStrictEqual([header.changed, header.routing, header.replaced], [false, false, {}], 'nothing of the header was edited');
-    assert.deepStrictEqual(headerWrites(writes), [], 'no PATCH of the appmodule at all');
+    assert.deepStrictEqual(header.replaced, replaced, 'the text its edits replaced');
+    assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), bodies, 'one PATCH, of what changed alone');
     assert.deepStrictEqual(state.refused, [], 'and nothing a String column cannot take was ever sent');
+    for (const [key, value] of Object.entries(initial)) assert.deepStrictEqual(state[key], value, `the environment still holds the maker's ${key}, every translation of it`);
     assert.strictEqual(sitemapWrites(writes).length, 1, 'the navigation is written, as it always is');
-    const held = await sdk.getArtifact('app', APP_ID);
-    assert.deepStrictEqual([held.name, held.description], [fetched.name, fetched.description], 'the copy still holds the header exactly as it was fetched');
     assert.strictEqual(warnings.length, expected.length, JSON.stringify(warnings));
     for (const re of expected) assert.ok(warnings.some((w) => re.test(w)), `${re} in ${JSON.stringify(warnings)}`);
   });
 }
+
+// The two cases that decide the policy, named for what they pin: the plain text beside a localized one is written on its own, whichever it is, and the localized one keeps
+// every translation (the environment's row is read back after the push).
+test('REAL BUNDLE: a localized name with a changed plain description — only the description is written, and the name\'s translations are untouched', async () => {
+  const name = localizedText('Probe', 'Sonde');
+  const { sdk, writes, state } = await freshSdk({ name });
+  const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, description: 'Track tickets.' }), { sdk, apply: true, publish: true, genpage: fakeGenpage(), workspaceDir: workspaceDir(), env: 'https://contoso.crm.dynamics.com', phases: ['app-shell', 'publish'] });
+  assert.strictEqual(built.ok, true);
+  assert.deepStrictEqual(headerWrites(writes).map((w) => [w.body, w.ifMatch]), [[{ description: 'Track tickets.' }, 'W/"1"']], 'the description alone, conditioned on the row token the fetch read');
+  assert.deepStrictEqual([state.name, state.description], [name, 'Track tickets.'], 'the row holds the new description and the name\'s translations');
+});
+
+test('REAL BUNDLE: a localized description with a changed plain name — only the name is written, and the description\'s translations are untouched', async () => {
+  const description = localizedText('Tickets', 'Billets');
+  const { sdk, writes, state } = await freshSdk({ description });
+  const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, name: 'Help Desk' }), { sdk, apply: true, publish: true, genpage: fakeGenpage(), workspaceDir: workspaceDir(), env: 'https://contoso.crm.dynamics.com', phases: ['app-shell', 'publish'] });
+  assert.strictEqual(built.ok, true);
+  assert.deepStrictEqual(headerWrites(writes).map((w) => [w.body, w.ifMatch]), [[{ name: 'Help Desk' }, 'W/"1"']]);
+  assert.deepStrictEqual([state.name, state.description], ['Help Desk', description]);
+});
+
+// What the build leans on to keep a text off the wire: a text REMOVED from the copy is neither compared nor written, the copy is clean once the push has saved,
+// and a plain fetch brings the maker's text back (the next run starts from the environment's header, not from a copy without one).
+test('REAL BUNDLE: the text taken off the copy is not written, the copy is clean after the push, and a plain fetch brings the maker\'s text back', async () => {
+  const name = localizedText('Probe', 'Sonde');
+  const { sdk, writes } = await freshSdk({ name });
+  const { pushed } = await rebuild(sdk, spec({ description: 'Changed' }));
+  assert.strictEqual(pushed.saved, true);
+  const afterPush = await sdk.getArtifact('app', APP_ID);
+  assert.strictEqual(afterPush.name, undefined, 'the copy no longer holds the name the build kept off the wire');
+  assert.strictEqual(afterPush.description, 'Changed');
+  assert.strictEqual((await sdk.listArtifacts('app')).find((a) => a.id === APP_ID).isDirty, false, 'a push that saved leaves the copy clean: nothing is left for the next run to refuse');
+  assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), [{ description: 'Changed' }]);
+  assert.deepStrictEqual((await sdk.fetchArtifact('app', APP_ID)).name, name, 'and the next run\'s fetch reads the environment\'s name again, translations included');
+});
+
+// The edit of a text is applied to the copy, and a text that is not plain is taken off it only when a push follows: the header edit alone leaves the copy as the fetch read it,
+// so a run that does not push (the routing description of a page-backed app, say) leaves no edit behind for the next run to refuse (refuseUnpushedAppCopy).
+test('REAL BUNDLE: applying a header over a text that is not plain changes nothing on the copy but the edits: it is taken off only by the push', async () => {
+  const name = localizedText('Probe', 'Sonde');
+  const { sdk } = await freshSdk({ name });
+  await sdk.fetchArtifact('app', APP_ID);
+  const header = await applyAppHeader(sdk, spec(), APP_ID, { warn: () => assert.fail('nothing to say: the spec asks for nothing the header does not already hold') });
+  assert.deepStrictEqual([header.changed, header.routing, header.replaced], [false, false, {}]);
+  assert.deepStrictEqual(header.held.map(({ key }) => key), ['name'], 'the text that has to stay off the wire');
+  assert.deepStrictEqual((await sdk.getArtifact('app', APP_ID)).name, name, 'still on the copy');
+  assert.strictEqual((await sdk.listArtifacts('app')).find((a) => a.id === APP_ID).isDirty, false, 'and the copy is clean');
+});
+
+// A never-published app takes no write to its header until it is published: the SDK throws before it writes the navigation, the build puts the edited text back, and the same
+// copy then saves the navigation. The text taken off the copy stays off it for that second push, and is never in either request.
+test('REAL BUNDLE: a never-published app over a localized name — the description edit is not applied and put back, the name is in neither push, and the navigation is written', async () => {
+  const name = localizedText('Probe', 'Sonde');
+  const { sdk, writes, state } = await freshSdk({ name, headerStatus: 400 });
+  const s = spec({ description: 'Track tickets.' });
+  await sdk.fetchArtifact('app', APP_ID);
+  const warnings = [];
+  const header = await applyAppHeader(sdk, s, APP_ID, { warn: (m) => warnings.push(m) });
+  await sdk.updateElement('app', APP_ID, '/siteMap', appDef(s, { forms: {}, views: {}, charts: {} }).siteMap);
+  const pushed = await pushAppHeader(sdk, APP_ID, 'Probe', header, undefined, (m) => warnings.push(m));
+  assert.strictEqual(pushed.saved, true, JSON.stringify(pushed.error && pushed.error.message));
+  assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), [{ description: 'Track tickets.' }], 'the one refused header PATCH carried the description alone, never the name');
+  assert.strictEqual(sitemapWrites(writes).length, 1, 'and the push without it wrote the navigation');
+  assert.strictEqual(warnings.length, 1, JSON.stringify(warnings));
+  assert.match(warnings[0], /^app "Probe": its description was not applied: the app was never published; publish it in Power Apps and re-run\./);
+  assert.deepStrictEqual([state.name, state.description], [name, 'Tickets'], 'the environment is as it was');
+  const held = await sdk.getArtifact('app', APP_ID);
+  assert.deepStrictEqual([held.name, held.description], [undefined, 'Tickets'], 'the description is put back, and the name stays off the copy');
+});
 
 test('REAL BUNDLE: a header text that is not plain, beside edits that need nothing from it, stays silent and writes nothing', async () => {
   // The spec says nothing new: its name is one of the localized name\u2019s own entries and it sets no description.
@@ -416,9 +489,9 @@ test('REAL BUNDLE: a header text that is not plain, beside edits that need nothi
   assert.deepStrictEqual(headerWrites(writes), []);
 });
 
-test('REAL BUNDLE: a transport that refuses a non-string name or description is never asked to — the build\'s push is the navigation alone', async () => {
+test('REAL BUNDLE: a transport that refuses a non-string name or description is never asked to — the build\'s push is the description and the navigation', async () => {
   // The consequence the guard prevents, with a fake that refuses what a String column cannot take: the header PATCH answers 400, and the SDK
-  // throws before it writes the navigation, so one text of the header would have stopped the app step. Held back, there is no such request.
+  // throws before it writes the navigation, so one text of the header would have stopped the app step. Taken off the copy, it is not in the request.
   const { sdk, writes, state } = await freshSdk({ name: localizedText('Probe', 'Sonde') });
   const warnings = [];
   await sdk.fetchArtifact('app', APP_ID);
@@ -428,16 +501,17 @@ test('REAL BUNDLE: a transport that refuses a non-string name or description is 
   const pushed = requireSuccessfulPush(await pushAppHeader(sdk, APP_ID, 'Probe', header), 'app Probe');
   assert.strictEqual(pushed.saved, true);
   assert.deepStrictEqual(state.refused, []);
+  assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), [{ description: 'Changed' }]);
   assert.strictEqual(sitemapWrites(writes).length, 1);
   assert.match(sitemapWrites(writes)[0].body.sitemapxml, /Entity="new_torder"/, 'the navigation the run built is what was written');
 });
 
-// The whole app step, through runSdkBuild, over the same fake: the build goes on past a header it will not edit — to the navigation, the
-// publish of the app and, with the pages phase, the finalizer that is then the app's only writer.
-test('REAL BUNDLE: a complete rebuild over a header that is not plain text finishes — navigation written, app published, nothing sent for the header (with and without the pages phase)', async () => {
-  for (const [what, initial, app, wanted] of [
-    ['a localized name beside a changed description', { name: localizedText('Probe', 'Sonde') }, { description: 'Changed' }, /^app "Probe": its description was not applied: the app's name is localized/],
-    ['a localized description beside a routing description', { description: localizedText('Tickets', 'Billets') }, { aiDescription: ROUTING }, /^app "Probe": its routing description \(app\.aiDescription\) was not applied: the app's description is localized/],
+// The whole app step, through runSdkBuild, over the same fake: the build goes on past a text it will not edit — the other text and the routing description are
+// written alone, then the navigation, the publish of the app and, with the pages phase, the finalizer that is then the app's only writer.
+test('REAL BUNDLE: a complete rebuild over a header that is not plain text finishes — what changed written alone, navigation written, app published (with and without the pages phase)', async () => {
+  for (const [what, initial, app, bodies] of [
+    ['a localized name beside a changed description', { name: localizedText('Probe', 'Sonde') }, { description: 'Changed' }, [{ description: 'Changed' }]],
+    ['a localized description beside a routing description', { description: localizedText('Tickets', 'Billets') }, { aiDescription: ROUTING }, [{ aiappdescription: ROUTING }]],
   ]) {
     for (const pages of [false, true]) {
       const { sdk, writes, state } = await freshSdk(initial);
@@ -446,12 +520,13 @@ test('REAL BUNDLE: a complete rebuild over a header that is not plain text finis
         phases: pages ? ['app-shell', 'pages', 'publish'] : ['app-shell', 'publish'], warn: (m) => warnings.push(m) });
       const label = `${what}${pages ? ', with the pages phase' : ''}`;
       assert.strictEqual(built.ok, true, label);
-      assert.deepStrictEqual(headerWrites(writes), [], `${label}: no header PATCH`);
+      assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), bodies, `${label}: one header PATCH, of what changed alone`);
       assert.deepStrictEqual(state.refused, [], label);
+      for (const [key, value] of Object.entries(initial)) assert.deepStrictEqual(state[key], value, `${label}: the maker's ${key} is as it was`);
       assert.strictEqual(sitemapWrites(writes).length, 1, `${label}: the navigation is written once`);
       const published = writes.filter((w) => /\/PublishXml/.test(w.url) && /<appmodule>/.test((w.body || {}).ParameterXml || ''));
       assert.ok(published.length > 0 && writes.indexOf(published[0]) > writes.indexOf(sitemapWrites(writes)[0]), `${label}: the app is published after its navigation`);
-      assert.strictEqual(warnings.filter((w) => wanted.test(w)).length, 1, `${label}: ${JSON.stringify(warnings)}`);
+      assert.deepStrictEqual(warnings.filter((w) => /was not applied/.test(w)), [], `${label}: nothing was left unapplied`);
     }
   }
   // The neighbour: the same rebuild of a plain header writes it, as before.
@@ -461,13 +536,13 @@ test('REAL BUNDLE: a complete rebuild over a header that is not plain text finis
   assert.deepStrictEqual(headerWrites(writes).map((w) => w.body), [{ name: 'Help Desk', description: 'Changed' }]);
 });
 
-// --- the SDK's OWN comparison read fails: the client is the last line of defence ----------------------------------------------------------------------------
+// --- the SDK's OWN comparison read fails: a text taken off the copy is not written, and the client is the last line of defence ------------------------------------
 //
-// Everything above holds the header on the workspace COPY. But the SDK's push of an app decides for itself whether the header is written: it reads the header and compares it with the
-// copy's, and its "write needed" flag starts true and only a 2xx answer sets it — so a read that cannot be made (HTTP 503 or 403, a transport that throws) leaves the flag true, and a 200 with no row
-// is compared with an empty header, which differs: the header is written from the copy as it is, a text that is not plain included, even when the build edited nothing at all. Pinned here with a fault in the fake server. The client the SDK is made
-// with (lib/app-header-text.js, wired in lib/maker-sdk.js, the one way a script makes an SDK) refuses that PATCH before any byte is sent: the push fails with the typed error, and since the
-// SDK writes the header first, it wrote nothing of its navigation either.
+// The SDK's push of an app decides for itself whether the header is written: it reads the header and compares it with the copy's, and when that read cannot be made (HTTP 503 or 403, a transport that
+// throws, a 200 with no row) it writes EVERY text the copy holds. So the build takes the text that is not plain off the copy right before the push (pushAppHeader): a text that is not on the copy is not written
+// even then, and the build goes on. Pinned here with a fault in the fake server. For a copy the build did not clean — the page backend's push of the app, say — the client the SDK is made with
+// (lib/app-header-text.js, wired in lib/maker-sdk.js, the one way a script makes an SDK) is the last line of defence: it refuses a PATCH that carries such a text before any byte is sent, the push fails with the
+// typed error, and since the SDK writes the header first, it wrote nothing of its navigation either.
 
 // Fails that read once, inside a push of an app: `kind` is an HTTP status ('503', '403'), 'throw' (the transport throws) or 'empty' (HTTP 200 with no row). Armed only inside the push of an
 // app: the build's own reads of the app select the same columns and must answer — its recovery reads the app again.
@@ -493,95 +568,88 @@ function workspaceDir() {
 
 const COMPARISON_FAULTS = [['HTTP 503', '503'], ['HTTP 403', '403'], ['a thrown error', 'throw'], ['an empty HTTP 200', 'empty']];
 const PROTECTED_NAMES = [
-  ['a localized name', localizedText('Probe', 'Sonde'), /the app's name is localized \(2 languages: 1033, 1036\)\. Nothing was sent/],
-  ['an array-valued name', ['Probe'], /the app's name could not be read as plain text \(it came back as a list\)\. Nothing was sent/],
+  ['a localized name', localizedText('Probe', 'Sonde'), /the app's name is localized \(2 languages: 1033, 1036\)\. Nothing was sent/, null],
+  // The spec's name is not one of a list's entries, so the name's own edit is held back and reported (a localized name that holds the spec's text needs no word).
+  ['an array-valued name', ['Probe'], /the app's name could not be read as plain text \(it came back as a list\)\. Nothing was sent/, /^app "Probe": its name was not applied: the app's name could not be read as plain text \(it came back as a list\), so a rebuild does not replace it\./],
 ];
 const PUSH_SITES = [['app-shell + publish', false], ['app-shell + pages + publish', true]];
 
 for (const [faultWhat, fault] of COMPARISON_FAULTS) {
-  for (const [shapeWhat, shape, described] of PROTECTED_NAMES) {
+  for (const [shapeWhat, shape, , ownEditWarning] of PROTECTED_NAMES) {
     for (const [siteWhat, pages] of PUSH_SITES) {
-      test(`REAL BUNDLE: ${faultWhat} on the SDK's own comparison read, over ${shapeWhat}, ${siteWhat} — the header write is refused before a byte is sent, nothing is written, and the re-run finishes`, async () => {
+      test(`REAL BUNDLE: ${faultWhat} on the SDK's own comparison read, over ${shapeWhat}, ${siteWhat} — the text that is not plain is never sent: the changed description is written alone, and the build finishes`, async () => {
         const f = await freshSdk({ name: shape, existingIcon: true });
         const injected = failComparisonRead(f, fault);
         const warnings = [];
-        const phase = pages ? 'pages' : 'app-shell';
-        const genpage = fakeGenpage();
-        const workspace = workspaceDir();
-        // A changed description beside the protected name: the build holds it back (and says so), and the SDK is then asked to push the copy.
-        const run = () => runSdkBuild(spec({ uniqueName: APP_UNIQUE, description: 'Changed' }), {
-          sdk: f.sdk, apply: true, publish: true, genpage, workspaceDir: workspace, env: 'https://contoso.crm.dynamics.com',
+        // A changed description beside the protected name: the build applies it, takes the name off the copy, and the SDK is then asked to push the copy.
+        const built = await runSdkBuild(spec({ uniqueName: APP_UNIQUE, description: 'Changed' }), {
+          sdk: f.sdk, apply: true, publish: true, genpage: fakeGenpage(), workspaceDir: workspaceDir(), env: 'https://contoso.crm.dynamics.com',
           phases: pages ? ['app-shell', 'pages', 'publish'] : ['app-shell', 'publish'], warn: (m) => warnings.push(m),
         });
-        await assert.rejects(run(), (halt) => {
-          assert.strictEqual(halt.name, 'BuildHalt');
-          assert.strictEqual(halt.code, NOT_PLAIN, 'the halt carries the typed code');
-          assert.strictEqual(halt.phase, phase);
-          assert.match(halt.message, new RegExp(`^${phase} failed: Refused before anything was sent: the write of app ${APP_ID}'s header would have carried a text that is not plain — `));
-          assert.match(halt.message, described);
-          assert.match(halt.message, /Nothing was sent, so the app is as it was, and the push stopped before it wrote the app's navigation\. /);
-          assert.match(halt.message, /Run it again: a re-run normally succeeds\. If the same refusal comes back, make the app's name and description plain text in Power Apps\.$/);
-          assert.ok(halt.cause instanceof SdkError, 'the SDK rethrew the client\'s error as it is');
-          assert.strictEqual(halt.cause.code, NOT_PLAIN);
-          assert.strictEqual(halt.cause.transient, false);
-          assert.strictEqual(isTransientHalt(halt), false, 'the build does not run the phase again on its own');
-          return true;
-        });
+        assert.strictEqual(built.ok, true);
         assert.strictEqual(injected.reads.length, 1, 'the fault reached the SDK\'s one comparison read of the header');
-        assert.deepStrictEqual(headerWrites(f.writes), [], 'no PATCH of the appmodule was sent');
-        assert.deepStrictEqual(f.state.refused, [], 'so nothing a String column cannot take reached the server');
-        assert.deepStrictEqual(sitemapWrites(f.writes), [], 'and the navigation was not written: the SDK writes the header first');
-        // No PATCH of anything, and the app not published. (What a rebuild does before its push — the app's solution membership, an idempotent add — is not the push's.) The one publish
-        // before the push is the request that publishes, ahead of the app's write, the tables whose forms that write adds (publishTablesBeforeApp): it is made before the push is tried,
-        // whichever way the push then ends, and it names tables only.
-        assert.deepStrictEqual(f.writes.filter((w) => w.verb === 'patch'), []);
-        const publishes = f.writes.filter((w) => /\/PublishXml/.test(w.url)).map((w) => String((w.body || {}).ParameterXml || ''));
-        assert.ok(publishes.length <= 1 && publishes.every((xml) => /^<importexportxml><entities>(<entity>[a-z_]+<\/entity>)+<\/entities><\/importexportxml>$/.test(xml)), `at most the one request for the tables before the app, and no publish of the app: ${JSON.stringify(publishes)}`);
-        assert.deepStrictEqual([f.state.name, f.state.description], [shape, 'Tickets'], 'the app is as it was');
-        assert.strictEqual(warnings.filter((w) => /^app "Probe": its description was not applied: the app's name /.test(w)).length, 1, `the held-back description is still reported, once: ${JSON.stringify(warnings)}`);
-
-        // A re-run — the read answers now — finds the copy equal to the row, sends no header, and writes the navigation. (It also shows the failed push left the workspace copy as the
-        // server has it: a copy holding the refused run's edits would be refused as unpushed.)
-        const rerun = await run();
-        assert.strictEqual(rerun.ok, true);
-        assert.deepStrictEqual(headerWrites(f.writes), [], 're-run: still no header PATCH');
-        assert.deepStrictEqual(f.state.refused, [], 're-run: nothing that is not plain text was sent');
-        assert.strictEqual(sitemapWrites(f.writes).length, 1, 're-run: the navigation is written, once');
+        // The read could not be made, so the SDK wrote every text the copy held: the description — on the row's token, as for a plain header — and not the name, which was no longer on the copy.
+        assert.deepStrictEqual(headerWrites(f.writes).map((w) => [w.body, w.ifMatch]), [[{ description: 'Changed' }, 'W/"1"']]);
+        assert.deepStrictEqual(f.state.refused, [], 'nothing a String column cannot take reached the server');
+        assert.strictEqual(sitemapWrites(f.writes).length, 1, 'the navigation is written once');
         const published = f.writes.filter((w) => /\/PublishXml/.test(w.url) && /<appmodule>/.test((w.body || {}).ParameterXml || ''));
-        assert.ok(published.length > 0 && f.writes.indexOf(published[0]) > f.writes.indexOf(sitemapWrites(f.writes)[0]), 're-run: the app is published after its navigation');
-        assert.deepStrictEqual([f.state.name, f.state.description], [shape, 'Tickets'], 're-run: the header is still the maker\'s');
+        assert.ok(published.length > 0 && f.writes.indexOf(published[0]) > f.writes.indexOf(sitemapWrites(f.writes)[0]), 'the app is published after its navigation');
+        assert.deepStrictEqual([f.state.name, f.state.description], [shape, 'Changed'], 'the name is still the maker\'s, and the description is the spec\'s');
+        assert.deepStrictEqual(warnings.filter((w) => /was not applied/.test(w)).map((w) => ownEditWarning && ownEditWarning.test(w)), ownEditWarning ? [true] : [], 'only the name\'s own edit, when the spec\'s name is not one the text already holds, is left unapplied');
       });
     }
   }
 }
 
-// The same fault one level down, with nothing edited at all (`changed: false`) — the case a hold on the workspace copy cannot see: the SDK is still asked to push the copy, and writes its header.
-// The description is judged exactly as the name is, and both together are named together.
+// The same fault with nothing edited at all (`changed: false`) — the case a hold on the edits cannot see: the SDK is still asked to push the copy, and writes the texts it holds. The text that is not plain is off the
+// copy, so only the other one is written: the copy's own, which is the row's (the SDK has no row to compare it with), on the row's token, as for a header that is plain. Both off: nothing is left to write.
+// [what, the header the environment holds, the text the guard names in its refusal of a copy that still holds it, the header PATCH bodies the push makes]
 const PROTECTED_HEADERS = [
-  ...PROTECTED_NAMES.map(([what, name, described]) => [what, { name }, described, { name }]),
-  ['a localized description', { description: localizedText('Tickets', 'Billets') }, /the app's description is localized \(2 languages: 1033, 1036\)\. Nothing was sent/, { description: localizedText('Tickets', 'Billets') }],
-  ['a list for the description', { description: ['Tickets'] }, /the app's description could not be read as plain text \(it came back as a list\)\. Nothing was sent/, { description: ['Tickets'] }],
+  ...PROTECTED_NAMES.map(([what, name, described]) => [what, { name }, described, [{ description: 'Tickets' }]]),
+  ['a localized description', { description: localizedText('Tickets', 'Billets') }, /the app's description is localized \(2 languages: 1033, 1036\)\. Nothing was sent/, [{ name: 'Probe' }]],
+  ['a list for the description', { description: ['Tickets'] }, /the app's description could not be read as plain text \(it came back as a list\)\. Nothing was sent/, [{ name: 'Probe' }]],
   ['a localized name and description', { name: localizedText('Probe', 'Sonde'), description: localizedText('Tickets', 'Billets') },
-    /the app's name is localized \(2 languages: 1033, 1036\) and its description is localized \(2 languages: 1033, 1036\)\. Nothing was sent/, { name: localizedText('Probe', 'Sonde'), description: localizedText('Tickets', 'Billets') }],
+    /the app's name is localized \(2 languages: 1033, 1036\) and its description is localized \(2 languages: 1033, 1036\)\. Nothing was sent/, []],
 ];
 for (const [faultWhat, fault] of COMPARISON_FAULTS) {
-  for (const [shapeWhat, initial, described, held] of PROTECTED_HEADERS) {
-    test(`REAL BUNDLE: ${faultWhat} on the comparison read, over ${shapeWhat} and an edit of nothing — the push of the copy is refused with the typed error, and the copy is put back as the server has it`, async () => {
+  for (const [shapeWhat, initial, , bodies] of PROTECTED_HEADERS) {
+    test(`REAL BUNDLE: ${faultWhat} on the comparison read, over ${shapeWhat} and an edit of nothing — the push goes on without the text that is not plain, and the other text is written as it is`, async () => {
       const f = await freshSdk(initial);
       await f.sdk.fetchArtifact('app', APP_ID);
       const header = await applyAppHeader(f.sdk, spec(), APP_ID, { warn: () => {} });
-      assert.deepStrictEqual(header, { changed: false, routing: false, replaced: {} }, 'the build edited nothing (an array-valued or number text is reported as not applied; a localized one that holds the spec\'s text, or one the spec does not set, is silent)');
+      assert.deepStrictEqual([header.changed, header.routing, header.replaced], [false, false, {}], 'the build edited nothing (an array-valued or number text is reported as not applied; a localized one that holds the spec\'s text, or one the spec does not set, is silent)');
       const injected = failComparisonRead(f, fault);
-      await assert.rejects(pushAppHeader(f.sdk, APP_ID, 'Probe', header), (e) => {
-        assert.ok(e instanceof SdkError);
+      const pushed = await pushAppHeader(f.sdk, APP_ID, 'Probe', header);
+      assert.strictEqual(pushed.saved, true, JSON.stringify(pushed.error && pushed.error.message));
+      assert.strictEqual(injected.reads.length, 1);
+      assert.deepStrictEqual(headerWrites(f.writes).map((w) => w.body), bodies);
+      assert.deepStrictEqual(f.state.refused, []);
+      assert.strictEqual(sitemapWrites(f.writes).length, 1, 'and the navigation is written');
+      for (const [key, value] of Object.entries(initial)) assert.deepStrictEqual(f.state[key], value, `the maker's ${key} is as it was`);
+    });
+  }
+}
+
+// The client is the last line of defence, and it stays: the build's push never carries such a text, but a push of a copy that still holds one — which the build did not make — is refused with the typed error, before
+// a byte is sent, when the SDK's read fails. Nothing was written, not even the navigation, and a re-run finds the read answering.
+for (const [faultWhat, fault] of COMPARISON_FAULTS) {
+  for (const [shapeWhat, initial, described] of PROTECTED_HEADERS) {
+    test(`REAL BUNDLE: ${faultWhat} on the comparison read, over ${shapeWhat}, pushed as the SDK holds it — the client refuses the write with the typed error before a byte is sent`, async () => {
+      const f = await freshSdk(initial);
+      await f.sdk.fetchArtifact('app', APP_ID);
+      const injected = failComparisonRead(f, fault);
+      await assert.rejects(f.sdk.pushArtifact('app', APP_ID), (e) => {
+        assert.ok(e instanceof SdkError, 'the SDK rethrew the client\'s error as it is');
         assert.strictEqual(e.code, NOT_PLAIN);
+        assert.strictEqual(e.transient, false);
         assert.match(e.message, described);
         return true;
       });
       assert.strictEqual(injected.reads.length, 1);
-      assert.deepStrictEqual([headerWrites(f.writes), f.state.refused, sitemapWrites(f.writes)], [[], [], []]);
-      const kept = await f.sdk.getArtifact('app', APP_ID);
-      assert.deepStrictEqual([kept.name, kept.description], [held.name || 'Probe', held.description || 'Tickets'], 'the copy holds what the server holds');
+      assert.deepStrictEqual([headerWrites(f.writes), f.state.refused, sitemapWrites(f.writes)], [[], [], []], 'nothing was sent, and the SDK writes the header first, so the navigation was not written either');
+      // The copy is as the fetch read it, so a re-run's push — the read answers now — finds it equal to the row and sends no header at all.
+      assert.deepStrictEqual((await f.sdk.pushArtifact('app', APP_ID)).saved, true);
+      assert.deepStrictEqual(headerWrites(f.writes), []);
     });
   }
 }

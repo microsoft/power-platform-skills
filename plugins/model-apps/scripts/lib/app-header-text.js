@@ -3,22 +3,23 @@
 //
 // Both are String columns of the app module table
 // (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule). The build edits them on the workspace copy of
-// an existing app (sdk-build.js `applyAppHeaderText`) and never edits a text that is not plain — a text per language held as an LCID map, a list, a
-// number — because the SDK writes the header from the whole copy and cannot be told to leave one field out. That hold is on the COPY, though, and the
-// SDK decides for itself whether the header is written. Its push of an app makes two requests about the header (the vendored bundle, `pushArtifact('app')`):
+// an existing app (sdk-build.js `applyAppHeaderText`), never edits a text that is not plain — a text per language held as an LCID map, a list, a
+// number — and takes such a text off the copy right before it pushes it (`pushAppHeader`, `removeElement`), which the SDK reads as "neither compared nor
+// written" (cds-maker-sdk 9a0c9f03). That is a hold on the COPY, though, and the SDK decides for itself what it writes. Its push of an app makes two requests
+// about the header (the vendored bundle, `pushArtifact('app')`):
 //
 //   GET   …/api/data/v9.0/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,uniquename,description,aiappdescription&$filter=appmoduleid eq <id>&$top=1
 //         (the commas and the spaces are percent-encoded on the wire)
 //   PATCH …/api/data/v9.0/appmodules(<id>)?$select=appmoduleid            If-Match: W/"<the row's token>"
-//         { "name": "Help Desk", "description": "Track tickets" }          (plus "aiappdescription" when the copy carries one)
+//         { "description": "Track tickets" }                              (only the texts that differ from the row's: `name`, `description`, `aiappdescription`)
 //
-// The PATCH is made when that comparison read finds the copy's header different from the row's — and also when the read CANNOT be made: the SDK's "write
-// needed" flag starts true and only a 2xx answer sets it, so a read that answers 503 or 403, or that throws, leaves it true; a 200 with no row is compared
-// with an empty header, which differs, so it comes out true as well. The header is then written from the copy as it is, a text that is not plain included.
-// "The build made no header edit" has therefore never meant "no header PATCH". The one place that sees
-// every request is the client, so the last line of defence is there: a PATCH of an app module row whose body carries a `name` or a `description` that is not
-// a string is not sent. It fails before any byte leaves, with APP_HEADER_NOT_PLAIN_TEXT. (Pinned against the real bundle, for each way the comparison read
-// can fail, in tests/app-header-text-real-bundle.test.js.)
+// The PATCH carries each text of the copy that differs from the row the comparison read answered — and, when that read CANNOT be made, EVERY text the copy
+// holds: the SDK's "write needed" flag starts true and only a 2xx answer sets it, so a read that answers 503 or 403, or that throws, leaves it true, and a 200
+// with no row is compared with an empty header, which differs. A text that is not on the copy is neither compared nor written, so a build that took the text
+// that is not plain off the copy never offers it. But a push the build did not clean — the page backend's push of the app copy it fetched, say — can carry
+// one, and "the build edited no text" has never meant "no header PATCH". The one place that sees every request is the client, so the last line of defence is
+// there: a PATCH of an app module row whose body carries a `name` or a `description` that is not a string is not sent. It fails before any byte leaves, with
+// APP_HEADER_NOT_PLAIN_TEXT. (Pinned against the real bundle, for each way the comparison read can fail, in tests/app-header-text-real-bundle.test.js.)
 //
 // THE OTHER DOORS. The SDK's own `patch` is not the only way that PATCH can leave the process. `sdk.dataverse` is a public surface, and three more of its methods reach the client with a body this module
 // does not see as an object:

@@ -23,8 +23,8 @@
 // system table, so delete it. Guarded here, once, no script that makes an SDK can forget it, and no request is added or changed: only that answer is looked at. It then fails as an SdkError (TABLES_UNREADABLE), which the
 // bundle rethrows as it is.
 // The second (lib/app-header-text.js): a PATCH of an app module row whose name or description is not a string — through `patch`, through
-// `patchRaw`, or in a change set a caller sends raw (`dataverse.postBatch`) — is refused before it is sent. The SDK's push of an app writes the header from the workspace copy whenever its own comparison
-// read of the header cannot be made, and the build never edits a header text that is not plain, so the request itself is the last place to stop one. Guarded here, once, so no script that makes an SDK
+// `patchRaw`, or in a change set a caller sends raw (`dataverse.postBatch`) — is refused before it is sent. The SDK's push of an app writes every text its workspace copy holds whenever its own comparison
+// read of the header cannot be made, and the build never sends a header text that is not plain (it takes such a text off the copy before it pushes it), so for a push the build did not clean the request itself is the last place to stop one. Guarded here, once, so no script that makes an SDK
 // can leave an app push unguarded (tests/maker-sdk.test.js pins that no script makes one another way); the refusal is an SdkError (APP_HEADER_NOT_PLAIN_TEXT), which the bundle rethrows as it is. No request
 // is added or changed: only writes of that row are looked at, and every other member of the client runs on the client itself, so a client whose methods keep private state still works.
 const bundle = require('../vendor/cds-maker-sdk.cjs');

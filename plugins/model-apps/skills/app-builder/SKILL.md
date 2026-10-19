@@ -799,9 +799,9 @@ child view id. Each step emits `[n/total]`.
   or sort. A changed column type, and an edited command or dashboard, are not re-applied at all; an
   existing chart takes only a changed description, an existing app takes a changed name and description
   (an app that was never published keeps its text and the build warns it was not applied, and so does one whose name or
-  description is localized — the SDK writes the two together, so while either is localized the header is not edited at
-  all, a routing description included, and if the SDK's own read of the header fails while one is, the build stops with
-  `APP_HEADER_NOT_PLAIN_TEXT` before anything is sent or written: re-run it; the icon is set when the app is created: a
+  description is localized — only that text is held back: the other text and a routing description are applied, the SDK
+  writes only what changed, and a text that is not plain is never sent, even when the SDK's own read of the header fails;
+  the icon is set when the app is created: a
   different `app.icon` is reported as not applied), and an existing
   business process flow takes the stage and step edits that cannot move a record — a stage added or renamed,
   a step added, renamed, rebound or moved — and refuses, saying why, one that would remove a stage or a step

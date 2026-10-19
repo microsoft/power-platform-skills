@@ -808,38 +808,41 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   description have), so a spec that leaves the description out or carries the `""` a download writes never blanks
   one a maker typed; the spec wins over a text changed in Maker, as it does for those. The unique name is the app's
   identity and is never written: a spec that pins `app.uniqueName` (a download does) is renamed, one that does not
-  names a different app. **The header is written only while both texts are plain text.** Both columns are localizable,
-  and a plain write of the base-language text has not been measured to keep the translations beside it, so a name or
-  description that comes back as one text per language — or as any other value that is not a string — is never sent:
-  not as a map (these are String columns), and not replaced by a scalar. The SDK's one header PATCH carries the
-  artifact's `name` AND `description` whichever of them an edit changed (pinned in
-  `app-header-text-real-bundle.test.js`), so leaving that one field alone is not enough: while either text is not
-  plain **no header edit is made at all** — not the other text's, and not a requested routing description — and each
-  edit the spec asked for is reported as not applied, with the reason (change it in Power Apps). That is a warning,
-  never a halt: the push is the navigation alone, as for a rebuild with no edit. A localized text the spec's own text
-  already equals needs no edit and no word. **That whole-header hold is the chosen policy, and the SDK is the reason:**
-  it has no partial header write — its PATCH is built from the whole workspace copy and the row token that conditions it
-  is private to it. The plugin therefore cannot send only the one plain field that changed: a PATCH of its own would
-  need a row token read afresh (a blind overwrite of whatever changed since the fetch), and taking the text that is not
-  plain off the copy for the SDK to leave out would lean on an SDK internal — the serializer dropping `undefined` — whose
-  failure (a re-vendor that writes `name: ''`) blanks an app's name. A plain edit beside a text that is not plain is
-  held back, with a warning, rather than sent alone. Writing only the changed field needs an SDK operation (a partial
-  header write): a follow-up, after which the hold can be narrowed to the one field (the real-bundle pin that the PATCH
-  carries both texts fails the day the bundle makes it partial).
-  **The hold is on the workspace copy, and the SDK decides for itself whether the header is written** (`lib/app-header-text.js`).
-  Its push reads the app's header and compares it with the copy; its "write needed" flag starts true and only a 2xx
+  names a different app. **A text that is not plain is never sent, and it holds nothing else back.** Both columns are
+  localizable, and a plain write of the base-language text has not been measured to keep the translations beside it, so
+  a name or description that comes back as one text per language — or as any other value that is not a string — is never
+  edited and never sent: not as a map (these are String columns), and not replaced by a scalar. Its own edit is reported
+  as not applied, with the reason (change it in Power Apps) — a warning, never a halt; a localized text the spec's own
+  text already equals needs no edit and no word. The other text and a requested routing description are applied as usual:
+  the SDK's header PATCH carries only the texts that changed (cds-maker-sdk 9a0c9f03; pinned in
+  `app-header-text-real-bundle.test.js`), so a localized name beside a changed plain description writes the description
+  alone and leaves every translation of the name as it is, and the reverse. (While the SDK wrote the whole copy in every
+  header PATCH, one text that was not plain held the whole header back, and this paragraph said so.)
+  **A text that is not plain is kept off the wire by being taken off the workspace copy**, right before the push
+  (`takeNonPlainTextOffCopy`, called by `pushAppHeader`, `removeElement('app', id, '/name')`): the SDK neither compares nor
+  writes a text that is not on its copy — now its documented contract, where it was once an SDK internal (the serializer
+  dropping `undefined`) whose failure, a re-vendor that writes `name: ''`, would blank an app's name; the real-bundle
+  tests pin it, and that the push saves, leaves the copy clean and that a plain fetch brings the maker's text back. The
+  texts to take off are what `applyAppHeader` answers as `held`; it edits the copy no further than the edits themselves.
+  The push is where they come off — not the edit — because a copy that holds an edit no push follows is refused by the next
+  run (`refuseUnpushedAppCopy`): the routing description of a page-backed app is pushed only when it changed.
+  **Taking it off the copy is what makes it safe when the SDK's own read fails** (`lib/app-header-text.js`).
+  The SDK's push reads the app's header and compares it with the copy; its "write needed" flag starts true and only a 2xx
   answer sets it, so a read that cannot be made (HTTP 503 or 403, a thrown error) leaves it true, and an empty 200 is
-  compared with an empty header, which differs: the header is written from the copy as it is, a text that is not plain
-  included — even when the build edited nothing. So the HTTP client every SDK is made
-  with (`lib/maker-sdk.js` is the one way a script makes one) refuses a PATCH of an app module row whose `name` or
+  compared with an empty header, which differs: it then writes every text the copy holds, the text that is not plain
+  included — which is why the hold on the edit alone was never enough. With the text off the copy, only the other text is
+  written then (the copy's own, on the row's token, as for a plain header), and the build goes on.
+  So the HTTP client every SDK is made
+  with (`lib/maker-sdk.js` is the one way a script makes one) still refuses a PATCH of an app module row whose `name` or
   `description` is not a string, before any byte is sent: `APP_HEADER_NOT_PLAIN_TEXT`, an `SdkError` the bundle rethrows
-  as it is, marked `transient: false` (the build never runs the phase again on its own for it). Nothing is sent, and the
-  SDK writes the header before the navigation, so the push wrote nothing of the sitemap either; the copy is reset to the
-  server's, the halt is `app-shell failed: …` (or `pages failed: …` at the finalizer) with that code, and its message says
-  the header holds a text that is not plain, that nothing was written, and that the SDK only tried because its own
-  comparison read failed — so a re-run normally succeeds. Pinned over the real bundle for each way that read fails, a
-  localized and an array-valued text, and both complete push sites, in `app-header-text-real-bundle.test.js`. No PATCH the
-  build makes carries a map, a list or a scalar over a text that is not plain.
+  as it is, marked `transient: false` (the build never runs the phase again on its own for it). It is the last line of
+  defence, for a push of a copy the build did not clean — the page backend's push of the app, which fetches its own copy —
+  and the build's own push never meets it. Nothing is sent, and the SDK writes the header before the navigation, so the
+  push wrote nothing of the sitemap either; the halt is `… failed: …` with that code, and its message says the header holds
+  a text that is not plain, that nothing was written, and that the SDK only tried because its own comparison read failed — so
+  a re-run normally succeeds. Pinned over the real bundle for each way that read fails, a localized and an array-valued text, in
+  `app-header-text-real-bundle.test.js` (the build's push goes on without the text; a push of the copy as the SDK holds it is
+  refused).
   **The guard stands in front of every door the SDK's client has, not only `patch`.** A PATCH of the app module row that
   rides in a raw change set (`sdk.dataverse.postBatch`, which sends the body a caller rendered through the client's
   `postRaw`, or the same text through `post`) or in `patchRaw` is refused the same way — the same typed, non-transient
@@ -2257,7 +2260,7 @@ scripts/
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK; a caller can name requests that are sent exactly once (`sendOnce(method, url)`: no retry on a transport failure, a 429 or 5xx, or a 401 refresh, and none of the replays special to a record delete and a `$batch` either) — `solution-settings.js` does for the three long solution actions; an answer that is not a success comes back with the access token taken out of it (and a transport failure's text too, the error that carries Node's code included), a success untouched — the one `scrub` / `scrubAnswer` the Power Apps client uses as well; `throttleBackoffMs(attempt, random)` is the capped, jittered schedule every throttled request waits on (1 s, 2 s, 4 s, 8 s, 8 s), exported because the page backend waits out a throttled page write on it (the client never re-sends a page's `$batch`: `lib/genpage-sdk.js` does, a push at a time); `retryAfterMs(headers, now, cap)` and `batchRetryAfterMs(res, now, cap)` cap what a response asks at a minute for the client's own retries, and a caller with a bound of its own passes `Infinity`: the page backend spends it inside the run's budget, and `solution-settings.js` inside the one budget of its import resend; `completeBatchStatus(res)` is the one status a COMPLETE multipart answer reports for every operation (the page backend reads a change set refused as a whole with it); the parser behind it, `isBatchThrottled` and `isBatchDeadlockVictim` is strict — an answer is read only when its outer boundary closes, every change set in it closes, and every part is a complete response whose first line is a status line; a part that declares a change set (`Content-Type: multipart/mixed; boundary=…`) must open and close exactly that boundary before the outer one goes on, a part with no response in it is an operation nobody answered, and a body is as long as the `Content-Length` its response gives, counted by the line breaks the answer has; a part that declares a `Transfer-Encoding` (chunked or any other) is not read at all, whole stream or not — the delimiters around it say nothing of whether its chunk stream is finished, so it never certifies a refusal or a deadlock victim; anything missing or malformed makes the WHOLE answer unproven (an answer that closes its outer boundary and is incomplete inside proves nothing); `isTransientTransportFailure(text, code)` says which failures of the transport are sent again — decided by Node's own error code when `makeRequest` reported one (`TRANSIENT_TRANSPORT_CODES`: `ECONNRESET`, `ETIMEDOUT`, `ESOCKETTIMEDOUT`, `ECONNABORTED`, `EPIPE`, `EAI_AGAIN`; any other code is final whatever the words say) and by the words only when it did not (a certificate's own phrases first): a reset, a timeout, an answer cut off, a temporary DNS failure, the same list `lib/retry-policy.js` calls a blip, and nothing else — a certificate that does not verify (whatever names it quotes), an unknown host and a message nobody recognises return at once; the error it throws carries the code beside the same message (this file is copied into the pcf plugin, so a test holds the two lists equal). Copied verbatim into `plugins/pcf` (`scripts/validate-plugin-copies.js`)
     maker-sdk.js               ← the one way a script makes an SDK: the vendored bundle with the vendored TypeScript compiler as its page compiler, and with the client it is handed guarded by `app-header-text.js`; `connectivity: true` (opt-in) also gives the instance the Power Apps service client, so no script wires a credential-carrying client by hand; and the `httpClient` it is given is handed over with the read of the environment's TABLE LIST held to being a list (`lib/collection-answers.js` `guardTableLists`), so every script's `findTables()` meets a failure (`TABLES_UNREADABLE`, an `SdkError`, so `error.code`) where the bundle alone would read a sign-in page, `{}` or `null` as "no tables" — none can forget it
-    app-header-text.js         ← an app's header texts (`name`, `description`) held to plain text at the HTTP client every SDK is made with (wired in `maker-sdk.js`): a PATCH of an app module row that carries one that is not a string is refused before any byte is sent — `APP_HEADER_NOT_PLAIN_TEXT`, an `SdkError` marked `transient: false` — whether it is the SDK's `patch`, a `patchRaw`, or a PATCH inside a raw change set (`postRaw` / `post` to `$batch`), because the SDK writes the workspace copy's header whenever its own comparison read of it cannot be made (503, 403, a thrown error, an empty 200). A batch that names the app module table and cannot be read is refused too. A delegating Proxy: every member it does not judge runs on the client itself. Also how such a text reads in a message (`describeHeldAppText`), which `sdk-build.js`'s warnings share
+    app-header-text.js         ← an app's header texts (`name`, `description`) held to plain text at the HTTP client every SDK is made with (wired in `maker-sdk.js`): a PATCH of an app module row that carries one that is not a string is refused before any byte is sent — `APP_HEADER_NOT_PLAIN_TEXT`, an `SdkError` marked `transient: false` — whether it is the SDK's `patch`, a `patchRaw`, or a PATCH inside a raw change set (`postRaw` / `post` to `$batch`), because the SDK writes every text its workspace copy holds whenever its own comparison read of the header cannot be made (503, 403, a thrown error, an empty 200). The build takes such a text off the copy before its push, so this is the last line of defence, for a push of a copy it did not clean. A batch that names the app module table and cannot be read is refused too. A delegating Proxy: every member it does not judge runs on the client itself. Also how such a text reads in a message (`describeHeldAppText`), which the guard's refusals share
     batch-request.js           ← a multipart `$batch` REQUEST read the way the service reads it — `readBatchRequest(text, contentType)`: the parts of the boundary the Content-Type declares, a change set one level down, one HTTP request in each part, answered as `{ operations: [{ method, target, contentId, body }] }`, or `{ problem }` for text it cannot read with confidence (cut short, another boundary, a part that is not a request). A body is only ever text: a line in it that looks like a request is not an operation. `app-header-text.js` reads a raw change set with it
     throwaway-sdk.js           ← `withThrowawaySdk({ env, prefix, httpClient? }, run)`: the bundled SDK, made through `maker-sdk.js`, over a throwaway workspace folder (made by `temp-workspace.js`) that is removed whichever way the run ends (a constructor, a storage or a module that throws included); `run(make)` gets a `make(extra)` for more instances over the same folder and the one client (`make({ languageCode })` is a writer). The one copy of what `apps.js`, `list-tables.js` and `list-languages.js` each wrote out
     collection-answers.js      ← `requireCollectionAnswers(client, { reads, unreadable })`: the HttpClient the SDK is given, with one addition — a 2xx answer to a read `reads(url)` selects must be a collection (`{ value: [...] }`), or the read throws what `unreadable` says; `unreadableAnswer(error)` finds that error, itself or under the SDK's `ConnectionError`. `guardTableLists(client, makeError)` is its policy for the one read of the environment's table list (`/EntityDefinitions?…`, which only `findTables()` makes), and `maker-sdk.js` applies it to every SDK a script makes: the SDK's `findTables()` is `body.value ?? []`, and the bundle is not edited
@@ -3845,9 +3848,9 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
 - **An app header write is never unconditional** (`scripts/tests/app-ai-description-real-bundle.test.js`,
   `scripts/tests/app-header-text-real-bundle.test.js`). The
   SDK writes the app's name, description and routing description conditioned on the appmodule ROW token a
-  fetch read, even when its own read of the header fails (the header PATCH carries `name` and `description` —
-  always both, whichever one an edit changed — and, when one is supplied, `aiappdescription`; the icon is written at
-  create only). A header edit made while it
+  fetch read, even when its own read of the header fails (the header PATCH carries only the texts that changed:
+  `name`, `description` and, when one is supplied, `aiappdescription` — and every text its copy holds when that read
+  fails; the icon is written at create only). A header edit made while it
   holds no token throws `APP_UPDATE_NO_ETAG` before anything is written (it used to send the PATCH plain,
   which overwrote another writer's header). The plugin edits an existing app's header only on a copy it has
   just fetched, and only its text (`name`, `description`: `applyAppHeaderText`) and the routing description
