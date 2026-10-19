@@ -193,27 +193,18 @@ function assertPreparationPath(projectRoot, relativePath) {
 function copyMissingGuidance(projectRoot, state) {
   const copied = [];
   const preserved = [];
+  const skipped = [];
   for (const relativePath of GUIDANCE_FILES) {
     assertPreparationPath(projectRoot, relativePath);
     if (state.files.get(relativePath).exists) {
       preserved.push(relativePath);
       continue;
     }
-    if (relativePath.startsWith('.github/')) {
-      try {
-        const guidanceDirectory = path.join(projectRoot, '.github');
-        fs.mkdirSync(guidanceDirectory);
-        state.guidanceDirectoryCreated = true;
-        const stat = fs.lstatSync(guidanceDirectory, { bigint: true });
-        state.guidanceDirectoryIdentity = {
-          dev: stat.dev,
-          ino: stat.ino,
-          birthtimeNs: stat.birthtimeNs,
-        };
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        assertPreparationPath(projectRoot, relativePath);
-      }
+    if (relativePath.includes('/')) {
+      // Node exposes no cross-platform openat/no-follow copy primitive. Never write
+      // through a replaceable nested parent after a path-only validation.
+      skipped.push(relativePath);
+      continue;
     }
     // Exclusive creation preserves even a customer file appearing after preflight.
     // Track successful copies, not planned targets, so rollback owns only our files.
@@ -223,7 +214,7 @@ function copyMissingGuidance(projectRoot, state) {
     state.createdGuidanceContents.set(relativePath, fs.readFileSync(sourcePath));
     copied.push(relativePath);
   }
-  return { copied, preserved };
+  return { copied, preserved, skipped };
 }
 
 function verifyHostTsconfig(projectRoot) {
@@ -590,8 +581,6 @@ function capturePreparationState(projectRoot) {
     files,
     createdGuidanceFiles: new Set(),
     createdGuidanceContents: new Map(),
-    guidanceDirectoryCreated: false,
-    guidanceDirectoryIdentity: null,
   };
 }
 
@@ -628,22 +617,6 @@ function restorePreparationState(projectRoot, state) {
     const directoryPath = path.join(projectRoot, directory.relativePath);
     if (fs.existsSync(directoryPath) && fs.readdirSync(directoryPath).length === 0) {
       fs.rmdirSync(directoryPath);
-    }
-  }
-  const guidanceDirectory = path.join(projectRoot, '.github');
-  if (state.guidanceDirectoryCreated) {
-    const stat = fs.lstatSync(guidanceDirectory, { bigint: true, throwIfNoEntry: false });
-    const sameDirectory = stat
-      && stat.isDirectory()
-      && !stat.isSymbolicLink()
-      && state.guidanceDirectoryIdentity
-      && stat.dev === state.guidanceDirectoryIdentity.dev
-      && stat.ino === state.guidanceDirectoryIdentity.ino
-      && stat.birthtimeNs === state.guidanceDirectoryIdentity.birthtimeNs;
-    if (stat && !sameDirectory) {
-      rollbackConflicts.push('.github');
-    } else if (sameDirectory && fs.readdirSync(guidanceDirectory).length === 0) {
-      fs.rmdirSync(guidanceDirectory);
     }
   }
   if (rollbackConflicts.length > 0) {
@@ -704,6 +677,7 @@ function prepareMobileTemplate(options) {
     preservedSharedFiles: sharedFiles.preserved,
     copiedGuidanceFiles: guidanceFiles.copied,
     preservedGuidanceFiles: guidanceFiles.preserved,
+    skippedGuidanceFiles: guidanceFiles.skipped,
   };
 }
 

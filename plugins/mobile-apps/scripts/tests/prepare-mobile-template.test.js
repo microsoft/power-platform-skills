@@ -17,6 +17,8 @@ const {
 const pluginRoot = path.resolve(__dirname, '../..');
 const templateRoot = path.join(pluginRoot, 'template');
 const guidanceFiles = ['AGENTS.md', 'CLAUDE.md', '.github/copilot-instructions.md'];
+const copyableGuidanceFiles = ['AGENTS.md', 'CLAUDE.md'];
+const nestedGuidanceFiles = ['.github/copilot-instructions.md'];
 const fixtureDirectories = [];
 
 test.after(() => {
@@ -119,8 +121,9 @@ test('preparation CLI copies POSIX-relative guidance beneath a native root with 
   ], { cwd: path.dirname(projectRoot), encoding: 'utf8', timeout: 10000 });
   assert.strictEqual(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
-  assert.deepStrictEqual(report.copiedGuidanceFiles, guidanceFiles);
-  for (const relativePath of guidanceFiles) {
+  assert.deepStrictEqual(report.copiedGuidanceFiles, copyableGuidanceFiles);
+  assert.deepStrictEqual(report.skippedGuidanceFiles, nestedGuidanceFiles);
+  for (const relativePath of copyableGuidanceFiles) {
     assert.ok(report.writtenFiles.includes(relativePath));
     assert.deepStrictEqual(
       fs.readFileSync(path.join(projectRoot, ...relativePath.split('/'))),
@@ -137,13 +140,14 @@ test('preparation adds only missing guidance and reports exact writer ownership'
   const result = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
   const after = fileSnapshot(projectRoot);
 
-  assert.deepStrictEqual(result.copiedGuidanceFiles, guidanceFiles);
+  assert.deepStrictEqual(result.copiedGuidanceFiles, copyableGuidanceFiles);
   assert.deepStrictEqual(result.preservedGuidanceFiles, []);
+  assert.deepStrictEqual(result.skippedGuidanceFiles, nestedGuidanceFiles);
   assert.deepStrictEqual(result.writtenFiles, [...after]
     .filter(([name, content]) => !before.has(name) || !content.equals(before.get(name)))
     .map(([name]) => name.split(path.sep).join('/'))
     .sort());
-  for (const relativePath of guidanceFiles) {
+  for (const relativePath of copyableGuidanceFiles) {
     assert.deepStrictEqual(
       fs.readFileSync(path.join(projectRoot, relativePath)),
       fs.readFileSync(path.join(templateRoot, relativePath)),
@@ -154,7 +158,8 @@ test('preparation adds only missing guidance and reports exact writer ownership'
   const repeated = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
   assert.deepStrictEqual(repeated.writtenFiles, []);
   assert.deepStrictEqual(repeated.copiedGuidanceFiles, []);
-  assert.deepStrictEqual(repeated.preservedGuidanceFiles, guidanceFiles);
+  assert.deepStrictEqual(repeated.preservedGuidanceFiles, copyableGuidanceFiles);
+  assert.deepStrictEqual(repeated.skippedGuidanceFiles, nestedGuidanceFiles);
   assertSnapshotsEqual(after, fileSnapshot(projectRoot));
 });
 
@@ -168,16 +173,17 @@ test('preparation preserves customer guidance bytes and fills a partial set', ()
   fs.writeFileSync(unrelated, 'customer-owned\n');
 
   const result = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
-  assert.deepStrictEqual(result.copiedGuidanceFiles, ['.github/copilot-instructions.md']);
-  assert.deepStrictEqual(result.preservedGuidanceFiles, ['AGENTS.md', 'CLAUDE.md']);
+  assert.deepStrictEqual(result.copiedGuidanceFiles, []);
+  assert.deepStrictEqual(result.preservedGuidanceFiles, copyableGuidanceFiles);
+  assert.deepStrictEqual(result.skippedGuidanceFiles, nestedGuidanceFiles);
   assert.deepStrictEqual(fs.readFileSync(path.join(projectRoot, 'AGENTS.md')), customAgents);
   assert.strictEqual(fs.readFileSync(path.join(projectRoot, 'CLAUDE.md'), 'utf8'), '');
   assert.strictEqual(fs.readFileSync(unrelated, 'utf8'), 'customer-owned\n');
   assert.ok(!result.writtenFiles.includes('AGENTS.md'));
   assert.ok(!result.writtenFiles.includes('CLAUDE.md'));
-  assert.deepStrictEqual(
-    fs.readFileSync(path.join(projectRoot, '.github', 'copilot-instructions.md')),
-    fs.readFileSync(path.join(templateRoot, '.github', 'copilot-instructions.md')),
+  assert.strictEqual(
+    fs.existsSync(path.join(projectRoot, '.github', 'copilot-instructions.md')),
+    false,
   );
 });
 
@@ -190,6 +196,7 @@ test('preparation preserves all existing customer guidance byte-for-byte', () =>
   const result = prepareMobileTemplate({ workingDir: projectRoot, ...guidanceOptions });
   assert.deepStrictEqual(result.copiedGuidanceFiles, []);
   assert.deepStrictEqual(result.preservedGuidanceFiles, guidanceFiles);
+  assert.deepStrictEqual(result.skippedGuidanceFiles, []);
   for (const relativePath of guidanceFiles) {
     assert.deepStrictEqual(
       fs.readFileSync(path.join(projectRoot, relativePath)),
@@ -272,54 +279,6 @@ test('guidance rollback preserves a customer replacement made after exclusive co
   }), /rollback failed: customer-modified guidance preserved: AGENTS\.md/);
   before.set('AGENTS.md', customerContent);
   assertSnapshotsEqual(before, fileSnapshot(projectRoot));
-});
-
-test('guidance rollback retains new parent directories containing unrelated customer files', (t) => {
-  const projectRoot = copyTemplate();
-  removeGuidance(projectRoot);
-  fs.rmdirSync(path.join(projectRoot, '.github'));
-  const before = fileSnapshot(projectRoot);
-  const copilotPath = path.join(projectRoot, '.github', 'copilot-instructions.md');
-  const originalCopy = fs.copyFileSync;
-  t.mock.method(fs, 'copyFileSync', (source, destination, flags) => {
-    if (destination === copilotPath) {
-      fs.writeFileSync(path.join(projectRoot, '.github', 'customer.txt'), 'Concurrent customer file\n');
-      throw new Error('Simulated guidance copy failure');
-    }
-    return originalCopy(source, destination, flags);
-  });
-  assert.throws(() => prepareMobileTemplate({
-    workingDir: projectRoot, ...guidanceOptions,
-  }), /Simulated guidance copy failure/);
-  before.set(path.join('.github', 'customer.txt'), Buffer.from('Concurrent customer file\n'));
-  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
-});
-
-test('guidance rollback preserves an empty replacement of its created parent directory', (t) => {
-  const projectRoot = copyTemplate();
-  removeGuidance(projectRoot);
-  const guidanceDirectory = path.join(projectRoot, '.github');
-  fs.rmdirSync(guidanceDirectory);
-  const layoutPath = path.join(projectRoot, 'app', '_layout.tsx');
-  fs.writeFileSync(layoutPath, fs.readFileSync(layoutPath, 'utf8')
-    .replace('<Slot />', '<SafeAreaView><Slot /></SafeAreaView>'));
-  const before = fileSnapshot(projectRoot);
-  const copilotPath = path.join(guidanceDirectory, 'copilot-instructions.md');
-  const originalCopy = fs.copyFileSync;
-  t.mock.method(fs, 'copyFileSync', (source, destination, flags) => {
-    const result = originalCopy(source, destination, flags);
-    if (destination === copilotPath) {
-      fs.rmSync(guidanceDirectory, { recursive: true });
-      fs.mkdirSync(guidanceDirectory);
-    }
-    return result;
-  });
-
-  assert.throws(() => prepareMobileTemplate({
-    workingDir: projectRoot, ...guidanceOptions,
-  }), /rollback failed: customer-modified guidance preserved: \.github/);
-  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
-  assert.ok(fs.lstatSync(guidanceDirectory).isDirectory());
 });
 
 test('preparation rejects a symlinked project root without mutations', (t) => {
