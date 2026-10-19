@@ -163,6 +163,11 @@ function startTarget(t, args, { env = {} } = {}) {
       if (!ended) child.kill('SIGKILL');
       return ending();
     },
+    // A signal a program can handle, sent the way a parent or a timeout sends one — POSIX only: on Windows it is TerminateProcess, as above. Resolves with how the process ended: `{ code, signal }`.
+    async signal(name) {
+      if (!ended) child.kill(name);
+      return ending();
+    },
   };
   started.push({ args, pid: child.pid, child, isEnded: () => ended, said: () => ({ stdout: out.slice(-1000), stderr: err.slice(-1000), ended }) });
   armWatchdog();

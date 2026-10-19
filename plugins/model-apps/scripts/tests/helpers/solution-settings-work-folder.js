@@ -103,8 +103,8 @@ function refusingWorkFolders(t, { plugin = 'ENOSPC', plain = 'EACCES' } = {}) {
   };
   t.after(() => {
     fs.mkdtempSync = real;
-    // The maker makes the plugin's folder before it asks it for a workspace, and removes it when the process ends only if a workspace was made in it: with none, it is this test's to remove (`rmdir` takes
-    // an empty folder and nothing else).
+    // The maker makes the plugin's folder before it asks it for a workspace, and takes it away when the process ends if nothing is in it, a refused workspace included: the tests that follow in this process should not find it
+    // either, so it is this test's to remove now (`rmdir` takes an empty folder and nothing else).
     try { fs.rmdirSync(pluginFolderOf()); } catch { /* not there, or something is in it */ }
   });
   return refused;

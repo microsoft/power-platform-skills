@@ -631,22 +631,136 @@ test('REAL PROCESSES: runs that make and remove workspaces while others sweep �
   for (const run of runs) assert.strictEqual((await run.exited).code, 0, `a run ended cleanly — none had its own removal fail: ${run.stderr()}`);
 });
 
-test('when a process ends it removes the plugin\'s folder if nothing is left in it — and leaves it if a workspace was left', async (t) => {
+test('when a process ends it removes the plugin\'s folder if nothing is left in it', async (t) => {
   const root = privateTempRoot(t);
-  const deps = { os: { tmpdir: () => root } };
   const clean = startTarget(t, ['workspace-exit', 'genpage-'], { env: tempEnv(root) });
   await clean.waitFor(/^done$/);
   await clean.exited;
   assert.deepStrictEqual(fs.readdirSync(root), [], 'a normal run leaves the temp folder as it found it');
+});
 
-  const careless = startTarget(t, ['workspace-keep', 'genpage-'], { env: tempEnv(root) });
-  const left = (await careless.waitFor(/^workspace /)).slice('workspace '.length);
-  await careless.exited;
-  assert.ok(fs.existsSync(path.join(left, 'page.tsx')), 'a workspace a run did not remove is left where it is');
-  assert.deepStrictEqual(fs.readdirSync(root), [path.basename(workspaceParent(deps))], 'in the plugin\'s folder');
-  // The run has ended — it is gone — so the next sweep takes its workspace, and not the folder.
-  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(left)]);
+// ── A run that is cut short ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// What ends a run in a way JavaScript can see — process.exit, and an error nothing catches — runs the `exit` event, and a run that ends so has usually not reached the `finally` that removes its workspace. The workspace and
+// the plugin's folder it is in were left for the next run: its sweep takes the workspace, and the folder stays until some run ends with nothing in it. So the end of a run takes, besides the folder when it is empty, the
+// workspaces the run itself made and did not lend (a run that lends one is not the one to say when the program it lent it to is done). A signal is not one of these ends: the default action of SIGINT and SIGTERM ends
+// the process with no JavaScript run, and a listener, which would, replaces that default action — for every script that makes a workspace.
+const ABORTS = [['process.exit(7)', 'exit', 7], ['an error nothing catches', 'throw', 1]];
+
+for (const [what, how, status] of ABORTS) {
+  test(`a run that ends by ${what} with its workspace still there takes the workspace and the plugin's folder with it, and ends with the status it would have had`, async (t) => {
+    const root = privateTempRoot(t);
+    const run = startTarget(t, ['workspace-abort', 'genpage-', how], { env: tempEnv(root) });
+    const made = (await run.waitFor(/^workspace /)).slice('workspace '.length);
+    assert.strictEqual(path.dirname(made), workspaceParent({ os: { tmpdir: () => root } }), 'the run made its workspace in the plugin\'s folder');
+    const ended = await run.exited;
+    assert.deepStrictEqual([ended.code, ended.signal], [status, null], 'the status is the one the run would have ended with');
+    assert.deepStrictEqual(fs.readdirSync(root), [], 'the temp folder is as the run found it: the workspace is gone, and so is the plugin\'s folder');
+  });
+
+  test(`a run that removed its workspace before it ended by ${what} leaves nothing either, and ends with the same status`, async (t) => {
+    const root = privateTempRoot(t);
+    const run = startTarget(t, ['workspace-abort', 'genpage-', how, 'removed'], { env: tempEnv(root) });
+    await run.waitFor(/^workspace /);
+    const ended = await run.exited;
+    assert.deepStrictEqual([ended.code, ended.signal], [status, null]);
+    assert.deepStrictEqual(fs.readdirSync(root), []);
+  });
+}
+
+test('a run that ends by process.exit or an error nothing catches takes only what is its own: while another run\'s workspace is in the plugin\'s folder, that workspace is whole and the folder stays', async (t) => {
+  const root = privateTempRoot(t);
+  const deps = { os: { tmpdir: () => root } };
+  const other = startTarget(t, ['workspace', 'genpage-'], { env: tempEnv(root) });
+  const theirs = (await other.waitFor(/^workspace /)).slice('workspace '.length);
+  // Both ways out, and a run that ends by itself, at the same time.
+  const runs = [...ABORTS.map(([what, how, status]) => ({ what, args: ['workspace-abort', 'genpage-', how], status })), { what: 'the end of its event loop', args: ['workspace-keep', 'genpage-'], status: 0 }]
+    .map((run) => ({ ...run, target: startTarget(t, run.args, { env: tempEnv(root) }) }));
+  const made = await Promise.all(runs.map(async (run) => (await run.target.waitFor(/^workspace /)).slice('workspace '.length)));
+  const ended = await Promise.all(runs.map((run) => run.target.exited));
+  runs.forEach((run, i) => {
+    assert.strictEqual(ended[i].code, run.status, `${run.what}: the status`);
+    assert.ok(!fs.existsSync(made[i]), `${run.what}: its own workspace is gone`);
+  });
+  assert.ok(fs.existsSync(path.join(theirs, 'page.tsx')) && isOwnerStamp(JSON.parse(fs.readFileSync(path.join(theirs, OWNER_FILE), 'utf8'))), 'the workspace of the run that is going is whole, and still recorded');
+  assert.deepStrictEqual(fs.readdirSync(workspaceParent(deps)), [path.basename(theirs)], 'it is all the plugin\'s folder holds');
+  // Once that run is gone too, a sweep takes its workspace — and not the folder, which the end of a run takes when it is empty.
+  await other.kill();
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(theirs)]);
   assert.ok(fs.existsSync(workspaceParent(deps)));
+});
+
+test('REAL PROCESSES: runs that are cut short while others make and remove workspaces take only what is their own — none finds its workspace gone or unrecorded, and every run ends with its status', async (t) => {
+  const root = privateTempRoot(t);
+  const deps = { os: { tmpdir: () => root } };
+  const gate = path.join(root, 'go');
+  const RUNS = 2;
+  const ITERATIONS = 40;
+  const loops = Array.from({ length: RUNS }, () => startTarget(t, ['workspace-loop', 'genpage-', String(ITERATIONS), '10', gate], { env: tempEnv(root) }));
+  await Promise.all(loops.map((run) => run.waitFor(/^ready$/)));
+  fs.writeFileSync(gate, '');
+  // While they work, runs that are cut short come and go in the same folder: each makes a workspace and ends without removing it, so that its end removes it — beside the workspaces of the runs that are going, and
+  // in the moments between theirs, when the folder is empty.
+  const ends = [];
+  for (let i = 0; i < 4; i += 1) {
+    const [, how, status] = ABORTS[i % ABORTS.length];
+    const run = startTarget(t, ['workspace-abort', 'genpage-', how], { env: tempEnv(root) });
+    await run.waitFor(/^workspace /);
+    ends.push({ expected: status, actual: (await run.exited).code });
+  }
+  const answers = await Promise.all(loops.map((run) => run.waitFor(/^loop-done \d+ \d+$/)));
+  const lost = answers.reduce((sum, line) => sum + Number(line.split(' ')[1]), 0);
+  assert.strictEqual(lost, 0, `no run found its own workspace gone, or unrecorded in the plugin's folder: ${answers.join(', ')}`);
+  assert.deepStrictEqual(ends.map((e) => e.actual), ends.map((e) => e.expected), 'the runs that were cut short ended with the status they would have had');
+  for (const run of loops) assert.strictEqual((await run.exited).code, 0, `a run that makes and removes workspaces ended cleanly: ${run.stderr()}`);
+  assert.deepStrictEqual(fs.existsSync(workspaceParent(deps)) ? fs.readdirSync(workspaceParent(deps)) : [], [], 'and no workspace is left in the plugin\'s folder');
+});
+
+test('a workspace lent to another program is not taken when the run that lent it ends — the program may still be writing in it — and the plugin\'s folder stays with it', async (t) => {
+  const root = privateTempRoot(t);
+  const run = startTarget(t, ['workspace-abort', 'solution-settings-', 'exit', 'lent'], { env: tempEnv(root) });
+  const lent = (await run.waitFor(/^workspace /)).slice('workspace '.length);
+  assert.strictEqual((await run.exited).code, 7);
+  assert.ok(fs.existsSync(path.join(lent, 'page.tsx')), 'the lent workspace is whole');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(lent, OWNER_FILE), 'utf8')).lent, true, 'and still recorded as lent');
+  assert.deepStrictEqual(fs.readdirSync(root), [path.basename(workspaceParent({ os: { tmpdir: () => root } }))]);
+});
+
+test('a run that ends without removing its workspace — its event loop empties, nothing calls process.exit — takes the workspace and the plugin\'s folder with it', async (t) => {
+  const root = privateTempRoot(t);
+  const careless = startTarget(t, ['workspace-keep', 'genpage-'], { env: tempEnv(root) });
+  await careless.waitFor(/^workspace /);
+  const ended = await careless.exited;
+  assert.deepStrictEqual([ended.code, ended.signal], [0, null]);
+  assert.deepStrictEqual(fs.readdirSync(root), []);
+});
+
+test('a plugin\'s folder that a run made, and then could make no workspace in, is removed when the run ends — the workspace goes in the temp folder as before', async (t) => {
+  const root = privateTempRoot(t);
+  const run = startTarget(t, ['workspace-refused', 'genpage-'], { env: tempEnv(root) });
+  const plain = (await run.waitFor(/^workspace /)).slice('workspace '.length);
+  assert.strictEqual(path.dirname(plain), root, 'the workspace is in the temp folder itself');
+  await run.waitFor(/^done$/);
+  assert.strictEqual((await run.exited).code, 0);
+  assert.deepStrictEqual(fs.readdirSync(root), [], 'and the plugin\'s folder, made for the workspace that was refused, is not left behind');
+});
+
+test('the maker listens for no signal, so a signal ends a run as it always did', async (t) => {
+  const root = privateTempRoot(t);
+  const run = startTarget(t, ['workspace-listeners', 'genpage-'], { env: tempEnv(root) });
+  const heard = JSON.parse((await run.waitFor(/^listeners /)).slice('listeners '.length));
+  assert.deepStrictEqual(heard, { SIGINT: 0, SIGTERM: 0, SIGHUP: 0, SIGBREAK: 0 }, 'a listener replaces the default action of the signal, and has to put it back by hand');
+  await run.exited;
+});
+
+test('POSIX: SIGTERM ends a run that holds a workspace BY the signal, as it ends a process with no listener — no JavaScript runs, so the workspace is left for the next run\'s sweep', onlyPosix, async (t) => {
+  const root = privateTempRoot(t);
+  const deps = { os: { tmpdir: () => root } };
+  const run = startTarget(t, ['workspace', 'genpage-'], { env: tempEnv(root) });
+  const left = (await run.waitFor(/^workspace /)).slice('workspace '.length);
+  const ended = await run.signal('SIGTERM');
+  assert.deepStrictEqual([ended.code, ended.signal], [null, 'SIGTERM'], 'ended by the signal, and not by an exit status');
+  assert.ok(fs.existsSync(path.join(left, 'page.tsx')), 'the workspace is left where it is');
+  assert.deepStrictEqual(sweepDeadWorkspaces(deps).removed.map((r) => r.name), [path.basename(left)]);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

@@ -16,6 +16,14 @@
 //        and waits to be killed.
 //   node kill-target.js workspace-exit <prefix>        makes one, removes it as a run does when it is done, and ends: `done`.
 //   node kill-target.js workspace-keep <prefix>        makes one and ends without removing it (a run that failed to): `workspace <folder>`.
+//   node kill-target.js workspace-abort <prefix> <how> [lent|removed]
+//        makes a workspace, puts a file in it and says `workspace <folder>`, then ends the way a run that is cut short does: <how> `exit` is process.exit(7), `throw` an error nothing catches (thrown from a timer, which ends
+//        the process with status 1). With `lent` the workspace is made LENT to another program (makeTempWorkspace(prefix, { lent: true })); with `removed` it is removed first, as the run's own `finally` would have.
+//   node kill-target.js workspace-listeners <prefix>
+//        makes one and says what the process listens for once it has — `listeners {"SIGINT":0,"SIGTERM":0,"SIGHUP":0,"SIGBREAK":0}` — then removes it and ends: `done`.
+//   node kill-target.js workspace-refused <prefix>
+//        makes one with a maker that refuses to make a folder inside the plugin's own folder (a full disk: ENOSPC), so that the workspace is made in the temp folder itself — which it says, `workspace <folder>` —
+//        and removes it, and ends: `done`. The plugin's folder was made, for the workspace that was refused.
 //   node kill-target.js workspace-loop <prefix> <n> <ms> [<gateFile>]
 //        n times: sweeps, makes a workspace, puts a file in it, waits <ms>, sweeps, checks that its own workspace is still whole (and recorded, if it is in the plugin's folder), removes it.
 //        Says `ready`, waits for <gateFile> when one is given, and says `loop-done <how many times a workspace of its own was gone or unrecorded> <how many were made in the plain temp folder>`.
@@ -117,6 +125,35 @@ async function main() {
     const folder = makeTempWorkspace(args[0]);
     fs.writeFileSync(path.join(folder, 'page.tsx'), 'x');
     say(`workspace ${folder}`);
+  } else if (mode === 'workspace-abort') {
+    const { makeTempWorkspace } = require('../../lib/temp-workspace.js');
+    const [prefix, how, option] = args;
+    const folder = makeTempWorkspace(prefix, option === 'lent' ? { lent: true } : {});
+    fs.writeFileSync(path.join(folder, 'page.tsx'), 'x');
+    if (option === 'removed') fs.rmSync(folder, { recursive: true, force: true });
+    say(`workspace ${folder}`);
+    if (how === 'exit') process.exit(7);
+    // From a timer, so that nothing in this file catches it: the process ends as it does for any error that nothing catches.
+    if (how === 'throw') setImmediate(() => { throw new Error('an error nothing catches'); });
+  } else if (mode === 'workspace-listeners') {
+    const { makeTempWorkspace } = require('../../lib/temp-workspace.js');
+    const folder = makeTempWorkspace(args[0]);
+    const listeners = Object.fromEntries(['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'].map((signal) => [signal, process.listenerCount(signal)]));
+    say(`listeners ${JSON.stringify(listeners)}`);
+    fs.rmSync(folder, { recursive: true, force: true });
+    say('done');
+  } else if (mode === 'workspace-refused') {
+    const { makeTempWorkspace, workspaceParent } = require('../../lib/temp-workspace.js');
+    const parent = workspaceParent();
+    const folder = makeTempWorkspace(args[0], {
+      mkdtempSync: (start) => {
+        if (path.dirname(start) === parent) throw Object.assign(new Error(`ENOSPC: no space left on device, mkdir '${start}'`), { code: 'ENOSPC' });
+        return fs.mkdtempSync(start);
+      },
+    });
+    say(`workspace ${folder}`);
+    fs.rmSync(folder, { recursive: true, force: true });
+    say('done');
   } else if (mode === 'workspace-loop') {
     const { makeTempWorkspace, sweepDeadWorkspaces, workspaceParent } = require('../../lib/temp-workspace.js');
     const [prefix, iterations, ms, gate] = args;

@@ -14,10 +14,12 @@
 //   * The first workspace a process makes sweeps that folder first (sweepDeadWorkspaces): a workspace whose owner is PROVABLY gone is removed, and
 //     the run says so on stderr. Everything else is left exactly as it is — a workspace of a run that may still be going, one with no readable record
 //     (made by an earlier release, or damaged), one from another machine, anything that is not a folder.
-//   * When the process ends, the plugin's folder is removed if nothing is left in it, so a normal run leaves the temp folder as it found it.
+//   * When the process ends — by itself, by `process.exit` or by an error nothing catches: the `exit` event — the workspaces it made and did not lend that are still there are removed, and then the plugin's folder, if nothing is
+//     left in it, so a run leaves the temp folder as it found it. A run that is cut short never reached the `finally` that removes its workspace, and it held the source of every page the run read (THE END OF A RUN, below,
+//     says why this cannot take what another run is using, and why a POSIX signal is not one of these ends).
 //
 // IT CHANGES NOTHING ELSE. A caller that gets the folder here does what it did with `fs.mkdtempSync(path.join(os.tmpdir(), prefix))`: it passes the folder to
-// the SDK and removes it, with `fs.rmSync`, when it is done. The plugin's own folder is OPTIONAL: if it cannot be used — it is not ours alone, it is a link, the disk
+// the SDK and removes it, with `fs.rmSync`, when it is done — and the end of the process does it for a caller that never got there. The plugin's own folder is OPTIONAL: if it cannot be used — it is not ours alone, it is a link, the disk
 // says no, or it exists and will not take a new folder (mode 0500, a Windows access list that denies it) — the folder is made in the temp directory exactly as before,
 // unrecorded and never swept, and an error is reported only if that fails too. This is a courtesy to the next run, never a reason for one to fail.
 // Folders made by an earlier release are loose in the temp folder with no record, and stay where they are.
@@ -56,7 +58,25 @@
 //   * The record is moved out of the folder to `<folder>.removing`, beside it, and the folder removed. A sweep that is killed between those two steps leaves an empty folder and that
 //     file, and the next sweep FINISHES the removal — when the file is a record of the folder's own (its name, a record that names the pid in it, an owner that is gone) and the folder
 //     is empty or already gone. Anything that does not agree is left exactly as it is.
-//   * It never removes the plugin's folder itself: another run may be making a workspace in it that moment.
+//   * It never removes the plugin's folder itself: another run may be making a workspace in it that moment. (The end of a process takes the folder with `rmdir`, which takes it only when it is empty: THE END OF A RUN, below.)
+//
+// THE END OF A RUN. The `exit` event — it runs when the event loop empties, on `process.exit` and on an error nothing catches — removes, synchronously and in this order,
+//   1. the workspaces this process made here and did not lend (makeTempWorkspace remembers them), by the steps a sweep takes a dead run's (removeWorkspace: what is inside first, the record last, so that a removal that fails —
+//      Windows holds a file — leaves a folder that is still recorded, and that a later run's sweep takes). A LENT workspace is not one of them: the program it was lent to may still be writing in it, and a lent workspace is taken
+//      only when it is old (LENT_KEEP_MS), by a sweep;
+//   2. the plugin's folder, with `rmdir`.
+// Why neither takes what another run is using, or is about to use:
+//   * A workspace of this process is named for its pid and six random characters, so no other run makes, opens or removes it. A sweep never opens a folder whose pid runs (on Linux it reads its record, and a run that is going
+//     is "alive" there), and this process runs until the last listener of its `exit` event has returned.
+//   * `rmdir` removes a folder only if it is empty, in one step. Another run's workspace in the plugin's folder — one that is there, or one `mkdtemp` is making that moment, which creates its entry in one step — makes it refuse
+//     (ENOTEMPTY), and the folder stays. A run that has made the folder and not yet its workspace in it has an empty folder for a moment, and CAN lose it: its `mkdtemp` then fails with ENOENT, which makeTempWorkspace answers by
+//     making the folder again (MAKE_ATTEMPTS times), and on Windows a folder that is being removed refuses for a moment instead, which it answers by waiting (WAITS_MS). So no run fails for it; the cost is one more mkdir.
+//   * The workspaces go first, so that the folder is looked at after this process has taken what is its own out of it.
+// What is NOT covered is a POSIX signal. The default action of SIGINT, SIGTERM and SIGHUP ends the process at once, and the `exit` event never runs: what the run left stays for the next run's sweep, and the folder goes with the next
+// run that ends with nothing in it. Covering it takes a listener in every script that makes a workspace, and a listener REPLACES the default action: a process that is blocked in a synchronous call (`az` or `pac` run to its end, a pause
+// for a Windows lock) no longer ends when it is signalled, but when the call returns; the listener must end the process itself, by raising the signal again so that its status stays a signal's; and a script with a handler of its own
+// must keep the decision. lib/exit-cleanup.js does all of that, and is used where the leftover holds values a person has not shared (solution-settings.js: the lent folder of pac, while pac runs). What a workspace leaves is a few
+// kilobytes until the next run's sweep, which is not worth changing how every script of the plugin ends when it is signalled. SIGKILL and "End task" run nothing, whatever is listened for.
 //
 // A SWEEP IS BOUNDED, AND FAIR. It looks at no more than MAX_EXAMINED entries and removes no more than MAX_REMOVED, so a folder that has somehow collected thousands is worked off over several runs and not in the time of one. If the
 // entries it looked at were always the first ones, a folder whose first MAX_EXAMINED must be kept — folders no record vouches for, a record that cannot be read for a moment — would hide every entry after them for good: a dead run's
@@ -230,15 +250,29 @@ function pidOfName(name) {
   return named ? Number(named[1]) : null;
 }
 
-// The plugin's folder is removed when the process ends and nothing is left in it. `rmdir` removes a folder only when it is empty — the check and the
-// removal are one step — so a workspace another run is making, or has, is never lost to it; a run that was about to make one finds the folder gone
-// and makes it again (makeTempWorkspace). One listener for every folder this process used, so a process that uses many (a test) adds one.
+// What the end of the process removes (THE END OF A RUN, at the top of this file): the workspaces this process made in the plugin's folder and did not lend, each with the file system it was made through, and then the plugin's folder when
+// nothing is left in it. `rmdir` removes a folder only when it is empty — the check and the removal are one step — so a workspace another run is making, or has, is never lost to it; a run that was about to make one finds the
+// folder gone and makes it again (makeTempWorkspace). One listener for everything this process used, so a process that uses many folders (a test) adds one. The listener never throws and never touches the exit status: the
+// process is ending, there is nobody left to tell, and a failure here is what a later run's sweep is for.
+const ownWorkspaces = new Map();
 const pruneAtExit = new Map();
+function removeOwnWorkspace(dir, fsx) {
+  try {
+    // Gone already (its run removed it) or not a folder at all — a link put there is not followed.
+    if (!fsx.lstatSync(dir).isDirectory()) return;
+  } catch {
+    return;
+  }
+  try { removeWorkspace(dir, { fs: fsx }); } catch { /* a removal that fails (Windows holds a file) leaves the folder recorded, for a later sweep */ }
+  // A folder whose record could not be written has none to move aside, and removeWorkspace leaves it empty.
+  try { fsx.rmdirSync(dir); } catch { /* gone, or not empty */ }
+}
 function prune(parent, deps) {
   if (pruneAtExit.size === 0) {
     process.once('exit', () => {
+      for (const [dir, fsx] of ownWorkspaces) removeOwnWorkspace(dir, fsx);
       for (const [folder, fsx] of pruneAtExit) {
-        try { fsx.rmdirSync(folder); } catch { /* not empty (a workspace that was left, another run's), or already gone */ }
+        try { fsx.rmdirSync(folder); } catch { /* not empty (another run's workspace, or one that could not be removed), or already gone */ }
       }
     });
   }
@@ -532,10 +566,10 @@ function sweepOnce(parent, deps) {
 const refusing = new Set();
 
 /**
- * A new, empty, private workspace folder, to be used and removed as `fs.mkdtempSync(path.join(os.tmpdir(), prefix))` is.
+ * A new, empty, private workspace folder, to be used and removed as `fs.mkdtempSync(path.join(os.tmpdir(), prefix))` is — and removed when the process ends, if the caller never got to it (a workspace that is not lent: see THE END OF A RUN).
  *
  * `lent: true` is for a folder one of whose paths is to be GIVEN to another program — pac, writing its settings file in it: say so here, when the folder is made, and not later (see the top of
- * this file). The record is then written once with that word in it, and a sweep never takes the folder because this run is gone: only when it is old as well (LENT_KEEP_MS).
+ * this file). The record is then written once with that word in it, and a sweep never takes the folder because this run is gone: only when it is old as well (LENT_KEEP_MS); and the end of this process does not take it either.
  * @param {string} prefix what the folder's name starts with (a name, not a path), so a folder left behind says whose it was: `<prefix><pid>-<random>`, with a hyphen put before the pid when the prefix does not end in one
  * @param {object} [deps] `lent` (see above), and test seams: fs, os, uid, mkdtempSync (what makes the folder, given the path to start its name with), warn, owner, pause (sleeps, given milliseconds), folderPrivacy (the Windows access-list reader), folderProtect (the Windows maker of an access list)
  * @returns {string} the folder
@@ -563,6 +597,8 @@ function makeTempWorkspace(prefix, deps = {}) {
       let dir;
       try {
         ensureParent(parent, deps);
+        // From here on the folder may be one this process made, so it is this process's to take away when it ends with nothing in it — also when the workspace below is refused (a full disk) and goes in the temp folder.
+        prune(parent, deps);
         sweepOnce(parent, deps);
         dir = mkdtemp(path.join(parent, `${named}${stamp.pid}-`));
       } catch (e) {
@@ -580,7 +616,9 @@ function makeTempWorkspace(prefix, deps = {}) {
         break;
       }
       mark(dir, stamp, deps);
-      prune(parent, deps);
+      // The end of the process removes what the run did not — unless it was lent: a program that was given a path in it may still be writing there (see THE END OF A RUN). A `mkdtempSync` seam that answers a
+      // folder somewhere else is not the plugin's folder's, and is not touched.
+      if (deps.lent !== true && path.dirname(dir) === parent) ownWorkspaces.set(dir, deps.fs || fs);
       return dir;
     }
   }
