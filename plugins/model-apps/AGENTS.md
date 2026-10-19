@@ -3446,8 +3446,10 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
   runs in is the plugin's own, so the run FAILS too, naming the folder, when a test makes a
   `.maker-workspace` there that was not there before the run (a build opens `<app folder>/.maker-workspace`
   unless it is given a workspace, so a test must never hand a build `process.cwd()`; `sdk-build.test.js`
-  gives a build that names no app folder one of its own), and the runner removes it, so the next run is not
-  blind to the leak.
+  gives a build that names no app folder one of its own). The runner removes such a folder only when it is
+  empty, so that the next run is not blind to the leak; one with anything in it, a link or a file is left where it
+  is and the run says so (`kept`), since it cannot tell a test's folder from the workspace of a build another
+  process started beside the suite and deletes nothing it cannot show to be its own — delete it by hand.
   **CI runs this same command** (`.github/workflows/model-apps-script-tests.yml`) on any PR into `main`
   touching `plugins/model-apps/**`, `evals/model-apps/**`, `shared/telemetry/**`, `shared/skills/**` or the
   workflow itself, across ubuntu × windows × macos and Node 20 × 22.
