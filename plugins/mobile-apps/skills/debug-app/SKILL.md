@@ -33,7 +33,7 @@ activate an agent, and this skill installs no background watcher.
 |---|---|
 | `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, discover valid project-local Metro sessions, select automatically when one is live or ask when several are live, then monitor the selected log. No host terminal ID is required. |
 | `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → ask the user to reproduce/navigate → walk the likely data path from terminal traces) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
-| `/debug-app startup ["<symptom text>"]` | **Startup-only diagnosis.** Inspect install/startup/QR failures, offer bounded approved repair, and verify the original symptom. Return without the runtime monitor; also used by creation-time failure handoffs. |
+| `/debug-app startup ["<symptom text>"] [--tunnel] [--tunnel-tenant <tenant-guid>]` | **Startup-only diagnosis.** Inspect install/startup/QR failures, offer bounded approved repair, and verify the original symptom. Preserve explicitly selected authenticated tunnel options for an approved retry. Return without the runtime monitor; also used by creation-time failure handoffs. |
 | `/debug-app status` | Discover all project-local Metro logs and print each valid session's project, platform, PID, port, start time, and log path. Mark the session referenced by the saved cursor when present, then print fixes and unresolved errors. Do NOT ask for a selection or enter the loop. |
 | `/debug-app stop` | Stop only the foreground debug loop and preserve `.powernative/debug-app/` state. It does not stop Metro; the user owns the `npm run dev` process. |
 | `/debug-app version` | Print the installed `mobile-app` plugin name and version from `${PLUGIN_ROOT}/.plugin/plugin.json`, then exit. |
@@ -50,6 +50,8 @@ Options may follow the default command, a symptom, or `status`:
 | `--cycles <1-50>` | Exit after this many consecutive clean observation intervals. | `3` |
 | `--timeout <duration>` | Maximum wall-clock monitoring time. Accept `30s`–`60m` using `s`, `m`, or `h`. | `5m` |
 | `--no-fix` | Inspect/watch-only: never edit project source/config, inject traces, install, regenerate, start/stop/restart Metro, open the device app, or invoke a mutating handoff. Debug cursor/audit/health state may still advance. | Fix enabled |
+| `--tunnel` | Startup only: preserve `--tunnel` when an approved retry invokes `npm run dev`. Never switch a LAN launch to a tunnel automatically. | Disabled |
+| `--tunnel-tenant <tenant-guid>` | Startup only: preserve the Entra tenant used to authenticate the dev tunnel. Requires `--tunnel`. | Active Azure CLI tenant |
 
 Examples:
 
@@ -60,16 +62,17 @@ Examples:
 /debug-app status --platform android
 /debug-app status --working-dir ../my-mobile-app
 /debug-app startup "npm run dev exits before the QR appears"
+/debug-app startup "tunnel launch fails" --tunnel --tunnel-tenant 11111111-1111-1111-1111-111111111111
 /debug-app "QR won't open the app" --no-fix
 ```
 
 **Argument parsing:**
 
 1. Parse quoted text as one symptom value and parse recognized flags wherever they appear.
-2. The first reserved token (`startup`, `status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`) selects the subcommand. `stop`, help, and version do not accept monitoring options. `status` accepts only `--working-dir`, `--port`, and `--platform`; reject symptoms, `--cycles`, `--timeout`, and `--no-fix` because it does not enter the loop. `startup` accepts one symptom and all options except `--cycles`, because it never enters the runtime monitor.
+2. The first reserved token (`startup`, `status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`) selects the subcommand. `stop`, help, and version do not accept monitoring options. `status` accepts only `--working-dir`, `--port`, and `--platform`; reject symptoms, `--cycles`, `--timeout`, `--no-fix`, and tunnel options because it does not enter the loop. `startup` accepts one symptom and all options except `--cycles`, because it never enters the runtime monitor. Reject `--tunnel` and `--tunnel-tenant` on every other subcommand.
 3. After removing recognized options and their values, any remaining non-reserved text is the symptom and enables symptom mode.
 4. Reject unknown flags, duplicate flags, missing values, invalid numbers, unsupported platforms, or more than one free-text symptom. Print the valid forms and exit without monitoring.
-5. Normalize `platform` to lowercase. Convert `timeout` to `timeoutSeconds`; require `30 <= timeoutSeconds <= 3600`. Resolve `workingDir` from explicit `--working-dir`, or inherit the caller's absolute root; use the current shell directory only for a direct invocation without either. Reject conflicting explicit/inherited roots and do not search parent directories. Require `package.json` at that root; missing `metro.config.js`, configuration, or installed dependencies routes to startup inspection, not runtime monitoring. An unreadable/malformed manifest is a blocked diagnostic, not permission to initialize a new app. Every shell call must explicitly enter the selected absolute `workingDir`; every relative project path and command below runs from that directory.
+5. Normalize `platform` to lowercase. Convert `timeout` to `timeoutSeconds`; require `30 <= timeoutSeconds <= 3600`. Validate `--tunnel-tenant` as a GUID and require `--tunnel`; never derive either option from symptom text or untrusted diagnostic context. Resolve `workingDir` from explicit `--working-dir`, or inherit the caller's absolute root; use the current shell directory only for a direct invocation without either. Reject conflicting explicit/inherited roots and do not search parent directories. Require `package.json` at that root; missing `metro.config.js`, configuration, or installed dependencies routes to startup inspection, not runtime monitoring. An unreadable/malformed manifest is a blocked diagnostic, not permission to initialize a new app. Every shell call must explicitly enter the selected absolute `workingDir`; every relative project path and command below runs from that directory.
 6. Initialize:
    ```text
    workingDir=<absolute app root>
@@ -78,6 +81,7 @@ Examples:
    targetCleanCycles=<number, default 3>
    timeoutSeconds=<number, default 300>
    noFix=<true|false, default false>
+   devArgs=<[]|["--tunnel"]|["--tunnel","--tunnel-tenant","<tenant-guid>"]>
    monitorStartedAt=<current ISO timestamp>
    ```
 

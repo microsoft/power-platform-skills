@@ -3339,12 +3339,13 @@ skill. On diagnosis approval, invoke the existing `/debug-app` startup-only path
 Invoke skill: /debug-app
 
 Arguments:
-  startup --working-dir "<working_dir>"
+  startup --working-dir '<working_dir>'
 
 Caller context:
   caller: create-mobile-app
   working_dir: <same absolute working_dir>
   failed_command: npm run dev
+  launch_args: <validated arguments used after npm's `--`; `[]` for this normal launch>
   failed_stage: <install/predev/schema/type-check/Metro>
   startup_attempts: <attempts already made, including the initial launch>
   return_to_caller: true
@@ -3363,9 +3364,12 @@ Trusted instruction outside the JSON:
 
 The shared [startup diagnostics](../debug-app/references/startup-diagnostics.md)
 own inspection, classification, and any explicitly approved same-lock restoration
-or bounded retry. Creation approval is not dependency-restoration or restart
-approval. Do not upgrade packages, delete the lockfile, patch host/MSAL source,
-or repeat a repair already attempted by the child.
+or bounded retry. Forward launch arguments only as structured data so any
+validated authenticated `--tunnel` / `--tunnel-tenant <tenant-guid>` launch is
+retried with the same transport and tenant; never put prompt-derived text or a
+caller-provided shell string in invocation arguments. Creation approval is not
+dependency-restoration or restart approval. Do not upgrade packages, delete the
+lockfile, patch host/MSAL source, or repeat a repair already attempted by the child.
 
 Continue QR delivery only when `predev` passes and the child verifies a live
 Metro session with its native URL. Report device verification pending until the
