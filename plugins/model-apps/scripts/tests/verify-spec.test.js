@@ -3268,7 +3268,7 @@ test('verifySpec: a plain-string relationship list stays name-only', async () =>
 test('verifySpec: a 1:N passes only when the name and both endpoints match', async () => {
   const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
     relationships: [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId' } }] };
-  const row = { schemaName: 'CONTOSO_PROJECT_CONTOSO_TASK', type: 'OneToMany', referencedEntity: 'contoso_project', referencingAttribute: 'contoso_projectid' };
+  const row = { schemaName: 'CONTOSO_PROJECT_CONTOSO_TASK', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' };
   const read = {
     findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
     entityRelationships: async () => [row],

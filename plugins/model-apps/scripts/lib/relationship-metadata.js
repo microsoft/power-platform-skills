@@ -136,6 +136,8 @@ function castKind(body) {
 }
 
 function holderFromCast(body, kind) {
+  // The body is taken as it is. A 200 that carries none of the selected properties (`{}`) gives a holder with nothing stated:
+  // the name is known to be held, and nothing about whose it is — which compareRelationship reads as unproven, never as the declared one.
   if (kind === 'ManyToMany') {
     return {
       schemaName: body && body.SchemaName,
@@ -230,8 +232,10 @@ function pickProjectionRow(rows, schemaName) {
 function projectionHolder(row, probedEntity) {
   const probed = lc(probedEntity);
   if (!row) return null;
-  // A name-only test double has no type. Inventing OneToMany ends from the probed entity made
-  // that row a false conflict. The vendored projection always sets type; without it, compare by name.
+  // A row with no type (a test double that lists names) says nothing of its ends. Inventing OneToMany
+  // ends from the probed entity made that row a false conflict, so only its name is kept — which
+  // compareRelationship reads as unproven, neither the declared relationship nor another's. The
+  // vendored projection always sets type.
   if (row.type !== 'OneToMany' && row.type !== 'ManyToOne' && row.type !== 'ManyToMany') {
     return { schemaName: row.schemaName };
   }
@@ -261,38 +265,81 @@ function kindOf(r) {
   return '';
 }
 
-function pairOf(a, b) {
-  if (!a || !b) return null;
-  return [lc(a), lc(b)].sort();
+// Two pairs of table names are the same pair whichever order they are written in.
+function sameTables(a, b) {
+  const x = [...a].sort();
+  const y = [...b].sort();
+  return x[0] === y[0] && x[1] === y[1];
 }
 
-function sameRelationship(declared, holder) {
-  if (!declared || !holder || typeof declared !== 'object' || typeof holder !== 'object') return false;
-  const dName = lc(declared.schemaName || declared.effectiveName);
-  const hName = lc(holder.schemaName || holder.SchemaName);
-  if (dName && hName && dName !== hName) return false;
-  const dKind = kindOf(declared);
-  const hKind = kindOf(holder);
-  if (dKind && hKind && dKind !== hKind) return false;
-  if (dKind === 'nn' || hKind === 'nn') {
-    const declaredPair = pairOf(declared.entity1, declared.entity2);
-    const holderPair = pairOf(
-      holder.entity1 || holder.Entity1LogicalName || holder.entity1LogicalName,
-      holder.entity2 || holder.Entity2LogicalName || holder.entity2LogicalName,
-    );
-    if (declaredPair && holderPair) return declaredPair[0] === holderPair[0] && declaredPair[1] === holderPair[1];
-    return !holderPair;
+// Is this holder — what the environment says a schema name belongs to — the relationship the spec declares?
+//
+//   { state: 'same',       missing: [] }       every part of its identity is stated, and equals the declaration
+//   { state: 'different',  missing: [] }       a part it states contradicts the declaration, whatever else it states or leaves out
+//   { state: 'incomplete', missing: [parts] }  nothing it states contradicts, but it does not state every part
+//
+// The identity of a relationship is its schema name, its type and its two tables, and for a 1:N the lookup column. The holder has to
+// STATE all of them: a part that is absent from a successful answer (a collection row without its ReferencingAttribute, a typed read
+// that answers 200 with `{}`, the empty string the vendored SDK's projection writes for a value it lacked) is a part nobody checked.
+// Reading "absent" as "nothing contradicts" certified a relationship on its name alone — the build skipped the create of a
+// relationship it could not identify, and verify passed it — and the name is the one thing a different relationship can share: a 1:N
+// and an N:N between the same two tables derive the same one, and two lookups of a self-reference differ only in the column.
+// So an incomplete holder is UNPROVEN: neither reused nor refused as another's, but looked at again, and reported as it is.
+//
+// The declaration is compared on the parts it states (the build's and verify's declared relationships always state all of them).
+function compareRelationship(declared, holder) {
+  const d = declared && typeof declared === 'object' ? declared : {};
+  const h = holder && typeof holder === 'object' ? holder : {};
+  const missing = [];
+  let differs = false;
+  const part = (label, stated, declaredValue) => {
+    if (!stated) missing.push(label);
+    else if (declaredValue && stated !== declaredValue) differs = true;
+  };
+  part('schema name', lc(h.schemaName || h.SchemaName), lc(d.schemaName || d.effectiveName));
+  const dKind = kindOf(d);
+  const hKind = kindOf(h);
+  if (dKind && hKind && dKind !== hKind) differs = true;
+  if (!hKind) missing.push('relationship type');
+  if ((dKind || hKind) === 'nn') {
+    const e1 = h.entity1 || h.Entity1LogicalName || h.entity1LogicalName;
+    const e2 = h.entity2 || h.Entity2LogicalName || h.entity2LogicalName;
+    if (!e1) missing.push('first table');
+    if (!e2) missing.push('second table');
+    const declaredTables = [lc(d.entity1), lc(d.entity2)].filter(Boolean);
+    const holderTables = [lc(e1), lc(e2)].filter(Boolean);
+    if (declaredTables.length === 2 && holderTables.length === 2) {
+      // The pair is unordered, and a self-referencing N:N names the same table twice.
+      if (!sameTables(declaredTables, holderTables)) differs = true;
+    } else if (declaredTables.length === 2) {
+      // The holder names one table or none: what it names must still be one of the declared two.
+      if (holderTables.some((table) => !declaredTables.includes(table))) differs = true;
+    } else if (holderTables.length === 2) {
+      // The declaration names fewer than two tables: each it names must be one of the holder's.
+      if (declaredTables.some((table) => !holderTables.includes(table))) differs = true;
+    }
+  } else {
+    part('referenced table', lc(h.referencedEntity || h.ReferencedEntity || h.referenced), lc(d.referenced));
+    part('referencing table', lc(h.referencingEntity || h.ReferencingEntity || h.referencing), lc(d.referencing));
+    part('lookup column', lc(h.referencingAttribute || h.ReferencingAttribute), lc(d.lookup && d.lookup.schemaName));
   }
-  const ref = lc(declared.referenced);
-  const ring = lc(declared.referencing);
-  const lookup = lc(declared.lookup && declared.lookup.schemaName);
-  const hRef = lc(holder.referencedEntity || holder.ReferencedEntity || holder.referenced);
-  const hRing = lc(holder.referencingEntity || holder.ReferencingEntity || holder.referencing);
-  const hLookup = lc(holder.referencingAttribute || holder.ReferencingAttribute);
-  if (hRef && ref && hRef !== ref) return false;
-  if (hRing && ring && hRing !== ring) return false;
-  if (hLookup && lookup && hLookup !== lookup) return false;
-  return true;
+  if (differs) return { state: 'different', missing: [] };
+  return missing.length ? { state: 'incomplete', missing } : { state: 'same', missing: [] };
+}
+
+// True only when the holder is PROVEN to be the declared relationship (compareRelationship says 'same'). `false` is not "another
+// relationship": it is also an answer that left out a part of its identity, so a caller that must tell those apart asks
+// compareRelationship.
+function sameRelationship(declared, holder) {
+  return compareRelationship(declared, holder).state === 'same';
+}
+
+// What an incomplete answer left out, in the words every message about it uses:
+//   the environment's answer for it is incomplete (it does not state its referencing table and its lookup column)
+function describeIncomplete(missing) {
+  const parts = (missing || []).map((part) => `its ${part}`);
+  const list = parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  return `the environment's answer for it is incomplete (it does not state ${list})`;
 }
 
 function describeRelationship(r) {
@@ -315,6 +362,8 @@ module.exports = {
   readExact,
   pickProjectionRow,
   projectionHolder,
+  compareRelationship,
   sameRelationship,
   describeRelationship,
+  describeIncomplete,
 };

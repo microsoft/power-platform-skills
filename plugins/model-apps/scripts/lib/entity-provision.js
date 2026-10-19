@@ -34,7 +34,7 @@ const { odataLit } = require('./odata.js');
 // The one PublishXml that publishes tables by name (also the pre-app publish of sdk-build.js).
 const { publishTablesXml } = require('./table-publish.js');
 const { unreadableAnswer } = require('./collection-answers.js');
-const { readRelationshipsOf, findRelationshipHolder, sameRelationship, describeRelationship, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
+const { readRelationshipsOf, findRelationshipHolder, compareRelationship, describeRelationship, describeIncomplete, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
 // Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
 // construction-time option, so the LCID must be known before the SDK that would normally read it.
 const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-auth.js');
@@ -1117,6 +1117,12 @@ async function findExistingColumns(provision, logical, warn) {
 // the create's own already-exists handling deal with it, because a table created moments ago
 // legitimately 404s here.
 //
+// A row that carries the name but does not state its whole identity (a collection row without its
+// referencing table or lookup, a projection row with an empty value) is `null` too: it is not the
+// declared relationship and it is not another's, so nothing is skipped on its name. The create then
+// collides, and its already-exists handling reads the relationship ITSELF — which is where it is
+// reused, once that read states everything, or where the build halts (see compareRelationship).
+//
 // `hasLocalizedLabels` closes the same hole `findExistingTable` documents, for the same reason and
 // with the same rule. `fetchEntityMetadata` → `createRelationship` is one of the three broad-read →
 // create pairs that makes Dataverse keep ONLY the base-language label (AB#6686428), so falling back
@@ -1172,7 +1178,9 @@ async function relationshipExists(provision, entityLogical, schemaName, type, op
   if (probed.state === 'unknown') return null;
   if (probed.state === 'absent') return false;
   const declaredWithName = Object.assign({}, declared, { schemaName: declared.schemaName || schemaName });
-  if (sameRelationship(declaredWithName, probed.holder)) return true;
+  const verdict = compareRelationship(declaredWithName, probed.holder);
+  if (verdict.state === 'same') return true;
+  if (verdict.state === 'incomplete') return null;
   return { mismatch: true, holder: probed.holder };
 }
 
@@ -2247,19 +2255,27 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         }
       } catch (err) {
         if (!isAlreadyExists(err)) throw err;
+        // What the relationship held under this name says of itself decides the step. It is the declared one only when it states its whole
+        // identity (compareRelationship): the create's own error is then rethrown, marked, which is how skipIf turns the step into a skip. One
+        // it contradicts is another relationship's, and the name has to change. One that leaves a part out is neither — it has not been shown
+        // to be the declared relationship, so nothing is skipped on its name, and the build stops.
+        const unprovenHolder = (verdict) => refusal(`relationship schema name '${schema}' already exists, but ${describeIncomplete(verdict.missing)}, so the build cannot tell it from the declared ${describeRelationship(declared)} and does not reuse it. It was left as it is: run the build again, and if the answer stays incomplete, check this relationship in Power Apps (Solutions > the table > Relationships).`);
+        const settle = (heldBy) => {
+          const verdict = compareRelationship(declared, heldBy);
+          if (verdict.state === 'same') {
+            err.sameRelationshipExists = true;
+            throw err;
+          }
+          if (verdict.state === 'incomplete') throw unprovenHolder(verdict);
+          throw refusal(`relationship schema name '${schema}' is already used by ${describeRelationship(heldBy)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
+        };
         // skipIf is synchronous, so classify the holder here and rethrow a marked error. The
         // SchemaName key is case-sensitive; findRelationshipHolder falls back to the declared
         // endpoints when the exact spelling 404s.
         let holder = await findRelationshipHolder(provision && provision.dataverse, schema, {
           candidates: rel.type === 'ManyToMany' ? [rel.entity1, rel.entity2] : [rel.referenced, rel.referencing],
         });
-        if (holder.found === true && sameRelationship(declared, holder.holder)) {
-          err.sameRelationshipExists = true;
-          throw err;
-        }
-        if (holder.found === true) {
-          throw refusal(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
-        }
+        if (holder.found === true) settle(holder.holder);
         if (holder.found === false) {
           // The generated name is free, but the lookup column may already belong to a relationship
           // under a different name (a download that omitted the deployed name, or an authored spec
@@ -2271,10 +2287,14 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
             if (owner) {
               // The row may have become visible on this read — the lag case. If it is the
               // relationship we declared, skip. Only a different owner (same lookup, other name) halts.
-              if (sameRelationship(declared, owner)) {
+              // A row that holds the lookup but does not state enough to be called the declared relationship
+              // is neither: it is not skipped, and it is not another relationship's to name.
+              const verdict = compareRelationship(declared, owner);
+              if (verdict.state === 'same') {
                 err.sameRelationshipExists = true;
                 throw err;
               }
+              if (verdict.state === 'incomplete') throw unprovenHolder(verdict);
               const at = (spec.relationships || []).indexOf(rel);
               throw refusal(`lookup '${wantLookup}' on '${String(rel.referencing).toLowerCase()}' already belongs to relationship '${owner.schemaName}' (${describeRelationship(owner)}); set relationships[${at}].schemaName to '${owner.schemaName}' to reuse it`);
             }
@@ -2288,13 +2308,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           for (const delay of [2000, 4000]) {
             await wait(delay);
             holder = await findRelationshipHolder(provision && provision.dataverse, schema, { candidates });
-            if (holder.found === true && sameRelationship(declared, holder.holder)) {
-              err.sameRelationshipExists = true;
-              throw err;
-            }
-            if (holder.found === true) {
-              throw refusal(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
-            }
+            if (holder.found === true) settle(holder.holder);
             if (holder.found !== false) break;
           }
           if (holder.found === false) {

@@ -199,7 +199,7 @@ test('sameRelationship matches endpoints case-insensitively and rejects a differ
     { schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' },
   ), false);
   assert.strictEqual(sameRelationship(
-    { type: 'ManyToMany', entity1: 'contoso_tag', entity2: 'contoso_project' },
-    { type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' },
+    { type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_tag', entity2: 'contoso_project' },
+    { type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_project', entity2: 'contoso_tag' },
   ), true);
 });

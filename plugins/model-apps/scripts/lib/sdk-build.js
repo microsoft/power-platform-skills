@@ -26,7 +26,7 @@ const { unreadableAnswer } = require('./collection-answers.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
-const { describeRelationship, readExact, sameRelationship, findRelationshipHolder } = require('./relationship-metadata.js');
+const { describeRelationship, describeIncomplete, readExact, compareRelationship, findRelationshipHolder } = require('./relationship-metadata.js');
 const {
   sampleRecordsFor,
   resolveSampleRecords,
@@ -2269,11 +2269,18 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
           // held by a 1:N). One exact-name read, no collection scan — the plan stays cheap.
           const exact = await readExact(provision && provision.dataverse, k.name);
           const declared = Object.assign({}, k.declared, { schemaName: (k.declared && k.declared.schemaName) || k.name });
-          if (exact.found === true && sameRelationship(declared, exact.holder)) item.state = 'reuse';
-          else if (exact.found === true) {
+          // A holder that exists is reused only when it states its whole identity. Otherwise the item is unknown, and the reason says
+          // whether the name belongs to another relationship or the environment's answer left a part out (compareRelationship).
+          const judgeHolder = (heldBy) => {
+            const verdict = compareRelationship(declared, heldBy);
+            if (verdict.state === 'same') { item.state = 'reuse'; return; }
             item.state = 'unknown';
-            item.stateWhy = `schema name '${k.name}' is already used by ${describeRelationship(exact.holder)}, not the declared relationship`;
-          } else if (exact.found === false) {
+            item.stateWhy = verdict.state === 'incomplete'
+              ? `schema name '${k.name}' exists, but ${describeIncomplete(verdict.missing)}, so it cannot be told from the declared relationship`
+              : `schema name '${k.name}' is already used by ${describeRelationship(heldBy)}, not the declared relationship`;
+          };
+          if (exact.found === true) judgeHolder(exact.holder);
+          else if (exact.found === false) {
             // The SchemaName key is case-sensitive. A differently-cased holder 404s here and would
             // otherwise be planned as create. The collection scan is case-insensitive; skipExact
             // because this read already 404'd that spelling.
@@ -2281,11 +2288,8 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
               ? (k.relType === 'ManyToMany' ? [k.declared.entity1, k.declared.entity2] : [k.declared.referenced, k.declared.referencing])
               : [k.entity];
             const holder = await findRelationshipHolder(provision && provision.dataverse, k.name, { candidates: ends, cache: relationshipReads, skipExact: true });
-            if (holder.found === true && sameRelationship(declared, holder.holder)) item.state = 'reuse';
-            else if (holder.found === true) {
-              item.state = 'unknown';
-              item.stateWhy = `schema name '${k.name}' is already used by ${describeRelationship(holder.holder)}, not the declared relationship`;
-            } else if (holder.found === false) item.state = 'create';
+            if (holder.found === true) judgeHolder(holder.holder);
+            else if (holder.found === false) item.state = 'create';
             else {
               item.state = 'unknown';
               item.stateWhy = 'the relationship metadata read was inconclusive';

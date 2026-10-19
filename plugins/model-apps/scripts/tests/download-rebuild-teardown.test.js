@@ -112,6 +112,11 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
       SchemaName: RELATIONSHIP, ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task',
       ReferencingAttribute: 'contoso_projectid', IsCustomRelationship: true,
     }] : [] } };
+    // The collection the rebuild's own probe reads, from the referenced table: the relationship as the platform lists it, with the lookup
+    // that says which relationship it is (a name alone does not identify one).
+    if (url.includes('/OneToManyRelationships')) return { status: 200, body: { value: logical === 'contoso_project' ? [{
+      SchemaName: RELATIONSHIP, ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid',
+    }] : [] } };
     if (url.includes('/LookupAttributeMetadata')) return { status: 200, body: { value: [] } };
     if (/\/(?:Attributes|ManyToManyRelationships)/.test(url)) return { status: 200, body: { value: [] } };
     // The saved (unpublished) layer of every sitemap, read once for the shared-page scan. This fixture holds no pending edit, so each app's saved navigation is

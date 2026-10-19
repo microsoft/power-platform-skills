@@ -13,7 +13,7 @@ const { sitemapEntityTables } = require('./app-spec.js');
 // liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
 const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName, normalizeLanguageCode, isLocalizedLabelMap } = require('./app-spec.js');
-const { sameRelationship, describeRelationship } = require('./relationship-metadata.js');
+const { sameRelationship, compareRelationship, describeRelationship, describeIncomplete } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
 // Recorded on an icon check the build's keep rule satisfies (keepsLiveValue, sitemap-merge.js).
@@ -659,9 +659,14 @@ async function verifySpec(spec, read, opts = {}) {
         add('relationship', schema, true);
         continue;
       }
+      // A relationship is verified only when the answer states its whole identity (compareRelationship). One that leaves a part out
+      // is neither verified nor shown to be another relationship, so the check FAILS and says what the answer lacked. It is not listed
+      // `unverified`: that list leaves `ok` and the exit status as they were, and a relationship nobody identified must not read as a pass.
+      const unproven = (verdict) => `exists, but ${describeIncomplete(verdict.missing)}, so verify cannot prove it is the declared ${describeRelationship(declared)}`;
       const nameHit = detailed.find(named);
       if (nameHit) {
-        add('relationship', schema, false, `exists as ${describeRelationship(nameHit)}`);
+        const verdict = compareRelationship(declared, nameHit);
+        add('relationship', schema, false, verdict.state === 'incomplete' ? unproven(verdict) : `exists as ${describeRelationship(nameHit)}`);
         continue;
       }
       // The typed collection on this side cannot see a holder of the other type (a 1:N is not in
@@ -676,7 +681,9 @@ async function verifySpec(spec, read, opts = {}) {
           continue;
         }
         if (holder && holder.found === true) {
-          if (sameRelationship(declared, holder.holder)) { add('relationship', schema, true); continue; }
+          const verdict = compareRelationship(declared, holder.holder);
+          if (verdict.state === 'same') { add('relationship', schema, true); continue; }
+          if (verdict.state === 'incomplete') { add('relationship', schema, false, unproven(verdict)); continue; }
           const declaredKind = r.type === 'ManyToMany' ? 'N:N' : '1:N';
           add('relationship', schema, false, `${schema} exists as ${describeRelationship(holder.holder)}, not as the declared ${declaredKind}`);
           continue;

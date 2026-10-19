@@ -191,9 +191,10 @@ test('apply surfaces fallback metadata for existing columns and relationships', 
   d.provision.fetchEntityMetadata = async (logical) => ({
     logicalName: logical,
     entitySetName: `${logical}s`,
+    // The SDK's projection rows: the other table and its attribute; an existing relationship is skipped only when they say which one it is.
     relationships: [
-      { schemaName: 'cr_parent_children' },
-      { schemaName: 'cr_parent_child_nn' },
+      { schemaName: 'cr_parent_children', type: 'OneToMany', relatedEntity: 'cr_child', relatedAttribute: 'cr_parentid' },
+      { schemaName: 'cr_parent_child_nn', type: 'ManyToMany', relatedEntity: 'cr_child', relatedAttribute: '' },
     ],
   });
 

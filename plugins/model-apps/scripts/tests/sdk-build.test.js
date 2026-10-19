@@ -113,7 +113,8 @@ function seedForm(id, fields) {
     bag: { a: [], c: [] } };
 }
 
-// `existingTables`: { logical: { entitySetName, columns:[logical...], relationships:[schema...] } }
+// `existingTables`: { logical: { entitySetName, columns:[logical...], relationships:[row...] } }, a relationship row being what the SDK's
+// metadata projection lists for the table: { schemaName, type, relatedEntity, relatedAttribute } (a name alone does not identify one).
 const MEMBER_SOLUTION_ID = '5011c0de-0000-4000-8000-000000000001'; // a GUID: the membership read interpolates it unquoted
 function mockSdk(opts = {}) {
   const calls = [];
@@ -294,7 +295,7 @@ function mockSdk(opts = {}) {
     createSolution: async (o) => { calls.push({ name: 'createSolution', args: [o] }); return { id: 'sol-1' }; },
     findTables: async (q, o) => { calls.push({ name: 'findTables', args: [q, o] }); const t = ex[String(q).toLowerCase()]; return t ? [{ logicalName: String(q).toLowerCase(), schemaName: q, displayName: q, entitySetName: t.entitySetName, isCustom: true }] : []; },
     findColumns: async (logical) => { calls.push({ name: 'findColumns', args: [logical] }); const t = ex[logical]; return ((t && t.columns) || []).map((c) => ({ logicalName: c, schemaName: c, displayName: c, attributeType: 'String', isCustom: true })); },
-    fetchEntityMetadata: async (logical) => { calls.push({ name: 'fetchEntityMetadata', args: [logical] }); const t = ex[logical]; return { logicalName: logical, displayName: logical, entitySetName: (t && t.entitySetName) || `${logical}s`, attributes: ((t && t.columns) || []).map((c) => ({ logicalName: c })), relationships: ((t && t.relationships) || []).map((s) => ({ schemaName: s, type: 'OneToMany' })) }; },
+    fetchEntityMetadata: async (logical) => { calls.push({ name: 'fetchEntityMetadata', args: [logical] }); const t = ex[logical]; return { logicalName: logical, displayName: logical, entitySetName: (t && t.entitySetName) || `${logical}s`, attributes: ((t && t.columns) || []).map((c) => ({ logicalName: c })), relationships: (t && t.relationships) || [] }; },
     createTable: async (o) => { calls.push({ name: 'createTable', args: [o] }); if (opts.failTable === o.schemaName) throw new Error('boom'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: `tbl-${o.schemaName}` }; },
     updateTable: async (l, o) => { calls.push({ name: 'updateTable', args: [l, o] }); return {}; },
     createColumn: async (e, o) => { calls.push({ name: 'createColumn', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
@@ -671,7 +672,7 @@ test('idempotent: an existing table is reused — no createTable, and only missi
 });
 
 test('idempotent: an existing relationship is skipped', async () => {
-  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: [], relationships: ['new_customer_new_ticket'] } } });
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: [], relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }] } } });
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   assert.strictEqual(find(calls, 'createRelationship').length, 0, 'existing relationship not re-created');
 });
@@ -1767,7 +1768,7 @@ test('apply progress total includes existing-column reconciliation steps', async
       new_customer: {
         entitySetName: 'new_customers',
         columns: ['new_name', 'new_tier', 'new_score'],
-        relationships: ['new_customer_new_ticket'],
+        relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }],
       },
       new_ticket: {
         entitySetName: 'new_tickets',
