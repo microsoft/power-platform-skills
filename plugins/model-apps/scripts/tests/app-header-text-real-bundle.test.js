@@ -512,6 +512,8 @@ test('REAL BUNDLE: a complete rebuild over a header that is not plain text finis
   for (const [what, initial, app, bodies] of [
     ['a localized name beside a changed description', { name: localizedText('Probe', 'Sonde') }, { description: 'Changed' }, [{ description: 'Changed' }]],
     ['a localized description beside a routing description', { description: localizedText('Tickets', 'Billets') }, { aiDescription: ROUTING }, [{ aiappdescription: ROUTING }]],
+    // Both texts off the copy: the SDK is supplied none of them, and the routing description is what its one PATCH carries.
+    ['two localized texts beside a routing description', { name: localizedText('Probe', 'Sonde'), description: localizedText('Tickets', 'Billets') }, { aiDescription: ROUTING }, [{ aiappdescription: ROUTING }]],
   ]) {
     for (const pages of [false, true]) {
       const { sdk, writes, state } = await freshSdk(initial);

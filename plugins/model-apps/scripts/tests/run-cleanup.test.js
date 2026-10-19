@@ -296,7 +296,7 @@ const listOf = (value) => ({ status: 200, headers: {}, body: { value } });
 // An answer that is an Error is what the transport throws: the request got no answer at all, as when a connection is reset. The mock SDK the build drives gets the real
 // `configureRowSummary` (the errors it throws are kept, `sdkErrors`) and a `queryRecords` over the same transport that records the table each read names (`reads`): the
 // table set of the template table is answered, so that a read of that table by the build itself would show up in `requests` instead of failing the transport.
-async function orgWithTemplateAnswers(t, answers) {
+async function orgWithTemplateAnswers(t, answers, { skills = listOf([]) } = {}) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-summary-template-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -312,7 +312,7 @@ async function orgWithTemplateAnswers(t, answers) {
     httpClient: {
       get: async (url) => {
         seen('GET', url);
-        if (url.includes('/aiskillconfigs?')) return listOf([]);
+        if (url.includes('/aiskillconfigs?')) return skills;
         if (url.includes('/msdyn_aitemplates?')) {
           const answer = answers[Math.min(templateReads++, answers.length - 1)];
           if (answer instanceof Error) throw answer;
@@ -395,6 +395,29 @@ for (const [what, answer, words] of MALFORMED_TEMPLATE_ANSWERS) {
     assert.deepEqual(org.writes(), []);
     assert.equal(org.templateReads().length, 1, 'the SDK read the list once, and the build asked nothing more');
     assert.deepEqual(org.reads, []);
+  });
+}
+
+// The SDK's lookup of an existing row-summary skill is as strict: a first row that is no row is an answer it cannot read, never "no row summary yet" — which used to go on to publish a model and bind a
+// skill. The build stops with the SDK's own error, and nothing is written (the template is not even read: the skill lookup comes first).
+for (const [what, answer, words] of [
+  ['a first row that is no row', listOf([null]), /the existing row-summary skill lookup returned a malformed row — expected an object but got /],
+  ['an answer with no list', { status: 200, headers: {}, body: {} }, /the existing row-summary skill lookup returned a malformed answer — expected an OData 'value' array but got /],
+]) {
+  test(`${what} in the skill lookup is not "no row summary yet": the build stops with the SDK's error and writes nothing`, async (t) => {
+    const org = await orgWithTemplateAnswers(t, [listOf([{ msdyn_aitemplateid: TEMPLATE }])], { skills: answer });
+    const warnings = [];
+    await assert.rejects(runSdkBuild(spec(), { sdk: org.sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }), (err) => {
+      assert.equal(err.name, 'BuildHalt');
+      assert.equal(err.code, 'CONNECTION_ERROR');
+      assert.equal(err.cause, org.sdkErrors[0], "the SDK's own error is the halt's cause");
+      assert.match(err.message, words);
+      assert.equal(err.retry, 'never');
+      return true;
+    });
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(org.writes(), [], 'no model was published and no skill was bound');
+    assert.deepEqual(org.templateReads(), []);
   });
 }
 
