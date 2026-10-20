@@ -1,0 +1,708 @@
+'use strict';
+// The METADATA half of helpers/fake-lifecycle-org.js: tables (`EntityDefinitions`), their columns (`Attributes`, typed) and alternate keys
+// (`Keys`), relationships (`RelationshipDefinitions`) and global option sets (`GlobalOptionSetDefinitions`), stored as the Web API
+// returns them and answered with `$select`, `$filter` and `$expand` honoured. The shapes, abridged:
+//
+//   GET EntityDefinitions(LogicalName='contoso_item')?$select=LogicalName,EntitySetName
+//     -> { "LogicalName": "contoso_item", "EntitySetName": "contoso_items", "MetadataId": "<guid>" }        (MetadataId always comes back)
+//   GET EntityDefinitions(LogicalName='contoso_item')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet
+//     -> { "value": [ { "@odata.type": "#Microsoft.Dynamics.CRM.PicklistAttributeMetadata", "LogicalName": "contoso_kind", "MetadataId": "<guid>",
+//                       "OptionSet": { "Options": [ { "Value": 100000000, "Label": { "LocalizedLabels": [...], "UserLocalizedLabel": {...} } } ] } } ] }
+//   a label   { "LocalizedLabels": [ { "Label": "Item", "LanguageCode": 1033, "IsManaged": false, "MetadataId": "<guid>", "HasChanged": null } ],
+//               "UserLocalizedLabel": { "Label": "Item", "LanguageCode": 1033, … } }       — the user's language, else the first label
+//
+// A create is answered as the platform answers it: 204 with `OData-EntityId` naming the new definition by its MetadataId.
+// What the platform makes beside what was asked is made here too, because the plugin reads it back and acts on it:
+//   - a table gets its primary id column (`<table>id`), the ownership and audit columns a user-owned table has, `statecode` and
+//     `statuscode` with their two states, `versionnumber`, and the `<lookup>name` / `<lookup>yominame` companions of its lookups;
+//   - a Choice, MultiChoice or Boolean column gets its `<name>name` companion, a Money column its `<name>_base`, a lookup its
+//     `<name>name` and `<name>yominame` (each `AttributeOf` the column, which is how a reader tells them from real columns);
+//   - a 1:N relationship creates its lookup column on the referencing table; an N:N its intersect table.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-relationships-using-web-api
+const { randomUUID } = require('node:crypto');
+const { matchesFilter } = require('./odata-filter.js');
+
+const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+const lc = (value) => String(value == null ? '' : value).toLowerCase();
+const bare = (id) => lc(id).replace(/[{}]/g, '');
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// AttributeType and AttributeTypeName of each typed metadata class the build sends.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributetypecode
+const TYPE_OF = {
+  StringAttributeMetadata: ['String', 'StringType'],
+  MemoAttributeMetadata: ['Memo', 'MemoType'],
+  IntegerAttributeMetadata: ['Integer', 'IntegerType'],
+  BigIntAttributeMetadata: ['BigInt', 'BigIntType'],
+  DecimalAttributeMetadata: ['Decimal', 'DecimalType'],
+  DoubleAttributeMetadata: ['Double', 'DoubleType'],
+  MoneyAttributeMetadata: ['Money', 'MoneyType'],
+  BooleanAttributeMetadata: ['Boolean', 'BooleanType'],
+  DateTimeAttributeMetadata: ['DateTime', 'DateTimeType'],
+  PicklistAttributeMetadata: ['Picklist', 'PicklistType'],
+  MultiSelectPicklistAttributeMetadata: ['Virtual', 'MultiSelectPicklistType'],
+  LookupAttributeMetadata: ['Lookup', 'LookupType'],
+  UniqueIdentifierAttributeMetadata: ['Uniqueidentifier', 'UniqueidentifierType'],
+  ImageAttributeMetadata: ['Virtual', 'ImageType'],
+  FileAttributeMetadata: ['Virtual', 'FileType'],
+  StateAttributeMetadata: ['State', 'StateType'],
+  StatusAttributeMetadata: ['Status', 'StatusType'],
+  EntityNameAttributeMetadata: ['EntityName', 'EntityNameType'],
+};
+const classOf = (attribute) => String(attribute['@odata.type'] || '').replace(/^#?Microsoft\.Dynamics\.CRM\./, '');
+
+function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage, solutionOf, addComponent, removeComponents, onTableCreated, onTableDeleted } = {}) {
+  const tables = new Map(); // logical -> definition (see makeTable); `Attributes`/`Keys` are Maps
+  const relationships = new Map(); // lower-cased SchemaName -> definition
+  const optionSets = new Map(); // lower-cased Name -> definition
+  let nextObjectTypeCode = 10300;
+
+  // ------------------------------------------------------------------------------------------------------------------------
+  // Labels.
+  const localized = (label, code) => ({ Label: label, LanguageCode: code, IsManaged: false, MetadataId: randomUUID(), HasChanged: null });
+  // A label as sent (`{ LocalizedLabels: [{ Label, LanguageCode }] }`) or plain text, stored as the platform returns it.
+  function label(sent) {
+    if (sent == null) return { LocalizedLabels: [], UserLocalizedLabel: null };
+    const list = typeof sent === 'string' ? [localized(sent, baseLanguage)] : (sent.LocalizedLabels || []).map((l) => localized(l.Label, l.LanguageCode));
+    return { LocalizedLabels: list, UserLocalizedLabel: clone(list.find((l) => l.LanguageCode === userLanguage) || list[0] || null) };
+  }
+  const textOf = (stored) => (stored && stored.UserLocalizedLabel ? stored.UserLocalizedLabel.Label : null);
+
+  // ------------------------------------------------------------------------------------------------------------------------
+  // Columns.
+  function makeAttribute(table, sent, extra = {}) {
+    const cls = classOf(sent) || 'StringAttributeMetadata';
+    const [type, typeName] = TYPE_OF[cls] || [null, null];
+    if (!type) throw new Error(`fake-lifecycle-metadata: column class ${cls} is not modelled (${sent.SchemaName})`);
+    const logical = lc(sent.SchemaName || sent.LogicalName);
+    const attribute = {
+      ...clone(sent),
+      '@odata.type': `#Microsoft.Dynamics.CRM.${cls}`,
+      MetadataId: randomUUID(),
+      LogicalName: logical,
+      SchemaName: sent.SchemaName || logical,
+      EntityLogicalName: table.LogicalName,
+      AttributeType: type,
+      AttributeTypeName: { Value: typeName },
+      DisplayName: label(sent.DisplayName),
+      Description: label(sent.Description),
+      RequiredLevel: { Value: (sent.RequiredLevel && sent.RequiredLevel.Value) || 'None', CanBeChanged: true, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' },
+      IsCustomAttribute: extra.IsCustomAttribute !== undefined ? extra.IsCustomAttribute : true,
+      IsCustomizable: { Value: true, CanBeChanged: true, ManagedPropertyLogicalName: 'iscustomizable' },
+      IsManaged: false,
+      IsPrimaryId: false,
+      IsPrimaryName: !!sent.IsPrimaryName,
+      IsLogical: false,
+      IsValidForCreate: sent.IsValidForCreate !== undefined ? sent.IsValidForCreate : true,
+      IsValidForRead: sent.IsValidForRead !== undefined ? sent.IsValidForRead : true,
+      IsValidForUpdate: sent.IsValidForUpdate !== undefined ? sent.IsValidForUpdate : true,
+      AttributeOf: null,
+      SourceType: sent.SourceType !== undefined ? sent.SourceType : 0,
+      ...extra,
+    };
+    delete attribute['@odata.context'];
+    if (cls === 'StringAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 100;
+    if (cls === 'StringAttributeMetadata' && !attribute.FormatName) attribute.FormatName = { Value: (sent.FormatName && sent.FormatName.Value) || 'Text' };
+    if (cls === 'MemoAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 2000;
+    if (attribute.OptionSet) attribute.OptionSet = storedOptionSet(attribute.OptionSet, { local: true });
+    return attribute;
+  }
+
+  // An option set as stored: every option's labels as labels, the set's own metadata. A global set's bind replaces the local one.
+  function storedOptionSet(sent, { local }) {
+    const set = clone(sent) || {};
+    delete set['@odata.type'];
+    const options = (set.Options || []).map((o) => ({
+      Value: o.Value,
+      Label: label(o.Label),
+      Description: label(o.Description),
+      Color: o.Color === undefined ? null : o.Color,
+      IsManaged: false,
+      ExternalValue: o.ExternalValue === undefined ? null : o.ExternalValue,
+      ...(o.State !== undefined ? { State: o.State } : {}),
+      ...(o.DefaultStatus !== undefined ? { DefaultStatus: o.DefaultStatus } : {}),
+    }));
+    return {
+      MetadataId: set.MetadataId || randomUUID(),
+      Name: set.Name || null,
+      IsGlobal: !local,
+      IsCustomOptionSet: true,
+      OptionSetType: set.OptionSetType || 'Picklist',
+      DisplayName: label(set.DisplayName),
+      Description: label(set.Description),
+      ...(set.TrueOption ? { TrueOption: { Value: 1, Label: label(set.TrueOption.Label) }, FalseOption: { Value: 0, Label: label(set.FalseOption.Label) } } : {}),
+      Options: options,
+    };
+  }
+
+  // The companions the platform makes beside a column (each `AttributeOf` it): what a reader must tell from a real column.
+  function companionsOf(attribute) {
+    const name = attribute.LogicalName;
+    const cls = classOf(attribute);
+    const virtual = (logical, type = 'Virtual', typeName = 'VirtualType') => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: name, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
+    if (['PicklistAttributeMetadata', 'MultiSelectPicklistAttributeMetadata', 'BooleanAttributeMetadata', 'StateAttributeMetadata', 'StatusAttributeMetadata'].includes(cls)) return [virtual(`${name}name`)];
+    if (cls === 'MoneyAttributeMetadata') return [{ ...virtual(`${name}_base`, 'Money', 'MoneyType'), '@odata.type': '#Microsoft.Dynamics.CRM.MoneyAttributeMetadata', IsBaseCurrency: true }];
+    if (cls === 'LookupAttributeMetadata') return [virtual(`${name}name`, 'String', 'StringType'), virtual(`${name}yominame`, 'String', 'StringType')];
+    if (cls === 'FileAttributeMetadata') return [virtual(`${name}_name`, 'String', 'StringType')];
+    if (cls === 'ImageAttributeMetadata') return [virtual(`${name}id`, 'Uniqueidentifier', 'UniqueidentifierType'), virtual(`${name}_timestamp`, 'BigInt', 'BigIntType'), virtual(`${name}_url`, 'String', 'StringType')];
+    return [];
+  }
+
+  function addAttribute(table, attribute) {
+    table.Attributes.set(attribute.LogicalName, attribute);
+    for (const companion of companionsOf(attribute)) if (!table.Attributes.has(companion.LogicalName)) table.Attributes.set(companion.LogicalName, companion);
+    return attribute;
+  }
+
+  // ------------------------------------------------------------------------------------------------------------------------
+  // Tables.
+  const systemColumn = (table, logical, cls, extra = {}) => addAttribute(table, makeAttribute(table, { '@odata.type': `Microsoft.Dynamics.CRM.${cls}`, SchemaName: logical, DisplayName: logical }, { IsCustomAttribute: false, IsValidForCreate: false, IsValidForUpdate: false, ...extra }));
+  const lookupTo = (targets) => ({ Targets: targets });
+  // What a user-owned table holds from its creation, whatever the request said (the columns the platform adds; abridged to the ones a
+  // reader meets: ownership, audit, state and the row version).
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/entity-metadata#table-type-and-ownership
+  function addSystemColumns(table) {
+    const id = `${table.LogicalName}id`;
+    addAttribute(table, makeAttribute(table, { '@odata.type': 'Microsoft.Dynamics.CRM.UniqueIdentifierAttributeMetadata', SchemaName: `${table.SchemaName}Id`, DisplayName: table.SchemaName }, { LogicalName: id, IsCustomAttribute: true, IsPrimaryId: true, IsValidForUpdate: false }));
+    systemColumn(table, 'createdon', 'DateTimeAttributeMetadata');
+    systemColumn(table, 'modifiedon', 'DateTimeAttributeMetadata');
+    systemColumn(table, 'overriddencreatedon', 'DateTimeAttributeMetadata', { IsValidForCreate: true });
+    systemColumn(table, 'createdby', 'LookupAttributeMetadata', lookupTo(['systemuser']));
+    systemColumn(table, 'modifiedby', 'LookupAttributeMetadata', lookupTo(['systemuser']));
+    systemColumn(table, 'createdonbehalfby', 'LookupAttributeMetadata', lookupTo(['systemuser']));
+    systemColumn(table, 'modifiedonbehalfby', 'LookupAttributeMetadata', lookupTo(['systemuser']));
+    systemColumn(table, 'ownerid', 'LookupAttributeMetadata', { AttributeType: 'Owner', AttributeTypeName: { Value: 'OwnerType' }, Targets: ['systemuser', 'team'], IsValidForCreate: true, IsValidForUpdate: true });
+    systemColumn(table, 'owningbusinessunit', 'LookupAttributeMetadata', lookupTo(['businessunit']));
+    systemColumn(table, 'owninguser', 'LookupAttributeMetadata', lookupTo(['systemuser']));
+    systemColumn(table, 'owningteam', 'LookupAttributeMetadata', lookupTo(['team']));
+    systemColumn(table, 'statecode', 'StateAttributeMetadata', { IsValidForUpdate: true, OptionSet: storedOptionSet({ OptionSetType: 'State', Options: [{ Value: 0, Label: 'Active', DefaultStatus: 1 }, { Value: 1, Label: 'Inactive', DefaultStatus: 2 }] }, { local: true }) });
+    systemColumn(table, 'statuscode', 'StatusAttributeMetadata', { IsValidForCreate: true, IsValidForUpdate: true, OptionSet: storedOptionSet({ OptionSetType: 'Status', Options: [{ Value: 1, Label: 'Active', State: 0 }, { Value: 2, Label: 'Inactive', State: 1 }] }, { local: true }) });
+    systemColumn(table, 'versionnumber', 'BigIntAttributeMetadata');
+    systemColumn(table, 'importsequencenumber', 'IntegerAttributeMetadata', { IsValidForCreate: true });
+    systemColumn(table, 'timezoneruleversionnumber', 'IntegerAttributeMetadata', { IsValidForCreate: true, IsValidForUpdate: true });
+    systemColumn(table, 'utcconversiontimezonecode', 'IntegerAttributeMetadata', { IsValidForCreate: true, IsValidForUpdate: true });
+  }
+
+  // A table definition from a create request (or a seed). `sent` is the EntityMetadata body: its `Attributes` hold the primary name column.
+  function makeTable(sent, { custom = true } = {}) {
+    const logical = lc(sent.SchemaName || sent.LogicalName);
+    const table = {
+      ...clone(sent),
+      MetadataId: sent.MetadataId || randomUUID(),
+      LogicalName: logical,
+      SchemaName: sent.SchemaName || logical,
+      EntitySetName: sent.EntitySetName || `${logical}s`,
+      LogicalCollectionName: sent.LogicalCollectionName || `${logical}s`,
+      CollectionSchemaName: sent.CollectionSchemaName || `${sent.SchemaName || logical}s`,
+      ObjectTypeCode: sent.ObjectTypeCode || nextObjectTypeCode++,
+      IsCustomEntity: custom,
+      IsManaged: false,
+      IsActivity: !!sent.IsActivity,
+      IsIntersect: !!sent.IsIntersect,
+      TableType: 'Standard',
+      OwnershipType: sent.OwnershipType || 'UserOwned',
+      HasNotes: !!sent.HasNotes,
+      HasActivities: !!sent.HasActivities,
+      DisplayName: label(sent.DisplayName),
+      DisplayCollectionName: label(sent.DisplayCollectionName),
+      Description: label(sent.Description),
+      PrimaryIdAttribute: `${logical}id`,
+      PrimaryNameAttribute: null,
+      PrimaryImageAttribute: null,
+      IconVectorName: sent.IconVectorName || null,
+      IconSmallName: sent.IconSmallName || null,
+      IconMediumName: sent.IconMediumName || null,
+      IconLargeName: sent.IconLargeName || null,
+      ChangeTrackingEnabled: false,
+      Attributes: new Map(),
+      Keys: new Map(),
+    };
+    delete table['@odata.type'];
+    for (const key of ['Attributes', 'Keys']) if (Array.isArray(sent[key])) table[key] = new Map();
+    // The eight privileges the platform makes for a user- or organization-owned table (`prv<Type><SchemaName>`), which a role grants.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/security-roles#privileges
+    const ownedByUser = table.OwnershipType === 'UserOwned';
+    table.Privileges = ['Create', 'Read', 'Write', 'Delete', 'Append', 'AppendTo', 'Assign', 'Share']
+      .filter((type) => ownedByUser || !['Assign', 'Share'].includes(type))
+      .map((type) => ({ PrivilegeId: randomUUID(), Name: `prv${type}${table.SchemaName}`, PrivilegeType: type, CanBeBasic: ownedByUser, CanBeLocal: ownedByUser, CanBeDeep: ownedByUser, CanBeGlobal: true, CanBeEntityReference: false, CanBeParentEntityReference: false }));
+    addSystemColumns(table);
+    for (const attribute of sent.Attributes || []) {
+      const made = addAttribute(table, makeAttribute(table, attribute));
+      if (made.IsPrimaryName) table.PrimaryNameAttribute = made.LogicalName;
+    }
+    return table;
+  }
+
+  // ------------------------------------------------------------------------------------------------------------------------
+  // Relationships. A 1:N is stored with its lookup made on the referencing table; an N:N with its intersect table.
+  function makeOneToMany(sent) {
+    const referencing = tables.get(lc(sent.ReferencingEntity));
+    const referenced = tables.get(lc(sent.ReferencedEntity));
+    if (!referencing || !referenced) return { error: `the table ${!referencing ? sent.ReferencingEntity : sent.ReferencedEntity} does not exist` };
+    const lookupSent = sent.Lookup || {};
+    const lookup = makeAttribute(referencing, { ...lookupSent, '@odata.type': 'Microsoft.Dynamics.CRM.LookupAttributeMetadata' }, { Targets: [referenced.LogicalName] });
+    if (referencing.Attributes.has(lookup.LogicalName)) return { error: `Attribute ${lookup.LogicalName} already exists for entity ${referencing.LogicalName}.`, code: '0x80060304' };
+    addAttribute(referencing, lookup);
+    const relationship = {
+      ...clone(sent),
+      '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata',
+      MetadataId: randomUUID(),
+      RelationshipType: 'OneToManyRelationship',
+      IsCustomRelationship: true,
+      IsManaged: false,
+      IsValidForAdvancedFind: true,
+      ReferencedEntity: referenced.LogicalName,
+      ReferencingEntity: referencing.LogicalName,
+      ReferencedAttribute: referenced.PrimaryIdAttribute,
+      ReferencingAttribute: lookup.LogicalName,
+      ReferencedEntityNavigationPropertyName: sent.ReferencedEntityNavigationPropertyName || sent.SchemaName,
+      ReferencingEntityNavigationPropertyName: sent.ReferencingEntityNavigationPropertyName || lookup.LogicalName,
+      CascadeConfiguration: clone(sent.CascadeConfiguration) || { Assign: 'NoCascade', Delete: 'RemoveLink', Merge: 'NoCascade', Reparent: 'NoCascade', Share: 'NoCascade', Unshare: 'NoCascade', RollupView: 'NoCascade' },
+      AssociatedMenuConfiguration: clone(sent.AssociatedMenuConfiguration) || { Behavior: 'UseCollectionName', Group: 'Details', Label: label(null), Order: 10000 },
+    };
+    delete relationship.Lookup;
+    relationships.set(lc(relationship.SchemaName), relationship);
+    return { relationship, lookup };
+  }
+
+  function makeManyToMany(sent) {
+    const one = tables.get(lc(sent.Entity1LogicalName));
+    const two = tables.get(lc(sent.Entity2LogicalName));
+    if (!one || !two) return { error: `the table ${!one ? sent.Entity1LogicalName : sent.Entity2LogicalName} does not exist` };
+    const intersect = lc(sent.IntersectEntityName || sent.SchemaName);
+    const relationship = {
+      ...clone(sent),
+      '@odata.type': '#Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata',
+      MetadataId: randomUUID(),
+      RelationshipType: 'ManyToManyRelationship',
+      IsCustomRelationship: true,
+      IsManaged: false,
+      IsValidForAdvancedFind: true,
+      Entity1LogicalName: one.LogicalName,
+      Entity2LogicalName: two.LogicalName,
+      Entity1IntersectAttribute: `${one.LogicalName}id`,
+      Entity2IntersectAttribute: one.LogicalName === two.LogicalName ? `${two.LogicalName}idtwo` : `${two.LogicalName}id`,
+      IntersectEntityName: intersect,
+      Entity1NavigationPropertyName: sent.Entity1NavigationPropertyName || sent.SchemaName,
+      Entity2NavigationPropertyName: sent.Entity2NavigationPropertyName || sent.SchemaName,
+      Entity1AssociatedMenuConfiguration: clone(sent.Entity1AssociatedMenuConfiguration) || { Behavior: 'UseCollectionName', Group: 'Details', Label: label(null), Order: 10000 },
+      Entity2AssociatedMenuConfiguration: clone(sent.Entity2AssociatedMenuConfiguration) || { Behavior: 'UseCollectionName', Group: 'Details', Label: label(null), Order: 10000 },
+    };
+    relationships.set(lc(relationship.SchemaName), relationship);
+    // The intersect table the platform makes (not customizable, no primary name): it exists while the relationship does.
+    const table = makeTable({ SchemaName: intersect, EntitySetName: `${intersect}set`, IsIntersect: true, DisplayName: intersect, DisplayCollectionName: intersect }, { custom: true });
+    tables.set(intersect, table);
+    return { relationship };
+  }
+
+  // The relationships a table takes part in, from one side: what `<table>/OneToManyRelationships` (the table is the referenced one),
+  // `ManyToOneRelationships` (the referencing one) and `ManyToManyRelationships` (either entity) answer.
+  function relationshipsOf(logical, kind) {
+    const all = [...relationships.values()];
+    if (kind === 'OneToManyRelationships') return all.filter((r) => r.RelationshipType === 'OneToManyRelationship' && r.ReferencedEntity === logical);
+    if (kind === 'ManyToOneRelationships') return all.filter((r) => r.RelationshipType === 'OneToManyRelationship' && r.ReferencingEntity === logical);
+    return all.filter((r) => r.RelationshipType === 'ManyToManyRelationship' && (r.Entity1LogicalName === logical || r.Entity2LogicalName === logical));
+  }
+
+  // ------------------------------------------------------------------------------------------------------------------------
+  // Reads: `$select`, `$filter` and `$expand` over the stored definitions.
+  //   $expand=Attributes($select=LogicalName,AttributeType;$filter=IsCustomAttribute eq true),OptionSet,Keys
+  function parseExpand(text) {
+    const items = [];
+    let depth = 0;
+    let start = 0;
+    const s = String(text || '');
+    for (let i = 0; i <= s.length; i += 1) {
+      const ch = s[i];
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      else if ((ch === ',' && depth === 0) || i === s.length) {
+        const part = s.slice(start, i).trim();
+        if (part) {
+          const open = part.indexOf('(');
+          const name = open === -1 ? part : part.slice(0, open);
+          const inner = open === -1 ? '' : part.slice(open + 1, -1);
+          const opts = {};
+          let d = 0;
+          let from = 0;
+          for (let j = 0; j <= inner.length; j += 1) {
+            const c = inner[j];
+            if (c === '(') d += 1;
+            else if (c === ')') d -= 1;
+            else if ((c === ';' && d === 0) || j === inner.length) {
+              const opt = inner.slice(from, j).trim();
+              if (opt) {
+                const eq = opt.indexOf('=');
+                opts[opt.slice(0, eq)] = opt.slice(eq + 1);
+              }
+              from = j + 1;
+            }
+          }
+          items.push({ name, opts });
+        }
+        start = i + 1;
+      }
+    }
+    return items;
+  }
+
+  // The properties a definition is answered with. A collection-valued navigation (a table's Attributes, Keys and relationships) comes back
+  // only when it is expanded; `MetadataId` always does, and so does the `@odata.type` of a derived type.
+  const NAVIGATIONS = { table: ['Attributes', 'Keys', 'OneToManyRelationships', 'ManyToOneRelationships', 'ManyToManyRelationships'], attribute: ['OptionSet', 'GlobalOptionSet'] };
+  function project(def, query, kind) {
+    const select = query.$select ? String(query.$select).split(',').map((x) => x.trim()).filter(Boolean) : null;
+    const out = {};
+    if (def['@odata.type']) out['@odata.type'] = def['@odata.type'];
+    for (const [key, value] of Object.entries(def)) {
+      if (key === '@odata.type') continue;
+      if ((NAVIGATIONS[kind] || []).includes(key) && !(kind === 'attribute' && key === 'OptionSet' && !select)) continue;
+      if (select && !select.includes(key) && key !== 'MetadataId') continue;
+      out[key] = value instanceof Map ? undefined : clone(value);
+    }
+    for (const item of parseExpand(query.$expand)) out[item.name] = expandOf(def, kind, item);
+    return out;
+  }
+  function expandOf(def, kind, item) {
+    if (kind === 'table') {
+      if (item.name === 'Attributes') return listAttributes(def, item.opts);
+      if (item.name === 'Keys') return [...def.Keys.values()].map((k) => project(k, item.opts, 'key'));
+      if (/Relationships$/.test(item.name)) return relationshipsOf(def.LogicalName, item.name).filter((r) => !item.opts.$filter || matchesFilter(item.opts.$filter, r)).map((r) => project(r, item.opts, 'relationship'));
+    }
+    if (kind === 'attribute' && (item.name === 'OptionSet' || item.name === 'GlobalOptionSet')) {
+      const set = item.name === 'GlobalOptionSet' ? (def.GlobalOptionSet || (def.OptionSet && def.OptionSet.IsGlobal ? def.OptionSet : null)) : def.OptionSet;
+      return set ? project(set, item.opts, 'optionset') : null;
+    }
+    throw new Error(`fake-lifecycle-metadata: $expand=${item.name} on a ${kind} is not modelled`);
+  }
+  function listAttributes(table, query, cast) {
+    let list = [...table.Attributes.values()];
+    if (cast) list = list.filter((a) => classOf(a) === cast || (cast === 'LookupAttributeMetadata' && ['Lookup', 'Customer', 'Owner'].includes(a.AttributeType) && classOf(a) === 'LookupAttributeMetadata'));
+    if (query.$filter) list = list.filter((a) => matchesFilter(query.$filter, flatForFilter(a)));
+    return list.map((a) => project(a, query, 'attribute'));
+  }
+  // A filter reads a metadata property's value: an enum-valued one (`AttributeType eq 'Picklist'`) is text, a BooleanManagedProperty its `Value`.
+  const flatForFilter = (def) => Object.fromEntries(Object.entries(def).map(([k, v]) => [k, v && typeof v === 'object' && !Array.isArray(v) && 'Value' in v ? v.Value : v]));
+
+  // `LogicalName='x'` / `<MetadataId>` / `SchemaName='x'` / `Name='x'`, as the key of a definition in a path.
+  function keyed(map, key, field) {
+    const named = /^(\w+)='((?:[^']|'')*)'$/.exec(key);
+    if (named) {
+      const value = lc(named[2].replace(/''/g, "'"));
+      return [...map.values()].find((d) => lc(d[named[1]]) === value) || null;
+    }
+    const id = bare(key);
+    return [...map.values()].find((d) => bare(d.MetadataId) === id) || (field ? null : null);
+  }
+  const tableAt = (key) => keyed(tables, key);
+
+  // ------------------------------------------------------------------------------------------------------------------------
+  // The router. `path` is below the API root, decoded, without the query; `query` the query's parameters. Answers
+  // `{ status, body, headers }`, or null when the path is not a metadata path. `solution` is the `MSCRM.SolutionUniqueName` header.
+  const ok = (body, headers = {}) => ({ status: 200, body, headers });
+  const created = (location) => ({ status: 204, body: undefined, headers: { 'odata-entityid': location } });
+  const fail = (status, message, code = '0x80040203') => ({ status, body: { error: { code, message } }, headers: {} });
+  const missing = (what) => fail(404, `Could not find ${what}.`, '0x80040217');
+  const collection = (value) => ok({ value });
+  const CAST = /^Microsoft\.Dynamics\.CRM\.(\w+)$/;
+
+  function handle(method, path, query, body, headers, apiRoot) {
+    const segments = splitPath(path);
+    if (!segments.length) return null;
+    const head = segments[0];
+    const solution = headers && Object.entries(headers).find(([k]) => k.toLowerCase() === 'mscrm.solutionuniquename');
+    const solutionName = solution ? solution[1] : null;
+    if (head.name === 'CreateCustomerRelationships' && method === 'POST') return createCustomer(body, solutionName);
+    if (!['EntityDefinitions', 'RelationshipDefinitions', 'GlobalOptionSetDefinitions'].includes(head.name)) return null;
+    if (head.name === 'EntityDefinitions') return entityDefinitions(method, segments, query, body, solutionName, apiRoot, headers);
+    if (head.name === 'RelationshipDefinitions') return relationshipDefinitions(method, segments, query, body, solutionName, apiRoot);
+    return optionSetDefinitions(method, segments, query, body, solutionName, apiRoot);
+  }
+
+  // `EntityDefinitions(LogicalName='x')/Attributes(LogicalName='y')/Microsoft.Dynamics.CRM.StringAttributeMetadata` ->
+  // [{ name: 'EntityDefinitions', key: "LogicalName='x'" }, { name: 'Attributes', key: "LogicalName='y'" }, { name: 'Microsoft.Dynamics.CRM.StringAttributeMetadata' }]
+  function splitPath(path) {
+    const out = [];
+    let i = 1;
+    while (i < path.length) {
+      let name = '';
+      while (i < path.length && path[i] !== '(' && path[i] !== '/') name += path[i++];
+      let key = null;
+      if (path[i] === '(') {
+        let depth = 0;
+        let start = i + 1;
+        for (; i < path.length; i += 1) {
+          if (path[i] === "'") { i += 1; while (i < path.length && !(path[i] === "'" && path[i + 1] !== "'")) i += path[i] === "'" ? 2 : 1; continue; }
+          if (path[i] === '(') depth += 1;
+          if (path[i] === ')') { depth -= 1; if (depth === 0) break; }
+        }
+        key = path.slice(start, i);
+        i += 1;
+      }
+      out.push({ name, key });
+      if (path[i] === '/') i += 1;
+    }
+    return out;
+  }
+
+  function entityDefinitions(method, segments, query, body, solutionName, apiRoot, headers) {
+    const [head, sub, third, fourth] = segments;
+    if (!head.key) {
+      if (method === 'GET' && !sub) {
+        let list = [...tables.values()];
+        if (query.$filter) list = list.filter((t) => matchesFilter(query.$filter, flatForFilter(t)));
+        return collection(list.map((t) => project(t, query, 'table')));
+      }
+      if (method === 'POST' && !sub) return createTable(body, solutionName, apiRoot);
+      throw new Error(`fake-lifecycle-metadata: ${method} EntityDefinitions/${sub ? sub.name : ''} is not modelled`);
+    }
+    const table = tableAt(head.key);
+    if (!sub) {
+      if (method === 'GET') return table ? ok(project(table, query, 'table')) : missing(`entity ${head.key}`);
+      if (method === 'PUT') return table ? updateTable(table, body, headers) : missing(`entity ${head.key}`);
+      if (method === 'DELETE') return table ? deleteTable(table) : missing(`entity ${head.key}`);
+      throw new Error(`fake-lifecycle-metadata: ${method} EntityDefinitions(${head.key}) is not modelled`);
+    }
+    if (!table) return missing(`entity ${head.key}`);
+    if (sub.name === 'Attributes') {
+      if (!sub.key) {
+        const cast = third && CAST.exec(third.name);
+        if (method === 'GET') return collection(listAttributes(table, query, cast && cast[1]));
+        if (method === 'POST' && !third) return createColumn(table, body, solutionName, apiRoot);
+        throw new Error(`fake-lifecycle-metadata: ${method} ${table.LogicalName}/Attributes is not modelled`);
+      }
+      const attribute = keyed(table.Attributes, sub.key);
+      if (!attribute) return missing(`attribute ${sub.key} on ${table.LogicalName}`);
+      const cast = third && CAST.exec(third.name);
+      if (cast && classOf(attribute) !== cast[1]) return fail(400, `The attribute ${attribute.LogicalName} is not a ${cast[1]}.`, '0x80060888');
+      if (method === 'GET') {
+        if (fourth || (third && !cast)) {
+          const nav = cast ? fourth : third;
+          return ok(expandOf(attribute, 'attribute', { name: nav.name, opts: query }));
+        }
+        return ok(project(attribute, query, 'attribute'));
+      }
+      if (method === 'PUT') return updateColumn(table, attribute, body, headers);
+      if (method === 'DELETE') return deleteColumn(table, attribute);
+      throw new Error(`fake-lifecycle-metadata: ${method} ${table.LogicalName}/Attributes(${sub.key}) is not modelled`);
+    }
+    if (sub.name === 'Keys') {
+      if (method === 'GET' && !sub.key) return collection([...table.Keys.values()].map((k) => project(k, query, 'key')));
+      if (method === 'POST' && !sub.key) return createKey(table, body, apiRoot);
+      const key = sub.key && keyed(table.Keys, sub.key);
+      if (method === 'GET') return key ? ok(project(key, query, 'key')) : missing(`key ${sub.key}`);
+      if (method === 'DELETE') { if (!key) return missing(`key ${sub.key}`); table.Keys.delete(key.LogicalName); return { status: 204, headers: {} }; }
+    }
+    if (/Relationships$/.test(sub.name) && method === 'GET' && !sub.key) {
+      let list = relationshipsOf(table.LogicalName, sub.name);
+      if (query.$filter) list = list.filter((r) => matchesFilter(query.$filter, flatForFilter(r)));
+      return collection(list.map((r) => project(r, query, 'relationship')));
+    }
+    throw new Error(`fake-lifecycle-metadata: ${method} EntityDefinitions(${head.key})/${sub.name} is not modelled`);
+  }
+
+  function createTable(body, solutionName, apiRoot) {
+    const logical = lc(body.SchemaName);
+    if (tables.has(logical)) return fail(400, `Entities already exist: ${body.SchemaName}`, '0x80047013');
+    const table = makeTable(body);
+    if (!table.PrimaryNameAttribute) return fail(400, 'A primary name attribute is required.', '0x80047013');
+    tables.set(logical, table);
+    if (addComponent) addComponent(solutionName, { objectid: table.MetadataId, componenttype: 1, rootcomponentbehavior: 0 });
+    if (onTableCreated) onTableCreated(table, solutionName);
+    return created(`${apiRoot}/EntityDefinitions(${table.MetadataId})`);
+  }
+
+  // A PUT replaces the definition; `MSCRM.MergeLabels: true` keeps the labels of the languages the request does not carry.
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api#update-table-definitions
+  function mergeLabels(stored, sent, merge) {
+    const next = label(sent);
+    if (!merge) return next;
+    const kept = stored.LocalizedLabels.filter((l) => !next.LocalizedLabels.some((n) => n.LanguageCode === l.LanguageCode));
+    const list = [...kept, ...next.LocalizedLabels];
+    return { LocalizedLabels: list, UserLocalizedLabel: clone(list.find((l) => l.LanguageCode === userLanguage) || list[0] || null) };
+  }
+  const isMerge = (headers) => !!headers && Object.entries(headers).some(([k, v]) => k.toLowerCase() === 'mscrm.mergelabels' && String(v) === 'true');
+  const LABEL_KEYS = ['DisplayName', 'DisplayCollectionName', 'Description'];
+  function updateTable(table, body, headers) {
+    for (const [key, value] of Object.entries(body || {})) {
+      if (key.startsWith('@odata') || ['MetadataId', 'LogicalName', 'Attributes', 'Keys'].includes(key)) continue;
+      table[key] = LABEL_KEYS.includes(key) ? mergeLabels(table[key], value, isMerge(headers)) : clone(value);
+    }
+    return { status: 204, headers: {} };
+  }
+
+  function createColumn(table, body, solutionName, apiRoot) {
+    const logical = lc(body.SchemaName);
+    if (table.Attributes.has(logical)) return fail(400, `Attribute ${logical} already exists for entity ${table.LogicalName}.`, '0x80060304');
+    const bind = body['GlobalOptionSet@odata.bind'];
+    const sent = { ...body };
+    delete sent['GlobalOptionSet@odata.bind'];
+    const attribute = makeAttribute(table, sent);
+    if (bind) {
+      const set = keyed(optionSets, (/GlobalOptionSetDefinitions\((.+)\)$/.exec(bind) || [])[1] || '');
+      if (!set) return fail(400, `The global option set ${bind} does not exist.`);
+      attribute.OptionSet = clone(set);
+      attribute.GlobalOptionSet = clone(set);
+    }
+    addAttribute(table, attribute);
+    if (addComponent) addComponent(solutionName, { objectid: attribute.MetadataId, componenttype: 2, parentTable: table.LogicalName });
+    return created(`${apiRoot}/EntityDefinitions(${table.MetadataId})/Attributes(${attribute.MetadataId})`);
+  }
+
+  function updateColumn(table, attribute, body, headers) {
+    for (const [key, value] of Object.entries(body || {})) {
+      if (key.startsWith('@odata') || ['MetadataId', 'LogicalName', 'AttributeType', 'AttributeTypeName'].includes(key)) continue;
+      if (LABEL_KEYS.includes(key)) attribute[key] = mergeLabels(attribute[key], value, isMerge(headers));
+      else if (key === 'OptionSet') attribute.OptionSet = { ...attribute.OptionSet, ...storedOptionSet(value, { local: !attribute.OptionSet || !attribute.OptionSet.IsGlobal }), MetadataId: attribute.OptionSet ? attribute.OptionSet.MetadataId : randomUUID() };
+      else attribute[key] = clone(value);
+    }
+    if (attribute.IsPrimaryName) table.PrimaryNameAttribute = attribute.LogicalName;
+    return { status: 204, headers: {} };
+  }
+
+  function deleteColumn(table, attribute) {
+    table.Attributes.delete(attribute.LogicalName);
+    for (const [name, other] of [...table.Attributes]) if (other.AttributeOf === attribute.LogicalName) table.Attributes.delete(name);
+    if (removeComponents) removeComponents([attribute.MetadataId]);
+    return { status: 204, headers: {} };
+  }
+
+  function createKey(table, body, apiRoot) {
+    const logical = lc(body.SchemaName);
+    if (table.Keys.has(logical)) return fail(400, `A key with the same name already exists on ${table.LogicalName}.`);
+    for (const column of body.KeyAttributes || []) if (!table.Attributes.has(lc(column))) return fail(400, `The key column ${column} does not exist on ${table.LogicalName}.`);
+    const key = { ...clone(body), MetadataId: randomUUID(), LogicalName: logical, EntityLogicalName: table.LogicalName, DisplayName: label(body.DisplayName), EntityKeyIndexStatus: 'Active', IsManaged: false };
+    delete key['@odata.type'];
+    table.Keys.set(logical, key);
+    return created(`${apiRoot}/EntityDefinitions(${table.MetadataId})/Keys(${key.MetadataId})`);
+  }
+
+  // Deleting a table removes everything that is part of it: its columns, its keys, the relationships it takes part in (with the lookups
+  // they made on the other side), its rows and its views, forms and charts (`onTableDeleted`) and its solution components.
+  function deleteTable(table) {
+    for (const r of [...relationships.values()]) {
+      const involved = r.RelationshipType === 'OneToManyRelationship' ? [r.ReferencedEntity, r.ReferencingEntity] : [r.Entity1LogicalName, r.Entity2LogicalName];
+      if (involved.includes(table.LogicalName)) removeRelationship(r);
+    }
+    tables.delete(table.LogicalName);
+    if (removeComponents) removeComponents([table.MetadataId, ...[...table.Attributes.values()].map((a) => a.MetadataId)]);
+    if (onTableDeleted) onTableDeleted(table);
+    return { status: 204, headers: {} };
+  }
+
+  function removeRelationship(r) {
+    relationships.delete(lc(r.SchemaName));
+    if (r.RelationshipType === 'OneToManyRelationship') {
+      const referencing = tables.get(r.ReferencingEntity);
+      const lookup = referencing && referencing.Attributes.get(r.ReferencingAttribute);
+      if (lookup) deleteColumn(referencing, lookup);
+    } else {
+      const intersect = tables.get(r.IntersectEntityName);
+      if (intersect) { tables.delete(intersect.LogicalName); if (onTableDeleted) onTableDeleted(intersect); }
+    }
+    if (removeComponents) removeComponents([r.MetadataId]);
+  }
+
+  function relationshipDefinitions(method, segments, query, body, solutionName, apiRoot) {
+    const [head, sub] = segments;
+    if (!head.key) {
+      if (method === 'GET') {
+        let list = [...relationships.values()];
+        if (sub && CAST.exec(sub.name)) list = list.filter((r) => r['@odata.type'] === `#${sub.name}`);
+        if (query.$filter) list = list.filter((r) => matchesFilter(query.$filter, flatForFilter(r)));
+        return collection(list.map((r) => project(r, query, 'relationship')));
+      }
+      if (method === 'POST' && !sub) {
+        if (relationships.has(lc(body.SchemaName))) return fail(400, `A relationship with the name ${body.SchemaName} already exists.`, '0x80047007');
+        const many = /ManyToManyRelationshipMetadata$/.test(String(body['@odata.type']));
+        const made = many ? makeManyToMany(body) : makeOneToMany(body);
+        if (made.error) return fail(400, made.error, made.code || '0x80040203');
+        if (addComponent) addComponent(solutionName, { objectid: made.relationship.MetadataId, componenttype: 10 });
+        return created(`${apiRoot}/RelationshipDefinitions(${made.relationship.MetadataId})`);
+      }
+      throw new Error(`fake-lifecycle-metadata: ${method} RelationshipDefinitions is not modelled`);
+    }
+    const r = keyed(relationships, head.key);
+    if (!r) return missing(`relationship ${head.key}`);
+    const cast = sub && CAST.exec(sub.name);
+    if (cast && r['@odata.type'] !== `#Microsoft.Dynamics.CRM.${cast[1]}`) return fail(400, `The relationship ${r.SchemaName} is not a ${cast[1]}.`, '0x80060888');
+    if (method === 'GET') return ok(project(r, query, 'relationship'));
+    if (method === 'PUT') {
+      for (const [key, value] of Object.entries(body || {})) if (!key.startsWith('@odata') && key !== 'MetadataId') r[key] = clone(value);
+      return { status: 204, headers: {} };
+    }
+    if (method === 'DELETE') { removeRelationship(r); return { status: 204, headers: {} }; }
+    throw new Error(`fake-lifecycle-metadata: ${method} RelationshipDefinitions(${head.key}) is not modelled`);
+  }
+
+  // A global option set cannot be deleted while a column binds it (the platform names the dependency).
+  function optionSetDefinitions(method, segments, query, body, solutionName, apiRoot) {
+    const [head] = segments;
+    if (!head.key) {
+      if (method === 'GET') {
+        let list = [...optionSets.values()];
+        if (query.$filter) list = list.filter((s) => matchesFilter(query.$filter, flatForFilter(s)));
+        return collection(list.map((s) => project(s, query, 'optionset')));
+      }
+      if (method === 'POST') {
+        if (optionSets.has(lc(body.Name))) return fail(400, `An option set with the name ${body.Name} already exists.`, '0x80047008');
+        const set = { ...storedOptionSet(body, { local: false }), Name: body.Name };
+        optionSets.set(lc(body.Name), set);
+        if (addComponent) addComponent(solutionName, { objectid: set.MetadataId, componenttype: 9 });
+        return created(`${apiRoot}/GlobalOptionSetDefinitions(${set.MetadataId})`);
+      }
+      throw new Error(`fake-lifecycle-metadata: ${method} GlobalOptionSetDefinitions is not modelled`);
+    }
+    const set = keyed(optionSets, head.key);
+    if (!set) return missing(`option set ${head.key}`);
+    if (method === 'GET') return ok(project(set, query, 'optionset'));
+    if (method === 'DELETE') {
+      const binders = [...tables.values()].flatMap((t) => [...t.Attributes.values()].filter((a) => a.OptionSet && bare(a.OptionSet.MetadataId) === bare(set.MetadataId)));
+      if (binders.length) return fail(400, `The OptionSet(${set.MetadataId}) component cannot be deleted because it is referenced by ${binders.length} other components.`, '0x8004f01f');
+      optionSets.delete(lc(set.Name));
+      if (removeComponents) removeComponents([set.MetadataId]);
+      return { status: 204, headers: {} };
+    }
+    if (method === 'PUT') {
+      Object.assign(set, storedOptionSet({ ...set, ...body }, { local: false }), { MetadataId: set.MetadataId, Name: set.Name });
+      return { status: 204, headers: {} };
+    }
+    throw new Error(`fake-lifecycle-metadata: ${method} GlobalOptionSetDefinitions(${head.key}) is not modelled`);
+  }
+
+  // CreateCustomerRelationships { Lookup: { "@odata.type": "Microsoft.Dynamics.CRM.ComplexLookupAttributeMetadata", SchemaName, Targets },
+  // OneToManyRelationships: [ { SchemaName, ReferencedEntity: "account", ReferencingEntity }, { … "contact" … } ] }: one Customer lookup
+  // on the referencing table (with its `<name>name`, `<name>yominame` and `<name>idtype` companions) and a 1:N from each target, answered
+  // `{ "AttributeId": "<guid>", "RelationshipIds": [ "<guid>", "<guid>" ] }`.
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/createcustomerrelationships
+  function createCustomer(body, solutionName) {
+    const rels = body.OneToManyRelationships || [];
+    const referencing = tables.get(lc(rels[0] && rels[0].ReferencingEntity));
+    if (!referencing) return fail(400, `the table ${rels[0] && rels[0].ReferencingEntity} does not exist`);
+    const logical = lc(body.Lookup.SchemaName);
+    if (referencing.Attributes.has(logical)) return fail(400, `Attribute ${logical} already exists for entity ${referencing.LogicalName}.`, '0x80060304');
+    const lookup = makeAttribute(referencing, { ...body.Lookup, '@odata.type': 'Microsoft.Dynamics.CRM.LookupAttributeMetadata' }, { AttributeType: 'Customer', AttributeTypeName: { Value: 'CustomerType' }, Targets: clone(body.Lookup.Targets) });
+    addAttribute(referencing, lookup);
+    const idtype = { ...companionsOf(lookup)[0], LogicalName: `${logical}idtype`, SchemaName: `${logical}idtype`, AttributeType: 'EntityName', AttributeTypeName: { Value: 'EntityNameType' }, MetadataId: randomUUID() };
+    referencing.Attributes.set(idtype.LogicalName, idtype);
+    const ids = [];
+    for (const r of rels) {
+      const referenced = tables.get(lc(r.ReferencedEntity));
+      if (!referenced) return fail(400, `the table ${r.ReferencedEntity} does not exist`);
+      const relationship = {
+        ...clone(r), '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', MetadataId: randomUUID(), RelationshipType: 'OneToManyRelationship', IsCustomRelationship: true, IsManaged: false,
+        ReferencedEntity: referenced.LogicalName, ReferencingEntity: referencing.LogicalName, ReferencedAttribute: referenced.PrimaryIdAttribute, ReferencingAttribute: logical,
+        CascadeConfiguration: { Assign: 'NoCascade', Delete: 'RemoveLink', Merge: 'NoCascade', Reparent: 'NoCascade', Share: 'NoCascade', Unshare: 'NoCascade', RollupView: 'NoCascade' },
+      };
+      relationships.set(lc(relationship.SchemaName), relationship);
+      ids.push(relationship.MetadataId);
+      if (addComponent) addComponent(solutionName, { objectid: relationship.MetadataId, componenttype: 10 });
+    }
+    if (addComponent) addComponent(solutionName, { objectid: lookup.MetadataId, componenttype: 2, parentTable: referencing.LogicalName });
+    return ok({ AttributeId: lookup.MetadataId, RelationshipIds: ids });
+  }
+
+  return { tables, relationships, optionSets, label, textOf, makeAttribute, storedOptionSet, companionsOf, addAttribute, makeTable, makeOneToMany, makeManyToMany, relationshipsOf, project, listAttributes, parseExpand, keyed, tableAt, flatForFilter, handle, splitPath, deleteTable, removeRelationship };
+}
+
+module.exports = { createMetadataStore, TYPE_OF, classOf };
