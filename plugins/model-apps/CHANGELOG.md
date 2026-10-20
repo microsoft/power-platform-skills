@@ -11,9 +11,9 @@ The bundled SDK is updated to power-platform-ux d603c799. Dashboard tiles the sp
 download keeps File and Image columns and a table's plural, and an alternate key in several languages over a new table's name column
 no longer stops the first build. A relationship is reused or verified only when the environment states its whole identity, an import
 refused because another import or a publish was running is sent again when its job proves nothing started, and the five minutes a run
-allows itself for a throttled service now bound all of its waiting. An access token is kept out of everything a script writes.
-`--verify` settles a form's captions in another language from one translation export and puts its warnings in its result JSON, and
-lint no longer calls an app with no personas administrator-only.
+allows itself for a throttled service now bound all of its waiting. An access token is kept out of everything a script writes, and a
+large result is no longer cut short on Linux and macOS. `--verify` settles a form's captions in another language from one translation
+export and puts its warnings in its result JSON, and lint no longer calls an app with no personas administrator-only.
 
 ### Added
 
@@ -165,6 +165,14 @@ lint no longer calls an app with no personas administrator-only.
 - **A download keeps a table's plural when a rebuild would not derive it**: "Tag Catalog" for "Tag" was left out, so a rebuild into
   another environment named the table "Tags". A plural that is the display name plus "s" is still left out, so the download of an
   ordinary table is unchanged.
+- **A large result or message is no longer cut short on Linux and macOS when a script prints it and exits at once.** Node writes to a
+  pipe asynchronously there and `process.exit` did not wait, so an agent could receive a multi-megabyte answer, listing, auth check,
+  validation report or error as a text that ended mid-string. Every printer that ends the process — `emitResult`, the printer of an
+  uncaught error, each script's own result printer (`check-auth.js`, `dataverse-request.js`, `genpage-plan-provenance.js`,
+  `promote-intent-pages.js`, `check-page-files.js`, …), usage errors, last-resort error handlers, the hooks' messages and the warnings
+  a script prints right before its result — now makes its writes blocking first. What is printed and every exit status are unchanged,
+  and Windows was never affected; as on Windows, a reader that stops reading now holds the script at its last write instead of
+  receiving a truncated text.
 - The page-builder worker, the planners and the entity builder no longer tell the agent to call `TaskCreate` with no alternative: a
   host can hand a subagent no task tool, so the agent tracks its task with `TaskCreate`/`TaskUpdate` or `todo` when it has one, and
   otherwise says so and tracks it in plain words; `/genpage` does not treat a worker without a task tool as a failed worker.

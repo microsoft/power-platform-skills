@@ -18,3 +18,4 @@ First preview release: ships the `/pcf:pcf` skill, matrix-pinned templates and r
 ### Fixed
 
 - The push receipt (`pcf-receipt.json`) no longer carries an access token that a refused confirmation read quoted, and every file the SDK writes into a push's workspace goes through the same output guard as model-apps' scripts.
+- A large result is no longer cut short on Linux and macOS: `emitResult`, the printer of an uncaught error, `check-auth.js`, the result printers of `pcf-inventory.js`, `verify-pcf.js` and `lint-pcf.js`, every script's usage error and the write-safety hook's message make their writes blocking before the process exits. What is printed and every exit status are unchanged; Windows was never affected.
