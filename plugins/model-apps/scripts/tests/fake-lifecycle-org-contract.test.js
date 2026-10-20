@@ -3,8 +3,9 @@
 // does not model must FAIL LOUD — 501 and an entry in `org.unexpected`, which every lifecycle test asserts is empty — and never answer
 // an empty success that the code under test could take for "nothing there". Each refusal is pinned twice, over a collection that holds
 // rows and over one that holds none (the check runs before any row is looked at), beside a control that the same shape with a known
-// name is answered. And the content proof the lifecycle tests rely on (org.contents + diffContents) is pinned to see an overwrite the
-// identity inventory cannot.
+// name is answered. A read it DOES accept must answer what it asks for — every option applied, pinned on the values and the row counts
+// it returns; a function's arguments and a record's key are checked before anything is resolved. And the content proof the lifecycle
+// tests rely on (org.contents + diffContents) is pinned to see an overwrite the identity inventory cannot.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
@@ -12,9 +13,9 @@ const { seedForeignWork, diffContents, FOREIGN } = require('./helpers/lifecycle-
 
 const BASIC_USER = '11111111-0000-4000-8000-000000000007';
 
-async function send(org, method, where, body) {
+async function send(org, method, where, body, headers = {}) {
   const from = org.unexpected.length;
-  const res = await org.request({ url: `${org.API}${where}`, method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await org.request({ url: `${org.API}${where}`, method, headers: { 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null, unexpected: org.unexpected.slice(from) };
 }
 // A fresh environment with another maker's work in it (populated), and one with nothing but what a new environment has (empty).
@@ -142,4 +143,97 @@ test("fake contract: the content proof sees another maker's work overwritten, wh
     assert.equal(changes.length, 1, `${what}: ${JSON.stringify(changes)}`);
     assert.match(changes[0], reported, what);
   }
+});
+
+// ====================================================================================================================================
+// What an ACCEPTED read answers: every option the checker admits is applied — the values and the row counts below, not only the status.
+
+// A second page that only has a draft, next to the published one the seed made: the two layers a page read can see.
+const DRAFT_PAGE = '33333333-0000-4000-8000-000000000001';
+async function withDraftPage() {
+  const org = await populated();
+  org.pageServer.seedPage(DRAFT_PAGE, { name: 'AAA Page' });
+  return org;
+}
+const keysOf = (row) => Object.keys(row).sort();
+
+test('fake contract: a page read applies its $filter, $select, $orderby and $top, over the layer it sees', async () => {
+  const org = await withDraftPage();
+  const values = async (where, headers) => answered(await send(org, 'GET', where, undefined, headers)).value;
+  // The plain read is the published layer: the draft page is not in it, and a filter on any column narrows it.
+  assert.deepEqual(await values("/uxagentprojects?$select=uxagentprojectid&$filter=name eq 'No Such Page'"), []);
+  const widget = await values("/uxagentprojects?$select=uxagentprojectid&$filter=name eq 'Widget Board'");
+  assert.deepEqual(widget.map((row) => [row.uxagentprojectid, keysOf(row)]), [[FOREIGN.page, ['@odata.etag', 'uxagentprojectid']]]);
+  assert.deepEqual((await values('/uxagentprojects?$select=name')).map((row) => row.name), ['Widget Board']);
+  // With MSCRM.IncludeUnpublished the saved rows are seen, drafts included, in the order asked for, cut at $top.
+  const unpublished = { 'MSCRM.IncludeUnpublished': 'true' };
+  assert.deepEqual((await values('/uxagentprojects?$select=name&$orderby=name asc', unpublished)).map((row) => row.name), ['AAA Page', 'Widget Board']);
+  assert.deepEqual((await values('/uxagentprojects?$select=name&$orderby=name desc&$top=1', unpublished)).map((row) => row.name), ['Widget Board']);
+  // RetrieveUnpublishedMultiple() is the saved layer with componentstate.
+  const many = '/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()';
+  assert.deepEqual(await values(`${many}?$select=uxagentprojectid&$top=0`), []);
+  const first = await values(`${many}?$select=uxagentprojectid&$orderby=name asc&$top=1`);
+  assert.deepEqual(first.map((row) => [row.uxagentprojectid, keysOf(row)]), [[DRAFT_PAGE, ['@odata.etag', 'uxagentprojectid']]]);
+  assert.deepEqual((await values(`${many}?$select=name,componentstate&$filter=componentstate eq 1`)).map((row) => [row.name, row.componentstate]), [['AAA Page', 1]]);
+  assert.deepEqual((await values(`${many}?$select=name&$filter=startswith(name,'Widget')`)).map((row) => row.name), ['Widget Board']);
+  // By id: the selected columns, the draft only with the header.
+  const byId = answered(await send(org, 'GET', `/uxagentprojects(${FOREIGN.page})?$select=name`));
+  assert.deepEqual([byId.name, keysOf(byId)], ['Widget Board', ['@odata.etag', 'name', 'uxagentprojectid']]);
+  assert.equal((await send(org, 'GET', `/uxagentprojects(${DRAFT_PAGE})?$select=name`)).status, 404);
+  assert.equal(answered(await send(org, 'GET', `/uxagentprojects(${DRAFT_PAGE})?$select=name`, undefined, unpublished)).name, 'AAA Page');
+});
+
+test("fake contract: a page's files and conversation are read with their own filter, order, cut and columns", async () => {
+  const org = await withDraftPage();
+  const values = async (where) => answered(await send(org, 'GET', where)).value;
+  // The published page's four files; the draft page's are not in the published layer.
+  const files = await values(`/uxagentprojectfiles?$select=filename&$filter=_uxagentprojectid_value eq ${FOREIGN.page}&$orderby=filename desc&$top=2`);
+  assert.deepEqual(files.map((row) => [row.filename, keysOf(row)]), [
+    ['src/pages/page.tsx', ['@odata.etag', 'filename', 'uxagentprojectfileid']],
+    ['src/pages/page.compiled', ['@odata.etag', 'filename', 'uxagentprojectfileid']],
+  ]);
+  assert.deepEqual((await values('/uxagentprojectfiles?$select=filename&$filter=filetype eq 200000001')).map((row) => row.filename), ['src/pages/page.compiled']);
+  assert.deepEqual(await values(`/uxagentprojectfiles?$select=filename&$filter=_uxagentprojectid_value eq ${DRAFT_PAGE}`), []);
+  // The conversation, in the order it was had; a filter on the sender, a cut, and only the columns asked for.
+  const turns = await values(`/agentconversationmessages?$select=message&$filter=_regardingobjectid_value eq ${FOREIGN.page}&$orderby=createdon asc,versionnumber asc`);
+  assert.deepEqual(turns.map((row) => [row.message, keysOf(row)]), [['Seeded', ['agentconversationmessageid', 'message']], ['Done', ['agentconversationmessageid', 'message']]]);
+  assert.deepEqual((await values(`/agentconversationmessages?$select=message&$filter=_regardingobjectid_value eq ${FOREIGN.page} and messagesender eq 200000001`)).map((row) => row.message), ['Done']);
+  assert.deepEqual((await values(`/agentconversationmessages?$select=message&$filter=_regardingobjectid_value eq ${DRAFT_PAGE}&$orderby=versionnumber desc&$top=1`)).map((row) => row.message), ['Done']);
+});
+
+test('fake contract: a record read applies its options — $expand by id, values, counts — and a write answers its $select', async () => {
+  const org = await populated();
+  const single = answered(await send(org, 'GET', `/solutions(${FOREIGN.solution})?$select=solutionid&$expand=publisherid($select=customizationprefix)`));
+  assert.deepEqual([keysOf(single), single.publisherid.customizationprefix, keysOf(single.publisherid)], [['@odata.etag', 'publisherid', 'solutionid'], 'fabrikam', ['@odata.etag', 'customizationprefix', 'publisherid']]);
+  const values = async (where) => answered(await send(org, 'GET', where)).value;
+  assert.deepEqual((await values('/roles?$select=name&$filter=ismanaged eq true&$orderby=name desc&$top=1')).map((row) => row.name), ['System Administrator']);
+  assert.deepEqual(await values('/roles?$select=name&$top=0'), []);
+  assert.deepEqual((await values("/roles?$select=name&$filter=ismanaged eq false and startswith(name,'Fabrikam')")).map((row) => row.name), ['Fabrikam Reader']);
+  // Prefer: return=representation answers the created row narrowed by the write's own $select.
+  const created = await send(org, 'POST', '/publishers?$select=uniquename', { uniquename: 'adatum', friendlyname: 'Adatum', customizationprefix: 'adatum', customizationoptionvalueprefix: 30000 }, { Prefer: 'return=representation' });
+  assert.equal(created.status, 201);
+  assert.deepEqual([keysOf(created.body), created.body.uniquename], [['@odata.etag', 'publisherid', 'uniquename'], 'adatum']);
+});
+
+// What a function's arguments and a record's key may be: anything else is refused before any row is resolved — never a 200 that
+// ignored an argument, never a 404 that "proved" an absence.
+test('fake contract: an unknown or missing function argument, and a key that is not a record id, are refused', async () => {
+  const org = await populated();
+  refused(await send(org, 'GET', "/RetrieveSetting(SettingName='NewLookAlwaysOn',Unknown='x')"), /the parameter Unknown of RetrieveSetting is not modelled/);
+  refused(await send(org, 'GET', "/RetrieveSetting(Unknown='NewLookAlwaysOn')"), /the parameter Unknown of RetrieveSetting is not modelled/);
+  refused(await send(org, 'GET', "/RetrieveSetting(AppUniqueName='fabrikam_widgets')"), /RetrieveSetting without its SettingName/);
+  refused(await send(org, 'GET', '/RetrieveSetting(SettingName=@p)?@p=1'), /not modelled/);
+  refused(await send(org, 'GET', "/solutions(Unknown='FabrikamCore')"), /the key \(Unknown='FabrikamCore'\) on GET \/solutions/);
+  refused(await send(org, 'PATCH', "/solutions(Unknown='FabrikamCore')", { description: 'x' }), /the key \(Unknown='FabrikamCore'\)/);
+  refused(await send(org, 'GET', '/roles(basic-user)/appmoduleroles_association?$select=appmoduleid'), /the key \(basic-user\)/);
+  refused(await send(org, 'GET', "/uxagentprojects(name='Widget Board')"), /the key \(name='Widget Board'\)/);
+  refused(await send(org, 'GET', "/systemforms(formid='x')/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=name"), /the key \(formid='x'\)/);
+  refused(await send(org, 'POST', '/roles', { name: 'Adatum Reader', 'businessunitid@odata.bind': "/businessunits(name='contoso')" }), /the key \(name='contoso'\) on the bind/);
+  refused(await send(org, 'GET', "/systemforms/Microsoft.Dynamics.CRM.RetrieveFilteredForms(EntityLogicalName=@e,FormType=@t,User=@u)?@e='fabrikam_widget'&@t=2&@u={'@odata.id':'systemusers(44444444-0000-4000-8000-000000000001)'}"), /only the maker is/);
+  // The same reads, well formed, are answered.
+  assert.equal(answered(await send(org, 'GET', "/RetrieveSetting(SettingName='NewLookAlwaysOn')")).SettingDetail.Value, 'false');
+  assert.equal(answered(await send(org, 'GET', "/RetrieveSetting(SettingName='NewLookAlwaysOn',AppUniqueName='fabrikam_widgets')")).SettingDetail.Value, 'false');
+  assert.equal(answered(await send(org, 'GET', `/solutions(${FOREIGN.solution})?$select=uniquename`)).uniquename, 'FabrikamCore');
+  assert.equal((await send(org, 'GET', '/solutions(44444444-0000-4000-8000-000000000001)?$select=uniquename')).status, 404, 'a well-formed id that names no row is the platform\'s 404');
+  assert.deepEqual(answered(await send(org, 'GET', "/systemforms/Microsoft.Dynamics.CRM.RetrieveFilteredForms(EntityLogicalName=@e,FormType=@t,User=@u)?@e='fabrikam_widget'&@t=2&@u={'@odata.id':'systemusers(11111111-0000-4000-8000-000000000003)'}")).value.length, 1);
 });

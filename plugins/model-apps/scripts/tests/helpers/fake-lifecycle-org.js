@@ -24,8 +24,9 @@
 //   solution   `solutions`, `publishers` and `solutioncomponents`: a component created with the `MSCRM.SolutionUniqueName` header or
 //              added with AddSolutionComponent is a row of that solution; a view, form or chart of a table the solution holds with all
 //              its subcomponents has no row of its own (helpers/fake-dataverse.js says why).
-//   pages      the generative pages (`uxagentprojects`, their files and conversation), answered by the stateful page fake the SDK's
-//              own tests drive (helpers/fake-genpage-server.js); a `PublishXml` reaches it too.
+//   pages      the generative pages (`uxagentprojects`, their files and conversation), held by the stateful page fake the SDK's own
+//              tests drive (helpers/fake-genpage-server.js), which takes their writes, a file's bytes and a `PublishXml`; their reads
+//              are answered here from its state, so every query option a read carries is applied (pageRows, answerPageRead).
 //
 // The platform rules it keeps, and where each comes from. MEASURED or DOCUMENTED (the plugin's code or another fake records it):
 //   - a read BY ID answers the saved row with its current token (the SDK reads a form it just created that way), except an app module,
@@ -49,8 +50,10 @@
 // so a new read or write shows up as a loud failure in the test that first sends it — never as a silent empty answer that the code
 // under test might read as "nothing there". For a READ that holds before a single row or definition is looked at: the whole path, every
 // query option, every column or property it names (in `$select`, `$filter`, `$orderby`, `$expand`), every navigation, cast and filter
-// function is checked against an explicit schema (RECORD_SCHEMA below; the metadata read contract in fake-lifecycle-metadata.js), so a
-// read over an empty collection is refused exactly as one over a full one. fake-lifecycle-org-contract.test.js pins that boundary.
+// function, every record key (a row is addressed by its id) and every function argument is checked against an explicit schema
+// (RECORD_SCHEMA below; the metadata read contract in fake-lifecycle-metadata.js), so a read over an empty collection is refused exactly
+// as one over a full one — and every option a read is allowed to carry is APPLIED to the answer, never accepted and ignored.
+// fake-lifecycle-org-contract.test.js pins that boundary, and the values and row counts the accepted reads answer.
 //
 // What a test compares: `inventory()` names what exists (identities: create/delete), `contents()` what each artifact holds (saved and
 // published layers, whole definitions, page files) — the proof that a command left everything it did not make as it found it.
@@ -61,7 +64,7 @@
 const { randomUUID } = require('node:crypto');
 const { compileFilter, describeFilter, evaluateFilter } = require('./odata-filter.js');
 const { createMetadataStore } = require('./fake-lifecycle-metadata.js');
-const { FakeGenPageServer, API: PAGE_API } = require('./fake-genpage-server.js');
+const { FakeGenPageServer, API: PAGE_API, sqlGuidOrder } = require('./fake-genpage-server.js');
 
 const API_ROOT = /^\/api\/data\/v9\.\d/;
 const GUID_TEXT = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
@@ -353,6 +356,14 @@ function createLifecycleOrg(options = {}) {
   // ---------------------------------------------------------------------------------------------------------------------------
   // The read contract (RECORD_SCHEMA above): what a set's rows hold, and the check every read passes before a row is looked at.
   const listOf = (text) => String(text).split(',').map((x) => x.trim()).filter(Boolean);
+  // A row is addressed by its id. An alternate-key expression (`/accounts(accountnumber='x')`, `/solutions(Unknown='x')`) or any other
+  // text in a key's place is not modelled: it is refused, never resolved as an id that "does not exist" (a 404 would prove an absence
+  // nothing measured).
+  const GUID_KEY = new RegExp(`^${GUID_TEXT}$`);
+  const idOf = (key, where) => {
+    if (!GUID_KEY.test(String(key))) throw new Unmodelled(`the key (${key}) on ${where} is not modelled: a row is addressed by its id`);
+    return bare(key);
+  };
   function schemaOf(set) {
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`no table has the entity set ${set}`);
@@ -429,60 +440,73 @@ function createLifecycleOrg(options = {}) {
   // lets it be empty, and refused otherwise: the platform would have filled it, and the fake does not model how.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/select-columns
   function shape(row, data, query, info, { saved = false } = {}) {
-    const select = query.$select ? listOf(query.$select) : null;
     const full = { ...data, '@odata.etag': etagOf(saved ? row.version : (row.publishedVersion || row.version)) };
     if (info.layered) full.componentstate = saved ? (row.publishedVersion === row.version ? 0 : 1) : 0;
-    if (!select) return full;
-    const schema = schemaOf(row.set);
-    const out = { '@odata.etag': full['@odata.etag'], [info.id]: full[info.id] };
-    for (const name of select) {
+    if (!query.$select) return full;
+    return selectColumns(schemaOf(row.set), full, query, { '@odata.etag': full['@odata.etag'], [info.id]: full[info.id] });
+  }
+  // `$select` over one row: `extra` (the key, the token) always comes back, then each selected column — `null` when the platform lets it
+  // be empty and the row holds none, refused when the platform always fills it (the fake does not model how it would be set).
+  function selectColumns(schema, full, query, extra) {
+    const out = { ...extra };
+    for (const name of listOf(query.$select)) {
       if (full[name] !== undefined && full[name] !== null) out[name] = full[name];
       else if (schema.nullable.has(name)) out[name] = null;
-      else throw new Unmodelled(`${info.logical} ${row.id} holds no ${name}, which the platform always fills`);
+      else throw new Unmodelled(`${schema.info.logical} ${full[schema.info.id]} holds no ${name}, which the platform always fills`);
     }
     return out;
+  }
+  // The checked `$filter`, `$orderby` and `$top` over a list (each item read as `dataOf(item)`), the same for records and page rows:
+  // a column the filter reads that the platform always fills must be there; the order is stable, so rows that tie keep the order the
+  // list came in (the platform's own order for its set).
+  function applyQuery(items, dataOf, query, checked, where, navigate) {
+    const { schema, filter } = checked;
+    let list = items;
+    if (filter) {
+      list = list.filter((item) => {
+        const data = dataOf(item);
+        for (const name of filter.required) if (data[name] === undefined || data[name] === null) throw new Unmodelled(`${schema.info.logical} ${data[schema.info.id]} holds no ${name}, which the platform always fills ($filter on ${where})`);
+        return evaluateFilter(filter.ast, data, { navigate });
+      });
+    }
+    if (query.$orderby !== undefined) {
+      const keys = listOf(query.$orderby).map((item) => { const [field, dir] = item.split(/\s+/); return { field, sign: lc(dir) === 'desc' ? -1 : 1 }; });
+      list = [...list].sort((a, b) => {
+        for (const { field, sign } of keys) {
+          const x = dataOf(a)[field];
+          const y = dataOf(b)[field];
+          if (x !== y) return (x == null ? -1 : y == null ? 1 : x > y ? 1 : -1) * sign;
+        }
+        return 0;
+      });
+    }
+    if (query.$top !== undefined) list = list.slice(0, Number(query.$top));
+    return list;
   }
   const etagOf = (version) => `W/"${version}"`;
   const readRows = (set, query, options = {}) => answerRows(set, [...rowsOf(set).values()], query, options);
   // The rows a read answers, out of `candidates` (a whole set, or the rows a navigation links): checked, filtered, ordered, cut, shaped.
   function answerRows(set, candidates, query, { saved = false, kind = 'collection', where = `/${set}` } = {}) {
-    const { schema, filter, expands } = checkRead(set, query, kind, where);
-    const { info } = schema;
+    const checked = checkRead(set, query, kind, where);
+    const { info } = checked.schema;
     const layered = !!info.layered;
-    let rows = candidates
+    // A lambda over an N:N navigation (`appmoduleroles_association/any(x:x/roleid eq <id>)`) follows the row's links.
+    const navigate = (data, nav) => {
+      const id = bare(data[info.id]);
+      const out = [];
+      for (const a of associations) {
+        if (a.nav !== nav) continue;
+        if (a.set === set && a.id === id) out.push((rowsOf(a.toSet).get(a.toId) || {}).data);
+        else if (a.toSet === set && a.toId === id) out.push((rowsOf(a.set).get(a.id) || {}).data);
+      }
+      return out.filter(Boolean);
+    };
+    const items = candidates
       .map((row) => ({ row, data: layered && !saved ? row.published : row.data }))
-      .filter((x) => x.data);
-    if (filter) {
-      // A lambda over an N:N navigation (`appmoduleroles_association/any(x:x/roleid eq <id>)`) follows the row's links.
-      const navigate = (data, nav) => {
-        const id = bare(data[info.id]);
-        const out = [];
-        for (const a of associations) {
-          if (a.nav !== nav) continue;
-          if (a.set === set && a.id === id) out.push((rowsOf(a.toSet).get(a.toId) || {}).data);
-          else if (a.toSet === set && a.toId === id) out.push((rowsOf(a.set).get(a.id) || {}).data);
-        }
-        return out.filter(Boolean);
-      };
-      rows = rows.filter((x) => {
-        const data = layered ? { ...x.data, componentstate: saved && x.row.publishedVersion !== x.row.version ? 1 : 0 } : x.data;
-        for (const name of filter.required) if (data[name] === undefined || data[name] === null) throw new Unmodelled(`${info.logical} ${x.row.id} holds no ${name}, which the platform always fills ($filter on ${where})`);
-        return evaluateFilter(filter.ast, data, { navigate });
-      });
-    }
-    if (query.$orderby) {
-      const keys = listOf(query.$orderby).map((item) => { const [field, dir] = item.split(/\s+/); return { field, sign: lc(dir) === 'desc' ? -1 : 1 }; });
-      rows.sort((a, b) => {
-        for (const { field, sign } of keys) {
-          const x = a.data[field];
-          const y = b.data[field];
-          if (x !== y) return (x > y ? 1 : -1) * sign;
-        }
-        return 0;
-      });
-    }
-    if (query.$top) rows = rows.slice(0, Number(query.$top));
-    return rows.map((x) => withExpands(shape(x.row, x.data, query, info, { saved }), x.data, expands));
+      .filter((x) => x.data)
+      .map((x) => ({ ...x, read: layered ? { ...x.data, componentstate: saved && x.row.publishedVersion !== x.row.version ? 1 : 0 } : x.data }));
+    return applyQuery(items, (x) => x.read, query, checked, where, navigate)
+      .map((x) => withExpands(shape(x.row, x.data, query, info, { saved }), x.data, checked.expands));
   }
 
   // `$expand` of a single-valued navigation — a lookup — embeds the row it points at, with its own `$select`:
@@ -522,12 +546,13 @@ function createLifecycleOrg(options = {}) {
       if (!bind) { out[key] = clone(value); continue; }
       const target = /\/?([A-Za-z_]\w*)\(([^)]+)\)$/.exec(String(value || ''));
       if (!target) throw new Unmodelled(`cannot read the bind ${key}: ${value}`);
+      const targetId = idOf(target[2], `the bind ${key}`);
       let name = lc(bind[1]);
       if (table && !table.Attributes.has(name)) {
         const poly = /^(.+)_[a-z0-9]+$/.exec(name);
         if (poly && table.Attributes.has(poly[1])) name = poly[1];
       }
-      out[`_${name}_value`] = bare(target[2]);
+      out[`_${name}_value`] = targetId;
     }
     return out;
   }
@@ -557,7 +582,7 @@ function createLifecycleOrg(options = {}) {
     appactions: () => ({ ismanaged: false, statecode: 0, statuscode: 1 }),
   };
 
-  function createRow(set, body, headers) {
+  function createRow(set, body, headers, query = {}) {
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`no table has the entity set ${set}`);
     const data = { ...(CREATE_DEFAULTS[set] ? CREATE_DEFAULTS[set]() : {}), ...coerce(bindLookups(set, body)) };
@@ -578,11 +603,12 @@ function createLifecycleOrg(options = {}) {
     const solution = solutionHeader(headers);
     if (solution && info.componentType) addComponentByName(solution, { objectid: id, componenttype: info.componentType });
     const location = `${API}/${set}(${id})`;
-    if (/return=representation/i.test(preferOf(headers))) return json(201, shape(row, row.data, {}, info, { saved: true }), { 'odata-entityid': location, etag: etagOf(row.version) });
+    // `Prefer: return=representation` answers the row as created — narrowed by the request's `$select`, as a read would be.
+    if (/return=representation/i.test(preferOf(headers))) return json(201, shape(row, row.data, query, info, { saved: true }), { 'odata-entityid': location, etag: etagOf(row.version) });
     return noContent({ 'odata-entityid': location, etag: etagOf(row.version) });
   }
 
-  function updateRow(set, id, body, headers) {
+  function updateRow(set, id, body, headers, query = {}) {
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`no table has the entity set ${set}`);
     const row = rowsOf(set).get(bare(id));
@@ -592,7 +618,7 @@ function createLifecycleOrg(options = {}) {
       if (ifMatch) return failure(404, '0x80040217', `${info.logical} With Id = ${id} Does Not Exist`);
       // A PATCH without a precondition is an UPSERT: it creates the row it names.
       // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api#prevent-create-in-upsert
-      return createRow(set, { ...body, [info.id]: bare(id) }, headers);
+      return createRow(set, { ...body, [info.id]: bare(id) }, headers, query);
     }
     if (ifNoneMatch && ifNoneMatch[1] === '*') return failure(412, '0x80040237', 'A record with matching key values already exists.');
     if (ifMatch && ifMatch[1] !== '*' && ifMatch[1] !== etagOf(row.version)) return failure(412, '0x80060882', "The version of the existing record doesn't match the RowVersion property provided.");
@@ -609,7 +635,7 @@ function createLifecycleOrg(options = {}) {
         other.data.versionnumber = other.version;
       }
     }
-    if (/return=representation/i.test(preferOf(headers))) return json(200, shape(row, row.data, {}, info, { saved: true }), { etag: etagOf(row.version) });
+    if (/return=representation/i.test(preferOf(headers))) return json(200, shape(row, row.data, query, info, { saved: true }), { etag: etagOf(row.version) });
     return noContent({ 'odata-entityid': `${API}/${set}(${row.id})`, etag: etagOf(row.version) });
   }
 
@@ -669,28 +695,63 @@ function createLifecycleOrg(options = {}) {
   // The page tables are served by the page fake, over the SDK's own HttpClient shape (`{ status, headers, body }`).
   const pageServer = new FakeGenPageServer();
   pageServer.languages = { base: baseLanguage, provisioned: options.provisionedLanguages || [baseLanguage], available: options.provisionedLanguages || [baseLanguage] };
-  // The page reads, each checked against RECORD_SCHEMA before the page fake sees it (it answers what it routes, and would not refuse a
-  // column it does not know):
+  // The page tables. The page fake owns their state and takes their writes, and a file's bytes (`/uxagentprojectfiles(<id>)/filecontent/$value`);
+  // their READS are answered here, from that state, so every option a read may carry is APPLIED — `$filter` (any expression the
+  // checker admits), `$orderby`, `$top` and `$select` — where the page fake's routes match only the reads the SDK sends today. Which
+  // rows a read sees is the page fake's rule (FakeGenPageServer.execute, measured there):
+  //   - a plain read is the PUBLISHED layer: each page and file as its last publish left it, with the `versionnumber` the row has NOW;
+  //     `MSCRM.IncludeUnpublished: true` shows the saved rows, drafts included, instead;
+  //   - RetrieveUnpublishedMultiple() is the saved layer, `componentstate` 1 while a page holds a draft no publish has copied;
+  //   - conversation messages have one layer, kept in the platform's order: by `createdon`, then — the turns of one change set share a
+  //     second — by primary key in SQL uniqueidentifier order (both measured); a requested `$orderby` sorts over that order.
+  // The reads a page table takes (anything else is refused):
   //   /uxagentprojects · /uxagentprojects(<id>) · /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple() ·
-  //   /uxagentprojectfiles · /uxagentprojectfiles(<id>) · /uxagentprojectfiles(<id>)/filecontent/$value · /agentconversationmessages
+  //   /uxagentprojectfiles · /uxagentprojectfiles(<id>)/filecontent/$value · /agentconversationmessages
   function checkPageRead(p, query) {
-    const m = /^\/(uxagentprojects|uxagentprojectfiles|agentconversationmessages)(?:\(([^)]+)\))?(?:\/(.+))?$/.exec(p);
+    const m = /^\/(uxagentprojects|uxagentprojectfiles|agentconversationmessages)(?:\(([^)]*)\))?(?:\/(.+))?$/.exec(p);
     if (!m) throw new Unmodelled(`GET ${p}`);
     const [, set, key, rest] = m;
-    if (!key && !rest) return checkRead(set, query, 'collection', p);
-    if (key && !rest) return checkRead(set, query, 'single', p);
-    if (!key && set === 'uxagentprojects' && rest === 'Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') return checkRead(set, query, 'unpublishedMany', p);
-    if (key && set === 'uxagentprojectfiles' && rest === 'filecontent/$value') return noQuery(query, p);
+    const read = (kind) => ({ set, kind, where: p, key: key === undefined ? null : idOf(key, `GET ${p}`) });
+    if (key === undefined && !rest) return { ...read('collection'), checked: checkRead(set, query, 'collection', p) };
+    if (key !== undefined && !rest && set === 'uxagentprojects') return { ...read('single'), checked: checkRead(set, query, 'single', p) };
+    if (key === undefined && set === 'uxagentprojects' && rest === 'Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') return { ...read('unpublishedMany'), checked: checkRead(set, query, 'unpublishedMany', p) };
+    if (key !== undefined && set === 'uxagentprojectfiles' && rest === 'filecontent/$value') { noQuery(query, p); return read('content'); }
     throw new Unmodelled(`GET ${p}`);
   }
+  // A page table's rows, whole, as the layer a read sees holds them (`saved`: drafts included).
+  function pageRows(set, saved) {
+    const pages = pageServer.state;
+    const published = pageServer.publishedPages;
+    if (set === 'uxagentprojects') {
+      if (saved) return [...pages.projects.values()].map((p) => ({ uxagentprojectid: p.id, name: p.name, versionnumber: p.version, componentstate: p.draft || !published.has(p.id) ? 1 : 0, '@odata.etag': `W/"${p.etag}"` }));
+      return [...published.values()].map(({ project }) => ({ uxagentprojectid: project.id, name: project.name, versionnumber: pages.projects.has(project.id) ? pages.projects.get(project.id).version : project.version, componentstate: 0, '@odata.etag': `W/"${project.etag}"` }));
+    }
+    if (set === 'uxagentprojectfiles') {
+      const row = (file, projectId, version) => ({ uxagentprojectfileid: file.id, filename: file.filename, filetype: file.filetype, versionnumber: version, _uxagentprojectid_value: projectId, '@odata.etag': `W/"${file.etag}"` });
+      if (saved) return [...pages.files.values()].map((file) => row(file, file.projectId, file.version));
+      return [...published.entries()].flatMap(([id, page]) => (page.files || []).map((file) => row(file, id, pages.files.has(file.id) ? pages.files.get(file.id).version : file.version)));
+    }
+    return [...pages.messages.values()]
+      .sort((a, b) => a.createdon.localeCompare(b.createdon) || sqlGuidOrder(a.id, b.id))
+      .map((x) => ({ agentconversationmessageid: x.id, message: x.message, messagesender: x.sender, messagecontext: x.context, createdon: x.createdon, versionnumber: x.version, _regardingobjectid_value: x.regarding }));
+  }
+  function answerPageRead({ set, kind, key, where, checked }, query, headers) {
+    const unpublished = Object.entries(headers || {}).some(([name, value]) => lc(name) === 'mscrm.includeunpublished' && String(value) === 'true');
+    const rows = pageRows(set, kind === 'unpublishedMany' || unpublished);
+    const { schema } = checked;
+    const id = schema.info.id;
+    const answer = (row) => (query.$select ? selectColumns(schema, row, query, { ...(row['@odata.etag'] ? { '@odata.etag': row['@odata.etag'] } : {}), [id]: row[id] }) : row);
+    if (kind === 'single') {
+      const row = rows.find((r) => r[id] === key);
+      if (!row) return failure(404, '0x80040217', `${schema.info.logical} With Id = ${key} Does Not Exist`);
+      return json(200, answer(row), { etag: row['@odata.etag'] });
+    }
+    return json(200, { value: applyQuery(rows, (row) => row, query, checked, where).map(answer) });
+  }
   async function pageRequest(method, where, body, headers) {
-    const checked = method === 'GET' ? checkPageRead(pathOf(where), queryOf(where)) : null;
-    // The saved layer of the page list, by id — the app push's check that every page its navigation names exists, drafts included:
-    //   GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> or …
-    // `componentstate` 1 while the page holds a draft no publish has copied (helpers/fake-apps-org.js answers it the same way).
-    if (method === 'GET' && /^\/uxagentprojects\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)$/.test(pathOf(where))) {
-      const rows = [...pageServer.state.projects.values()].map((p) => ({ uxagentprojectid: p.id, name: p.name, versionnumber: p.etag, componentstate: p.draft || !pageServer.publishedPages.has(p.id) ? 1 : 0, '@odata.etag': `W/"${p.etag}"` }));
-      return json(200, { value: rows.filter((r) => !checked.filter || evaluateFilter(checked.filter.ast, r, {})) });
+    if (method === 'GET') {
+      const read = checkPageRead(pathOf(where), queryOf(where));
+      if (read.kind !== 'content') return answerPageRead(read, queryOf(where), headers);
     }
     const res = await pageServer.receive(method, `${PAGE_API}${where}`, body, { headers }, false, {});
     // The page fake answers what it does not route with a 404/405 "no route": that is a request this fake does not model either.
@@ -782,7 +843,7 @@ function createLifecycleOrg(options = {}) {
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/addprivilegesrole
     const roleAction = /^\/roles\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.(AddPrivilegesRole|ReplacePrivilegesRole)$/.exec(p);
     if (method === 'POST' && roleAction) {
-      const role = rowsOf('roles').get(bare(roleAction[1]));
+      const role = rowsOf('roles').get(idOf(roleAction[1], p));
       if (!role) return failure(404, '0x80040217', `role With Id = ${roleAction[1]} Does Not Exist`);
       const mask = { Basic: 1, Local: 2, Deep: 4, Global: 8 };
       const held = rowsOf('roleprivilegescollection');
@@ -799,7 +860,7 @@ function createLifecycleOrg(options = {}) {
     if (method === 'GET' && unpublished) {
       const { info } = checkRead(unpublished[1], query, 'unpublished', p).schema;
       if (!info.layered) throw new Unmodelled(`${unpublished[1]} has no unpublished layer (${p})`);
-      const row = rowsOf(unpublished[1]).get(bare(unpublished[2]));
+      const row = rowsOf(unpublished[1]).get(idOf(unpublished[2], p));
       if (!row) return failure(404, '0x80040217', `${unpublished[1]} With Id = ${unpublished[2]} Does Not Exist`);
       const shaped = shape(row, row.data, query, info, { saved: true });
       return json(200, shaped, { etag: shaped['@odata.etag'] });
@@ -822,8 +883,14 @@ function createLifecycleOrg(options = {}) {
     // form with no conditions after every form that has them; forms that tie come in the order they were created.
     // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievefilteredforms
     if (method === 'GET' && /^\/systemforms\/Microsoft\.Dynamics\.CRM\.RetrieveFilteredForms\(EntityLogicalName=@e,FormType=@t,User=@u\)$/.test(p)) {
+      // Its three parameter aliases, each as the SDK sends it: `@e='contoso_task'`, `@t=2`, and the user as a reference,
+      // `@u={'@odata.id':'systemusers(<id>)'}`. The one user modelled is the maker (System Administrator, who may open every form).
       for (const option of Object.keys(query)) if (!['@e', '@t', '@u'].includes(option)) throw new Unmodelled(`the parameter ${option} is not modelled on ${p}`);
-      const entity = lc(String(query['@e'] || '').replace(/^'|'$/g, ''));
+      const named = /^'([A-Za-z_]\w*)'$/.exec(String(query['@e'] || ''));
+      const user = new RegExp(`^\\{'@odata\\.id':'systemusers\\((${GUID_TEXT})\\)'\\}$`).exec(String(query['@u'] || ''));
+      if (!named || !/^\d+$/.test(String(query['@t'] || ''))) throw new Unmodelled(`the parameters @e=${query['@e']}, @t=${query['@t']} of ${p} are not modelled`);
+      if (!user || bare(user[1]) !== IDS.user) throw new Unmodelled(`the user @u=${query['@u']} of ${p} is not modelled: only the maker is`);
+      const entity = lc(named[1]);
       const type = Number(query['@t']);
       const rank = (xml) => {
         const conditions = /<DisplayConditions\b([^>]*)>/i.exec(String(xml || ''));
@@ -889,11 +956,13 @@ function createLifecycleOrg(options = {}) {
       }
       return noContent();
     }
-    if (method === 'GET' && /^\/RetrieveSetting\(/.test(p)) {
-      const arg = (name) => { const m = new RegExp(`${name}='((?:[^']|'')*)'`).exec(p); return m ? m[1].replace(/''/g, "'") : null; };
-      const definition = settingDefinition(arg('SettingName'));
-      if (!definition) return failure(404, '0x80040217', `settingdefinition With Name = ${arg('SettingName')} Does Not Exist`);
-      const appUnique = arg('AppUniqueName');
+    const setting = /^\/RetrieveSetting\((.*)\)$/.exec(p);
+    if (method === 'GET' && setting) {
+      // SettingName is required, AppUniqueName optional; nothing else is a parameter of the function.
+      const args = functionParameters(setting[1], ['SettingName', 'AppUniqueName'], ['SettingName'], 'RetrieveSetting');
+      const definition = settingDefinition(args.SettingName);
+      if (!definition) return failure(404, '0x80040217', `settingdefinition With Name = ${args.SettingName} Does Not Exist`);
+      const appUnique = args.AppUniqueName;
       const app = appUnique && [...rowsOf('appmodules').values()].find((row) => lc(row.data.uniquename) === lc(appUnique));
       const override = app && [...rowsOf('appsettings').values()].find((row) => row.published && bare(row.published._parentappmoduleid_value) === app.id && bare(row.published._settingdefinitionid_value) === definition.id);
       const org = [...rowsOf('organizationsettings').values()].find((row) => bare(row.data._settingdefinitionid_value) === definition.id);
@@ -903,6 +972,25 @@ function createLifecycleOrg(options = {}) {
     return null;
   }
   const settingDefinition = (name) => [...rowsOf('settingdefinitions').values()].find((row) => lc(row.data.uniquename) === lc(name));
+  // A function's parameters in its path, `Name='text'` pairs (a quote inside doubled: 'O''Neil') separated by commas, checked against
+  // the ones it takes BEFORE anything is resolved: an unknown, repeated or missing required parameter, or a value that is not a text
+  // literal (an alias, a number), is not modelled — never answered as though the parameter were simply not given.
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/use-web-api-functions#passing-parameters-to-a-function
+  function functionParameters(text, allowed, required, where) {
+    const params = {};
+    const pair = /\s*(\w+)\s*=\s*'((?:[^']|'')*)'\s*(,|$)/y;
+    let at = 0;
+    while (at < text.length) {
+      pair.lastIndex = at;
+      const m = pair.exec(text);
+      if (!m || (m[3] === ',' && pair.lastIndex === text.length)) throw new Unmodelled(`the parameters (${text}) of ${where} are not modelled`);
+      if (!allowed.includes(m[1]) || Object.prototype.hasOwnProperty.call(params, m[1])) throw new Unmodelled(`the parameter ${m[1]} of ${where} is not modelled`);
+      params[m[1]] = m[2].replace(/''/g, "'");
+      at = pair.lastIndex;
+    }
+    for (const name of required) if (!Object.prototype.hasOwnProperty.call(params, name)) throw new Unmodelled(`${where} without its ${name} is not modelled`);
+    return params;
+  }
 
   // A component of AddAppComponents, by its type: `{ "@odata.type": "Microsoft.Dynamics.CRM.savedquery", "savedqueryid": "<id>" }` or
   // the older `{ "@odata.id": "savedqueries(<id>)" }`. An app component's type is the solution component type of its kind.
@@ -933,13 +1021,14 @@ function createLifecycleOrg(options = {}) {
     const [, set, key, rest] = m;
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`${method} ${p}: no table has the entity set ${set}`);
+    if (key !== undefined) idOf(key, `${method} ${p}`);
     if (!key && !rest) {
       if (method === 'GET') return json(200, { value: readRows(set, query, { kind: 'collection', where: p }) });
-      if (method === 'POST') { checkRead(set, query, 'write', p); return createRow(set, body, headers); }
+      if (method === 'POST') { checkRead(set, query, 'write', p); return createRow(set, body, headers, query); }
     }
     if (key && !rest) {
       if (method === 'GET') {
-        checkRead(set, query, 'single', p);
+        const { expands } = checkRead(set, query, 'single', p);
         // A read by id answers the row as saved, with its current version — the SDK reads a form right after it creates it
         // (`systemforms(<id>)?$select=formid`, for the token of its next write) and the platform answers it (fake-dataverse.js models the
         // same). Only a plain read of the COLLECTION is the published layer.
@@ -948,11 +1037,13 @@ function createLifecycleOrg(options = {}) {
         // An app module is the exception: its read by id is the PUBLISHED projection, so a draft that was never published answers 404
         // (measured; helpers/fake-apps-org.js) — which is why the download tells the maker to publish a new app first.
         if (set === 'appmodules' && !row.published) return failure(404, '0x80040217', `appmodule With Id = ${key} Does Not Exist`);
-        const shaped = shape(row, set === 'appmodules' ? row.published : row.data, query, info, { saved: true });
-        if (info.layered && !String(query.$select || '').split(',').map((x) => x.trim()).includes('componentstate')) delete shaped.componentstate;
-        return json(200, shaped, { etag: shaped['@odata.etag'] });
+        const data = set === 'appmodules' ? row.published : row.data;
+        const shaped = shape(row, data, query, info, { saved: true });
+        if (info.layered && !listOf(query.$select || '').includes('componentstate')) delete shaped.componentstate;
+        // The checked `$expand` is applied as on a collection read: the lookup's row embedded, narrowed by its own `$select`.
+        return json(200, withExpands(shaped, data, expands), { etag: shaped['@odata.etag'] });
       }
-      if (method === 'PATCH') { checkRead(set, query, 'write', p); return updateRow(set, key, body, headers); }
+      if (method === 'PATCH') { checkRead(set, query, 'write', p); return updateRow(set, key, body, headers, query); }
       if (method === 'DELETE') { noQuery(query, p); return deleteRow(set, key); }
     }
     if (key && rest) {
@@ -963,6 +1054,7 @@ function createLifecycleOrg(options = {}) {
         noQuery(query, p);
         const target = /\/([A-Za-z_]\w*)\(([^)]+)\)$/.exec(String(body['@odata.id'] || ''));
         if (!target || target[1] !== schema.navigations[ref[1]]) throw new Unmodelled(`cannot read the reference ${JSON.stringify(body)} for ${ref[1]}`);
+        idOf(target[2], `the reference of ${p}`);
         // An N:N link that exists already is refused as a duplicate, as Dataverse does (sdk-build.js ensureAppAvailableToRole relies on it
         // and treats the refusal as "already linked").
         if (associations.some((a) => a.id === bare(key) && a.nav === ref[1] && a.toId === bare(target[2]))) return failure(400, '0x80040237', 'Cannot insert duplicate key.');
@@ -971,7 +1063,7 @@ function createLifecycleOrg(options = {}) {
       }
       if (ref && method === 'DELETE') {
         for (const option of Object.keys(query)) if (option !== '$id') throw new Unmodelled(`the query option ${option} is not modelled on ${p}`);
-        const toId = bare(ref[2] || (/\(([^)]+)\)$/.exec(String(query.$id || '')) || [])[1]);
+        const toId = idOf(ref[2] || (/\(([^)]+)\)$/.exec(String(query.$id || '')) || [])[1], `DELETE ${p}`);
         const at = associations.findIndex((a) => a.id === bare(key) && a.nav === ref[1] && a.toId === toId);
         if (at === -1) return failure(404, '0x80040217', 'The association does not exist.');
         associations.splice(at, 1);

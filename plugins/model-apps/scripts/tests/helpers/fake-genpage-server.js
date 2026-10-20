@@ -663,4 +663,4 @@ function appTransport(server, { publishFailures = 0, appId = APP_ID, existingPag
   return { http, state };
 }
 
-module.exports = { FakeGenPageServer, INSTANCE, API, ACCOUNT_TABLE, batchEnvelope, appTransport, APP_ID, APP_EXISTING_PAGE_ID, APP_VIEW_ID };
+module.exports = { FakeGenPageServer, INSTANCE, API, ACCOUNT_TABLE, batchEnvelope, appTransport, APP_ID, APP_EXISTING_PAGE_ID, APP_VIEW_ID, sqlGuidOrder };
