@@ -28,7 +28,12 @@ Compare semantic versions. If the public version is newer, make no project chang
 
 - GitHub Copilot CLI: `copilot plugin marketplace update power-platform-skills`, then `copilot plugin update mobile-app@power-platform-skills`, `/restart`, and rerun this skill.
 - Claude Code: `claude plugin marketplace update power-platform-skills`, then `claude plugin update mobile-app@power-platform-skills`, restart, and rerun this skill.
-- VS Code Copilot Chat: update **mobile-app** in the Agent Plugins/Extensions view, reload VS Code, and rerun this skill.
+- VS Code Copilot Chat:
+  1. Open the **Extensions** view.
+  2. Enter `@agentplugin mobile-app` in the search box.
+  3. Select **mobile-app** from **power-platform-skills**, then select **Update**.
+  4. Run **Developer: Reload Window** from the Command Palette.
+  5. Rerun this skill.
 
 For a checkout loaded with `--plugin-dir`, tell the user to update that checkout and restart the host instead.
 

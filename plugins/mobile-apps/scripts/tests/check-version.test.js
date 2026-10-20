@@ -288,6 +288,11 @@ test('every public skill runs or owns the plugin check before its workflow', () 
     const content = normalizeLineEndings(fs.readFileSync(skillPath, 'utf8'));
     if (/^name: check-updates$/m.test(content)) {
       assert.match(content, /^## Step 1: Check The Plugin$/m);
+      assert.match(content, /Open the \*\*Extensions\*\* view/);
+      assert.match(content, /`@agentplugin mobile-app`/);
+      assert.match(content, /Select \*\*mobile-app\*\* from \*\*power-platform-skills\*\*/);
+      assert.match(content, /\*\*Developer: Reload Window\*\*/);
+      assert.doesNotMatch(content, /Agent Plugins\/Extensions view/);
       continue;
     }
     const allowedTools = content.match(/^allowed-tools:\s*(.+)$/m);
