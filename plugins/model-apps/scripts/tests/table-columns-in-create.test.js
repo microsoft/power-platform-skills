@@ -966,6 +966,139 @@ test('through the build, a change set the budget has no room to wait for halts t
   assert.deepStrictEqual(warnings.filter((w) => /one by one/.test(w)), []);
 });
 
+// ── What the build owes when the budget refuses a wait ────────────────────────────────────────────────────────────────────────────────────────
+// A table this run creates is owed the length the spec asks of its name column, and only this run can pay it: a run in a new process finds the table and leaves its name column as it is (a rebuild must not shorten a column that may hold data),
+// and a key over that column is refused for its size while the column keeps the 850 characters some environments make of a new one. So the budget's refusal of one table's length update — the service throttled it for longer than the run has room
+// to wait — must not stop the update of the next table's, and a length step that never began must not count as a length that was set. The step guard (makeRunner) stops the steps of the phase after a refusal; the length a table owes is not one of them.
+const NOTE_KEY = { schemaName: 'new_note_namekey', displayName: 'Name key', columns: ['new_notename'] };
+// Two tables that each ask for a length (120 and 180); the second has an alternate key over its name column, which waits for that length.
+function twoOwedLengths({ key = false } = {}) {
+  const spec = oneTable([], asksFor(120));
+  spec.entities.push({ schemaName: 'new_note', displayName: 'Note', primaryAttribute: { schemaName: 'new_notename', displayName: 'Name', maxLength: 180 }, columns: [], ...(key ? { alternateKeys: [NOTE_KEY] } : {}) });
+  return spec;
+}
+// The first update of a length — the one that asks 120 — is throttled for ten minutes, which the budget has no room for; every other request is healthy.
+function firstLengthThrottled() {
+  let refused = false;
+  return (body) => {
+    if (refused || body.MaxLength !== 120) return null;
+    refused = true;
+    return { status: 429, headers: { 'retry-after': '600' }, body: { error: { message: 'throttled first length update' } } };
+  };
+}
+// One run of the data-model phase as a process makes it: its own SDK over the transport, its own budget, its own record of what is owed. `runnerOf` stands between the engine and its runner.
+async function budgetedRun(dv, spec, { owedLengths = new Map(), runnerOf = (runner) => runner } = {}) {
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const warnings = [];
+  const events = [];
+  const throttle = makeThrottleBudget({ warn: () => {} });
+  const { httpClient, sent, slept } = throughAzHttpClient(dv, { throttle });
+  const sdk = await realSdk(httpClient);
+  const runner = runnerOf(makeRunner({ emit: (e) => events.push(e), total: 99, throttle }));
+  const error = await provisionDataModel({
+    sdk, provision: sdk, runner, spec, apply: true, owedLengths, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033], sleep: async () => {}, warn: (m) => warnings.push(m),
+  }).then(() => null, (err) => err);
+  return { error, events, warnings, throttle, sent, slept, owedLengths, sdk };
+}
+const primaryLengths = (dv) => Object.fromEntries([...dv.tables].map(([name, table]) => [name, table.primaryLength]));
+const keysOf = (dv) => Object.fromEntries([...dv.tables].map(([name, table]) => [name, [...table.keys.keys()]]));
+const lengthRequests = (dv) => dv.log.filter((r) => r.method === 'PUT').map((r) => r.body.MaxLength);
+
+test('the budget refuses the first of two owed name lengths: the second is still set, the key over it waits for the next run, and that run finishes — a length the build owes is not dropped', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const dv = fakeDataverse({ updateFails: firstLengthThrottled() });
+  const spec = twoOwedLengths({ key: true });
+  const first = await budgetedRun(dv, spec);
+  assert.strictEqual(first.throttle.declined().count, 1, 'one update was refused for want of room');
+  assert.deepStrictEqual(first.slept, [], 'and nothing was waited for');
+  assert.ok(first.error instanceof BuildHalt, 'the phase stops at the key, a step of the phase');
+  assert.strictEqual(first.error.code, 'throttle-budget-exhausted');
+  assert.strictEqual(isTransientHalt(first.error), true, 'a later run goes on from here');
+  assert.deepStrictEqual(lengthRequests(dv), [120, 180], 'both tables were asked to set their length');
+  assert.deepStrictEqual(primaryLengths(dv), { new_ticket: 850, new_note: 180 }, 'the table whose update was refused keeps the length the platform gave it; the other was set');
+  assert.deepStrictEqual(lengthEvents(first).map((e) => [e.status, e.label]), [['error', 'primary column length new_ticket.new_name -> 120'], ['ok', 'primary column length new_note.new_notename -> 180']]);
+  assert.deepStrictEqual([...first.owedLengths.keys()], ['new_ticket'], 'what is still owed is the length whose update was refused: the one that was set is paid');
+  assert.strictEqual(first.owedLengths.get('new_ticket').tried, true, 'and its step has run and said what became of it');
+  assert.deepStrictEqual(keysOf(dv), { new_ticket: [], new_note: [] }, 'the key is a step of the phase, and no step of the phase starts after a refusal');
+  // The next run is a new process: it finds both tables, owes nothing, and the key goes over a name column of 180 characters.
+  const refusedBefore = dv.refusals.length;
+  const next = await budgetedRun(dv, spec);
+  assert.strictEqual(next.error, null, 'the next run finishes');
+  assert.deepStrictEqual(keysOf(dv), { new_ticket: [], new_note: ['new_note_namekey'] });
+  assert.strictEqual(dv.refusals.length, refusedBefore, 'and the platform refuses nothing');
+  assert.deepStrictEqual(primaryLengths(dv), { new_ticket: 850, new_note: 180 }, 'a run that finds a table leaves its name column as it is');
+});
+
+test('the budget refuses the first of two owed name lengths and no key waits: the second table is set all the same, narrated as any length step is, and only the refused one stays owed', async () => {
+  const dv = fakeDataverse({ updateFails: firstLengthThrottled() });
+  const run = await budgetedRun(dv, twoOwedLengths());
+  assert.strictEqual(run.throttle.declined().count, 1, 'one update was refused for want of room');
+  assert.strictEqual(run.error, null, 'the refused update is best-effort, as any failed length step is: the phase goes on');
+  assert.deepStrictEqual(primaryLengths(dv), { new_ticket: 850, new_note: 180 });
+  assert.deepStrictEqual(lengthEvents(run).map((e) => [e.status, e.label]), [['error', 'primary column length new_ticket.new_name -> 120'], ['ok', 'primary column length new_note.new_notename -> 180']]);
+  assert.strictEqual(run.warnings.length, 1, 'one warning, for the table whose update was refused');
+  assert.match(run.warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120 /);
+  assert.deepStrictEqual([...run.owedLengths.keys()], ['new_ticket']);
+});
+
+test('a length step the runner stopped before it began is not a length that was set: the debt stays, untried, the key is not asked for, and the settlement of a halted build pays it', async () => {
+  const { settleOwedLengths } = require('../lib/entity-provision.js');
+  const dv = fakeDataverse();
+  const spec = keyedTable([NAME_KEY]);
+  // The engine's contract is that a runner can stop a step before it calls the step's function — the budget's guard does — and the engine swallows that stop for a best-effort step.
+  const stopsLengthSteps = (runner) => ({ ...runner, run: (phase, label, fn, options) => (/^primary column length /.test(label) ? Promise.reject(new Error('the runner stopped the step before it began')) : runner.run(phase, label, fn, options)) });
+  const run = await budgetedRun(dv, spec, { runnerOf: stopsLengthSteps });
+  assert.deepStrictEqual(lengthRequests(dv), [], 'no update was sent');
+  assert.strictEqual(primaryLengths(dv).new_ticket, 850);
+  assert.match(run.warnings.join('\n'), /could not set the length of the primary name column new_ticket\.new_name to 120 .*the runner stopped the step before it began/);
+  assert.ok(run.error instanceof BuildHalt, 'the key that waits for the length is not made over a column that was not set');
+  assert.strictEqual(run.error.code, 'alt-key-name-length-not-set');
+  assert.match(run.error.message, /whose length the build could not set to 120 \(.*the runner stopped the step before it began/);
+  assert.deepStrictEqual(keyPosts({ dv }), [], 'nothing was sent for the key');
+  assert.deepStrictEqual([...run.owedLengths.keys()], ['new_ticket'], 'the debt stays');
+  assert.strictEqual(run.owedLengths.get('new_ticket').tried, false, 'and no step has tried it, so a build that stops for good still pays it');
+  const warnings = [];
+  await settleOwedLengths({ sdk: run.sdk, provision: run.sdk, spec, owed: [...run.owedLengths.values()], warn: (m) => warnings.push(m), sleep: async () => {} });
+  assert.deepStrictEqual(warnings, []);
+  assert.deepStrictEqual(lengthRequests(dv), [120], 'the settlement sets it');
+  assert.strictEqual(primaryLengths(dv).new_ticket, 120);
+});
+
+test('through the build, the budget refusing the first of two owed name lengths halts the build once — the second table is set, the length refused is not sent again, and the next run finishes', async () => {
+  const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  const dv = fakeDataverse({ updateFails: firstLengthThrottled() });
+  const spec = { schemaVersion: 2, ...twoOwedLengths({ key: true }), app: { name: 'Budget app' } };
+  // A run of the build is a process: its own budget, its own SDK, nothing carried from the last but what the environment holds.
+  const buildOnce = async () => {
+    const waits = [];
+    const warnings = [];
+    const throttle = makeThrottleBudget({ warn: (line) => warnings.push(line) });
+    const { httpClient, sent, slept } = throughAzHttpClient(dv, { throttle });
+    const sdk = await realSdk(httpClient);
+    let attempts = 0;
+    const error = await buildModelApp(spec, { apply: true, env: ORG, preResolvedLanguageCode: 1033 }, {
+      sdk, provisionSdk: sdk, throttle, log: () => {}, warn: (m) => warnings.push(m), provisionedLanguages: async () => [1033], sleep: async (ms) => { waits.push(ms); },
+      discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+      runBuild: (s, o) => { attempts += 1; return runSdkBuild(s, { ...o, phases: ['data-model'] }); },
+    }).then(() => null, (err) => err);
+    return { error, attempts, waits: [...waits, ...slept], sent, warnings };
+  };
+  const first = await buildOnce();
+  assert.ok(first.error, 'the build did not report a success: the service asked it to wait ten minutes');
+  assert.strictEqual(first.error.code, 'throttle-budget-exhausted');
+  assert.strictEqual(isTransientHalt(first.error), true);
+  assert.strictEqual(first.attempts, 1, 'the phase was not run again to meet the same answer');
+  assert.deepStrictEqual(first.waits, [], 'nothing was waited for, by the client or by the build');
+  assert.deepStrictEqual(lengthRequests(dv), [120, 180], 'each table was asked once: what the build settles after its halt does not send the refused update again');
+  assert.deepStrictEqual(primaryLengths(dv), { new_ticket: 850, new_note: 180 });
+  const next = await buildOnce();
+  assert.strictEqual(next.error, null, 'the next run finishes');
+  assert.deepStrictEqual(keysOf(dv), { new_ticket: [], new_note: ['new_note_namekey'] });
+  assert.deepStrictEqual(lengthRequests(dv), [120, 180], 'and sends no length: a run that finds the tables leaves their name columns as they are');
+});
+
 // A column whose options cannot even be built (a spec the validator would have refused) must not turn into a different failure for
 // being near a change set: the options are built inside the attempt, the attempt is abandoned with its reason, and the column then
 // fails in its own step, as it always did.

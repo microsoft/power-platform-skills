@@ -80,6 +80,34 @@ test('a best-effort step after a refusal does not run and says why — and the n
   assert.strictEqual(called, 0);
 });
 
+// A caller that records what a step came to inside its function (the primary name column's length step) cannot tell a step that ran and succeeded from one the runner stopped before it began — the stop is swallowed with the failures —
+// unless the runner says so. `onFailure` is that: what the step failed with, whichever of the two it was.
+test('runBestEffort tells a caller what a step failed with — what the step threw, or the stop that kept it from running — and hands the runner only the options the runner knows', async () => {
+  const budget = makeThrottleBudget();
+  const runner = makeRunner({ emit: () => {}, total: 4, throttle: budget });
+  const failures = [];
+  const options = { onFailure: (error) => failures.push(error) };
+  let called = 0;
+  assert.strictEqual(await runBestEffort(runner, 'data-model', 'fails', async () => { called += 1; throw new Error('boom'); }, () => {}, 'could not do it', options), undefined);
+  assert.strictEqual(called, 1);
+  assert.strictEqual(failures.length, 1);
+  assert.ok(failures[0] instanceof BuildHalt, 'what the runner made of the failure');
+  assert.strictEqual(failures[0].cause.message, 'boom');
+  assert.strictEqual(await runBestEffort(runner, 'data-model', 'works', async () => 'done', () => {}, 'could not do it', options), 'done');
+  assert.strictEqual(failures.length, 1, 'a step that succeeded says nothing');
+  refuse(budget);
+  assert.strictEqual(await runBestEffort(runner, 'data-model', 'stopped', async () => { called += 1; }, () => {}, 'could not do it', options), undefined);
+  assert.strictEqual(called, 1, 'the function was not called');
+  assert.strictEqual(failures.length, 2);
+  assert.strictEqual(failures[1].code, 'throttle-budget-exhausted', 'and the hook has the stop');
+  assert.strictEqual(await runBestEffort(runner, 'data-model', 'settles', async () => 'settled', () => {}, 'could not do it', { ...options, settling: true }), 'settled');
+  assert.strictEqual(failures.length, 2, 'a step that settles is not stopped');
+  const seen = [];
+  const recording = { run: async (phase, label, fn, runOptions) => { seen.push(runOptions); return fn(); } };
+  await runBestEffort(recording, 'data-model', 'x', async () => 1, undefined, 'could not do it', { skipIf: () => false, onFailure() {} });
+  assert.deepStrictEqual(Object.keys(seen[0]).sort(), ['recoverable', 'skipIf'], 'the hook is not one of the options of the runner');
+});
+
 test('what settles a halt is let through after a refusal, and a skip is still narrated — neither sends a request that the service has asked the run to hold back', async () => {
   const budget = makeThrottleBudget();
   const events = [];

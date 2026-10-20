@@ -505,7 +505,8 @@ async function checkOwedTable({ provision, debt, logical, primaryLogical, asked 
 // The answer is `{ ok: true }` when the column has the length now; `{ ok: false, error, columnId? }` when it could not be read or set —
 // which an alternate key over the column needs to know (provisionDataModel creates it only after a step that succeeded) — with the id of
 // the column when the read before the update answered it, for the debt to keep; and `{ ok: false, left: true }` when the table is not
-// the one the debt was recorded for (checkOwedTable, or a request addressed by its ids that answered 404), which is left alone.
+// the one the debt was recorded for (checkOwedTable, or a request addressed by its ids that answered 404), which is left alone. A step the runner stopped before it began (`notStarted: true`, with the stop as `error`, and the column's
+// id as above) is neither a length that was set nor an update that failed: nothing was sent, and the table is owed the length as it was.
 //
 // It is the LAST thing the data-model phase does (provisionDataModel calls it once every table, column, status reason, alternate
 // key and relationship has been created), not the first thing after the table. The SDK's updateColumn starts by reading the column
@@ -595,11 +596,16 @@ async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical,
       : 'the rest of the build continues';
   let failure;
   let vanished = false;
+  // `runner.run` can stop a step before it calls the function (the budget's guard does, for the steps of a phase it stops) and runBestEffort swallows that stop like any failure. Nothing is recorded inside the function then, which is also
+  // how a step that succeeded looks, so whether the step began is recorded: a step that did not is neither a length that was set nor an update that failed, and must never be taken for the first.
+  let began = false;
+  let stopped;
   await runBestEffort(
     runner,
     'data-model',
     `${label} -> ${asked}${carried ? ` (${OWED_LENGTH})` : ''}`,
     async () => {
+      began = true;
       try {
         if (unread) {
           const what = unconfirmed ? 'it could not be confirmed that the table is the one this build created' : 'the length the platform made is unknown';
@@ -624,14 +630,17 @@ async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical,
     },
     warn,
     `could not set the length of the primary name column ${logical}.${primaryLogical} to ${asked} — it keeps the length the platform gave it, and ${afterwards}`,
-    // A phase that halted has stopped before this step (`halted`): the step settles what the halt left, and is not a step of the phase a refused budget stops (makeRunner).
-    { skipIf: (err) => (err && err.leftAlone ? `${gone.step} — kept` : false), settling: halted }
+    // This step pays what the build owes for a table it created, which no later run can pay (a run that finds the table leaves its name column as it is), so it is never a step a refused budget stops (makeRunner): not in the settlement
+    // of a halted phase, and not in the pass that completes one, where the refusal of one table's update must not keep the next table's from being set.
+    { skipIf: (err) => (err && err.leftAlone ? `${gone.step} — kept` : false), settling: true, onFailure: (err) => { stopped = err; } }
   );
   if (vanished) {
     warnKept(gone.why);
     return { ok: false, left: true };
   }
-  return failure ? { ok: false, error: failure, ...(read && read.metadataId ? { columnId: read.metadataId } : {}) } : { ok: true };
+  const readColumn = read && read.metadataId ? { columnId: read.metadataId } : {};
+  if (!began) return { ok: false, notStarted: true, error: stopped || serviceFailure(`asked ${asked}, the step was not run`), ...readColumn };
+  return failure ? { ok: false, error: failure, ...readColumn } : { ok: true };
 }
 
 // The primary name column of a table that was found after the create that made it: the answer to that create was lost, or somebody
@@ -1236,11 +1245,14 @@ async function readAttributeRequiredLevels({ sdk, provision, logical }) {
   return out;
 }
 
-// `options` are the options of runner.run (`skipIf`, for a step that turns out to be a skip once it has started).
+// `options` are the options of runner.run (`skipIf`, for a step that turns out to be a skip once it has started, and `settling`) and `onFailure`, which is told what the step failed with: the halt the runner made of what `fn` threw, or the stop
+// the runner raised before it called `fn` (the budget's guard, makeRunner). Both are swallowed here, so a caller that records what the step came to inside `fn` cannot tell a step that ran and succeeded from one that never began without it.
 async function runBestEffort(runner, phase, label, fn, warn, warning, options = {}) {
+  const { onFailure, ...runOptions } = options;
   try {
-    return await runner.run(phase, label, fn, { recoverable: true, ...options });
+    return await runner.run(phase, label, fn, { recoverable: true, ...runOptions });
   } catch (err) {
+    if (typeof onFailure === 'function') onFailure(err);
     if (typeof warn === 'function') {
       const cause = err && err.cause ? err.cause : err;
       warn(`${warning}: ${(cause && cause.message) || cause}`);
@@ -1297,8 +1309,8 @@ async function mapLimit(items, limit, fn, { firstInOrder = false } = {}) {
 // retry loop stops with `throttle-budget-exhausted` rather than run the phases again to meet the same answer — but the refusal can be swallowed on its way up: a best-effort step reports a failure
 // and goes on, and a fallback answers a refused request with others (createColumnsInOneRequest). The run would then keep sending requests to a service that asked it to hold back, and could even end as a
 // success. So after a refusal no step STARTS: `run` and each item of `mapLimit` stop the phase with the budget's halt (budgetStop), and `stopIfRefused` is the same check for code that must decide before it
-// writes. A step that is already running finishes (a request is never cut off), and a step that settles what a halted phase left (`settling`: the name column's length it still owes, which the halt
-// would otherwise leave at the platform's default for good, as a run that finds the table leaves it alone) is let through. One runner is one run of the phases (runSdkBuild makes one for each), so only
+// writes. A step that is already running finishes (a request is never cut off), and the step that pays what the run owes is let through (`settling`: the name column's length of a table the run created, in the settlement of a halted phase and in the
+// pass that completes one — no later run can set it, because a run that finds the table leaves its name column as it is, so a stop would leave the table at the platform's default for good). One runner is one run of the phases (runSdkBuild makes one for each), so only
 // refusals made after it was made count; a runner given no budget — or one that cannot say what it refused — never stops, as before.
 function makeRunner({ emit, total, throttle }) {
   let n = 0;
@@ -1693,7 +1705,7 @@ async function provisionDataModel(args) {
 // takes — and answers what each came to: `Map<logical name, { ok, error?, left? }>`, for the keys that wait for them. A table whose length
 // is right comes out of `owed`; so does one that turned out not to be the table the debt was recorded for (`left`: it is left alone, see
 // checkOwedTable — only a debt an earlier attempt carried is held to that); one whose step failed stays in it, marked `tried`, with the
-// id of the column when the step read it. A debt for a table whose spec asks for no length (the spec cannot change within one build, so
+// id of the column when the step read it — and so does one whose step the runner stopped before it began, which is not `tried`: nothing has run for it. A debt for a table whose spec asks for no length (the spec cannot change within one build, so
 // this is a record that does not match it) is dropped, and said if it was carried; one for a table the spec does not declare is left
 // alone: it is not this phase's. `waitingKeys` are the keys that wait for the steps, which the warning of a step that fails names.
 async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owed, carriedIn, { halted, waitingKeys }) {
@@ -1713,7 +1725,11 @@ async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owe
     const keys = waitingKeys.filter((waiting) => waiting.logical === logical).map((waiting) => waiting.key.schemaName);
     const outcome = await alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted, debt, carried, keys });
     if (outcome.ok || outcome.left) owed.delete(logical);
-    else if (outcome.columnId) debt.columnId = outcome.columnId;
+    else {
+      if (outcome.columnId) debt.columnId = outcome.columnId;
+      // A step the runner stopped before it began has tried nothing, so the debt is still one that a build which stops for good pays (settleOwedLengths repeats no step that has run and said what became of it).
+      if (outcome.notStarted) debt.tried = false;
+    }
     outcomes.set(logical, outcome);
   }
   return outcomes;
