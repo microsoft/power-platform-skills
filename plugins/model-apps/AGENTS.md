@@ -2241,7 +2241,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     with the sizes of the key's columns if the next run is refused the same way. Neither offers a label in one language as a way out: that changes
     where a key is made, not its size. The same two wordings (`keyRoomAtAskedLength`) are what the stop for a key that waited for a length step
     that failed, and that step's warning, say of the key (above). Where the environment
-    keeps the length asked, the key is made and nothing is said. Every other key —
+    keeps the length asked and the key is made, nothing is said. Every other key —
     over another column, over the name column of a table that already existed or was found after its create (never
     written to), or in a spec that gives no length — is made with its table, as it always was; a spec that keys a name
     column without a `primaryAttribute.maxLength` leaves the column as the environment made it, so the reference tells
