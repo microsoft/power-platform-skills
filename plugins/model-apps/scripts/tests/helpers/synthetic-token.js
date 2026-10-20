@@ -13,6 +13,16 @@ const FOLDED = TOKEN.match(/.{1,8}/g).join(`${NL} `);
 // The first character of each part spelled as a JSON escape (`\u0073` is `s`): written into a JSON body the SDK decodes it, written as text it stays what it is.
 const ESCAPED_INITIALS = PARTS.map((part) => `\\u${part.charCodeAt(0).toString(16).padStart(4, '0')}${part.slice(1)}`).join('.');
 
+// A token whose signature starts with `n` — the second character of the JSON escape `\n` — for a diagnostic that has a literal backslash right before the signature: a reader that takes `\n` for a line break
+// reads the backslash and the `n` away together and finds the rest of the signature, which is not a part of the token. Header and payload are the base64url of small synthetic JSON documents.
+const LEADING_N_PARTS = [
+  Buffer.from('{"alg":"RS256","typ":"JWT","test":"synthetic"}').toString('base64url'),
+  Buffer.from('{"aud":"synthetic","test":"not-a-real-credential"}').toString('base64url'),
+  'nSyntheticSignaturePartNotARealCredential',
+];
+const LEADING_N_TOKEN = LEADING_N_PARTS.join('.');
+const LEADING_N_SECRETS = [LEADING_N_TOKEN, ...LEADING_N_PARTS];
+
 // What the refused part of a change set can say. The SDK quotes the body of the part as it parses it — a JSON body is decoded, so a character written `\uXXXX` is the character itself in the message, and a body that is
 // itself escaped JSON keeps its escapes — and takes any text between the part's own delimiters as that body, whatever lines it holds. `typed` is the platform's own code, which the SDK keeps in the body it parsed.
 const REFUSALS = [
@@ -28,4 +38,4 @@ const REFUSALS = [
   { name: 'plain text with the token folded onto several lines', body: `Rejected bearer ${FOLDED}` },
 ];
 
-module.exports = { PARTS, TOKEN, SECRETS, NL, CODE, FOLDED, ESCAPED_INITIALS, REFUSALS };
+module.exports = { PARTS, TOKEN, SECRETS, NL, CODE, FOLDED, ESCAPED_INITIALS, REFUSALS, LEADING_N_PARTS, LEADING_N_TOKEN, LEADING_N_SECRETS };

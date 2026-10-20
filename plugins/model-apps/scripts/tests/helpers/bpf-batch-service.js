@@ -8,10 +8,11 @@ const { createAzHttpClient } = require('../../lib/sdk-http-client.js');
 const { INSTANCE } = require('./fake-genpage-server.js');
 const { TOKEN, NL } = require('./synthetic-token.js');
 
-// The production client over a fake service that speaks the SDK's HttpClient (`http`). `seen` is given every `$batch` answer as the transport handed it over; `rewrite` may change a `$batch` answer first.
-function productionClient(http, { rewrite = (text) => text, seen = [] } = {}) {
+// The production client over a fake service that speaks the SDK's HttpClient (`http`). `seen` is given every `$batch` answer as the transport handed it over; `rewrite` may change a `$batch` answer first; `token` is the
+// access token the client sends (the synthetic one unless a test names another).
+function productionClient(http, { rewrite = (text) => text, seen = [], token = TOKEN } = {}) {
   return createAzHttpClient(INSTANCE, {
-    getToken: () => TOKEN, sleep: async () => {}, random: () => 0,
+    getToken: () => token, sleep: async () => {}, random: () => 0,
     request: async ({ url, method, headers, body }) => {
       const batch = method === 'POST' && url.endsWith('/$batch');
       const answer = batch ? await http.postRaw(url, body, { headers })
@@ -79,10 +80,10 @@ function workflowsService(state) {
 }
 
 // A flow that exists, and an SDK over a workspace that has never seen it, asked to rename a stage: what a rebuild does. `makeSdk` is the factory the SDK is made with, `makeDir` makes a workspace folder, and `state` is the fake
-// service's (`refuse`, `refusal`, `echo`). `seen` is every `$batch` answer as the service sent it, `given` every one the SDK was handed.
-async function flowEdit(state, makeSdk, makeDir) {
+// service's (`refuse`, `refusal`, `echo`). `seen` is every `$batch` answer as the service sent it, `given` every one the SDK was handed. `token` is the access token the client sends.
+async function flowEdit(state, makeSdk, makeDir, { token = TOKEN } = {}) {
   const seen = [];
-  const client = productionClient(workflowsService(state), { seen });
+  const client = productionClient(workflowsService(state), { seen, token });
   const given = [];
   const watched = { ...client, postRaw: async (...args) => { const answer = await client.postRaw(...args); given.push(answer.body); return answer; } };
   const open = async () => {
@@ -104,9 +105,9 @@ async function flowEdit(state, makeSdk, makeDir) {
 }
 
 // The edit, refused as a whole by a part whose body is `refusal`: the error the SDK raises, and the answers the transport sent and the SDK was handed.
-async function refusedEdit(refusal, makeSdk, makeDir) {
+async function refusedEdit(refusal, makeSdk, makeDir, options) {
   const state = { refuse: false, refusal };
-  const { apply, seen, given } = await flowEdit(state, makeSdk, makeDir);
+  const { apply, seen, given } = await flowEdit(state, makeSdk, makeDir, options);
   state.refuse = true;
   const error = await apply().then(() => null, (e) => e);
   return { error, seen, given };

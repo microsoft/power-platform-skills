@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
-const { SECRETS, FOLDED, REFUSALS } = require('./helpers/synthetic-token.js');
+const { SECRETS, FOLDED, REFUSALS, LEADING_N_PARTS, LEADING_N_SECRETS } = require('./helpers/synthetic-token.js');
 const { leaksIn } = require('./helpers/token-leaks.js');
 
 const CHILD = path.join(__dirname, 'helpers', 'token-boundary-child.js');
@@ -28,14 +28,15 @@ function filesUnder(root, base = root, out = new Map()) {
   return out;
 }
 
-// One scenario, in a real process: what it printed on each descriptor, how it ended, what it knew (`facts`: booleans and counts, never the token), and every file it wrote.
-function run(scenario, parameters = {}) {
+// One scenario, in a real process: what it printed on each descriptor, how it ended, what it knew (`facts`: booleans and counts, never the token), and every file it wrote. `env` is added to the process's environment
+// (FORCE_COLOR=1 makes the console print in colours, as it does on a terminal, which a pipe's reader would never see).
+function run(scenario, parameters = {}, env = {}) {
   const dir = makeTempDir('token-boundary-');
   const work = path.join(dir, 'work');
   fs.mkdirSync(work);
   const factsFile = path.join(dir, 'facts.json');
   const result = spawnSync(process.execPath, [CHILD, scenario, JSON.stringify(parameters)], {
-    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', TOKEN_BOUNDARY_DIR: work, TOKEN_BOUNDARY_FACTS: factsFile },
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', TOKEN_BOUNDARY_DIR: work, TOKEN_BOUNDARY_FACTS: factsFile, ...env },
     encoding: 'utf8',
     timeout: 120000,
   });
@@ -47,10 +48,10 @@ function run(scenario, parameters = {}) {
 const writtenBy = (ran) => [['stdout', ran.stdout], ['stderr', ran.stderr], ...[...ran.files].map(([name, text]) => [`the file ${name}`, text])];
 
 // Nothing that reached a descriptor or a file holds the token in any spelling; and what is still JSON is still JSON — a journal line, a status file, a baseline and the SDK's own workspace files are read back by the next run.
-// `jsonStdout` is false for a scenario whose stdout is not JSON (an object printed with console.log).
-function assertNothingLeaks(ran, what, { jsonStdout = true } = {}) {
+// `jsonStdout` is false for a scenario whose stdout is not JSON (an object printed with console.log). `secrets` is what must not be readable (the synthetic token and its parts unless a scenario sends another).
+function assertNothingLeaks(ran, what, { jsonStdout = true, secrets = SECRETS } = {}) {
   for (const [where, text] of writtenBy(ran)) {
-    assert.deepStrictEqual(leaksIn(text, SECRETS), [], `${what}: ${where} holds the token, or a part of it, in some spelling`);
+    assert.deepStrictEqual(leaksIn(text, secrets), [], `${what}: ${where} holds the token, or a part of it, in some spelling`);
     if (/^the file .*\.json$/.test(where)) assert.doesNotThrow(() => JSON.parse(text), `${what}: ${where} is still JSON`);
     if (/^the file .*\.jsonl$/.test(where)) for (const line of text.split('\n').filter(Boolean)) assert.doesNotThrow(() => JSON.parse(line), `${what}: a line of ${where} is still JSON`);
   }
@@ -71,6 +72,60 @@ for (const [index, { name }] of REFUSALS.entries()) {
     assert.match(ran.stderr, /HTTP 403 from \S+\/workflows\([^)]+\): /, 'what the service said is still there');
     assert.ok(ran.files.has('journal/build-log.jsonl') && ran.files.has('journal/build-status.json') && ran.files.has('baseline.json') && ran.files.has('result.json'), 'the journal, the status, the baseline and the result were written');
   });
+}
+
+// ── A console that prints in colours ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// On a terminal (and with FORCE_COLOR=1) `console.error(error)` prints the body an error keeps with `util.inspect`'s colours: a long string is cut after each line break, each piece wrapped in its own colour codes, and the
+// pieces joined by a quote, a plus sign and a line break with the codes between them. A pipe's reader never sees it, a person at a console does.
+for (const [index, name] of [[5, 'JSON with the token folded onto several lines'], [9, 'plain text with the token folded onto several lines'], [3, 'JSON with the first character of each part spelled as a \\u escape']]) {
+  test(`a change set refused as a whole, ${name}, printed by a console that prints in colours — the codes between the pieces of a long string do not hide the token`, () => {
+    const ran = run('change-set', { index }, { FORCE_COLOR: '1' });
+    assert.strictEqual(ran.facts.refused, true);
+    assert.strictEqual(ran.status, 1);
+    assert.match(ran.stderr, /\u001b\[\d+m/, 'the console printed in colours: this is the scenario');
+    assertNothingLeaks(ran, `${name}, in colours`);
+    assert.ok(wroteMark(ran), 'the token stood where the marker is');
+    assert.match(ran.stderr, /HTTP 403 from \S+\/workflows\([^)]+\): /, 'what the service said is still there');
+  });
+}
+
+for (const how of ['console-log-folded-object', 'console-error-object']) {
+  test(`${how} on a console that prints in colours reaches stdout and stderr without the token`, () => {
+    const ran = run('print', { how }, { FORCE_COLOR: '1' });
+    assert.strictEqual(ran.status, 0);
+    assert.match(`${ran.stdout}${ran.stderr}`, /\u001b\[\d+m/, 'in colours');
+    assertNothingLeaks(ran, how, { jsonStdout: false });
+    assert.ok(wroteMark(ran));
+  });
+}
+
+// ── A literal backslash right before a part of the token ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// A diagnostic that says `... \nSyntheticSignature...` with a LITERAL backslash — JSON writes it `\\n` — is not a line break followed by `ySyntheticSignature...`: the `n` is the first character of the signature.
+const LEADING_N = [
+  ['signature', 'the signature alone, with a literal backslash right before it'],
+  ['folded', 'the whole token folded onto several lines, with a literal backslash before the signature'],
+  ['escaped-fold', 'the whole token with a JSON-escaped fold, and a literal backslash before the signature'],
+];
+// The token as `child 'leading-n'` quotes it — the backslash before the signature included — cut where it is folded: no piece of it may be left in anything the script wrote, which is what a person reassembling a folded
+// token reads (the pieces are the fold's own, and a text can spell them with escapes no view of `leaksIn` joins).
+const [, , SIGNATURE] = LEADING_N_PARTS;
+const PIECES = `${LEADING_N_PARTS[0]}.${LEADING_N_PARTS[1]}.\\${SIGNATURE}`.match(/.{1,8}/g).filter((piece) => /^[A-Za-z0-9_-]{8}$/.test(piece));
+for (const colours of [false, true]) {
+  for (const [spelling, what] of LEADING_N) {
+    test(`a change set refused as a whole, quoting ${what}${colours ? ', on a console that prints in colours' : ''}, is reported without the token — on both descriptors, in the journal, the baseline and the result files`, () => {
+      const ran = run('leading-n', { spelling }, colours ? { FORCE_COLOR: '1' } : {});
+      assert.strictEqual(ran.facts.refused, true, 'the edit is refused');
+      assert.strictEqual(ran.status, 1);
+      assertNothingLeaks(ran, what, { secrets: LEADING_N_SECRETS });
+      if (spelling !== 'signature') for (const [where, text] of writtenBy(ran)) for (const piece of PIECES) assert.ok(!text.includes(piece), `${what}: ${where} holds the piece ${piece} of the token`);
+      if (spelling === 'signature') for (const [where, text] of writtenBy(ran)) assert.ok(!text.includes(SIGNATURE) && !text.includes(SIGNATURE.slice(1)), `${what}: ${where} holds the signature, or all of it but its first character`);
+      assert.ok(wroteMark(ran), 'the token stood where the marker is');
+      assert.match(ran.stderr, /HTTP 403 from \S+\/workflows\([^)]+\): /, 'what the service said is still there');
+      if (colours) assert.match(ran.stderr, /\u001b\[\d+m/, 'in colours');
+    });
+  }
 }
 
 // ── A warning the SDK RETURNS: no error object carries it ─────────────────────────────────────────────────────────────────────────────────────────────────────────────

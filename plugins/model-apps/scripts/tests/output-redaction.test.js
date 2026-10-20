@@ -83,9 +83,9 @@ test('a JSON escape in the text — \\u in either case, \\/, the white space \\r
   // Folds and escapes in one spelling.
   const both = [...TOKEN].map((char, i) => (i % 5 === 0 ? unicode(char) : char) + (i % 7 === 0 ? '\r\n ' : '')).join('');
   assert.equal(redactTokens(`bearer ${both} end`, [TOKEN]), `bearer ${MARK} end`);
-  // A backslash that is not an escape of those is a backslash, and an incomplete \u is no character at all.
+  // A backslash that is not an escape of those is a stray between two characters, which is a fold like any other; a character that is not the token's own is not.
   assert.equal(redactTokens('C:\\path\\u12 and \\x', [TOKEN]), 'C:\\path\\u12 and \\x');
-  assert.equal(redactTokens(`${PARTS[0].slice(0, 10)}\\x${PARTS[0].slice(10)}`, [TOKEN]), `${PARTS[0].slice(0, 10)}\\x${PARTS[0].slice(10)}`, 'a backslash inside a token breaks it: it is not the token');
+  assert.equal(redactTokens(`${PARTS[0].slice(0, 10)}\\x${PARTS[0].slice(10)}`, [TOKEN]), `${PARTS[0].slice(0, 10)}\\x${PARTS[0].slice(10)}`, 'an `x` inside a token breaks it: it is not the token');
 });
 
 test('a long string printed the way util.inspect prints it — the pieces joined by a quote, a plus sign and a line break — is the token too', () => {
@@ -105,6 +105,109 @@ test('a long string printed the way util.inspect prints it — the pieces joined
   const quoted = "it's-an-opaque-token-with-a-quote-in-it";
   assert.equal(redactTokens(`bearer ${quoted} end`, [quoted]), `bearer ${MARK} end`);
   assert.equal(redactTokens(`bearer it's-an-opaque-token-with-a-quote-in-it' +\n 'x end`, [quoted]), `bearer ${MARK}' +\n 'x end`);
+});
+
+test('a long string printed the way util.inspect prints it IN COLOURS — each piece in its own colour codes, the codes between the quote, the plus sign and the line break — is the token too; the codes around it stay', () => {
+  const folded = TOKEN.match(/.{1,8}/g).join('\r\n ');
+  // A string value is cut after each line break; a key is not.
+  const subjects = [
+    [{ error: { message: `Rejected bearer ${folded}` } }, true],
+    [[`bearer ${folded}`], true],
+    [{ list: [{ note: `bearer ${folded}`, other: 'x' }], count: 2 }, true],
+    [{ [`bearer ${folded}`]: 1 }, false],
+  ];
+  for (const [subject, cut] of subjects) {
+    const printed = util.inspect(subject, { depth: 6, colors: true });
+    assert.match(printed, /\u001b\[\d+m'/, 'in colours');
+    assert.equal(/\u001b\[\d+m'[^'\n]*\\r\\n'\u001b\[39m \+\n\s*\u001b\[\d+m'/.test(printed), cut, `inspect ${cut ? 'cut the string and put each piece in colour codes' : 'did not cut it'}: ${JSON.stringify(printed)}`);
+    const cleaned = redactTokens(printed, [TOKEN]);
+    assert.deepEqual(leaksIn(cleaned, SECRETS), [], JSON.stringify(printed));
+    assert.ok(cleaned.includes(MARK), 'the token stood where the marker is');
+    assert.equal(util.stripVTControlCharacters(cleaned), redactTokens(util.stripVTControlCharacters(printed), [TOKEN]), 'the same text whether the colours are read away before or after');
+  }
+  // The string that held the token is still one coloured string: its opening code and its closing one are where they were.
+  const one = util.inspect({ error: { message: `Rejected bearer ${folded}` }, other: 'x' }, { depth: 6, colors: true });
+  assert.match(redactTokens(one, [TOKEN]), /message: \u001b\[32m'Rejected bearer <token>'\u001b\[39m\n  \},\n  other: \u001b\[32m'x'\u001b\[39m/);
+});
+
+test('a terminal colour code between two characters of a token is a fold — a well-formed one, and up to a bound; the codes before and after the token stay', () => {
+  const inner = (i) => i % 5 === 2 && i !== 0 && i !== TOKEN.length - 1;
+  const coloured = [...TOKEN].map((char, i) => (inner(i) ? `\u001b[${30 + (i % 8)};1m${char}\u001b[39m` : char)).join('');
+  assert.equal(redactTokens(`\u001b[31mbearer ${coloured}\u001b[39m end`, [TOKEN]), `\u001b[31mbearer ${MARK}\u001b[39m end`);
+  assert.equal(redactTokens(`bearer ${[...TOKEN].join('\u001b')} end`, [TOKEN]), `bearer ${MARK} end`, 'an ESC alone is a fold too');
+  assert.equal(redactTokens(`bearer ${[...TOKEN].map((char) => `\u001b[0m${char}`).join('')} end`, [TOKEN]), `bearer \u001b[0m${MARK} end`, 'a code in front of every character');
+  // Colour codes and the other folds, in one spelling.
+  const last = TOKEN.length - 1;
+  const mixed = [...TOKEN].map((char, i) => (i % 3 === 0 ? `\u001b[2m${char}\u001b[22m` : char) + (i < last && i % 7 === 0 ? '\r\n ' : '') + (i < last && i % 11 === 0 ? "'\u001b[39m +\n  \u001b[32m'" : '')).join('');
+  assert.equal(redactTokens(`bearer ${mixed} end`, [TOKEN]), `bearer \u001b[2m${MARK} end`, 'the code in front of the first character stays; the one right after it is inside the token');
+  assert.equal(redactTokens(`bearer ${mixed} end`, [TOKEN]), reference(`bearer ${mixed} end`, [TOKEN]));
+  // Only a code that is well-formed and short is read: anything else is characters, and a token that has them in it is not the token.
+  const opaque = 'opaque-token-without-any-dot-in-it';
+  const half = opaque.length >> 1;
+  assert.equal(redactTokens(`bearer ${opaque.slice(0, half)}\u001b[1;2;3m${opaque.slice(half)} end`, [opaque]), `bearer ${MARK} end`, 'a short code');
+  const tooLong = `\u001b[${'1;'.repeat(40)}m`;
+  assert.equal(redactTokens(`bearer ${opaque.slice(0, half)}${tooLong}${opaque.slice(half)} end`, [opaque]), `bearer ${opaque.slice(0, half)}${tooLong}${opaque.slice(half)} end`, 'a code of more than 32 parameter bytes is not read');
+  // A text with colours and no token is the very string it was.
+  const plain = '\u001b[32mgreen\u001b[39m and \u001b[1;31mred\u001b[0m \u001b';
+  assert.equal(redactTokens(plain, [TOKEN]), plain);
+});
+
+// The synthetic token with its signature starting with a letter that is also the second character of a JSON escape, as a diagnostic that has a literal backslash right before it spells it.
+const LEADING = (first) => {
+  const signature = `${first}SyntheticSignaturePartNotARealCredential`;
+  return { signature, token: `${PARTS[0]}.${PARTS[1]}.${signature}` };
+};
+
+test('a backslash right before a part of the token — a literal one, which JSON writes `\\\\` — does not hide the letter after it: `\\n` is a line break or a backslash and an `n`, and both are read', () => {
+  for (const first of ['n', 'r', 't', 'f', 'b', 'v', 'u', 'x', 'S', '0', '-', '_']) {
+    const { signature, token } = LEADING(first);
+    // The span of a letter that begins an escape takes the backslashes with it — it never leaves half of an escape (a JSON `\b` is one as much as `\n`); a stray before any other character stays where it was.
+    const begins = 'nrtfbv'.includes(first);
+    for (const run of ['\\', '\\\\', '\\\\\\', '\\\\\\\\']) {
+      const text = `Rejected signature ${run}${signature} end`;
+      assert.equal(redactTokens(text, [token]), `Rejected signature ${begins ? '' : run}${MARK} end`, JSON.stringify(text));
+    }
+    // As JSON writes a literal backslash: the message is still read, and the JSON is still JSON.
+    const json = JSON.stringify({ message: `Rejected signature \\${signature}`, note: 'kept' });
+    const cleaned = redactTokens(json, [token]);
+    assert.deepEqual(JSON.parse(cleaned), { message: `Rejected signature ${begins ? '' : '\\'}${MARK}`, note: 'kept' }, `${first}: ${cleaned}`);
+  }
+  // A line break and then a signature that really starts with `n` is read as it is: the fold is the escape, and the `n` is the character.
+  const { signature, token } = LEADING('n');
+  assert.equal(redactTokens(JSON.stringify(`Rejected\n${signature}`), [token]), JSON.stringify(`Rejected\n${MARK}`));
+  assert.deepEqual(JSON.parse(redactTokens(JSON.stringify({ message: `Rejected\n${signature}` }), [token])), { message: `Rejected\n${MARK}` });
+  // `\u` and four hex digits, or `\x` and two (util.inspect's escape of a control character), is the character they spell or the characters themselves.
+  for (const hexLike of ['u00a1SyntheticSignaturePartNotARealCredential', 'x41SyntheticSignaturePartNotARealCredential']) {
+    const hexToken = `${PARTS[0]}.${PARTS[1]}.${hexLike}`;
+    assert.equal(redactTokens(`Rejected signature \\${hexLike} end`, [hexToken]), `Rejected signature ${MARK} end`);
+    assert.equal(redactTokens(`Rejected signature \\\\${hexLike} end`, [hexToken]), `Rejected signature ${MARK} end`);
+  }
+  assert.equal(redactTokens(`bearer ${[...TOKEN].map((char, i) => (i % 4 === 2 ? `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}` : char)).join('')} end`, [TOKEN]), `bearer ${MARK} end`, '`\\x..` is the character it spells');
+});
+
+test('a backslash between the characters of a token, before every one of them or before some, with folds and escapes and colour codes in the same token, is the token', () => {
+  const before = (text, backslashes) => [...text].map((char) => backslashes + char).join('');
+  for (const backslashes of ['\\', '\\\\', '\\\\\\']) {
+    const text = `bearer ${before(TOKEN, backslashes)} end`;
+    const cleaned = redactTokens(text, [TOKEN]);
+    assert.deepEqual(leaksIn(cleaned, SECRETS), [], JSON.stringify(text));
+    assert.equal(cleaned, reference(text, [TOKEN]));
+    assert.ok(cleaned.includes(MARK));
+    // Some, before the characters that begin an escape most of all.
+    const some = `bearer ${[...TOKEN].map((char, i) => (i % 3 === 0 || 'nrtfu'.includes(char) ? backslashes : '') + char).join('')} end`;
+    assert.deepEqual(leaksIn(redactTokens(some, [TOKEN]), SECRETS), []);
+    assert.equal(redactTokens(some, [TOKEN]), reference(some, [TOKEN]));
+  }
+  // One token that has all of them: a stray backslash before a letter that begins an escape, a real escape and a fold in the same token.
+  const last = TOKEN.length - 1;
+  const mixed = [...TOKEN].map((char, i) => {
+    let spelled = char;
+    if (i % 4 === 1) spelled = unicode(char);
+    if ('nrtfu'.includes(char) && i % 2 === 0) spelled = `\\${spelled}`;
+    return spelled + (i < last && i % 6 === 5 ? '\\r\\n ' : '') + (i < last && i % 9 === 8 ? '\u001b[2m' : '');
+  }).join('');
+  assert.equal(redactTokens(`bearer ${mixed} end`, [TOKEN]), reference(`bearer ${mixed} end`, [TOKEN]));
+  assert.equal(redactTokens(`bearer ${mixed} end`, [TOKEN]), `bearer ${MARK} end`);
 });
 
 test('the text around a token is kept as it was — multi-byte characters, surrogate pairs, the escapes and white space beside it — and spellings that only touch stay two markers, as plain ones do', () => {
@@ -163,41 +266,98 @@ test('JSON written with a token in it is still JSON when the token is taken out 
   }
 });
 
-// ── The matcher against a plain reference ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── The matcher against an exact reference ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-// The text normalized into a view — white space dropped, escapes decoded, a continuation dropped, every character remembering where it came from — and searched with indexOf. It shares no code with the module.
-function reference(text, tokens) {
-  const needles = [...new Set(tokens.filter(Boolean).flatMap((token) => needlesOf(token)))].filter((needle) => !/[\s\\]/.test(needle));
-  const alphabet = new Set(needles.join(''));
-  const view = [];
-  const from = [];
-  const to = [];
+// The text read into REGIONS, each a list of the ways it can be read — a way is the characters it spells, none at all for a fold — and every alignment of a needle followed through them with no limit on how many readings
+// are followed at once. It shares no code with the module; what it holds is the specification:
+//   a backslash run (any length) and then `u` and four hex digits  → the character they spell (nothing if it is white space), or the literal `u` and the four digits
+//   a backslash run and then `x` and two hex digits                 → the character they spell (nothing if it is white space), or the literal `x` and the two digits
+//   a backslash run and then `/`                                    → `/`
+//   a backslash run and then `b` `f` `n` `r` `t` or `v`             → nothing (a control character or white space), or the literal letter
+//   a backslash run and anything else, or the end of the text       → nothing: a stray backslash between two characters of a token is a fold
+//   a terminal colour code (ESC [ and up to 32 bytes of 0x20–0x3f and a byte of 0x40–0x7e), or an ESC alone → nothing
+//   white space → nothing; a quote that is no character of a needle and starts `util.inspect`'s join of the pieces of a long string (a quote, a plus sign and a line break, the colour codes and the indentation
+//   between them) → nothing
+//   anything else → itself
+// A match is spelled from the first region it reads a character of to the last: the whole regions, which is what keeps half an escape from being left behind.
+const COLOUR = '\\x1b\\[[\\x20-\\x3f]{0,32}[\\x40-\\x7e]';
+function regionsOf(text, alphabet) {
+  const regions = [];
   for (let i = 0; i < text.length;) {
-    const start = i;
-    let char = text[i];
-    let width = 1;
+    const begin = i;
+    const char = text[i];
+    let alternatives = [[char]];
+    let end = i + 1;
     if (char === '\\') {
-      let end = i;
+      end = i;
       while (text[end] === '\\') end += 1;
       const letter = text[end];
       const hex = text.slice(end + 1, end + 5);
-      if (letter === 'u' && /^[0-9a-fA-F]{4}$/.test(hex)) { char = String.fromCharCode(parseInt(hex, 16)); width = end + 5 - i; }
-      else if (letter === '/') { char = '/'; width = end + 1 - i; }
-      else if (letter !== undefined && 'rntf'.includes(letter)) { char = ' '; width = end + 1 - i; }
-      else width = end - i;
+      const two = text.slice(end + 1, end + 3);
+      if (letter === 'u' && /^[0-9a-fA-F]{4}$/.test(hex)) {
+        const decoded = String.fromCharCode(parseInt(hex, 16));
+        alternatives = [/\s/.test(decoded) ? [] : [decoded], ['u', ...hex]];
+        end += 5;
+      } else if (letter === 'x' && /^[0-9a-fA-F]{2}$/.test(two)) {
+        const decoded = String.fromCharCode(parseInt(two, 16));
+        alternatives = [/\s/.test(decoded) ? [] : [decoded], ['x', ...two]];
+        end += 3;
+      } else if (letter === '/') {
+        alternatives = [['/']];
+        end += 1;
+      } else if (letter !== undefined && 'bfnrtv'.includes(letter)) {
+        alternatives = [[], [letter]];
+        end += 1;
+      } else {
+        alternatives = [[]];
+      }
+    } else if (char === '\u001b') {
+      const colour = new RegExp(`^${COLOUR}`).exec(text.slice(i, i + 40));
+      alternatives = [[]];
+      end = i + (colour ? colour[0].length : 1);
+    } else if (/\s/.test(char)) {
+      alternatives = [[]];
     } else if ("\"'`".includes(char) && !alphabet.has(char)) {
-      const continuation = new RegExp(`^${char}[ \\t]*\\+[ \\t]*\\r?\\n[ \\t]*${char}`).exec(text.slice(i));
-      if (continuation) { char = ' '; width = continuation[0].length; }
+      const between = `(?:[ \\t]|${COLOUR})*`;
+      const join = new RegExp(`^${char}${between}\\+${between}\\r?\\n${between}${char}`).exec(text.slice(i));
+      if (join) {
+        alternatives = [[]];
+        end = i + join[0].length;
+      }
     }
-    i += width;
-    if (/\s/.test(char)) continue;
-    view.push(char);
-    from.push(start);
-    to.push(i);
+    regions.push({ begin, end, alternatives });
+    i = end;
   }
-  const haystack = view.join('');
+  return regions;
+}
+
+function reference(text, tokens) {
+  const needles = [...new Set(tokens.filter(Boolean).flatMap((token) => needlesOf(token)))].filter((needle) => !/[\s\\\u001b]/.test(needle));
+  const regions = regionsOf(text, new Set(needles.join('')));
   const spans = [];
-  for (const needle of needles) for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) spans.push([from[at], to[at + needle.length - 1]]);
+  for (const needle of needles) {
+    // `alive` maps how many characters of the needle an alignment has spelled to where the earliest such alignment began: of two alignments in the same state only the earlier one can make a longer match, and the
+    // spans of two that end together merge into the longer.
+    let alive = new Map();
+    for (const region of regions) {
+      const after = new Map();
+      for (const alternative of region.alternatives) {
+        let current = new Map(alive);
+        for (const char of alternative) {
+          const next = new Map();
+          const keep = (state, began) => { if (!next.has(state) || began < next.get(state)) next.set(state, began); };
+          for (const [state, began] of [...current, [0, region.begin]]) {
+            if (needle[state] !== char) continue;
+            if (state + 1 === needle.length) spans.push([began, region.end]);
+            else keep(state + 1, began);
+          }
+          current = next;
+        }
+        for (const [state, began] of current) if (!after.has(state) || began < after.get(state)) after.set(state, began);
+      }
+      alive = after;
+    }
+  }
   spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
   const merged = [];
   for (const span of spans) {
@@ -209,12 +369,15 @@ function reference(text, tokens) {
   let at = 0;
   for (const [start, end] of merged) { out += text.slice(at, start) + MARK; at = end; }
   out += text.slice(at);
-  return tokens.filter((token) => token && needlesOf(token).some((needle) => /[\s\\]/.test(needle))).reduce((current, token) => scrub(current, token), out);
+  return tokens.filter((token) => token && needlesOf(token).some((needle) => /[\s\\\u001b]/.test(needle))).reduce((current, token) => scrub(current, token), out);
 }
 
-test('the matcher agrees with a plain reference over a few thousand random texts: tokens spelled with folds, escapes and continuations, near misses, noise, and three tokens at once', () => {
-  const NOISE = ['a', 'Z', '0', '9', '.', '-', '_', '/', ' ', '\n', '\r\n', '\t', '\\', '\\\\', 'u', '0073', '\\u0041', '\\/', '\\n', '\\\\r', 'é', '日', '🧪', '<token>', 'Bearer ', '"', "'", "' +\n '", '{', '}', '\u00a0'];
-  const GAPS = ['', '', '', ' ', '\n', '\r\n ', '\t', '\\r\\n', '\\n ', '\n\n', '   ', "' +\n  '", '\\\\r\\\\n ', '\\u000a'];
+test('the matcher agrees with an exact reference over a few thousand random texts: tokens spelled with folds, escapes, stray backslashes, colour codes and continuations, near misses, noise, and three tokens at once', () => {
+  const NOISE = ['a', 'Z', '0', '9', '.', '-', '_', '/', ' ', '\n', '\r\n', '\t', '\\', '\\\\', 'u', '0073', '\\u0041', '\\/', '\\n', '\\\\r', 'é', '日', '🧪', '<token>', 'Bearer ', '"', "'", "' +\n '", '{', '}', '\u00a0',
+    '\u001b[32m', '\u001b[39m', '\u001b', '\\q', '\\\\\\n', "'\u001b[39m +\n  \u001b[32m'", 'n', 'r', 't', 'f', 'b', 'v', 'x', '\\b', '\\v', '\\x41', '\\x0B', '\\\\x7a', 'x0'];
+  const GAPS = ['', '', '', ' ', '\n', '\r\n ', '\t', '\\r\\n', '\\n ', '\n\n', '   ', "' +\n  '", '\\\\r\\\\n ', '\\u000a',
+    '\u001b[32m', '\u001b[39m', '\u001b[1;32m\u001b[4m', "'\u001b[39m +\n  \u001b[32m'", '\\', '\\\\', '\\q', '\\\\\\', '\u001b', '\\b', '\\x0b', '\\v'];
+  const STRAYS = ['\\', '\\', '\\\\', '\\\\\\'];
   const tokens = [TOKEN, OTHER, 'aaa.bbb.ccc-and-a-longer-opaque-token-value'];
   for (let seed = 1; seed <= 3000; seed += 1) {
     const random = generator(seed);
@@ -227,8 +390,12 @@ test('the matcher agrees with a plain reference over a few thousand random texts
         if (random.next() < 0.2) chars[random.int(chars.length)] = 'Q';
         const gapRate = random.next() * 0.5;
         const escapeRate = random.next() * 0.3;
+        const strayRate = random.next() < 0.5 ? 0 : random.next() * 0.3;
         text += chars.map((char) => {
-          const spelled = random.next() < escapeRate ? `${random.next() < 0.3 ? '\\\\' : ''}${unicode(char, random.next() < 0.5)}` : (char === '/' && random.next() < 0.5 ? '\\/' : char);
+          let spelled = char;
+          if (random.next() < escapeRate) spelled = `${random.next() < 0.3 ? '\\\\' : ''}${unicode(char, random.next() < 0.5)}`;
+          else if (char === '/' && random.next() < 0.5) spelled = '\\/';
+          if (random.next() < strayRate) spelled = random.pick(STRAYS) + spelled;
           return spelled + (random.next() < gapRate ? random.pick(GAPS) : '');
         }).join('');
       } else {
@@ -240,6 +407,28 @@ test('the matcher agrees with a plain reference over a few thousand random texts
 });
 
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('past its bound of readings followed at once the search does not guess which to drop — it fails, and a guarded stream writes a notice and not the text; a real token never comes near the bound', () => {
+  // A needle that is one letter 300 times, against a text in which every escape may be that letter or nothing: every count of letters so far is a reading that is alive. Only a text made for the needle does this.
+  const needle = `${'n'.repeat(300)}Z`;
+  const crafted = `${'\\n'.repeat(400)}Z`;
+  assert.throws(() => redactTokens(crafted, [needle]), (error) => error instanceof RangeError && /too many ways to read a token/.test(error.message));
+  const stream = fakeStream();
+  guardStream(stream, (text) => redactTokens(text, [needle]));
+  stream.write(crafted);
+  assert.equal(stream.chunks.length, 1);
+  assert.match(stream.chunks[0], /^\[output withheld/, 'fail closed: what could not be checked is not written');
+  // The search is whole again after the failure, with the same prepared needles.
+  assert.equal(redactTokens(`a ${needle} b`, [needle]), `a ${MARK} b`);
+  // Just under the bound: followed to the end, and the match found.
+  const fits = `${'n'.repeat(120)}Z`;
+  assert.equal(redactTokens(`${'\\n'.repeat(150)} ${fits}`, [fits]), `${'\\n'.repeat(150)} ${MARK}`);
+  assert.equal(redactTokens(`${'\\n'.repeat(119)}nZ`, [fits]), MARK, 'the escapes read as the letters they are: the needle');
+  // The synthetic token, spelled with every escape that can be read two ways, among text that is nothing but such escapes: far below the bound.
+  const { token } = LEADING('n');
+  const noisy = `${'\\n\\t\\b\\f\\r\\v\\u006e\\x6e'.repeat(20000)}${[...token].map((char) => `\\n${char}`).join('')}${'\\n'.repeat(20000)}`;
+  assert.equal(redactTokens(noisy, [token]).endsWith(`${MARK}${'\\n'.repeat(20000)}`), true);
+});
 
 test('a token is found in a text of any size in time that grows with the text — a long text, a text that is nearly the token over and over, a long run of backslashes, and a text full of tokens', (t) => {
   const filler = 'The platform answered with a diagnostic that says nothing about credentials.\r\n';
@@ -261,6 +450,31 @@ test('a token is found in a text of any size in time that grows with the text �
   assert.equal(redactTokens(`${TOKEN}\n`.repeat(50000), [TOKEN]), `${MARK}\n`.repeat(50000));
   t.diagnostic(`${Date.now() - started} ms for all of the above`);
   assert.ok(Date.now() - started < 20000, 'a linear scan: tens of megabytes and the worst case of a restarting one finish in a moment');
+});
+
+// The signature of the synthetic token starts with `n`, so every `\n` of a text could be the first character of it: the worst text for the readings that follow both ways.
+test('a backslash that can be read two ways and a colour code cost no more than the rest — a text of nothing else, one in which every escape could begin a match, a needle of one letter over and over, a code that never ends — in time that grows with the text', (t) => {
+  const started = Date.now();
+  const { signature, token } = LEADING('n');
+  const escapes = '\\n'.repeat(1000000);
+  assert.equal(redactTokens(escapes, [token]), escapes);
+  const half = '\\n'.repeat(500000);
+  assert.equal(redactTokens(`${half}Rejected signature \\${signature}${half}`, [token]), `${half}Rejected signature ${MARK}${half}`);
+  // A needle that is `n` sixty times and then a `Z`: after each `\n` there is a reading in which it is the next `n`, and the readings that are alive could all be extended by the next one.
+  const needle = `${'n'.repeat(60)}Z`;
+  assert.equal(redactTokens(escapes, [needle]), escapes);
+  assert.equal(redactTokens(`${escapes}${needle}${escapes}`, [needle]), `${escapes}${MARK}${escapes}`);
+  assert.equal(redactTokens(`${'\\n'.repeat(30)}${needle}`, [needle]), `${'\\n'.repeat(30)}${MARK}`, 'the same on a text that is short enough to be followed in every way');
+  const stray = '\\'.repeat(1000000);
+  assert.equal(redactTokens(`${stray}${token}${stray}`, [token]), `${stray}${MARK}${stray}`);
+  assert.equal(redactTokens(`\\n${'\\'.repeat(1000)}n`.repeat(1000), [token]), `\\n${'\\'.repeat(1000)}n`.repeat(1000));
+  // Colour codes: a million of them, a million starts of one, and one that has a million parameters and no end.
+  assert.equal(redactTokens('\u001b[0m'.repeat(1000000), [TOKEN]), '\u001b[0m'.repeat(1000000));
+  assert.equal(redactTokens('\u001b['.repeat(1000000), [TOKEN]), '\u001b['.repeat(1000000));
+  assert.equal(redactTokens(`\u001b[${'1;'.repeat(1000000)}`, [TOKEN]), `\u001b[${'1;'.repeat(1000000)}`);
+  assert.equal(redactTokens(`${'\u001b[0m'.repeat(100000)}${TOKEN}${'\u001b[0m'.repeat(100000)}`, [TOKEN]), `${'\u001b[0m'.repeat(100000)}${MARK}${'\u001b[0m'.repeat(100000)}`);
+  t.diagnostic(`${Date.now() - started} ms for all of the above`);
+  assert.ok(Date.now() - started < 30000, 'a linear scan: the readings that are followed are bounded, and a text that is nothing but ways to read it finishes in a moment');
 });
 
 // ── The list of what is taken out of a token ──────────────────────────────────────────────────────────────────────────────────────────────────────────────

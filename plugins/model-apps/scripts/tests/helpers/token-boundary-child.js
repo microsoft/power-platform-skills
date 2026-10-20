@@ -21,7 +21,7 @@ const ai = require('../../lib/artifact-intent.js');
 const { refusedEdit } = require('./bpf-batch-service.js');
 const { createHarness, seedForm, NOTES_CLASS_ID } = require('./form-store-harness.js');
 const { INSTANCE } = require('./fake-genpage-server.js');
-const { TOKEN, SECRETS, FOLDED, REFUSALS } = require('./synthetic-token.js');
+const { TOKEN, SECRETS, FOLDED, REFUSALS, CODE, LEADING_N_PARTS, LEADING_N_TOKEN, LEADING_N_SECRETS } = require('./synthetic-token.js');
 const { leaksIn } = require('./token-leaks.js');
 
 const DIR = process.env.TOKEN_BOUNDARY_DIR;
@@ -53,6 +53,24 @@ const scenarios = {
     const { error } = await refusedEdit(REFUSALS[index].body, createMakerSdk, makeDir);
     note('refused', Boolean(error));
     note('errorHoldsToken', leaksIn(error, SECRETS).length > 0);
+    printLikeAScript(error);
+  },
+
+  // The same change set, refused by a part that has a LITERAL backslash right before a part of the token that starts with `n` (the token is LEADING_N_TOKEN, which the client sends): in the decoded message the backslash and the
+  // `n` read as the escape `\n`, which is not what they are. `spelling` is how the refusal says it: `signature` quotes the signature alone; `folded` quotes the whole token, folded onto several lines, with the backslash
+  // before the signature; `escaped-fold` quotes it with a JSON-escaped fold in every part and the backslash before the signature.
+  async 'leading-n'({ spelling }) {
+    const [header, payload, signature] = LEADING_N_PARTS;
+    const whole = `${header}.${payload}.\\${signature}`;
+    const message = {
+      signature: `Rejected signature \\${signature}`,
+      folded: `Rejected bearer ${whole.match(/.{1,8}/g).join('\r\n ')}`,
+      'escaped-fold': `Rejected bearer ${whole.match(/.{1,8}/g).join('\\r\\n ')}`,
+    }[spelling];
+    if (message === undefined) throw new Error(`unknown spelling ${spelling}`);
+    const { error } = await refusedEdit(JSON.stringify({ error: { code: CODE, message } }), createMakerSdk, makeDir, { token: LEADING_N_TOKEN });
+    note('refused', Boolean(error));
+    note('errorHoldsToken', leaksIn(error, LEADING_N_SECRETS).length > 0);
     printLikeAScript(error);
   },
 
