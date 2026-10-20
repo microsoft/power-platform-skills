@@ -27,7 +27,8 @@ const stubSdk = () => ({
 
 // Stands in for the page backend (lib/genpage-sdk.js): `read(id)` answers the page's source, throws what the backend throws for a page it
 // cannot read, and records every read and how many were in flight at once.
-function fakeGenpage({ failIds = new Set(), rawIds = new Set(), delayMs = 0 } = {}) {
+// `hold`, a promise, keeps every read open until it settles — for a test that must prove an order without a clock.
+function fakeGenpage({ failIds = new Set(), rawIds = new Set(), delayMs = 0, hold } = {}) {
   const reads = [];
   const state = { inFlight: 0, peak: 0 };
   return {
@@ -40,6 +41,7 @@ function fakeGenpage({ failIds = new Set(), rawIds = new Set(), delayMs = 0 } = 
       state.peak = Math.max(state.peak, state.inFlight);
       try {
         if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        if (hold) await hold;
         if (failIds.has(String(id).toLowerCase())) throw Object.assign(new Error(`page ${id} does not exist in this environment`), { code: 'GENPAGE_NOT_FOUND' });
         if (rawIds.has(String(id).toLowerCase())) throw Object.assign(new Error(`page ${id} has no source this tool can read`), { code: 'GENPAGE_NO_SOURCE' });
         return { id, name: 'Page', source: source(id) };
@@ -136,13 +138,25 @@ test('once a pass ends its page reads none starts until the next pass begins —
   assert.deepStrictEqual(await reader.pageCode(pid(1)), source(pid(1)), 'the next pass reads again');
 });
 
+// The read is held open until the test lets it go, so "endPageReads did not wait for it" is proven by order, not by a clock: the
+// earlier form (a 20 ms read, endPageReads back within 15 ms) failed on a loaded machine. The 5 s race only turns a regression —
+// endPageReads waiting for the read, which never ends while it is held — into a failure instead of a hang.
 test('ending the reads never waits for, or cancels, a read in flight — it is a request, and finishes by itself', async () => {
-  const genpage = fakeGenpage({ delayMs: 20 });
+  let release;
+  const genpage = fakeGenpage({ hold: new Promise((resolve) => { release = resolve; }) });
   const reader = readerWith(genpage);
   const reading = reader.pageCode(pid(1));
-  const started = Date.now();
-  await reader.endPageReads();
-  assert.ok(Date.now() - started < 15, 'endPageReads does not wait for the read');
+  let readSettled = false;
+  reading.then(() => { readSettled = true; }, () => { readSettled = true; });
+  let timer;
+  const stillWaiting = new Promise((resolve) => { timer = setTimeout(() => resolve('still waiting'), 5000); });
+  try {
+    assert.strictEqual(await Promise.race([reader.endPageReads().then(() => 'ended'), stillWaiting]), 'ended', 'endPageReads does not wait for the read');
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.strictEqual(readSettled, false, 'the read was still in flight when the reads were ended');
+  release();
   assert.strictEqual(await reading, source(pid(1)), 'the read in flight finishes');
 });
 
