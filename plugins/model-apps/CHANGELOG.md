@@ -5,6 +5,173 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.17.0]
+
+The bundled SDK is updated to power-platform-ux d603c799. Dashboard tiles the spec does not size now show their charts and lists, a
+download keeps File and Image columns and a table's plural, and an alternate key in several languages over a new table's name column
+no longer stops the first build. A relationship is reused or verified only when the environment states its whole identity, an import
+refused because another import or a publish was running is sent again when its job proves nothing started, and the five minutes a run
+allows itself for a throttled service now bound all of its waiting. An access token is kept out of everything a script writes.
+`--verify` settles a form's captions in another language from one translation export and puts its warnings in its result JSON, and
+lint no longer calls an app with no personas administrator-only.
+
+### Added
+
+- **A cross-feature regression matrix.** One App Spec with every feature an offline fake can model faithfully (all column types, a
+  Customer column, a global choice, status reasons, an alternate key, 1:N, self and N:N relationships, views, a chart, Main, Quick
+  Create and Quick View forms, a dashboard, web resources, commands, a generative page, navigation, app settings, sample data, a
+  persona and a role grant) is built, rebuilt unchanged, downloaded, verified and torn down over the bundled SDK and a stateful fake
+  Dataverse that refuses every read it does not model and applies every query option it accepts. Every phase's writes and publishes
+  are pinned, its reads are under a budget, the download is compared with the authored spec, and every phase is proven to leave the
+  content of everything that was already in the environment as it was. Beside it, tests pin that dry runs and the teardown preview
+  write nothing, downloads are stable, a rebuild without `--publish`, rebuilding a downloaded spec in place, verify naming what was
+  deleted in Maker and a rebuild restoring it, a build or a teardown that fails part way finishing when run again, and a teardown of a
+  downloaded spec keeping every table, relationship, global choice and row. The three files take about 7–12 s each.
+
+### Changed
+
+- **The bundled SDK is updated (power-platform-ux d603c799).** What a maker can see of it:
+  - an app's header write carries only the texts that changed: an edit of the description does not send the name again (and the
+    reverse), and a routing-description edit sends neither text — another writer's unpublished description is no longer sent again;
+  - a row-summary lookup that answers something that cannot be read as a list of rows is an error: a first row that is no row, or a
+    template row without a GUID id, stops the build (it used to read as "no row summary yet" and publish a model, or as "no
+    template"), and teardown says the lookup failed instead of reporting "nothing to remove";
+  - the Command Designer change merged since ccf2c1a1 does not reach the plugin: the commands phase writes what it wrote. The SDK's
+    PCF control registration, which the plugins never called, is no longer in the bundle.
+- **A name or description that is localized (or otherwise not plain text) holds back only its own edit.** The other text and an
+  `app.aiDescription` are now applied and written alone, where one such text held the whole header back and a changed plain text
+  beside it was reported as not applied. The text is taken off the app copy before it is pushed, so it is never sent — even when the
+  SDK's own read of the header fails, which used to stop the build with `APP_HEADER_NOT_PLAIN_TEXT`.
+- **An environment without the row-summary AI template skips the row summaries on the SDK's answer alone.** The build no longer reads
+  the template list a second time before it skips (one warning, nothing written, as before); an answer the SDK cannot read stops the
+  build with the SDK's own error, and a throttled or interrupted read is still run again.
+- **Teardown reports a row summary from what the SDK says it did**: `✓ row summary <table> (1 deleted)` when one was removed,
+  `⊘ … (not found)` when the table had none (also an environment with no AI skill table), `kept` with the SDK's words when the removal
+  or its lookup failed — with no read of the plugin's own.
+- **`verify-model-app.js` puts its warnings in the result JSON, and prints the result as pure ASCII.** Every `WARNING:` line it prints on
+  stderr is now also in an optional `warnings` array of the result — the same messages, in the order printed, left out when there is
+  none — when the verification passes, fails, or the spec is refused; it changes neither `ok` nor the exit status. A refused spec now
+  prints the warnings it also has. A character beyond ASCII in the result (an em dash, a Spanish label) is a `\uXXXX` escape that any
+  JSON parser reads back as the original text, so Windows PowerShell 5.1 can no longer garble it. stderr is unchanged.
+- **A new table that no persona and no `roleGrants[]` entry grants a privilege on is a warning** ("no access declared", in lint and in
+  the design document's `warnings`); a covering grant satisfies it, and `--strict` fails on it like on any warning.
+- **`write-app-spec-doc.js --env` reads, read-only, the roles the app has associated with it** and lists them beside the privileges the
+  spec grants. It finds an app that was saved and never published, matches a role to a persona or a `roleGrants[]` entry by id where
+  the spec gives one and otherwise by name as "may be" (role names repeat across business units; every candidate is listed), and says
+  "not checked" — never "no roles" — for a refused read or an answer that is no list of roles. It calls an app administrator-only
+  only when the environment shows it and no persona gets the app. The command never fails because of the read.
+- **A build that is throttled for more than five minutes in all now stops with `throttle-budget-exhausted`** once the five minutes are
+  spent and it has something left to write (it used to finish after waiting out the HTTP client's own re-sends on top of the budget);
+  running the same command again later continues from there. See Fixed.
+- **`/genpage`, `/app-builder` and the six `genpage-*` agents say what they are not for**: a generic or standalone React or web app,
+  Power Pages, canvas apps, Power Automate, and a request that rules out Power Platform, Dataverse and model-driven apps.
+  `/app-builder`'s description lost process detail no request routes on, to stay under GitHub Copilot's 1,024-character limit; every
+  capability and trigger phrase stayed.
+- **The routing eval has 35 cases (15 added)** — requests that say outright they are not for Power Platform, a plain web app in the
+  stack `/genpage` is written in, a Power Apps code app, and positives that carry a "not" about the other skill — and **reports the
+  decision of the agent's first turn beside its grade** (`first turn: … · later: …`; `initial` / `delayed` / `turn` in `--out`). The
+  grade is unchanged: the first model-apps skill the agent asks for, at any turn.
+- `references/agent-interaction-contract.md` explains that declaring a tool in both naming schemes makes a host recognize it, not
+  deliver it, and a test fails an agent that names `TaskCreate`/`TaskUpdate` without saying what to do when there is no task tool.
+- A download's warning for a failed label read now says which read failed — the table's own, or its columns' — and only what that read
+  carries; the table read's warning also says the table's plural is not written.
+
+### Fixed
+
+- **Dashboard tiles show their charts and lists.** A tile the spec did not size was built one row tall, which the app draws as the
+  tile's title bar alone. An unsized tile is now one column by 12 rows, the most common height of the platform's own chart and list
+  tiles, so two of them share a row; a tile's `colspan` and `rowspan` still win. A rebuild reuses a dashboard that exists and does not
+  resize its tiles: re-create one an earlier version built under a new `name`, or resize its tiles in the dashboard designer. The App
+  Spec reference said the default was 1x4; it now states the size and how tiles fill the dashboard's two-column grid.
+- **A relationship is no longer taken for the declared one on its name alone.** The build skips the create of an existing relationship
+  — and the dry run says `= reuse`, and `verify-model-app.js` passes it — only when the environment's answer states its whole identity:
+  schema name, type, both tables and, for a 1:N, the lookup column, for an N:N the intersect table and the column each table has in it.
+  An answer that left a part out used to count as "nothing contradicts". Now the build reads the relationship itself and halts, leaving
+  it as it is, when that read is incomplete too; the dry run shows `? unknown`; verify fails the check and names what the answer
+  lacked. An N:N whose spec names an `intersectEntityName` is refused (`relationship-name-taken`, with the way to reuse it) when the
+  relationship under that name sits on another intersect table. Complete answers behave as before.
+- **The five minutes a run allows itself for a throttled service now bound all the waiting it does for a throttle.** The HTTP client's
+  own re-sends of a throttled read, publish, delete or column create kept a schedule of their own outside the budget; the client now
+  draws every wait it takes after an HTTP 429 from the same budget in the build and the page upload. It waits what `Retry-After` asks,
+  counts requests throttled together once, and announces a wait of more than five seconds on stderr. A wait that does not fit is not
+  taken: the throttled answer comes back as it came, and the build stops with `throttle-budget-exhausted`, which says what the service
+  asked, before its next write. A 5xx, a reset connection and the re-send of a deadlock victim are not throttling and keep their own
+  schedule; every other script (and the pcf plugin's copy of the client) waits as it always did.
+- **A refused throttle wait stops the build before it writes again, not only the request.** No later step that would write starts — a
+  refused column change set is no longer followed by one request per column — and the build stops with `throttle-budget-exhausted`
+  instead of finishing as a success. A step that only reads to find it has nothing to do still runs, so a rebuild that has nothing left
+  to write after a refused best-effort read finishes, with the refusal's warning on stderr. A throttled read before an update, or of a
+  page an earlier build started creating, that the budget has no room for is the throttle's refusal, not "could not read page" and not
+  a conflict that asks the maker to delete a record. The client's stderr line for such a request no longer says to run the same
+  command again; after a page upload's create, the result names the page and the command (`--page-id <id>`) that finishes it.
+- **A refused throttle wait no longer leaves a new table's name column at the platform's default length.** The build skipped the
+  length update of the next table owed one and forgot it, so a later run could not set it and an alternate key over that column was
+  refused for its size on every run. Every owed length is now set whatever the budget has refused; a key waiting for it is made by the
+  next run, which the halt asks for.
+- **Verify no longer calls a published dashboard "not published" for a user whose own UI language is the organization's second one.**
+  When the published read carries more than one language and the saved and published rows answer the same `@odata.etag`, the two reads
+  are compared in everything but their captions; any other difference is still a change. A dashboard saved and not published, a row
+  that answers no token, and a base-language user's read are decided as before.
+- **A generative page whose class has a class expression for its base, and one that has a field named `new` before a method, are read
+  instead of refused** (2.15.0 refused them with the guess `generic`). Still refused, naming the guess: a function expression or an
+  object literal for the base, type arguments after a class expression, more than four class expressions nested in each other's heads,
+  and a `new` that no member of a class begins; parenthesise the base, as before.
+- **Lint and the design document no longer call an app administrator-only because `personas[]` is empty** (AB#6770008). A spec that
+  authors no role says nothing about who can open an app that already exists — an extension of such an app leaves `personas[]` out on
+  purpose — yet lint said the app "opens only for system administrators", steering authors to redefine their existing roles. Both now
+  say what the spec authors; a spec that carries what a download writes (`app.uniqueName`, a page or dashboard id) is told the app
+  already exists and keeps its roles. The document follows each persona's `appAccess`.
+- A rebuild of an app whose name (or description) is held as one text per language writes a changed description (or name) instead of
+  reporting it as not applied.
+- **`solution-settings.js import` sends an import again that the platform refused because another import or a publish was running.**
+  The platform answers such an import with HTTP 429 and `0x80071151` ("Cannot start another [Import] because there is a previous
+  [Import] running …"), which the retry did not know, so the maker had to run it again by hand. The code alone does not say that nothing
+  started, so the refused send's import job is read once, and the import is sent again — after waits of 10, 20, 40 and 60 seconds (or a
+  longer `Retry-After`), at most five sends in five minutes, the budget checked again after each wait — only when the job does not exist
+  or is finished and its log says the import failed with that error before it processed the solution or any component. A job that
+  proves nothing is not sent again: the failure says why and to look the import job up (`importjobs(<id>)` or the solution history)
+  before importing again. A resend's output says how each refusal was proven (`importRefusals[].proof`). When the fifth send is refused
+  too, the failure no longer says to run the import again; it says what to check first. The retry for the lock codes is unchanged.
+- **`--verify` no longer lists a form's tab and section captions as unverified just because the form read does not return their
+  language** (Spanish captions in an English-language organization): they are read from one translation export of the app's solution,
+  matched by the id of each tab and section, so a right caption passes and a stale, missing or empty one is reported. The export is one
+  request (several seconds, more as the solution grows), made only when such a caption exists, shared by every form of the run and never
+  sent twice. When it fails or cannot be read with certainty — its archive must be self-consistent and its labels sheet exactly the
+  platform's shape — the captions stay unverified, with the reason, as before.
+- **An alternate key labelled in several languages over a new table's name column and another column no longer stops the first
+  build** where the platform makes the name column 850 characters long (HTTP 400 `0x80060895`, "Index size exceeded the size limit of
+  1700 bytes"). For such a key only, the build reads the column's length once (a typed `MaxLength` read, no labels); where the key cannot
+  fit beside it but can at the length the spec asks, it is made after the length step, with both labels, instead of in the run after.
+  The key's size is counted from its columns as the build creates them (an `AutoNumber` column, like one with no `type`, is created 100
+  characters long whatever `maxLength` it carries). Every other key keeps its place. The warnings and the stop
+  (`alt-key-name-length-not-set`) now name the platform's measured limit of 1,700 bytes (they said 900) and no longer promise that
+  running the build again creates a key: a key proven too large at the asked length is said to be so, with its size and what to change;
+  otherwise they say a run again may create it, that this is not certain, and what to compare if it is refused again. They no longer
+  suggest labelling the key in one language. The stop's code, retry behaviour and exit status are unchanged.
+- **An access token the process obtained no longer reaches anything a script writes, whatever text carries it.** A service that rejects a
+  token may repeat it — whole or by a part, folded onto several lines, with a JSON escape or a backslash left in it — in a diagnostic,
+  and a change set refused as a whole is answered HTTP 200, so the token could reach an error message, a warning, the journal or a file.
+  Every token the process obtains is now kept out of stdout and stderr (colour output included), what Node prints when an error ends a
+  script, the build's journal and status file, the baseline and snapshot, downloads and generated files, and every file of the SDK's
+  workspace; the token reads `<token>` and the text around it is unchanged. Answers themselves are never rewritten, so the strict
+  `$batch` readers decide a page write's resend on the same bytes as before. A text that could not be checked is not written.
+- **pcf: the push receipt no longer carries the access token** a refused confirmation read quoted, and every file the SDK writes into a
+  push's workspace goes through the same guard.
+- **A download keeps File and Image columns.** Both report the Dataverse type "Virtual", so every download left them out without a word
+  and a rebuild elsewhere lost them. They now come back typed, with `maxSizeKb` when it is not the build's default (10240 KB) and
+  `isPrimaryImage` for a table's primary image. The table's own image and the platform's companion columns are not written, a column of
+  another type the App Spec cannot express is named in a warning, and a size read that fails or answers short is reported — per read, and
+  per column for a short answer. Only a table with such a column costs a read more (one per type).
+- **A download keeps a table's plural when a rebuild would not derive it**: "Tag Catalog" for "Tag" was left out, so a rebuild into
+  another environment named the table "Tags". A plural that is the display name plus "s" is still left out, so the download of an
+  ordinary table is unchanged.
+- The page-builder worker, the planners and the entity builder no longer tell the agent to call `TaskCreate` with no alternative: a
+  host can hand a subagent no task tool, so the agent tracks its task with `TaskCreate`/`TaskUpdate` or `todo` when it has one, and
+  otherwise says so and tracks it in plain words; `/genpage` does not treat a worker without a task tool as a failed worker.
+- The routing eval no longer ends a trial before the agent it killed has exited (an `EBUSY` on Windows), and two tests no longer
+  assert a time limit that failed on a busy machine (the shared telemetry spawn test, and the test that ending a verify pass's page
+  reads does not wait for a read in flight).
+
 ## [2.16.0]
 
 The bundled SDK is updated to power-platform-ux ccf2c1a1, and a new table's primary (name) column is now created required when the
