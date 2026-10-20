@@ -200,7 +200,7 @@ const TEARDOWN_WRITES = {
 // Reads per phase: a ceiling about a tenth above what each phase reads today, so a read that starts being made once per row fails
 // here. HTTP requests (reads, writes and change sets) likewise.
 const BUDGET = {
-  build: { reads: 335, requests: 430 }, // today 302 / 392
+  build: { reads: 335, requests: 430 }, // today 306 / 396: the SDK reads each web resource it writes back once it has published it (4 here)
   rebuild: { reads: 295, requests: 320 }, // today 268 / 289
   download: { reads: 130, requests: 130 }, // today 117 / 117 (the File and the Image column's sizes are one read each, of the one table that has them)
   verify: { reads: 85, requests: 85 }, // today 74 / 74

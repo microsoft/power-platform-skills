@@ -73,6 +73,10 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
         app.componentstate = 0;
         appVersion += 1;
       }
+      for (const [, id] of String(body.ParameterXml).matchAll(/<webresource>([^<]+)<\/webresource>/g)) {
+        const row = resources.get(id.toLowerCase());
+        if (row) row.publishedContent = row.content;
+      }
       return fake.httpClient.post(url, body, options);
     }
     if (method === 'GET' && /^\/appmodulecomponents/.test(p)) {
@@ -93,19 +97,29 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
     //   POST  /webresourceset                       { name, content, … }  ->  204, OData-EntityId: <API>/webresourceset(<id>)
     //   PATCH /webresourceset(<id>)                 { content }           ->  204
     //   GET   /webresourceset?$select=webresourceid,content&$filter=name eq '<name>'&$top=1
+    //   GET   /webresourceset(<id>)?$select=content                        (the SDK's read-back of what it published)
+    // A web resource has two layers, as the platform holds it: a POST or PATCH writes the SAVED content (`content`), a PublishXml that
+    // names the row (`<webresources><webresource><id></webresource></webresources>`) copies it to the PUBLISHED layer (`publishedContent`),
+    // and every plain read — by name or by id — answers the published content. A row no publish has named is in no plain read, as for the
+    // views, forms and charts above (assumed: the plain read of a never-published web resource is not measured; the SDK's create publishes).
     let m;
+    const publishedRow = ({ publishedContent, ...row }) => ({ ...row, content: publishedContent });
     if (method === 'POST' && /^\/webresourceset(\?|$)/.test(p)) {
-      const id = body.webresourceid || randomUUID();
+      const id = (body.webresourceid || randomUUID()).toLowerCase();
       resources.set(id, { ...body, webresourceid: id });
       return { status: 204, headers: { 'odata-entityid': `${ORIGIN}/api/data/v9.0/webresourceset(${id})` }, body: null };
     }
-    if (method === 'PATCH' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)/i.exec(p)) && resources.has(m[1])) {
-      Object.assign(resources.get(m[1]), body);
+    if (method === 'PATCH' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)/i.exec(p)) && resources.has(m[1].toLowerCase())) {
+      Object.assign(resources.get(m[1].toLowerCase()), body);
       return { status: 204, headers: {}, body: null };
+    }
+    if (method === 'GET' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)\?\$select=content$/i.exec(p))) {
+      const row = resources.get(m[1].toLowerCase());
+      return row && row.publishedContent !== undefined ? response({ webresourceid: row.webresourceid, content: row.publishedContent }) : { status: 404, headers: {}, body: { error: { message: 'Does Not Exist' } } };
     }
     if (method === 'GET' && /^\/webresources(et)?\?/.test(p)) {
       const named = /name eq '([^']+)'/.exec(p);
-      const stored = named ? [...resources.values()].filter((row) => row.name === named[1]) : [];
+      const stored = named ? [...resources.values()].filter((row) => row.name === named[1] && row.publishedContent !== undefined).map(publishedRow) : [];
       return rows(stored.length ? stored : p.includes('_icon') ? [{ webresourceid: ICON_ID }] : []);
     }
     // The environment's generative pages, plain or in the saved layer: every page of the list, whatever the filter asks (a test that needs a narrower answer intercepts).

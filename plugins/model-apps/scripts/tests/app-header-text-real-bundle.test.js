@@ -43,6 +43,7 @@ const APP_UNIQUE = 'new_probeapp';
 const APP_IDUNIQUE = '33333333-3333-3333-3333-333333333333';
 const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
 const SITEMAP_ID = '55555555-5555-5555-5555-555555555555';
+const ICON_ID = '77777777-7777-4777-8777-777777777777';
 const SITEMAP_XML = '<SiteMap IntroducedVersion="7.0.0.0"><Area Id="area_0" ShowGroups="true"><Titles><Title LCID="1033" Title="Main" /></Titles>'
   + '<Group Id="group_0_0"><Titles><Title LCID="1033" Title="Main" /></Titles>'
   + '<SubArea Id="sub_0_0_0" Entity="new_torder" Client="All" Sku="All"><Titles><Title LCID="1033" Title="Orders" /></Titles></SubArea>'
@@ -65,8 +66,19 @@ async function freshSdk({ name = 'Probe', description = 'Tickets', headerStatus 
   const state = { name, description, headerStatus, etag: 'W/"1"', ai: undefined, refused: [], fault: null };
   const appRow = () => ({ appmoduleid: APP_ID, appmoduleidunique: APP_IDUNIQUE, name: state.name, uniquename: APP_UNIQUE, description: state.description, componentstate: 0, ...(state.ai !== undefined ? { aiappdescription: state.ai } : {}), '@odata.etag': state.etag });
   const sitemapRow = () => ({ sitemapid: SITEMAP_ID, sitemapnameunique: APP_UNIQUE, sitemapxml: SITEMAP_XML, '@odata.etag': state.etag });
+  // The web resource a first build creates (the generated app icon) is held in two layers, as the platform holds it: the POST writes the
+  // SAVED content, a PublishXml that names the row (`<webresources><webresource>{id}</webresource></webresources>`) copies it to the
+  // PUBLISHED layer, and the plain read by id — the read-back the SDK makes after its publish, `GET /webresourceset({id})?$select=content`
+  // — answers the published content. A row no publish has named answers 404 here (assumed: the plain read of a never-published web resource
+  // is not measured; the build's own create always publishes).
+  const webResources = new Map();
   const httpClient = {
     get: async (url) => {
+      const wr = /\/webresourceset\(([0-9a-f-]{36})\)\?\$select=content$/i.exec(String(url));
+      if (wr) {
+        const row = webResources.get(wr[1].toLowerCase());
+        return row && row.published !== undefined ? { status: 200, headers: {}, body: { webresourceid: wr[1], content: row.published } } : { status: 404, headers: {}, body: { error: { message: 'Does Not Exist' } } };
+      }
       // The SDK's own comparison read of the header: the one read of the app module row that selects the routing description, made inside its push of an app.
       const fault = state.fault;
       if (fault && fault.armed && fault.reads.length === 0 && /\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/i.test(url) && /aiappdescription/.test(url)) {
@@ -93,7 +105,20 @@ async function freshSdk({ name = 'Probe', description = 'Tickets', headerStatus 
       }
       return { status: 200, headers: {}, body: { value: [] } };
     },
-    post: async (url, body) => { writes.push({ verb: 'post', url: String(url), body }); return { status: 204, headers: { 'odata-entityid': `https://x/y(${APP_ID})` }, body: {} }; },
+    post: async (url, body) => {
+      writes.push({ verb: 'post', url: String(url), body });
+      if (/\/webresourceset$/.test(String(url))) {
+        webResources.set(ICON_ID, { saved: body.content });
+        return { status: 204, headers: { 'odata-entityid': `https://contoso.crm.dynamics.com/api/data/v9.2/webresourceset(${ICON_ID})` }, body: {} };
+      }
+      if (/\/PublishXml$/.test(String(url))) {
+        for (const [, id] of String((body && body.ParameterXml) || '').matchAll(/<webresource>([^<]+)<\/webresource>/g)) {
+          const row = webResources.get(id.toLowerCase());
+          if (row) row.published = row.saved;
+        }
+      }
+      return { status: 204, headers: { 'odata-entityid': `https://x/y(${APP_ID})` }, body: {} };
+    },
     patch: async (url, body, options) => {
       const ifMatch = (options && options.headers && options.headers['If-Match']) || null;
       writes.push({ verb: 'patch', url: String(url), body, ifMatch });
