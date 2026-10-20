@@ -24,6 +24,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { KIND_HANDLERS, deleteStep, runTeardown } = require('../lib/sdk-teardown.js');
+const { appSitemapLinkRows } = require('./helpers/app-sitemap-link-rows.js');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const ENV = 'https://contoso.crm.dynamics.com';
@@ -90,6 +91,11 @@ function appOrg(script) {
     }
     const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(where);
     if (meta) return json(200, { LogicalName: meta[1], EntitySetName: `${meta[1]}s` });
+    const linked = appSitemapLinkRows(url, {
+      apps: [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE_ID, componentstate: 0 }],
+      components: [{ _appmoduleidunique_value: APP_UNIQUE_ID, objectid: SITEMAP_ID, componenttype: 62 }],
+    });
+    if (linked !== undefined) return json(200, { value: linked });
     if (/\/appmodules\([^)]+\)/.test(where)) return json(200, { appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE_ID, uniquename: APP_UNIQUE, name: 'Support Desk', '@odata.etag': 'W/"1001"' }, { etag: 'W/"1001"' });
     if (/\/sitemaps\([^)]+\)/.test(where)) return json(200, { '@odata.etag': 'W/"2002"', sitemapid: SITEMAP_ID }, { etag: 'W/"2002"' });
     if (where.includes('/sitemaps')) return json(200, { value: [{ '@odata.etag': 'W/"2003"', sitemapid: SITEMAP_ID, sitemapnameunique: APP_UNIQUE, sitemapxml: '<SiteMap></SiteMap>' }] });

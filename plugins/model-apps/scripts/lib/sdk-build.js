@@ -1264,7 +1264,8 @@ async function persistPageManifest(provision, spec, keyToId, sol, appUnique, exi
 
 // Add the app's sitemap (componenttype 62) to the solution. Adding the app module alone leaves the
 // sitemap only in the Default solution, so the app's own solution is incomplete on export. Resolve
-// the sitemap by its unique name (== the app's unique name) and add it. Best-effort + idempotent:
+// it by the naming convention of SDK-created apps (the app's unique name). This additive lookup is
+// not an ownership proof for a renamed or externally created sitemap. Best-effort + idempotent:
 // a re-add of an already-present component is tolerated so this never fails an otherwise-good build.
 async function ensureSitemapInSolution(provision, sol, appUnique, solutionMembers) {
   try {

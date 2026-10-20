@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 // The migration's pure intent helpers, used to drive the generic surface in the CONTRACT tests below.
 const { formEventsRegionIntent, findFieldCellPointer } = require('../lib/artifact-intent.js');
+const { appSitemapLinkRows } = require('./helpers/app-sitemap-link-rows.js');
 
 // Every app the PLUGIN creates carries an icon: `ensureAppIcon` (sdk-build.js) resolves the author's
 // `spec.app.icon` or generates an SVG web resource, and `appDef` passes its id as
@@ -353,8 +354,13 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
         const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x';
         return { status: 200, headers: {}, body: { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln } };
       }
-      // The app row supplies the uniquename the sitemap is linked by + the ETag the conditional
-      // delete is issued against; both are mandatory now (the SDK refuses to guess).
+      const linked = appSitemapLinkRows(url, {
+        apps: [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE, componentstate: 0 }],
+        components: [{ _appmoduleidunique_value: APP_UNIQUE, objectid: SITEMAP_ID, componenttype: 62 }],
+      });
+      if (linked !== undefined) return { status: 200, headers: {}, body: { value: linked } };
+      // The by-id app row supplies the conditional delete's ETag; the current layer above supplies
+      // the actual type-62 sitemap identity. Neither can be guessed from a matching name.
       if (/\/appmodules\([^)]+\)/.test(url)) {
         return { status: 200, headers: {}, body: { '@odata.etag': 'W/"1"', appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE, uniquename: 'new_cascadeapp', name: 'Cascade App' } };
       }

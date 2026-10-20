@@ -1103,11 +1103,9 @@ const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolv
 const { OBJECT_DIVISION_PAGE, LONG_KEY, lookBehindPage } = require('./helpers/misread-page.js');
 
 test('runDownload translates a fail-closed app read into a graceful error, not a raw SDK throw', async () => {
-  // `fetchArtifact('app')` fails closed (`APP_SITEMAP_UNRESOLVED`) rather than hand back an app whose
-  // navigation is untrustworthy. The sitemap IS this function's membership oracle, so that is a
-  // LOGICAL failure of the class its contract says it RETURNS rather than throws — otherwise the CLI
-  // surfaces an opaque SDK error for the very ordinary case of an unpublished app.
-  for (const code of ['APP_SITEMAP_UNRESOLVED', 'APP_UPDATE_NO_ETAG']) {
+  // An unresolved or shared sitemap is not a partial download: none of its navigation can be trusted
+  // as this app's membership. Preserve that refusal as a logical error before reading or writing pages.
+  for (const code of ['APP_SITEMAP_UNRESOLVED', 'APP_SITEMAP_SHARED', 'APP_UPDATE_NO_ETAG']) {
     const err = new Error('app sitemap could not be resolved');
     err.code = code;
     const sdk = { fetchArtifact: async () => { throw err; } };
@@ -1120,7 +1118,7 @@ test('runDownload translates a fail-closed app read into a graceful error, not a
 });
 
 test('runDownload still propagates a genuinely unexpected error (no blanket swallow)', async () => {
-  // Only the two fail-closed read codes are translated. An unexpected I/O error must keep propagating
+  // Only the fail-closed read codes are translated. An unexpected I/O error must keep propagating
   // to main().catch, or a real defect would be reported as an ordinary "download failed".
   const err = new Error('EACCES: permission denied');
   err.code = 'EACCES';

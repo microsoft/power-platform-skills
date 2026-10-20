@@ -200,11 +200,11 @@ const TEARDOWN_WRITES = {
 // Reads per phase: a ceiling about a tenth above what each phase reads today, so a read that starts being made once per row fails
 // here. HTTP requests (reads, writes and change sets) likewise.
 const BUDGET = {
-  build: { reads: 335, requests: 430 }, // today 306 / 396: the SDK reads each web resource it writes back once it has published it (4 here)
-  rebuild: { reads: 295, requests: 320 }, // today 268 / 289
-  download: { reads: 130, requests: 130 }, // today 117 / 117 (the File and the Image column's sizes are one read each, of the one table that has them)
+  build: { reads: 335, requests: 430 }, // today 320 / 410: +18 current-layer/component proofs replace 4 name lookups; published web resources are still read back (4)
+  rebuild: { reads: 318, requests: 343 }, // today 303 / 324: +30 current-layer/component proofs replace 7 name lookups; both ceilings rise by the net 23, preserving headroom and identical writes
+  download: { reads: 130, requests: 130 }, // today 120 / 120: +4 current-layer/component proofs replace 1 name lookup (File/Image sizes still cost one read each)
   verify: { reads: 85, requests: 85 }, // today 74 / 74
-  teardown: { reads: 95, requests: 135 }, // today 86 / 122
+  teardown: { reads: 95, requests: 135 }, // today 91 / 127: +4 current-layer/component proofs and 2 reverse-owner reads replace 1 name lookup; identical deletes
 };
 
 // What verify checks, by kind: a kind that stops being checked (or is checked fewer times) fails here even though verify still passes.

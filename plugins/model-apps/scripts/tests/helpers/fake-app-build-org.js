@@ -26,6 +26,7 @@
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { createFakeDataverse } = require('./fake-dataverse.js');
+const { appSitemapLinkRows } = require('./app-sitemap-link-rows.js');
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const LAYER_ID = '11111111-0000-4000-8000-000000000002';
@@ -63,6 +64,13 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
     calls.push(recorded);
     const overridden = overrides.find((o) => o.match(recorded));
     if (overridden) return overridden.answer(recorded);
+    if (method === 'GET') {
+      const linked = appSitemapLinkRows(url, {
+        apps: app ? [{ ...app, appmoduleidunique: LAYER_ID }] : [],
+        components: components.map((c) => ({ ...c, _appmoduleidunique_value: LAYER_ID })),
+      });
+      if (linked !== undefined) return rows(linked);
+    }
     if (method === 'POST' && p === '/PublishXml') {
       if (refusal && /<entities>/.test(body.ParameterXml)) {
         const status = refusal;

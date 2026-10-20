@@ -174,17 +174,23 @@ test('REAL BUNDLE + REAL CLIENT: the change set the SDK itself renders (createCo
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const DELETE_APP_UNIQUE_ID = '22222222-2222-2222-2222-222222222222';
 const DELETE_SITEMAP_ID = '33333333-3333-3333-3333-333333333333';
+const { appSitemapLinkRows } = require('./helpers/app-sitemap-link-rows.js');
 async function deleteAppOver(sdkModule) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-header-transport-'));
   tempDirs.push(dir);
   const wire = [];
-  const appRow = { appmoduleid: APP, appmoduleidunique: DELETE_APP_UNIQUE_ID, uniquename: 'co_supportdesk', name: 'Support Desk', '@odata.etag': 'W/"1001"' };
+  const appRow = { appmoduleid: APP, appmoduleidunique: DELETE_APP_UNIQUE_ID, componentstate: 0, uniquename: 'co_supportdesk', name: 'Support Desk', '@odata.etag': 'W/"1001"' };
   const sitemapRow = { '@odata.etag': 'W/"2003"', sitemapid: DELETE_SITEMAP_ID, sitemapnameunique: 'co_supportdesk', sitemapxml: '<SiteMap></SiteMap>' };
   const ok = (body, headers = {}) => ({ statusCode: 200, headers, body: JSON.stringify(body) });
   const request = async (req) => {
     wire.push(req);
     const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(req.url);
     if (meta) return ok({ LogicalName: meta[1], EntitySetName: `${meta[1]}s` });
+    const linked = appSitemapLinkRows(req.url, {
+      apps: [appRow],
+      components: [{ _appmoduleidunique_value: DELETE_APP_UNIQUE_ID, objectid: DELETE_SITEMAP_ID, componenttype: 62 }],
+    });
+    if (linked !== undefined) return ok({ value: linked });
     if (/\/\$batch$/.test(req.url)) return changeSetAnswer(req);
     if (/\/appmodules\([^)]+\)/.test(req.url)) return ok(appRow);
     if (/\/sitemaps\([^)]+\)/.test(req.url)) return ok({ sitemapid: DELETE_SITEMAP_ID }, { etag: 'W/"2002"' });

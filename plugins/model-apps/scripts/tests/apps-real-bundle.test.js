@@ -568,6 +568,49 @@ test('REAL BUNDLE: a rollback the platform refuses keeps both rows, and the outp
   assert.deepStrictEqual([result.published, result.unpublishedChanges, result.addedToSolution, result.inSolution], [false, true, false, []]);
 });
 
+for (const wholeChangeSet of [true, false]) {
+  test(`REAL BUNDLE: a customization lock ${wholeChangeSet ? 'refusing the rollback whole' : 'interrupting its answer'} keeps the SDK's honest advice, without replay`, async () => {
+    const lock = { code: '0x80071151', message: 'Cannot start the requested operation because there is another EntityCustomization running at this moment.' };
+    const org = orgWithPages({
+      answer: (req) => {
+        if (req.path === '/AddAppComponents') return json(400, { error: { message: 'component refused' } });
+        if (req.path !== '/$batch') return undefined;
+        if (!wholeChangeSet) return json(429, { error: lock });
+        // Only a failed operation is returned when an atomic change set is refused. The lock code
+        // must be on that operation, not just in the outer envelope, to prove nothing was deleted.
+        return {
+          statusCode: 200, headers: { 'content-type': 'multipart/mixed; boundary=br' },
+          body: [
+            '--br', 'Content-Type: multipart/mixed; boundary=csr', '',
+            '--csr', 'Content-Type: application/http', 'Content-ID: 1', '',
+            'HTTP/1.1 429 Too Many Requests', 'Content-Type: application/json', '',
+            JSON.stringify({ error: lock }), '--csr--', '--br--', '',
+          ].join('\r\n'),
+        };
+      },
+    });
+    const result = await createApp(args({ publish: true }), client(org), seams);
+    assert.deepStrictEqual([result.ok, result.stage, result.written, result.left, result.published, result.unpublishedChanges],
+      [false, 'create', true, { app: true, sitemap: true }, false, true]);
+    if (wholeChangeSet) {
+      assert.match(result.error, /KEPT — its rollback deleted nothing, because the environment's customization lock refused it/);
+      assert.match(result.error, /Once the lock frees .*check that the rows exist and are this create's own before removing them/);
+    } else {
+      // postRaw preserves response TEXT, including a JSON error outside a change set. The SDK cannot
+      // prove that answer refused an atomic rollback: keep its unknown verdict and cause, not KEPT.
+      assert.match(result.error, /could not be confirmed, because its delete was sent but its outcome is unknown/);
+      assert.match(result.error, /0x80071151.*EntityCustomization/);
+      assert.match(result.error, /once you have confirmed the rows are this create's own/);
+      assert.doesNotMatch(result.error, /KEPT|rollback deleted nothing/);
+    }
+    assert.strictEqual(result.appId, org.state.apps[0].appmoduleid);
+    assert.strictEqual(result.sitemapId, org.state.sitemaps[0].sitemapid);
+    assert.strictEqual(org.requests.filter((r) => r.path === '/PublishXml').length, 0, 'the component failure happened before publication');
+    assert.strictEqual(org.requests.filter((r) => r.path === '/$batch').length, 1, 'rollback has an unguarded app delete, so neither layer may replay it');
+    assert.deepStrictEqual(org.unexpected, []);
+  });
+}
+
 // The SDK cannot tell whether a change set whose answer it never read was applied, and says so. The output does not have to guess: it reads the platform.
 test('REAL BUNDLE: a rollback whose answer is lost is "unconfirmed" to the SDK, and the output reads which it was — rows gone, or rows kept', async () => {
   for (const applied of [true, false]) {

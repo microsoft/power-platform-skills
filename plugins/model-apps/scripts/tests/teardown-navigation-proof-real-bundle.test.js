@@ -26,6 +26,7 @@ const { runTeardown } = require('../lib/sdk-teardown.js');
 const { manifestResourceName } = require('../lib/page-manifest.js');
 const { createFakeAppsOrg, json } = require('./helpers/fake-apps-org.js');
 const { assertGolden } = require('./helpers/golden.js');
+const { appSitemapLinkRows } = require('./helpers/app-sitemap-link-rows.js');
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const PAGE_A = '11111111-1111-4111-8111-111111111111';
@@ -67,8 +68,15 @@ async function world(t, { xml = navigation(entry(PAGE_A), entry(PAGE_B)), sitema
         const first = org.state.sitemaps.find((row) => !id || row.sitemapid.toLowerCase() === id.toLowerCase());
         return json(200, { value: first ? [first] : [] });
       }
-      // The app's sitemap, as a component of its layer: GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <layer key> and componenttype eq 62&$top=1
-      if (req.method === 'GET' && req.path.startsWith('/appmodulecomponents')) return json(200, { value: componentLinked ? [{ objectid: SITEMAP, componenttype: 62 }] : [] });
+      if (req.method === 'GET') {
+        // The SDK reads this link in both directions: the reverse projection needs the layer id,
+        // not the objectid returned by the plugin's forward navigation lookup.
+        const linked = appSitemapLinkRows(`${ORIGIN}/api/data/v9.0${req.path}`, {
+          apps: org.state.apps,
+          components: componentLinked ? [{ _appmoduleidunique_value: LAYER, objectid: SITEMAP, componenttype: 62 }] : [],
+        });
+        if (linked !== undefined) return json(200, { value: linked });
+      }
       if (req.method === 'GET' && req.path.startsWith('/webresourceset')) {
         const name = (/name eq '([^']+)'/.exec(req.path) || [])[1];
         if (name === manifestResourceName(APP_NAME)) return json(200, { value: [{ webresourceid: MANIFEST_ID, name, content: manifest }] });
@@ -382,20 +390,20 @@ for (const [route, setup] of PROOF_ROUTES) {
   }
 }
 
-// A published app costs exactly what it cost before: the same reads, in the same order, and the same writes — its sitemap is read in the published layer, and in the saved layer only for a page the published one does not
-// name, and a saved layer that cannot be read is tried again by the client and then reported. The three sequences are in golden/teardown-published-requests.txt (one section each, `METHOD path`, a `$batch` change set
-// taken apart). They were recorded from the teardown as it ran before the proof of a page was changed to read the entries of the navigation, so an extra look, or a lookup that is not needed, makes this fail. A teardown of
-// an app that was never published is the one that grew a read: its saved layer.
+// The SDK's delete now proves the current layer/component twice and reads the sitemap's reverse owner
+// plus that owner's current app: six reads replace one name lookup, net +5. The plugin's published/saved
+// navigation proof and every write stay unchanged. A refused saved-layer proof still stops before the
+// SDK delete and gains no reads. Pin all three sequences, not just a larger request ceiling.
 const requestLog = (org) => org.requests.map((r) => (r.operations ? `${r.method} ${r.path} [${r.operations.map((op) => `${op.method} ${op.path}`).join(', ')}]` : `${r.method} ${r.path}`));
 const REFUSED_SAVED_LAYER = (req) => (req.method === 'GET' && req.path.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')
   ? json(503, { error: { message: 'Offline refusal' } }) : null);
 const PUBLISHED_SCENARIOS = [
-  ['its published navigation names both pages', { published: true }, { requests: 32, ok: true }],
-  ['its published navigation names one page and its saved navigation, which is read for the other, names both', { published: true, xml: navigation(entry(PAGE_A)), answer: savedLayer(navigation(entry(PAGE_A), entry(PAGE_B))) }, { requests: 36, ok: true }],
+  ['its published navigation names both pages', { published: true }, { requests: 37, ok: true }],
+  ['its published navigation names one page and its saved navigation, which is read for the other, names both', { published: true, xml: navigation(entry(PAGE_A)), answer: savedLayer(navigation(entry(PAGE_A), entry(PAGE_B))) }, { requests: 41, ok: true }],
   ['its published navigation names one page and its saved navigation cannot be read', { published: true, xml: navigation(entry(PAGE_A)), answer: REFUSED_SAVED_LAYER }, { requests: 18, ok: false }],
 ];
 
-test('REAL BUNDLE: the requests a teardown of a published app makes — the reads of its sitemap in both layers, and every write — are exactly the ones it made before', async (t) => {
+test('REAL BUNDLE: published teardown pins the SDK identity proofs, unchanged navigation reads and every conditional write', async (t) => {
   const sections = [];
   for (const [what, options, expected] of PUBLISHED_SCENARIOS) {
     const w = await world(t, options);

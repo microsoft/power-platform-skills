@@ -21,6 +21,7 @@ const { runTeardown } = require('../lib/sdk-teardown.js');
 const { manifestResourceName } = require('../lib/page-manifest.js');
 const { createApp } = require('../apps.js');
 const { createFakeAppsOrg, json } = require('./helpers/fake-apps-org.js');
+const { appSitemapLinkRows } = require('./helpers/app-sitemap-link-rows.js');
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const PAGE_A = '0f8fad5b-d9cb-469f-a165-70867728950e'; // in the app's navigation, published
@@ -46,8 +47,15 @@ async function scenario(t, { publish = false, refuse = () => null, inNavigation 
     answer: (req) => {
       const refused = armed ? refuse(req) : null;
       if (refused) return refused;
-      // The app's sitemap, as a component of its layer: GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <layer key> and componenttype eq 62&$top=1
-      if (req.method === 'GET' && req.path.startsWith('/appmodulecomponents')) return json(200, { value: [{ objectid: made.sitemapId, componenttype: 62 }] });
+      if (req.method === 'GET') {
+        // After create, model the actual pin on this app's layer for both the forward lookup and
+        // the SDK's reverse-owner proof. Unrelated component reads are not answered here.
+        const linked = appSitemapLinkRows(`${ORIGIN}/api/data/v9.0${req.path}`, {
+          apps: org.state.apps,
+          components: made.sitemapId ? [{ _appmoduleidunique_value: LAYER, objectid: made.sitemapId, componenttype: 62 }] : [],
+        });
+        if (linked !== undefined) return json(200, { value: linked });
+      }
       if (req.method === 'GET' && req.path.startsWith('/webresourceset')) {
         const name = (/name eq '([^']+)'/.exec(req.path) || [])[1];
         if (name === manifestResourceName(made.uniqueName)) return json(200, { value: [{ webresourceid: MANIFEST_ID, name, content: manifest() }] });

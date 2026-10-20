@@ -1,13 +1,13 @@
 {
-  "commit": "3c07f6c53fdcb341c0e622d995ef3c9a57dcb2ea",
+  "commit": "a3443479b88ec538be2e74293fa92230c4ef1aab",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-10-20T15:02:54.938Z",
-  "newestSrcAt": "2026-10-20T14:57:32.881Z",
+  "libBuiltAt": "2026-10-20T20:18:04.982Z",
+  "newestSrcAt": "2026-10-20T19:21:12.668Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
-  "nodeVersion": "v20.20.2",
-  "builtAt": "2026-10-20T15:07:03.018Z",
-  "bundleSha256": "ea9920a6a4c5417010f76310e8c8a93fdd3c6db0ac8db34a880092c369dff9fd",
-  "bundleBytes": 1023703
+  "nodeVersion": "v24.21.0",
+  "builtAt": "2026-10-20T20:20:30.581Z",
+  "bundleSha256": "eebd70a2a7f6e12e45d18744640fd803479a738bc936b8e0dce1a9f97a0a4f8c",
+  "bundleBytes": 1029451
 }

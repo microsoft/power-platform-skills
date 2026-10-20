@@ -523,8 +523,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   no published layer, so whatever it holds is saved only. That list is fail-closed like the others: a read that fails halts as
   `pages-shared-check-failed`, and a never-published app whose layer, sitemap component or saved sitemap cannot be read is listed
   unreadable. A never-published app whose component read **succeeds** and finds **no sitemap component** is not yet shown to have no navigation: the
-  vendored SDK links an app to its sitemap **by name** — it looks the sitemap up with `sitemapnameunique eq '<the app's unique name>'` and takes one for the app only
-  while that column holds the app's name, and `ensureSitemapInSolution` (sdk-build.js) resolves it the same way — so such an app may hold a sitemap, and pages in it, that no component row links to it.
+  vendored SDK prefers a type-62 sitemap component on the app's **current** `appmoduleidunique` layer, but falls back to
+  `sitemapnameunique eq '<the app's unique name>'` when that component is absent and no other live app pins the candidate. So such an app may
+  hold a sitemap, and pages in it, that no component row links to it. `ensureSitemapInSolution` (sdk-build.js) still uses the naming convention
+  of SDK-created apps for its best-effort, additive solution membership; it is not an ownership or deletion proof.
   The saved-layer read the scan makes anyway (it asks for `sitemapnameunique` too — no further request) shows whether it does: a sitemap of that name is joined
   like any draft app's (case-insensitively, as Dataverse compares names), several sitemaps of the name leave the app unreadable, and **none** means the app has no
   navigation at all and holds no page, so it is skipped — one draft app saved with only a name must not stop every page update in the environment (a read that
@@ -1392,13 +1394,19 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   never published answers 404 without it; measured live, the platform DELETED such a row, so the read-back is insurance against an answer it has not been seen to give.
   Form-only page references are not scanned.
   **An app is TWO rows** — an `appmodule` AND a `sitemaps`
-  row, with no lookup between them and no server-side cascade; the only link is
-  `sitemap.sitemapnameunique === appmodule.uniquename`. Deleting only the appmodule strands the sitemap
+  row, with no server-side cascade. The sitemap is linked by a type-62 `appmodulecomponent` on the app's **current**
+  `appmoduleidunique` layer, not necessarily by equal unique names (first-party and renamed sitemaps may have different names).
+  Only an app with no sitemap component permits a same-name fallback, and only when no other live app's current layer pins that candidate.
+  Deleting only the appmodule strands the sitemap
   forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
   a later build of an app with the same name fails with *"The name &lt;x&gt; is already in use by an
   existing site map"*, which the maker cannot act on. `deleteAppCascade` therefore resolves the sitemap
-  BEFORE deleting the app, deletes both rows in **one atomic OData `$batch`**, and **fails closed** — any
-  delete it cannot prove is rejected rather than guessed. Each row's delete is conditioned on its
+  BEFORE deleting the app, rechecks the current link after reading it, deletes both rows in **one atomic OData `$batch`**, and **fails closed**.
+  Missing, malformed, ambiguous or changed identity refuses as `APP_SITEMAP_UNRESOLVED`; a sitemap another live app currently pins refuses
+  deletion as `APP_SITEMAP_SHARED`. Fetch/push also refuse a shared same-name fallback rather than adopting another app's navigation, and
+  download returns the refusal with `ok:false` before writing output. A copy whose app was re-linked must be fetched again before pushing edits.
+  The reverse-owner check is a snapshot, not a cross-app lock: another app adding a pin afterwards moves neither row token, so this does not
+  promise to prevent that race. Each row's delete is conditioned on its
   **row** token from a by-id read, not the unpublished-aware read's content token, which runs ahead
   of the row while a sitemap edit is unpublished (that made such an app impossible to tear down —
   412 every time). This is why
@@ -1409,6 +1417,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   The SDK re-sends an app delete itself when the platform's search-index insert race refuses it (HTTP
   400, SQL 547) — an answer this client never re-sends — so the two layers add and never multiply
   (counts pinned in `scripts/tests/sdk-resend-layers.test.js`).
+  An app-create rollback preserves the SDK's distinction between **KEPT** (a whole atomic change set was refused by the customization lock
+  and deleted nothing) and **unconfirmed** (its answer cannot prove what happened). Its advice is surfaced unchanged: verify that the rows
+  are this create's own before removing them; a raw outer 429 remains unconfirmed and retains its lock error, rather than proving KEPT.
+  Neither `PublishXml` nor an unguarded rollback is re-sent.
   Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
   drives a mock and would stay green through a regression here. The teardown of an app that was created and never

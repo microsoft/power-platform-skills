@@ -2486,18 +2486,15 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
   assertSafeOutputDir(outDir);
-  // `fetchArtifact('app')` FAILS CLOSED when the app's sitemap cannot be resolved, read, or proven to
-  // still belong to this app (SDK code `APP_SITEMAP_UNRESOLVED`) — rather than returning an app whose
-  // navigation is untrustworthy. That is a LOGICAL failure of exactly the class this function's
-  // contract says it returns rather than throws (the sitemap IS the download's membership oracle), so
-  // translate it instead of letting a raw SDK error escape. A newly created app is the common cause:
-  // an unpublished appmodule is not readable, so the caller's fix is to publish it and retry.
+  // The sitemap is the download's membership oracle. An unresolved or shared identity is a logical
+  // refusal, not a partial app: return it before reading pages or writing output. Saved-only apps are
+  // readable when the SDK can prove their current layer and sitemap; publishing is not a blanket fix.
   let app;
   try {
     app = await sdk.fetchArtifact('app', appId);
   } catch (e) {
     const code = e && e.code;
-    if (code === 'APP_SITEMAP_UNRESOLVED' || code === 'APP_UPDATE_NO_ETAG') {
+    if (code === 'APP_SITEMAP_UNRESOLVED' || code === 'APP_SITEMAP_SHARED' || code === 'APP_UPDATE_NO_ETAG') {
       return { ok: false, error: `cannot read app ${appId}: ${(e && e.message) || code}` };
     }
     throw e;
