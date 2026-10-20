@@ -1193,8 +1193,16 @@ as a date, waited whole; the time an import the platform accepted then takes is 
 says so in its output (`importAttempts`, `importRefusals`, and for `0x80071151` how the job proved it). A
 `Retry-After` that does not fit in what is left of the five minutes ends the retry at once, with no send made
 early, and a wait that ends after the five minutes (a timer that resumed late) ends it before the next send.
-When the sends or the time run out the failure is the platform's refusal, with a sentence that says
-which: run the import again when the other operation has finished. When the job of a `0x80071151` refusal
+When the time runs out, or the sends run out on a lock code, the failure is the platform's refusal, with a
+sentence that says which: run the import again when the other operation has finished. When the sends run out
+on a `0x80071151` refusal, the job of that last send was not read, so nothing shows that it applied nothing:
+do not run the import again until you have looked up the import job the failure names (`importjobs(<id>)`)
+and it does not exist (404), or it is finished (`completedon` set) and its log (`data`) is that of an import
+refused at the lock — the root says `succeeded="failure"` and `errorcode="-2147020463"`, every
+`solutionManifest` is `processed="false"`, and no element under the root but `upgradeHandler` and
+`validateHandler` has a `processed` other than `"false"` — and the other operation has finished; anything
+else means the import may be running or may have applied the package.
+When the job of a `0x80071151` refusal
 proves nothing — it is still running, the import failed after it began, its log is not what is expected, or it
 cannot be read — the import is sent once and the failure says why it was not sent again: do not run the import
 again until you have looked up the import job it names (`importjobs(<id>)`, or the solution history in Maker)

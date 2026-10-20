@@ -2090,9 +2090,10 @@ function refusedImport({ sends, job, observing = true, http = {} }) {
   const told = [];
   const stopped = [];
   const unproven = [];
-  const listeners = { onImportRefused: (event) => told.push(event), onImportRetryStopped: (event) => stopped.push(event), onImportRetryUnproven: (event) => unproven.push(event) };
+  const exhausted = [];
+  const listeners = { onImportRefused: (event) => told.push(event), onImportRetryStopped: (event) => stopped.push(event), onImportRetryUnproven: (event) => unproven.push(event), onImportRetryExhausted: (event) => exhausted.push(event) };
   const client = ss.solutionHttpClient(ENV, { ...platform.http, ...http }, observing ? listeners : {});
-  return { ...platform, http: { ...platform.http, ...http }, client, told, stopped, unproven, post: () => client.post(`${ENV}/api/data/v9.0/ImportSolution`, importBody()) };
+  return { ...platform, http: { ...platform.http, ...http }, client, told, stopped, unproven, exhausted, post: () => client.post(`${ENV}/api/data/v9.0/ImportSolution`, importBody()) };
 }
 // The same, over a clock that only the waits move: `now` is what the client reads, a wait moves it by its length, and a read of the job moves it by `readMs` — so what the client spends is measured, as
 // it is when the waits are real. `sentAt` is when each send reached the platform, in milliseconds from the first. `lateMs` is how much later than asked each timer resumes (a timer that was delayed, a laptop
@@ -2315,6 +2316,7 @@ test('an import refused with 0x80071151 is sent FIVE times at most, on the lock 
   ]);
   assert.deepStrictEqual(world.told.map((event) => [event.importJobId, event.nextImportJobId, event.waitedMs, event.proof]), ids.slice(0, 4).map((id, i) => [id, ids[i + 1], [10000, 20000, 40000, 60000][i], 'job-absent']));
   assert.deepStrictEqual([world.stopped, world.unproven], [[], []], 'a refusal after the fifth send is the sends running out, not the time and not a job that proves nothing');
+  assert.deepStrictEqual(world.exhausted, [{ importJobId: ids[4], status: 429, code: '0x80071151' }], 'the listener is told which refusal the sends ran out on — the job it carried, which was not looked at');
 });
 
 // A refusal with 0x80071151 that asks, with Retry-After, to wait `seconds`.
@@ -2428,10 +2430,10 @@ test('import: a refusal with 0x80071151 that is sent again is reported — each 
       { importJobId: ids[1], status: 429, code: '0x80071151', waitedMs: 20000, proof: 'job-absent' },
     ],
   });
-  // The failure of a run that was refused at every send: the platform's own refusal, the count, and the sentence — word for word the one for the lock codes, with this code in it.
+  // The failure of a run that was refused at every send: the platform's own refusal, the count, and — for the last send, whose job was not looked at — what to look up before the import is run again.
   const refusedAlways = platformFor({ sends: Array.from({ length: 5 }, () => concurrencyAnswer()) });
   await assert.rejects(ss.runImport(importFiles().request, { http: refusedAlways.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
-    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message} ${RESENT_AS('0x80071151')(5, '10 s, 20 s, 40 s, 60 s')} It sends at most 5 times: run the import again when the other operation has finished.`);
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message} ${RESENT_AS('0x80071151')(5, '10 s, 20 s, 40 s, 60 s')} ${NOT_LOOKED_AT(refusedAlways.imports().map(jobIdOf)[4])}`);
     return true;
   });
 });
@@ -2453,7 +2455,7 @@ test('import: a refusal proven by the job\'s LOG is reported with the sentence t
   // All five sends refused, each proven by its log: the platform's refusal, the count, and how each was proven.
   const allLogs = platformFor({ sends: Array.from({ length: 5 }, () => concurrencyAnswer()), job: refused });
   await assert.rejects(ss.runImport(importFiles().request, { http: allLogs.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
-    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message} ${RESENT_BY_LOG(5, '10 s, 20 s, 40 s, 60 s')} It sends at most 5 times: run the import again when the other operation has finished.`);
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message} ${RESENT_BY_LOG(5, '10 s, 20 s, 40 s, 60 s')} ${NOT_LOOKED_AT(allLogs.imports().map(jobIdOf)[4])}`);
     assert.deepStrictEqual(err.importRefusals.map((refusal) => refusal.proof), Array(4).fill('job-refused-before-any-component'));
     return true;
   });
@@ -2469,6 +2471,11 @@ test('import: a refusal proven by the job\'s LOG is reported with the sentence t
 
 // What a refusal that is not sent again adds to its failure, word for word: why the job is no proof (`reason`), and what to do.
 const NOT_PROVEN = (reason, id = JOB) => `ImportSolution was not sent again: the platform refused it (HTTP 429, code 0x80071151: another operation held the environment's customization lock), but ${reason}, so it is not proven that the refused send applied nothing of the package. Look up import job ${id} (importjobs(${id}) in the Web API, or the solution history in Maker) and run the import again only when that shows nothing was imported and the other operation has finished.`;
+// What a refusal with 0x80071151 adds to the failure when it is the LAST send's — the sends ran out on it. Its job was not looked at (the four reads are for the refusals that can still be sent again, and their proofs
+// are of four other jobs), so nothing shows that the send applied nothing: the failure says what to look up first, by the rule that decided the sends before it, and never "run the import again" without it.
+const NOT_LOOKED_AT = (id = JOB) => `The last send was refused too (code 0x80071151), but this run sends the import 5 times at most and did not look at its import job, so it is not proven that it applied nothing of the package. Look up import job ${id} (importjobs(${id}) in the Web API, or the solution history in Maker) and run the import again only when that job does not exist (a 404), or is finished and its log says the import failed with that error before it processed the solution or any component, and the other operation has finished. Anything else means that the import may be running or may have applied the package: do not run it again.`;
+// What the advice said before, and still says for a lock code: the documented text of those codes says the operation could not be started.
+const RUN_AGAIN = 'It sends at most 5 times: run the import again when the other operation has finished.';
 const WHY = {
   unfinished: 'its import job is not finished (completedon is empty)',
   noLog: 'its import job has no log to read',
@@ -2522,6 +2529,116 @@ test('import: a refusal that is not proven after one that was sent again keeps t
   assert.strictEqual(platform.imports().length, 2);
 });
 
+// A job whose read answers 404 for each of the first four refused sends — each is proven, so each is waited out and sent again — and `last` for every read after them: the failure's own read of the LAST send's job.
+const lastJobAnswering = (last, proofs = 4) => {
+  let reads = 0;
+  return () => { reads += 1; return reads <= proofs ? NO_SUCH_JOB : last; };
+};
+
+test('import: when the sends run out on a refusal with 0x80071151 the failure never says "run the import again" outright, whatever the job of that last send is — it was not looked at, so the failure says what to look up first', async () => {
+  const answer = (statusCode, body = {}) => ({ statusCode, headers: {}, body: JSON.stringify(body) });
+  const cases = [
+    ['a job that is still running', jobAnswer(jobRow(LOGS.running(), { completed: false }))],
+    ['a job that applied the package', jobAnswer(jobRow(LOGS.succeeded()))],
+    ['a job that does not exist', NO_SUCH_JOB],
+    ['a read that is refused (403)', answer(403, { error: { message: 'principal user is missing prvReadImportJob privilege' } })],
+    ['a read that fails (503)', answer(503)],
+    ['a read that gets no answer', { error: 'Request timed out' }],
+  ];
+  for (const [what, last] of cases) {
+    const platform = platformFor({ sends: Array.from({ length: 6 }, () => concurrencyAnswer()), job: lastJobAnswering(last) }); // a sixth would be answered, too: it must never be asked
+    const { pac, calls } = fakePac(() => ({ status: 0, stdout: '', stderr: '' }));
+    await assert.rejects(ss.runImport(importFiles().request, { http: platform.http, sdkFirst: importingOver(), importJobId: JOB, pac }), (err) => {
+      const ids = platform.imports().map(jobIdOf);
+      assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message} ${RESENT_AS('0x80071151')(5, '10 s, 20 s, 40 s, 60 s')} ${NOT_LOOKED_AT(ids[4])}`, what);
+      assert.ok(!err.message.includes(RUN_AGAIN), `${what}: the advice that nothing has proven safe is not given`);
+      assert.deepStrictEqual([err.code, err.statusCode, err.importJobId, err.importAttempts], ['CONNECTION_ERROR', 429, ids[4], 5], what);
+      assert.deepStrictEqual(ss.describeFailure(err), { ok: false, error: err.message, code: 'CONNECTION_ERROR', status: 429, importJobId: ids[4], importAttempts: 5, importRefusals: err.importRefusals }, what);
+      return true;
+    }, what);
+    assert.strictEqual(platform.imports().length, 5, `${what}: five sends, and no sixth`);
+    assert.deepStrictEqual(platform.jobReads().map((r) => new URL(r.url).search), [...Array(4).fill(PROOF_READ), '?$select=data'], `${what}: the four proofs, then the one read of the last job's log that every failed import makes — never a fifth proof`);
+    assert.deepStrictEqual(platform.waits, [10000, 20000, 40000, 60000], what);
+    assert.strictEqual(calls.length, 0, `${what}: pac is not asked`);
+  }
+});
+
+test('import: the log of the last send\'s job is still quoted when it says why the import failed — and the advice is still to look that job up first, since the quotation is not the rule that proves it', async () => {
+  for (const [what, last, quoted] of [
+    ['an import that failed after it began', jobAnswer(jobRow(LOGS.failedAfterStart())), 'its status is The import failed.'],
+    ['an import refused at the lock, which is the shape the rule accepts', jobAnswer(jobRow(LOGS.refused())), `its status is ${REFUSAL_STATUS}`],
+  ]) {
+    const platform = platformFor({ sends: Array.from({ length: 5 }, () => concurrencyAnswer()), job: lastJobAnswering(last) });
+    await assert.rejects(ss.runImport(importFiles().request, { http: platform.http, sdkFirst: importingOver(), importJobId: JOB }), (err) => {
+      const ids = platform.imports().map(jobIdOf);
+      assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message} The import job's log (importjobs(${ids[4]})) says: ${quoted} ${RESENT_AS('0x80071151')(5, '10 s, 20 s, 40 s, 60 s')} ${NOT_LOOKED_AT(ids[4])}`, what);
+      return true;
+    }, what);
+  }
+});
+
+test('import: the sentence about the last send is the one for the KIND of refusal it was — a lock code says what it always said, 0x80071151 says what to look up — whichever kind the sends before it were', async () => {
+  const lockLast = platformFor({ sends: [...Array.from({ length: 4 }, () => concurrencyAnswer()), lockAnswer()] });
+  await assert.rejects(ss.runImport(importFiles().request, { http: lockLast.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${LOCK_REFUSAL.message} ${RESENT_AS('0x80071151')(5, '10 s, 20 s, 40 s, 60 s')} ${RUN_AGAIN}`);
+    return true;
+  });
+  const concurrencyLast = platformFor({ sends: [...Array.from({ length: 4 }, () => lockAnswer()), concurrencyAnswer()] });
+  await assert.rejects(ss.runImport(importFiles().request, { http: concurrencyLast.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message} ${RESENT(5, '10 s, 20 s, 40 s, 60 s')} ${NOT_LOOKED_AT(concurrencyLast.imports().map(jobIdOf)[4])}`);
+    return true;
+  });
+});
+
+test('import: when the sends run out on an answer that is not a refusal to start — a 429 of another kind, or 0x80071151 with other words — the failure is the platform\'s own, judged like a first send: what the sends before it were, and no advice to run the import again', async () => {
+  const others = [
+    ['a service protection limit', '0x80072322', 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.'],
+    ['0x80071151 with its documented words alone', '0x80071151', DOCUMENTED_CONCURRENCY_TEXT],
+    ['an operation that failed because of another, which had started', '0x80071154', 'The current Import operation failed due to another concurrent operation running at the same time. Please try again later.'],
+  ];
+  for (const [what, code, message] of others) {
+    const platform = platformFor({ sends: [...Array.from({ length: 4 }, () => lockAnswer()), lockAnswer({ code, message })] });
+    await assert.rejects(ss.runImport(importFiles().request, { http: platform.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+      assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${message} ${RESENT(5, '10 s, 20 s, 40 s, 60 s')}`, what);
+      assert.deepStrictEqual([err.statusCode, err.importAttempts], [429, 5], what);
+      return true;
+    }, what);
+    assert.deepStrictEqual([platform.imports().length, platform.jobReads().length], [5, 4], `${what}: five sends, the four proofs and no more`);
+  }
+});
+
+test('the client tells the listener which refusal the sends ran out on — once, with the job it carried, its status and its code, for either kind of refusal — and of no earlier refusal and no other answer', async () => {
+  const told = async (sends, extra = {}) => {
+    const world = refusedImport({ sends, ...extra });
+    await world.post();
+    return world;
+  };
+  for (const [code, refusal] of [['0x8004F064', () => lockAnswer()], ['0x80071151', () => concurrencyAnswer()]]) {
+    const world = await told(Array.from({ length: 6 }, () => refusal()));
+    const ids = world.imports().map(jobIdOf);
+    assert.deepStrictEqual(world.exhausted, [{ importJobId: ids[4], status: 429, code }], code);
+    assert.strictEqual(world.jobReads().length, 4, `${code}: the job of the last send is not read`);
+    assert.deepStrictEqual(world.told.map((event) => event.importJobId), ids.slice(0, 4), `${code}: the four before it were sent again, and are told as that`);
+  }
+  // The last send's own kind decides, not the kind of the others.
+  const mixed = await told([...Array.from({ length: 4 }, () => concurrencyAnswer()), lockAnswer(), ok()]);
+  assert.deepStrictEqual(mixed.exhausted.map((event) => event.code), ['0x8004F064']);
+  // Not told: a refusal that is sent again, an answer that is not a refusal to start, a send the platform takes, a retry the time ended, and a refusal whose job proves nothing.
+  const gateway = { statusCode: 504, headers: {}, body: JSON.stringify({ error: { code: '0x80048d19', message: 'gateway timeout' } }) };
+  const quiet = [
+    ['a refusal that is sent again and taken', await told([lockAnswer(), concurrencyAnswer(), ok()])],
+    ['a gateway on the fifth send', await told([...Array.from({ length: 4 }, () => lockAnswer()), gateway, ok()])],
+    ['a service protection limit on the fifth send', await told([...Array.from({ length: 4 }, () => lockAnswer()), lockAnswer({ code: '0x80072322', message: 'Number of requests exceeded the limit.' }), ok()])],
+    ['0x80071151 with its documented words alone on the fifth send', await told([...Array.from({ length: 4 }, () => lockAnswer()), lockAnswer({ code: '0x80071151', message: DOCUMENTED_CONCURRENCY_TEXT }), ok()])],
+    ['a refusal whose job proves nothing', await told([concurrencyAnswer(), ok()], { job: jobAnswer(jobRow(LOGS.running(), { completed: false })) })],
+    ['a retry that the time ended', await told([askingConcurrency(600), ok()])],
+  ];
+  for (const [what, world] of quiet) assert.deepStrictEqual(world.exhausted, [], what);
+  // A client that was given no listener for it is not harmed by the refusal the sends ran out on.
+  const silent = ss.solutionHttpClient(ENV, platformFor({ sends: Array.from({ length: 6 }, () => lockAnswer()) }).http, { onImportRefused: () => {} });
+  assert.strictEqual((await silent.post(`${ENV}/api/data/v9.0/ImportSolution`, importBody())).status, 429);
+});
+
 test('import: nothing the settings file holds is in a sentence a refusal with 0x80071151 adds — the platform\'s words that quote it are withheld, and the run\'s own sentences, which hold no value, are shown whole', async () => {
   const quoting = concurrencyAnswer({ message: `${REFUSAL_STATUS} (value ${SECRET}, connection ${CONNECTION_ID}, plain ${PLAIN})` });
   const quoted = importFiles(filled());
@@ -2534,7 +2651,7 @@ test('import: nothing the settings file holds is in a sentence a refusal with 0x
   });
   const exhausted = platformFor({ sends: Array.from({ length: 5 }, () => quoting) });
   await assert.rejects(ss.runImport(importFiles(filled()).request, { http: exhausted.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
-    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${WITHHELD('message')} ${RESENT_AS('0x80071151')(5, '10 s, 20 s, 40 s, 60 s')} It sends at most 5 times: run the import again when the other operation has finished.`);
+    assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${WITHHELD('message')} ${RESENT_AS('0x80071151')(5, '10 s, 20 s, 40 s, 60 s')} ${NOT_LOOKED_AT(exhausted.imports().map(jobIdOf)[4])}`);
     return true;
   });
 });
