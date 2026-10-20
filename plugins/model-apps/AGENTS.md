@@ -4893,10 +4893,11 @@ carry a "not" about the other skill or the schema. The offline harnesses above g
 cannot see a mis-route; both skill descriptions point at each other, so a
 wording change to one can start stealing the other's prompts. The agent is
 killed at its first plugin-skill call, so a trial costs about one model turn;
-cases are graded as a pass rate over N trials, on the decision of the agent's
-**first turn**: a skill it reaches for only after a first turn that chose none (a
-stand-in, when its read-only menu has no way to do the work) is reported as a
-later fallback, not graded (`--grade eventual` counts it). **Run it when you edit a skill
+cases are graded as a pass rate over N trials, on the first plugin skill the agent
+asks for at any turn. The decision of its **first turn** is reported beside that
+grade and never in place of it: a skill it reaches for only after a first turn that
+chose none (a stand-in, perhaps, when its read-only menu has no way to do the work)
+still fails a negative case, and the case line says the first turn chose none. **Run it when you edit a skill
 `description:`.** It is not a per-PR gate (cost, non-determinism):
 `model-apps-agent-evals.yml` runs it on a same-repo PR labelled
 `run-agent-evals`, weekly, and on demand, using Copilot CLI authenticated by the

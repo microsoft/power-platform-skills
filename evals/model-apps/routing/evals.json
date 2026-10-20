@@ -1,6 +1,6 @@
 {
   "skill_name": "model-apps-routing",
-  "eval_instructions": "Each case is one user prompt sent to a headless agent with only the model-apps plugin loaded. `expect` is the model-apps skill the agent must invoke in its FIRST TURN (genpage | app-builder | report-issue | telemetry), or null when it must invoke none of them in that turn; a skill asked for only after a first turn that chose none is reported as a later fallback and is not graded (--grade eventual counts it). `accept` lists other outcomes that are also correct for a genuinely ambiguous prompt. `trap` names the mis-route the case exists to catch. Graded by run-routing.js over N trials against a pass-rate threshold.",
+  "eval_instructions": "Each case is one user prompt sent to a headless agent with only the model-apps plugin loaded. `expect` is the model-apps skill the agent must invoke FIRST (genpage | app-builder | report-issue | telemetry), or null when it must invoke none of them. A skill asked for only after a first turn that chose none still counts; the decision of the agent's first turn is reported beside the grade and never replaces it. `accept` lists other outcomes that are also correct for a genuinely ambiguous prompt. `trap` names the mis-route the case exists to catch. Graded by run-routing.js over N trials against a pass-rate threshold.",
   "evals": [
     {
       "id": 1,
@@ -140,7 +140,7 @@
       "tier": "smoke",
       "prompt": "Build a generic React dashboard website using mock property data. No Power Platform, Dataverse or model-driven app.",
       "expect": null,
-      "trap": "a \"no Power Platform\" disclaimer that still uses the plugin's own words (React, dashboard, model-driven app) pulling the request into /genpage or /app-builder. The agent may look at the empty workspace first and, with no tool to build with, ask for a skill in a later turn; that is reported as a later fallback and is not graded"
+      "trap": "a \"no Power Platform\" disclaimer that still uses the plugin's own words (React, dashboard, model-driven app) pulling the request into /genpage or /app-builder. An agent that looks at the empty workspace first and then asks for a skill, because it has no tool to build with, fails the case all the same; the report shows that its first turn chose none"
     },
     {
       "id": 22,

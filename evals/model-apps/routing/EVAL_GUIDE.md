@@ -24,7 +24,7 @@ instead" and back), so a wording change to one can silently start stealing the o
 
 | Field | Meaning |
 |-------|---------|
-| `expect` | The model-apps skill the agent must invoke **in its first turn** (see [What counts as the decision](#what-counts-as-the-decision)) — `genpage`, `app-builder`, `report-issue`, `telemetry` — or `null` for "none of them" (a negative / bleed case) |
+| `expect` | The model-apps skill the agent must invoke **first**, at any turn (see [What counts as the decision](#what-counts-as-the-decision)) — `genpage`, `app-builder`, `report-issue`, `telemetry` — or `null` for "none of them" (a negative / bleed case) |
 | `accept` | Optional other outcomes that are also correct, for a genuinely ambiguous prompt. `null` is never implied: "ambiguous" does not mean "anything goes" |
 | `trap` | Optional. The mis-route the case exists to catch; printed when the case fails |
 | `tier` | `smoke` / `full` / `stress`, as in the other suites |
@@ -53,8 +53,8 @@ rule things out, and these are how a rule-out that is read too widely would show
   session offers more tools, so the model sees a slightly smaller menu.
 - **Stopped at the decision.** The JSONL transcript is parsed as it streams, and the agent is killed
   the moment it invokes a model-apps skill, so a positive trial costs about one model turn. A run that
-  has not chosen a skill goes on to its own end, so a skill it reaches for later is seen too (see
-  [What counts as the decision](#what-counts-as-the-decision)).
+  has not chosen a skill goes on to its own end, so a skill it reaches for later is seen, and graded, too
+  (see [What counts as the decision](#what-counts-as-the-decision)).
 - **Guarded.** Every trial proves the plugin's skills were loaded before its outcome counts; if they
   were not, the trial is a harness **error**, not a passing "none". Claude reports its loaded
   skills in the transcript's init event. Copilot's transcript does not, so each Copilot trial first
@@ -70,38 +70,46 @@ Every flag is in `lib/agents.js`; every transcript shape the parser understands 
 
 ## What counts as the decision
 
+A case is graded on the **first plugin skill the agent asks for, at any turn**. That is the decision a real
+session would act on, and a negative case exists to fail when the agent reaches for the plugin on a request
+that is not for it. The report also shows what the agent did in its **first turn**, beside the grade and
+never in place of it.
+
 The agent runs with a read-only menu (a skill, `view`, `glob`, `grep`: no file writes, no shell). A request
 that is plainly not for the plugin can therefore go like this: turn 0 looks at the empty workspace and
 decides that no skill applies, which is the right answer, and turn 1, with nothing to build with, asks for
-a skill as a stand-in. The second request is the menu running out, not a choice made from the descriptions,
-so a case is graded on the **first turn** and a later request is reported beside the grade:
+a skill as a stand-in. The grade counts that request, so the case fails, and the first turn's decision is
+what tells a stand-in from a description that pulls the request in.
 
-| | Meaning | Graded |
-|---|---------|--------|
-| initial | the plugin skill the agent asked for in its first turn, or none | yes |
-| later fallback | a plugin skill asked for only after a first turn that chose none | no — reported |
+| | Meaning | Part of the grade |
+|---|---------|-------------------|
+| decision | the first plugin skill the agent asked for, at any turn, or none | yes: `expect` is compared with it |
+| initial decision | the plugin skill asked for in the first turn, or none | no: reported beside the grade |
+| later fallback | a plugin skill asked for only after a first turn that chose none | it is the decision; `later:` names it |
 
-A case that expects a skill needs it in the first turn: a late request is shown and never credited. The
-first turn is the model's first response; a skill asked for in the same response as a `view` is still a
-first-turn decision. A model that habitually looks at the workspace before it acts will show its positive
-cases as failures with a `later:` count; grade such a model with `--grade eventual`.
+The first turn is the model's first response: a skill asked for in the same response as a `view` is still a
+first-turn decision. The case line shows the first turn once a later request makes it differ from the grade:
 
 ```
-ok 21 - #21 [smoke] expect none — 3/3 (none×3) · later: genpage×2
-# later fallbacks: 2 trial(s) in 1 case(s) chose a plugin skill only after a first turn that chose none (reported, not graded; --grade eventual counts them)
+not ok 21 - #21 [smoke] expect none — 1/3 (genpage×2, none×1) · first turn: 3/3 (none×3) · later: genpage×2
+# later fallbacks: 2 trial(s) in 1 case(s) chose a plugin skill only after a first turn that chose none (counted in the grade; the first-turn decision is shown beside each case)
 ```
 
-`--grade eventual` grades the first plugin skill asked for at any turn instead, which is how every run was
-graded before the two were told apart. A results file records the basis as `grade`; `--compare` against a
-file graded on the other one prints a `# note:`, because a delta can then come from the grading and not
-from a description. In the `--out` JSON each trial has `initial` (the first-turn skill or `null`),
-`delayed` (the later one or `null`) and `turn` (which turn asked for the first plugin skill), `routedTo`
-is still the first plugin skill of the run, and each case has `outcomes` (what was graded) and `delayed`
-(the later fallbacks).
+Two of the three trials asked for `/genpage` after a first turn that chose none, so the case fails; its first
+turn chose none every time. A case that expects a skill and gets it only in turn 1 passes, as it always did, and
+reads `ok 1 - #1 [smoke] expect genpage — 3/3 (genpage×3) · first turn: 0/3 (none×3) · later: genpage×3`. Where
+nothing is asked for late the two decisions are the same, and the line is the plain
+`ok 1 - #1 [smoke] expect genpage — 3/3 (genpage×3)`.
 
-Read a `later:` count as a question, not a verdict. In a real session the agent has file and shell tools
-and would do the work itself, so a fallback is partly a property of this menu. A count that grows after a
-description edit, though, means the agent reached for the plugin on a request that is not for it.
+In the `--out` JSON each case has the grade (`status`, `rate`, `passes`, `valid`, `outcomes`), `initial` (the
+first turn's `passes`, `valid`, `rate` and `outcomes`, for every case) and `delayed` (the later fallbacks).
+Each trial has `routedTo` (the first plugin skill of the run), `initial` (the first-turn skill or `null`),
+`delayed` (the later one or `null`) and `turn` (which turn asked for the first plugin skill).
+
+Read a `later:` count as a question. In a real session the agent has file and shell tools and would do the
+work itself, so a stand-in is partly a property of this menu. A count that grows after a description edit,
+though, means the agent reached for the plugin on a request that is not for it. No option grades only the
+first turn: it would pass every negative case on any run that reads the workspace before it asks for a skill.
 
 ## Grading
 
@@ -115,7 +123,7 @@ Exit codes: `0` every case met the threshold · `1` a case failed · `2` harness
 
 ```
 TAP version 13
-# agent claude · model sonnet · runs 2 · threshold 2/3 · grade initial
+# agent claude · model sonnet · runs 2 · threshold 2/3
 1..35
 ok 1 - #1 [smoke] expect genpage — 2/2 (genpage×2)
 not ok 4 - #4 [smoke] expect app-builder — 1/2 (app-builder×1, genpage×1)
@@ -144,9 +152,6 @@ node evals/model-apps/routing/run-routing.js --agent copilot --model claude-sonn
 
 # ...edit a description, then compare: prints `# delta #<id>: <old> → <new>` for every case that moved
 node evals/model-apps/routing/run-routing.js --agent copilot --model claude-sonnet-5.5 --out after.json --compare before.json
-
-# Count a skill asked for after a first turn that chose none as the decision too (how runs were graded before the first turn was told apart)
-node evals/model-apps/routing/run-routing.js --agent copilot --grade eventual
 ```
 
 `--out` records each skill's description fingerprint, so two result files show whether the
