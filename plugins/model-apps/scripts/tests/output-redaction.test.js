@@ -657,3 +657,50 @@ test('a guarded workspace storage writes every text with the token taken out, an
   assert.equal(fs.existsSync(path.join(dir, 'forms', 'two.json')), false);
   for (const value of [null, undefined, 'storage', {}, { writeTextAtomic: 3 }]) assert.equal(guardWorkspaceStorage(value, redactToken), value, 'what is no storage is returned as it is');
 });
+
+// A valid WorkspaceStorage may keep its state in `#private` fields, which a method reads only on the object it was made for: the wrapper must run every member it does not judge on the STORAGE, never on itself.
+class PrivateStorage {
+  #files = new Map();
+  #label = 'private';
+  get label() { return this.#label; }
+  get size() { return this.#files.size; }
+  async readText(key) { return this.#files.get(key.join('/')) ?? null; }
+  async writeTextAtomic(key, text) { this.#files.set(key.join('/'), text); }
+  async exists(key) { return this.#files.has(key.join('/')); }
+  async ensureContainer() { this.#files.size; }
+  async deleteFile(key) { this.#files.delete(key.join('/')); }
+  async deleteByPrefix(prefix) { for (const name of [...this.#files.keys()]) if (name.startsWith(prefix.join('/'))) this.#files.delete(name); }
+}
+
+test('a guarded workspace storage whose methods keep private state still works — every member but the writer runs on the storage itself, an accessor too — and what it writes is clean', async () => {
+  const storage = new PrivateStorage();
+  const guarded = guardWorkspaceStorage(storage, redactToken);
+  assert.notEqual(guarded, storage);
+  await guarded.writeTextAtomic(['a.json'], JSON.stringify({ message: `Rejected bearer ${TOKEN.match(/.{1,8}/g).join('\r\n ')}` }));
+  await guarded.writeTextAtomic(['b.json'], '{"plain":true}');
+  assert.deepEqual(JSON.parse(await storage.readText(['a.json'])), { message: `Rejected bearer ${MARK}` }, 'the storage holds the clean text');
+  assert.equal(await storage.readText(['b.json']), '{"plain":true}');
+  assert.equal(await guarded.readText(['a.json']), await storage.readText(['a.json']));
+  assert.equal(await guarded.exists(['b.json']), true);
+  assert.equal(await guarded.ensureContainer(), undefined);
+  assert.equal(guarded.size, 2, 'an accessor reads the storage\'s private state');
+  assert.equal(guarded.label, 'private');
+  await guarded.deleteByPrefix(['a']);
+  assert.equal(await storage.exists(['a.json']), false);
+  await guarded.deleteFile(['b.json']);
+  assert.equal(guarded.size, 0);
+  assert.ok(guarded instanceof PrivateStorage, 'and it is still one');
+  assert.ok('readText' in guarded && !('nothing' in guarded));
+  assert.equal(guarded.nothing, undefined);
+});
+
+test('REAL BUNDLE: the SDK made by the factory works over a storage whose methods keep private state — as it does made by the bundle — and writes its manifest through it', async () => {
+  const { createMakerSdk } = require('../lib/maker-sdk.js');
+  const httpClient = { get: async () => { throw new Error('no service call is expected'); } };
+  for (const [label, create] of [['the bundle', bundle.createMakerSdk], ['the factory', createMakerSdk]]) {
+    const storage = new PrivateStorage();
+    const sdk = create({ workspaceStorage: storage, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+    await sdk.initWorkspace();
+    assert.equal(await storage.exists(['manifest.json']), true, `${label}: the manifest is written`);
+  }
+});

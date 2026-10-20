@@ -550,7 +550,10 @@ function installOutputGuard() {
 
 /**
  * `storage` (an SDK WorkspaceStorage) with the tokens taken out of every text it is asked to write. The SDK writes each file of its workspace — an artifact, its metadata, the manifest — through `writeTextAtomic(key, text)`, and
- * through nothing else, so this is every file the SDK writes. Everything else is the storage's own: the wrapper has it for a prototype, so the SDK still finds the folder (`pathFor`, `getRoot`) and an `instanceof` still holds.
+ * through nothing else, so this is every file the SDK writes. Everything else is the storage's own and runs ON the storage: a method is called with the storage as `this` and an accessor is read from it, because a
+ * storage may keep its state in `#private` fields, which only the object they were made for can read (a wrapper that is merely a child of the storage would be `this` instead, and fail). The wrapper is a Proxy over an
+ * empty child of the storage — not over the storage itself, whose own frozen members would bind what a Proxy may answer — so the SDK still finds the folder (`pathFor`, `getRoot`) and an `instanceof` still holds; a value
+ * set through it is set on the storage.
  * @template T
  * @param {T} storage
  * @param {(text: string) => string} [redact]
@@ -558,14 +561,21 @@ function installOutputGuard() {
  */
 function guardWorkspaceStorage(storage, redact = redactOutput) {
   if (storage === null || typeof storage !== 'object' || typeof storage.writeTextAtomic !== 'function') return storage;
-  return Object.create(storage, {
-    writeTextAtomic: {
-      value: function writeTextAtomicWithoutTokens(key, text, ...rest) {
-        return storage.writeTextAtomic(key, typeof text === 'string' ? redact(text) : text, ...rest);
-      },
-      writable: true,
-      configurable: true,
-      enumerable: true,
+  const writeTextAtomic = function writeTextAtomicWithoutTokens(key, text, ...rest) {
+    return storage.writeTextAtomic(key, typeof text === 'string' ? redact(text) : text, ...rest);
+  };
+  // One function per member, so that a member read twice is the same function, as it is on the storage.
+  const onStorage = new Map();
+  return new Proxy(Object.create(storage), {
+    get(target, key) {
+      if (key === 'writeTextAtomic') return writeTextAtomic;
+      const value = Reflect.get(storage, key, storage);
+      if (typeof value !== 'function' || key === 'constructor') return value;
+      if (!onStorage.has(value)) onStorage.set(value, function onTheStorage(...args) { return value.apply(storage, args); });
+      return onStorage.get(value);
+    },
+    set(target, key, value) {
+      return Reflect.set(storage, key, value, storage);
     },
   });
 }
