@@ -455,6 +455,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     `$batch` change set (the plugin's client has `postRaw`) and stays Active; a Draft flow as one PATCH. The
     Active/Draft state is converged AFTER the edit — a state change before it would move the row's version,
     and the SDK's push is conditioned on it (a 412).
+    When the customization lock refuses an Active edit's whole change set, the SDK waits and re-sends the
+    identical body for at most 180 seconds of scheduled waits. The guard keeps the original `If-Match`:
+    another maker's intervening edit fails it with 412 rather than being overwritten. The HTTP client
+    delivers each attempt once; an ambiguous 5xx envelope is not permission to replay it. These boundaries
+    are pinned over the real bundle in `bpf-stage-edits.test.js`.
   - *Refused — no stage or step edit of the flow is applied, never half of them*: a stage or step the flow has
     and the spec does not list (a build never removes either, and cannot tell a spec that dropped one from
     a maker who added it in Maker); the same stages in another order; a different number of stages where one

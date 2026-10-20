@@ -912,3 +912,158 @@ test('REAL BUNDLE: a stale local copy is replaced by the environment\'s — the 
   assert.strictEqual(inspected.kind, 'same', 'the interrupted build\'s local rename does not count: only the deployed flow does');
   assert.strictEqual((await sdk.getArtifact('bpf', id)).stages[0].name, 'Triage');
 });
+
+// An Active flow's change set the customization lock refuses. The platform answers the whole `$batch` 429 with ONE part, the guard's,
+// and nothing written (measured: etag, state, name and definition unchanged):
+//   --batchresponse_<id>
+//   Content-Type: multipart/mixed; boundary=changesetresponse_<id>
+//
+//   --changesetresponse_<id>
+//   Content-Type: application/http
+//   Content-ID: 1
+//
+//   HTTP/1.1 429 Too Many Requests
+//   {"error":{"code":"0x80071151","message":"Cannot start the requested operation [EntityCustomization] because there is another [WorkflowSetState] running…"}}
+//   --changesetresponse_<id>--
+//   --batchresponse_<id>--
+// The plugin's HTTP client delivers it once — a `$batch` it never sends again but for the two kinds lib/sdk-http-client.js names — and the
+// SDK sends the IDENTICAL change set again after its first wait (2 s), the guard still under the caller's If-Match, so a flow edited in the
+// meantime would fail it 412 with nothing written. This is the one BPF write the plugin makes that the SDK's lock re-send reaches: a Draft
+// flow's edit is one PATCH, and the plugin never takes the deactivate, edit and activate cycle (its client has postRaw).
+function lockRefusedChangeSet(contentId) {
+  return ['--batchresponse_l', 'Content-Type: multipart/mixed; boundary=changesetresponse_l', '', '--changesetresponse_l', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${contentId}`, '',
+    'HTTP/1.1 429 Too Many Requests', 'Content-Type: application/json; odata.metadata=minimal', '',
+    JSON.stringify({ error: { code: '0x80071151', message: 'Cannot start the requested operation [EntityCustomization] because there is another [WorkflowSetState] running at this moment.' } }),
+    '--changesetresponse_l--', '--batchresponse_l--', ''].join('\r\n');
+}
+
+// SDK waits use setTimeout; advance those waits without speeding up the asynchronous workspace writes. The wall-clock bound
+// catches a hung call even if a loaded machine needs many event-loop turns to finish one write.
+async function settleBpfWaits(t, promise) {
+  let settled = false;
+  let value;
+  let failure;
+  promise.then((result) => { settled = true; value = result; }, (error) => { settled = true; failure = error; });
+  const deadline = Date.now() + 20000;
+  while (!settled && Date.now() < deadline) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5000);
+  }
+  assert.ok(settled, 'the SDK call settled within the wall-clock bound');
+  if (failure) throw failure;
+  return value;
+}
+
+test('REAL BUNDLE: an Active flow\'s change set the customization lock refuses is delivered ONCE by the plugin\'s HTTP client and sent again by the SDK — the edit lands under the same If-Match, and the flow stays Active', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const { fake, id, row } = await realBpf();
+  const batches = [];
+  let refusals = 1;
+  // The transport under the plugin's real client, onto the fake: what Node's client hands it — the status, the headers and the body as text.
+  const asTransport = async (answer) => ({ statusCode: answer.status, headers: answer.headers, body: typeof answer.body === 'string' ? answer.body : JSON.stringify(answer.body) });
+  async function request({ url, method, headers, body }) {
+    if (method === 'POST' && /\/\$batch$/.test(new URL(url).pathname)) {
+      batches.push(String(body));
+      if (refusals > 0) {
+        refusals -= 1;
+        return { statusCode: 429, headers: { 'content-type': 'multipart/mixed; boundary=batchresponse_l' }, body: lockRefusedChangeSet(/Content-ID:\s*(\S+)/i.exec(String(body))[1]) };
+      }
+      return asTransport(await fake.client.postRaw(url, body));
+    }
+    if (method === 'GET') return asTransport(await fake.client.get(url));
+    if (method === 'PATCH') return asTransport(await fake.client.patch(url, JSON.parse(body), { headers }));
+    return asTransport(await fake.client[method.toLowerCase()](url, body === null ? undefined : JSON.parse(body), { headers }));
+  }
+  const clientSleeps = [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bpf-stages-lock-'));
+  tempDirs.push(dir);
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: createAzHttpClient('https://contoso.crm.dynamics.com', { getToken: () => 'token', request, sleep: async (ms) => { clientSleeps.push(ms); } }) });
+  await sdk.initWorkspace();
+  const d = DEPLOYED();
+  const want = flowOf([{ ...d.stages[0], name: 'Intake' }, d.stages[1], d.stages[2]]);
+  const inspected = await inspectBpfStages(sdk, want, id);
+  assert.strictEqual(inspected.kind, 'edit', JSON.stringify(inspected));
+  const pushed = await applyBpfStages(sdk, want, id, inspected.plan, {});
+  assert.strictEqual(pushed.saved, true);
+  assert.strictEqual(batches.length, 2, 'the refused change set and the SDK\u2019s one re-send of it');
+  assert.strictEqual(batches[1], batches[0], 'the same body: the guard under the same If-Match, the definition on the same row');
+  assert.deepStrictEqual(clientSleeps, [], 'the client sent the change set once: it waited for nothing');
+  assert.deepStrictEqual(fake.log.map((l) => l.verb), ['BATCH-PATCH', 'BATCH-PATCH'], 'only the accepted change set wrote anything');
+  assert.deepStrictEqual(xamlStages(row()), ['Intake', 'Resolve', 'Close']);
+  assert.strictEqual(row().statecode, 1, 'the flow is still Active');
+});
+
+test('REAL BUNDLE: an Active edit refused by the lock then edited by another maker fails its identical guarded resend without writing', async (t) => {
+  const { sdk, fake, id, row } = await realBpf();
+  const bodies = [];
+  fake.client.postRaw = async (url, body) => {
+    bodies.push(String(body));
+    const contentId = /Content-ID:\s*(\S+)/i.exec(String(body))[1];
+    if (bodies.length === 1) {
+      row().name = 'Another maker';
+      row()['@odata.etag'] = 'W/"99"';
+      return { status: 429, headers: { 'content-type': 'multipart/mixed; boundary=batchresponse_l' }, body: lockRefusedChangeSet(contentId) };
+    }
+    const validator = /^If-Match:\s*(.+)$/im.exec(String(body))[1].trim();
+    assert.notStrictEqual(validator, row()['@odata.etag'], 'the resend keeps the old guard, never a newly read token');
+    return { status: 200, headers: { 'content-type': 'multipart/mixed; boundary=batchresponse_l' }, body: lockRefusedChangeSet(contentId).replace('429 Too Many Requests', '412 Precondition Failed') };
+  };
+  const d = DEPLOYED();
+  const want = flowOf([{ ...d.stages[0], name: 'Intake' }, d.stages[1], d.stages[2]]);
+  const inspected = await inspectBpfStages(sdk, want, id);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await assert.rejects(settleBpfWaits(t, applyBpfStages(sdk, want, id, inspected.plan)), { code: 'version-conflict' });
+  assert.strictEqual(bodies.length, 2);
+  assert.strictEqual(bodies[1], bodies[0]);
+  assert.deepStrictEqual(fake.log, []);
+  assert.deepStrictEqual(xamlStages(row()), ['Triage', 'Resolve', 'Close']);
+  assert.strictEqual(row().name, 'Another maker');
+  assert.strictEqual(row().statecode, 1);
+});
+
+test('REAL BUNDLE: an ambiguous 503 envelope carrying a lock-refused part never authorizes an Active edit resend', async () => {
+  const { sdk, fake, id, row } = await realBpf();
+  let sends = 0;
+  fake.client.postRaw = async (url, body) => {
+    sends += 1;
+    return { status: 503, headers: { 'content-type': 'multipart/mixed; boundary=batchresponse_l' }, body: lockRefusedChangeSet(/Content-ID:\s*(\S+)/i.exec(String(body))[1]) };
+  };
+  const d = DEPLOYED();
+  const want = flowOf([{ ...d.stages[0], name: 'Intake' }, d.stages[1], d.stages[2]]);
+  const inspected = await inspectBpfStages(sdk, want, id);
+  await assert.rejects(applyBpfStages(sdk, want, id, inspected.plan), { code: 'CONNECTION_ERROR' });
+  assert.strictEqual(sends, 1);
+  assert.deepStrictEqual(fake.log, []);
+  assert.deepStrictEqual(xamlStages(row()), ['Triage', 'Resolve', 'Close']);
+});
+
+test('REAL BUNDLE: a fallback edit whose activation exhausts the lock waits succeeds when its bound compensation is acknowledged, keeping that write\'s token', async (t) => {
+  // The production client has postRaw and takes the in-place path above. This explicitly non-batch client pins the SDK's
+  // fallback contract too: a late, acknowledged activation is success, not a stale 429 that would make the builder replay it.
+  const { sdk, fake, id, row } = await realBpf({ atomic: false });
+  const patch = fake.client.patch;
+  const activationGuards = [];
+  fake.client.patch = async (url, body, options) => {
+    assert.strictEqual(options.headers['If-Match'], row()['@odata.etag'], 'every fallback write remains bound to its last acknowledged predecessor');
+    if (body.statecode === 1) {
+      activationGuards.push(options.headers['If-Match']);
+      if (activationGuards.length <= 38) return { status: 429, headers: {}, body: { error: { code: '0x80071151', message: 'Cannot start the requested operation [WorkflowSetState] because another customization is running.' } } };
+    }
+    return patch(url, body, options);
+  };
+  const d = DEPLOYED();
+  const want = flowOf([{ ...d.stages[0], name: 'Intake' }, d.stages[1], d.stages[2]]);
+  const inspected = await inspectBpfStages(sdk, want, id);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pushed = await settleBpfWaits(t, applyBpfStages(sdk, want, id, inspected.plan));
+  assert.strictEqual(pushed.saved, true);
+  assert.strictEqual(activationGuards.length, 39, '38 forward refusals, then the acknowledged bound compensation');
+  assert.strictEqual(new Set(activationGuards).size, 1, 'the compensation writes the same version, never another maker\'s edit');
+  assert.strictEqual(row().statecode, 1);
+  assert.deepStrictEqual(xamlStages(row()), ['Intake', 'Resolve', 'Close']);
+  // No fetch between the pushes: only the compensation's returned token can authorize this next edit.
+  await sdk.updateElement('bpf', id, '/stages/0/name', 'Screen');
+  assert.strictEqual((await settleBpfWaits(t, sdk.pushArtifact('bpf', id))).saved, true);
+  assert.deepStrictEqual(xamlStages(row()), ['Screen', 'Resolve', 'Close']);
+});
