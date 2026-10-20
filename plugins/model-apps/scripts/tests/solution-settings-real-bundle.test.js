@@ -14,7 +14,7 @@ const plainPrivateFile = require('./helpers/plain-private-file.js');
 plainPrivateFile.install();
 const ss = require('../solution-settings.js');
 const { createCloud, LOCK_REFUSAL, CONCURRENCY_REFUSAL, ORG, DATAVERSE_TOKEN } = require('./helpers/fake-power-platform.js');
-const { LOGS, jobRow, jobAnswer } = require('./helpers/import-job-logs.js');
+const { LOGS, jobRow, jobAnswer, REFUSAL_STATUS } = require('./helpers/import-job-logs.js');
 const { runScript } = require('./helpers/run-with-fakes.js');
 const { VALUES, spellingsOfValue } = require('./helpers/value-spellings.js');
 const { WORK_FOLDER, RECORDED_WORK_FOLDER, PLAIN_WORK_FOLDER, entriesOf, pluginFolderOf, assertMadeByTheMaker, refusingWorkFolders } = require('./helpers/solution-settings-work-folder.js');
@@ -756,6 +756,24 @@ test('REAL BUNDLE: five refusals with 0x80071151 in a row end the run — each o
   assert.strictEqual(cloud.requests.filter((r) => r.path.endsWith('/StageSolution')).length, 1, 'staged once, for five sends');
 });
 
+test('REAL BUNDLE: a timer that resumes after the five minutes ends the retry before the send, for a refusal with 0x80071151 proven by a 404 or by the log — the job read at once, the wait, and no second import', async () => {
+  for (const [what, jobLogAnswer, logged] of [
+    ['a 404', undefined, ''],
+    ['the log of an import refused at the lock', jobAnswer(jobRow(LOGS.refused({ tables: 6 }), { id: JOB })), ` The import job's log (importjobs(${JOB})) says: its status is ${REFUSAL_STATUS}`],
+  ]) {
+    const { cloud, http } = world({ importRefusals: [CONCURRENCY_REFUSAL, CONCURRENCY_REFUSAL], ...(jobLogAnswer ? { jobLogAnswer } : {}) });
+    const time = clocked(http, { lateMs: 350000 });
+    const f = files();
+    await assert.rejects(ss.runImport(importRequest(f), { http: time.http, pac: never, importJobId: JOB }), (err) => {
+      assert.strictEqual(err.message, `HTTP 429 from ${ORG}/api/data/v9.0/ImportSolution: ${CONCURRENCY_REFUSAL.message}${logged} ${OUT_OF_TIME('360 s')}`, what);
+      assert.deepStrictEqual([err.code, err.statusCode, err.importJobId, 'importAttempts' in err], ['CONNECTION_ERROR', 429, JOB, false], what);
+      return true;
+    }, what);
+    assert.deepStrictEqual([cloud.state.refusedImports.length, cloud.state.imports.length, time.waits], [1, 0, [10000]], `${what}: one send, nothing taken, the one wait`);
+    assert.deepStrictEqual(wireOf(cloud).slice(-2), [`GET importjobs(${JOB})${PROOF_READ}`, `GET importjobs(${JOB})?$select=data`], `${what}: the proof at once, then the failure's usual read — and no send after the wait`);
+  }
+});
+
 test('REAL BUNDLE: a refusal with 0x80071151 whose job does not prove that nothing was applied is NOT sent again — one send, the job read once at once, no wait — and the failure says why and what to do', async () => {
   for (const [what, jobLogAnswer, reason] of [
     ['the import is still running', jobAnswer(jobRow(LOGS.running(), { completed: false })), 'its import job is not finished (completedon is empty)'],
@@ -818,14 +836,16 @@ test('REAL BUNDLE: a refusal that quotes the settings file reaches no message �
   assert.strictEqual(cloud.state.refusedImports.length, 5);
 });
 
-// A clock that only the waits move, so that what the run spends is measured as it is when the waits are real: `now` is what the client reads, and a wait moves it by its length.
+// A clock that only the waits move, so that what the run spends is measured as it is when the waits are real: `now` is what the client reads, and a wait moves it by its length — and by `lateMs` more, for a timer
+// that resumes later than it was asked to (a delayed timer, a laptop that was suspended).
 const CLOCK_ORIGIN = Date.UTC(2026, 9, 14, 12, 0, 0);
-function clocked(http) {
+function clocked(http, { lateMs = 0 } = {}) {
   const clock = { elapsed: 0 };
   const waits = [];
-  return { clock, waits, http: { ...http, now: () => CLOCK_ORIGIN + clock.elapsed, sleep: async (ms) => { waits.push(ms); clock.elapsed += ms; } } };
+  return { clock, waits, http: { ...http, now: () => CLOCK_ORIGIN + clock.elapsed, sleep: async (ms) => { waits.push(ms); clock.elapsed += ms + lateMs; } } };
 }
 const NOT_SENT_AGAIN = (wait, spent) => `ImportSolution was not sent again: the next wait, ${wait}, does not fit in what is left of the 5 minutes this run spends in all on sending it again (${spent} are spent). Run the import again when the other operation has finished.`;
+const OUT_OF_TIME = (spent) => `ImportSolution was not sent again: the 5 minutes this run spends in all on sending it again were used up (${spent}) before the next send. Run the import again when the other operation has finished.`;
 
 test('REAL BUNDLE: a Retry-After longer than a minute — in seconds, and as a date — is waited out WHOLE before the second send; the platform is never sent the import again early', async () => {
   for (const [form, header] of [['delay-seconds', '180'], ['HTTP-date', new Date(CLOCK_ORIGIN + 180000).toUTCString()]]) {

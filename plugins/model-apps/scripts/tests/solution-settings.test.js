@@ -2095,9 +2095,10 @@ function refusedImport({ sends, job, observing = true, http = {} }) {
   return { ...platform, http: { ...platform.http, ...http }, client, told, stopped, unproven, post: () => client.post(`${ENV}/api/data/v9.0/ImportSolution`, importBody()) };
 }
 // The same, over a clock that only the waits move: `now` is what the client reads, a wait moves it by its length, and a read of the job moves it by `readMs` — so what the client spends is measured, as
-// it is when the waits are real. `sentAt` is when each send reached the platform, in milliseconds from the first.
+// it is when the waits are real. `sentAt` is when each send reached the platform, in milliseconds from the first. `lateMs` is how much later than asked each timer resumes (a timer that was delayed, a laptop
+// that was suspended: the wait the client asked for is the least a real wait takes) and `job` is what every read of the job answers.
 const CLOCK_ORIGIN = Date.UTC(2026, 9, 14, 12, 0, 0);
-function clockedImport({ sends, readMs = 0, observing = true }) {
+function clockedImport({ sends, readMs = 0, observing = true, lateMs = 0, job = NO_SUCH_JOB }) {
   const clock = { elapsed: 0, sentAt: [] };
   const answers = sends.map((answer) => (options) => {
     clock.sentAt.push(clock.elapsed);
@@ -2106,9 +2107,9 @@ function clockedImport({ sends, readMs = 0, observing = true }) {
   const waits = [];
   const world = refusedImport({
     sends: answers,
-    job: () => { clock.elapsed += readMs; return NO_SUCH_JOB; },
+    job: () => { clock.elapsed += readMs; return job; },
     observing,
-    http: { now: () => CLOCK_ORIGIN + clock.elapsed, sleep: async (ms) => { waits.push(ms); clock.elapsed += ms; world.events.push(`wait ${ms}`); } },
+    http: { now: () => CLOCK_ORIGIN + clock.elapsed, sleep: async (ms) => { waits.push(ms); clock.elapsed += ms + lateMs; world.events.push(`wait ${ms}`); } },
   });
   return { ...world, clock, waits };
 }
@@ -2343,6 +2344,58 @@ test('the one read of the job counts in the five minutes: a refusal whose wait n
   assert.strictEqual(world.jobReads().length, 2);
   assert.strictEqual(world.told.length, 1);
   assert.deepStrictEqual(world.stopped, [{ importJobId: world.imports().map(jobIdOf)[1], waitMs: 120000, spentMs: 320000 }]);
+});
+
+// The five minutes are asked for AFTER a wait as well as before it. What the client asks the timer for is the least a wait takes: a timer that is delayed, a busy machine, a laptop that is suspended resumes it
+// later, so a wait that fitted when it began can end after the five minutes — and a send made then is a send the budget does not allow. `lateMs` is how much later than asked each timer resumes.
+const LATE_PROOFS = [
+  ['its job does not exist (a 404)', NO_SUCH_JOB],
+  ['its job is finished and its log says the import was refused at the lock', jobAnswer(jobRow(LOGS.refused()))],
+];
+
+test('a wait that ends AFTER the five minutes — a timer that resumed late — ends the retry before the send, for a refusal with 0x80071151 proven by a 404 or by the log: nothing is sent, nothing is told as sent again, and the listener hears what was spent — to the millisecond', async () => {
+  // 100 s late ends at 110 s and 290 s late at exactly 300 s: both are inside the five minutes and send. One millisecond more is past them, and does not.
+  for (const [lateMs, expectedSends] of [[100000, 2], [290000, 2], [290001, 1]]) {
+    const world = clockedImport({ sends: [() => concurrencyAnswer(), ok()], lateMs });
+    await world.post();
+    assert.strictEqual(world.imports().length, expectedSends, `a timer ${lateMs} ms late`);
+    assert.deepStrictEqual(world.stopped, expectedSends === 1 ? [{ importJobId: JOB, waitMs: null, spentMs: 300001 }] : [], `a timer ${lateMs} ms late`);
+  }
+  for (const [what, job] of LATE_PROOFS) {
+    // The first refusal: the wait is 10 s, which fits, and the timer resumes at 360 s.
+    const first = clockedImport({ sends: [() => concurrencyAnswer(), ok()], lateMs: 350000, job });
+    const res = await first.post();
+    assert.strictEqual(res.status, 429, `${what}: the refusal comes back as it came`);
+    assert.strictEqual(res.body.error.code, '0x80071151', what);
+    assert.deepStrictEqual(first.events, [`send ${JOB}`, `read importjobs(${JOB})`, 'wait 10000'], `${what}: the read at once, the wait, and no send after it`);
+    assert.deepStrictEqual([first.imports().length, first.clock.sentAt, first.told, first.unproven], [1, [0], [], []], what);
+    assert.deepStrictEqual(first.stopped, [{ importJobId: JOB, waitMs: null, spentMs: 360000 }], `${what}: what was spent is what the clock says, and not what the wait asked for`);
+    // A later refusal: the first wait is late but inside the five minutes (10 s asked, 150 s taken), the second (20 s asked, 160 s taken) ends at 310 s.
+    const later = clockedImport({ sends: [() => concurrencyAnswer(), () => concurrencyAnswer(), ok()], lateMs: 140000, job });
+    assert.strictEqual((await later.post()).status, 429, what);
+    const [firstId, secondId] = later.imports().map(jobIdOf);
+    assert.strictEqual(later.imports().length, 2, `${what}: a second send was made, a third was not`);
+    assert.deepStrictEqual(later.clock.sentAt, [0, 150000], what);
+    assert.deepStrictEqual(later.events, [`send ${firstId}`, `read importjobs(${firstId})`, 'wait 10000', `send ${secondId}`, `read importjobs(${secondId})`, 'wait 20000'], what);
+    assert.strictEqual(later.told.length, 1, `${what}: the first refusal was sent again, the second was not`);
+    assert.deepStrictEqual(later.stopped, [{ importJobId: secondId, waitMs: null, spentMs: 310000 }], what);
+  }
+});
+
+test('the same late timer ends the retry for a lock code — after the read that follows its wait, as ever — and a timer that is late but ends inside the five minutes, or exactly at them, sends as it always did', async () => {
+  const lock = clockedImport({ sends: [() => lockAnswer(), ok()], lateMs: 350000 });
+  assert.strictEqual((await lock.post()).status, 429);
+  assert.deepStrictEqual(lock.events, [`send ${JOB}`, 'wait 10000', `read importjobs(${JOB})`], 'the proof of a lock code is read after the wait');
+  assert.deepStrictEqual([lock.imports().length, lock.told], [1, []]);
+  assert.deepStrictEqual(lock.stopped, [{ importJobId: JOB, waitMs: null, spentMs: 360000 }]);
+  // 100 s late ends at 110 s and 290 s late at exactly 300 s: both send. One millisecond more is past the five minutes, and does not.
+  for (const [lateMs, expectedSends] of [[100000, 2], [290000, 2], [290001, 1]]) {
+    const world = clockedImport({ sends: [() => lockAnswer(), ok()], lateMs });
+    await world.post();
+    assert.strictEqual(world.imports().length, expectedSends, `a timer ${lateMs} ms late`);
+    assert.deepStrictEqual(world.events.slice(0, 3), [`send ${JOB}`, 'wait 10000', `read importjobs(${JOB})`], `a timer ${lateMs} ms late: the read after the wait, as ever`);
+    assert.deepStrictEqual(world.stopped, expectedSends === 1 ? [{ importJobId: JOB, waitMs: null, spentMs: 300001 }] : [], `a timer ${lateMs} ms late`);
+  }
 });
 
 test('a client with no listener never reads the job or waits for a refusal with 0x80071151 either: the retry belongs to the caller that asked for it', async () => {
@@ -2816,6 +2869,23 @@ test('import: a retry whose budget the proof read used up says so — the refusa
     assert.deepStrictEqual([err.importJobId, err.importAttempts], [ids[2], 3]);
     return true;
   });
+});
+
+test('import: a retry whose wait overran the five minutes says so — the refusal, the sends there were, and the time that was spent — for a refusal with 0x80071151 as for a lock code', async () => {
+  for (const [what, refusal, message, resent] of [
+    ['0x80071151', concurrencyAnswer, CONCURRENCY_REFUSAL.message, RESENT_AS('0x80071151')],
+    ['a lock code', lockAnswer, LOCK_REFUSAL.message, RESENT],
+  ]) {
+    // Every timer resumes 140 s late: the first wait ends at 150 s, the second, which was asked for 20 s, at 310 s.
+    const world = clockedImport({ sends: Array.from({ length: 5 }, () => () => refusal()), lateMs: 140000 });
+    await assert.rejects(ss.runImport(importFiles().request, { http: world.http, sdkFirst: importingOver(), importJobId: JOB, readJobLog: async () => null }), (err) => {
+      const ids = world.imports().map(jobIdOf);
+      assert.strictEqual(ids.length, 2, what);
+      assert.strictEqual(err.message, `HTTP 429 from ${ENV}/api/data/v9.0/ImportSolution: ${message} ${resent(2, '10 s')} ${OUT_OF_TIME('310 s')}`, what);
+      assert.deepStrictEqual([err.importJobId, err.importAttempts], [ids[1], 2], what);
+      return true;
+    }, what);
+  }
 });
 
 test('import: when the sends run out the failure is not described as one that ran out of time, and a retry that ended for time is not described as one whose sends ran out', async () => {

@@ -1192,7 +1192,8 @@ most five and the time at most five minutes in all, counted from the first refus
 as a date, waited whole; the time an import the platform accepted then takes is not counted) — and the script
 says so in its output (`importAttempts`, `importRefusals`, and for `0x80071151` how the job proved it). A
 `Retry-After` that does not fit in what is left of the five minutes ends the retry at once, with no send made
-early. When the sends or the time run out the failure is the platform's refusal, with a sentence that says
+early, and a wait that ends after the five minutes (a timer that resumed late) ends it before the next send.
+When the sends or the time run out the failure is the platform's refusal, with a sentence that says
 which: run the import again when the other operation has finished. When the job of a `0x80071151` refusal
 proves nothing — it is still running, the import failed after it began, its log is not what is expected, or it
 cannot be read — the import is sent once and the failure says why it was not sent again: do not run the import

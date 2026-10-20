@@ -55,8 +55,9 @@
 //     that failed after it began, a log that is not exactly that, or a read that fails is NOT proof: the import is sent once, and the failure says why, and to look up the import job before importing again.
 // At most five sends in all, after 10, 20, 40 and 60 s, or the platform's Retry-After when that asks for longer — waited WHOLE, in either of its forms — and inside one budget of five minutes of elapsed time from
 // the first refusal to the last send (IMPORT_RETRY_BUDGET_MS: the waits and the proof reads together; the time an accepted import takes is not in it). A wait that does not fit in what is left of the budget ends the
-// retry there: the platform's refusal is the failure, with the sends so far, and the import is never sent early to make it fit. Any other answer — another status, another kind of 429, 0x80071151 with
-// any other words, a gateway's 5xx, no answer, a job that exists or a read that fails — is the first and the last send, as above. See `sendImport`.
+// retry there: the platform's refusal is the failure, with the sends so far, and the import is never sent early to make it fit. The budget is asked again when a wait is over, for either refusal — a timer can
+// resume later than it was asked to — so a wait that ENDED past the five minutes ends the retry too, before the send.
+// Any other answer — another status, another kind of 429, 0x80071151 with any other words, a gateway's 5xx, no answer, a job that exists or a read that fails — is the first and the last send, as above. See `sendImport`.
 //
 // What the output holds of the settings file: entry NAMES, and what the sanitizer lets through of a text that quotes a value — which is less than every value, as follows. The file is read from
 // and written to disk only, and every text another party wrote — the SDK's, the platform's, pac's, a job log's — goes through `sanitizer`, WHOLE, before it is shown. What it does with a value depends
@@ -108,8 +109,9 @@
 // Exit codes: 0 done; 1 usage error (stderr names the flag, stdout stays empty) or a failure — stdout then holds
 //   { "ok": false, "error": "<message>", "code": "<the SDK's or the PAC step's code>" [, "status": <HTTP status of the answer>] [, "fallback": { … }, "importJobId": "<guid>"]
 //     [, "importAttempts": <sends>, "importRefusals": [ … ] — when the import was sent again after a refusal, the same two fields as on success; the failure is then the platform's own refusal or the
-//     failure of the last send, with the count added — and, when the sends ran out, or the retry ended because the wait the platform asked for did not fit in its five minutes, or because the job of a
-//     refusal with 0x80071151 did not prove that nothing was applied (and what to do then: look up the import job before importing again), a sentence of the plugin's own that says which]
+//     failure of the last send, with the count added — and, when the sends ran out, or the retry ended because the wait the platform asked for did not fit in its five minutes (or a wait ended
+//     after them), or because the job of a refusal with 0x80071151 did not prove that nothing was applied (and what to do then: look up the import job before importing again), a sentence of the plugin's
+//     own that says which]
 //     [, "warnings": [...]] } and stderr the message. `warnings` is the same cleanup note as on success: a failed run that staged a copy and could not delete it says so.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -179,7 +181,9 @@ const IMPORT_MAX_SENDS = 5;
 const IMPORT_RESEND_WAITS_MS = Object.freeze([10 * 1000, 20 * 1000, 40 * 1000, 60 * 1000]);
 // And one budget of elapsed time for the whole retry: from the moment the first refusal arrives to the moment the last send leaves — every wait and every read of a refused send's job in between — not a
 // second more than five minutes. Before each wait the run asks whether it fits in what is left; when it does not (a `Retry-After` of ten minutes, say) the retry ENDS there and the platform's refusal is the
-// failure — the import is never sent early to make it fit. What is not in the budget is the time an import that the platform ACCEPTED takes: it runs for as long as it runs (ACTION_TIMEOUT_MS), and a send the
+// failure — the import is never sent early to make it fit. And it asks again when the wait is over, before the send: what a timer is asked for is the least it takes (a busy machine, a laptop that was suspended
+// resumes it later), so a wait that fitted can still end past the five minutes, and a send then is one the budget does not allow. What is not in the budget is the time an import that the platform ACCEPTED
+// takes: it runs for as long as it runs (ACTION_TIMEOUT_MS), and a send the
 // platform refuses is answered in moments. A publish of all customizations, the usual holder of the lock, is over in a minute or two; an import that holds it can run much longer, and the run then ends as it
 // always did, with the platform's refusal. The same sends, waits and budget serve both kinds of refusal (a lock code, and 0x80071151 with its job read at once): they are one lock, and the measured holders are
 // short — a publish of six tables took 3–12 s, an import of a package of six tables 48–127 s — against the 130 s the four waits add up to; the budget is never the limit of the default schedule, only of a
@@ -814,8 +818,9 @@ async function readRefusedImportJob(env, importJobId, http) {
  * Then, for at most IMPORT_MAX_SENDS sends and inside IMPORT_RETRY_BUDGET_MS of elapsed time from the first refusal (the read of the job counts in it):
  *   [read the job — SolutionConcurrencyFailure]  →  wait the step of IMPORT_RESEND_WAITS_MS, or the platform's `Retry-After` when that asks for longer — WHOLE, uncapped  →  [read the job — a lock code]  →
  *   tell the listener  →  send again with a job id that was never used.
- * A wait that does not fit in what is left of the budget ends the retry BEFORE it is waited, and so does a read of the job that leaves nothing of it: the refusal that was last answered is returned as it came
- * and the import is not sent again — never early, to make it fit. `onStopped({ importJobId, waitMs, spentMs })` says so (`waitMs` is the wait that did not fit, or null when the budget ran out during the read).
+ * A wait that does not fit in what is left of the budget ends the retry BEFORE it is waited; one that ENDS past the budget — a timer resumes later than it was asked to, on a busy machine or a laptop that was
+ * suspended — ends it after the wait, before the send, for either refusal, and so does a read of the job that leaves nothing of it. The refusal that was last answered is returned as it came and the import is not
+ * sent again — never early, to make it fit. `onStopped({ importJobId, waitMs, spentMs })` says so (`waitMs` is the wait that did not fit, or null when the budget ran out during the wait or the read after it).
  * `onUnproven({ importJobId, status, code, why, reason })` says that the job of a refusal with SolutionConcurrencyFailure proves nothing, and in what words. The refusal of the LAST send (the fifth) is not looked into:
  * it is the sends running out.
  * Whatever else answers — any other status, a 429 of another kind, a gateway's 5xx, no answer, a job that exists or cannot be read — is returned as it came, and the send is the last.
@@ -853,14 +858,14 @@ async function sendImport(send, options, { env, http, sleep, onRefused, onStoppe
       return { res, sent };
     }
     await sleep(waitMs);
-    if (lockRefusal) {
-      if (!(await importJobIsAbsent(env, refusedId, http))) return { res, sent };
-      // The read took time too (its own timeout is a minute): the budget is for the whole retry, so a send is not made after it.
-      const spentAfterMs = clock() - firstRefusedAt;
-      if (spentAfterMs > IMPORT_RETRY_BUDGET_MS) {
-        onStopped({ importJobId: refusedId, waitMs: null, spentMs: spentAfterMs });
-        return { res, sent };
-      }
+    if (lockRefusal && !(await importJobIsAbsent(env, refusedId, http))) return { res, sent };
+    // The budget is asked again AFTER the wait, for either refusal: the length a wait was asked for is the least it takes — a delayed timer, a busy machine, a laptop that was suspended resumes it later — and the check
+    // before the wait cannot know that. For a lock code the read of its job (its own timeout is a minute) has been made by now and took time too; for 0x80071151 the job was read before the wait and says nothing
+    // of the time the wait took. A send is not made after the five minutes.
+    const spentAfterMs = clock() - firstRefusedAt;
+    if (spentAfterMs > IMPORT_RETRY_BUDGET_MS) {
+      onStopped({ importJobId: refusedId, waitMs: null, spentMs: spentAfterMs });
+      return { res, sent };
     }
     const nextImportJobId = crypto.randomUUID();
     // `proof` is told only for the refusals that were proven by their job's read AT ONCE; a lock code's is the 404 after the wait, as it always was.
@@ -1379,8 +1384,9 @@ const resendSentence = (sends) => {
   const shown = alsoAbsent ? `importjobs(<id>) answered 404, or ${LOG_SHOWED}` : `importjobs(<id>) ${LOG_SHOWED}`;
   return `ImportSolution was sent ${total} times. Each send before the last was refused at the environment's customization lock (HTTP 429, code ${codes}: another operation held it) before any of the package was applied, and its import job showed it: ${shown}. The run waited ${waits} before sending again.`;
 };
-// Why a retry that the platform's refusal asked for was not made: the wait it asks for does not fit in what is left of IMPORT_RETRY_BUDGET_MS (`waitMs`), or the time went on the read that proves the refused send did not
-// start (`waitMs` null). Numbers only, like the sentences above.
+// Why a retry that the platform's refusal asked for was not made: the wait it asks for does not fit in what is left of IMPORT_RETRY_BUDGET_MS (`waitMs`), or the time ran out during the wait itself (a timer that
+// resumed late) or the read after it that proves a lock code's refused send did not start (`waitMs` null). Numbers only, like the sentences above. Its advice holds for both kinds of refusal: the job of a refusal with
+// SolutionConcurrencyFailure is read and proven BEFORE the wait (one that proves nothing is unprovenSentence's), and for a lock code it is the advice the retry always gave.
 const RETRY_BUDGET_TEXT = `${IMPORT_RETRY_BUDGET_MS / 60000} minutes`;
 const stoppedSentence = ({ waitMs, spentMs }) => `ImportSolution was not sent again: ${waitMs === null
   ? `the ${RETRY_BUDGET_TEXT} this run spends in all on sending it again were used up (${secondsOf(spentMs)}) before the next send`
