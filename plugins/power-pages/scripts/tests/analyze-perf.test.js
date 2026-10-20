@@ -444,13 +444,13 @@ test('scanSiteSettings flags sign-in tracking enabled as PERF-SIGNIN-TRACKING', 
   assert.equal(signin.fixAction.value, 'false');
 });
 
-test('scanSiteSettings keeps absent classic aggregate settings manual-only', () => {
-  const found = scanSiteSettings(new Map(), 'sitesetting.yml', 'classic');
+test('scanSiteSettings keeps absent non-SPA aggregate settings manual-only', () => {
+  const found = scanSiteSettings(new Map(), 'sitesetting.yml', 'non-spa');
   const header = found.find((f) => f.tag === 'PERF-HEADER-OUTPUTCACHE');
   assert.ok(header);
   assert.equal(header.autoFixAvailable, false);
   assert.equal(header.fixAction, null);
-  assert.match(header.fix, /classic sitesetting\.yml export/);
+  assert.match(header.fix, /non-SPA sitesetting\.yml export/);
 });
 
 // ── Count rules ──────────────────────────────────────────────────────────────
@@ -521,8 +521,8 @@ test('analyze() walks a project, assigns perf-N ids, and aggregates findings', (
   assert.equal(result.details.kind, 'kv');
 });
 
-test('analyze() supports a classic PAC download with root-level metadata', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'perf-classic-'));
+test('analyze() supports a non-SPA PAC download with root-level metadata', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'perf-non-spa-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   fs.mkdirSync(path.join(root, '.portalconfig'), { recursive: true });
@@ -573,6 +573,20 @@ test('analyze() supports a classic PAC download with root-level metadata', (t) =
   );
   assert.equal(coverage['Web files'], '2');
   assert.equal(coverage['Web roles'], '2');
+});
+
+test('analyze() rejects SPA websites', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'perf-spa-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(root, 'powerpages.config.json'),
+    JSON.stringify({ siteName: 'SPA Site' }),
+  );
+
+  assert.throws(
+    () => analyze(root),
+    /supports non-SPA Power Pages websites only.*powerpages\.config\.json/i,
+  );
 });
 
 test('analyze() wires list pagination and webpage-as-API checks into the project scan', (t) => {

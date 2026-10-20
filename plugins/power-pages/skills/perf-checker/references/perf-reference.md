@@ -146,7 +146,7 @@ Only runtime `.css` is scanned for `@import`; pre-processor sources (`.scss`/`.l
 ### Output caching & tracking rules
 
 These read either `.powerpages-site/site-settings/*.sitesetting.yml` (via the
-shared `loadSiteSettings` parser) or a classic PAC download's root-level
+shared `loadSiteSettings` parser) or a non-SPA PAC download's root-level
 `sitesetting.yml` aggregate list. Page/file tracking reads the per-record YAML in
 either export layout. The rules run only when the relevant metadata exists.
 
@@ -164,8 +164,8 @@ either export layout. The rules run only when the relevant metadata exists.
 
 | Tag | Detect | Severity | Auto-fix | Why it matters |
 |-----|--------|----------|----------|----------------|
-| `PERF-WEBFILE-COUNT` | `.webfile.yml` count across `.powerpages-site/web-files/` or classic root `web-files/` > `WEB_FILE_WARN_THRESHOLD` (500) | warning | No | Large web-file table slows website startup. Move static content to Blob/CDN. |
-| `PERF-WEBROLE-COUNT` | per-record `.webrole.yml` count or classic root `webrole.yml` record count > `WEB_ROLE_WARN_THRESHOLD` (100) | warning | No | Many roles evaluated per request affect every page. Consolidate roles. |
+| `PERF-WEBFILE-COUNT` | `.webfile.yml` count across `.powerpages-site/web-files/` or non-SPA root `web-files/` > `WEB_FILE_WARN_THRESHOLD` (500) | warning | No | Large web-file table slows website startup. Move static content to Blob/CDN. |
+| `PERF-WEBROLE-COUNT` | per-record `.webrole.yml` count or non-SPA root `webrole.yml` record count > `WEB_ROLE_WARN_THRESHOLD` (100) | warning | No | Many roles evaluated per request affect every page. Consolidate roles. |
 | `PERF-LARGE-STATIC-ASSET` | any media/binary asset > `LARGE_ASSET_BYTES` (1 MiB) | info | No | Large unoptimized assets slow first load, especially on mobile. Compress or move to CDN. |
 
 `PERF-LARGE-STATIC-ASSET` reports at most the 20 largest offenders so a media-heavy project cannot drown the report.
@@ -178,9 +178,9 @@ For findings with `autoFixAvailable: true`, `fixAction` tells the SKILL.md Phase
 
 | `fixAction.type` | Fields | How the skill applies it |
 |------------------|--------|--------------------------|
-| `create-site-setting` | `name`, `value`, `valueType` | Per-record `.powerpages-site` layout only: `node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot <root> --name <name> --value <value> --type boolean --description "<why>"`. Errors if the setting already exists — treat that as "already handled". A missing setting in classic aggregate `sitesetting.yml` remains manual because creating a second metadata layout would be unsafe. |
+| `create-site-setting` | `name`, `value`, `valueType` | Per-record `.powerpages-site` layout only: `node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot <root> --name <name> --value <value> --type boolean --description "<why>"`. Errors if the setting already exists — treat that as "already handled". A missing setting in a non-SPA aggregate `sitesetting.yml` remains manual because creating a second metadata layout would be unsafe. |
 | `set-site-setting` | `name`, `value`, `valueType` | The setting file already exists; use `Edit` to flip the `value:` line (e.g., `false` → `true`, or tracking `true` → `false`). Do **not** call `create-site-setting.js` (it refuses to overwrite). |
-| `set-yaml-field` | `field`, `value`, optional `recordName` | Use `Edit` at the finding's precise `location` to set `<field>: <value>` (e.g., `adx_enabletracking: false`). For classic aggregate `sitesetting.yml`, `recordName` identifies the record and the location points at its exact `adx_value` line. |
+| `set-yaml-field` | `field`, `value`, optional `recordName` | Use `Edit` at the finding's precise `location` to set `<field>: <value>` (e.g., `adx_enabletracking: false`). For a non-SPA aggregate `sitesetting.yml`, `recordName` identifies the record and the location points at its exact `adx_value` line. |
 
 **Output-cache fixes carry a mandatory caveat** (already baked into the finding's `fix` text): enabling `Header/Footer/OutputCache/Enabled` alone is **not** sufficient — the Header, Footer, and Languages-Dropdown web templates must also use the `{% substitution %}` Liquid tag, or those regions stop rendering. Always surface this caveat when applying the fix and recommend verifying the templates.
 
@@ -212,7 +212,12 @@ Documented here for completeness; **not** emitted by the analyzer because they r
 
 ## Key nuances
 
-- **Code sites vs declarative sites.** `pac pages upload-code-site` replaces the Header and Footer web templates with a `<div/>` on every upload, so output-cache findings apply mainly to **declarative** sites. The analyzer reads either `.powerpages-site/site-settings/` or classic root-level `sitesetting.yml`; a pure code site with neither metadata source simply won't produce those findings.
+- **Non-SPA scope.** The skill and analyzer reject projects containing
+  `powerpages.config.json`, the authoritative local marker for a Power Pages SPA
+  website. The current rules target Liquid, portal metadata, and non-SPA export
+  layouts; accepting a SPA would produce an incomplete performance assessment.
+  Supported non-SPA exports may store settings under
+  `.powerpages-site/site-settings/` or in root-level `sitesetting.yml`.
 - **Default-on vs default-off caching.** New sites default header/footer output caching **on**; upgraded sites default it **off** when the setting is absent. Hence: present-and-false ⇒ `warning` (confident), absent ⇒ `info` (a nudge).
 - **`adx_enabletracking` is deprecated, not removed.** The field is retired on portal versions 9.3.4.x and later, but older exports still carry it; Site Checker continues to flag it, so the analyzer does too (at `info`).
 - **Heuristics are intentionally conservative.** `PERF-WEBAPI-IN-LOOP` requires an `async` callback and a `/_api/` reference within the same statement window to stay high-signal; a plain `.map` over already-fetched results is not flagged.

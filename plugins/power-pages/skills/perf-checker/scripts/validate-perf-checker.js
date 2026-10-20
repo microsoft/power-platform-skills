@@ -28,7 +28,7 @@ const UNREPLACED_PLACEHOLDER = /__[A-Z][A-Z0-9_]+__/;
 const MIN_REPORT_BYTES = 500;
 
 // The shared findProjectRoot helper intentionally recognizes only code-site and
-// `.powerpages-site` layouts. perf-checker also supports classic PAC downloads,
+// `.powerpages-site` layouts. perf-checker also supports non-SPA PAC downloads,
 // whose root contains `.portalconfig/` plus files such as `website.yml` and
 // `sitesetting.yml`, so climb separately before deciding this was not a skill run.
 function findPerfProjectRoot(startPath) {

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const { buildTemplateOutcomeEvent, emitTemplateOutcome, normalizeBool, sanitizeTemplateOutcomeInfo } = require('../lib/create-site-template-telemetry');
 const { parseArgs, toCliResult } = require('../emit-create-site-template-outcome');
+const { version: PLUGIN_VERSION } = require('../../.plugin/plugin.json');
 
 test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the existing skill event shape', () => {
   const event = buildTemplateOutcomeEvent({
@@ -21,14 +22,13 @@ test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the exi
   }, {
     readPacAuth: () => ({ orgId: 'org', tenantId: 'tenant' }),
     readAgentInfo: () => ({ aiAgentName: 'Copilot CLI', aiAgentVersion: '1.0.76-0', pacCliVersion: '2.10.1' }),
-    pluginVersion: '2.7.0',
     randomUUID: () => 'ignored',
   });
 
   assert.equal(event.name, 'PagesAIPluginEvent');
   assert.equal(event.data.eventName, 'template_used');
   assert.equal(event.data.skillName, 'create-site');
-  assert.equal(event.data.pluginVersion, '2.7.0');
+  assert.equal(event.data.pluginVersion, PLUGIN_VERSION);
   assert.equal(event.data.sessionId, 'session');
   assert.equal(event.data.aiAgentName, 'Copilot CLI');
   assert.equal(event.data.aiAgentVersion, '1.0.76-0');
@@ -158,7 +158,6 @@ test('buildTemplateOutcomeEvent emits scratch branch adoption signal', () => {
     readAgentInfo: () => ({}),
     randomUUID: () => 'corr',
     env: { COPILOT_AGENT_SESSION_ID: 'copilot-session' },
-    pluginVersion: '2.7.0',
   });
 
   assert.equal(event.data.eventName, 'create_site_from_scratch');

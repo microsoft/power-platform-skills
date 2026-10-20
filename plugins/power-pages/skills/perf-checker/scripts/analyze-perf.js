@@ -58,7 +58,7 @@ const WEB_FILE_WARN_THRESHOLD = 500;
 // Site Checker flags web-role counts > 100 (per-request permission evaluation cost).
 // See site-checker-performance "Number of web roles".
 const WEB_ROLE_WARN_THRESHOLD = 100;
-// Unoptimized media is a classic first-load regression. 1 MiB is a conservative
+// Unoptimized media is a common first-load regression. 1 MiB is a conservative
 // "worth a look" bar for a single static asset shipped with the site.
 const LARGE_ASSET_BYTES = 1024 * 1024;
 // Cap the large-asset findings so a media-heavy project can't drown the report.
@@ -953,7 +953,7 @@ function scanCssContent(content, relPath) {
 
 // ── Site-settings rules (output caching, sign-in tracking) ───────────────────
 // settingsByName: Map<lowercaseName, { value, filePath, name, valueField? }>.
-// siteSettingsSource is either a per-record directory, a classic aggregate file,
+// siteSettingsSource is either a per-record directory, a non-SPA aggregate file,
 // or null when the project has no local site-setting metadata.
 function scanSiteSettings(settingsByName, siteSettingsSource, siteSettingsLayout = 'per-record') {
   const out = [];
@@ -961,7 +961,7 @@ function scanSiteSettings(settingsByName, siteSettingsSource, siteSettingsLayout
 
   const isTrue = (v) => v === true || String(v).trim().toLowerCase() === 'true';
   const settingFixAction = (rec, name, value) => {
-    // Classic PAC downloads store every setting in one root-level sitesetting.yml.
+    // Non-SPA PAC downloads can store every setting in one root-level sitesetting.yml.
     // The parser records the exact adx_value line, so set-yaml-field remains a
     // precise, single-record edit instead of replacing the first matching boolean.
     if (rec && rec.valueField === 'adx_value') {
@@ -1005,9 +1005,9 @@ function scanSiteSettings(settingsByName, siteSettingsSource, siteSettingsLayout
       }));
     } else if (!rec) {
       // create-site-setting.js writes the per-record `.powerpages-site` format.
-      // It must not be used against a classic aggregate sitesetting.yml because
+      // It must not be used against a non-SPA aggregate sitesetting.yml because
       // that would create a second, incompatible metadata layout beside the site.
-      const canAutoCreate = siteSettingsLayout !== 'classic';
+      const canAutoCreate = siteSettingsLayout !== 'non-spa';
       out.push(finding({
         tag,
         severity: SEVERITY.INFO,
@@ -1019,7 +1019,7 @@ function scanSiteSettings(settingsByName, siteSettingsSource, siteSettingsLayout
         fix:
           (canAutoCreate
             ? `Create ${name} = true to guarantee caching.`
-            : `Add ${name} with adx_value: true to the classic sitesetting.yml export.`) +
+            : `Add ${name} with adx_value: true to the non-SPA sitesetting.yml export.`) +
           substitutionCaveat,
         autoFixAvailable: canAutoCreate,
         fixAction: canAutoCreate
@@ -1143,7 +1143,7 @@ function readSafe(absPath) {
   }
 }
 
-// Parse the classic PAC download list shape, where all records of one table are
+// Parse the non-SPA PAC download list shape, where all records of one table are
 // stored in a single root-level YAML file, for example:
 //   - adx_name: Header/OutputCache/Enabled
 //     adx_sitesettingid: <guid>
@@ -1152,7 +1152,7 @@ function readSafe(absPath) {
 // nested-list lines remain part of their current record. Each record is then
 // delegated to the shared parseSimpleYaml helper so scalar coercion and quoting
 // stay consistent with the per-record `.powerpages-site` loader.
-function parseClassicYamlRecordList(content, filePath) {
+function parseNonSpaYamlRecordList(content, filePath) {
   const lines = content.split(/\r?\n/);
   const records = [];
   let current = null;
@@ -1198,7 +1198,7 @@ function parseClassicYamlRecordList(content, filePath) {
 
 // Load site settings into Map<lowercaseName, {value, filePath, name}> from either
 // the per-record `.powerpages-site/site-settings/*.sitesetting.yml` layout or the
-// classic root-level `sitesetting.yml` list. `rel` prevents machine-specific
+// non-SPA root-level `sitesetting.yml` list. `rel` prevents machine-specific
 // absolute paths from leaking into the shared HTML report.
 function loadSiteSettingsMap(projectRoot, rel) {
   const map = new Map();
@@ -1226,13 +1226,13 @@ function loadSiteSettingsMap(projectRoot, rel) {
     return { map, source: relDir, layout: 'per-record' };
   }
 
-  const classicFile = path.join(projectRoot, 'sitesetting.yml');
-  if (fs.existsSync(classicFile)) {
-    const relFile = rel(classicFile);
-    const content = readSafe(classicFile);
+  const nonSpaFile = path.join(projectRoot, 'sitesetting.yml');
+  if (fs.existsSync(nonSpaFile)) {
+    const relFile = rel(nonSpaFile);
+    const content = readSafe(nonSpaFile);
     const records = content == null
       ? []
-      : parseClassicYamlRecordList(content, classicFile);
+      : parseNonSpaYamlRecordList(content, nonSpaFile);
 
     for (const r of records) {
       if (typeof r.adx_name !== 'string') continue;
@@ -1244,14 +1244,14 @@ function loadSiteSettingsMap(projectRoot, rel) {
         valueField: 'adx_value',
       });
     }
-    return { map, source: relFile, layout: 'classic' };
+    return { map, source: relFile, layout: 'non-spa' };
   }
 
   return { map, source: null, layout: null };
 }
 
-// Count records across both Power Pages export layouts. Enhanced/code-site
-// metadata uses one descriptor file per record; classic downloads keep web-file
+// Count records across both supported non-SPA export layouts. Per-record
+// metadata uses one descriptor file per record; aggregate downloads keep web-file
 // descriptors in a root folder and web roles in one aggregate `webrole.yml`.
 function countPortalRecords(
   projectRoot,
@@ -1271,7 +1271,7 @@ function countPortalRecords(
   const filePath = path.join(projectRoot, aggregateFile);
   const content = readSafe(filePath);
   if (content == null) return 0;
-  return parseClassicYamlRecordList(content, filePath)
+  return parseNonSpaYamlRecordList(content, filePath)
     .filter((record) => record[aggregateIdField] != null)
     .length;
 }
@@ -1279,6 +1279,17 @@ function countPortalRecords(
 function analyze(projectRoot) {
   const root = path.resolve(projectRoot || process.cwd());
   const findings = [];
+
+  // powerpages.config.json is the authoritative local marker for a Power Pages
+  // code/SPA site. The current rules target Liquid/portal metadata and would give
+  // incomplete guidance for a SPA, so fail explicitly instead of returning a
+  // success-shaped partial scan.
+  if (fs.existsSync(path.join(root, 'powerpages.config.json'))) {
+    throw new Error(
+      'This performance checker currently supports non-SPA Power Pages websites only. ' +
+      `The selected path is a SPA website because it contains powerpages.config.json: ${root}`,
+    );
+  }
 
   // Single directory walk for content scans (source only), reused for FetchXML,
   // Web API, and deprecated-tracking checks.

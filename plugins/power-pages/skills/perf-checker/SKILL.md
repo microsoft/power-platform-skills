@@ -31,10 +31,13 @@ This skill reads local source only — it does not call the deployed site. For a
 
 ## Prerequisites
 
-- An existing local Power Pages project or PAC CLI site download. `powerpages.config.json`
-  and `.powerpages-site/` are useful discovery markers, but they are not required
-  when the user supplies an existing site folder. Classic downloads with root-level
-  `.portalconfig/`, `website.yml`, and portal content folders are valid inputs.
+- An existing local **non-SPA** Power Pages project or PAC CLI site download.
+  `.powerpages-site/`, root-level `.portalconfig/`, `website.yml`, and portal
+  content folders are useful discovery markers, but they are not all required
+  when the user supplies an existing site folder.
+- SPA websites are not supported yet. `powerpages.config.json` is the
+  authoritative local SPA marker; if it exists at the selected project root,
+  tell the user this skill currently supports non-SPA websites only and stop.
 - Node.js (bundled scripts run under `node`).
 
 No sign-in, PAC CLI, or Azure CLI is required — the analysis is fully offline.
@@ -101,15 +104,17 @@ Create tasks in three groups. Mark each `in_progress` when starting, `completed`
      working directory. Use `Glob` to locate `**/powerpages.config.json`,
      `**/.powerpages-site`, `**/.portalconfig`, or `**/website.yml` when needed.
 3. Treat any of these as recognizable Power Pages source:
-   `powerpages.config.json`, `.powerpages-site/`, root-level `.portalconfig/`,
-   `website.yml`, or a characteristic portal export layout containing folders such
-   as `web-pages/`, `web-templates/`, or `web-files/`. Do **not** reject an
-   explicitly supplied existing site folder merely because it lacks
-   `powerpages.config.json` and `.powerpages-site/`.
-4. If no existing directory with recognizable Power Pages source can be located,
+   `.powerpages-site/`, root-level `.portalconfig/`, `website.yml`, or a
+   characteristic portal export layout containing folders such as `web-pages/`,
+   `web-templates/`, or `web-files/`. Do **not** reject an explicitly supplied
+   existing site folder merely because it lacks `.powerpages-site/`.
+4. If `<PROJECT_ROOT>/powerpages.config.json` exists, tell the user that the
+   selected path is a SPA website and this skill currently supports non-SPA
+   Power Pages websites only, then **stop**.
+5. If no existing directory with recognizable non-SPA Power Pages source can be located,
    tell the user and recommend `/create-site`, then **stop**.
-5. In review mode Phases 3, 4, and 6-presentation are skipped: Phase 2 runs,
-   Step 5.1 writes JSON only, and the skill stops after writing it.
+6. In review mode Phases 3, 4, and 6-presentation are skipped: Phase 2 runs,
+   Step 6.2 writes JSON only, and the skill stops after writing it.
 
 Report: "Found project: `<PROJECT_ROOT>`. Scanning for performance anti-patterns."
 
@@ -212,7 +217,7 @@ For the approved finding, apply its `fixAction`:
 - **`set-site-setting`** (setting exists but is wrong): use `Edit` on the finding's `location` file to flip the `value:` line (`false` → `true`, or tracking `true` → `false`). Do **not** call `create-site-setting.js` — it refuses to overwrite.
 - **`set-yaml-field`**: use `Edit` at the finding's precise `location` to set
   `<fixAction.field>: <fixAction.value>` (e.g., `adx_enabletracking: false`).
-  For a classic aggregate `sitesetting.yml`, `fixAction.recordName` identifies the
+  For a non-SPA aggregate `sitesetting.yml`, `fixAction.recordName` identifies the
   setting record and the location points at its exact `adx_value` line. Do not
   replace another record's matching boolean.
 
@@ -247,9 +252,14 @@ Write the enriched `{ status, findings, details }` object (the Phase 5 re-scan r
 
 The filename **must** be `perf-checker.json` — that is the key `build-review-data.js` maps to the Performance section.
 
-### Step 5.2 — Render the HTML report
+### Step 6.3 — Render the HTML report
 
 Skip in **review mode**. Reuse the shared report pipeline (same template as the security review and site scan):
+
+The final HTML report is a persistent website artifact under
+`<PROJECT_ROOT>/docs/`, consistent with the other review reports. Only
+`perf-checker.json` and `data.json` are temporary scratch files; delete their
+temporary directory after the HTML render succeeds.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-review-data.js" \
@@ -266,9 +276,12 @@ node "${PLUGIN_ROOT}/scripts/render-review.js" \
   --output "<PROJECT_ROOT>/docs/perf-check-<YYYY-MM-DD-HHMMSS>.html"
 ```
 
-`<SITE_NAME>` comes from `powerpages.config.json` (`siteName`) or the site's `website.yml`; fall back to the folder name. The filename **must** include the local timestamp (e.g., `perf-check-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the render succeeds and open the report in the browser.
+`<SITE_NAME>` comes from the site's `website.yml`; fall back to the folder name.
+The filename **must** include the local timestamp (e.g.,
+`perf-check-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the render
+succeeds and open the report in the browser.
 
-### Step 5.3 — Summarize and route follow-ups
+### Step 6.4 — Summarize and route follow-ups
 
 <!-- gate: perf-checker:6.next-action | category=plan | cancel-leaves=nothing -->
 > 🚦 **Gate (plan · perf-checker:6.next-action):** After the report, recommend the single most useful next step and let the user accept or choose differently via `AskUserQuestion` — walk through the manual (non-auto-fixable) findings one at a time, re-scan, or finish. Reviewing findings and re-scanning are read-only; nothing is changed without a later Phase 4 consent.
