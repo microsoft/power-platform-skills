@@ -1041,6 +1041,31 @@ test('the budget refuses the first of two owed name lengths and no key waits: th
   assert.deepStrictEqual([...run.owedLengths.keys()], ['new_ticket']);
 });
 
+// What an attempt that failed leaves behind (`owedLengths`) is paid by the attempt that follows it, and a refusal of the budget in that attempt does not change that.
+test('a debt an earlier attempt left is still paid by a run in which the budget refuses the first of two owed lengths — the second table\'s carried debt is not dropped', async () => {
+  let attempt = 1;
+  const throttled = firstLengthThrottled();
+  const dv = fakeDataverse({ updateFails: (body) => (attempt === 1 ? refusal() : throttled(body)) });
+  const spec = twoOwedLengths();
+  const owed = new Map();
+  // The first attempt creates both tables and cannot set either length: the platform refuses each update, so both are owed, and tried.
+  const first = await budgetedRun(dv, spec, { owedLengths: owed });
+  assert.strictEqual(first.error, null);
+  assert.deepStrictEqual([...owed.keys()].sort(), ['new_note', 'new_ticket']);
+  assert.deepStrictEqual(primaryLengths(dv), { new_ticket: 850, new_note: 850 });
+  // The retry is handed the debts: the budget refuses the update of the first, and the second is paid all the same.
+  attempt = 2;
+  const retry = await budgetedRun(dv, spec, { owedLengths: owed });
+  assert.strictEqual(retry.throttle.declined().count, 1, 'one update was refused for want of room');
+  assert.strictEqual(retry.error, null);
+  assert.deepStrictEqual(primaryLengths(dv), { new_ticket: 850, new_note: 180 });
+  assert.deepStrictEqual(lengthEvents(retry).map((e) => [e.status, e.label]), [
+    ['error', `primary column length new_ticket.new_name -> 120 (${OWED})`],
+    ['ok', `primary column length new_note.new_notename -> 180 (${OWED})`],
+  ]);
+  assert.deepStrictEqual([...owed.keys()], ['new_ticket'], 'the debt of the table whose update was refused stays; the other was paid');
+});
+
 test('a length step the runner stopped before it began is not a length that was set: the debt stays, untried, the key is not asked for, and the settlement of a halted build pays it', async () => {
   const { settleOwedLengths } = require('../lib/entity-provision.js');
   const dv = fakeDataverse();
