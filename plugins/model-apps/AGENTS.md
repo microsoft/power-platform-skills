@@ -2226,12 +2226,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     that carries labels lost a language), while a key made after the length step kept both languages (9 of 9, and 2 of 2 in a new process) — so
     "after the step" cannot be shown safe where the loss does exist, and a key that fits keeps the place that never risked it; the one key that
     cannot be made there is the one that moves. A key that was not known to be too large and that the platform then refuses for its size (an
-    environment whose limit is smaller, or a read that failed) is made where it always was, and `alternateKeyAheadOfLength` warns — only when the key fails — naming the
-    key, the languages its label goes out in, why it was made first and what to do: run the build again (the length is set as the build stops, so
-    the run that follows finds the table with it and makes the key), or label the key in one language. A key that cannot fit even at the length
-    the spec asks is made there too (waiting makes no room for it), and when the platform refuses it the warning says so instead: the bytes its
-    columns take at that length, that running the build again does not create it, and to take a column out of the key or make its text columns
-    shorter. Where the environment
+    environment whose limit is smaller, a read that failed, or a column the floor counts at one byte that the platform counts at more) is made where
+    it always was, and `alternateKeyAheadOfLength` warns — only when the key fails — naming the key, the languages its label goes out in, why it was
+    made first, and what to do, which depends on what the floor proves at the length the spec asks. **Proven too large** (the floor is over the
+    limit): such a key is made there too (waiting makes no room for it), and the warning says so — the bytes its columns take at that length, that
+    running the build again does not create it, and to take a column out of the key or make its text columns shorter. **Inconclusive** (the floor
+    is within the limit — it counts a column that is not text, or one the spec does not describe, at one byte, so a name column of 849 characters
+    beside an Integer column counts 1,699 bytes and is refused all the same): the warning promises nothing — running the build again may create the
+    key (the length is set as the build stops) if the asked length leaves room for it; it states the floor, and says to compare the platform's error
+    with the sizes of the key's columns if the next run is refused the same way. Neither offers a label in one language as a way out: that changes
+    where a key is made, not its size. Where the environment
     keeps the length asked, the key is made and nothing is said. Every other key —
     over another column, over the name column of a table that already existed or was found after its create (never
     written to), or in a spec that gives no length — is made with its table, as it always was; a spec that keys a name
@@ -2240,8 +2244,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     table the build creates has it, and a key labelled in several languages with its table — whether the environment makes the build move
     it is known only to the build, and the count is the same either way. `table-columns-in-create.test.js` pins the order (against a
     stub that answers a key that is too large as the platform does: at 1,700 bytes, and at 900 for an environment that enforces the documented
-    limit), the failure, the language rule, the warning, the read and the retry, and that the floor counts each column as the real bundle
-    creates it, for every type the build creates; `app-spec-key-size.test.js` pins the size rule.
+    limit), the failure, the language rule, the warning (proven and inconclusive, and that the run after agrees with each), the read and the retry,
+    and that the floor counts each column as the real bundle creates it, for every type the build creates; `app-spec-key-size.test.js` pins the
+    size rule.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an

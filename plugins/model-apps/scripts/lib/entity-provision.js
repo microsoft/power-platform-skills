@@ -1757,14 +1757,20 @@ function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
 // labels, which setting the length starts with, does not come before a create that carries several languages. Where the platform then
 // refuses it — a key may hold at most 1,700 bytes, which a name column of the 850 characters some environments give a new table fills by
 // itself — the build says why this key was made first and what to do, because the platform's refusal says nothing of the length. The build
-// sets the length as the last step before it stops (provisionDataModel), so the run that follows finds the table with it and makes the key.
+// sets the length as the last step before it stops (provisionDataModel), so the run that follows finds the table with it, and makes the key
+// where that length leaves room for it.
 // Said only when the key fails: where the environment keeps the length asked the key is made, and nothing is wrong. What reaches here is
 // a key that was not known to be too large — a key over the name column alone fits even at 850 characters, and a read of the length that
 // failed leaves a key that would not fit as undecided (keyMustWaitForShorterNameColumn) — or one the platform refused for another reason.
 // What the warning tells the reader to do follows from the size the key has at the length the spec asks, counted from its columns as the build
-// creates them (keyBytesAtLeast). Where even that is over what a key may hold, setting the length makes no room for the key — which is why it was not
-// made after the step (keyHasRoomOnlyAfterLength) — and the run that follows is refused as this one was: so the warning says that, with the bytes,
-// instead of sending the reader to run the build again.
+// creates them (keyBytesAtLeast) — a floor. Where even the floor is over what a key may hold, the key is proven too large: setting the length makes
+// no room for it — which is why it was not made after the step (keyHasRoomOnlyAfterLength) — and the run that follows is refused as this one was,
+// so the warning says that, with the bytes. Where the floor is within the limit, nothing is proven either way: the floor counts a column that is
+// not text, or that the spec does not describe, at one byte, which the platform may exceed (a name column of 849 characters beside an Integer
+// column counts 1,699 bytes, and is refused), and an environment may allow less than the 1,700 bytes measured. So the warning promises nothing
+// there: a run again may create the key, if the length the spec asks leaves room for it, and where that run is refused the same way, the
+// platform's error and the sizes of the key's columns say why. A label in one language is not offered as a way out: it changes where a key is
+// made, not its size.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, languageCode, warn }) {
   try {
@@ -1778,13 +1784,17 @@ async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, la
       const languages = Object.keys(key.displayName);
       const named = languages.length > 1 ? `in several languages (${languages.join(', ')})` : 'a language map that does not name exactly one language';
       const atAsked = keyBytesAtLeast(entity, key, asked);
+      const limit = KEY_BYTES_LIMIT.toLocaleString('en-US');
       const whatToDo = atAsked > KEY_BYTES_LIMIT
         ? `It cannot fit at that length either: with ${column} at ${asked} characters the key's columns take at least ${atAsked.toLocaleString('en-US')} bytes, `
-          + `and a key may hold at most ${KEY_BYTES_LIMIT.toLocaleString('en-US')}, 2 for each character of text — so running the build again does not create it. `
+          + `and a key may hold at most ${limit}, 2 for each character of text — so running the build again does not create it. `
           + 'Take a column out of the key, or make its text columns shorter.'
         : 'If the platform refused it for its size — a key may hold '
           + 'at most 1,700 bytes, 2 for each character of text, so the 850 characters some environments make of a new name column fill it by themselves, and no other column fits beside it — '
-          + 'run the build again: the length is set as the build stops, so the key is created then. A key labelled in one language is created after the length is set.';
+          + `the length is set as the build stops, so running the build again may create the key: it does if ${column} at ${asked} characters leaves room for it. `
+          + `That is not certain: the build counts at least ${atAsked.toLocaleString('en-US')} bytes for the key at that length — one byte for a column that is not text, `
+          + `or that the spec does not describe — and the platform may count more, or allow less than the ${limit} bytes measured. `
+          + 'If the next run is refused the same way, compare the platform\'s error with the sizes of the key\'s columns, and take a column out of the key or make its text columns shorter.';
       warn(
         `alt key ${entity.schemaName}.${key.schemaName} was not created. It is over the name column ${column} of a table this build created, and its label is ${named}, `
         + `so the build creates it before it sets that column to ${asked} characters `

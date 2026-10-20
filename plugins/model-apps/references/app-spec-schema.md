@@ -575,12 +575,17 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   column, and shortening the column is what lets it): the build reads the column's length once, before it asks for such
   a key, and makes the key after the length is set — with both labels, so the first build succeeds. A key labelled in several
   languages over the name column alone is made before the length is set whatever the column's length. Where the platform refuses a key made before
-  the length is set for its size all the same, the first build stops there; the build then **warns**, naming the key and what
-  to do: run it again (the length is set as the build stops, so the key is made then), or label the key in one language so
-  that it is made after the length. A key too large even at the length you give the name column is refused on every run, and
-  the warning says that instead, with its size: take a column out of the key, or make its text columns shorter. A key's columns
-  count as the build creates them — a `Text` column at its `maxLength` (100 without one), an `AutoNumber` column at 100 (the
-  build gives it no other length). Nothing is said where the environment keeps the length asked and the key is made.
+  the length is set for its size all the same, the first build stops there, and the build **warns**, naming the key. What the
+  warning says depends on what the build can tell of the key's size. It counts the key's columns as it creates them, 2 bytes
+  for each character of text — a `Text` column at its `maxLength` (100 without one), an `AutoNumber` column at 100 (the build
+  gives it no other length) — and any other column at one byte, so the count is a minimum. When even that minimum is over
+  1,700 bytes at the length you give the name column, the key is **proven** too large: the warning says so, with its size, and
+  that running the build again does not create it — take a column out of the key, or make its text columns shorter. Otherwise
+  the count is **inconclusive** (a column that is not text can take more than one byte, and an environment may allow less than
+  1,700), so the warning promises nothing: running the build again may create the key, since the length is set as the build
+  stops, if the name column at the length you give leaves room for it; if that run is refused the same way, compare Dataverse's
+  error with the sizes of the key's columns. Labelling the key in one language changes where it is made, not its size. Nothing
+  is said where the environment keeps the length asked and the key is made.
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
 

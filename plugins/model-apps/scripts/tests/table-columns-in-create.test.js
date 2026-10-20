@@ -147,6 +147,7 @@ function fakeDataverse({
   updateFails = null,          // (body) => response | falsy, for the PUT of a typed column; a falsy answer lets it through
   keyFails = null,             // (body, table) => response | falsy, for the request that creates an alternate key; a falsy answer lets it through
   keyBytesLimit = KEY_BYTES_LIMIT, // the most bytes a key may hold on this environment (the one measured answers 1,700; Learn documents 900)
+  createdOnColumn = false,     // list `createdon` among a new table's columns, as the DateTime the platform gives every table, so a key can name it
   extraCompanions = null,      // (body) => names the platform makes beside a column that nothing in the build lists
 } = {}) {
   const log = [];
@@ -296,6 +297,8 @@ function fakeDataverse({
         const primary = clone(body.Attributes[0]);
         if (!primary.AutoNumberFormat && !keepsAskedRequired) primary.RequiredLevel = { ...primary.RequiredLevel, Value: 'None' };
         addColumn(table, primary);
+        // `createdon` is one of the columns the platform gives every table (SYSTEM_COLUMNS), a DateTime: a key may name it, though no spec declares it.
+        if (createdOnColumn) table.columns.set('createdon', { body: { '@odata.type': 'Microsoft.Dynamics.CRM.DateTimeAttributeMetadata', SchemaName: 'createdon' }, row: columnRow(table, { SchemaName: 'createdon' }) });
         if (createCommitsThenFails) return refuse(p, createCommitsThenFails(body));
         return created(`EntityDefinitions(${table.id})`);
       }
@@ -3592,6 +3595,20 @@ test('what is sent decides, not the language the build is authored in: a key who
 // The build asks for such a key where it always did and finds out from the platform whether it fits: it cannot know the limit of an
 // environment that enforces the 900 bytes Microsoft Learn documents (the stub's `keyBytesLimit`), where even the name column alone is too
 // long at 850 characters.
+//
+// What it can know of a key's size is a floor (keyBytesAtLeast): it counts a column that is not text, or that the spec does not describe, at
+// one byte. Where the floor at the length the spec asks is within the limit, the build cannot tell whether setting that length makes room for
+// the key, so after the platform refuses the key its warning promises nothing: a run again may create the key, on that condition, and where it
+// is refused the same way the platform's error and the sizes of the key's columns say why. A label in one language changes where a key is
+// made, not its size, so it is not offered as a way out.
+function assertConditionalAdvice(advice, { column, asked, floor }) {
+  assert.match(advice, new RegExp(`running the build again may create the key: it does if ${column} at ${asked} characters leaves room for it\\. That is not certain: the build counts at least ${floor} bytes for the key at that length`), 'what a run again may do, on what condition, and how far the build can tell');
+  assert.match(advice, /and the platform may count more, or allow less than the 1,700 bytes measured\./, 'and why it cannot tell');
+  assert.match(advice, /If the next run is refused the same way, compare the platform's error with the sizes of the key's columns, and take a column out of the key or make its text columns shorter\.$/, 'and where to look then');
+  assert.doesNotMatch(advice, /so the key is created then/, 'no promise');
+  assert.doesNotMatch(advice, /cannot fit at that length either/, 'nor a proof the build does not have');
+  assert.doesNotMatch(advice, /labelled in one language/, 'and no label in one language as a way out');
+}
 test('a key labelled in several languages that the build had no reason to think too large is made ahead of the length step, and where the platform then refuses it the build says why and what to do — and the run that follows makes it, with both labels', async () => {
   const labelled = MAP_KEY({ 1033: 'Name Key', 3082: 'Clave del nombre' });
   const run = await provisionOver(keyedTable([labelled]), { dataverse: { keyBytesLimit: 900 }, capture: true });
@@ -3610,8 +3627,7 @@ test('a key labelled in several languages that the build had no reason to think 
   assert.match(advice[0], /at most 1,700 bytes, 2 for each character of text/, 'and what the platform refuses a key for, with the limit the platform names');
   assert.match(advice[0], /850 characters .* no other column/, 'and what that makes of a name column of 850 characters');
   assert.doesNotMatch(advice[0], /900 bytes/, 'not the limit Microsoft Learn documents and the platform does not name');
-  assert.match(advice[0], /run the build again/, 'and what to do');
-  assert.match(advice[0], /A key labelled in one language is created after the length is set/, 'and how to have it made first time');
+  assertConditionalAdvice(advice[0], { column: 'new_name', asked: 120, floor: '240' });
   const again = await provisionAgain(run.dv, keyedTable([labelled]));
   assert.strictEqual(again.error, null, 'the run that follows finds the table with the length set');
   assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
@@ -3751,6 +3767,8 @@ test('where the length the environment made cannot be read, such a key is made w
   assert.match(advice[0], /at most 1,700 bytes, 2 for each character of text/, 'with the limit the platform names');
   assert.match(advice[0], /850 characters .* no other column/, 'and what a name column of 850 characters leaves a key');
   assert.doesNotMatch(advice[0], /900 bytes/);
+  // The build could not read the length, so it cannot tell whether setting it makes room: it says the run after MAY create the key, and here it does.
+  assertConditionalAdvice(advice[0], { column: 'new_name', asked: 120, floor: '440' });
   const again = await provisionAgain(run.dv, keyedTable([PAIR_KEY]));
   assert.strictEqual(again.error, null, 'the run that follows finds the table with the length set');
   assert.deepStrictEqual(keyLabels({ dv: run.dv }).slice(-1), [PAIR_BOTH], 'and makes the key with both of its labels');
@@ -3927,7 +3945,7 @@ test('the floor of a key counts each column as the platform holds it once the bu
 
 // The size decides what the build says, too. A key that cannot fit even at the length the spec asks is not moved (waiting changes nothing), so it
 // is made ahead of the length step, where the platform refuses it; the run after would be refused the same way, so the warning must not send the
-// reader to run the build again, as it does for a key the length step makes room for.
+// reader to run the build again, as it may for a key whose size the build cannot tell.
 test('a key that cannot fit even at the length the spec asks is not promised to the run after: the warning says it cannot fit, with the bytes its columns take, and the run after is refused as the first build was', async () => {
   const key = { schemaName: 'new_widekey', displayName: PAIR_LABELS, columns: ['new_name', 'new_wide'] };
   const spec = keyedTable([key], asksFor(120), [{ ...textColumn('new_wide'), maxLength: 900 }]);
@@ -3949,6 +3967,31 @@ test('a key that cannot fit even at the length the spec asks is not promised to 
   assert.match(again.error.message, /Index size exceeded the size limit of 1700 bytes/);
   assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], [], 'and there is no key');
 });
+
+// A key the build's count does NOT show too large can be too large all the same: the count is a floor, and it counts a column that is not text, or
+// that the spec does not describe, at one byte. Beside a name column of 849 characters (1,698 bytes) one byte fits and anything more does not; the
+// stub counts such a column at 8 bytes (SQL Server stores an integer in 4 and a datetime in 8), and any count over two bytes gives the same answer.
+// The environment keeps the length asked, so the length step has nothing to set, and the run after asks for the same key at the same size.
+for (const [what, key, columns, dataverse] of [
+  ['an Integer column', { schemaName: 'new_countkey', displayName: PAIR_LABELS, columns: ['new_name', 'new_count'] }, [{ schemaName: 'new_count', displayName: 'Count', type: 'Integer' }], HONOURING],
+  ['createdon, a column every table has that the spec does not describe', { schemaName: 'new_createdkey', displayName: PAIR_LABELS, columns: ['new_name', 'createdon'] }, [], { ...HONOURING, createdOnColumn: true }],
+]) {
+  test(`a key whose size the build cannot tell is not promised to the run after: over a name column asked and made 849 characters long and ${what}, the build counts 1,699 bytes, the platform refuses the key, and the run after is refused the same way`, async () => {
+    const spec = keyedTable([key], asksFor(849), columns);
+    const label = `alt key new_ticket.${key.schemaName}`;
+    const run = await provisionOver(spec, { dataverse, capture: true });
+    assert.ok(run.error instanceof BuildHalt, 'the platform refuses the key');
+    assert.match(run.error.message, /Index size exceeded the size limit of 1700 bytes/, 'for its size');
+    assert.deepStrictEqual(labelsOfSteps(run).slice(-2), [label, 'primary column length new_ticket.new_name (already 849)'], 'made ahead of the length step, which has nothing to set');
+    const advice = run.warnings.filter((w) => w.startsWith(`${label} was not created.`));
+    assert.strictEqual(advice.length, 1, 'one warning names the key');
+    assertConditionalAdvice(advice[0], { column: 'new_name', asked: 849, floor: '1,699' });
+    const again = await provisionAgain(run.dv, spec);
+    assert.ok(again.error instanceof BuildHalt, 'the run after stops at the key too: nothing it does changes the key\'s size');
+    assert.match(again.error.message, /Index size exceeded the size limit of 1700 bytes/);
+    assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], [], 'and there is no key');
+  });
+}
 
 // --- the dry run and the apply agree on where a key goes ------------------------------------------------------------------------
 // The plan lists the steps in the order the apply takes them. Where a key over the name column goes depends only on what the key is
