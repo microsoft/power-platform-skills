@@ -28,6 +28,33 @@ const label = (text) => ({ LocalizedLabels: [{ Label: text, LanguageCode: 1033 }
 const sdkAttribute = (logicalName, attributeType, attributeTypeName, extra = {}) => ({ logicalName, displayName: logicalName, attributeType, attributeTypeName, isCustomAttribute: true, ...extra });
 const row = (LogicalName, typeName, extra = {}) => ({ LogicalName, DisplayName: label(LogicalName.replace(/^contoso_/, '')), AttributeTypeName: { Value: typeName }, AttributeOf: null, IsLogical: false, ...extra });
 
+// A File column and an Image column with the companions the platform makes, in the shape a live environment reports (MEASURED):
+//   File  `x`  Virtual / FileType    AttributeOf null      not logical    `x_name`  String  AttributeOf `x`    logical
+//   Image `y`  Virtual / ImageType   AttributeOf `yid`     LOGICAL        `yid`     Uniqueidentifier, custom, AttributeOf null, not logical
+//                                                                         `y_timestamp` BigInt, `y_url` String: AttributeOf `yid`, logical
+// The Image column is the logical projection of its `<image>id` — the opposite of what an earlier fake modelled. Given both ways the
+// download reads them: `attributes` (the SDK's projection, which carries `attributeOf` when there is one) and `rows` (the column read).
+function fileColumn(name) {
+  return {
+    attributes: [sdkAttribute(name, 'Virtual', 'FileType'), sdkAttribute(`${name}_name`, 'String', 'StringType', { attributeOf: name })],
+    rows: [row(name, 'FileType'), row(`${name}_name`, 'StringType', { AttributeOf: name, IsLogical: true })],
+  };
+}
+function imageColumn(name) {
+  const id = `${name}id`;
+  return {
+    attributes: [
+      sdkAttribute(name, 'Virtual', 'ImageType', { attributeOf: id }), sdkAttribute(id, 'Uniqueidentifier', 'UniqueidentifierType'),
+      sdkAttribute(`${name}_timestamp`, 'BigInt', 'BigIntType', { attributeOf: id }), sdkAttribute(`${name}_url`, 'String', 'StringType', { attributeOf: id }),
+    ],
+    rows: [
+      row(name, 'ImageType', { AttributeOf: id, IsLogical: true }), row(id, 'UniqueidentifierType'),
+      row(`${name}_timestamp`, 'BigIntType', { AttributeOf: id, IsLogical: true }), row(`${name}_url`, 'StringType', { AttributeOf: id, IsLogical: true }),
+    ],
+  };
+}
+const columnsOf = (...columns) => ({ attributes: columns.flatMap((c) => c.attributes), rows: columns.flatMap((c) => c.rows) });
+
 function scriptedSdk({ attributes, rows = [], file = [], image = [], answers = {}, urls = [] }) {
   const answer = (name, value) => (answers[name] ? answers[name] : { status: 200, headers: {}, body: { value } });
   return {
@@ -53,8 +80,7 @@ test('a File and an Image column download typed, with the size and the primary-i
   const urls = [];
   const sdk = scriptedSdk({
     urls,
-    attributes: [sdkAttribute('contoso_contract', 'Virtual', 'FileType'), sdkAttribute('contoso_logo', 'Virtual', 'ImageType')],
-    rows: [row('contoso_contract', 'FileType'), row('contoso_logo', 'ImageType')],
+    ...columnsOf(fileColumn('contoso_contract'), imageColumn('contoso_logo')),
     file: [{ LogicalName: 'contoso_contract', MaxSizeInKB: 1024 }],
     image: [{ LogicalName: 'contoso_logo', MaxSizeInKB: 30720, IsPrimaryImage: true }],
   });
@@ -70,8 +96,7 @@ test('a File and an Image column download typed, with the size and the primary-i
 test('a size a build gives a column that sets none is left out, and so is a primary-image flag that is false', async () => {
   // So a column authored without a size downloads exactly as it was authored, and a rebuild makes it at the same size.
   const sdk = scriptedSdk({
-    attributes: [sdkAttribute('contoso_manual', 'Virtual', 'FileType'), sdkAttribute('contoso_photo', 'Virtual', 'ImageType')],
-    rows: [row('contoso_manual', 'FileType'), row('contoso_photo', 'ImageType')],
+    ...columnsOf(fileColumn('contoso_manual'), imageColumn('contoso_photo')),
     file: [{ LogicalName: 'contoso_manual', MaxSizeInKB: DEFAULT_MAX_SIZE_KB }],
     image: [{ LogicalName: 'contoso_photo', MaxSizeInKB: DEFAULT_MAX_SIZE_KB, IsPrimaryImage: false }],
   });
@@ -117,15 +142,12 @@ test("the table's own image, entityimage, and its companions are left out, and a
 });
 
 test('the companions of a File or Image column stay out even when the read that names them failed', async () => {
-  // The attribute read carries `AttributeOf`, which is how a companion is normally told from a column. When it fails, the SDK's own
+  // The column read carries `AttributeOf`, which is how a companion is normally told from a column. When it fails, the SDK's own
   // projection still says which columns are File and Image, and their companions are named by the platform's rule.
+  const live = columnsOf(fileColumn('contoso_contract'), imageColumn('contoso_logo'));
   const sdk = scriptedSdk({
     answers: { rows: { status: 403, headers: {}, body: {} } },
-    attributes: [
-      sdkAttribute('contoso_contract', 'Virtual', 'FileType'), sdkAttribute('contoso_contract_name', 'String', 'StringType'),
-      sdkAttribute('contoso_logo', 'Virtual', 'ImageType'), sdkAttribute('contoso_logoid', 'Uniqueidentifier', 'UniqueidentifierType'),
-      sdkAttribute('contoso_logo_timestamp', 'BigInt', 'BigIntType'), sdkAttribute('contoso_logo_url', 'String', 'StringType'),
-    ],
+    attributes: live.attributes,
     file: [{ LogicalName: 'contoso_contract', MaxSizeInKB: 4096 }],
     image: [{ LogicalName: 'contoso_logo', MaxSizeInKB: DEFAULT_MAX_SIZE_KB, IsPrimaryImage: false }],
   });
@@ -138,15 +160,112 @@ test('the companions of a File or Image column stay out even when the read that 
   ]);
 });
 
-test('a File column the platform reports as logical is still kept', async () => {
-  // Its data is kept in file storage, not on the row; whatever the platform calls that, the type name proves an authored column.
+test('an Image column is kept as the platform reports it — logical, the projection of its <image>id — and none of its companions is', async () => {
+  // MEASURED: an Image column reports `AttributeOf: "<image>id"` and `IsLogical: true`, the two marks the shadow rules leave a column out
+  // by. Its type name is positive evidence against both. The companions stay out: `_timestamp` and `_url` by both marks and by name, and
+  // `<image>id` — a custom Uniqueidentifier with no `AttributeOf`, not logical — by name, and by its type, which no App Spec column has
+  // (it is not Virtual either, so nothing names it). A File column is neither logical nor `AttributeOf` anything; its `_name` is both.
   const sdk = scriptedSdk({
-    attributes: [sdkAttribute('contoso_contract', 'Virtual', 'FileType')],
-    rows: [row('contoso_contract', 'FileType', { IsLogical: true })],
+    ...columnsOf(fileColumn('contoso_contract'), imageColumn('contoso_logo')),
     file: [{ LogicalName: 'contoso_contract', MaxSizeInKB: 1024 }],
+    image: [{ LogicalName: 'contoso_logo', MaxSizeInKB: DEFAULT_MAX_SIZE_KB, IsPrimaryImage: true }],
   });
-  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'contoso_asset'), 'contoso_asset');
-  assert.deepEqual(e.columns, [{ schemaName: 'contoso_contract', displayName: 'contract', type: 'File', maxSizeKb: 1024 }]);
+  const unexpressible = [];
+  const incomplete = [];
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'contoso_asset'), 'contoso_asset', { unexpressible, incomplete });
+  assert.deepEqual(e.columns, [
+    { schemaName: 'contoso_contract', displayName: 'contract', type: 'File', maxSizeKb: 1024 },
+    { schemaName: 'contoso_logo', displayName: 'logo', type: 'Image', isPrimaryImage: true },
+  ]);
+  assert.deepEqual({ unexpressible, incomplete }, { unexpressible: [], incomplete: [] });
+});
+
+// The attribute list of a table on a live environment with three File columns and two Image columns, the first of them made its
+// primary image by the platform, as `GET EntityDefinitions(LogicalName='<table>')/Attributes?$select=LogicalName,AttributeType,
+// AttributeTypeName,AttributeOf,IsLogical,IsCustomAttribute` answered it (MEASURED; renamed to this file's prefix, nothing else changed):
+//   [LogicalName, AttributeType, AttributeTypeName, AttributeOf, IsLogical, IsCustomAttribute]
+const LIVE_ATTRIBUTES = [
+  ['createdby', 'Lookup', 'LookupType', null, false, false],
+  ['createdbyname', 'String', 'StringType', 'createdby', true, false],
+  ['createdbyyominame', 'String', 'StringType', 'createdby', true, false],
+  ['createdon', 'DateTime', 'DateTimeType', null, false, false],
+  ['createdonbehalfby', 'Lookup', 'LookupType', null, false, false],
+  ['createdonbehalfbyname', 'String', 'StringType', 'createdonbehalfby', true, false],
+  ['createdonbehalfbyyominame', 'String', 'StringType', 'createdonbehalfby', true, false],
+  ['importsequencenumber', 'Integer', 'IntegerType', null, false, false],
+  ['modifiedby', 'Lookup', 'LookupType', null, false, false],
+  ['modifiedbyname', 'String', 'StringType', 'modifiedby', true, false],
+  ['modifiedbyyominame', 'String', 'StringType', 'modifiedby', true, false],
+  ['modifiedon', 'DateTime', 'DateTimeType', null, false, false],
+  ['modifiedonbehalfby', 'Lookup', 'LookupType', null, false, false],
+  ['modifiedonbehalfbyname', 'String', 'StringType', 'modifiedonbehalfby', true, false],
+  ['modifiedonbehalfbyyominame', 'String', 'StringType', 'modifiedonbehalfby', true, false],
+  ['overriddencreatedon', 'DateTime', 'DateTimeType', null, false, false],
+  ['ownerid', 'Owner', 'OwnerType', null, false, false],
+  ['owneridname', 'String', 'StringType', 'ownerid', true, false],
+  ['owneridtype', 'EntityName', 'EntityNameType', 'ownerid', false, false],
+  ['owneridyominame', 'String', 'StringType', 'ownerid', true, false],
+  ['owningbusinessunit', 'Lookup', 'LookupType', null, false, false],
+  ['owningbusinessunitname', 'String', 'StringType', 'owningbusinessunit', true, false],
+  ['owningteam', 'Lookup', 'LookupType', null, true, false],
+  ['owninguser', 'Lookup', 'LookupType', null, true, false],
+  ['statecode', 'State', 'StateType', null, false, false],
+  ['statecodename', 'Virtual', 'VirtualType', 'statecode', true, false],
+  ['statuscode', 'Status', 'StatusType', null, false, false],
+  ['statuscodename', 'Virtual', 'VirtualType', 'statuscode', true, false],
+  ['contoso_contrato', 'Virtual', 'FileType', null, false, true],
+  ['contoso_contrato_name', 'String', 'StringType', 'contoso_contrato', true, true],
+  ['contoso_escaneo', 'Virtual', 'FileType', null, false, true],
+  ['contoso_escaneo_name', 'String', 'StringType', 'contoso_escaneo', true, true],
+  ['contoso_etiquetaid', 'Uniqueidentifier', 'UniqueidentifierType', null, false, false],
+  ['contoso_foto', 'Virtual', 'ImageType', 'contoso_fotoid', true, true],
+  ['contoso_foto_timestamp', 'BigInt', 'BigIntType', 'contoso_fotoid', true, true],
+  ['contoso_foto_url', 'String', 'StringType', 'contoso_fotoid', true, true],
+  ['contoso_fotoid', 'Uniqueidentifier', 'UniqueidentifierType', null, false, true],
+  ['contoso_insignia', 'Virtual', 'ImageType', 'contoso_insigniaid', true, true],
+  ['contoso_insignia_timestamp', 'BigInt', 'BigIntType', 'contoso_insigniaid', true, true],
+  ['contoso_insignia_url', 'String', 'StringType', 'contoso_insigniaid', true, true],
+  ['contoso_insigniaid', 'Uniqueidentifier', 'UniqueidentifierType', null, false, true],
+  ['contoso_manual', 'Virtual', 'FileType', null, false, true],
+  ['contoso_manual_name', 'String', 'StringType', 'contoso_manual', true, true],
+  ['contoso_nombre', 'String', 'StringType', null, false, true],
+  ['timezoneruleversionnumber', 'Integer', 'IntegerType', null, false, false],
+  ['utcconversiontimezonecode', 'Integer', 'IntegerType', null, false, false],
+  ['versionnumber', 'BigInt', 'BigIntType', null, false, false],
+];
+// ...and what its two casts answered (the same environment, the same moment).
+const LIVE_FILE_CAST = [{ LogicalName: 'contoso_contrato', MaxSizeInKB: 2048 }, { LogicalName: 'contoso_escaneo', MaxSizeInKB: 32768 }, { LogicalName: 'contoso_manual', MaxSizeInKB: 10240 }];
+const LIVE_IMAGE_CAST = [{ LogicalName: 'contoso_foto', IsPrimaryImage: true, MaxSizeInKB: 10240 }, { LogicalName: 'contoso_insignia', IsPrimaryImage: false, MaxSizeInKB: 30720 }];
+
+test("a live table's attribute list downloads every File and Image column, and nothing that is the platform's", async () => {
+  const live = LIVE_ATTRIBUTES.map(([LogicalName, AttributeType, typeName, AttributeOf, IsLogical, IsCustomAttribute]) => ({ LogicalName, AttributeType, AttributeTypeName: { Value: typeName }, AttributeOf, IsLogical, IsCustomAttribute }));
+  const named = (e) => e.columns.map((c) => `${c.schemaName} ${c.type}${c.maxSizeKb ? ` ${c.maxSizeKb}` : ''}${c.isPrimaryImage ? ' primary' : ''}`);
+  // The download's own column filter over the list alone, as the live check fed it.
+  const unexpressible = [];
+  const bare = entityFromMetadata({ primaryNameAttribute: 'contoso_nombre', attributes: live }, 'contoso_etiqueta', { unexpressible });
+  assert.deepEqual(named(bare), ['contoso_contrato File', 'contoso_escaneo File', 'contoso_foto Image', 'contoso_insignia Image', 'contoso_manual File']);
+  assert.deepEqual(unexpressible, []);
+  // And through the download's reads, the list answered both ways it is read and the casts as the environment answered them: the primary
+  // image is the one the platform reports (the build sent `false` for it), and the size a build gives a column that sets none is left out.
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: logical, displayName: 'Etiqueta', primaryNameAttribute: 'contoso_nombre',
+      attributes: live.map((a) => ({ logicalName: a.LogicalName, displayName: a.LogicalName, attributeType: a.AttributeType, attributeTypeName: a.AttributeTypeName.Value, isCustomAttribute: a.IsCustomAttribute, ...(a.AttributeOf ? { attributeOf: a.AttributeOf } : {}) })),
+    }),
+    dataverse: {
+      get: async (url) => {
+        if (/FileAttributeMetadata/.test(url)) return { status: 200, headers: {}, body: { value: LIVE_FILE_CAST } };
+        if (/ImageAttributeMetadata/.test(url)) return { status: 200, headers: {}, body: { value: LIVE_IMAGE_CAST } };
+        if (/AttributeMetadata/.test(url)) return { status: 200, headers: {}, body: { value: [] } };
+        if (/\/Attributes\?/.test(url)) return { status: 200, headers: {}, body: { value: live } };
+        return { status: 200, headers: {}, body: { DisplayName: label('Etiqueta'), DisplayCollectionName: label('Etiquetas') } };
+      },
+    },
+  };
+  const incomplete = [];
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'contoso_etiqueta'), 'contoso_etiqueta', { unexpressible, incomplete });
+  assert.deepEqual(named(e), ['contoso_contrato File 2048', 'contoso_escaneo File 32768', 'contoso_foto Image primary', 'contoso_insignia Image 30720', 'contoso_manual File']);
+  assert.deepEqual({ unexpressible, incomplete }, { unexpressible: [], incomplete: [] });
 });
 
 test('a Virtual column of another kind is left out and named; a companion is left out without a word', async () => {
@@ -178,8 +297,7 @@ test('without the attribute read, a Virtual column cannot be told from a compani
 test('a File read that fails keeps the File columns typed, without their size, and records that read alone; the Image read stands', async () => {
   const sdk = scriptedSdk({
     answers: { file: { status: 503, headers: {}, body: {} } },
-    attributes: [sdkAttribute('contoso_contract', 'Virtual', 'FileType'), sdkAttribute('contoso_logo', 'Virtual', 'ImageType')],
-    rows: [row('contoso_contract', 'FileType'), row('contoso_logo', 'ImageType')],
+    ...columnsOf(fileColumn('contoso_contract'), imageColumn('contoso_logo')),
     image: [{ LogicalName: 'contoso_logo', MaxSizeInKB: 2048, IsPrimaryImage: false }],
   });
   const meta = await readEntityWithDescriptions(sdk, 'contoso_asset');
@@ -196,8 +314,7 @@ test('a File read that fails keeps the File columns typed, without their size, a
 test('an Image read that fails keeps the Image columns typed, without their size or flag, and records that read alone; the File read stands', async () => {
   const sdk = scriptedSdk({
     answers: { image: { status: 503, headers: {}, body: {} } },
-    attributes: [sdkAttribute('contoso_contract', 'Virtual', 'FileType'), sdkAttribute('contoso_logo', 'Virtual', 'ImageType')],
-    rows: [row('contoso_contract', 'FileType'), row('contoso_logo', 'ImageType')],
+    ...columnsOf(fileColumn('contoso_contract'), imageColumn('contoso_logo')),
     file: [{ LogicalName: 'contoso_contract', MaxSizeInKB: 1024 }],
   });
   const meta = await readEntityWithDescriptions(sdk, 'contoso_asset');
@@ -216,11 +333,7 @@ test('a cast answer without a column, or with an unusable value, is reported by 
   const urls = [];
   const sdk = scriptedSdk({
     urls,
-    attributes: [
-      sdkAttribute('contoso_badge', 'Virtual', 'ImageType'), sdkAttribute('contoso_contract', 'Virtual', 'FileType'),
-      sdkAttribute('contoso_logo', 'Virtual', 'ImageType'), sdkAttribute('contoso_manual', 'Virtual', 'FileType'), sdkAttribute('contoso_photo', 'Virtual', 'ImageType'),
-    ],
-    rows: [row('contoso_badge', 'ImageType'), row('contoso_contract', 'FileType'), row('contoso_logo', 'ImageType'), row('contoso_manual', 'FileType'), row('contoso_photo', 'ImageType')],
+    ...columnsOf(imageColumn('contoso_badge'), fileColumn('contoso_contract'), imageColumn('contoso_logo'), fileColumn('contoso_manual'), imageColumn('contoso_photo')),
     file: [{ LogicalName: 'contoso_manual', MaxSizeInKB: 4096 }], // no row for contoso_contract
     image: [
       { LogicalName: 'contoso_badge', MaxSizeInKB: 2048, IsPrimaryImage: null }, // a size, but no usable flag
@@ -340,12 +453,13 @@ const walk = () => walkP || (walkP = (async () => {
   const build = ran(await harness.measure(() => harness.build(spec)), 'the build');
   assert.equal(build.value.result.ok, true, JSON.stringify(build.value.result.errors));
   env.built = mediaColumns(org);
-  // Then, in Maker: a File column at the size Maker gives one (32 MB, Microsoft Learn: file-attributes), an Image column made the
-  // table's primary image, the table's own image with its companions, and a Virtual column of a kind the App Spec has no type for. The
-  // fake has no Web API create for that last kind, so it is put in its store with the shape the platform reports.
+  // Then, in Maker: a File column at the size Maker gives one (32 MB, Microsoft Learn: file-attributes); a second Image column, sent
+  // as the table's primary image, which the platform ignores because the table's first Image column (the build's) already is; the
+  // table's own image with its companions; and a Virtual column of a kind the App Spec has no type for. The fake has no Web API create
+  // for that last kind, so it is put in its store with the shape the platform reports.
   const where = "/EntityDefinitions(LogicalName='contoso_asset')/Attributes";
   await inMaker(org, 'POST', where, { '@odata.type': 'Microsoft.Dynamics.CRM.FileAttributeMetadata', SchemaName: 'contoso_scan', DisplayName: { LocalizedLabels: [{ Label: 'Scan', LanguageCode: 1033 }] }, RequiredLevel: { Value: 'None' }, MaxSizeInKB: 32768 });
-  await inMaker(org, 'POST', where, { '@odata.type': 'Microsoft.Dynamics.CRM.ImageAttributeMetadata', SchemaName: 'contoso_badge', DisplayName: { LocalizedLabels: [{ Label: 'Badge', LanguageCode: 1033 }] }, RequiredLevel: { Value: 'None' }, MaxSizeInKB: 30720, IsPrimaryImage: true });
+  await inMaker(org, 'POST', where, { '@odata.type': 'Microsoft.Dynamics.CRM.ImageAttributeMetadata', SchemaName: 'contoso_stamp', DisplayName: { LocalizedLabels: [{ Label: 'Stamp', LanguageCode: 1033 }] }, RequiredLevel: { Value: 'None' }, MaxSizeInKB: 30720, IsPrimaryImage: true });
   await inMaker(org, 'POST', where, { '@odata.type': 'Microsoft.Dynamics.CRM.ImageAttributeMetadata', SchemaName: 'EntityImage', DisplayName: { LocalizedLabels: [{ Label: 'Entity Image', LanguageCode: 1033 }] }, RequiredLevel: { Value: 'None' }, MaxSizeInKB: 10240, IsPrimaryImage: false });
   const table = org.metadata.tables.get('contoso_asset');
   const sensor = org.metadata.makeAttribute(table, { '@odata.type': 'Microsoft.Dynamics.CRM.StringAttributeMetadata', SchemaName: 'contoso_sensor', DisplayName: 'Sensor' });
@@ -359,12 +473,13 @@ const walk = () => walkP || (walkP = (async () => {
 })());
 
 test('the size a build gives a File or Image column that sets none is DEFAULT_MAX_SIZE_KB, on the real wire', async () => {
-  // What the download leaves out must be what the build really makes: read off the environment the real SDK wrote to.
+  // What the download leaves out must be what the build really makes: read off the environment the real SDK wrote to. The build sent
+  // `IsPrimaryImage: false` for contoso_photo; it is the table's first Image column, so the platform made it the primary image anyway.
   const { built } = await walk();
   assert.deepEqual(built, {
     contoso_contract: 'FileType 2048 KB',
     contoso_manual: `FileType ${DEFAULT_MAX_SIZE_KB} KB`,
-    contoso_photo: `ImageType ${DEFAULT_MAX_SIZE_KB} KB`,
+    contoso_photo: `ImageType ${DEFAULT_MAX_SIZE_KB} KB primary`,
   });
 });
 
@@ -373,15 +488,16 @@ test('a download writes each File and Image column as it was made, leaves the pl
   const { emitted, spec: downloaded, stderr } = download.value;
   assert.equal(emitted.ok, true, JSON.stringify(emitted));
   const asset = downloaded.entities.find((e) => e.schemaName === 'contoso_asset');
-  // The authored columns exactly as authored; the two made in Maker with what they were made with. No `entityimage`, no companion
-  // (`*_name`, `*id`, `*_timestamp`, `*_url`), no `contoso_sensor`.
+  // The authored columns as authored, but for the primary image the platform made of contoso_photo (written, as it is what the
+  // environment reports); the two made in Maker with what they were made with. No `entityimage`, no companion (`*_name`, `*id`,
+  // `*_timestamp`, `*_url`), no `contoso_sensor`.
   assert.deepEqual(asset.columns.slice().sort((a, b) => (a.schemaName < b.schemaName ? -1 : 1)), [
-    { schemaName: 'contoso_badge', displayName: 'Badge', type: 'Image', maxSizeKb: 30720, isPrimaryImage: true },
     { schemaName: 'contoso_contract', displayName: 'Contract', type: 'File', maxSizeKb: 2048 },
     { schemaName: 'contoso_manual', displayName: 'Manual', type: 'File' },
-    { schemaName: 'contoso_photo', displayName: 'Photo', type: 'Image' },
+    { schemaName: 'contoso_photo', displayName: 'Photo', type: 'Image', isPrimaryImage: true },
     { schemaName: 'contoso_scan', displayName: 'Scan', type: 'File', maxSizeKb: 32768 },
     { schemaName: 'contoso_serial', displayName: 'Serial', type: 'Text' },
+    { schemaName: 'contoso_stamp', displayName: 'Stamp', type: 'Image', maxSizeKb: 30720 },
   ]);
   const warnings = stderr.split('\n').filter((l) => /^WARNING:/.test(l));
   assert.deepEqual(warnings, [
@@ -391,17 +507,22 @@ test('a download writes each File and Image column as it was made, leaves the pl
 });
 
 test('the downloaded spec rebuilt in the same environment sends no write for a File or Image column', async () => {
-  const { org, harness, root, download } = await walk();
+  const { org, harness, root, download, held } = await walk();
   const before = org.inventory();
   const dir = path.join(root, 'download');
+  // The spec rebuilt is the one that carries `isPrimaryImage: true` for contoso_photo (the test above): the column exists, so nothing
+  // of it is sent, and the environment's primary image stays where the platform put it.
   const rebuild = ran(await harness.measure(() => harness.build(download.value.spec, { appFolder: dir, workspace: path.join(dir, '.maker-workspace') })), 'the rebuild of the downloaded spec');
   assert.equal(rebuild.value.result.ok, true, JSON.stringify(rebuild.value.result.errors));
   const columnWrites = Object.keys(rebuild.writes).filter((w) => /Attributes/.test(w));
   assert.deepEqual(columnWrites, [], `no column is created or changed: ${JSON.stringify(rebuild.writes)}`);
   assert.deepEqual(org.inventory(), before);
+  assert.deepEqual(mediaColumns(org), held);
 });
 
 test('the downloaded spec built into a fresh environment makes each File and Image column as it is in the first', async () => {
+  // Here the primary image, contoso_photo, is also the first Image column by name, so the fresh build creates it first and the platform
+  // makes it the primary image there too; the last test of this file pins what happens when it is not.
   const { held, download } = await walk();
   const fresh = environment('download-file-image-fresh-');
   const build = ran(await fresh.harness.measure(() => fresh.harness.build(download.value.spec)), 'the build into a fresh environment');
@@ -419,13 +540,13 @@ const TABLE_LABEL_READ_FAILED = "WARNING: the table label read failed for 1 tabl
 const COLUMN_READ_FAILED = "WARNING: the column read failed for 1 table(s) (contoso_asset (HTTP 400)). Their COLUMN labels and descriptions fall back to ONE language, so a column labelled in several languages downloads as single-language and rebuilding into a FRESH environment would recreate it that way. That read also carries the flags that identify a lookup's synthetic '<lookup>name' column, so those tables may additionally have captured one as a real Text column — delete any you see before a cross-environment rebuild — and the type names that tell a column of a type the App Spec cannot express from the platform's own, so any such column on those tables was left out without being named. Re-run the download to recover them.";
 const FILE_READ_FAILED = `WARNING: the File column read failed for 1 table(s) (contoso_asset (HTTP 400)). Their File columns are captured WITHOUT the maximum size each was made with, so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB. Re-run the download to recover them before a cross-environment rebuild.`;
 const IMAGE_READ_FAILED = `WARNING: the Image column read failed for 1 table(s) (contoso_asset (HTTP 400)). Their Image columns are captured WITHOUT the maximum size each was made with or whether one is the table's primary image, so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB, none of them asked to be the table's primary image. Re-run the download to recover them before a cross-environment rebuild.`;
-const READ_INCOMPLETE = `WARNING: the File/Image column read came back incomplete for 3 column(s): contoso_asset.contoso_badge (whether it is the table's primary image), contoso_asset.contoso_contract (its maximum size), contoso_asset.contoso_photo (its maximum size and whether it is the table's primary image). Each is captured without what did not come back, so rebuilding into a FRESH environment would create a column without its maximum size at the default size of ${DEFAULT_MAX_SIZE_KB} KB and would not ask an Image column without its primary-image flag to be the table's primary image. Re-run the download to recover them before a cross-environment rebuild.`;
+const READ_INCOMPLETE = `WARNING: the File/Image column read came back incomplete for 3 column(s): contoso_asset.contoso_contract (its maximum size), contoso_asset.contoso_photo (its maximum size and whether it is the table's primary image), contoso_asset.contoso_stamp (whether it is the table's primary image). Each is captured without what did not come back, so rebuilding into a FRESH environment would create a column without its maximum size at the default size of ${DEFAULT_MAX_SIZE_KB} KB and would not ask an Image column without its primary-image flag to be the table's primary image. Re-run the download to recover them before a cross-environment rebuild.`;
 
 // The table's File and Image columns as a download wrote them, `<name> <type>[ <size>][ primary]`, and the warnings it printed.
 const mediaOf = (downloaded) => downloaded.entities[0].columns.filter((c) => c.type === 'File' || c.type === 'Image')
   .map((c) => `${c.schemaName} ${c.type}${c.maxSizeKb ? ` ${c.maxSizeKb}` : ''}${c.isPrimaryImage ? ' primary' : ''}`).sort();
 const warningsOf = (stderr) => stderr.split('\n').filter((l) => /^WARNING:/.test(l));
-const HEALTHY_MEDIA = ['contoso_badge Image 30720 primary', 'contoso_contract File 2048', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768'];
+const HEALTHY_MEDIA = ['contoso_contract File 2048', 'contoso_manual File', 'contoso_photo Image primary', 'contoso_scan File 32768', 'contoso_stamp Image 30720'];
 
 // One download of the walked environment with `rules` in front of it (each returns its own undo), into a folder of its own.
 async function downloadWith(name, rules) {
@@ -459,7 +580,7 @@ test('a download the environment refuses the column read of still keeps each Fil
   const { spec: downloaded, stderr } = await downloadWith('download-no-column-read', ({ refuse }) => [
     refuse('GET', /^\/api\/data\/v9\.\d\/EntityDefinitions\(LogicalName='contoso_asset'\)\/Attributes$/),
   ]);
-  assert.deepEqual(downloaded.entities[0].columns.map((c) => c.schemaName).sort(), ['contoso_badge', 'contoso_contract', 'contoso_manual', 'contoso_photo', 'contoso_scan', 'contoso_serial']);
+  assert.deepEqual(downloaded.entities[0].columns.map((c) => c.schemaName).sort(), ['contoso_contract', 'contoso_manual', 'contoso_photo', 'contoso_scan', 'contoso_serial', 'contoso_stamp']);
   assert.deepEqual(mediaOf(downloaded), HEALTHY_MEDIA);
   assert.deepEqual(warningsOf(stderr), [COLUMN_READ_FAILED]);
 });
@@ -469,7 +590,7 @@ test('a download the environment refuses the File read of keeps the File columns
     refuse('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.FileAttributeMetadata$/),
   ]);
   // The Image read was not refused: its sizes and flag stand.
-  assert.deepEqual(mediaOf(downloaded), ['contoso_badge Image 30720 primary', 'contoso_contract File', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File']);
+  assert.deepEqual(mediaOf(downloaded), ['contoso_contract File', 'contoso_manual File', 'contoso_photo Image primary', 'contoso_scan File', 'contoso_stamp Image 30720']);
   assert.deepEqual(warningsOf(stderr), [FILE_READ_FAILED, SENSOR_NAMED]);
 });
 
@@ -478,17 +599,42 @@ test('a download the environment refuses the Image read of keeps the Image colum
     refuse('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.ImageAttributeMetadata$/),
   ]);
   // The File read was not refused: its sizes stand.
-  assert.deepEqual(mediaOf(downloaded), ['contoso_badge Image', 'contoso_contract File 2048', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768']);
+  assert.deepEqual(mediaOf(downloaded), ['contoso_contract File 2048', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768', 'contoso_stamp Image']);
   assert.deepEqual(warningsOf(stderr), [IMAGE_READ_FAILED, SENSOR_NAMED]);
 });
 
 test('a File or Image read that answers without a column, or with an unusable value, keeps what did come back and names each column it lacks', async () => {
   // Both reads succeed, but the File answer has no row for contoso_contract, and the Image answer has no row for contoso_photo and no
-  // usable primary-image flag for contoso_badge — what an answer read while the table changes, say, can carry. No request is added.
+  // usable primary-image flag for contoso_stamp — what an answer read while the table changes, say, can carry. No request is added.
   const { spec: downloaded, stderr } = await downloadWith('download-short-answers', ({ alter }) => [
     alter('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.FileAttributeMetadata$/, (body) => ({ ...body, value: body.value.filter((r) => r.LogicalName !== 'contoso_contract') })),
-    alter('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.ImageAttributeMetadata$/, (body) => ({ ...body, value: body.value.filter((r) => r.LogicalName !== 'contoso_photo').map((r) => (r.LogicalName === 'contoso_badge' ? { ...r, IsPrimaryImage: null } : r)) })),
+    alter('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.ImageAttributeMetadata$/, (body) => ({ ...body, value: body.value.filter((r) => r.LogicalName !== 'contoso_photo').map((r) => (r.LogicalName === 'contoso_stamp' ? { ...r, IsPrimaryImage: null } : r)) })),
   ]);
-  assert.deepEqual(mediaOf(downloaded), ['contoso_badge Image 30720', 'contoso_contract File', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768']);
+  assert.deepEqual(mediaOf(downloaded), ['contoso_contract File', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768', 'contoso_stamp Image 30720']);
   assert.deepEqual(warningsOf(stderr), [READ_INCOMPLETE, SENSOR_NAMED]);
+});
+
+test('a rebuild into a fresh environment makes the first Image column it creates the primary image: isPrimaryImage on a later one is not honoured', async () => {
+  // What the platform does with `IsPrimaryImage` on a create: a table's FIRST Image column becomes its primary image whatever was sent
+  // (MEASURED: sent `false`, read back `true`), and on a later one a `true` "is ignored if set to true when creating a new image column"
+  // (Microsoft Learn, image-attributes). A download writes `isPrimaryImage: true` where the environment reports it, and lists a table's
+  // columns by name, so where the primary image is not the first Image column by name, a rebuild into a FRESH environment creates
+  // another Image column first, and that one becomes the primary image. A limitation of the build, not of the download — the flag is
+  // only sent on create, and the build creates columns in the spec's order — pinned so a change (the build creating the flagged column
+  // first, or setting it with an update after the create, which Learn allows) shows here. The same environment is not affected: a
+  // rebuild there sends nothing for an existing column (above).
+  const twoImages = { ...spec, entities: [{ ...spec.entities[0], columns: [
+    { schemaName: 'contoso_portrait', displayName: 'Portrait', type: 'Image' },
+    { schemaName: 'contoso_badge', displayName: 'Badge', type: 'Image' },
+  ] }] };
+  const primaryImageOf = (org) => org.metadata.tables.get('contoso_asset').PrimaryImageAttribute;
+  const source = environment('download-primary-image-');
+  const built = ran(await source.harness.measure(() => source.harness.build(twoImages)), 'the build');
+  assert.equal(built.value.result.ok, true, JSON.stringify(built.value.result.errors));
+  const download = ran(await source.harness.measure(() => source.harness.download(appUniqueName(twoImages), path.join(source.root, 'download'))), 'the download');
+  assert.deepEqual(mediaOf(download.value.spec), ['contoso_badge Image', 'contoso_portrait Image primary']);
+  const fresh = environment('download-primary-image-fresh-');
+  const rebuilt = ran(await fresh.harness.measure(() => fresh.harness.build(download.value.spec)), 'the build into a fresh environment');
+  assert.equal(rebuilt.value.result.ok, true, JSON.stringify(rebuilt.value.result.errors));
+  assert.deepEqual({ source: primaryImageOf(source.org), fresh: primaryImageOf(fresh.org) }, { source: 'contoso_portrait', fresh: 'contoso_badge' });
 });

@@ -352,6 +352,8 @@ test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothin
 //   documented  a lookup label that is the referenced table's display name is left out (it is the default)
 //   documented  a File or Image column comes back typed, with the size it was made with unless that is the size a build gives a column
 //               that sets none (docs/app-builder-capabilities.md, "Round-trip scope")
+//   documented  a table's first Image column comes back with `isPrimaryImage: true`: the platform makes it the table's primary image
+//               whatever the create sent (MEASURED on a live environment; helpers/fake-lifecycle-metadata.js models it)
 //   documented  a table's plural comes back when it is not the display name plus "s", the one a rebuild would derive
 //               (references/app-spec-schema.md, "Round-trip")
 //   documented  personas[] are not carried (references/app-spec-schema.md: "a download carries none")
@@ -361,13 +363,14 @@ test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothin
 //               table-icon web resources, roleGrants[] and sampleData are not carried
 function expectedDownload(authored, ids) {
   const byName = (a, b) => (a.schemaName < b.schemaName ? -1 : a.schemaName > b.schemaName ? 1 : 0);
-  const column = (c) => ({
+  const column = (c, primaryImage) => ({
     schemaName: c.schemaName,
     displayName: c.displayName,
     type: c.type === 'AutoNumber' ? 'Text' : c.type, // documented
     ...(c.options ? { options: c.options } : {}),
     ...(c.globalChoice ? { globalChoice: c.globalChoice } : {}),
     ...((c.type === 'File' || c.type === 'Image') && c.maxSizeKb !== undefined ? { maxSizeKb: c.maxSizeKb } : {}), // documented
+    ...(c === primaryImage ? { isPrimaryImage: true } : {}), // documented
   });
   const entity = (e) => ({
     schemaName: e.schemaName,
@@ -376,7 +379,7 @@ function expectedDownload(authored, ids) {
     primaryAttribute: { schemaName: e.primaryAttribute.schemaName, displayName: e.primaryAttribute.displayName },
     columns: e.columns
       .filter((c) => c.type !== 'Customer') // warned
-      .map(column).sort(byName),
+      .map((c) => column(c, e.columns.find((x) => x.type === 'Image'))).sort(byName),
     existing: true,
     description: e.description,
   });

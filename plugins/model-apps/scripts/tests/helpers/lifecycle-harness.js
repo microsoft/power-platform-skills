@@ -276,9 +276,13 @@ function deployedFeatures(org) {
   const tables = {};
   for (const t of org.metadata.tables.values()) {
     if (!t.LogicalName.startsWith('contoso_')) continue;
-    // The columns the spec authored: custom, not a companion (`AttributeOf`), not the key — and not a Money column's base-currency twin,
-    // which is a physical custom column with no AttributeOf, told apart only by `IsBaseCurrency` (fake-lifecycle-metadata.js companionsOf).
-    const attributes = [...t.Attributes.values()].filter((a) => a.IsCustomAttribute && !a.AttributeOf && !a.IsPrimaryId && a.IsBaseCurrency !== true);
+    // The columns a maker sees: custom, not the table's id, not the companion of another column — and not a Money column's
+    // base-currency twin, which is a physical custom column with no AttributeOf, told apart only by `IsBaseCurrency`
+    // (fake-lifecycle-metadata.js companionsOf). An Image column is the one column that is `AttributeOf` something and still a column
+    // (it is the projection of its `<name>id`, MEASURED live), and that `<name>id` is a custom Uniqueidentifier that is `AttributeOf`
+    // nothing — no App Spec column is a Uniqueidentifier, so none is listed.
+    const fileOrImage = (a) => ['FileType', 'ImageType'].includes(a.AttributeTypeName && a.AttributeTypeName.Value);
+    const attributes = [...t.Attributes.values()].filter((a) => a.IsCustomAttribute && (!a.AttributeOf || fileOrImage(a)) && !a.IsPrimaryId && a.AttributeType !== 'Uniqueidentifier' && a.IsBaseCurrency !== true);
     // A column as `<AttributeTypeName> <RequiredLevel>` and then what its type carries: a text format and length, a whole number's
     // format and range, a decimal's precision, an auto-number format, a file's size, a Boolean's two labels, a choice's options (and
     // whether they are a global set's), a lookup's targets.

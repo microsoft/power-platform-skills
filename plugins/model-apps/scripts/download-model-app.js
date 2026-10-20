@@ -1304,9 +1304,12 @@ function mediaTypeFromTypeName(a) {
 //     maker added — with its companions (the `*id`, `*_timestamp` and `*_url` the platform makes beside every image column);
 //   - the companions of each File or Image column the download keeps: `<file>_name` beside a File column, and `<image>id`,
 //     `<image>_timestamp` and `<image>_url` beside an Image column. The platform makes them WITH the column (none appears in the
-//     designer) and reports each `AttributeOf` it, which the shadow rule in entityFromMetadata reads; naming them here as well is
-//     what keeps them out when that read failed. Kept in, a rebuild into a fresh environment would create them as Text and BigInt
-//     columns of their own, under the very names the platform makes for the File or Image column itself.
+//     designer). LIVE-MEASURED, `<file>_name` is `AttributeOf` the File column and `_timestamp` / `_url` are `AttributeOf`
+//     `<image>id`, which the shadow rule in entityFromMetadata reads; but `<image>id` itself is a custom Uniqueidentifier that is
+//     `AttributeOf` nothing and not logical (the Image column is `AttributeOf` IT), so no shadow rule sees it. Naming them here keeps
+//     `<image>id` out (its type would as well: see the AttributeOf rule in entityFromMetadata), and every one of them when that read
+//     failed. Kept in, a rebuild into a fresh environment would create them as Text and BigInt columns of their own, under the very
+//     names the platform makes for the File or Image column itself.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/image-column-data#primary-images
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/file-column-data
 const TABLE_IMAGE_COLUMNS = new Set(['entityimage', 'entityimage_url', 'entityimage_timestamp', 'entityimageid']);
@@ -1331,8 +1334,11 @@ function mediaCompanionNames(attrs) {
 // The size a File or Image column comes back with, when one is worth writing: the size the column was made with, unless it is the
 // one a rebuild of a spec WITHOUT `maxSizeKb` gives it (DEFAULT_MAX_SIZE_KB, the build's own) — so a column authored without a size
 // downloads as it was authored, and one made in Maker (32768 KB for a File column there) or with another size keeps it. Plus, for
-// an image, `isPrimaryImage` when the platform reports the column as the table's primary image; `false` is what a build sends for a
-// spec without it, so it is never written.
+// an image, `isPrimaryImage: true` when the platform reports the column as the table's primary image. The platform makes a table's
+// FIRST Image column its primary image whatever the create sent (LIVE-MEASURED: a build sending `false` read back `true`; Microsoft
+// Learn, image-attributes: "If there's only one image column for a table, this value is set by default"), so a spec whose one Image
+// column sets no flag downloads with it: written all the same, as it is what the environment holds, and a rebuild sends nothing for
+// a column that exists. `false` is what a build sends for a spec without the flag, so it is never written.
 function mediaColumnFields(a, type) {
   const out = {};
   const size = a && a.MaxSizeInKB;
@@ -1724,9 +1730,9 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete } = {}) {
     // entirely. The residual cost is that a failed read re-enables the shadow leak, which is why the
     // label-read warning now names that consequence explicitly.
     //
-    // A File or Image column is exempt for the same reason a choice is: its type name is positive evidence of an authored column,
-    // and whether the platform reports one as logical (its data is kept in file storage, not on the row) is not something to bet
-    // a silent column deletion on.
+    // A File or Image column is exempt for the same reason a choice is: its type name is positive evidence of an authored column.
+    // And the exemption is load-bearing, not defensive: LIVE-MEASURED, the platform reports an Image column `IsLogical: true` (it is
+    // `AttributeOf` the `<image>id` beside it — see the AttributeOf rule below), and a File column `IsLogical: false`.
     const isLogical = a.IsLogical !== undefined ? a.IsLogical : a.isLogical;
     if (isLogical === true && a.optionSet === undefined && choiceTypeFromTypeName(a) === undefined && mediaTypeFromTypeName(a) === undefined) return false;
     // SHADOW-OF, the precise form of the same rule. `AttributeOf` names the attribute this one is a
@@ -1745,7 +1751,22 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete } = {}) {
     //
     // Absent KEEPS the attribute, matching every other rule here: when the label read fails no
     // attribute carries `AttributeOf`, and "we could not look" must not become a column deletion.
-    if (a.AttributeOf) return false;
+    //
+    // A File or Image column is exempt, because for an Image column "a projection, so never authored" is false. LIVE-MEASURED (the
+    // names here are placeholders), the same for the columns a build made and the ones made in Maker:
+    //   contoso_contract            AttributeOf=null              IsLogical=FALSE  AttributeType=Virtual  AttributeTypeName=FileType
+    //   contoso_contract_name       AttributeOf=contoso_contract  IsLogical=TRUE   AttributeType=String
+    //   contoso_photo               AttributeOf=contoso_photoid   IsLogical=TRUE   AttributeType=Virtual  AttributeTypeName=ImageType
+    //   contoso_photoid             AttributeOf=null              IsLogical=FALSE  AttributeType=Uniqueidentifier  IsCustomAttribute=true
+    //   contoso_photo_timestamp     AttributeOf=contoso_photoid   IsLogical=TRUE   AttributeType=BigInt
+    //   contoso_photo_url           AttributeOf=contoso_photoid   IsLogical=TRUE   AttributeType=String
+    // The authored Image column is itself `AttributeOf` the `<image>id` that holds the image's id, so this rule dropped every Image
+    // column a maker or a build made, without a word. Its type name is positive evidence of an authored column, as for the IsLogical
+    // rule above: no companion is FileType or ImageType, so the exemption admits none — `_timestamp`, `_url` and `<file>_name` are
+    // still dropped here. `<image>id` is `AttributeOf` nothing and not logical, so no shadow rule sees it: its NAME keeps it out (the
+    // companion rule above), and its type would too — a Uniqueidentifier is no App Spec column type, and not being Virtual it is left
+    // out without being named (the type rule below). The table's own image, `entityimage`, which is ImageType, is out by name first.
+    if (a.AttributeOf && mediaTypeFromTypeName(a) === undefined) return false;
     // BASE-CURRENCY TWIN. Dataverse generates a `<money>_base` column beside every Money column. It
     // carries no `AttributeOf`, is not logical, and reports `IsCustomAttribute: true`, so every rule
     // above is blind to it — and emitting it meant a rebuild tried to CREATE a column the platform

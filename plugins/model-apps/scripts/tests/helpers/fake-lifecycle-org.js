@@ -34,7 +34,9 @@
 //   - a publish rotates the token of every row it names, changed or not (helpers/fake-dataverse.js, helpers/fake-genpage-server.js);
 //   - one default form per table and form type: making one the default takes the flag off the other;
 //   - an N:N link that exists is refused as a duplicate; an app's settings, and a role's grants, go with it when it is deleted;
-//   - a File or Image column is `AttributeType: "Virtual"` with `AttributeTypeName` FileType / ImageType (Microsoft Learn);
+//   - a File or Image column is `AttributeType: "Virtual"` with `AttributeTypeName` FileType / ImageType (Microsoft Learn); an Image
+//     column is `AttributeOf` its `<name>id` and logical, and a table's first Image column becomes its primary image whatever the create
+//     sent (MEASURED on a live environment; helpers/fake-lifecycle-metadata.js has the whole shape);
 //   - a Money column's `<name>_base` twin has no AttributeOf, is not logical, is custom, and is told apart only by `IsBaseCurrency`
 //     (live-measured, pinned in download-model-app.test.js);
 //   - integer columns the SDK sends as text (`type: "0"`) are stored as numbers.

@@ -18,9 +18,18 @@
 //   - a Choice, MultiChoice or Boolean column gets its `<name>name` companion, a lookup its `<name>name` and `<name>yominame` (each
 //     `AttributeOf` the column, which is how a reader tells them from real columns), and a Money column its `<name>_base` twin — a
 //     physical column with no AttributeOf, told apart only by `IsBaseCurrency: true` (measured; see companionsOf);
+//   - a File column gets `<name>_name` (`AttributeOf` the File column, logical); an Image column gets `<name>id`, `<name>_timestamp`
+//     and `<name>_url` — and here the platform turns it round (MEASURED on a live environment): the Image column is itself the logical
+//     projection of `<name>id` (`AttributeOf: "<name>id"`, `IsLogical: true`), `<name>id` is a custom Uniqueidentifier with no
+//     `AttributeOf`, and `_timestamp` / `_url` are `AttributeOf` `<name>id`. The File column is neither logical nor `AttributeOf` anything;
+//   - the first Image column a table gets becomes its primary image (`IsPrimaryImage: true`, the table's `PrimaryImageAttribute`)
+//     whatever the create sent — MEASURED: a create sending `false` read back `true` — and a later one does not, `true` sent or not
+//     (Microsoft Learn: "ignored if set to true when creating a new image column" while another exists). Deleting the primary one
+//     makes the next the primary (Learn: "another image column for the table is selected automatically");
 //   - a 1:N relationship creates its lookup column on the referencing table; an N:N its intersect table.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-relationships-using-web-api
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/image-attributes#update-image-columns
 const { randomUUID } = require('node:crypto');
 const { compileFilter, describeFilter, evaluateFilter } = require('./odata-filter.js');
 
@@ -253,6 +262,8 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     // The column a Money column converts is not its base-currency twin (companionsOf makes that one).
     if (cls === 'MoneyAttributeMetadata' && attribute.IsBaseCurrency === undefined) attribute.IsBaseCurrency = false;
     if (attribute.OptionSet) attribute.OptionSet = storedOptionSet(attribute.OptionSet, { local: true });
+    // MEASURED: an Image column is the logical projection of its `<name>id` (see companionsOf); `IsPrimaryImage` is decided in addAttribute.
+    if (cls === 'ImageAttributeMetadata' && extra.AttributeOf === undefined) Object.assign(attribute, { AttributeOf: `${logical}id`, IsLogical: true });
     return attribute;
   }
 
@@ -284,11 +295,13 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     };
   }
 
-  // The companions the platform makes beside a column (each `AttributeOf` it): what a reader must tell from a real column.
+  // The companions the platform makes beside a column: what a reader must tell from a real column. Each is `AttributeOf` the column
+  // — but an Image column's are not (MEASURED live): `<name>id` is a custom Uniqueidentifier that is `AttributeOf` nothing and is not
+  // logical, `_timestamp` and `_url` are `AttributeOf` `<name>id`, and it is the Image column that is `AttributeOf` `<name>id`.
   function companionsOf(attribute) {
     const name = attribute.LogicalName;
     const cls = classOf(attribute);
-    const virtual = (logical, type = 'Virtual', typeName = 'VirtualType') => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: name, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
+    const virtual = (logical, type = 'Virtual', typeName = 'VirtualType', of = name) => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: of, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
     if (['PicklistAttributeMetadata', 'MultiSelectPicklistAttributeMetadata', 'BooleanAttributeMetadata', 'StateAttributeMetadata', 'StatusAttributeMetadata'].includes(cls)) return [virtual(`${name}name`)];
     // A Money column's base-currency twin is a PHYSICAL column, not a shadow: it carries no AttributeOf, is not logical and reports
     // IsCustomAttribute like the column it converts — only `IsBaseCurrency: true` tells it apart (measured on stock
@@ -298,11 +311,26 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     }
     if (cls === 'LookupAttributeMetadata') return [virtual(`${name}name`, 'String', 'StringType'), virtual(`${name}yominame`, 'String', 'StringType')];
     if (cls === 'FileAttributeMetadata') return [virtual(`${name}_name`, 'String', 'StringType')];
-    if (cls === 'ImageAttributeMetadata') return [virtual(`${name}id`, 'Uniqueidentifier', 'UniqueidentifierType'), virtual(`${name}_timestamp`, 'BigInt', 'BigIntType'), virtual(`${name}_url`, 'String', 'StringType')];
+    if (cls === 'ImageAttributeMetadata') {
+      const id = `${name}id`;
+      return [
+        { ...virtual(id, 'Uniqueidentifier', 'UniqueidentifierType', null), IsLogical: false },
+        virtual(`${name}_timestamp`, 'BigInt', 'BigIntType', id),
+        virtual(`${name}_url`, 'String', 'StringType', id),
+      ];
+    }
     return [];
   }
 
+  const isImage = (attribute) => classOf(attribute) === 'ImageAttributeMetadata';
+
   function addAttribute(table, attribute) {
+    // The platform's choice of a table's primary image (see the header): the first Image column it gets, whatever was sent.
+    if (isImage(attribute)) {
+      const first = ![...table.Attributes.values()].some(isImage);
+      attribute.IsPrimaryImage = first;
+      if (first) table.PrimaryImageAttribute = attribute.LogicalName;
+    }
     table.Attributes.set(attribute.LogicalName, attribute);
     for (const companion of companionsOf(attribute)) if (!table.Attributes.has(companion.LogicalName)) table.Attributes.set(companion.LogicalName, companion);
     return attribute;
@@ -732,6 +760,17 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     // The base-currency twin has no AttributeOf to follow (see companionsOf): it goes by its name, as the platform deletes it.
     const twin = table.Attributes.get(`${attribute.LogicalName}_base`);
     if (classOf(attribute) === 'MoneyAttributeMetadata' && attribute.IsBaseCurrency !== true && twin && twin.IsBaseCurrency === true) table.Attributes.delete(twin.LogicalName);
+    // An Image column's companions hang off its `<name>id` (companionsOf), which goes with it; and the next Image column becomes the
+    // table's primary image when this one was it (see the header).
+    if (isImage(attribute)) {
+      const id = `${attribute.LogicalName}id`;
+      for (const [name, other] of [...table.Attributes]) if (name === id || other.AttributeOf === id) table.Attributes.delete(name);
+      if (table.PrimaryImageAttribute === attribute.LogicalName) {
+        const next = [...table.Attributes.values()].find(isImage);
+        table.PrimaryImageAttribute = next ? next.LogicalName : null;
+        if (next) next.IsPrimaryImage = true;
+      }
+    }
     if (removeComponents) removeComponents([attribute.MetadataId]);
     return { status: 204, headers: {} };
   }
