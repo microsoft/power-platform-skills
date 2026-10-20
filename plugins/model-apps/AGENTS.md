@@ -1660,12 +1660,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   column passes by design, so a column REMOVED from the spec, which the additive `reconcileView` leaves
   in place, is not flagged), plus **relationship** and **command-bar existence** (previously unchecked).
   A relationship is verified by its **identity**, not its name: the answer has to state its schema name, its
-  type, both its tables and, for a 1:N, its lookup column, and all of them have to match
-  (`compareRelationship`, `lib/relationship-metadata.js`). An answer that leaves a part out — a row without its
-  lookup, an exact read that answers an empty body — does not pass: the check fails and says what the answer
-  lacked. It is not listed `unverified`, which leaves `ok` and the exit status as they were; a relationship
-  nobody identified must not read as a pass. (A reader that lists plain names, as older test doubles do, stays
-  a name-only reader; the plugin's own reader never does.)
+  type, both its tables and, for a 1:N, its lookup column — for an N:N, its intersect table and the column each
+  table has in it — and all of them have to match (`compareRelationship`, `lib/relationship-metadata.js`; an N:N's
+  intersect table has to equal the spec's `intersectEntityName` when the spec names one, and any table the
+  answer states will do when it names none). An answer that leaves a part out — a row without its
+  lookup, an N:N row without its intersect table, an exact read that answers an empty body — does not pass: the
+  check fails and says what the answer lacked. It is not listed `unverified`, which leaves `ok` and the exit
+  status as they were; a relationship nobody identified must not read as a pass. (A reader that lists plain
+  names, as older test doubles do, stays a name-only reader; the plugin's own reader never does.)
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
   `entityRelationships` / `commandBar`), so existence-only callers are unaffected. A view filter's
   Choice label is expected as the value the **environment** gives it, which needs the reader's
@@ -1849,15 +1851,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `--no-live-plan` restores the offline, spec-only listing.
 - **A relationship is reused only when the environment states its whole identity.** The build skips the create
   of a relationship that is already there — and a dry run marks it `= reuse` — only when the answer states its
-  schema name, its type, both its tables and, for a 1:N, its lookup column, and each equals what the spec declares
+  schema name, its type, both its tables and, for a 1:N, its lookup column, for an N:N its intersect table and the
+  column each table has in it, and each equals what the spec declares
   (`compareRelationship` in `lib/relationship-metadata.js`, used by `relationshipExists` and the data-model
-  phase). A part the answer leaves out — a collection row without its lookup, a typed read that answers `{}` —
-  is not "nothing contradicts": the relationship is unproven, and a name is the one thing another relationship
-  can share (a 1:N and an N:N between the same tables derive the same one). The probe then answers "could not
+  phase). A part the answer leaves out — a collection row without its lookup, an N:N row without its intersect
+  table, a typed read that answers `{}` — is not "nothing contradicts": the relationship is unproven, and a name
+  is the one thing another relationship can share (a 1:N and an N:N between the same tables derive the same one;
+  an N:N made elsewhere under the same name and tables can sit on another intersect table). The probe then answers "could not
   tell" (`? unknown` in a dry run), the create is tried, collides on the name, and the build reads the
   relationship itself: it is reused when that read states everything and matches, and when that read is
   incomplete too the build halts — final, since a run again reads the same answer — and leaves the relationship
-  as it is. A complete answer for another relationship halts as it always did (`relationship-name-taken`).
+  as it is. A complete answer for another relationship halts as it always did (`relationship-name-taken`). An N:N's
+  intersect table is held to the spec's `intersectEntityName` only when the spec names one (the SDK creates it
+  under that name, or under the lower-cased schema name when none is given); a spec that names none is held to
+  none, because a download never writes one and a relationship adopted with `existing: true` has the intersect
+  table its maker chose — the answer still has to state it. The SDK's own relationship projection
+  (`fetchEntityMetadata`) lists an N:N without its intersect table, so it never proves one.
 - **Bounded parallelism in the read-heavy and publish-heavy paths.** Each item below has tests that count
   requests and prove the overlap (`verify-parallel-checks`, `verify-page-code-batch`,
   `download-parallel-reads`, `teardown-publish-once`, `table-columns-in-create`, and the check-auth tests),

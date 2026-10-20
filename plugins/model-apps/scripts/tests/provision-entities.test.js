@@ -191,7 +191,7 @@ test('apply surfaces fallback metadata for existing columns and relationships', 
   d.provision.fetchEntityMetadata = async (logical) => ({
     logicalName: logical,
     entitySetName: `${logical}s`,
-    // The SDK's projection rows: the other table and its attribute; an existing relationship is skipped only when they say which one it is.
+    // The SDK's projection rows: the other table and its attribute; an existing 1:N is skipped only when they say which one it is.
     relationships: [
       { schemaName: 'cr_parent_children', type: 'OneToMany', relatedEntity: 'cr_child', relatedAttribute: 'cr_parentid' },
       { schemaName: 'cr_parent_child_nn', type: 'ManyToMany', relatedEntity: 'cr_child', relatedAttribute: '' },
@@ -203,7 +203,10 @@ test('apply surfaces fallback metadata for existing columns and relationships', 
   assert.deepStrictEqual(r.columns, [{ table: 'cr_parent', schemaName: 'cr_code', logicalName: 'cr_code' }]);
   assert.deepStrictEqual(r.relationships, [
     { kind: '1n', schemaName: 'cr_parent_children' },
-    { kind: 'nn', schemaName: 'cr_parent_child_nn' },
+    // The projection lists the N:N but says nothing of its intersect table, so it cannot show which N:N the name belongs to: the build tries the create,
+    // as it does for any relationship it could not prove. A real environment answers that create with a collision and the relationship is read then
+    // (relationship-identity.test.js); this double has no collision, so the create succeeds.
+    { kind: 'nn', schemaName: 'cr_parent_child_nn', metadataId: 'rel-cr_parent_child_nn' },
   ]);
   assert.ok(!d.calls.includes('createColumn'), 'existing columns are not recreated');
 });

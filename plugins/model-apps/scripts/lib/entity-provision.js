@@ -34,7 +34,7 @@ const { odataLit } = require('./odata.js');
 // The one PublishXml that publishes tables by name (also the pre-app publish of sdk-build.js).
 const { publishTablesXml } = require('./table-publish.js');
 const { unreadableAnswer } = require('./collection-answers.js');
-const { readRelationshipsOf, findRelationshipHolder, compareRelationship, describeRelationship, describeIncomplete, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
+const { readRelationshipsOf, findRelationshipHolder, compareRelationship, describeRelationship, describeIncomplete, intersectRemedy, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
 // Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
 // construction-time option, so the LCID must be known before the SDK that would normally read it.
 const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-auth.js');
@@ -1118,7 +1118,8 @@ async function findExistingColumns(provision, logical, warn) {
 // legitimately 404s here.
 //
 // A row that carries the name but does not state its whole identity (a collection row without its
-// referencing table or lookup, a projection row with an empty value) is `null` too: it is not the
+// referencing table or lookup, an N:N row without its intersect table, a projection row with an empty value —
+// and the SDK's projection of an N:N always, which has no intersect table to state) is `null` too: it is not the
 // declared relationship and it is not another's, so nothing is skipped on its name. The create then
 // collides, and its already-exists handling reads the relationship ITSELF — which is where it is
 // reused, once that read states everything, or where the build halts (see compareRelationship).
@@ -2222,7 +2223,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
     if (exists && exists.mismatch) {
       throw new BuildHalt(
-        `relationship schema name '${schema}' is already used by ${describeRelationship(exists.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`,
+        `relationship schema name '${schema}' is already used by ${describeRelationship(exists.holder)}; the spec declares ${describeRelationship(declared)}. ${intersectRemedy(declared, exists.holder) || 'Give it an explicit "schemaName".'}`,
         { phase: 'data-model', code: 'relationship-name-taken', recoverable: false, retry: RETRY.NEVER },
       );
     }
@@ -2267,7 +2268,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
             throw err;
           }
           if (verdict.state === 'incomplete') throw unprovenHolder(verdict);
-          throw refusal(`relationship schema name '${schema}' is already used by ${describeRelationship(heldBy)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
+          throw refusal(`relationship schema name '${schema}' is already used by ${describeRelationship(heldBy)}; the spec declares ${describeRelationship(declared)}. ${intersectRemedy(declared, heldBy) || 'Give it an explicit "schemaName".'}`);
         };
         // skipIf is synchronous, so classify the holder here and rethrow a marked error. The
         // SchemaName key is case-sensitive; findRelationshipHolder falls back to the declared

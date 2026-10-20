@@ -3288,7 +3288,10 @@ test('verifySpec: an N:N passes on an unordered pair and fails when the name is 
     relationships: [{ type: 'ManyToMany', entity1: 'contoso_task', entity2: 'contoso_project' }] };
   const read = {
     findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
-    entityRelationships: async () => [{ schemaName: 'contoso_project_contoso_task', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+    entityRelationships: async () => [{
+      schemaName: 'contoso_project_contoso_task', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task',
+      intersectEntityName: 'contoso_project_contoso_task', entity1IntersectAttribute: 'contoso_projectid', entity2IntersectAttribute: 'contoso_taskid',
+    }],
   };
   const ok = await verifySpec(spec, read);
   assert.strictEqual(ok.checks.find((c) => c.kind === 'relationship').present, true);

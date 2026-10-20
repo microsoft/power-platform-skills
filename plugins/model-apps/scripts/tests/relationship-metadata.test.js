@@ -28,7 +28,9 @@ function client(routes) {
 const ONE_TO_MANY_BASE = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_task')?$select=SchemaName,RelationshipType";
 const ONE_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_task')/Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute";
 const MANY_TO_MANY_BASE = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')?$select=SchemaName,RelationshipType";
-const MANY_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata?$select=SchemaName,Entity1LogicalName,Entity2LogicalName";
+const MANY_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute";
+// The N:N properties beyond its two tables: the table that holds its links and the column each table has in it.
+const MANY_TO_MANY_SELECT = 'SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute';
 
 test('readRelationshipsOf uses the narrow collection selects and stamps the queried end', async () => {
   const c = client([
@@ -43,9 +45,12 @@ test('readRelationshipsOf uses the narrow collection selects and stamps the quer
       body: { value: [{ SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingAttribute: 'contoso_projectid' }] },
     },
     {
-      path: "/EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName",
+      path: `/EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=${MANY_TO_MANY_SELECT}`,
       status: 200,
-      body: { value: [{ SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_tag' }] },
+      body: { value: [{
+        SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_tag',
+        IntersectEntityName: 'contoso_project_contoso_tag', Entity1IntersectAttribute: 'contoso_projectid', Entity2IntersectAttribute: 'contoso_tagid',
+      }] },
     },
   ]);
   const one = await readRelationshipsOf(c, 'contoso_project', 'OneToMany');
@@ -54,7 +59,10 @@ test('readRelationshipsOf uses the narrow collection selects and stamps the quer
   assert.deepStrictEqual(one, { ok: true, rows: [{ schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' }] });
   assert.deepStrictEqual(many.rows[0].referencingEntity, 'contoso_task');
   assert.strictEqual(many.rows[0].referencedEntity, 'contoso_project');
-  assert.deepStrictEqual(nn.rows[0], { schemaName: 'contoso_project_contoso_tag', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' });
+  assert.deepStrictEqual(nn.rows[0], {
+    schemaName: 'contoso_project_contoso_tag', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag',
+    intersectEntityName: 'contoso_project_contoso_tag', entity1IntersectAttribute: 'contoso_projectid', entity2IntersectAttribute: 'contoso_tagid',
+  });
 });
 
 test('a 404 on the table is an empty read, not a failure', async () => {
@@ -66,7 +74,7 @@ test('a 404 on the table is an empty read, not a failure', async () => {
 test('a quote in a logical name is escaped with odataLit', async () => {
   const c = client([{ test: () => true, status: 200, body: { value: [] } }]);
   await readRelationshipsOf(c, "contoso_o'brien", 'ManyToMany');
-  assert.strictEqual(c.paths[0], "/EntityDefinitions(LogicalName='contoso_o''brien')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName");
+  assert.strictEqual(c.paths[0], `/EntityDefinitions(LogicalName='contoso_o''brien')/ManyToManyRelationships?$select=${MANY_TO_MANY_SELECT}`);
 });
 
 test('findRelationshipHolder reads the 1:N cast after the base type', async () => {
@@ -83,11 +91,14 @@ test('findRelationshipHolder reads the 1:N cast after the base type', async () =
 test('findRelationshipHolder reads the N:N cast after the base type', async () => {
   const c = client([
     { path: MANY_TO_MANY_BASE, status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_tag', RelationshipType: 'ManyToManyRelationship' } },
-    { path: MANY_TO_MANY_CAST, status: 200, body: { SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_tag', Entity2LogicalName: 'contoso_project' } },
+    { path: MANY_TO_MANY_CAST, status: 200, body: { SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_tag', Entity2LogicalName: 'contoso_project', IntersectEntityName: 'contoso_project_contoso_tag', Entity1IntersectAttribute: 'contoso_tagid', Entity2IntersectAttribute: 'contoso_projectid' } },
   ]);
   const found = await findRelationshipHolder(c, 'contoso_project_contoso_tag', { candidates: [] });
   assert.deepStrictEqual(c.paths, [MANY_TO_MANY_BASE, MANY_TO_MANY_CAST]);
-  assert.strictEqual(describeRelationship(found.holder), 'N:N contoso_tag <-> contoso_project');
+  assert.strictEqual(describeRelationship(found.holder), 'N:N contoso_tag <-> contoso_project (intersect contoso_project_contoso_tag)');
+  assert.strictEqual(found.holder.intersectEntityName, 'contoso_project_contoso_tag');
+  assert.strictEqual(found.holder.entity1IntersectAttribute, 'contoso_tagid');
+  assert.strictEqual(found.holder.entity2IntersectAttribute, 'contoso_projectid');
 });
 
 test('a case-sensitive 404 falls back to the candidate collections and finds the other casing', async () => {
@@ -200,6 +211,9 @@ test('sameRelationship matches endpoints case-insensitively and rejects a differ
   ), false);
   assert.strictEqual(sameRelationship(
     { type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_tag', entity2: 'contoso_project' },
-    { type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_project', entity2: 'contoso_tag' },
+    {
+      type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_project', entity2: 'contoso_tag',
+      intersectEntityName: 'contoso_project_contoso_tag', entity1IntersectAttribute: 'contoso_projectid', entity2IntersectAttribute: 'contoso_tagid',
+    },
   ), true);
 });

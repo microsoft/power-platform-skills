@@ -18,8 +18,22 @@
 //   A derived property in $select without the matching cast → 400, which is why each collection select
 //   below omits the entity the collection is already scoped to and the caller stamps that end.
 // Some Web API surfaces capitalize the error envelope as "Error", so both spellings are read.
+//
+// An N:N is read with three properties more than the three measured above — IntersectEntityName, Entity1IntersectAttribute and Entity2IntersectAttribute —
+// because its identity is not its two tables: it is the table that holds the links and the column each table has in it (MANY_TO_MANY_SELECT).
+// They are documented properties of ManyToManyRelationshipMetadata, in the collection and in the cast alike, and are read here like the others (scalars):
+//   …/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute → 200
+//   {"value":[{"SchemaName":"contoso_project_contoso_task","Entity1LogicalName":"contoso_project","Entity2LogicalName":"contoso_task",
+//              "IntersectEntityName":"contoso_project_task_links","Entity1IntersectAttribute":"contoso_projectid","Entity2IntersectAttribute":"contoso_taskid"}]}
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/manytomanyrelationshipmetadata
+// (documented, not yet measured live.)
 
 const { odataLit } = require('./odata.js');
+
+// The properties that say which N:N a row is. The name and the two tables alone do not say it: the create names the intersect table too — `relationships[].intersectEntityName`,
+// or the lower-cased schema name when the spec names none — so a relationship under the same name and tables with another intersect table is not the one the spec asked
+// for. The two columns are the key each table has in the intersect table (typically `<table>id`).
+const MANY_TO_MANY_SELECT = 'SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute';
 
 const COLLECTION = {
   OneToMany: {
@@ -32,7 +46,7 @@ const COLLECTION = {
   },
   ManyToMany: {
     segment: 'ManyToManyRelationships',
-    select: 'SchemaName,Entity1LogicalName,Entity2LogicalName',
+    select: MANY_TO_MANY_SELECT,
   },
 };
 
@@ -70,6 +84,16 @@ async function get(client, path) {
   }
 }
 
+// What a read of an N:N states of the table that holds its links and the column each table has in it. Absent (or empty) is kept as it came: it is what
+// compareRelationship reads as "not stated". The two spellings are the Web API's (`IntersectEntityName`) and the normalized holder's.
+function intersectOf(raw) {
+  return {
+    intersectEntityName: raw && (raw.IntersectEntityName || raw.intersectEntityName),
+    entity1IntersectAttribute: raw && (raw.Entity1IntersectAttribute || raw.entity1IntersectAttribute),
+    entity2IntersectAttribute: raw && (raw.Entity2IntersectAttribute || raw.entity2IntersectAttribute),
+  };
+}
+
 function mapCollectionRow(raw, kind, entityLogical) {
   const schemaName = raw && (raw.SchemaName || raw.schemaName);
   if (kind === 'ManyToMany') {
@@ -78,6 +102,7 @@ function mapCollectionRow(raw, kind, entityLogical) {
       type: 'ManyToMany',
       entity1: raw && (raw.Entity1LogicalName || raw.entity1),
       entity2: raw && (raw.Entity2LogicalName || raw.entity2),
+      ...intersectOf(raw),
     };
   }
   if (kind === 'ManyToOne') {
@@ -144,6 +169,7 @@ function holderFromCast(body, kind) {
       type: 'ManyToMany',
       entity1: body && body.Entity1LogicalName,
       entity2: body && body.Entity2LogicalName,
+      ...intersectOf(body),
     };
   }
   return {
@@ -165,7 +191,7 @@ async function readExact(client, schemaName) {
   const kind = castKind(base.body);
   if (!kind) return { found: null, status: base.status, error: 'relationship type was not in the base read' };
   const select = kind === 'ManyToMany'
-    ? 'SchemaName,Entity1LogicalName,Entity2LogicalName'
+    ? MANY_TO_MANY_SELECT
     : 'SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute';
   const castName = kind === 'ManyToMany' ? 'ManyToManyRelationshipMetadata' : 'OneToManyRelationshipMetadata';
   const cast = await get(client, `${key}/Microsoft.Dynamics.CRM.${castName}?$select=${select}`);
@@ -240,6 +266,9 @@ function projectionHolder(row, probedEntity) {
     return { schemaName: row.schemaName };
   }
   if (row.type === 'ManyToMany') {
+    // The projection lists an N:N as { schemaName, type: 'ManyToMany', relatedEntity: <the other table>, relatedAttribute: '' }: nothing of its
+    // intersect table or of the column each table has in it. So its holder states neither, and compareRelationship reads it as unproven: the
+    // projection can say an N:N of this name exists, never that it is the declared one.
     return { schemaName: row.schemaName, type: 'ManyToMany', entity1: probed, entity2: row.relatedEntity };
   }
   if (row.type === 'ManyToOne') {
@@ -278,15 +307,17 @@ function sameTables(a, b) {
 //   { state: 'different',  missing: [] }       a part it states contradicts the declaration, whatever else it states or leaves out
 //   { state: 'incomplete', missing: [parts] }  nothing it states contradicts, but it does not state every part
 //
-// The identity of a relationship is its schema name, its type and its two tables, and for a 1:N the lookup column. The holder has to
-// STATE all of them: a part that is absent from a successful answer (a collection row without its ReferencingAttribute, a typed read
-// that answers 200 with `{}`, the empty string the vendored SDK's projection writes for a value it lacked) is a part nobody checked.
+// The identity of a relationship is its schema name, its type and its two tables, and for a 1:N the lookup column, for an N:N the intersect
+// table and the column each table has in it. The holder has to STATE all of them: a part that is absent from a successful answer (a
+// collection row without its ReferencingAttribute, a typed read that answers 200 with `{}`, the empty string the vendored SDK's
+// projection writes for a value it lacked) is a part nobody checked.
 // Reading "absent" as "nothing contradicts" certified a relationship on its name alone — the build skipped the create of a
 // relationship it could not identify, and verify passed it — and the name is the one thing a different relationship can share: a 1:N
 // and an N:N between the same two tables derive the same one, and two lookups of a self-reference differ only in the column.
 // So an incomplete holder is UNPROVEN: neither reused nor refused as another's, but looked at again, and reported as it is.
 //
-// The declaration is compared on the parts it states (the build's and verify's declared relationships always state all of them).
+// The declaration is compared on the parts it states (the build's and verify's declared relationships always state all of them, except
+// the intersect table of an N:N, which a spec may leave to the platform — see below).
 function compareRelationship(declared, holder) {
   const d = declared && typeof declared === 'object' ? declared : {};
   const h = holder && typeof holder === 'object' ? holder : {};
@@ -318,6 +349,15 @@ function compareRelationship(declared, holder) {
       // The declaration names fewer than two tables: each it names must be one of the holder's.
       if (declaredTables.some((table) => !holderTables.includes(table))) differs = true;
     }
+    // The table that holds the links is part of what an N:N is, and the answer has to state it (and the column each table has in it) like the
+    // tables. It is compared only with what the spec states: `intersectEntityName` is optional — the reference calls an unnamed one "auto-named",
+    // a download never writes it, and a relationship adopted from the environment (`existing: true`) has the intersect table its maker chose — so a
+    // spec that names none is held to none, and a spec that names one is held to it (without regard to case, as every name compared here). The two
+    // columns are the key each table has in the intersect table: the spec cannot say them and the platform derives them, so they are required,
+    // not compared.
+    part('intersect table', lc(h.intersectEntityName || h.IntersectEntityName), lc(d.intersectEntityName));
+    part('first intersect column', lc(h.entity1IntersectAttribute || h.Entity1IntersectAttribute), '');
+    part('second intersect column', lc(h.entity2IntersectAttribute || h.Entity2IntersectAttribute), '');
   } else {
     part('referenced table', lc(h.referencedEntity || h.ReferencedEntity || h.referenced), lc(d.referenced));
     part('referencing table', lc(h.referencingEntity || h.ReferencingEntity || h.referencing), lc(d.referencing));
@@ -347,13 +387,27 @@ function describeRelationship(r) {
   if (kindOf(r) === 'nn') {
     const a = r.entity1 || r.Entity1LogicalName || r.entity1LogicalName;
     const b = r.entity2 || r.Entity2LogicalName || r.entity2LogicalName;
-    return `N:N ${lc(a)} <-> ${lc(b)}`;
+    // The intersect table when there is one to name — the declaration's when the spec names it, the holder's when its answer stated it — so a
+    // refusal that is only about the intersect table does not read as two identical relationships.
+    const intersect = lc(r.intersectEntityName || r.IntersectEntityName);
+    return intersect ? `N:N ${lc(a)} <-> ${lc(b)} (intersect ${intersect})` : `N:N ${lc(a)} <-> ${lc(b)}`;
   }
   const referenced = r.referenced || r.referencedEntity || r.ReferencedEntity;
   const referencing = r.referencing || r.referencingEntity || r.ReferencingEntity;
   const lookup = (r.lookup && r.lookup.schemaName) || r.referencingAttribute || r.ReferencingAttribute;
   const ends = `${lc(referenced)} -> ${lc(referencing)}`;
   return lookup ? `1:N ${ends} (lookup ${lc(lookup)})` : `1:N ${ends}`;
+}
+
+// What to tell the maker when the name is held by an N:N that is the declared one in every part but the intersect table the spec names. Reusing it is
+// one edit away — name its intersect table, or name none — and so is making another (an explicit schema name), which is why the generic "give it an
+// explicit schemaName" is not enough here. '' for any other difference: another table or another type cannot be reused by changing the intersect table.
+function intersectRemedy(declared, holder) {
+  const d = declared && typeof declared === 'object' ? declared : {};
+  if (!lc(d.intersectEntityName)) return '';
+  if (compareRelationship(Object.assign({}, d, { intersectEntityName: undefined }), holder).state !== 'same') return '';
+  const held = lc(holder.intersectEntityName || holder.IntersectEntityName);
+  return `Set "intersectEntityName" to '${held}' (or leave it out) to reuse that relationship, or give the declared one an explicit "schemaName" to create another.`;
 }
 
 module.exports = {
@@ -366,4 +420,5 @@ module.exports = {
   sameRelationship,
   describeRelationship,
   describeIncomplete,
+  intersectRemedy,
 };

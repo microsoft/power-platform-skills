@@ -719,6 +719,10 @@ run the lint, so an unlinted spec hits the failure at build time instead).
 ```
 - A **plain N:N** (no extra fields on the link) — use `ManyToMany`. A form sub-grid can sit on
   *either* side (the builder resolves the N:N relationship name automatically).
+- `intersectEntityName` (optional) names the table that holds the links. Leave it out and the build names it
+  after the relationship (its schema name, lower-cased). A build and `verify-model-app.js` hold the relationship
+  to the name you give it: an N:N that already uses the schema name on another intersect table is refused by the
+  build and fails verify. With no `intersectEntityName` the relationship is reused whichever intersect table it has.
 - **N:N that needs attributes on the link** (e.g. a role/date per assignment) — model a
   **junction entity** with two `OneToMany` relationships into it, and put the payload columns on
   the junction. Sample rows then bind **both** parents via `$parents` (see sampleData). This is the
