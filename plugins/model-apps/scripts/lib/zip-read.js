@@ -16,19 +16,30 @@
 // where its data starts. Both headers are read, because they are written by one program and disagree only when the archive is damaged or hand-made.
 //   - The platform's own export, measured: two deflated entries, flags 0x0002 (the compressor's "maximum" hint, not a data descriptor), version needed 20 —
 //     and an extra field of 28 bytes on each LOCAL header and none on the central one. So the data is found from the LOCAL header's own name and extra lengths, never
-//     from the central directory's.
-//   - A data descriptor (flag bit 3) is accepted: the local header's checksum and sizes may then be zero, and the central directory's are the ones that count.
+//     from the central directory's. Its entries lie end to end from the first byte, the central directory follows the last one at once, and the end record follows
+//     the central directory at once: every byte of it belongs to an entry, the directory or the end record.
+//   - A data descriptor (flag bit 3) is accepted when it is there: the local header's checksum and sizes may then be zero, and the descriptor that follows the data —
+//     `0x08074b50` and the checksum and both sizes, or (the older form the format also allows) those three alone — must hold the central directory's numbers.
+//
+// THE LAYOUT IS CHECKED, for every entry and not only the one asked for: a deflate stream ends where it ends, whatever follows it, so an entry whose declared size runs
+// four bytes into the next entry's header still inflates, to the right size and checksum. What says where an entry ends is therefore the layout as a whole — the
+// entries, in the order of their places, must be every byte before the central directory, one after the other, each the local header, the data and its descriptor —
+// and the deflate stream of the entry read must take up exactly the data the archive gives it.
 //
 // WHAT IT REFUSES, all of it as a `ZipReadError`: a file with no end record (or text after it), an archive in several parts, ZIP64 (the sizes and offsets of an
 // export of this kind fit 32 bits, and a reader that half-understands ZIP64 can accept a file it has misread), a central directory that is outside the file, cut
-// short or not the size of its entries, an entry that is encrypted, one that is neither stored nor deflated, a name that is in the archive twice, a local header
-// that is missing or says something other than the central one, data that runs into the central directory, data that does not inflate, data that is not the size the
-// archive declares, and data whose CRC-32 is not the one declared. Inflating never goes past the declared size, so a small archive cannot be made to fill memory.
+// short, not the size of its entries or not followed by the end record at once, an entry that is encrypted, one that is neither stored nor deflated, a name that is
+// in the archive twice, a local header that is missing or says something other than the central one, data that runs into the central directory, an entry that starts
+// inside another or after bytes that belong to none, a data descriptor that the flags announce and that is not there or not the central directory's, data that does
+// not inflate, a deflate stream that ends before its data does, data that is not the size the archive declares, and data whose CRC-32 is not the one declared.
+// Inflating never goes past the declared size, so a small archive cannot be made to fill memory.
 const zlib = require('node:zlib');
 
 const LOCAL_FILE_HEADER = 0x04034b50;
 const CENTRAL_DIRECTORY_HEADER = 0x02014b50;
 const END_OF_CENTRAL_DIRECTORY = 0x06054b50;
+// The optional signature of a data descriptor (APPNOTE 4.3.9.3: "commonly adopted", not required — so a descriptor without it is read as well).
+const DATA_DESCRIPTOR = 0x08074b50;
 // The ZIP64 end-of-central-directory locator, which sits right before the end record of a ZIP64 archive (20 bytes).
 const ZIP64_END_LOCATOR = 0x07064b50;
 const END_RECORD_SIZE = 22;
@@ -94,6 +105,7 @@ function readCentralDirectory(archive) {
   if (disk !== 0 || directoryDisk !== 0 || onThisDisk !== total) refuse('an archive that spans more than one disk is not read');
   const directoryEnd = offset + size;
   if (directoryEnd > end) refuse('the central directory lies outside the archive');
+  if (directoryEnd < end) refuse(`${end - directoryEnd} bytes between the central directory and the end record belong to neither`);
   const entries = [];
   let at = offset;
   for (let i = 0; i < total; i += 1) {
@@ -124,11 +136,20 @@ function readCentralDirectory(archive) {
   return { entries, directoryStart: offset };
 }
 
-function entryData(archive, entry, directoryStart, maxEntryBytes) {
+// The size of the data descriptor at `at`, which the flags of `entry` say follows its data: 16 bytes with the signature, 12 without — and its numbers must be the
+// central directory's. The bytes there are read as either form only up to `limit`, the start of the central directory.
+function descriptorSize(archive, entry, at, limit) {
+  const holdsTheNumbers = (p) => p + 12 <= limit
+    && archive.readUInt32LE(p) === entry.crc && archive.readUInt32LE(p + 4) === entry.compressedSize && archive.readUInt32LE(p + 8) === entry.uncompressedSize;
+  if (at + 16 <= limit && archive.readUInt32LE(at) === DATA_DESCRIPTOR && holdsTheNumbers(at + 4)) return 16;
+  if (holdsTheNumbers(at)) return 12;
+  return refuse(`the entry '${entry.name}' says a data descriptor follows its data and none does (neither the signature 0x08074b50 with the central directory's checksum and sizes, nor those alone)`);
+}
+
+// Where the local header of `entry` puts its data, and where the entry ends (after its data descriptor, if it has one) — once that header is found to say what the
+// central directory says.
+function placeOf(archive, entry, directoryStart) {
   const name = entry.name;
-  if (entry.flags & (FLAG_ENCRYPTED | FLAG_STRONG_ENCRYPTION)) refuse(`the entry '${name}' is encrypted`);
-  if (entry.method !== 0 && entry.method !== 8) refuse(`the entry '${name}' uses compression method ${entry.method}, and only stored and deflated entries are read`);
-  if (entry.uncompressedSize > maxEntryBytes) refuse(`the entry '${name}' is larger than ${maxEntryBytes} bytes`);
   const at = entry.localHeaderOffset;
   if (at + 30 > directoryStart) refuse(`the local header of '${name}' lies outside the data of the archive`);
   if (archive.readUInt32LE(at) !== LOCAL_FILE_HEADER) refuse(`the local header of '${name}' has a signature that is not 0x04034b50`);
@@ -137,22 +158,63 @@ function entryData(archive, entry, directoryStart, maxEntryBytes) {
   const dataStart = nameStart + nameLength + archive.readUInt16LE(at + 28);
   const dataEnd = dataStart + entry.compressedSize;
   if (dataEnd > directoryStart) refuse(`the data of '${name}' runs past the central directory`);
+  const descriptor = (entry.flags & FLAG_DATA_DESCRIPTOR) !== 0;
+  // With a data descriptor the local header may hold zeros where the checksum and sizes go (a writer that streams does not know them yet), or the numbers themselves.
+  const agrees = (offset, value) => archive.readUInt32LE(at + offset) === value || (descriptor && archive.readUInt32LE(at + offset) === 0);
   const disagrees = archive.readUInt16LE(at + 6) !== entry.flags
     || archive.readUInt16LE(at + 8) !== entry.method
     || !archive.subarray(nameStart, nameStart + nameLength).equals(entry.nameBytes)
-    // With a data descriptor the local header may hold zeros: its checksum and sizes follow the data, and the central directory is where they are read.
-    || (!(entry.flags & FLAG_DATA_DESCRIPTOR) && (archive.readUInt32LE(at + 14) !== entry.crc || archive.readUInt32LE(at + 18) !== entry.compressedSize || archive.readUInt32LE(at + 22) !== entry.uncompressedSize));
+    || !agrees(14, entry.crc) || !agrees(18, entry.compressedSize) || !agrees(22, entry.uncompressedSize);
   if (disagrees) refuse(`the local header of '${name}' does not agree with the central directory`);
-  const stored = archive.subarray(dataStart, dataEnd);
+  return { entry, start: at, dataStart, dataEnd, end: descriptor ? dataEnd + descriptorSize(archive, entry, dataEnd, directoryStart) : dataEnd };
+}
+
+// The places of every entry, checked to be what the platform writes: the entries, in the order of their places (which need not be the central directory's order),
+// are every byte from the start of the archive to the central directory, one after the other. Nothing is hidden between them, and no entry's declared data reaches
+// into another — which a deflate stream would not notice (see the header).
+function layoutOf(archive, entries, directoryStart) {
+  const places = entries.map((entry) => placeOf(archive, entry, directoryStart)).sort((a, b) => a.start - b.start);
+  let previous = null;
+  let cursor = 0;
+  for (const place of places) {
+    const name = place.entry.name;
+    if (place.start < cursor) refuse(`the entry '${name}' starts inside the data of the entry before it ('${previous.entry.name}')`);
+    if (place.start > cursor) {
+      refuse(previous
+        ? `${place.start - cursor} bytes between the entries '${previous.entry.name}' and '${name}' belong to no entry`
+        : `${place.start} bytes of the archive before the entry '${name}' belong to no entry`);
+    }
+    previous = place;
+    cursor = place.end;
+  }
+  if (cursor !== directoryStart) refuse(`${directoryStart - cursor} bytes between the last entry and the central directory belong to no entry`);
+  return new Map(places.map((place) => [place.entry, place]));
+}
+
+// What a deflate stream is, when it inflates: the bytes it was made from, and how many bytes of `stored` the stream took up. zlib stops at the end of the stream and
+// leaves what follows unread; `engine.bytesWritten` counts the bytes it took (measured on Node 20.20 and 22.13: a 42-byte stream followed by 0, 1, 4 or 100 other bytes
+// reports 42 every time), so a stream that ends before the data does is told from one that fills it. https://nodejs.org/api/zlib.html#zlibbyteswritten
+function inflateWhole(stored, maxOutputLength) {
+  const { buffer, engine } = zlib.inflateRawSync(stored, { maxOutputLength, info: true });
+  return { data: buffer, consumed: engine.bytesWritten };
+}
+
+function entryData(archive, place) {
+  const { entry } = place;
+  const name = entry.name;
+  const stored = archive.subarray(place.dataStart, place.dataEnd);
   let data = stored;
   if (entry.method === 8) {
+    let inflated;
     try {
       // One byte more than the declared size, so that data that inflates to more is told from data that inflates to exactly that: nothing larger is ever built.
-      data = zlib.inflateRawSync(stored, { maxOutputLength: Math.max(1, entry.uncompressedSize + 1) });
+      inflated = inflateWhole(stored, Math.max(1, entry.uncompressedSize + 1));
     } catch (err) {
       if (err && err.code === 'ERR_BUFFER_TOO_LARGE') refuse(`the entry '${name}' inflates to more than the ${entry.uncompressedSize} bytes the archive says`);
       return refuse(`the entry '${name}' did not inflate (${(err && err.message) || err})`);
     }
+    if (inflated.consumed !== stored.length) refuse(`the deflate data of '${name}' ends ${stored.length - inflated.consumed} bytes before the end of the data the archive gives it`);
+    data = inflated.data;
   }
   if (data.length !== entry.uncompressedSize) refuse(`the entry '${name}' is not the size the archive says (${data.length} bytes, not ${entry.uncompressedSize})`);
   if (crc32(data) !== entry.crc) refuse(`the entry '${name}' failed its CRC-32 check`);
@@ -175,7 +237,12 @@ function readZipEntry(archive, name, { maxArchiveBytes = MAX_ARCHIVE_BYTES, maxE
   const named = entries.filter((entry) => entry.name === name);
   if (named.length === 0) refuse(`the archive has no entry named '${name}'`);
   if (named.length > 1) refuse(`the entry '${name}' is in the archive twice`);
-  return entryData(archive, named[0], directoryStart, maxEntryBytes);
+  const [entry] = named;
+  // What the entry asked for must be before its place is looked at: an entry that cannot be read is refused as that, whatever the layout says.
+  if (entry.flags & (FLAG_ENCRYPTED | FLAG_STRONG_ENCRYPTION)) refuse(`the entry '${name}' is encrypted`);
+  if (entry.method !== 0 && entry.method !== 8) refuse(`the entry '${name}' uses compression method ${entry.method}, and only stored and deflated entries are read`);
+  if (entry.uncompressedSize > maxEntryBytes) refuse(`the entry '${name}' is larger than ${maxEntryBytes} bytes`);
+  return entryData(archive, layoutOf(archive, entries, directoryStart).get(entry));
 }
 
 module.exports = { readZipEntry, ZipReadError, crc32, MAX_ARCHIVE_BYTES, MAX_ENTRY_BYTES };

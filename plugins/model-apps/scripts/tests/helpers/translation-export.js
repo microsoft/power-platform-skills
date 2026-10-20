@@ -21,8 +21,12 @@ const escapeXml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&
 
 const cellOf = (text, { type = 'String', style = 's24' } = {}) => `<Cell ss:StyleID="${style}"><Data ss:Type="${type}">${escapeXml(text)}</Data></Cell>`;
 const rowOf = (cells) => `<Row ss:AutoFitHeight="0">${cells.join('')}</Row>`;
-const sheetOf = (name, rows) => `<Worksheet ss:Name="${name}" ss:Id="${name}" ss:Protected="1"><Table><Column ss:AutoFitWidth="0" ss:Width="160.5" />${rows.join('')}</Table>`
-  + '<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><ProtectObjects>False</ProtectObjects></WorksheetOptions></Worksheet>';
+// What the platform writes around a sheet's rows, as measured: column widths (`ss:Span` for a run of columns) before them and, after the table, the sheet's options in Excel's own namespace —
+// elements with no attribute, some of them empty. None of it is read; the reader holds the sheet to this shape, so a sheet made here is one it reads.
+const COLUMNS = '<Column ss:AutoFitWidth="0" ss:Width="105.75" /><Column ss:Width="224.25" /><Column ss:AutoFitWidth="0" ss:Width="105.75" /><Column ss:AutoFitWidth="0" ss:Width="114.75" ss:Span="2" />';
+const WORKSHEET_OPTIONS = '<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><Unsynced /><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios>'
+  + '<AllowFormatCells /><AllowSizeCols /><AllowSizeRows /><AllowInsertCols /><AllowInsertRows /><AllowDeleteCols /><AllowDeleteRows /><AllowSort /><AllowFilter /><AllowUsePivotTables /></WorksheetOptions>';
+const sheetOf = (name, rows) => `<Worksheet ss:Name="${name}" ss:Id="${name}" ss:Protected="1"><Table>${COLUMNS}${rows.join('')}</Table>${WORKSHEET_OPTIONS}</Worksheet>`;
 
 /**
  * The text of a CrmTranslations.xml: the platform's three worksheets, with `captions` as the rows of `Localized Labels`.
@@ -70,6 +74,8 @@ function crc32(bytes) {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
+const DATA_DESCRIPTOR_SIGNATURE = 0x08074b50;
+
 /**
  * A ZIP archive of `entries` ({ name, data }), laid out the way the platform's export is: a local header (30 bytes, the name, `localExtra` bytes of
  * extra field) and the data of each entry, then the central directory (46 bytes and the name each, no extra field), then the end record.
@@ -78,13 +84,17 @@ function crc32(bytes) {
  * @param {0 | 8} [options.method] 8 deflates the data (as the platform does); 0 stores it
  * @param {number} [options.localExtra] the size of the extra field of each local header
  * @param {number} [options.flags] the general-purpose flags both headers carry
+ * @param {'signed' | 'unsigned' | 'missing'} [options.descriptor] the way a streaming writer lays an entry out: flag bit 3 set, the checksum and the sizes zero in the local header, and — for
+ *   'signed' (what every writer in use produces) and 'unsigned' (the shorter form the format also allows) — a data descriptor after the data holding them; 'missing' is the damaged archive that says
+ *   a descriptor follows and has none
  * @param {number} [options.versionMadeBy]
  * @param {string} [options.comment] the archive comment
  */
-function zipOf(entries, { method = 8, localExtra = 28, flags = 0x0002, versionMadeBy = 45, comment = '' } = {}) {
+function zipOf(entries, { method = 8, localExtra = 28, flags = 0x0002, versionMadeBy = 45, comment = '', descriptor } = {}) {
   const locals = [];
   const centrals = [];
   let offset = 0;
+  const entryFlags = descriptor === undefined ? flags : flags | 0x0008;
   for (const { name, data } of entries) {
     const raw = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
     const stored = method === 8 ? zlib.deflateRawSync(raw, { level: 9 }) : raw;
@@ -92,19 +102,29 @@ function zipOf(entries, { method = 8, localExtra = 28, flags = 0x0002, versionMa
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(entryFlags, 6);
     local.writeUInt16LE(method, 8);
-    local.writeUInt32LE(crc32(raw), 14);
-    local.writeUInt32LE(stored.length, 18);
-    local.writeUInt32LE(raw.length, 22);
+    if (descriptor === undefined) {
+      local.writeUInt32LE(crc32(raw), 14);
+      local.writeUInt32LE(stored.length, 18);
+      local.writeUInt32LE(raw.length, 22);
+    }
     local.writeUInt16LE(nameBytes.length, 26);
     local.writeUInt16LE(localExtra, 28);
-    const body = Buffer.concat([local, nameBytes, Buffer.alloc(localExtra), stored]);
+    const after = Buffer.alloc(descriptor === 'signed' ? 16 : descriptor === 'unsigned' ? 12 : 0);
+    const values = descriptor === 'signed' ? 4 : 0;
+    if (descriptor === 'signed') after.writeUInt32LE(DATA_DESCRIPTOR_SIGNATURE, 0);
+    if (after.length > 0) {
+      after.writeUInt32LE(crc32(raw), values);
+      after.writeUInt32LE(stored.length, values + 4);
+      after.writeUInt32LE(raw.length, values + 8);
+    }
+    const body = Buffer.concat([local, nameBytes, Buffer.alloc(localExtra), stored, after]);
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(versionMadeBy, 4);
     central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(flags, 8);
+    central.writeUInt16LE(entryFlags, 8);
     central.writeUInt16LE(method, 10);
     central.writeUInt32LE(crc32(raw), 16);
     central.writeUInt32LE(stored.length, 20);
