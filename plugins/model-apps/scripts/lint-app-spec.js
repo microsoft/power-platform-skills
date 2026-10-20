@@ -195,13 +195,13 @@ function main() {
           : `app spec has ${report.warnings.length} warning(s) and --strict was set; see stdout JSON\n`
       );
     }
-    // Set the code and RETURN rather than process.exit(). Node's stdout is asynchronous when it is a
-    // TTY on Windows, and process.exit() tears the process down without draining it — so an
-    // interactive Windows run of a large report could lose its tail. MEASURED: a 5 MB write over a
-    // PIPE survives process.exit() intact on Windows, so a `--json | jq` CI consumer was never at
-    // risk; this is the interactive case and the idiomatic pattern, not a fix for a reproduced bug.
-    // The non-JSON usage-error paths still exit through emitResult's process.exit() — deliberately
-    // out of scope here, since that is shared behaviour across every CLI in this directory.
+    // Set the code and RETURN rather than process.exit(). Node writes to a pipe asynchronously on Linux
+    // and macOS (and to a TTY on Windows), and process.exit() tears the process down without draining
+    // it — so a `--json | jq` consumer there could lose the tail of a large report. MEASURED: a 5 MB
+    // write over a PIPE survives process.exit() intact on Windows, where a pipe on stdout is
+    // synchronous — which is why a Windows run never showed it. The non-JSON usage-error paths exit
+    // through emitResult, which makes its writes blocking before it exits (lib/output-redaction.js
+    // makeWritesBlocking), so they are whole too.
     // https://nodejs.org/api/process.html#a-note-on-process-io
     process.exitCode = failed ? 1 : 0;
     return;

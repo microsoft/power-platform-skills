@@ -22,7 +22,7 @@
 //   - stdout and stderr: `process.stdout.write` and `process.stderr.write` are wrapped (guardStream) the moment the first token is obtained — never before, so a process that has no token is untouched. Every `console.*` call
 //     (in colours too), every script's result printer and warning printer, the build's progress lines, a library's own `console.warn` and the SDK bundle's end there. A text is cleaned as a STRING; bytes (a Buffer) are passed
 //     as they are: nothing in the plugin writes bytes to a stream, and a test runner's own frames are bytes. `emitResult` (lib/dataverse-auth.js) also cleans its own text, so a result is clean where a caller has replaced the
-//     stream's `write`.
+//     stream's `write`. The writes a `process.exit` follows at once are made blocking first (makeWritesBlocking), so that what is written there is whole when the process ends — not only clean.
 //   - what Node itself prints when an error ends the process (an uncaught exception, an unhandled rejection): it never passes through `process.stderr.write`, so a handler prints it, cleaned, when nothing else handles the error
 //     (guardFatalErrors).
 //   - the files the plugin writes: `writeFileSafe` and `appendFileSafe` (lib/safe-fs.js: the build's journal and status file, a download's spec and pages, a page's file and its deployed copy, the plan, the settings template),
@@ -509,10 +509,42 @@ function guardStream(stream, redact = redactOutput) {
   return true;
 }
 
+/**
+ * Makes the writes to each of `streams` blocking from here on: a `write` returns when the stream has taken the whole text. For the last writes of a process — the ones a `process.exit` follows at once (`emitResult` in
+ * lib/dataverse-auth.js, the printer of an error that ends the process below, a script's own result printer). Nothing else about the stream changes: the text still goes through its `write`, the guard above included.
+ *
+ * WHY. Node writes to a pipe asynchronously on Linux and macOS, and synchronously on Windows (https://nodejs.org/api/process.html#a-note-on-process-io). What the pipe does not take at once — more than its buffer holds,
+ * 64 KiB on Linux — is queued, and `process.exit` ends the process without waiting for the queue (https://nodejs.org/api/process.html#processexitcode). An agent reads a script's result through a pipe, so a large
+ * result reached it cut short: on the Linux and macOS CI jobs the 3.5 MB result of tests/output-token-boundary.test.js ended mid-string (for example "Unterminated string in JSON at position 146176").
+ * A blocking handle is what Node itself gives a terminal (`tty.WriteStream` calls `setBlocking(true)`) and, on Windows, a pipe on stdout or stderr (`net.Socket`: "Make stdout and stderr blocking on Windows"); libuv then
+ * completes every write synchronously (uv_stream_set_blocking: https://docs.libuv.org/en/v1.x/stream.html). tests/result-whole-before-exit.test.js gives a script the kind of pipe Linux and macOS give it, on every
+ * platform: without this, a 3.5 MB result arrived in part on Windows too; with it, whole.
+ *
+ * SAFE because it is done at the end: the process exits right after, so no other work waits behind a blocking write. A reader that is reading takes the text; one that has stopped reading now holds the script at its last
+ * write — as a pipe on Windows always has — instead of receiving a result cut short. On POSIX the flag belongs to the pipe's open file description, which every process holding that end shares, and Node puts it back as
+ * it found it when the process exits (ResetStdio, src/node.cc). A write queued BEFORE this call (only when the reader has left more than a pipe's buffer unread, with no turn of the event loop since) stays queued, and the
+ * writes after it wait behind it in the stream's own buffer: Node has no synchronous flush of a queued write. That is why this is called before the last writes, not just before `process.exit`.
+ *
+ * A stream with no such handle — a file (written synchronously already), a worker's stdout, a test's stand-in — is left as it is, and so is a handle that answers with an error code (a terminal on Windows answers EINVAL:
+ * libuv blocks only a pipe there). Never throws: the text is written either way.
+ * @param {...?{ _handle?: ?{ setBlocking?: Function } }} streams
+ */
+function makeWritesBlocking(...streams) {
+  for (const stream of streams) {
+    try {
+      const handle = stream && stream._handle;
+      if (handle && typeof handle.setBlocking === 'function') handle.setBlocking(true);
+    } catch {
+      // A handle that throws (a closed or foreign one): the text goes out as it always did.
+    }
+  }
+}
+
 // Node prints an error that ends the process (an exception nothing caught, a promise rejected and never handled) from its own code, and not through `process.stderr.write`, so the wrapper on the stream does not see it
 // (measured on Node 20 and 22: a replaced `write` is never called). With a listener the default — print, exit with status 1 — is replaced by this one, which prints the same error, cleaned, and exits with the same status.
 // Only when nothing else handles the error: a test runner has its own listener, and a host that added one after this one has taken the decision over. `breakLength: Infinity` keeps `inspect` from cutting a long string
-// into pieces joined with `+`, which is the one thing that could make a cleaned text differ from the text a person reads.
+// into pieces joined with `+`, which is the one thing that could make a cleaned text differ from the text a person reads. The write is made blocking first (makeWritesBlocking): this handler exits right after it, so a
+// long error (an answer the SDK quoted into it) would otherwise reach a pipe on Linux and macOS cut short.
 function guardFatalErrors() {
   if (process.listenerCount('uncaughtException') > 0) return false;
   process.on('uncaughtException', function fatalWithoutTokens(error, origin) {
@@ -524,6 +556,7 @@ function guardFatalErrors() {
       text = 'an error that could not be printed';
     }
     try {
+      makeWritesBlocking(process.stderr);
       process.stderr.write(`${redactOutput(`${origin === 'unhandledRejection' ? 'Uncaught (in promise) ' : 'Uncaught '}${text}`)}\n`);
     } catch {
       // The stream is gone: there is nobody to tell.
@@ -590,6 +623,7 @@ module.exports = {
   redactTokens,
   redactOutput,
   guardStream,
+  makeWritesBlocking,
   guardFatalErrors,
   installOutputGuard,
   guardWorkspaceStorage,

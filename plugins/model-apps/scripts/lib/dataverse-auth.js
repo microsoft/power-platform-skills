@@ -913,10 +913,13 @@ function asciiJson(value) {
  * (stderr is for people and is never escaped.)
  * Every text it writes has the access tokens the process obtained taken out (lib/output-redaction.js). The streams are guarded the moment the first token is obtained, so this is the same guard once more; the result is
  * the one thing every script prints, and it is clean where a caller has replaced `process.stdout.write` (a host that runs a script in its own process, a test that captures it) and so replaced the guard too.
+ * Both streams are made blocking before the first write (makeWritesBlocking): the process exits right after the writes, and on Linux and macOS a pipe's writes are otherwise queued, so `process.exit` cut a large
+ * result short. It still never returns: the exit follows the writes at once.
  */
 function emitResult(ok, payload, options = {}) {
   const toJson = options && options.ascii ? asciiJson : JSON.stringify;
   const redact = outputRedaction.redactOutput;
+  outputRedaction.makeWritesBlocking(process.stdout, process.stderr);
   if (ok) {
     process.stdout.write(redact(toJson(payload)) + '\n');
     process.exit(0);

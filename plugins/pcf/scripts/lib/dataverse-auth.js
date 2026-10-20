@@ -732,8 +732,11 @@ function readJsonArg(raw) {
  *   ok=false + object → JSON payload to stdout (caller can parse partial-failure
  *                       details like `errors: [...]`), short note to stderr, exit 1
  *   ok=false + string → string to stderr, exit 1
+ * Both streams are made blocking before the first write (makeWritesBlocking, lib/output-redaction.js): the process exits right after the writes, and on Linux and macOS a pipe's
+ * writes are otherwise queued, so `process.exit` cut a large result short. It still never returns: the exit follows the writes at once.
  */
 function emitResult(ok, payload) {
+  outputRedaction.makeWritesBlocking(process.stdout, process.stderr);
   if (ok) {
     process.stdout.write(JSON.stringify(payload) + '\n');
     process.exit(0);

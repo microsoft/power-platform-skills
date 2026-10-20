@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const {
   makePcfSdk,
   findCustomControl,
@@ -271,6 +272,9 @@ function errorMessage(err) {
 }
 
 function writeResult(ok, payload) {
+  // The process exits right after printing the result, which grows with the bindings an intent names: blocking writes put the whole
+  // text in the pipe first (on Linux and macOS a pipe's writes are queued, and process.exit does not wait for them — lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   if (ok) {
     process.stdout.write(JSON.stringify(payload) + '\n');
     process.exit(0);

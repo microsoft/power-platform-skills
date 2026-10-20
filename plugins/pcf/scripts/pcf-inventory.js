@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const { parseArgs, validateFlags } = require('./lib/dataverse-auth.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const {
   WHERE_USED_CAVEAT,
   makePcfSdk,
@@ -119,6 +120,9 @@ function missingControlMessage(controlName) {
 }
 
 function writeResult(ok, payload) {
+  // A listing of an org's controls can be megabytes, and the process exits right after printing it: blocking writes put the whole
+  // text in the pipe first (on Linux and macOS a pipe's writes are queued, and process.exit does not wait for them — lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   if (ok) {
     process.stdout.write(JSON.stringify(payload) + '\n');
     process.exit(0);
