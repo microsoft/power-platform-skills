@@ -123,7 +123,7 @@ test('REAL BUNDLE: an old copy holding unpushed edits is refused at push, and th
     assert.strictEqual(err.code, 'ARTIFACT_PROJECTION_STALE', 'with the SDK code kept for the caller');
     assert.match(err.message, /Refusing to push app/, 'the SDK reason stays in the message');
     assert.match(err.message, /earlier version of this plugin/, 'it says where the copy came from');
-    assert.match(err.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run/,
+    assert.match(err.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\) and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run/,
       'and names the step an operator can take, keeping the navigation baseline, the approval record and the page records');
     return true;
   });
@@ -146,7 +146,7 @@ test('REAL BUNDLE: a copy holding unpushed edits over a moved environment halts 
     assert.ok(err instanceof BuildHalt);
     assert.strictEqual(err.code, 'LOCAL_EDITS_WOULD_BE_LOST', 'the SDK code is kept');
     assert.match(err.message, /the environment's copy changed after this workspace copy was fetched/);
-    assert.match(err.message, /A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run\./,
+    assert.match(err.message, /A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\) and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run\./,
       'the review comes before the reset: the copy may be the fence a concurrent-edit halt keeps');
     return true;
   });

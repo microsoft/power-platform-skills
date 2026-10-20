@@ -19,7 +19,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+const { createMakerSdk: createClientSdk } = require('../lib/maker-sdk.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
+const { requireSuccessfulPush } = require('../lib/entity-provision.js');
 const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
 const { retryPolicyFor, judgeFailure, RETRY } = require('../lib/retry-policy.js');
 const { openUnconfirmedWebResources, readUnconfirmedWebResources, unconfirmedRecordPath, PREFIX } = require('../lib/web-resource-records.js');
@@ -145,12 +148,26 @@ function refuseWebResourcePublishes(org, refusals = 1) {
   return org.intercept((c) => namesWebResource(c) && left > 0 && (left -= 1, true), lockRefused);
 }
 
-function scenario() {
+function scenario({ realClient = false } = {}) {
   const org = createFakeBuildOrg({ entities: {} });
   const dir = tempDir();
   const warnings = [];
+  const wire = [];
+  const httpClient = realClient ? createAzHttpClient(org.origin, {
+    getToken: () => 'offline-resource-reset-token',
+    sleep: async () => {},
+    request: async (request) => {
+      wire.push({ ...request, recoveryId: openUnconfirmedWebResources({ workspaceDir: dir, environment: org.origin }).idOf(SCRIPT) });
+      const verb = request.method.toLowerCase();
+      const options = { headers: request.headers };
+      const response = ['get', 'delete'].includes(verb)
+        ? await org.httpClient[verb](request.url, options)
+        : await org.httpClient[verb](request.url, request.body ? JSON.parse(request.body) : undefined, options);
+      return { statusCode: response.status, headers: response.headers || {}, body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body) };
+    },
+  }) : org.httpClient;
   async function build(spec, { phases = ['web-resources'], workspaceDir = dir, ...extra } = {}) {
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+    const sdk = (realClient ? createClientSdk : createMakerSdk)({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient });
     await sdk.initWorkspace();
     const mark = org.calls.length;
     try {
@@ -161,7 +178,7 @@ function scenario() {
     }
   }
   const row = (name) => [...org.resources.values()].find((r) => r.name === name);
-  return { org, dir, build, row, warnings };
+  return { org, dir, build, row, warnings, wire };
 }
 
 const SCRIPT = 'contoso_/scripts/form.js';
@@ -213,6 +230,91 @@ test('the run that follows writes it again by id — no second create of the nam
   assert.deepEqual(writesOf(after.calls), [], 'nothing written');
   assert.deepEqual(after.calls.map((c) => `${c.method} ${c.path}`), clean.calls.map((c) => `${c.method} ${c.path}`), 'and the same requests as a rebuild of a web resource whose first write was confirmed');
 });
+
+function followEmittedResetAdvice(dir) {
+  let advice;
+  try {
+    // Select the real shared remedy with a by-value refusal; the resource's write, unverified error
+    // and recovery below still traverse the actual bundle and production HTTP client.
+    requireSuccessfulPush({ saved: false, error: { code: 'ARTIFACT_ALREADY_EXISTS', message: 'An owned fixture row already exists.' } }, 'owned fixture');
+  } catch (halt) {
+    assert.equal(halt.code, 'already-exists');
+    advice = halt.message;
+  }
+  assert.match(advice, /stop any other build or teardown/);
+  assert.match(advice, /then delete everything in it except /);
+  // Read the emitted preservation names, e.g. `last-applied.json` or `page-ownership.*.json`,
+  // instead of giving this test a separate keep-list that could conceal missing operator advice.
+  const patterns = [...advice.matchAll(/\b[a-z][a-z0-9-]*(?:\.[a-z0-9*-]+)*\.json\b/g)].map(([name]) => {
+    const literal = (part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${name.split('*').map(literal).join('.*')}$`);
+  });
+  assert.ok(patterns.length >= 3, 'the emitted rule names the baseline, approval and page records');
+  const removed = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (patterns.some((pattern) => pattern.test(name))) continue;
+    fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    removed.push(name);
+  }
+  return removed;
+}
+
+for (const stalePublished of [false, true]) {
+  test(`workspace reset ${stalePublished ? 'does not turn unconfirmed published content into successful stale reuse' : 'retains the recovery identity of a never-published partial resource'} through the real client`, async (t) => {
+    const s = scenario({ realClient: true });
+    const stop = stalePublished ? s.org.intercept(namesWebResource, () => {
+      s.row(SCRIPT).publishedContent = base64('var Form = { old: true };');
+      return { status: 204, headers: {}, body: null };
+    }) : refuseWebResourcePublishes(s.org);
+    const first = await s.build(spec());
+    stop();
+    assert.equal(first.halt && first.halt.code, 'WEB_RESOURCE_UNVERIFIED');
+    const row = s.row(SCRIPT);
+    const id = row.webresourceid;
+    const receipt = unconfirmedRecordPath(s.dir, s.org.origin);
+    assert.equal(openUnconfirmedWebResources({ workspaceDir: s.dir, environment: s.org.origin }).idOf(SCRIPT), id);
+    assert.equal(s.wire.filter((request) => request.method === 'POST' && new URL(request.url).pathname.endsWith('/PublishXml')).length, 1);
+    assert.equal(row.publishedContent, stalePublished ? base64('var Form = { old: true };') : undefined);
+
+    fs.writeFileSync(path.join(s.dir, 'last-applied.json'), '{"baseline":"keep"}\n');
+    fs.writeFileSync(path.join(s.dir, 'destructive-approval.json'), '{"approved":"keep"}\n');
+    const pages = require('../lib/page-ownership-records.js');
+    pages.recordPageCreation(s.dir, 'contoso_reset', 'overview', ID_A, 'Overview', s.org.origin);
+    pages.recordPagePending(s.dir, 'contoso_reset', 'detail', ID_B, 'Detail', s.org.origin, 'a'.repeat(64));
+    pages.recordPageTeardown(s.dir, 'contoso_reset', [{ id: ID_A, key: 'overview', name: 'Overview' }], s.org.origin);
+    const existingStores = new Map(fs.readdirSync(s.dir)
+      .filter((name) => ['last-applied.json', 'destructive-approval.json'].includes(name) || name.startsWith('page-ownership.'))
+      .map((name) => [name, fs.readFileSync(path.join(s.dir, name))]));
+    assert.equal(existingStores.size, 5, 'baseline, approval and all three page-record kinds coexist with the resource receipt');
+    fs.writeFileSync(path.join(s.dir, 'reset-cache.json'), '{"cache":"discard"}\n');
+    fs.mkdirSync(path.join(s.dir, 'reset-cache'));
+    fs.writeFileSync(path.join(s.dir, 'reset-cache', 'artifact.json'), '{"cache":"discard"}\n');
+    const removed = followEmittedResetAdvice(s.dir);
+    assert.ok(removed.includes('reset-cache.json') && removed.includes('reset-cache'), 'nonessential files and cached directories are reset');
+    assert.equal(fs.existsSync(path.join(s.dir, 'manifest.json')), false, 'the SDK manifest is reconstructible cache, not an essential record');
+    for (const [name, bytes] of existingStores) assert.deepEqual(fs.readFileSync(path.join(s.dir, name)), bytes, `${name} is preserved byte for byte`);
+
+    const mark = s.wire.length;
+    const next = await s.build(spec());
+    const sent = s.wire.slice(mark);
+    const creates = sent.filter((request) => request.method === 'POST' && new URL(request.url).pathname.endsWith('/webresourceset'));
+    const patches = sent.filter((request) => request.method === 'PATCH');
+    t.diagnostic(JSON.stringify({ stalePublished, resultOk: next.outcome && next.outcome.ok, failureCode: next.halt && next.halt.code, creates: creates.length, patches: patches.length }));
+    assert.equal(next.outcome && next.outcome.ok, true, 'following the emitted reset must recover instead of retrying a refused duplicate create');
+    assert.equal(row.publishedContent, base64(SCRIPT_CODE), 'a successful rebuild must publish the intended bytes, not silently reuse stale content');
+    assert.equal(next.outcome.created.webResources[SCRIPT], id, 'the original durable id is retained');
+    assert.equal(creates.length, 0, 'reset does not authorize another create by name');
+    assert.equal(patches.length, 1);
+    assert.equal(new URL(patches[0].url).pathname.endsWith(`/webresourceset(${id})`), true);
+    assert.equal(JSON.parse(patches[0].body).content, base64(SCRIPT_CODE));
+    const verified = sent.findIndex((request) => request.method === 'GET' && new URL(request.url).pathname.endsWith(`/webresourceset(${id})`) && new URL(request.url).searchParams.get('$select') === 'content');
+    assert.ok(verified > sent.indexOf(patches[0]), 'published content is verified after rewriting the original row');
+    assert.equal(sent[verified].recoveryId, id, 'verification still has the durable receipt');
+    assert.equal(sent.filter((request) => request.method === 'POST' && new URL(request.url).pathname.endsWith('/PublishXml')).length, 1);
+    assert.equal(fs.existsSync(receipt), false, 'only successful recovery clears the receipt');
+    for (const [name, bytes] of existingStores) assert.deepEqual(fs.readFileSync(path.join(s.dir, name)), bytes, `${name} also survives recovery`);
+  });
+}
 
 test('a write again that the lock refuses too keeps the record and stops again, and a quiet run then converges — one create in three runs', async () => {
   const s = scenario();

@@ -3946,7 +3946,9 @@ runner names the manual reset every workspace-reset remedy shares
 (`RESET_WORKSPACE` in `lib/entity-provision.js`): stop other builds and teardowns on the workspace
 first — the changed-only snapshot holds their leases and a running teardown's registration — then
 delete everything except `last-applied.json` (the navigation baseline), `destructive-approval.json`
-(the approved removals) and the `page-ownership.*.json` records (a page's creation receipt, a teardown's
+(the approved removals), `web-resource-unconfirmed.*.json` (the durable ids of web resources whose publication
+could not be confirmed: a later build must rewrite and verify those same rows, not create again or reuse stale
+published content) and the `page-ownership.*.json` records (a page's creation receipt, a teardown's
 record of the pages it is deleting, and the `pending` record of a page create that was started and never
 answered — the only trace of a page that may still land: without it the next build creates a second page
 for the spec entry), which no re-run can rebuild. The build does not reset the copy itself: the

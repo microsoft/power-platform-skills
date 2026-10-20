@@ -17,20 +17,24 @@ function workspace(t) {
 }
 const lib = () => require('../lib/page-ownership-records.js');
 
-// The workspace-reset advice every halt that asks for one gives (`RESET_WORKSPACE`) says to keep the `page-ownership.*.json` records: they are the only trace of a page this app created, of a delete under
-// way, and of a create that was started and never answered (a page that may still land) — and deleting them is the way to the second page for one spec entry that the pending record prevents.
-// The glob it names has to cover every kind of record the module writes.
-test('the workspace-reset advice keeps every kind of ownership record: the three kinds the module writes all carry the name the advice protects', (t) => {
+// The reset remedy must preserve every non-reconstructible store, not only SDK cache. Page receipts
+// retain pending creates and deletion progress; resource receipts retain the id needed to rewrite an
+// unconfirmed publication. Its named globs must cover the actual files both modules write.
+test('the workspace-reset advice keeps the baseline, approval and every page and resource recovery store', (t) => {
   const { RESET_WORKSPACE } = require('../lib/entity-provision.js');
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
   lib().recordPagePending(dir, APP, 'detail', OTHER, 'Detail', ENV_A, 'a'.repeat(64));
   lib().recordPageTeardown(dir, APP, [{ id: ID, key: 'overview', name: 'Overview' }], ENV_A);
+  const { openUnconfirmedWebResources, unconfirmedRecordPath } = require('../lib/web-resource-records.js');
+  assert.equal(openUnconfirmedWebResources({ workspaceDir: dir, environment: ENV_A }).note('contoso_/reset.js', ID), true);
   const written = fs.readdirSync(dir);
-  assert.equal(written.length, 3);
-  assert.deepEqual(written.map((name) => name.split('.')[1]).sort(), ['created', 'pending', 'teardown']);
-  assert.ok(written.every((name) => /^page-ownership\..+\.json$/.test(name)), 'every record is page-ownership.<kind>.<hash>.json');
-  assert.match(RESET_WORKSPACE, /except last-applied\.json, destructive-approval\.json and the page-ownership\.\*\.json records/);
+  assert.equal(written.length, 4);
+  const pageRecords = written.filter((name) => name.startsWith('page-ownership.'));
+  assert.deepEqual(pageRecords.map((name) => name.split('.')[1]).sort(), ['created', 'pending', 'teardown']);
+  assert.ok(pageRecords.every((name) => /^page-ownership\..+\.json$/.test(name)), 'every page record is page-ownership.<kind>.<hash>.json');
+  assert.match(path.basename(unconfirmedRecordPath(dir, ENV_A)), /^web-resource-unconfirmed\.[a-f0-9]{64}\.json$/);
+  assert.match(RESET_WORKSPACE, /except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\) and the page-ownership\.\*\.json records/);
   assert.match(RESET_WORKSPACE, /pending records/);
 });
 
