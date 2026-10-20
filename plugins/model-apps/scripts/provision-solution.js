@@ -20,6 +20,7 @@ const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth')
 const { createAzHttpClient } = require('./lib/sdk-http-client');
 const { odataLit } = require('./lib/odata.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 /**
  * Finds the publisher to use for the solution:
@@ -140,6 +141,7 @@ async function main() {
     needValue: ['description', 'version', 'publisher'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

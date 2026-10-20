@@ -65,6 +65,7 @@ const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
 const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 // The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
 const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
 //
@@ -601,6 +602,7 @@ async function main() {
     needValue: ['env', 'spec', 'workspace', 'language-code', 'languageCode'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -619,6 +621,7 @@ async function main() {
   try {
     languageCode = readLanguageCodeFlag(flags);
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${err.message}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -641,6 +644,8 @@ async function main() {
     warnings.push(message);
     process.stderr.write(`WARNING: ${message}\n`);
   };
+  // A refused spec ends the run right after its warnings, so they are made blocking first (lib/output-redaction.js).
+  if (!v.ok) makeWritesBlocking(process.stdout, process.stderr);
   for (const w of v.warnings || []) warn(w);
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors, ...(warnings.length ? { warnings } : {}) }, RESULT_AS_ASCII); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
@@ -690,6 +695,8 @@ async function main() {
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
+  // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}${!c.present && c.detail ? ` — ${c.detail}` : ''}\n`);
   process.stderr.write(`\n${r.ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
   // What verify could not DECIDE is neither a pass nor a failure: listed beside the verdict, with its reason, so a green run never reads as

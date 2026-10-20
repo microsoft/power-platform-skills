@@ -43,6 +43,7 @@ const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -3082,6 +3083,7 @@ async function main(deps = {}) {
     needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode'],
   });
   if (flagError) {
+    makeWritesBlocking(io.stderr);
     io.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     io.exit(1);
     return;
@@ -3103,6 +3105,7 @@ async function main(deps = {}) {
   try {
     languageFlag = readLanguageCodeFlag(flags);
   } catch (e) {
+    makeWritesBlocking(io.stderr);
     io.stderr.write(`✗ ${e.message}\n${USAGE}\n`);
     io.exit(1);
     return;
@@ -3173,6 +3176,8 @@ async function main(deps = {}) {
     const genpage = io.makeGenpageSdk(env, { sdk });
 
     const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys });
+    // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
+    makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
 
     const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft } = result;

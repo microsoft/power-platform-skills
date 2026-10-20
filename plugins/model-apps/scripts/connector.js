@@ -45,6 +45,7 @@
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
 const { sdkFirst, connectivity } = require('./lib/sdk-first.js');
 const { runPac, pacPayload } = require('./lib/pac-fallback.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = [
   'Usage:',
@@ -197,6 +198,7 @@ function describeFailure(error) {
 async function main() {
   const { request, error } = readRequest(process.argv.slice(2));
   if (error) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${error}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -226,6 +228,7 @@ module.exports = { readRequest, pacArgs, answer, answerLine, describeFailure, co
 
 if (require.main === module) {
   main().catch((err) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(1);
   });

@@ -89,6 +89,7 @@ function parseFile(file) {
 }
 
 function usage(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`✗ ${message}\n${USAGE}\n`);
   process.exit(1);
 }
@@ -105,6 +106,7 @@ function emitJson(ok, payload) {
 if (require.main === module) {
   main().catch((err) => {
     const payload = { ok: false, error: String(err && err.message ? err.message : err) };
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stdout.write(`${JSON.stringify(payload)}\n`);
     process.stderr.write(`${payload.error}\n`);
     process.exit(1);

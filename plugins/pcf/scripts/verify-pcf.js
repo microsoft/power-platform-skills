@@ -45,6 +45,7 @@ const CLIENTS_HINT = 'allowed values: web,phone,tablet';
 const FORM_TYPE_CODES = Object.freeze({ main: 2, 'quick-create': 7, 'quick-view': 6, card: 11, other: 100 });
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }

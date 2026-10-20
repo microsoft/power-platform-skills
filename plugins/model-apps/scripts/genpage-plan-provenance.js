@@ -25,6 +25,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pagesTables } = require('./lib/page-file-targets.js');
 const { sha256 } = require('./lib/hash.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // What a plan document targets.
 //   create:  the Pages table's File column — `## Pages` in the written plan, `### Pages (N total)`
@@ -360,6 +361,9 @@ function main() {
     result = { ok: false, error: 'Usage: node genpage-plan-provenance.js prepare --plan <path> OR verify --plan <path> --approved @<approved-plan-file>' };
   }
 
+  // A mismatch carries both change lists whole, and the process exits right after the write: it is made blocking
+  // first, or a pipe on Linux and macOS takes only what fits at once (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exit(result.ok ? 0 : (args.command === 'prepare' || args.command === 'verify' ? 3 : 1));
 }

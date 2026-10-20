@@ -29,6 +29,7 @@ const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dat
 const snapStore = require('./lib/apply-snapshot-store.js');
 const { checkPageOwnershipClearable } = require('./lib/page-ownership-records.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
 async function makeSdk(env) {
@@ -194,6 +195,7 @@ async function main() {
     needValue: ['env', 'spec', 'workspace'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -247,6 +249,8 @@ async function main() {
         beforeRename: () => requireDisposable(clearable.target),
         beforeRemove: requireDisposable,
       }) : clearable;
+      // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
+      makeWritesBlocking(process.stdout, process.stderr);
       if (cleared.ok) {
         process.stderr.write(`\ncleared workspace ${clearable.target}${cleared.leftover ? ` (${cleared.reason})` : ''}\n`);
       } else {

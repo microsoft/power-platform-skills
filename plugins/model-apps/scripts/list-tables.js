@@ -49,6 +49,7 @@
 
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
 const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = 'Usage: node scripts/list-tables.js --env <envUrl> [--search "<term>[,<term>...]"] [--exact] [--type custom|standard|all]';
 const TABLE_TYPES = ['custom', 'standard', 'all'];
@@ -155,6 +156,7 @@ async function readTables(env, args = {}, httpClient) {
 }
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`✗ ${message}\n${USAGE}\n`);
   process.exit(1);
 }
@@ -200,6 +202,7 @@ module.exports = { readTables, searchTerms };
 
 if (require.main === module) {
   main().catch((err) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(1);
   });

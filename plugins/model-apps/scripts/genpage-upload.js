@@ -54,6 +54,7 @@ const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, desc
 const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
@@ -709,6 +710,7 @@ async function deploy(context) {
 
 if (require.main === module) {
   main().catch((e) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`${e && e.message ? e.message : e}\n`);
     process.exit(1);
   });

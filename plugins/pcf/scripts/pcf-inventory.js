@@ -19,6 +19,7 @@ const KNOWN = ['env', 'control', 'include-managed', 'where-used', 'workspace'];
 const NEED_VALUE = ['env', 'control', 'workspace'];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }

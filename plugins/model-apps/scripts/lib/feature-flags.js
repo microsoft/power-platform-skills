@@ -212,6 +212,9 @@ module.exports = {
 if (require.main === module) {
   const arg = process.argv[2];
   if (arg === '--list') {
+    // The list ends with a warning for each bad entry of the flags file, and the process exits right after it: the writes are
+    // made blocking first, or a pipe on Linux and macOS takes only what fits at once (output-redaction.js).
+    require('./output-redaction.js').makeWritesBlocking(process.stdout, process.stderr);
     for (const { flag, enabled, source, status } of describe()) {
       process.stdout.write(
         `${flag}: ${enabled ? 'enabled' : 'disabled'} (status: ${status}, source: ${source})\n`

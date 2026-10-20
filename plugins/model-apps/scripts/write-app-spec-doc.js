@@ -30,6 +30,7 @@ const { renderAppSpecDoc } = require('./lib/app-spec-doc.js');
 const { appAccessModel, uncoveredTables, uncoveredTablesWarning } = require('./lib/app-access.js');
 const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { appRolesOf } = require('./lib/app-roles.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // The design gaps the document calls out, returned as data. Kept here (not in the pure renderer)
 // because the renderer's contract is "markdown in one string"; the CLI is what talks to the caller.
@@ -127,6 +128,7 @@ async function main() {
   const USAGE = 'Usage: node scripts/write-app-spec-doc.js --spec @<app-folder>/app-spec.json [--env <orgUrl>] [--out <path>]';
   const flagError = validateFlags(argv, { known: ['spec', 'env', 'out'], needValue: ['spec', 'env', 'out'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

@@ -152,6 +152,7 @@
 
 const { randomBytes, randomUUID } = require('node:crypto');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { pushFailed } = require('./lib/entity-provision.js');
 const { collectionRows, currentLayerRow, savedPageRows } = require('./lib/app-components.js');
@@ -672,6 +673,7 @@ async function writeApp(sdk, args, plan, sitemapId) {
 // --- the command line ------------------------------------------------------------------------------------------------------
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`✗ ${message}\n${USAGE}\n`);
   process.exit(1);
 }
@@ -732,6 +734,8 @@ async function main() {
     result = failure(err, command === 'create' ? { written: false } : {});
   }
   // The SDK's notes on the push, for a run that finished and for one that failed after it: the failed run is the one that most needs them.
+  // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   for (const warning of result.warnings || []) process.stderr.write(`⚠ ${warning}\n`);
   emitResult(result.ok, result, { ascii: true });
 }
@@ -742,6 +746,7 @@ module.exports = { listApps, createApp, deriveUniqueName, pageIdArguments, COMMA
 
 if (require.main === module) {
   main().catch((err) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(1);
   });

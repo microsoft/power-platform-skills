@@ -118,6 +118,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin, makeRequest, webApiUrl, getAuthToken } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient, retryAfterMs, scrub, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH } = require('./lib/sdk-http-client.js');
 const { sdkFirst } = require('./lib/sdk-first.js');
@@ -1576,6 +1577,7 @@ async function main() {
   guardOutput(tokens);
   const { request, error } = readRequest(process.argv.slice(2));
   if (error) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${error}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -1635,6 +1637,7 @@ module.exports = {
 if (require.main === module) {
   main().catch((err) => {
     // Only the kind of failure: the message of an unexpected one is not known to be free of what the settings file holds, and this runs where no sanitizer exists.
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Error: solution-settings.js failed unexpectedly (${(err && err.name) || 'Error'}).\n`);
     process.exit(1);
   });

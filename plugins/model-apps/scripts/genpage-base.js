@@ -36,6 +36,7 @@ const {
   readPlainText,
   markerPath,
 } = require('./lib/genpage-base.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = 'Usage: node scripts/genpage-base.js record --page-id <id> --file <page.tsx> [--app-id <id>] [--deployed-sha256 <hash>]\n'
   + '       node scripts/genpage-base.js check --env <url> --app-id <id> --page-id <id> --file <local.tsx>';
@@ -181,6 +182,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
 
 if (require.main === module) {
   main().catch((e) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`${e && e.message ? e.message : e}\n`);
     process.exit(1);
   });

@@ -12,6 +12,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { AI_APP_SETTING, AI_SETTING_CODEC, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const fs = require('node:fs');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // Human-readable label + admin-action hint for each feature key returned by getAiReadiness.
 const FEATURE_META = {
@@ -141,6 +142,7 @@ async function main() {
   const USAGE = 'Usage: node scripts/ai-preflight.js --env <orgUrl> [--app <uniqueName>]';
   const flagError = validateFlags(argv, { known: ['env', 'app'], needValue: ['env', 'app'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -189,6 +191,8 @@ async function main() {
       const res = await effectiveSettingValue(read, appModuleId, setting);
       effective[key] = res.error ? { error: res.error } : { value: res.value, scope: res.scope, on: settingIsOn(res.value, key) };
     }
+    // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
+    makeWritesBlocking(process.stdout, process.stderr);
     if (appLookup.error) {
       process.stderr.write(`\nWarning: could not resolve app '${app}' (${appLookup.error}); reporting readiness gates only.\n`);
     }
@@ -222,6 +226,7 @@ module.exports = { runPreflight, featureLine };
 
 if (require.main === module) {
   main().catch((err) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(1);
   });

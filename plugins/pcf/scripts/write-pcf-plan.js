@@ -6,6 +6,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { parseManifest } = require('./lib/pcf-manifest.js');
 const { validateIntent, lintBindingIntent, renderPlanMarkdown } = require('./lib/pcf-intent.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = 'Usage: node scripts/write-pcf-plan.js --intent @pcf-intent.json [--manifest ControlManifest.Input.xml] [--out pcf-plan.md]';
 
@@ -36,6 +37,7 @@ function runMain() {
     needValue: ['intent', 'manifest', 'out'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

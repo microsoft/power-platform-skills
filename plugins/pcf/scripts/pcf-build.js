@@ -6,6 +6,7 @@ const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.j
 const { loadMatrix } = require('./lib/pcf-matrix.js');
 const { findControlProject, buildControl, bundleFindings } = require('./lib/pcf-build.js');
 const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = `Usage:
   node scripts/pcf-build.js --project <dir> [--mode production|development] [--no-clean]`;
@@ -14,6 +15,7 @@ const KNOWN = ['project', 'mode', 'no-clean'];
 const NEED_VALUE = ['project', 'mode'];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }

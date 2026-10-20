@@ -40,6 +40,10 @@ function stagePlugin() {
     path.join(PLUGIN_ROOT, "scripts", "lib", "utf8-stream.js"),
     path.join(root, "scripts", "lib", "utf8-stream.js")
   );
+  fs.copyFileSync(
+    path.join(PLUGIN_ROOT, "scripts", "lib", "output-redaction.js"),
+    path.join(root, "scripts", "lib", "output-redaction.js")
+  );
   // The staged hook must be the real source, not a rewritten stand-in.
   assert.equal(
     fs.readFileSync(path.join(root, "hooks", "run-skill-posttool-validation.js"), "utf8"),

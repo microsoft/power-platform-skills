@@ -512,6 +512,7 @@ function guardStream(stream, redact = redactOutput) {
 /**
  * Makes the writes to each of `streams` blocking from here on: a `write` returns when the stream has taken the whole text. For the last writes of a process — the ones a `process.exit` follows at once (`emitResult` in
  * lib/dataverse-auth.js, the printer of an error that ends the process below, a script's own result printer). Nothing else about the stream changes: the text still goes through its `write`, the guard above included.
+ * Each plugin's tests list every exit of its code that is not protected by this, with the bound that makes it safe (tests/exit-writes-inventory.test.js in model-apps, tests/pcf-exit-writes-inventory.test.js in pcf).
  *
  * WHY. Node writes to a pipe asynchronously on Linux and macOS, and synchronously on Windows (https://nodejs.org/api/process.html#a-note-on-process-io). What the pipe does not take at once — more than its buffer holds,
  * 64 KiB on Linux — is queued, and `process.exit` ends the process without waiting for the queue (https://nodejs.org/api/process.html#processexitcode). An agent reads a script's result through a pipe, so a large
@@ -555,8 +556,8 @@ function guardFatalErrors() {
     } catch {
       text = 'an error that could not be printed';
     }
+    makeWritesBlocking(process.stderr);
     try {
-      makeWritesBlocking(process.stderr);
       process.stderr.write(`${redactOutput(`${origin === 'unhandledRejection' ? 'Uncaught (in promise) ' : 'Uncaught '}${text}`)}\n`);
     } catch {
       // The stream is gone: there is nobody to tell.

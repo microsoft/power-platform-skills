@@ -30,6 +30,7 @@ const {
 } = require('./lib/dataverse-auth');
 const { odataLit } = require('./lib/odata');
 const { FORM_GUID_RE } = require('./lib/app-spec');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const APPMODULE_COMPONENT_TYPE = 80;
 const UXAGENTPROJECT_LOGICAL_NAME = 'uxagentproject';
 const CONNECTION_REFERENCE_LOGICAL_NAME = 'connectionreference';
@@ -90,6 +91,7 @@ async function main() {
     needValue: ['page-ids', 'connection-refs'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

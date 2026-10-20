@@ -25,6 +25,7 @@ const fs = require('node:fs');
 const zlib = require('node:zlib');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
+const { makeWritesBlocking } = require('../lib/output-redaction.js');
 
 // typescript@5.8.3, as the npm registry publishes it (`npm view typescript@5.8.3 dist`): the tarball's sha1 and sha512,
 // and the SHA-256 of the one file vendored from it. Bump all three together, deliberately.
@@ -74,6 +75,7 @@ function readTar(buffer) {
 const tgz = fs.readFileSync(tarball);
 const integrity = `sha512-${sha('sha512', tgz, 'base64')}`;
 if (integrity !== PINNED.tarballIntegrity || sha('sha1', tgz) !== PINNED.tarballSha1) {
+  makeWritesBlocking(process.stdout, process.stderr);
   console.error(`Refusing ${tarball}: it is not the pinned typescript@${PINNED.version} tarball (integrity ${integrity}).`);
   process.exit(1);
 }

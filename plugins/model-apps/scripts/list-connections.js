@@ -41,6 +41,7 @@ const {
 } = require('./lib/dataverse-auth');
 const { sdkFirst, connectivity } = require('./lib/sdk-first.js');
 const { PAC_READ_TIMEOUT_MS, PAC_BANNER, LINE_BREAK, LEFTOVER_ADVICE, pacErrorText, stopClaim } = require('./lib/pac-fallback.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -461,6 +462,7 @@ async function main() {
   // and report a missing envUrl — naming the symptom instead of the typo that caused it.
   const flagError = validateFlags(argv, { known: [] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

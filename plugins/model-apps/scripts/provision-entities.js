@@ -13,6 +13,7 @@ const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength, ke
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -320,6 +321,7 @@ async function main() {
     needValue: ['env', 'input', 'language-code', 'languageCode'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -339,6 +341,7 @@ async function main() {
   if (rawLang !== undefined) {
     languageCode = normalizeLanguageCode(rawLang);
     if (languageCode === null) {
+      makeWritesBlocking(process.stdout, process.stderr);
       process.stderr.write(`✗ --language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${rawLang}')\n`);
       process.exit(1);
     }

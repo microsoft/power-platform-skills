@@ -19,6 +19,7 @@
  * {sdk-surface-contract,hardening2-real-bundle,vendor-sdk-smoke}.test.js) against the new bundle. */
 const path = require('node:path');
 const fs = require('node:fs');
+const { makeWritesBlocking } = require('../lib/output-redaction.js');
 
 const argSdk = (() => {
   const i = process.argv.indexOf('--sdk');
@@ -46,10 +47,12 @@ const PROVENANCE = path.resolve(__dirname, '../vendor/PROVENANCE.json');
 const esbuild = require('esbuild');
 
 if (!fs.existsSync(SDK_ENTRY)) {
+  makeWritesBlocking(process.stdout, process.stderr);
   console.error('SDK entry not found:', SDK_ENTRY);
   process.exit(2);
 }
 if (!fs.existsSync(SDK_NODE_ENTRY)) {
+  makeWritesBlocking(process.stdout, process.stderr);
   console.error('SDK /node adapter entry not found:', SDK_NODE_ENTRY);
   console.error('The SDK requires an injected workspaceStorage; the plugin builds one from this.');
   process.exit(2);
@@ -129,6 +132,7 @@ function sdkProvenance(root) {
 
 const prov = sdkProvenance(argSdk);
 if (prov.libIsStale) {
+  makeWritesBlocking(process.stdout, process.stderr);
   console.error(`REFUSING: ${SDK_ENTRY} is OLDER than the newest .ts under packages/cds-maker-sdk/src`);
   console.error(`  lib built  : ${prov.libBuiltAt}`);
   console.error(`  newest src : ${prov.newestSrcAt}`);

@@ -42,6 +42,7 @@
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
 const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { describeEnvironmentLanguages } = require('./lib/lcid-cultures.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = 'Usage: node scripts/list-languages.js --env <envUrl>';
 
@@ -60,6 +61,7 @@ async function main() {
   const { flags } = parseArgs(argv);
   const flagError = validateFlags(argv, { known: ['env'], needValue: ['env'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -71,6 +73,7 @@ async function main() {
   try {
     env = requireDataverseOrigin(flags.env);
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${err.message}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -89,6 +92,8 @@ async function main() {
     emitResult(false, { ok: false, error: String((failure && failure.message) || failure), ...(code ? { code } : {}) }, { ascii: true });
     return;
   }
+  // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   for (const lcid of languages.unmapped) {
     process.stderr.write(`⚠ LCID ${lcid} has no culture code in this plugin's table, so its code and text direction are unknown (reported as null, not guessed).\n`);
   }
@@ -99,6 +104,7 @@ module.exports = { readLanguages };
 
 if (require.main === module) {
   main().catch((err) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(1);
   });

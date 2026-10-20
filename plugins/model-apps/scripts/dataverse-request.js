@@ -41,6 +41,7 @@ async function main() {
     hints: { timeout: 'a positive millisecond value (for example, --timeout 60000)' },
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -58,6 +59,7 @@ async function main() {
   if (flags.timeout !== undefined) {
     const parsed = Number(flags.timeout);
     if (!Number.isFinite(parsed) || parsed <= 0) {
+      makeWritesBlocking(process.stdout, process.stderr);
       process.stderr.write(`--timeout must be a positive number (got "${flags.timeout}")\n`);
       process.exit(1);
     }

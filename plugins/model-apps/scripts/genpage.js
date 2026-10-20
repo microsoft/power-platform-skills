@@ -118,6 +118,7 @@ const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require
 const { makeGenpageSdk, pageFolderFiles, dataSourcesOf, GUID_RE, unescapePacName } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeFileSafe } = require('./lib/safe-fs.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // How long the backend's cleanup is waited for before the process ends: a storage call that never settles must not keep the script alive.
 const DISPOSE_WAIT_MS = 10000;
@@ -188,6 +189,7 @@ class UsageError extends Error {
 const scriptError = (code, message, extra = {}) => Object.assign(new Error(message), { code }, extra);
 
 function exitWithUsage(message, verb) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`✗ ${message}\n${usageFor(verb)}\n`);
   process.exit(1);
 }
@@ -482,6 +484,7 @@ module.exports = { main, parseCommand, UsageError, VERBS };
 
 if (require.main === module) {
   main().catch((error) => {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Error: ${error && error.message ? error.message : error}\n`);
     process.exit(1);
   });

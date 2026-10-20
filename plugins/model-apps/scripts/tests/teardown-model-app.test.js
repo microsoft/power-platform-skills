@@ -282,6 +282,8 @@ function loadTeardownCli({
     // in for it with the very call the script made before it existed, so what this test pins — where the workspace is, and that it is removed — is as it was.
     if (id === './lib/temp-workspace.js') return { makeTempWorkspace: (prefix) => fakeFs.mkdtempSync(path.join('D:\\Projects\\power-platform-skills-sdk\\.test-workspace', prefix)) };
     if (id === 'node:os') return { tmpdir: () => 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace' };
+    // The real module: the script makes this sandbox's stand-in streams blocking before a last write, and a stand-in has no handle to change.
+    if (id === './lib/output-redaction.js') return require('../lib/output-redaction.js');
     if (id === './lib/app-spec.js') {
       return {
         validateAppSpec: () => validation,

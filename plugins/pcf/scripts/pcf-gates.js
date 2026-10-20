@@ -9,6 +9,7 @@ const { loadMatrix } = require('./lib/pcf-matrix.js');
 const { findControlProject, buildControl, bundleFindings, pcfScriptsFailed, resolveOutRoot } = require('./lib/pcf-build.js');
 const { parseManifest, lintManifest } = require('./lib/pcf-manifest.js');
 const { gateSources } = require('./lib/pcf-code-gate.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = `Usage:
   node scripts/pcf-gates.js --project <dir> [--hosts model,pages] [--skip lint,test,build]`;
@@ -18,6 +19,7 @@ const NEED_VALUE = ['project', 'hosts', 'skip'];
 const GATE_IDS = ['manifest', 'code', 'lint', 'test', 'build'];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }

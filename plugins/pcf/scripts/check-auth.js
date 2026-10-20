@@ -42,6 +42,7 @@
 const { execFileAsync } = require('./lib/process-runner.js');
 const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags, tokenFailureKind, tokenFailureMessage } = require('./lib/dataverse-auth');
 const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./lib/cli-failure.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // `pac org who` cold-starts the PAC CLI's .NET runtime (~7 s measured on Windows), and longer on a busy
 // machine; a probe that runs out of time is reported as that, never as "not logged in".
@@ -107,7 +108,11 @@ function runQuietAsync(cmd, args, timeoutMs) {
   };
 }
 
+// The result is a fixed shape whose strings are not bounded: a refused WhoAmI's whole diagnostic is its `message`, and a
+// mistyped flag is quoted in a usage blocker. The process exits right after this one write, so the write is made blocking
+// first (lib/output-redaction.js makeWritesBlocking): on Linux and macOS a pipe would otherwise take only what fits at once.
 function emit(payload) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(payload) + '\n');
   process.exit(0);
 }

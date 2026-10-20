@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const nodeProcess = require('node:process');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
-const { redactOutput } = require('./lib/output-redaction.js');
+const { redactOutput, makeWritesBlocking } = require('./lib/output-redaction.js');
 const { runPac } = require('./lib/pac-exec.js');
 const { validatePublisherPrefix, validateSolutionUniqueName, validateNamespace, validateControlName, orgControlName } = require('./lib/pcf-names.js');
 const { findControlProject } = require('./lib/pcf-build.js');
@@ -69,6 +69,7 @@ const HINTS = [
 ];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }

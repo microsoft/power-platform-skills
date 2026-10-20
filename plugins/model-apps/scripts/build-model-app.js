@@ -49,6 +49,7 @@ const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
 // missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
@@ -1046,6 +1047,7 @@ async function main() {
     needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'workspace'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

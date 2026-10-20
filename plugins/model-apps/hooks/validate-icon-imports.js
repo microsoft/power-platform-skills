@@ -44,6 +44,7 @@ if (process.env.MODEL_APPS_DISABLE_HOOKS === '1' || process.env.MODEL_APPS_DISAB
 }
 
 const { readUtf8Stream } = require('../scripts/lib/utf8-stream.js');
+const { makeWritesBlocking } = require('../scripts/lib/output-redaction.js');
 
 function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
@@ -316,6 +317,7 @@ readUtf8Stream(process.stdin).then((inputData) => {
   const relPath = path.relative(cwd, absPath) || absPath;
   const unsupported = extractUnsupportedIconImports(content);
   if (unsupported.length > 0) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(buildUnsupportedImportMessage(relPath, unsupported) + '\n');
     process.exit(2);
   }
@@ -336,6 +338,7 @@ readUtf8Stream(process.stdin).then((inputData) => {
   }
   if (invalid.length === 0) process.exit(0);
 
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(buildBlockMessage(relPath, invalid) + '\n');
   process.exit(2);
 }).catch(() => {

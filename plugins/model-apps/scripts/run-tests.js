@@ -19,6 +19,7 @@ const { spawnResultSync, withPathFirst } = require('./lib/process-runner.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // Node-20 bin dir for the SDK Jest suite (its canvas native module is built for the Node-20 ABI).
 // Portable: set NODE20_BIN=<dir-containing-node20> or pass nothing to skip the SDK suite.
@@ -169,6 +170,10 @@ function main(argv) {
   process.stdout.write(`\n=== plugin node:test (${files.length} files) ===\n`);
   const plugin = runPluginSuite(files, { cwd: pluginRoot });
   results.push({ name: 'plugin node:test', ok: plugin.status === 0 });
+  // What follows is this process's own report, and `process.exit(main())` follows it at once: blocking writes put it in the
+  // pipe whole (lib/output-redaction.js makeWritesBlocking). Made again before the summary, because the SDK suite's children
+  // share these streams, and a child that dies before Node restores the pipe's flags can leave it non-blocking.
+  makeWritesBlocking(process.stdout, process.stderr);
   if (plugin.left.length) {
     process.stdout.write(`\n${plugin.left.length} file(s) or folder(s) left in the suite's temporary folder:\n`);
     for (const name of plugin.left.slice(0, 50)) process.stdout.write(`  ${name}\n`);
@@ -201,6 +206,7 @@ function main(argv) {
   }
 
   // Summary.
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write('\n=== regression summary ===\n');
   const { lines, exitCode } = summarize(results);
   for (const l of lines) process.stdout.write(`${l}\n`);

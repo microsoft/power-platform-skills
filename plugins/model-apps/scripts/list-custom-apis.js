@@ -32,6 +32,7 @@ const {
 } = require('./lib/dataverse-auth');
 const { exitIfCustomApiDisabled } = require('./lib/feature-flags');
 const { odataLit } = require('./lib/odata');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // customapi.bindingtype is a Dataverse option set. Only the value→meaning mapping matters here;
 // a page invokes a record-bound API via boundTo, so we surface Entity as bound and Global as unbound.
@@ -129,6 +130,7 @@ async function main() {
   const USAGE = 'Usage: node list-custom-apis.js <envUrl> [--entities <logicalName1,logicalName2>]';
   const flagError = validateFlags(argv, { known: ['entities'], needValue: ['entities'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
