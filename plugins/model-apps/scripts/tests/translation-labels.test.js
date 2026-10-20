@@ -107,8 +107,8 @@ test('translation workbook: a cell may leave out its Data, its type or its tail 
   assert.deepStrictEqual([...short.lookup('new_ticket', TAB).texts], [[1033, 'Only English'], [3082, '']], 'a row that ends before the last column is empty there');
   const skipped = parseTranslationWorkbook(sheet(`<Row><Cell><Data ss:Type="String">new_ticket</Data></Cell><Cell><Data ss:Type="String">${TAB}</Data></Cell><Cell><Data ss:Type="String">displayname</Data></Cell><Cell ss:Index="5"><Data ss:Type="String">Solo espanol</Data></Cell></Row>`));
   assert.deepStrictEqual([...skipped.lookup('new_ticket', TAB).texts], [[1033, ''], [3082, 'Solo espanol']]);
-  const blank = parseTranslationWorkbook(sheet(`<Row/><Row><Cell><Data ss:Type="String">new_ticket</Data></Cell><Cell><Data ss:Type="String">${TAB}</Data></Cell><Cell><Data ss:Type="String">displayname</Data></Cell><Cell><Data ss:Type="Number">2024</Data></Cell></Row>`));
-  assert.strictEqual(blank.lookup('new_ticket', TAB).texts.get(1033), '2024', 'a Number cell is its text; an empty row is skipped');
+  const blank = parseTranslationWorkbook(sheet(`<Row/><Row><Cell><Data ss:Type="String">new_ticket</Data></Cell><Cell><Data ss:Type="String">${TAB}</Data></Cell><Cell><Data ss:Type="String">displayname</Data></Cell><Cell><Data ss:Type="String">2024</Data></Cell></Row>`));
+  assert.strictEqual(blank.lookup('new_ticket', TAB).texts.get(1033), '2024', 'an empty row is skipped');
 });
 
 test('translation workbook: a document that is not one well-formed XML document is not read — whatever it would have said', () => {
@@ -165,6 +165,177 @@ test('translation workbook: a table of the workbook other than the Localized Lab
   const read = parseTranslationWorkbook(strange);
   assert.strictEqual(read.ok, true, JSON.stringify(read));
   assert.strictEqual(read.lookup('new_ticket', TAB).texts.get(1033), 'Tab One');
+});
+
+// --- The sheet is validated WHOLE before anything is read from it ------------------------------------------------------------------------------
+//
+// The strict XML reader reads names as written — `ss:Row` is not `Row` to it — while to Excel (and to the namespace rules) `<ss:Row>` under the root's
+// `xmlns:ss` IS the spreadsheet's Row. A reader that picked `Row`, `Cell` and `Data` out by name passed such a row over: a second, conflicting caption
+// row vanished, and the first one settled the caption. So every element of `Localized Labels` must be one the platform writes, where it writes it, with
+// the attributes it writes, and anything else — a prefixed or unknown element, a namespace declaration, an attribute it does not write — makes the WHOLE
+// export unreadable: its captions stay unverified, never verified.
+const inLabels = (body) => workbookXml({ captions: rows() }).replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?)(<\/Table>)/, `$1${body}$2`);
+const rowWith = (texts, prefix = '') => `<${prefix}Row>${['new_ticket', TAB, 'displayname', ...texts].map((text) => `<${prefix}Cell><${prefix}Data ss:Type="String">${text}</${prefix}Data></${prefix}Cell>`).join('')}</${prefix}Row>`;
+const spanishFor = (read) => settleCaption(read, { entity: 'new_ticket', id: TAB, lcid: 3082, text: 'Pestana Uno' });
+
+test('translation workbook: a row, a cell or a Data written with a prefix — the spreadsheet\u2019s own elements under another name — makes the export unreadable, never a skipped row', async () => {
+  // The control: the same conflicting row, unprefixed, makes the caption ambiguous.
+  const control = parseTranslationWorkbook(inLabels(rowWith(['Tab One', 'Antiguo'])));
+  assert.deepStrictEqual(spanishFor(control).state, 'unsettled');
+  for (const [what, xml, detail] of [
+    ['a duplicate row in the spreadsheet namespace\u2019s own prefix', inLabels(rowWith(['Tab One', 'Antiguo'], 'ss:')), /has an element <ss:Row>, which the platform's sheet does not have/],
+    ['a prefixed cell in an ordinary row', inLabels(`<Row><Cell><Data ss:Type="String">new_ticket</Data></Cell><ss:Cell><Data ss:Type="String">${TAB}</Data></ss:Cell></Row>`), /<ss:Cell>/],
+    ['a prefixed Data in an ordinary cell', inLabels('<Row><Cell><ss:Data ss:Type="String">new_ticket</ss:Data></Cell></Row>'), /<ss:Data>/],
+    ['a row of another namespace\u2019s prefix', inLabels(rowWith(['Tab One', 'Antiguo'], 'x:')), /<x:Row>/],
+    ['a prefix the document never declares', inLabels(rowWith(['Tab One', 'Antiguo'], 'q:')), /<q:Row>/],
+  ]) {
+    assert.match(refused(xml), detail, what);
+  }
+  // Through the reader of the export, as --verify asks: an answer that is not readable, so the caption is never settled from the first row.
+  const read = await readTranslationLabels({ post: async () => exportAnswer(exportZip(inLabels(rowWith(['Tab One', 'Antiguo'], 'ss:')))) }, 'Contoso_Review');
+  assert.strictEqual(read.ok, false);
+  assert.match(read.reason, /^the workbook of the export is not readable: the worksheet 'Localized Labels' has an element <ss:Row>/);
+});
+
+test('translation workbook: a worksheet, or anything in the sheet, that declares a namespace — or a second prefix for the spreadsheet\u2019s — makes the export unreadable', () => {
+  const good = workbookXml({ captions: rows() });
+  const sheetTag = '<Worksheet ss:Name="Localized Labels"';
+  for (const [what, xml, detail] of [
+    ['the sheet rebinds the default namespace', good.replace(sheetTag, '<Worksheet xmlns="urn:example:not-spreadsheet" ss:Name="Localized Labels"'), /worksheet with the attribute xmlns,/],
+    ['the sheet rebinds ss:', good.replace(sheetTag, '<Worksheet xmlns:ss="urn:example:other" ss:Name="Localized Labels"'), /worksheet with the attribute xmlns:ss/],
+    ['another sheet declares a namespace', good.replace('<Worksheet ss:Name="Information"', '<Worksheet xmlns="urn:example:other" ss:Name="Information"'), /worksheet with the attribute xmlns,/],
+    ['the table declares one', good.replace(/(<Worksheet ss:Name="Localized Labels"[^>]*>)<Table>/, '$1<Table xmlns="urn:example:other">'), /a Table has the attribute xmlns/],
+    ['a row rebinds ss:', inLabels(`<Row xmlns:ss="urn:example:other">${''}</Row>`), /a Row has the attribute xmlns:ss/],
+    ['a Data declares the HTML namespace of rich text', inLabels(`<Row><Cell><Data ss:Type="String" xmlns="http://www.w3.org/TR/REC-html40">x</Data></Cell></Row>`), /a Data has the attribute xmlns/],
+    ['the root names the spreadsheet namespace with a second prefix', good.replace('xmlns:o=', `xmlns:s2="${SPREADSHEET_NAMESPACE}" xmlns:o=`), /prefix other than ss: \(xmlns:s2\)/],
+    ['the sheet\u2019s options are not in Excel\u2019s namespace', good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?)<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">/, `$1<WorksheetOptions xmlns="${SPREADSHEET_NAMESPACE}">`), /WorksheetOptions are not in Excel's namespace/],
+  ]) {
+    assert.match(refused(xml), detail, what);
+  }
+});
+
+test('translation workbook: a worksheet the spreadsheet would see is found wherever it is written — prefixed, nested, or named in other letters — and makes the export unreadable', () => {
+  const good = workbookXml({ captions: rows() });
+  const second = (tag) => good.replace('</Workbook>', `<${tag} ss:Name="Localized Labels"><Table><Row/></Table></${tag.split(' ')[0]}></Workbook>`);
+  assert.match(refused(second('ss:Worksheet')), /worksheet that is not where the spreadsheet puts one \(<ss:Worksheet> in Workbook\)/);
+  assert.match(refused(second('o:Worksheet')), /<o:Worksheet>/);
+  assert.match(refused(good.replace('<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"></DocumentProperties>', '<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Worksheet ss:Name="Localized Labels"/></DocumentProperties>')), /<Worksheet> in Workbook\/DocumentProperties/);
+  assert.match(refused(good.replace('ss:Name="Information"', 'ss:Name="LOCALIZED LABELS"')), /more than one worksheet named 'Localized Labels'/, 'Excel tells sheet names apart without regard to case');
+  assert.match(refused(good.replace('<Worksheet ss:Name="Information"', '<Worksheet x:Name="Localized Labels" ss:Name="Information"')), /worksheet with the attribute x:Name/);
+  assert.match(refused(good.replace(/<Worksheet ss:Name="Information" ss:Id="Information"/, '<Worksheet ss:Id="Information"')), /worksheet with no ss:Name/);
+});
+
+test('translation workbook: every element and attribute of the sheet is one the platform writes, where and in the order it writes it — or nothing is read', () => {
+  const good = workbookXml({ captions: rows() });
+  const cells = `<Cell><Data ss:Type="String">new_ticket</Data></Cell><Cell><Data ss:Type="String">${TAB}</Data></Cell><Cell><Data ss:Type="String">displayname</Data></Cell>`;
+  for (const [what, xml, detail] of [
+    ['an element the sheet does not have, in the table', inLabels('<Names/>'), /has an element <Names>/],
+    ['a cell comment', inLabels(`<Row>${cells}<Cell><Data ss:Type="String">x</Data><Comment/></Cell></Row>`), /has an element <Comment>/],
+    ['a named cell', inLabels(`<Row>${cells}<Cell><NamedCell ss:Name="x"/></Cell></Row>`), /has an element <NamedCell>/],
+    ['an element after the options', good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?<\/WorksheetOptions>)/, '$1<AutoFilter/>'), /has an element <AutoFilter>/],
+    ['an element inside an option', good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?)<Unsynced \/>/, '$1<Unsynced><Panes/></Unsynced>'), /has an element <Panes>/],
+    ['an option inside an option', good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?)<Unsynced \/>/, '$1<Unsynced><Selected/></Unsynced>'), /a Selected is not where the spreadsheet puts one/],
+    ['a row the spreadsheet places itself (ss:Index)', inLabels(`<Row ss:Index="9">${cells}</Row>`), /a Row has the attribute ss:Index/],
+    ['a row that stands for several (ss:Span)', inLabels(`<Row ss:Span="2">${cells}</Row>`), /a Row has the attribute ss:Span/],
+    ['a hidden row', inLabels(`<Row ss:Hidden="1">${cells}</Row>`), /a Row has the attribute ss:Hidden/],
+    ['a link on a cell', inLabels(`<Row>${cells}<Cell ss:HRef="https://contoso.example/"><Data ss:Type="String">x</Data></Cell></Row>`), /a Cell has the attribute ss:HRef/],
+    ['an index with no prefix', inLabels(`<Row>${cells}<Cell Index="5"><Data ss:Type="String">x</Data></Cell></Row>`), /a Cell has the attribute Index/],
+    ['an index under another prefix', inLabels(`<Row>${cells}<Cell x:Index="5"><Data ss:Type="String">x</Data></Cell></Row>`), /a Cell has the attribute x:Index/],
+    ['a table that counts its rows', good.replace(/(<Worksheet ss:Name="Localized Labels"[^>]*>)<Table>/, '$1<Table ss:ExpandedRowCount="9">'), /a Table has the attribute ss:ExpandedRowCount/],
+    ['a column after a row', inLabels('<Column ss:Width="10" />'), /a Column comes after a Row/],
+    ['the options before the table', good.replace(/(<Worksheet ss:Name="Localized Labels"[^>]*>)(<Table>[\s\S]*?<\/Table>)(<WorksheetOptions[\s\S]*?<\/WorksheetOptions>)/, '$1$3$2'), /WorksheetOptions are not one element after its Table/],
+    ['two sets of options', good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?)(<WorksheetOptions[\s\S]*?<\/WorksheetOptions>)/, '$1$2$2'), /WorksheetOptions are not one element after its Table/],
+    ['a second worksheet inside the sheet', inLabels('<Worksheet ss:Name="x"/>'), /worksheet that is not where the spreadsheet puts one \(<Worksheet> in Workbook\/Worksheet\/Table\)/],
+    ['text between rows', inLabels('<Row/>text'), /text inside <Table>, which holds elements only/],
+    ['text in a row, beside its cells', inLabels(`<Row>${cells}Antiguo</Row>`), /text inside <Row>, which holds elements only/],
+    ['text in a cell, beside its Data', inLabels(`<Row>${cells}<Cell>Antiguo<Data ss:Type="String">x</Data></Cell></Row>`), /text inside <Cell>, which holds elements only/],
+    ['a CDATA section in a row', inLabels('<Row><![CDATA[x]]></Row>'), /a CDATA section inside <Row>/],
+    ['a comment in the table', inLabels('<!-- a row was here -->'), /a comment inside <Table>/],
+    ['an instruction in a cell', inLabels(`<Row>${cells}<Cell><?p x?></Cell></Row>`), /a processing instruction inside <Cell>/],
+  ]) {
+    assert.match(refused(xml), detail, what);
+  }
+  // White space between the elements, as a writer that indents its output puts it, is not text: the sheet reads the same (an empty Data stays empty).
+  const indented = parseTranslationWorkbook(good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?<\/Worksheet>)/, (sheet) => sheet.replace(/>(?=<(?!\/Data>))/g, '>\r\n  ')));
+  assert.strictEqual(indented.ok, true, JSON.stringify(indented));
+  assert.deepStrictEqual([...indented.lookup('new_ticket', TAB).texts], [[1033, 'Tab One'], [3082, 'Pestana Uno']]);
+  assert.deepStrictEqual([...indented.lookup('new_ticket', OTHER).texts], [[1033, 'Notes'], [3082, '']]);
+  // What the platform writes in the options of a sheet it selects is read too.
+  const selected = parseTranslationWorkbook(good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?)<Unsynced \/>/, '$1<Selected /><Unsynced />'));
+  assert.strictEqual(selected.ok, true, JSON.stringify(selected));
+});
+
+test('translation workbook: a caption is text — a Number cell in a row makes the export unreadable; the header\u2019s languages may be either', () => {
+  const good = workbookXml({ captions: rows() });
+  // The probe that found it: a Number cell whose text is a caption, not a number, settled the caption.
+  const number = good.replace('<Data ss:Type="String">Pestana Uno</Data>', '<Data ss:Type="Number">Pestana Uno</Data>');
+  assert.match(refused(number), /row \d+ has a Number cell, and the cells of a row are text \(String\)/);
+  assert.match(refused(inLabels(`<Row><Cell><Data ss:Type="Number">1</Data></Cell><Cell><Data ss:Type="String">${TAB}</Data></Cell><Cell><Data ss:Type="String">displayname</Data></Cell></Row>`)), /has a Number cell/);
+  assert.match(refused(replaceLast(good, '<Data ss:Type="String">Object ID</Data>', '<Data ss:Type="Number">Object ID</Data>')), /header of 'Localized Labels' has a Number where it names a column \(Object ID\)/);
+  // The header's LCIDs are Numbers as the platform writes them; written as text they name the same language.
+  const asText = parseTranslationWorkbook(replaceLast(good, '<Data ss:Type="Number">3082</Data>', '<Data ss:Type="String">3082</Data>'));
+  assert.strictEqual(asText.ok, true, JSON.stringify(asText));
+  assert.deepStrictEqual(asText.languages, [1033, 3082]);
+});
+
+// --- A workbook that would cost more than it is worth is refused WHILE it is read ----------------------------------------------------------------
+//
+// The strict reader gives every element it answers the names of its ancestors, so a workbook nested thousands deep and asked for at every level costs the
+// square of its depth: 6,000 nested worksheets — 138 KB of XML, 819 bytes of zip — took the heap of a process past its limit and ended it, with no answer
+// at all. The read is bounded as it goes — by the depth, by the length of a name, by the number of worksheets and of the sheet's elements — and what goes
+// over is an export that cannot be read, which leaves the captions unverified.
+const nest = (depth, name, inner = '') => `${`<${name}>`.repeat(depth)}${inner}${`</${name}>`.repeat(depth)}`;
+const workbookAround = (inner) => `<Workbook xmlns="${SPREADSHEET_NAMESPACE}" xmlns:ss="${SPREADSHEET_NAMESPACE}">${inner}</Workbook>`;
+
+test('translation workbook: a workbook nested deeper than the platform\u2019s, or with a name or a count no export has, is refused as it is read — in a moment', () => {
+  const started = Date.now();
+  assert.match(refused(workbookAround(nest(6000, 'Worksheet'))), /nested more than 16 levels deep/, 'the probe that ended the process');
+  assert.match(refused(workbookAround(nest(6000, 'Style'))), /nested more than 16 levels deep/, 'an element nobody asks for is bounded too');
+  assert.match(refused(workbookXml({ captions: rows() }).replace('<Styles>', `<Styles>${nest(15, 'Style')}`)), /nested more than 16 levels deep/);
+  assert.match(refused(inLabels(nest(6000, 'Row'))), /nested more than 16 levels deep/, 'the workbook\u2019s bound holds inside the sheet as well');
+  assert.match(refused(inLabels(nest(5, 'Row'))), /the worksheet 'Localized Labels' is not read \(elements nested more than 6 levels deep/, 'and the sheet\u2019s own, closer one');
+  assert.match(refused(inLabels(`<Row><Cell><Data ss:Type="String">${nest(3, 'Data')}</Data></Cell></Row>`)), /nested more than 6 levels deep|has an element <Data>|is not where/);
+  const long = `S${'t'.repeat(64)}`;
+  assert.match(refused(workbookXml({ captions: rows() }).replace('<Styles>', `<Styles><${long}/>`)), /an element whose name is longer than 64 characters/);
+  assert.match(refused(workbookXml({ captions: rows(), sheetsAfter: '<Worksheet ss:Name="x"><Table/></Worksheet>'.repeat(62) })), /more than 64 worksheets/);
+  assert.match(refused(`<Workbook xmlns="${SPREADSHEET_NAMESPACE}" xmlns:ss="${SPREADSHEET_NAMESPACE}"><Styles>${'<Workbook/>'.repeat(5000)}</Styles></Workbook>`), /more than one Workbook element/);
+  assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms`);
+  // The bounds are above what the platform writes: its depth, its names and its worksheets read as they did.
+  const read = parseTranslationWorkbook(workbookXml({ captions: rows(), sheetsAfter: '<Worksheet ss:Name="x"><Table/></Worksheet>'.repeat(61) }).replace('<Styles>', `<Styles>${nest(14, 'Style')}<${'S'.repeat(64)}/>`));
+  assert.strictEqual(read.ok, true, JSON.stringify(read));
+  assert.strictEqual(read.lookup('new_ticket', TAB).texts.get(3082), 'Pestana Uno');
+});
+
+test('readTranslationLabels: a small export nested deep answers "not readable" in a process whose heap is small — it is never the end of the process', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  // In its own process, with a 64 MB heap, so that the failure this guards against — the end of the process — cannot touch the test runner's.
+  const script = `
+    const { readTranslationLabels } = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'translation-labels.js'))});
+    const { exportZip, exportAnswer, workbookXml, SPREADSHEET_NAMESPACE } = require(${JSON.stringify(path.join(__dirname, 'helpers', 'translation-export.js'))});
+    const nest = (depth, name) => ('<' + name + '>').repeat(depth) + ('</' + name + '>').repeat(depth);
+    const cases = {
+      worksheets: '<Workbook xmlns="' + SPREADSHEET_NAMESPACE + '" xmlns:ss="' + SPREADSHEET_NAMESPACE + '">' + nest(6000, 'Worksheet') + '</Workbook>',
+      rows: workbookXml({ captions: [] }).replace(/(<Worksheet ss:Name="Localized Labels"[\\s\\S]*?)(<\\/Table>)/, '$1' + nest(6000, 'Row') + '$2'),
+    };
+    (async () => {
+      const answers = {};
+      for (const [name, xml] of Object.entries(cases)) {
+        const archive = exportZip(xml);
+        const read = await readTranslationLabels({ post: async () => exportAnswer(archive) }, 'Contoso_Review');
+        answers[name] = { ok: read.ok, reason: read.reason, zipBytes: archive.length };
+      }
+      process.stdout.write(JSON.stringify(answers));
+    })();
+  `;
+  const child = spawnSync(process.execPath, ['--max-old-space-size=64', '-e', script], { encoding: 'utf8', timeout: 120000, windowsHide: true });
+  assert.strictEqual(child.status, 0, `the process ended with ${child.status} ${child.signal || ''}: ${String(child.stderr).split(/\r?\n/).filter((line) => /FATAL|heap|Error/.test(line)).slice(0, 3).join(' | ')}`);
+  const answers = JSON.parse(child.stdout);
+  for (const [name, answer] of Object.entries(answers)) {
+    assert.strictEqual(answer.ok, false, name);
+    assert.match(answer.reason, /^the workbook of the export is not readable: .*nested more than \d+ levels deep/, name);
+    assert.ok(answer.zipBytes < 4096, `${name}: a small archive (${answer.zipBytes} bytes)`);
+  }
 });
 
 test('translation workbook: a large export is read in one pass', () => {

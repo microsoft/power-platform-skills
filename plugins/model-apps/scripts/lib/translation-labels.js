@@ -40,6 +40,19 @@
 // document type declaration, no entity but the predefined ones, nothing it would read differently from the SDK's parser), the workbook must be the platform's
 // (its namespace, its sheet, its header), and a row, a cell or a type this does not understand makes the WHOLE export unreadable — never a skipped row, because the row
 // skipped could be the one that was needed. What `--verify` does with an export it cannot read is leave the captions UNVERIFIED, where they were before it read exports.
+//
+// THE SHEET IS VALIDATED WHOLE, BEFORE ANYTHING IS READ FROM IT. The strict reader does not resolve namespaces — `ss:Row` is a name to it, not the `Row` of the
+// spreadsheet namespace that it means to Excel — so a reader that picked out `Table`, `Row`, `Cell` and `Data` by name would pass over a row written `<ss:Row>`
+// (a second, conflicting caption) or a sheet that declares another namespace, and settle a caption from what is left. So every element of `Localized Labels` is
+// one of the platform's, by its name as written, in the place the platform puts it, with the attributes it writes — and the one namespace declaration in the sheet
+// is the one the platform writes (Excel's, on WorksheetOptions). The platform writes the sheet that way (measured: no prefix on any element, `ss:` on every
+// attribute, the `ss` prefix and the default namespace bound once, on the root), and a sheet written any other way is not one this reads. The worksheets are found
+// the same way: any element whose name ends in `Worksheet`, with or without a prefix and wherever it is, must be a plain `<Worksheet>` child of the root that declares
+// no namespace, and no prefix but `ss` may name the spreadsheet namespace.
+//
+// THE COST IS BOUNDED BEFORE IT IS PAID. The strict reader gives each element it answers the names of its ancestors, so a document of a few hundred kilobytes that
+// nests deep, or under ancestors with long names, would cost gigabytes: such a document is refused while it is read — by its depth, by the length of a name, and by the
+// number of elements answered — not after, when the process may already have run out of memory.
 const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
 const { readZipEntry } = require('./zip-read.js');
 
@@ -60,6 +73,39 @@ const MAX_WORKBOOK_BYTES = 32 * 1024 * 1024;
 // Cell attributes of a spreadsheet that make a cell something other than its own text.
 const UNSUPPORTED_CELL_ATTRIBUTES = ['ss:MergeAcross', 'ss:MergeDown', 'ss:ArrayRange', 'ss:Formula'];
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+const EXCEL_NAMESPACE = 'urn:schemas-microsoft-com:office:excel';
+
+// The shape of the `Localized Labels` sheet, as the platform writes it (measured on every export the lane captured): for each element, where it is (the names of its
+// ancestors in the sheet) and the attributes it may have. `ss:Index` on a cell is the spreadsheet's own way to leave cells out (forward only, see cellsOf); the
+// merge and formula attributes are named so that a cell that has one is refused for that, with its name. Nothing else is in the sheet, and nothing else is read.
+const SHEET_SHAPE = new Map([
+  ['Worksheet', { at: '', attributes: ['ss:Name', 'ss:Id', 'ss:Protected'] }],
+  ['Table', { at: 'Worksheet', attributes: [] }],
+  ['Column', { at: 'Worksheet/Table', attributes: ['ss:AutoFitWidth', 'ss:Width', 'ss:Span'] }],
+  ['Row', { at: 'Worksheet/Table', attributes: ['ss:AutoFitHeight'] }],
+  ['Cell', { at: 'Worksheet/Table/Row', attributes: ['ss:StyleID', 'ss:Index', ...UNSUPPORTED_CELL_ATTRIBUTES] }],
+  ['Data', { at: 'Worksheet/Table/Row/Cell', attributes: ['ss:Type'] }],
+  // The sheet's options, in Excel's namespace (declared on the element itself): flags, none of them read, each with no attribute and at most a word of text.
+  ['WorksheetOptions', { at: 'Worksheet', attributes: ['xmlns'] }],
+  ...['Unsynced', 'Selected', 'ProtectObjects', 'ProtectScenarios', 'AllowFormatCells', 'AllowSizeCols', 'AllowSizeRows', 'AllowInsertCols', 'AllowInsertRows', 'AllowDeleteCols',
+    'AllowDeleteRows', 'AllowSort', 'AllowFilter', 'AllowUsePivotTables'].map((name) => [name, { at: 'Worksheet/WorksheetOptions', attributes: [] }]),
+].map(([name, shape]) => [name, { ...shape, attributes: new Set(shape.attributes) }]));
+// The elements of the sheet that hold elements and white space only: text, a comment or a CDATA section directly inside one is not something this reads past.
+const HOLDS_ELEMENTS_ONLY = new Set(['Worksheet', 'Table', 'Column', 'Row', 'Cell', 'WorksheetOptions']);
+// The attributes a worksheet element may have, in the whole workbook: what the platform writes on its three sheets. Its name is `ss:Name`, and no other attribute
+// can give it one.
+const WORKSHEET_ATTRIBUTES = SHEET_SHAPE.get('Worksheet').attributes;
+
+// Bounds of the read, each checked WHILE the strict reader reads, so that a hostile workbook costs no more than they allow (see the header). The platform's workbook
+// nests 6 deep (Workbook/Worksheet/Table/Row/Cell/Data), and its sheet 5 (the same, from the Worksheet) — the sheet's bound is one more, so that an element inside a
+// cell's Data is refused as the markup in a cell it is; its longest element name is 19 characters; it has 3 worksheets; and a sheet at the byte limit holds about
+// 1.1 million elements (a row of five short cells is some 330 bytes and 11 elements). Measured: a sheet of 1.6 million empty rows (9 MB) is refused at the element
+// budget after 2 s and 530 MB of heap — about what a legitimate 29 MB workbook of 70,000 rows costs to read (410 MB) — where 32 MB of such rows would take some 2 GB.
+const MAX_WORKBOOK_DEPTH = 16;
+const MAX_SHEET_DEPTH = 6;
+const MAX_NAME_LENGTH = 64;
+const MAX_WORKSHEETS = 64;
+const MAX_SHEET_ELEMENTS = 1500000;
 
 class Unreadable extends Error {}
 const refuse = (message) => { throw new Unreadable(message); };
@@ -103,10 +149,11 @@ function dataText(sheet, data) {
     : String.fromCodePoint(parseInt(hex !== undefined ? hex : dec, hex !== undefined ? 16 : 10))));
 }
 
-// The texts of a row's cells, by column. A cell may say where it is (`ss:Index`, 1-based, forward only) and leave the ones before it out; a cell with no Data is empty.
-// A column past `limit` is a row with more cells than the header, which is refused; so is a cell that is merged or holds a formula.
+// The cells of a row, by column: `{ text, type }`, the type of the cell's Data (`String` or `Number`) or null for a cell with none. A cell may say where it is
+// (`ss:Index`, 1-based, forward only) and leave the ones before it out; a cell left out, or with no Data, is empty. A column past `limit` is a row with more cells than
+// the header, which is refused; so is a cell that is merged or holds a formula.
 function cellsOf(sheet, row, number, limit) {
-  const texts = [];
+  const cells = [];
   let column = 0;
   for (const cell of row.cells) {
     for (const name of UNSUPPORTED_CELL_ATTRIBUTES) if (cell.attrs[name] !== undefined) refuse(`row ${number} has a cell that is merged or holds a formula (${name})`);
@@ -117,25 +164,38 @@ function cellsOf(sheet, row, number, limit) {
       column = Number(index) - 1;
     }
     if (column >= limit) refuse(`row ${number} has more cells than the header names columns`);
-    texts[column] = cell.data ? dataText(sheet, cell.data) : '';
+    cells[column] = cell.data ? { text: dataText(sheet, cell.data), type: cell.data.attrs['ss:Type'] } : { text: '', type: null };
     column += 1;
   }
-  return Array.from(texts, (text) => (text === undefined ? '' : text));
+  return Array.from(cells, (cell) => cell || { text: '', type: null });
 }
 
-// The rows of the worksheet's one table, each with its cells and Data elements, from the strict reader's elements (in document order) — every Table, Row, Cell and Data
-// must be where the spreadsheet puts it, or the sheet is not read.
+// The rows of the sheet, each with its cells and their Data elements, from EVERY element of the sheet, in document order (the strict reader has answered them all,
+// and refused any name SHEET_SHAPE does not have) — once each one is found where the platform puts it, with only the attributes the platform writes on it, in the
+// platform's order: one Table, its Columns before its Rows, then at most one WorksheetOptions, in Excel's namespace. An element is only ever the child of the last one
+// opened at the place its path names, so a Cell belongs to the last Row and a Data to the last Cell.
 function rowsOf(elements) {
-  const tables = elements.filter((e) => e.name === 'Table');
-  if (tables.length === 0) refuse('the worksheet has no Table');
-  if (tables.length > 1) refuse('the worksheet has more than one Table');
-  const where = { Table: 'Worksheet', Row: 'Worksheet/Table', Cell: 'Worksheet/Table/Row', Data: 'Worksheet/Table/Row/Cell' };
   const rows = [];
   let row = null;
   let cell = null;
+  let tables = 0;
+  let options = 0;
   for (const element of elements) {
-    if (element.path !== where[element.name]) refuse(`a ${element.name} is not where the spreadsheet puts one (found in ${element.path || 'the root'})`);
-    if (element.name === 'Row') {
+    const shape = SHEET_SHAPE.get(element.name);
+    if (element.path !== shape.at) refuse(`a ${element.name} is not where the spreadsheet puts one (found in ${element.path || 'the root'})`);
+    for (const attribute of Object.keys(element.attrs)) {
+      if (!shape.attributes.has(attribute)) refuse(`a ${element.name} has the attribute ${attribute}, which the platform's sheet does not have`);
+    }
+    if (element.name === 'Table') {
+      tables += 1;
+      if (tables > 1) refuse('the worksheet has more than one Table');
+    } else if (element.name === 'WorksheetOptions') {
+      options += 1;
+      if (options > 1 || tables === 0) refuse('the worksheet\'s WorksheetOptions are not one element after its Table');
+      if (element.attrs.xmlns !== EXCEL_NAMESPACE) refuse(`the worksheet's WorksheetOptions are not in Excel's namespace (${EXCEL_NAMESPACE})`);
+    } else if (element.name === 'Column') {
+      if (rows.length > 0) refuse('a Column comes after a Row (a table\'s columns come before its rows)');
+    } else if (element.name === 'Row') {
       row = { cells: [] };
       rows.push(row);
       cell = null;
@@ -147,6 +207,7 @@ function rowsOf(elements) {
       cell.data = element;
     }
   }
+  if (tables === 0) refuse('the worksheet has no Table');
   return rows;
 }
 
@@ -178,31 +239,79 @@ function languagesOf(cells) {
  */
 function parseTranslationWorkbook(xml) {
   try {
-    const whole = readXmlElements(xml, (name) => name === 'Workbook' || name === 'Worksheet', { spans: true });
+    // The whole document, for its root and its worksheets: every element whose name ends in `Worksheet`, prefixed or not and wherever it is, is answered, so that
+    // a sheet the spreadsheet would see is never one this passes over. While it reads, no element name may be long and no element deep (see the header): only these
+    // few elements are kept, but each carries the names of its ancestors.
+    let workbooks = 0;
+    let worksheets = 0;
+    const workbookPart = (name) => {
+      if (name.length > MAX_NAME_LENGTH) refuse(`it has an element whose name is longer than ${MAX_NAME_LENGTH} characters`);
+      if (name === 'Workbook') {
+        workbooks += 1;
+        if (workbooks > 1) refuse('it has more than one Workbook element');
+        return true;
+      }
+      if (name !== 'Worksheet' && !name.endsWith(':Worksheet')) return false;
+      worksheets += 1;
+      if (worksheets > MAX_WORKSHEETS) refuse(`it has more than ${MAX_WORKSHEETS} worksheets`);
+      return true;
+    };
+    const whole = readXmlElements(xml, workbookPart, { spans: true, maxDepth: MAX_WORKBOOK_DEPTH });
     if (!whole.ok) refuse(`it is not one XML document the plugin reads (${whole.detail})`);
     const roots = whole.elements.filter((e) => e.name === 'Workbook');
     if (roots.length !== 1 || roots[0].path !== '' || roots[0].attrs.xmlns !== SPREADSHEET_NAMESPACE || roots[0].attrs['xmlns:ss'] !== SPREADSHEET_NAMESPACE) {
       refuse(`it is not a spreadsheet workbook of the namespace the platform writes (${SPREADSHEET_NAMESPACE}, with ss: for it)`);
     }
-    const sheets = whole.elements.filter((e) => e.name === 'Worksheet' && e.attrs['ss:Name'] === LABELS_SHEET);
-    if (sheets.length === 0) refuse(`it has no worksheet named '${LABELS_SHEET}'`);
-    if (sheets.length > 1) refuse(`it has more than one worksheet named '${LABELS_SHEET}'`);
-    if (sheets[0].path !== 'Workbook') refuse(`its worksheet '${LABELS_SHEET}' is not where the spreadsheet puts one (found in ${sheets[0].path})`);
+    // A second prefix for the spreadsheet namespace would make `x:Name` a sheet's name and `x:Row` a row as much as `ss:Name` and `Row` are.
+    for (const [attribute, value] of Object.entries(roots[0].attrs)) {
+      if (attribute.startsWith('xmlns:') && attribute !== 'xmlns:ss' && value === SPREADSHEET_NAMESPACE) refuse(`it names the spreadsheet namespace with a prefix other than ss: (${attribute})`);
+    }
+    const sheets = whole.elements.filter((e) => e.name !== 'Workbook');
+    for (const sheet of sheets) {
+      // A worksheet that declares a namespace, or is written with a prefix, is either not a spreadsheet's worksheet at all or one under another name: never read.
+      if (sheet.name !== 'Worksheet' || sheet.path !== 'Workbook') refuse(`it has a worksheet that is not where the spreadsheet puts one (<${sheet.name}> in ${sheet.path || 'the root'})`);
+      for (const attribute of Object.keys(sheet.attrs)) {
+        if (!WORKSHEET_ATTRIBUTES.has(attribute)) refuse(`it has a worksheet with the attribute ${attribute}, which the platform's worksheets do not have`);
+      }
+      if (sheet.attrs['ss:Name'] === undefined) refuse('it has a worksheet with no ss:Name');
+    }
+    const labelSheets = sheets.filter((e) => e.attrs['ss:Name'] === LABELS_SHEET);
+    if (labelSheets.length === 0) refuse(`it has no worksheet named '${LABELS_SHEET}'`);
+    // Excel tells sheet names apart without regard to case: a sheet named this one in other letters is the same sheet to it.
+    if (sheets.filter((e) => e.attrs['ss:Name'].toLowerCase() === LABELS_SHEET.toLowerCase()).length > 1) refuse(`it has more than one worksheet named '${LABELS_SHEET}'`);
 
     // The sheet is read on its own, from the text of its element: the strict reader answers elements of the whole document, and this keeps the elements of the other
-    // sheets (which can be far larger) out of memory. A fragment that is one well-formed element reads like a document.
-    const sheet = xml.slice(sheets[0].start, sheets[0].end);
-    const parts = readXmlElements(sheet, (name) => name === 'Table' || name === 'Row' || name === 'Cell' || name === 'Data', { spans: true });
+    // sheets (which can be far larger) out of memory. A fragment that is one well-formed element reads like a document. EVERY element of it is answered, and any
+    // name the platform's sheet does not have ends the read at once: it is not skipped, and nothing under it is kept.
+    let answered = 0;
+    const sheetPart = (name) => {
+      if (!SHEET_SHAPE.has(name)) {
+        refuse(`the worksheet '${LABELS_SHEET}' has an element <${name.slice(0, MAX_NAME_LENGTH)}>, which the platform's sheet does not have (markup inside a cell, or an element of another kind or namespace)`);
+      }
+      answered += 1;
+      if (answered > MAX_SHEET_ELEMENTS) refuse(`the worksheet '${LABELS_SHEET}' has more than ${MAX_SHEET_ELEMENTS} elements`);
+      return true;
+    };
+    const sheet = xml.slice(labelSheets[0].start, labelSheets[0].end);
+    const parts = readXmlElements(sheet, sheetPart, { spans: true, maxDepth: MAX_SHEET_DEPTH, elementOnly: (name) => HOLDS_ELEMENTS_ONLY.has(name) });
     if (!parts.ok) refuse(`the worksheet '${LABELS_SHEET}' is not read (${parts.detail})`);
     const rows = rowsOf(parts.elements);
     if (rows.length === 0) refuse(`the worksheet '${LABELS_SHEET}' has no header row`);
-    const languages = languagesOf(cellsOf(sheet, rows[0], 1, MAX_LANGUAGE_COLUMNS + HEADER.length));
+    const header = cellsOf(sheet, rows[0], 1, MAX_LANGUAGE_COLUMNS + HEADER.length);
+    // The header's names are text; a language is an LCID, which the platform writes as a Number (and which reads the same as text).
+    header.forEach((cell, column) => {
+      if (cell.type === 'Number' && column < HEADER.length) refuse(`the header of '${LABELS_SHEET}' has a Number where it names a column (${HEADER[column]})`);
+    });
+    const languages = languagesOf(header.map((cell) => cell.text));
 
     const captions = new Map();
     const ambiguous = new Set();
     for (let i = 1; i < rows.length; i += 1) {
       const number = i + 1;
-      const cells = cellsOf(sheet, rows[i], number, HEADER.length + languages.length);
+      const row = cellsOf(sheet, rows[i], number, HEADER.length + languages.length);
+      // A caption is text: a Number cell would be read by its digits as written ("1.50", "1E3"), which is not what a form shows, and the platform writes none.
+      if (row.some((cell) => cell.type === 'Number')) refuse(`row ${number} has a Number cell, and the cells of a row are text (String)`);
+      const cells = row.map((cell) => cell.text);
       if (cells.length === 0) continue;
       if (cells.length < HEADER.length) refuse(`row ${number} has fewer than the three cells (${HEADER.join(', ')}) that say what a row is about`);
       if (cells[2] !== CAPTION_COLUMN) continue;

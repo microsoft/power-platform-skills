@@ -4,8 +4,8 @@ const assert = require('node:assert');
 const { verifySpec, hasElement, parseFetchXml, liveNavEntries, subareaDashboardHasLauncher } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
-const { parseTranslationWorkbook } = require('../lib/translation-labels.js');
-const { workbookXml } = require('./helpers/translation-export.js');
+const { parseTranslationWorkbook, readTranslationLabels } = require('../lib/translation-labels.js');
+const { workbookXml, exportZip, exportAnswer } = require('./helpers/translation-export.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
 const idFor = (set) => ({ savedquery: 'savedqueryid', savedqueryvisualization: 'savedqueryvisualizationid', systemform: 'formid' }[set] || 'id');
@@ -3506,6 +3506,34 @@ test('verify leaves the captions UNVERIFIED — as before, with the reason — w
     assert.strictEqual(res.ok, baseline.res.ok, what);
     assert.deepStrictEqual(res.unverified, [entry(why)], what);
     assert.ok(!res.checks.some((c) => /label/i.test(c.kind)), `${what}: no label check was recorded as passed`);
+  }
+});
+
+// The workbook is read whole or not at all: a reader that picked rows out by name passed over a conflicting caption row written `<ss:Row>` (the
+// spreadsheet's own Row, under the root's prefix for its namespace), and over a sheet that declares another namespace, and settled the caption from
+// what was left. Through the real reader of the export, each of these now leaves the captions unverified, with the reason — never a pass.
+test('verify never settles a caption from a translation workbook it cannot read whole — a conflicting row written with a prefix, a sheet of another namespace, a Number caption', async () => {
+  const baseline = await checkWith(readsOnlyEnglish(), () => {}, inOrg(1033));
+  const opts = { languageCode: 3082 };
+  const good = workbookXml({ captions: spanishRows() });
+  const conflicting = `<ss:Row>${['new_ticket', TAB_ID, 'displayname', 'Overview', 'Antiguo'].map((text) => `<ss:Cell><ss:Data ss:Type="String">${text}</ss:Data></ss:Cell>`).join('')}</ss:Row>`;
+  const readerOf = async (xml) => readTranslationLabels({ post: async () => exportAnswer(exportZip(xml)) }, 's');
+  // The control: the workbook as the platform writes it settles all three captions.
+  const control = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(await readerOf(good)), opts);
+  assert.strictEqual(control.chk.present, true, control.chk.detail);
+  assert.strictEqual(control.res.unverified, undefined);
+  for (const [what, xml, why] of [
+    ['a conflicting caption row written <ss:Row>', good.replace(/(<Worksheet ss:Name="Localized Labels"[\s\S]*?)(<\/Table>)/, `$1${conflicting}$2`), /has an element <ss:Row>/],
+    ['the sheet declared in another namespace', good.replace('<Worksheet ss:Name="Localized Labels"', '<Worksheet xmlns="urn:example:not-spreadsheet" ss:Name="Localized Labels"'), /worksheet with the attribute xmlns,/],
+    ['a caption typed as a Number', good.replace('<Data ss:Type="String">Resumen</Data>', '<Data ss:Type="Number">Resumen</Data>'), /has a Number cell/],
+  ]) {
+    const { res, chk } = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(await readerOf(xml)), opts);
+    assert.strictEqual(chk.present, true, `${what}: nothing says a caption is wrong: ${chk.detail}`);
+    assert.deepStrictEqual(res.missing, baseline.res.missing, `${what}: unverified is not a failure`);
+    assert.strictEqual(res.ok, baseline.res.ok, what);
+    assert.strictEqual((res.unverified || []).length, 1, `${what}: the captions stay unverified`);
+    assert.match(res.unverified[0], /A translation export of solution 's' could not be read \(the workbook of the export is not readable: /, what);
+    assert.match(res.unverified[0], why, what);
   }
 });
 
