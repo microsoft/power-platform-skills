@@ -391,7 +391,7 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
 
-#### `/perf-checker`
+#### `/analyze-performance`
 
 > "Check my site for performance anti-patterns"
 

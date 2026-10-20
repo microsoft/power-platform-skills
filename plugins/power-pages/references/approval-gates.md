@@ -731,16 +731,16 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 ---
 
-### 6.33 `perf-checker` (1 loop-style gate + 1 plan gate)
+### 6.33 `analyze-performance` (1 loop-style gate + 1 plan gate)
 
 Static performance-analysis skill. Scans the local codebase for performance anti-patterns (FetchXML/Web API over-fetching, disabled output caching, tracking, volume/asset issues), reports them, and offers safe auto-fixes with per-fix consent. Read-only until the Phase 4 loop, which mutates only the site-setting/tracking findings the user explicitly approves.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `perf-checker:4.auto-fix` | gate | consent | 4 | Per-finding: each `autoFixAvailable` finding loops through this prompt template surfacing the tag and the exact change (site setting or YAML field). User answers Yes / No / Skip-all per finding. | nothing |
-| `perf-checker:6.next-action` | gate | plan | 6 (`### Step 5.3`) | Post-report prompt — *"Walk me through the manual fixes / Re-scan / Done"*. Drives whether the FetchXML/Web API code-fix walkthrough runs next. Reviewing and re-scanning are read-only. | nothing |
+| `analyze-performance:4.auto-fix` | gate | consent | 4 | Per-finding: each `autoFixAvailable` finding loops through this prompt template surfacing the tag and the exact change (site setting or YAML field). User answers Yes / No / Skip-all per finding. | nothing |
+| `analyze-performance:6.next-action` | gate | plan | 6 (`### Step 6.4`) | Post-report prompt — *"Walk me through the manual fixes / Re-scan / Done"*. Drives whether the FetchXML/Web API code-fix walkthrough runs next. Reviewing and re-scanning are read-only. | nothing |
 
-The `perf-checker:4.auto-fix` template fires once per finding with `autoFixAvailable: true` (the output-cache and tracking findings), mirroring the `diagnose-deployment:6.auto-fix` loop-style pattern — one gate ID, content varies per finding. FetchXML/Web API findings are never auto-fixed (they need human judgment), so they are excluded from the loop and surfaced via the plan gate instead.
+The `analyze-performance:4.auto-fix` template fires once per finding with `autoFixAvailable: true` (the output-cache and tracking findings), mirroring the `diagnose-deployment:6.auto-fix` loop-style pattern — one gate ID, content varies per finding. FetchXML/Web API findings are never auto-fixed (they need human judgment), so they are excluded from the loop and surfaced via the plan gate instead.
 
 ---
 

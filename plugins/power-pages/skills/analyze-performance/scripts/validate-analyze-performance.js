@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-// Validates that the perf-checker skill produced its performance report.
-// Runs as a PostToolUse (Stop-style) hook after a `perf-checker` Skill call
+// Validates that the analyze-performance skill produced its performance report.
+// Runs as a PostToolUse (Stop-style) hook after an `analyze-performance` Skill call
 // completes — auto-discovered by scripts/lib/powerpages-hook-utils.js because it
 // matches /^validate.*\.js$/ in this skill's scripts/ folder (no manual wiring).
 //
-// Fail-open by design: this hook fires on EVERY perf-checker invocation, but the
+// Fail-open by design: this hook fires on EVERY analyze-performance invocation, but the
 // skill has legitimate no-report exits (prerequisites not met / not a Power Pages
 // project / review mode, which writes JSON to an external dir instead of docs/).
 // So the only blocking condition is a report that WAS written but left with
@@ -16,9 +16,10 @@ const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
-// The report is timestamped (perf-check-<YYYY-MM-DD-HHMMSS>.html), so match by
-// prefix rather than a fixed name. Example: perf-check-2026-05-14-053805.html
-const REPORT_PREFIX = 'perf-check-';
+// The report is timestamped (performance-analysis-<YYYY-MM-DD-HHMMSS>.html), so
+// match by prefix rather than a fixed name. Example:
+// performance-analysis-2026-05-14-053805.html
+const REPORT_PREFIX = 'performance-analysis-';
 const REPORT_SUFFIX = '.html';
 // render-template.js leaves __KEY__ tokens verbatim when a required value was not
 // supplied, so their presence in the output is a definitive render failure.
@@ -28,10 +29,10 @@ const UNREPLACED_PLACEHOLDER = /__[A-Z][A-Z0-9_]+__/;
 const MIN_REPORT_BYTES = 500;
 
 // The shared findProjectRoot helper intentionally recognizes only code-site and
-// `.powerpages-site` layouts. perf-checker also supports non-SPA PAC downloads,
+// `.powerpages-site` layouts. analyze-performance also supports non-SPA PAC downloads,
 // whose root contains `.portalconfig/` plus files such as `website.yml` and
 // `sitesetting.yml`, so climb separately before deciding this was not a skill run.
-function findPerfProjectRoot(startPath) {
+function findPerformanceProjectRoot(startPath) {
   const standardRoot = findProjectRoot(startPath);
   if (standardRoot) return standardRoot;
 
@@ -53,8 +54,8 @@ function findPerfProjectRoot(startPath) {
 }
 
 runValidation((cwd) => {
-  const projectRoot = findPerfProjectRoot(cwd);
-  if (!projectRoot) approve(); // Not a Power Pages project — not a perf-checker session.
+  const projectRoot = findPerformanceProjectRoot(cwd);
+  if (!projectRoot) approve(); // Not a Power Pages project — not this skill's session.
 
   const docsDir = path.join(projectRoot, 'docs');
   if (!fs.existsSync(docsDir)) approve(); // No report yet (prereqs failed / review mode).
@@ -71,7 +72,7 @@ runValidation((cwd) => {
     approve(); // Unreadable docs/ — don't block on an environment quirk.
   }
 
-  if (!reports || reports.length === 0) approve(); // No perf report — nothing to validate.
+  if (!reports || reports.length === 0) approve(); // No performance report — nothing to validate.
 
   const latest = path.join(docsDir, reports[reports.length - 1]);
   let content = '';
@@ -83,10 +84,10 @@ runValidation((cwd) => {
 
   const reportBytes = Buffer.byteLength(content, 'utf8');
   if (reportBytes < MIN_REPORT_BYTES) {
-    block(`Performance report ${reports[reports.length - 1]} is suspiciously small (${reportBytes} bytes) — the render likely failed. Re-run /power-pages:perf-checker.`);
+    block(`Performance report ${reports[reports.length - 1]} is suspiciously small (${reportBytes} bytes) — the render likely failed. Re-run /power-pages:analyze-performance.`);
   }
   if (UNREPLACED_PLACEHOLDER.test(content)) {
-    block(`Performance report ${reports[reports.length - 1]} has unreplaced template placeholders — the report data was not populated. Re-run the render step in /power-pages:perf-checker.`);
+    block(`Performance report ${reports[reports.length - 1]} has unreplaced template placeholders — the report data was not populated. Re-run the render step in /power-pages:analyze-performance.`);
   }
 
   approve();

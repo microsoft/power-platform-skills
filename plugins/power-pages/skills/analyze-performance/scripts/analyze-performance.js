@@ -10,8 +10,8 @@
 //     details: { kind: "kv", label, entries: [ { key, value } ] } }
 //
 // Usage:
-//   node analyze-perf.js --projectRoot <path>     # defaults to cwd
-//   node analyze-perf.js --review                 # (flag ignored here; SKILL.md branches)
+//   node analyze-performance.js --projectRoot <path> # defaults to cwd
+//   node analyze-performance.js --review             # (flag ignored here; SKILL.md branches)
 //
 // Exit codes: 0 on success (including "no issues"), 1 only on a fatal I/O error.
 //
@@ -1286,7 +1286,7 @@ function analyze(projectRoot) {
   // success-shaped partial scan.
   if (fs.existsSync(path.join(root, 'powerpages.config.json'))) {
     throw new Error(
-      'This performance checker currently supports non-SPA Power Pages websites only. ' +
+      'This performance analyzer currently supports non-SPA Power Pages websites only. ' +
       `The selected path is a SPA website because it contains powerpages.config.json: ${root}`,
     );
   }
@@ -1454,7 +1454,7 @@ function main() {
   try {
     result = analyze(projectRoot);
   } catch (err) {
-    process.stderr.write(`analyze-perf.js failed: ${err.message}\n`);
+    process.stderr.write(`analyze-performance.js failed: ${err.message}\n`);
     process.exit(1);
   }
   process.stdout.write(JSON.stringify(result) + '\n');

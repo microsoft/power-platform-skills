@@ -26,7 +26,7 @@ const {
   WEB_ROLE_WARN_THRESHOLD,
   LARGE_ASSET_BYTES,
   SHORT_POLL_INTERVAL_MS,
-} = require('../../skills/perf-checker/scripts/analyze-perf');
+} = require('../../skills/analyze-performance/scripts/analyze-performance');
 
 // Collect the `tag`s a rule function produced — every assertion below is about
 // which anti-pattern tags fire (or don't) for a given input, so this keeps the

@@ -1,5 +1,5 @@
 ---
-name: perf-checker
+name: analyze-performance
 description: >-
   Statically scans the entire local Power Pages codebase for performance
   anti-patterns — unpaginated Power Pages lists, webpages/web templates used as
@@ -21,7 +21,7 @@ model: opus
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# perf-checker
+# analyze-performance
 
 Statically analyzes the **entire local Power Pages codebase** for known performance anti-patterns, enriches the static findings with **AI-driven, code-aware suggestions and mitigations**, presents them by severity in an HTML report + plain-language summary, and offers **safe auto-fixes with per-fix approval**. Never applies a fix without explicit consent.
 
@@ -44,7 +44,7 @@ No sign-in, PAC CLI, or Azure CLI is required — the analysis is fully offline.
 
 ## What it detects
 
-See `references/perf-reference.md` for the authoritative rule catalog (tags,
+See `references/performance-reference.md` for the authoritative rule catalog (tags,
 severities, detection, fixes, thresholds, and Microsoft Learn sources). The scan
 must cover all of these categories:
 
@@ -124,24 +124,24 @@ Report: "Found project: `<PROJECT_ROOT>`. Scanning for performance anti-patterns
 
 1. Run `microsoft_docs_search` with the query: `Power Pages Site Checker performance FetchXML output caching best practices`.
 2. Optionally `microsoft_docs_fetch` `https://learn.microsoft.com/en-us/power-pages/admin/site-checker-performance`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says. Compare it against the rule catalog in `references/perf-reference.md`. If Learn documents a performance pattern not covered by any analyzer rule, surface it to the user in Phase 6 as a **manual** follow-up — do not silently invent findings the analyzer did not produce.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says. Compare it against the rule catalog in `references/performance-reference.md`. If Learn documents a performance pattern not covered by any analyzer rule, surface it to the user in Phase 6 as a **manual** follow-up — do not silently invent findings the analyzer did not produce.
 
 ## Phase 2 — Scan the codebase
 
 Run the deterministic analyzer over the whole project:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/perf-checker/scripts/analyze-perf.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/skills/analyze-performance/scripts/analyze-performance.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-The analyzer prints a single JSON object `{ status, findings, details, severityCounts }` to stdout. Parse it. Each finding has `id`, `tag`, `severity`, `title`, `location`, `details`, `fix`, `autoFixAvailable`, and (when auto-fixable) `fixAction`. See `references/perf-reference.md` for the finding envelope and every tag's meaning.
+The analyzer prints a single JSON object `{ status, findings, details, severityCounts }` to stdout. Parse it. Each finding has `id`, `tag`, `severity`, `title`, `location`, `details`, `fix`, `autoFixAvailable`, and (when auto-fixable) `fixAction`. See `references/performance-reference.md` for the finding envelope and every tag's meaning.
 
 If the only finding is `PERF-NONE`, the codebase is clean — note this and skip Phase 4/5 (still render the report in Phase 6 so the user has a record).
 
 ## Phase 2.5 — Add AI-driven suggestions and mitigations
 
 Run this after every deterministic scan result that will be presented or written
-to `perf-checker.json` (including **review mode**). Skip only `PERF-NONE`.
+to `analyze-performance.json` (including **review mode**). Skip only `PERF-NONE`.
 
 For each finding, inspect the relevant customer-code context before writing the
 final JSON:
@@ -199,8 +199,8 @@ Only the site-setting and tracking findings are safely automatable (`PERF-HEADER
 
 For each finding with `autoFixAvailable: true`, in order:
 
-<!-- gate: perf-checker:4.auto-fix | category=consent | cancel-leaves=nothing -->
-> 🚦 **Gate (consent · perf-checker:4.auto-fix):** Per-finding consent before applying any auto-fix. **Loops once per `autoFixAvailable` finding** — each gets its own Yes / No / Skip-all `AskUserQuestion` naming the finding's tag and the exact change. **Never batch fixes** — three fixable findings = three separate prompts (unless the user picks "Skip all", which short-circuits the loop). Each fix has its own blast radius (a different site setting or YAML file), so approving one does not approve the next.
+<!-- gate: analyze-performance:4.auto-fix | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · analyze-performance:4.auto-fix):** Per-finding consent before applying any auto-fix. **Loops once per `autoFixAvailable` finding** — each gets its own Yes / No / Skip-all `AskUserQuestion` naming the finding's tag and the exact change. **Never batch fixes** — three fixable findings = three separate prompts (unless the user picks "Skip all", which short-circuits the loop). Each fix has its own blast radius (a different site setting or YAML file), so approving one does not approve the next.
 >
 > **Trigger:** Phase 4, once per fixable finding.
 > **Why we ask:** Enabling output caching alone can break header/footer rendering unless the web templates also use `{% substitution %}` (see caveat below); toggling tracking edits committed YAML. The user must consent to each concrete change.
@@ -232,7 +232,7 @@ Mark each finding **Fixed**, **Skipped**, or **Manual required** as you go.
 Re-run the analyzer to confirm the applied fixes resolved their findings:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/perf-checker/scripts/analyze-perf.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/skills/analyze-performance/scripts/analyze-performance.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
 Confirm each fixed finding's tag/location is gone (or downgraded from `warning` to `info` for the absent→present caching case). If a fix did not take, report it and offer to retry or hand it to the user. Use this re-scanned result set as the basis for the Phase 6 report so it reflects the post-fix state.
@@ -247,10 +247,11 @@ Handled at Step 6.2 below — review mode never reaches the HTML render or the f
 
 Write the enriched `{ status, findings, details }` object (the Phase 5 re-scan result if a re-scan ran, otherwise the Phase 2 result, with Phase 2.5 `aiSuggestion`/`mitigation` fields applied) to a JSON file:
 
-- **Review mode**: write to `<REVIEW_DIR>/perf-checker.json`, then **stop**. The orchestrating skill (e.g., `security-review`) handles presentation.
-- **Interactive mode**: write to `<TEMP_DIR>/perf-checker.json` where `<TEMP_DIR>` is a scratch directory containing only this file.
+- **Review mode**: write to `<REVIEW_DIR>/analyze-performance.json`, then **stop**. The orchestrating skill (e.g., `security-review`) handles presentation.
+- **Interactive mode**: write to `<TEMP_DIR>/analyze-performance.json` where `<TEMP_DIR>` is a scratch directory containing only this file.
 
-The filename **must** be `perf-checker.json` — that is the key `build-review-data.js` maps to the Performance section.
+The filename **must** be `analyze-performance.json` — that is the key
+`build-review-data.js` maps to the Performance section.
 
 ### Step 6.3 — Render the HTML report
 
@@ -258,12 +259,12 @@ Skip in **review mode**. Reuse the shared report pipeline (same template as the 
 
 The final HTML report is a persistent website artifact under
 `<PROJECT_ROOT>/docs/`, consistent with the other review reports. Only
-`perf-checker.json` and `data.json` are temporary scratch files; delete their
+`analyze-performance.json` and `data.json` are temporary scratch files; delete their
 temporary directory after the HTML render succeeds.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-review-data.js" \
-  --reportName "Performance Check" \
+  --reportName "Performance Analysis" \
   --inputDir "<TEMP_DIR>" \
   --siteName "<SITE_NAME>" \
   --goalLabel "Performance" \
@@ -273,18 +274,18 @@ node "${PLUGIN_ROOT}/scripts/build-review-data.js" \
 
 node "${PLUGIN_ROOT}/scripts/render-review.js" \
   --data "<TEMP_DIR>/data.json" \
-  --output "<PROJECT_ROOT>/docs/perf-check-<YYYY-MM-DD-HHMMSS>.html"
+  --output "<PROJECT_ROOT>/docs/performance-analysis-<YYYY-MM-DD-HHMMSS>.html"
 ```
 
 `<SITE_NAME>` comes from the site's `website.yml`; fall back to the folder name.
 The filename **must** include the local timestamp (e.g.,
-`perf-check-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the render
-succeeds and open the report in the browser.
+`performance-analysis-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the
+render succeeds and open the report in the browser.
 
 ### Step 6.4 — Summarize and route follow-ups
 
-<!-- gate: perf-checker:6.next-action | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · perf-checker:6.next-action):** After the report, recommend the single most useful next step and let the user accept or choose differently via `AskUserQuestion` — walk through the manual (non-auto-fixable) findings one at a time, re-scan, or finish. Reviewing findings and re-scanning are read-only; nothing is changed without a later Phase 4 consent.
+<!-- gate: analyze-performance:6.next-action | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · analyze-performance:6.next-action):** After the report, recommend the single most useful next step and let the user accept or choose differently via `AskUserQuestion` — walk through the manual (non-auto-fixable) findings one at a time, re-scan, or finish. Reviewing findings and re-scanning are read-only; nothing is changed without a later Phase 4 consent.
 >
 > **Trigger:** Phase 6, after the report is rendered (interactive mode only).
 > **Why we ask:** The manual list, webpage-as-API, FetchXML, Web API, query-hint,
@@ -302,7 +303,7 @@ each needs. If nothing meaningful remains, end the skill — do not ask just to 
 
 > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
-> Use `--skillName "PerfChecker"`.
+> Use `--skillName "AnalyzePerformance"`.
 
 ## Constraints
 
@@ -313,14 +314,14 @@ each needs. If nothing meaningful remains, end the skill — do not ask just to 
 
 ## References
 
-- `references/perf-reference.md` — authoritative rule catalog: tags, severities, detection logic, fixes, auto-fix actions, thresholds, manual-only checks, key nuances, and Microsoft Learn sources. Read when explaining a finding or deciding whether a fix is safe.
+- `references/performance-reference.md` — authoritative rule catalog: tags, severities, detection logic, fixes, auto-fix actions, thresholds, manual-only checks, key nuances, and Microsoft Learn sources. Read when explaining a finding or deciding whether a fix is safe.
 
 ## Progress Tracking Table
 
 | Task subject | activeForm | Description |
 |---|---|---|
 | Verify prerequisites and locate project | Verifying prerequisites | Locate an explicit/current code-site or PAC-download folder, confirm recognizable Power Pages source, detect review mode |
-| Scan codebase for anti-patterns | Scanning codebase | Run analyze-perf.js over the project, parse findings JSON |
+| Scan codebase for anti-patterns | Scanning codebase | Run analyze-performance.js over the project, parse findings JSON |
 | Present findings | Presenting findings | Show severity table and coverage stats |
 | Offer auto-fixes | Applying auto-fixes | Per-finding consent loop; apply site-setting/tracking fixes, surface substitution caveat |
 | Verify fixes | Verifying fixes | Re-run analyzer, confirm fixed findings are gone |

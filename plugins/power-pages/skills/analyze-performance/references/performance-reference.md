@@ -1,6 +1,8 @@
 # Performance Reference
 
-Rule catalog for `scripts/analyze-perf.js` — the deterministic analyzer behind `/power-pages:perf-checker`. Use this when explaining a finding, deciding whether an auto-fix is safe, or extending the analyzer.
+Rule catalog for `scripts/analyze-performance.js` — the deterministic analyzer
+behind `/power-pages:analyze-performance`. Use this when explaining a finding,
+deciding whether an auto-fix is safe, or extending the analyzer.
 
 > **Terminology**: the analyzer emits **findings**. Each finding carries a stable `tag` (e.g., `PERF-FETCHXML-ALLATTR`), a `severity`, a plain-language `title`/`details`/`fix`, and — for the subset that is safely automatable — `autoFixAvailable: true` plus a machine-readable `fixAction`.
 
@@ -26,7 +28,7 @@ Rule catalog for `scripts/analyze-perf.js` — the deterministic analyzer behind
 
 ## Finding envelope
 
-`analyze-perf.js` prints a single JSON object to stdout:
+`analyze-performance.js` prints a single JSON object to stdout:
 
 ```json
 {
@@ -52,7 +54,7 @@ Rule catalog for `scripts/analyze-perf.js` — the deterministic analyzer behind
 }
 ```
 
-The deterministic analyzer emits the stable rule fields (`tag`, `severity`, `details`, `fix`, `autoFixAvailable`, `fixAction`). The skill then enriches every non-`PERF-NONE` finding with `aiSuggestion` and `mitigation` after inspecting the customer-code snippet at `location`. This enriched `{ status, findings, details }` shape is what `scripts/build-review-data.js` (via the `perf-checker.json` `SECTION_MAP` entry, id `performance`, icon ⚡) and `scripts/render-review.js` consume — the same shared HTML report pipeline `scan-site` uses. `severityCounts` is an analyzer convenience for the in-chat summary; the renderer ignores it.
+The deterministic analyzer emits the stable rule fields (`tag`, `severity`, `details`, `fix`, `autoFixAvailable`, `fixAction`). The skill then enriches every non-`PERF-NONE` finding with `aiSuggestion` and `mitigation` after inspecting the customer-code snippet at `location`. This enriched `{ status, findings, details }` shape is what `scripts/build-review-data.js` (via the `analyze-performance.json` `SECTION_MAP` entry, id `performance`, icon ⚡) and `scripts/render-review.js` consume — the same shared HTML report pipeline `scan-site` uses. `severityCounts` is an analyzer convenience for the in-chat summary; the renderer ignores it.
 
 When no anti-pattern is found the analyzer still emits one `info` finding tagged `PERF-NONE` so the report is never empty.
 
@@ -70,7 +72,9 @@ The analyzer never emits `critical` — these are code-quality/perf issues, not 
 
 ## Rule catalog
 
-Each rule is a pure function in `analyze-perf.js` (unit-tested in `scripts/tests/analyze-perf.test.js`). `location` is a repo-relative `path:line` wherever a source offset exists.
+Each rule is a pure function in `analyze-performance.js` (unit-tested in
+`scripts/tests/analyze-performance.test.js`). `location` is a repo-relative
+`path:line` wherever a source offset exists.
 
 ### FetchXML rules
 
@@ -174,7 +178,7 @@ either export layout. The rules run only when the relevant metadata exists.
 
 ## Auto-fix actions
 
-For findings with `autoFixAvailable: true`, `fixAction` tells the SKILL.md Phase 4 loop exactly what deterministic change to apply. **Every fix is gated by per-finding consent** (`perf-checker:4.auto-fix`, category=consent) — the analyzer never mutates anything.
+For findings with `autoFixAvailable: true`, `fixAction` tells the SKILL.md Phase 4 loop exactly what deterministic change to apply. **Every fix is gated by per-finding consent** (`analyze-performance:4.auto-fix`, category=consent) — the analyzer never mutates anything.
 
 | `fixAction.type` | Fields | How the skill applies it |
 |------------------|--------|--------------------------|
@@ -186,7 +190,7 @@ For findings with `autoFixAvailable: true`, `fixAction` tells the SKILL.md Phase
 
 ## AI-driven suggestions and mitigations
 
-The analyzer stays deterministic; it does **not** call an AI service or mutate source. The `/power-pages:perf-checker` workflow performs a separate AI mitigation pass over analyzer results:
+The analyzer stays deterministic; it does **not** call an AI service or mutate source. The `/power-pages:analyze-performance` workflow performs a separate AI mitigation pass over analyzer results:
 
 - Read the local customer-code snippet behind each finding (`location`, about 20 lines on either side when available).
 - Preserve static fields exactly as emitted; do not hide, downgrade, or invent findings.
@@ -232,7 +236,7 @@ Documented here for completeness; **not** emitted by the analyzer because they r
 
 ## Thresholds
 
-Defined and exported from `analyze-perf.js` (tests assert against the real constants, not copies):
+Defined and exported from `analyze-performance.js` (tests assert against the real constants, not copies):
 
 | Constant | Value | Rule |
 |----------|-------|------|
