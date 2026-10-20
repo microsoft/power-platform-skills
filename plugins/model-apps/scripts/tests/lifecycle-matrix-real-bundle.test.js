@@ -352,13 +352,13 @@ test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothin
 //   documented  a lookup label that is the referenced table's display name is left out (it is the default)
 //   documented  a File or Image column comes back typed, with the size it was made with unless that is the size a build gives a column
 //               that sets none (docs/app-builder-capabilities.md, "Round-trip scope")
+//   documented  a table's plural comes back when it is not the display name plus "s", the one a rebuild would derive
+//               (references/app-spec-schema.md, "Round-trip")
 //   documented  personas[] are not carried (references/app-spec-schema.md: "a download carries none")
 //   warned      a Customer column is left out: its two relationships have no relationships[] form (the download warns)
 //   gap         solution.displayName, a global choice's displayName, a table's vectorIcon, statusReasons and alternateKeys, a column's
 //               type options (format, length, range, precision, labels, date format), a dashboard tile's size, script and
 //               table-icon web resources, roleGrants[] and sampleData are not carried
-//   DEFECT      a plural that is not the display name plus "s" is left out, so a rebuild elsewhere names the table "<name>s"
-//               (the test 'a download keeps a plural ...' below, skipped until fixed)
 function expectedDownload(authored, ids) {
   const byName = (a, b) => (a.schemaName < b.schemaName ? -1 : a.schemaName > b.schemaName ? 1 : 0);
   const column = (c) => ({
@@ -372,6 +372,7 @@ function expectedDownload(authored, ids) {
   const entity = (e) => ({
     schemaName: e.schemaName,
     displayName: e.displayName,
+    ...(e.pluralName !== `${e.displayName}s` ? { pluralName: e.pluralName } : {}), // documented
     primaryAttribute: { schemaName: e.primaryAttribute.schemaName, displayName: e.primaryAttribute.displayName },
     columns: e.columns
       .filter((c) => c.type !== 'Customer') // warned
@@ -484,8 +485,8 @@ test('lifecycle matrix: teardown deletes everything the build made and nothing e
 });
 
 // ====================================================================================================================================
-// DEFECTS the matrix found, kept as tests that state the right behaviour: skipped while one is open; when it is fixed the `skip` goes,
-// and so does its step from expectedDownload above.
+// DEFECTS the matrix found, kept as tests that state the right behaviour. A defect found later is added the same way: skipped while it
+// is open, and when it is fixed the `skip` goes, and so does its step from expectedDownload above.
 
 // Fixed: a File or Image column reports AttributeType "Virtual", which the download's type map never matched, so both were left out of
 // every download without a word. The download now types them by their AttributeTypeName (FileType / ImageType) and keeps the size.
@@ -495,7 +496,9 @@ test('lifecycle matrix: a download keeps the File and Image columns it reads', a
   assert.deepEqual(project.columns.filter((c) => ['File', 'Image'].includes(c.type)).map((c) => c.schemaName), ['contoso_contract', 'contoso_logo']);
 });
 
-test('lifecycle matrix: a download keeps a plural that is not the display name plus "s"', { skip: 'known defect: a plain plural is left out of the download as "derivable", but "Tag Catalog" is not "Tags", so a rebuild into another environment names the table differently' }, async () => {
+// Fixed: a plain plural was left out of every download as "derivable", but "Tag Catalog" is not "Tags", so a rebuild into another
+// environment named the table differently. The download now leaves out only the plural the build's own derivation would write.
+test('lifecycle matrix: a download keeps a plural that is not the display name plus "s"', async () => {
   const run = await lifecycle();
   const tag = stageOf(run, 'download').value.spec.entities.find((e) => e.schemaName === 'contoso_tag');
   assert.equal(tag.pluralName, 'Tag Catalog');

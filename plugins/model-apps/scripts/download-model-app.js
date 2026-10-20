@@ -34,7 +34,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
 const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
@@ -1850,17 +1850,26 @@ function entityFromMetadata(meta, logical, { unexpressible } = {}) {
   // translations. `'Name'` remains the fallback for a metadata read that carried no label at all.
   const primaryAttr = primaryLower ? attrs.find((a) => String((a && (a.logicalName || a.LogicalName || a.schemaName || a.SchemaName)) || '').toLowerCase() === primaryLower) : null;
   const primaryLabel = columnDisplayName(primaryAttr);
+  const tableSchemaName = (meta && (meta.schemaName || meta.logicalName)) || logical;
+  const tableLabel = displayName !== undefined ? displayName : ((meta && meta.displayName) || logical);
   return {
-    schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
-    displayName: displayName !== undefined ? displayName : ((meta && meta.displayName) || logical),
+    schemaName: tableSchemaName,
+    displayName: tableLabel,
     // Emitted when EITHER label is localized, not only when the singular is. `validateAppSpec`
     // requires `pluralName` beside a localized `displayName`, which is why the singular's shape is
     // checked — but a table can carry a single-language `DisplayName` and a multi-language
     // `DisplayCollectionName` (the two are independent in Dataverse, and an unprovisioned language is
     // dropped per-label on read). Keying only off the singular silently discarded those plural
-    // translations and a rebuild then derived an English plural. Two PLAIN labels still omit it: a
-    // plain plural is derivable and emitting it would add noise to every download.
-    ...((isLocalizedLabelMap(displayName) || isLocalizedLabelMap(pluralName)) && pluralName !== undefined ? { pluralName } : {}),
+    // translations and a rebuild then derived an English plural.
+    //
+    // Two PLAIN labels omit it only when the plural is the one a rebuild of a spec without it would
+    // write — derivedPluralName, the build's own rule, applied to what this spec says — so every
+    // download of an ordinary table ("Order" / "Orders") stays byte-identical. Any other plural is
+    // kept, because leaving it out was a silent rename: "Tag Catalog" is not derivable from "Tag", and
+    // a rebuild into another environment named the table "Tags". The comparison is exact (case and
+    // spacing included), because that is how the build writes the derivation.
+    ...(pluralName !== undefined && (isLocalizedLabelMap(displayName) || isLocalizedLabelMap(pluralName)
+      || pluralName !== derivedPluralName({ schemaName: tableSchemaName, displayName: tableLabel })) ? { pluralName } : {}),
     ...(descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) ? { description: descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) } : {}),
     // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
     // does not have, which is exactly the bug this fixes.

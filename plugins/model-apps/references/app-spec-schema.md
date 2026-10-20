@@ -312,7 +312,9 @@ languages resolves to the same artifact. One option, one value, several names.
 **Round-trip.** `download-model-app` reconstructs localized labels from Dataverse: a table, plural,
 column or option labelled in several languages comes back as a map, and one labelled in a single
 language comes back as a plain string (so no existing spec changes shape). The download emits
-`pluralName` alongside a localized `displayName`, so its own output re-validates.
+`pluralName` alongside a localized `displayName`, so its own output re-validates, and beside a plain one
+whenever it is not the `"<displayName>s"` a rebuild would derive — `"Tag Catalog"` for `"Tag"` comes back,
+`"Tags"` does not (it is the default).
 A navigation `label` or `title` is always a plain string (the spec has no map form for one), read in the
 language a rebuild writes it in: `--language-code`, else the `languageCode` the spec already on disk pins,
 else the environment's base language. When none of the three gives one — the base language could not be

@@ -15,6 +15,7 @@ const {
   quickCreateEnabledFor,
   normalizeLanguageCode,
   labelText,
+  derivedPluralName,
   isLocalizedLabelMap,
   localizedLabelLcids,
   sampleKeyIdentity,
@@ -2039,7 +2040,9 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         const tableDisplayName = isLocalizedLabelMap(e.displayName)
           ? e.displayName
           : (labelText(e.displayName, resolvedLanguageCode) || e.schemaName);
-        const createOpts = { schemaName: e.schemaName, displayName: tableDisplayName, pluralName: e.pluralName || `${labelText(tableDisplayName, resolvedLanguageCode) || e.schemaName}s`,
+        // A table without `pluralName` gets the ONE derivation (derivedPluralName), which a download also uses to tell a plural it
+        // must keep from one a rebuild would write anyway — so the two cannot drift apart.
+        const createOpts = { schemaName: e.schemaName, displayName: tableDisplayName, pluralName: e.pluralName || derivedPluralName(e, resolvedLanguageCode),
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode,
           // Always sent, so a later change of the SDK's own default cannot change what a spec without a length gets — see
           // DEFAULT_PRIMARY_NAME_LENGTH.

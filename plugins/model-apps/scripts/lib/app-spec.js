@@ -1240,6 +1240,19 @@ function labelText(value, languageCode) {
   return typeof hit === 'string' ? hit : '';
 }
 
+// The plural a build gives a table whose spec sets no `pluralName`: its display name in the build's
+// language, else its schema name, plus "s" — "Ticket" -> "Tickets", "Tag" -> "Tags". This is the ONE
+// derivation, so nothing that relies on it can disagree with what the build writes: the build sends it
+// as the table's DisplayCollectionName (entity-provision.js), lint predicts the "Active <plural>"
+// default-view names with it (spec-lint.js), and a download leaves out exactly the plural that equals
+// it (download-model-app.js entityFromMetadata) — a "Tag Catalog" is kept, because a rebuild of a spec
+// without it would name the table "Tags". English only: appending "s" is not a plural rule in most
+// languages, which is why validateAppSpec requires an explicit `pluralName` beside a localized
+// `displayName` rather than reaching this.
+function derivedPluralName(entity, languageCode) {
+  return `${labelText(entity && entity.displayName, languageCode) || (entity && entity.schemaName)}s`;
+}
+
 // Every string a label can legitimately be NAMED by: a plain label is itself; a localized label is
 // each of its per-language strings. Used wherever an author may reference a label by text — Choice
 // option → value resolution for `sampleData`, and `personas[].jobs[].surfaces[]` — so a reference
@@ -4438,6 +4451,7 @@ module.exports = {
   validateChoiceOptionLabels,
   ambiguousChoiceAliases,
   labelText,
+  derivedPluralName,
   labelAliases,
   isLocalizedLabelMap,
   labelIsMissing,
