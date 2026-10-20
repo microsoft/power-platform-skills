@@ -1336,9 +1336,28 @@ function mediaCompanionNames(attrs) {
 function mediaColumnFields(a, type) {
   const out = {};
   const size = a && a.MaxSizeInKB;
-  if (Number.isInteger(size) && size > 0 && size !== DEFAULT_MAX_SIZE_KB) out.maxSizeKb = size;
+  if (usableMediaSize(size) && size !== DEFAULT_MAX_SIZE_KB) out.maxSizeKb = size;
   if (type === 'Image' && a && a.IsPrimaryImage === true) out.isPrimaryImage = true;
   return out;
+}
+
+// `MaxSizeInKB` is an Int32 the platform always fills for a File or Image column, so anything but a positive whole number is not a
+// size this download can write — it is reported as missing (missingMediaDetail) rather than guessed.
+function usableMediaSize(size) {
+  return Number.isInteger(size) && size > 0;
+}
+
+// What an ANSWERED read of a File or Image column's cast did not give it: 'size', and for an image 'primary' — its row was not in the
+// answer, or held a value that cannot be used (a size that is not a positive whole number, a flag that is not true or false). Checked
+// against the columns a download writes, so an answer read while the table changes — a column added after the attribute read, say —
+// is said rather than taken for a column at the build's default. [] when the read did not answer: a failed read is reported as
+// such (mediaReadFailures), and no read is made for a column typed without a type name.
+function missingMediaDetail(meta, a, type) {
+  if (!(meta && meta.mediaReadsAnswered && meta.mediaReadsAnswered[type] === true)) return [];
+  const missing = [];
+  if (!usableMediaSize(a && a.MaxSizeInKB)) missing.push('size');
+  if (type === 'Image' && typeof (a && a.IsPrimaryImage) !== 'boolean') missing.push('primary');
+  return missing;
 }
 
 // One downloaded option set, or null when it carries nothing this spec can declare. Shape:
@@ -1650,7 +1669,9 @@ function untypedColumnNames(entities) {
 
 // `unexpressible`, when given, is an array this fills with the attributes left out because the App Spec has no type for them although
 // nothing shows they were not authored (`{ table, column, typeName }`), so the caller can name them (see the end of the filter).
-function entityFromMetadata(meta, logical, { unexpressible } = {}) {
+// `incomplete`, when given, is filled with the File and Image columns written without detail an answered read should have carried
+// (`{ table, column, type, missing }`, missingMediaDetail), so the caller can name those too.
+function entityFromMetadata(meta, logical, { unexpressible, incomplete } = {}) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
   const attrs = Array.isArray(meta && meta.attributes) ? meta.attributes : (Array.isArray(meta && meta.Attributes) ? meta.Attributes : []);
   const primaryLower = String(primary || '').toLowerCase();
@@ -1815,6 +1836,10 @@ function entityFromMetadata(meta, logical, { unexpressible } = {}) {
       : (usableOptionSet.isGlobal && usableOptionSet.name
         ? { globalChoice: usableOptionSet.name }
         : { options: inlineOptions });
+    if ((specType === 'File' || specType === 'Image') && schemaName && Array.isArray(incomplete)) {
+      const missing = missingMediaDetail(meta, a, specType);
+      if (missing.length) incomplete.push({ table: logical, column: schemaName, type: specType, missing });
+    }
     return withDescription({
       schemaName,
       // A column labelled in several languages round-trips as an LCID map; one language stays a
@@ -1987,6 +2012,10 @@ async function readEntityWithDescriptions(sdk, logical, { concurrency } = {}) {
     // A non-2xx is NOT "this table has no extra languages" — it is "we could not look". Recorded so
     // the caller can say so; see the catch below for why silence here is the wrong default.
     meta.labelReadFailed = entityLabels.failed;
+    // WHICH read failed is recorded too, because the two carry different things — this one the table's own labels (and with them
+    // its plural, which no other read carries), the one below the columns' labels with the flags and type names the column filters
+    // read — and a warning must say only what the read that failed carries (runDownload).
+    meta.tableLabelReadFailed = entityLabels.failed;
   }
   if (attributeLabels.rows) {
     // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
@@ -2010,11 +2039,12 @@ async function readEntityWithDescriptions(sdk, logical, { concurrency } = {}) {
       const row = byLogical.get(key);
       return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeOf: row.AttributeOf, AttributeTypeName: row.AttributeTypeName } : a;
     });
-  } else if (attributeLabels.failed && !meta.labelReadFailed) {
+  } else if (attributeLabels.failed) {
     // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded
     // above, because the first reason is the more useful one to show and both describe the same
     // outcome for the operator: this table came back single-language.
-    meta.labelReadFailed = attributeLabels.failed;
+    if (!meta.labelReadFailed) meta.labelReadFailed = attributeLabels.failed;
+    meta.attributeReadFailed = attributeLabels.failed;
   }
   // Base-currency twins. `IsBaseCurrency` lives on MoneyAttributeMetadata, not on the base
   // attribute type, so it needs its own CAST read — the same shape the option-set reads below use.
@@ -2050,21 +2080,26 @@ async function readEntityWithDescriptions(sdk, logical, { concurrency } = {}) {
   if (optionSets.failed) meta.optionSetReadFailed = optionSets.failed;
   // File and Image columns: the size each was made with, and whether an image is the table's primary one (readMediaColumns). Read
   // AFTER the reads above, because only their type names say whether the table has such a column at all — a table without one
-  // sends no more requests than it did before.
+  // sends no more requests than it did before. A row of the File answer is taken only for a File column, and one of the Image answer
+  // only for an Image column.
   const media = await readMediaColumns(sdk, logical, meta.attributes, concurrency);
-  if (media.byLogical.size) {
+  if (media.rows.File.size || media.rows.Image.size) {
     meta.attributes = (meta.attributes || []).map((a) => {
-      const row = media.byLogical.get(String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase());
+      const type = mediaTypeFromTypeName(a);
+      const row = type ? media.rows[type].get(attributeLogicalName(a)) : undefined;
       if (!row) return a;
       return {
         ...a,
         ...(row.MaxSizeInKB !== undefined ? { MaxSizeInKB: row.MaxSizeInKB } : {}),
-        ...(row.IsPrimaryImage !== undefined ? { IsPrimaryImage: row.IsPrimaryImage } : {}),
+        ...(type === 'Image' && row.IsPrimaryImage !== undefined ? { IsPrimaryImage: row.IsPrimaryImage } : {}),
       };
     });
   }
-  // The column is still kept, typed, when this read fails — only its size is unknown, which the caller says (mediaReadFailures).
-  if (media.failed) meta.mediaReadFailed = media.failed;
+  // By type, because each read carries only its own columns' detail, and what the caller says must name only what the read that
+  // failed carries (mediaReadFailures). The columns are kept, typed, either way. A read that answered is what entityFromMetadata
+  // checks each of its columns against, so an answer that lacks one is said too (missingMediaDetail).
+  if (Object.keys(media.answered).length) meta.mediaReadsAnswered = media.answered;
+  if (Object.keys(media.failed).length) meta.mediaReadFailures = media.failed;
   return meta;
 }
 
@@ -2082,35 +2117,36 @@ const MEDIA_CASTS = [
 ];
 
 // Reads the casts of the types `attributes` holds a column of (by type name; the table's own `entityimage` does not count, as it is
-// never written to a spec), and returns `{ byLogical: Map<lower-cased name, row>, failed: reason | null }`. A failed read is
-// recorded, not thrown: the columns are kept either way, and the caller says what was lost (their sizes).
+// never written to a spec), and returns, by type: `rows` (Map<lower-cased name, row>, empty for a type not read or not answered),
+// `answered` (true for a read that answered with a value[]) and `failed` (the reason for one that did not). A failed read is recorded,
+// not thrown: the columns are kept either way, and the caller says what was lost (their sizes, an image's primary flag).
 async function readMediaColumns(sdk, logical, attributes, concurrency) {
   const present = new Set((attributes || [])
     .filter((a) => !TABLE_IMAGE_COLUMNS.has(attributeLogicalName(a)))
     .map(mediaTypeFromTypeName)
     .filter(Boolean));
   const reads = MEDIA_CASTS.filter((m) => present.has(m.type));
-  const results = await mapLimit(reads, concurrency, async ({ cast, select }) => {
+  const results = await mapLimit(reads, concurrency, async ({ type, cast, select }) => {
     try {
       const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/Attributes/${cast}?$select=${select}`);
       // `dataverse.get` RESOLVES on a non-2xx rather than throwing, so the status is checked here, as for every read above.
       if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
       if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
-      return { rows: res.body.value };
+      return { type, rows: res.body.value };
     } catch (err) {
-      return { failed: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
+      return { type, failed: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
     }
   }, { firstInOrder: true });
-  const byLogical = new Map();
-  let failed = null;
+  const out = { rows: { File: new Map(), Image: new Map() }, answered: {}, failed: {} };
   for (const r of results) {
-    if (r.failed) { if (!failed) failed = r.failed; continue; }
+    if (r.failed) { out.failed[r.type] = r.failed; continue; }
+    out.answered[r.type] = true;
     for (const row of r.rows) {
       const key = String((row && row.LogicalName) || '').toLowerCase();
-      if (key) byLogical.set(key, row);
+      if (key) out.rows[r.type].set(key, row);
     }
   }
-  return { byLogical, failed };
+  return out;
 }
 
 // Reconstruct an App Spec label from a Dataverse Label, preserving EVERY language. AB#6686428.
@@ -2665,17 +2701,22 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   const noPrimaryName = [];   // sitemap tables — a hard failure (the user asked for these)
   const droppedComponents = []; // component-only tables — dropped with a warning (best-effort input)
   const metadataErrors = new Map(); // logical -> error message (the read itself failed)
-  // Tables whose LABEL read failed. Distinct from `metadataErrors`: the table itself was recovered
-  // and the spec is usable, but only the SDK's flattened single-language `displayName` survived, so
-  // a multi-language table silently downloads as English-only. Reported rather than swallowed.
-  const labelReadFailures = new Map(); // logical -> reason
-  // Tables whose OPTION-SET read failed (#564). Kept apart from `labelReadFailures` for the same
-  // reason that one is kept apart from `metadataErrors`: the table is recovered and the spec is
+  // Tables whose LABEL reads failed. Distinct from `metadataErrors`: the table itself was recovered
+  // and the spec is usable, but only the SDK's flattened single-language labels survived, so
+  // a multi-language table silently downloads as English-only. Reported rather than swallowed —
+  // by READ, because the table's own read and the columns' read carry different things, and each
+  // warning must say only what the read that failed carries.
+  const tableLabelReadFailures = new Map(); // logical -> reason
+  const attributeReadFailures = new Map(); // logical -> reason
+  // Tables whose OPTION-SET read failed (#564). Kept apart from the label reads for the same
+  // reason that those are kept apart from `metadataErrors`: the table is recovered and the spec is
   // usable, but every Choice/MultiChoice column on it comes back untyped, so a cross-environment
   // rebuild would create them as Text. Naming the reason is what makes that actionable.
   const optionSetReadFailures = new Map(); // logical -> reason
-  // Tables whose File/Image read failed: their File and Image columns are kept and typed, but without the size each was made with.
-  const mediaReadFailures = new Map(); // logical -> reason
+  // Tables whose File or Image read failed, by type: those columns are kept and typed, but without what that read carries.
+  const mediaReadFailures = { File: new Map(), Image: new Map() }; // type -> logical -> reason
+  // File and Image columns an answered read came back without detail for (entityFromMetadata's `incomplete`), of the tables kept.
+  const incompleteMediaColumns = [];
   // Columns left out because the App Spec has no type for them (entityFromMetadata's `unexpressible`), of the tables the spec keeps.
   const unexpressibleColumns = [];
   // Shared option sets bound by a downloaded column, keyed by lower-cased name so a set used by
@@ -2684,6 +2725,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   for (const logical of allLogicals) {
     let e;
     const leftOut = [];
+    const shortOf = [];
     // A metadata READ failure is not the same as metadata that reports no primary name, and it must
     // not be swallowed: a 429/503 on a sitemap table used to drop it silently, leaving its subarea
     // behind so validation later complained about a "sitemap subArea references unknown entity" —
@@ -2691,11 +2733,12 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     // exactly like the no-primary-name case, so the user is told the table AND the reason.
     try {
       const meta = await readEntityWithDescriptions(sdk, logical, { concurrency });
-      if (meta && meta.labelReadFailed) labelReadFailures.set(logical, meta.labelReadFailed);
+      if (meta && meta.tableLabelReadFailed) tableLabelReadFailures.set(logical, meta.tableLabelReadFailed);
+      if (meta && meta.attributeReadFailed) attributeReadFailures.set(logical, meta.attributeReadFailed);
       if (meta && meta.optionSetReadFailed) optionSetReadFailures.set(logical, meta.optionSetReadFailed);
-      if (meta && meta.mediaReadFailed) mediaReadFailures.set(logical, meta.mediaReadFailed);
+      for (const [type, reason] of Object.entries((meta && meta.mediaReadFailures) || {})) if (mediaReadFailures[type]) mediaReadFailures[type].set(logical, reason);
       collectGlobalChoices(meta, globalChoiceDecls);
-      e = entityFromMetadata(meta, logical, { unexpressible: leftOut });
+      e = entityFromMetadata(meta, logical, { unexpressible: leftOut, incomplete: shortOf });
     } catch (err) {
       metadataErrors.set(logical, (err && err.message) || String(err));
       (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
@@ -2717,6 +2760,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     }
     entities.push(e);
     for (const c of leftOut) unexpressibleColumns.push(`${e.schemaName}.${c.column} (${c.typeName})`);
+    for (const c of shortOf) incompleteMediaColumns.push({ name: `${e.schemaName}.${c.column}`, missing: c.missing });
   }
   const withReason = (list) => list.map((l) => (metadataErrors.has(l) ? `${l} (metadata read failed: ${metadataErrors.get(l)})` : l)).join(', ');
   if (noPrimaryName.length) {
@@ -2731,14 +2775,22 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (droppedComponents.length) {
     process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${withReason(droppedComponents)}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
   }
-  // AB#6686428: the label read is the ONLY source of multi-language labels. When it fails the table
-  // is still recovered, so the download succeeds and the spec looks complete — but it carries the
-  // SDK's flattened single-language `displayName` and every other language is gone. Silently
-  // degrading there is the same shape as the bug this feature fixes, so say so. Not a gate: an
-  // English-only spec is still a usable spec, and failing a read-only command over it would be worse.
-  if (labelReadFailures.size) {
-    const detail = [...labelReadFailures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
-    process.stderr.write(`WARNING: a label read failed for ${labelReadFailures.size} table(s) (${detail}). The table AND COLUMN labels for those tables fall back to ONE language, so anything labelled in several languages downloads as single-language and a rebuild would recreate it that way. That read also carries the flags that identify a lookup's synthetic '<lookup>name' column, so those tables may additionally have captured one as a real Text column — delete any you see before a cross-environment rebuild. It also carries the type names that tell a column the App Spec cannot express from the platform's own, so such a column on those tables is left out without being named. Re-run the download to recover all three.\n`);
+  // AB#6686428: the two label reads are the ONLY source of multi-language labels — the table's own (its display name, plural and
+  // description) and the columns' (which also carries the flags and type names the column filters read). When one fails the table
+  // is still recovered, so the download succeeds and the spec looks complete — but it carries the SDK's flattened single-language
+  // labels and every other language is gone. Silently degrading there is the same shape as the bug this feature fixes, so say so —
+  // once per READ, naming only what that read carries: the table's read failing says nothing about the columns, and the columns'
+  // read failing says nothing about the table. Not a gate: an English-only spec is still a usable spec, and failing a read-only
+  // command over it would be worse.
+  const failureDetail = (failures) => [...failures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
+  if (tableLabelReadFailures.size) {
+    // The table's plural is carried by this read alone (download keeps one a rebuild would not derive), so it goes with it.
+    process.stderr.write(`WARNING: the table label read failed for ${tableLabelReadFailures.size} table(s) (${failureDetail(tableLabelReadFailures)}). Their display names and descriptions fall back to ONE language and their plurals are not written, so rebuilding into a FRESH environment would recreate each of those tables labelled in one language, with the plural '<display name>s'. Re-run the download to recover them before a cross-environment rebuild.\n`);
+  }
+  if (attributeReadFailures.size) {
+    // Without this read no Virtual column has the type name entityFromMetadata names an unexpressible one by, so none is named: the
+    // platform's own virtual columns could not be told from it. That is what the last clause says, and it is said only here.
+    process.stderr.write(`WARNING: the column read failed for ${attributeReadFailures.size} table(s) (${failureDetail(attributeReadFailures)}). Their COLUMN labels and descriptions fall back to ONE language, so a column labelled in several languages downloads as single-language and rebuilding into a FRESH environment would recreate it that way. That read also carries the flags that identify a lookup's synthetic '<lookup>name' column, so those tables may additionally have captured one as a real Text column — delete any you see before a cross-environment rebuild — and the type names that tell a column of a type the App Spec cannot express from the platform's own, so any such column on those tables was left out without being named. Re-run the download to recover them.\n`);
   }
   // #564: the option-set read is the ONLY source of a Choice/MultiChoice column's type. When it
   // fails the table is still recovered and the spec still looks complete, but every choice column on
@@ -2758,12 +2810,27 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (untyped.length) {
     process.stderr.write(`WARNING: ${untyped.length} column(s) were captured WITHOUT a type (${untyped.join(', ')}) — most likely Choice/MultiChoice columns whose option set could not be read. Rebuilding this spec into an environment that already has the table is unaffected, but rebuilding into a FRESH environment would create them as single-line Text. Add the type and options[] (or a globalChoice reference) by hand before a cross-environment rebuild.\n`);
   }
-  // A File or Image column whose size could not be read is still in the spec, typed, but without `maxSizeKb` — so a rebuild into a
-  // FRESH environment makes it at the build's default size instead of the one it has here. Said, with the reason, as the option-set
-  // failure is: the read is what is re-runnable.
-  if (mediaReadFailures.size) {
-    const detail = [...mediaReadFailures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
-    process.stderr.write(`WARNING: the File/Image column read failed for ${mediaReadFailures.size} table(s) (${detail}). Their File and Image columns are captured WITHOUT the maximum size each was made with (and an Image column without whether it is the table's primary image), so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB. Re-run the download to recover them before a cross-environment rebuild.\n`);
+  // A File or Image column whose read failed is still in the spec, typed, but without what that read carries — so a rebuild into a
+  // FRESH environment makes it at the build's default size (and an image not asked to be the table's primary one) instead of as it is
+  // here. Said per READ, with the reason, as the option-set failure is: the read is what is re-runnable, and the File read failing
+  // says nothing about the Image columns, nor the other way round.
+  if (mediaReadFailures.File.size) {
+    process.stderr.write(`WARNING: the File column read failed for ${mediaReadFailures.File.size} table(s) (${failureDetail(mediaReadFailures.File)}). Their File columns are captured WITHOUT the maximum size each was made with, so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB. Re-run the download to recover them before a cross-environment rebuild.\n`);
+  }
+  if (mediaReadFailures.Image.size) {
+    process.stderr.write(`WARNING: the Image column read failed for ${mediaReadFailures.Image.size} table(s) (${failureDetail(mediaReadFailures.Image)}). Their Image columns are captured WITHOUT the maximum size each was made with or whether one is the table's primary image, so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB, none of them asked to be the table's primary image. Re-run the download to recover them before a cross-environment rebuild.\n`);
+  }
+  // A read that answered, but without a column's row or with a value that cannot be used (missingMediaDetail) — what an answer read
+  // while the table changes can carry. The column is kept with whatever valid detail came back; what did not is named per column,
+  // and the consequence is said only for the kinds of detail that are missing.
+  if (incompleteMediaColumns.length) {
+    const WHAT = { size: 'its maximum size', primary: "whether it is the table's primary image" };
+    const named = incompleteMediaColumns.slice().sort((a, b) => compareText(a.name, b.name)).map((c) => `${c.name} (${c.missing.map((m) => WHAT[m]).join(' and ')})`);
+    const consequences = [
+      ...(incompleteMediaColumns.some((c) => c.missing.includes('size')) ? [`create a column without its maximum size at the default size of ${DEFAULT_MAX_SIZE_KB} KB`] : []),
+      ...(incompleteMediaColumns.some((c) => c.missing.includes('primary')) ? ["not ask an Image column without its primary-image flag to be the table's primary image"] : []),
+    ];
+    process.stderr.write(`WARNING: the File/Image column read came back incomplete for ${named.length} column(s): ${named.join(', ')}. Each is captured without what did not come back, so rebuilding into a FRESH environment would ${consequences.join(' and would ')}. Re-run the download to recover them before a cross-environment rebuild.\n`);
   }
   // A column whose type the App Spec cannot express is left out of columns[] (entityFromMetadata's `unexpressible`). A rebuild into
   // an environment that has the table leaves it as it is — a build never deletes a column a spec does not list — but one into a

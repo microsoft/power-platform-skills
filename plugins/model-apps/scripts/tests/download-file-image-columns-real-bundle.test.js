@@ -21,7 +21,8 @@ const { validateAppSpec } = require('../lib/app-spec.js');
 
 // ====================================================================================================================================
 // THE PROJECTION, against a scripted SDK. `attributes` is the SDK's own projection of the table (fetchEntityMetadata), `rows` what the
-// attribute read answers (AttributeTypeName, AttributeOf, IsLogical, labels), `file` / `image` what each cast read answers.
+// attribute read answers (AttributeTypeName, AttributeOf, IsLogical, labels), `file` / `image` what each cast read answers, and
+// `answers` replaces a whole answer: `table` (the table's label read), `rows`, `file` or `image`.
 
 const label = (text) => ({ LocalizedLabels: [{ Label: text, LanguageCode: 1033 }], UserLocalizedLabel: { Label: text, LanguageCode: 1033 } });
 const sdkAttribute = (logicalName, attributeType, attributeTypeName, extra = {}) => ({ logicalName, displayName: logicalName, attributeType, attributeTypeName, isCustomAttribute: true, ...extra });
@@ -38,7 +39,7 @@ function scriptedSdk({ attributes, rows = [], file = [], image = [], answers = {
         if (/ImageAttributeMetadata/.test(url)) return answer('image', image);
         if (/AttributeMetadata/.test(url)) return { status: 200, headers: {}, body: { value: [] } }; // the option-set and Money casts
         if (/\/Attributes\?/.test(url)) return answer('rows', [row('contoso_name', 'StringType'), ...rows]);
-        return { status: 200, headers: {}, body: { DisplayName: label('Asset'), DisplayCollectionName: label('Assets') } };
+        return answers.table || { status: 200, headers: {}, body: { DisplayName: label('Asset'), DisplayCollectionName: label('Assets') } };
       },
     },
   };
@@ -74,11 +75,14 @@ test('a size a build gives a column that sets none is left out, and so is a prim
     file: [{ LogicalName: 'contoso_manual', MaxSizeInKB: DEFAULT_MAX_SIZE_KB }],
     image: [{ LogicalName: 'contoso_photo', MaxSizeInKB: DEFAULT_MAX_SIZE_KB, IsPrimaryImage: false }],
   });
-  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'contoso_asset'), 'contoso_asset');
+  const incomplete = [];
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'contoso_asset'), 'contoso_asset', { incomplete });
   assert.deepEqual(e.columns, [
     { schemaName: 'contoso_manual', displayName: 'manual', type: 'File' },
     { schemaName: 'contoso_photo', displayName: 'photo', type: 'Image' },
   ]);
+  // Left out because they are the defaults, not because they are missing: the answer was complete.
+  assert.deepEqual(incomplete, []);
 });
 
 test('a table without a File or Image column reads neither cast, and downloads byte for byte as before', async () => {
@@ -171,7 +175,7 @@ test('without the attribute read, a Virtual column cannot be told from a compani
   assert.deepEqual(unexpressible, []);
 });
 
-test('a File read that fails keeps the File columns typed, without their size, and records why; the Image read stands', async () => {
+test('a File read that fails keeps the File columns typed, without their size, and records that read alone; the Image read stands', async () => {
   const sdk = scriptedSdk({
     answers: { file: { status: 503, headers: {}, body: {} } },
     attributes: [sdkAttribute('contoso_contract', 'Virtual', 'FileType'), sdkAttribute('contoso_logo', 'Virtual', 'ImageType')],
@@ -179,16 +183,86 @@ test('a File read that fails keeps the File columns typed, without their size, a
     image: [{ LogicalName: 'contoso_logo', MaxSizeInKB: 2048, IsPrimaryImage: false }],
   });
   const meta = await readEntityWithDescriptions(sdk, 'contoso_asset');
-  assert.equal(meta.mediaReadFailed, 'HTTP 503');
-  assert.deepEqual(entityFromMetadata(meta, 'contoso_asset').columns, [
+  assert.deepEqual(meta.mediaReadFailures, { File: 'HTTP 503' });
+  const incomplete = [];
+  assert.deepEqual(entityFromMetadata(meta, 'contoso_asset', { incomplete }).columns, [
     { schemaName: 'contoso_contract', displayName: 'contract', type: 'File' },
     { schemaName: 'contoso_logo', displayName: 'logo', type: 'Image', maxSizeKb: 2048 },
   ]);
+  // The File column's read failed, which is said as such; the Image answer was complete.
+  assert.deepEqual(incomplete, []);
+});
+
+test('an Image read that fails keeps the Image columns typed, without their size or flag, and records that read alone; the File read stands', async () => {
+  const sdk = scriptedSdk({
+    answers: { image: { status: 503, headers: {}, body: {} } },
+    attributes: [sdkAttribute('contoso_contract', 'Virtual', 'FileType'), sdkAttribute('contoso_logo', 'Virtual', 'ImageType')],
+    rows: [row('contoso_contract', 'FileType'), row('contoso_logo', 'ImageType')],
+    file: [{ LogicalName: 'contoso_contract', MaxSizeInKB: 1024 }],
+  });
+  const meta = await readEntityWithDescriptions(sdk, 'contoso_asset');
+  assert.deepEqual(meta.mediaReadFailures, { Image: 'HTTP 503' });
+  const incomplete = [];
+  assert.deepEqual(entityFromMetadata(meta, 'contoso_asset', { incomplete }).columns, [
+    { schemaName: 'contoso_contract', displayName: 'contract', type: 'File', maxSizeKb: 1024 },
+    { schemaName: 'contoso_logo', displayName: 'logo', type: 'Image' },
+  ]);
+  assert.deepEqual(incomplete, []);
+});
+
+test('a cast answer without a column, or with an unusable value, is reported by column, and what did come back is kept', async () => {
+  // A successful answer is checked against the File and Image columns the download writes: a row that is not there, a size that is
+  // not a positive whole number, a primary-image flag that is not true or false. No request is added for it.
+  const urls = [];
+  const sdk = scriptedSdk({
+    urls,
+    attributes: [
+      sdkAttribute('contoso_badge', 'Virtual', 'ImageType'), sdkAttribute('contoso_contract', 'Virtual', 'FileType'),
+      sdkAttribute('contoso_logo', 'Virtual', 'ImageType'), sdkAttribute('contoso_manual', 'Virtual', 'FileType'), sdkAttribute('contoso_photo', 'Virtual', 'ImageType'),
+    ],
+    rows: [row('contoso_badge', 'ImageType'), row('contoso_contract', 'FileType'), row('contoso_logo', 'ImageType'), row('contoso_manual', 'FileType'), row('contoso_photo', 'ImageType')],
+    file: [{ LogicalName: 'contoso_manual', MaxSizeInKB: 4096 }], // no row for contoso_contract
+    image: [
+      { LogicalName: 'contoso_badge', MaxSizeInKB: 2048, IsPrimaryImage: null }, // a size, but no usable flag
+      { LogicalName: 'contoso_logo', MaxSizeInKB: '30720', IsPrimaryImage: true }, // a flag, but no usable size
+    ], // no row for contoso_photo
+  });
+  const incomplete = [];
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'contoso_asset'), 'contoso_asset', { incomplete });
+  assert.deepEqual(e.columns, [
+    { schemaName: 'contoso_badge', displayName: 'badge', type: 'Image', maxSizeKb: 2048 },
+    { schemaName: 'contoso_contract', displayName: 'contract', type: 'File' },
+    { schemaName: 'contoso_logo', displayName: 'logo', type: 'Image', isPrimaryImage: true },
+    { schemaName: 'contoso_manual', displayName: 'manual', type: 'File', maxSizeKb: 4096 },
+    { schemaName: 'contoso_photo', displayName: 'photo', type: 'Image' },
+  ]);
+  assert.deepEqual(incomplete, [
+    { table: 'contoso_asset', column: 'contoso_badge', type: 'Image', missing: ['primary'] },
+    { table: 'contoso_asset', column: 'contoso_contract', type: 'File', missing: ['size'] },
+    { table: 'contoso_asset', column: 'contoso_logo', type: 'Image', missing: ['size'] },
+    { table: 'contoso_asset', column: 'contoso_photo', type: 'Image', missing: ['size', 'primary'] },
+  ]);
+  assert.deepEqual(castReads(urls), [FILE_CAST, IMAGE_CAST]);
+});
+
+test('the two label reads are recorded apart: the table\'s own, and the columns\'', async () => {
+  // Each read carries different things, so what a download says about a failure depends on which one failed. `labelReadFailed`, the
+  // first of the two reasons, is kept for its readers.
+  const read = async (answers) => {
+    const meta = await readEntityWithDescriptions(scriptedSdk({ attributes: [], answers }), 'contoso_asset');
+    return { table: meta.tableLabelReadFailed, columns: meta.attributeReadFailed, first: meta.labelReadFailed };
+  };
+  const refused = (status) => ({ status, headers: {}, body: {} });
+  assert.deepEqual(await read({ table: refused(403) }), { table: 'HTTP 403', columns: undefined, first: 'HTTP 403' });
+  assert.deepEqual(await read({ rows: refused(503) }), { table: undefined, columns: 'HTTP 503', first: 'HTTP 503' });
+  assert.deepEqual(await read({ table: refused(403), rows: refused(503) }), { table: 'HTTP 403', columns: 'HTTP 503', first: 'HTTP 403' });
+  assert.deepEqual(await read({}), { table: undefined, columns: undefined, first: undefined });
 });
 
 // ====================================================================================================================================
 // THE ROUND TRIP, over the real bundle. One environment, walked in order: the build, what a maker then adds in Maker, the download, the
-// rebuild of the downloaded spec, the same spec built into a fresh environment; then a download the environment refuses the File read of.
+// rebuild of the downloaded spec, the same spec built into a fresh environment; then downloads the environment refuses one read of, or
+// answers one read short.
 
 const spec = {
   schemaVersion: 2,
@@ -209,20 +283,33 @@ const spec = {
 };
 const APP = appUniqueName(spec);
 
-// An environment with a seam in front of its transport that refuses what `refuse` names, with the Dataverse OData error a client does
-// not retry. The error shape: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors#parse-errors-from-the-response
+// An environment with a seam in front of its transport. `refuse` answers what it names with the Dataverse OData error a client does not
+// retry (the error shape: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors#parse-errors-from-the-response);
+// `alter` lets the fake answer what it names and edits the JSON body of that answer — a read that succeeds with less than it should.
+// A rule names a method and a path and, where one path is read for different things, the `$select`: the table's own label read and
+// the SDK's metadata read of the table share their path.
 function environment(prefix) {
   const org = createLifecycleOrg();
-  const refused = [];
+  const rules = [];
+  const ruleFor = (req, kind) => {
+    const url = new URL(req.url);
+    const where = decodeURIComponent(url.pathname);
+    return rules.find((r) => r.kind === kind && r.method === req.method && r.path.test(where) && (r.select === undefined || url.searchParams.get('$select') === r.select));
+  };
   const request = async (req) => {
-    const where = decodeURIComponent(new URL(req.url).pathname);
-    if (!refused.some((r) => r.method === req.method && r.path.test(where))) return org.request(req);
-    return { statusCode: 400, headers: { 'content-type': 'application/json; odata.metadata=minimal' }, body: JSON.stringify({ error: { code: '0x80040216', message: 'An unexpected error occurred.' } }) };
+    if (ruleFor(req, 'refuse')) {
+      return { statusCode: 400, headers: { 'content-type': 'application/json; odata.metadata=minimal' }, body: JSON.stringify({ error: { code: '0x80040216', message: 'An unexpected error occurred.' } }) };
+    }
+    const res = await org.request(req);
+    const alter = ruleFor(req, 'alter');
+    return alter ? { ...res, body: JSON.stringify(alter.edit(JSON.parse(res.body))) } : res;
   };
   const root = makeTempDir(prefix);
   const harness = createLifecycleHarness({ ...org, request }, root);
-  const refuse = (method, pattern) => { const r = { method, path: pattern }; refused.push(r); return () => refused.splice(refused.indexOf(r), 1); };
-  return { org, root, harness, refuse };
+  const add = (rule) => { rules.push(rule); return () => rules.splice(rules.indexOf(rule), 1); };
+  const refuse = (method, pattern, { select } = {}) => add({ kind: 'refuse', method, path: pattern, select });
+  const alter = (method, pattern, edit) => add({ kind: 'alter', method, path: pattern, edit });
+  return { org, root, harness, refuse, alter };
 }
 
 // What a maker sends from Maker, as the Web API call Maker makes.
@@ -325,44 +412,83 @@ test('the downloaded spec built into a fresh environment makes each File and Ima
   assert.deepEqual(mediaColumns(fresh.org), authorable);
 });
 
-test('a download the environment refuses the File read of keeps the File columns, without their size, and says why', async () => {
-  const { harness, refuse, root } = await walk();
-  const lift = refuse('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.FileAttributeMetadata$/);
+// What a download of the walked environment says about each read that failed or came back short, word for word: each warning names
+// only what the read it is about carries, so one read failing never reads as another's loss.
+const SENSOR_NAMED = 'WARNING: 1 column(s) have a type the App Spec cannot express and were left out of the spec (contoso_asset.contoso_sensor (VirtualType)). Rebuilding this spec into an environment that already has the table leaves them as they are, but rebuilding into a FRESH environment would not create them: add them there in Maker after the rebuild.';
+const TABLE_LABEL_READ_FAILED = "WARNING: the table label read failed for 1 table(s) (contoso_asset (HTTP 400)). Their display names and descriptions fall back to ONE language and their plurals are not written, so rebuilding into a FRESH environment would recreate each of those tables labelled in one language, with the plural '<display name>s'. Re-run the download to recover them before a cross-environment rebuild.";
+const COLUMN_READ_FAILED = "WARNING: the column read failed for 1 table(s) (contoso_asset (HTTP 400)). Their COLUMN labels and descriptions fall back to ONE language, so a column labelled in several languages downloads as single-language and rebuilding into a FRESH environment would recreate it that way. That read also carries the flags that identify a lookup's synthetic '<lookup>name' column, so those tables may additionally have captured one as a real Text column — delete any you see before a cross-environment rebuild — and the type names that tell a column of a type the App Spec cannot express from the platform's own, so any such column on those tables was left out without being named. Re-run the download to recover them.";
+const FILE_READ_FAILED = `WARNING: the File column read failed for 1 table(s) (contoso_asset (HTTP 400)). Their File columns are captured WITHOUT the maximum size each was made with, so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB. Re-run the download to recover them before a cross-environment rebuild.`;
+const IMAGE_READ_FAILED = `WARNING: the Image column read failed for 1 table(s) (contoso_asset (HTTP 400)). Their Image columns are captured WITHOUT the maximum size each was made with or whether one is the table's primary image, so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB, none of them asked to be the table's primary image. Re-run the download to recover them before a cross-environment rebuild.`;
+const READ_INCOMPLETE = `WARNING: the File/Image column read came back incomplete for 3 column(s): contoso_asset.contoso_badge (whether it is the table's primary image), contoso_asset.contoso_contract (its maximum size), contoso_asset.contoso_photo (its maximum size and whether it is the table's primary image). Each is captured without what did not come back, so rebuilding into a FRESH environment would create a column without its maximum size at the default size of ${DEFAULT_MAX_SIZE_KB} KB and would not ask an Image column without its primary-image flag to be the table's primary image. Re-run the download to recover them before a cross-environment rebuild.`;
+
+// The table's File and Image columns as a download wrote them, `<name> <type>[ <size>][ primary]`, and the warnings it printed.
+const mediaOf = (downloaded) => downloaded.entities[0].columns.filter((c) => c.type === 'File' || c.type === 'Image')
+  .map((c) => `${c.schemaName} ${c.type}${c.maxSizeKb ? ` ${c.maxSizeKb}` : ''}${c.isPrimaryImage ? ' primary' : ''}`).sort();
+const warningsOf = (stderr) => stderr.split('\n').filter((l) => /^WARNING:/.test(l));
+const HEALTHY_MEDIA = ['contoso_badge Image 30720 primary', 'contoso_contract File 2048', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768'];
+
+// One download of the walked environment with `rules` in front of it (each returns its own undo), into a folder of its own.
+async function downloadWith(name, rules) {
+  const env = await walk();
+  const undo = rules(env);
   try {
-    const step = ran(await harness.measure(() => harness.download(APP, path.join(root, 'download-refused'))), 'the refused download');
-    const { emitted, spec: downloaded, stderr } = step.value;
-    assert.equal(emitted.ok, true, JSON.stringify(emitted));
-    const files = downloaded.entities[0].columns.filter((c) => c.type === 'File').map((c) => c.schemaName).sort();
-    assert.deepEqual(files, ['contoso_contract', 'contoso_manual', 'contoso_scan']);
-    assert.ok(downloaded.entities[0].columns.filter((c) => c.type === 'File').every((c) => c.maxSizeKb === undefined));
-    // The Image read was not refused: its sizes stand.
-    assert.equal(downloaded.entities[0].columns.find((c) => c.schemaName === 'contoso_badge').maxSizeKb, 30720);
-    const failure = stderr.split('\n').filter((l) => /File\/Image column read failed/.test(l));
-    assert.deepEqual(failure, [`WARNING: the File/Image column read failed for 1 table(s) (contoso_asset (HTTP 400)). Their File and Image columns are captured WITHOUT the maximum size each was made with (and an Image column without whether it is the table's primary image), so rebuilding into a FRESH environment would create them at the default size of ${DEFAULT_MAX_SIZE_KB} KB. Re-run the download to recover them before a cross-environment rebuild.`]);
+    const step = ran(await env.harness.measure(() => env.harness.download(APP, path.join(env.root, name))), `the download ${name}`);
+    assert.equal(step.value.emitted.ok, true, JSON.stringify(step.value.emitted));
+    return step.value;
   } finally {
-    lift();
+    for (const lift of undo) lift();
   }
+}
+
+const TABLE_LABEL_READ = { select: 'LogicalName,Description,DisplayName,DisplayCollectionName' };
+
+test('a download the environment refuses only the table label read of says so of the table\'s labels alone, and still names what it cannot express', async () => {
+  const { spec: downloaded, stderr } = await downloadWith('download-no-table-labels', ({ refuse }) => [
+    refuse('GET', /^\/api\/data\/v9\.\d\/EntityDefinitions\(LogicalName='contoso_asset'\)$/, TABLE_LABEL_READ),
+  ]);
+  assert.deepEqual(mediaOf(downloaded), HEALTHY_MEDIA);
+  // The table's label comes from the SDK's own read; its plural, which only the refused read carries, is not written.
+  assert.deepEqual({ displayName: downloaded.entities[0].displayName, plural: 'pluralName' in downloaded.entities[0] }, { displayName: 'Asset', plural: false });
+  assert.deepEqual(warningsOf(stderr), [TABLE_LABEL_READ_FAILED, SENSOR_NAMED]);
 });
 
-test('a download the environment refuses the attribute read of still keeps each File and Image column, and none of their companions', async () => {
+test('a download the environment refuses the column read of still keeps each File and Image column and none of their companions, and says what that read carries', async () => {
   // That read carries AttributeOf, which normally tells a companion from a column; without it the SDK's own projection still names the
-  // File and Image columns, and their companions are known by the platform's names for them. What the download cannot tell apart
-  // without the read — a Virtual column the App Spec cannot express — it says it may have left out.
-  const { harness, refuse, root } = await walk();
-  const lift = refuse('GET', /^\/api\/data\/v9\.\d\/EntityDefinitions\(LogicalName='contoso_asset'\)\/Attributes$/);
-  try {
-    const step = ran(await harness.measure(() => harness.download(APP, path.join(root, 'download-no-attributes'))), 'the download without the attribute read');
-    const { emitted, spec: downloaded, stderr } = step.value;
-    assert.equal(emitted.ok, true, JSON.stringify(emitted));
-    assert.deepEqual(downloaded.entities[0].columns.map((c) => `${c.schemaName} ${c.type}${c.maxSizeKb ? ` ${c.maxSizeKb}` : ''}${c.isPrimaryImage ? ' primary' : ''}`).sort(), [
-      'contoso_badge Image 30720 primary', 'contoso_contract File 2048', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768', 'contoso_serial Text',
-    ]);
-    const labelWarning = stderr.split('\n').filter((l) => /a label read failed/.test(l));
-    assert.equal(labelWarning.length, 1, stderr);
-    assert.match(labelWarning[0], /^WARNING: a label read failed for 1 table\(s\) \(contoso_asset \(HTTP 400\)\)\./);
-    assert.match(labelWarning[0], /It also carries the type names that tell a column the App Spec cannot express from the platform's own, so such a column on those tables is left out without being named\. Re-run the download to recover all three\.$/);
-    assert.ok(!/cannot express and were left out/.test(stderr), 'nothing is named that could be the platform\'s own');
-  } finally {
-    lift();
-  }
+  // File and Image columns, and their companions are known by the platform's names for them. A Virtual column the App Spec cannot
+  // express cannot be told from the platform's own without it, so none is named — and the warning says that is why.
+  const { spec: downloaded, stderr } = await downloadWith('download-no-column-read', ({ refuse }) => [
+    refuse('GET', /^\/api\/data\/v9\.\d\/EntityDefinitions\(LogicalName='contoso_asset'\)\/Attributes$/),
+  ]);
+  assert.deepEqual(downloaded.entities[0].columns.map((c) => c.schemaName).sort(), ['contoso_badge', 'contoso_contract', 'contoso_manual', 'contoso_photo', 'contoso_scan', 'contoso_serial']);
+  assert.deepEqual(mediaOf(downloaded), HEALTHY_MEDIA);
+  assert.deepEqual(warningsOf(stderr), [COLUMN_READ_FAILED]);
+});
+
+test('a download the environment refuses the File read of keeps the File columns, without their size, and says so of the File columns alone', async () => {
+  const { spec: downloaded, stderr } = await downloadWith('download-no-file-read', ({ refuse }) => [
+    refuse('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.FileAttributeMetadata$/),
+  ]);
+  // The Image read was not refused: its sizes and flag stand.
+  assert.deepEqual(mediaOf(downloaded), ['contoso_badge Image 30720 primary', 'contoso_contract File', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File']);
+  assert.deepEqual(warningsOf(stderr), [FILE_READ_FAILED, SENSOR_NAMED]);
+});
+
+test('a download the environment refuses the Image read of keeps the Image columns, without their size or flag, and says so of the Image columns alone', async () => {
+  const { spec: downloaded, stderr } = await downloadWith('download-no-image-read', ({ refuse }) => [
+    refuse('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.ImageAttributeMetadata$/),
+  ]);
+  // The File read was not refused: its sizes stand.
+  assert.deepEqual(mediaOf(downloaded), ['contoso_badge Image', 'contoso_contract File 2048', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768']);
+  assert.deepEqual(warningsOf(stderr), [IMAGE_READ_FAILED, SENSOR_NAMED]);
+});
+
+test('a File or Image read that answers without a column, or with an unusable value, keeps what did come back and names each column it lacks', async () => {
+  // Both reads succeed, but the File answer has no row for contoso_contract, and the Image answer has no row for contoso_photo and no
+  // usable primary-image flag for contoso_badge — what an answer read while the table changes, say, can carry. No request is added.
+  const { spec: downloaded, stderr } = await downloadWith('download-short-answers', ({ alter }) => [
+    alter('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.FileAttributeMetadata$/, (body) => ({ ...body, value: body.value.filter((r) => r.LogicalName !== 'contoso_contract') })),
+    alter('GET', /\/Attributes\/Microsoft\.Dynamics\.CRM\.ImageAttributeMetadata$/, (body) => ({ ...body, value: body.value.filter((r) => r.LogicalName !== 'contoso_photo').map((r) => (r.LogicalName === 'contoso_badge' ? { ...r, IsPrimaryImage: null } : r)) })),
+  ]);
+  assert.deepEqual(mediaOf(downloaded), ['contoso_badge Image 30720', 'contoso_contract File', 'contoso_manual File', 'contoso_photo Image', 'contoso_scan File 32768']);
+  assert.deepEqual(warningsOf(stderr), [READ_INCOMPLETE, SENSOR_NAMED]);
 });
