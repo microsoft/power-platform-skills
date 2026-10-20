@@ -29,7 +29,7 @@ const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 // as the next number, so a message that repeats the marker tens of thousands of times is read in linear time, not quadratic.
 // The vendored SDK matches the marker anywhere in a 500's body for its own re-send (1 s / 2 s / 4 s) of reads, an app create,
 // PublishXml, a form create, a view create and a publisher create — requests this client has already re-sent by
-// then, because it re-sends every 5xx that is not a record delete or a $batch (TRANSIENT, below). So a deadlock the
+// then (all but PublishXml, below), because it re-sends every 5xx that is not a record delete, a $batch or a publish (TRANSIENT, below). So a deadlock the
 // client clears costs one re-send in all and the SDK's never fires; one that never clears is attempted up to the
 // client's six times per SDK attempt (24 in all, measured on a form create and on a view create), a ceiling on a
 // pathological case. A record DELETE and a conditional-delete $batch are the exception: this client re-sends their
@@ -40,6 +40,11 @@ const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 // one re-send in all and one that never clears at most 16 attempts (this client's four per SDK attempt). All of it
 // is pinned against the real bundle in sdk-resend-layers.test.js.
 //
+// A PUBLISH (`POST …/PublishXml`, or `PublishAllXml` should anything send it) is the other exception, the other way round: this client
+// sends it ONCE and leaves a deadlock victim to the one layer above it that re-sends one — the SDK's publishXml (its resendDeadlockVictim)
+// for a publish the SDK makes, and postPublishXml (lib/publish-xml.js) for the plugin's own — so no publish is sent again by two layers
+// at once. See `publishOnce` in `call` for what it is never sent again for, and why.
+//
 // The one other `$batch` this client sends again is a change set that only CREATES columns (a new table's ordinary columns, see
 // isColumnCreateBatch), and only after a 429: the platform refused to start it, so nothing in it committed (a change set is
 // atomic) and it goes out again on the throttle schedule. After any other answer, a deadlock included, it is sent once, because a
@@ -48,6 +53,24 @@ const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 const SQL_DEADLOCK_VICTIM = /\bSql Number:\s*1205\b(?:(?!\bSql Number:\s*\d)[\s\S])*$/i;
 // At most this many re-sends of a deadlock victim, 1 s / 2 s / 4 s apart — the SDK's own schedule.
 const DEADLOCK_RESENDS = 3;
+
+// A publish, addressed by the action's name as the last segment of the path, bare or with its namespace — an unbound action of the Web API:
+//   POST https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml                             { "ParameterXml": "<importexportxml>…</importexportxml>" }
+//   POST https://contoso.crm.dynamics.com/api/data/v9.2/Microsoft.Dynamics.CRM.PublishAllXml   {}
+// A custom action whose name merely ends the same way (`new_PublishXml`) is another segment, and not a publish.
+// See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/publishxml and …/reference/publishallxml
+const PUBLISH_ACTION = /\/(?:Microsoft\.Dynamics\.CRM\.)?Publish(?:All)?Xml$/i;
+const isPublishRequest = (method, url) => method === 'POST' && PUBLISH_ACTION.test(new URL(url).pathname);
+
+// The error codes of Dataverse's SERVICE PROTECTION limits — the only 429s the platform documents as a refusal to START a request,
+// which asks the caller to wait for `Retry-After` and send it again (https://learn.microsoft.com/power-apps/developer/data-platform/api-limits):
+//   0x80072322  Number of requests          "Number of requests exceeded the limit of 6000 over time window of 300 seconds."
+//   0x80072321  Execution time              "Combined execution time of incoming requests exceeded limit of 1,200,000 milliseconds over time window of 300 seconds. …"
+//   0x80072326  Concurrent requests         "Number of concurrent requests exceeded the limit of 52."
+// Read from the `error.code` of the answer, never from its words. A 429 with any other code — the customization lock (`0x80071151`
+// "Cannot start the requested operation [Publish] because there is another [WorkflowSetState] running…", and the other lock codes
+// lib/retry-policy.js lists) — or with none is not one of these.
+const SERVICE_PROTECTION_CODES = Object.freeze(new Set(['0x80072322', '0x80072321', '0x80072326']));
 // The longest `Retry-After` honoured in full. Dataverse's service protection limits answer 429 with
 // `Retry-After` in seconds and ask the caller to wait that long; a request sent sooner is refused again
 // and spends one of the few attempts. The cap keeps a large value from stalling a build or a teardown
@@ -102,6 +125,21 @@ function throttleBackoffMs(attempt, random = Math.random) {
 function isSqlDeadlockVictim(res) {
   if (!res || res.statusCode !== 500 || res.body === undefined || res.body === null) return false;
   return SQL_DEADLOCK_VICTIM.test(typeof res.body === 'string' ? res.body : JSON.stringify(res.body));
+}
+
+/**
+ * True when a raw transport response is a refusal by the service protection limits: HTTP 429 whose OData error code — the answer is
+ * `{"error":{"code":"0x80072322","message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds."}}` — is one of
+ * SERVICE_PROTECTION_CODES. A body that is not that JSON (an HTML page from a gateway, a code that is not a string) is not one.
+ */
+function isServiceProtectionRefusal(res) {
+  if (!res || res.statusCode !== 429) return false;
+  let body = res.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return false; }
+  }
+  const code = body && typeof body === 'object' && body.error && typeof body.error === 'object' ? body.error.code : undefined;
+  return typeof code === 'string' && SERVICE_PROTECTION_CODES.has(code.toLowerCase());
 }
 
 /**
@@ -602,7 +640,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
   const random = deps.random || Math.random;
   const now = deps.now || Date.now;
   // Transient HTTP statuses worth retrying with backoff — throttling, gateway hiccups, and
-  // SQL deadlocks (Dataverse surfaces deadlock 1205 as a 500 from PublishXml under load).
+  // SQL deadlocks (Dataverse surfaces deadlock 1205 as a 500 under load). A publish is the exception (`publishOnce`, in `call`).
   //
   // ⚠ 502/503/504 come from an INTERMEDIARY, so the write behind them may have COMMITTED — and this
   // retry then re-sends it. For a CONDITIONAL write (every SDK form, view, chart, dashboard and app
@@ -617,8 +655,12 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // policy stays.
   // It is NOT safe for a write whose failure path must know whether the first attempt landed: the
   // SDK's business-process-flow `update`/`delete` settle an ambiguous deactivate by re-reading the
-  // row, and this retry pre-empts that. Nothing in this plugin issues those today; exempt such
-  // writes from the retry before anything does.
+  // row, and this retry pre-empts that. The plugin reaches neither cycle: its stage edits of a flow it
+  // reuses (applyBpfStages, lib/sdk-build.js) are the SDK's in-place writes — an Active flow's ONE
+  // `$batch` change set of PATCHes on `/workflows(<id>)` under `If-Match`, which this client sends once
+  // (a `$batch`, below) and the SDK re-sends itself while the customization lock refuses it, bound by
+  // the same `If-Match`; a Draft flow's one PATCH under `If-Match` — and teardown deactivates and deletes a
+  // flow's row through the record surface (lib/sdk-teardown.js). Exempt such writes from the retry before anything issues them.
   const TRANSIENT = new Set([429, 500, 502, 503, 504]);
   // How long to wait for an answer before giving up. A WRITE gets far longer than a read, because a
   // write we stop waiting for is not a failed write — the server may still be executing it, so its
@@ -739,6 +781,20 @@ function createAzHttpClient(orgUrl, deps = {}) {
     // the caller's to look up. The exceptions of a record DELETE and a `$batch` stay what they were for every request the caller does not name.
     const once = sendOnce(method_, url) === true;
     const noRetry = recordDelete || isBatch || once;
+    // A PUBLISH (`POST …/PublishXml`, `…/PublishAllXml`) is sent ONCE on a 5xx, on a transport failure and on a 429 — but for the two answers that prove
+    // the platform never started it: a 401 (refused before it ran: the token is refreshed and the publish sent again, as any request is) and a 429 of the
+    // service protection limits (isServiceProtectionRefusal: waited out like any throttled request, inside the run's budget when the client has one).
+    // MEASURED on a test environment (four probe runs, 2026-10-20, the customization lock held by six concurrent business-process-flow activations): a
+    // publish the lock refused — HTTP 429 `0x80071151` "Cannot start the requested operation [Publish] because there is another [WorkflowSetState] running…",
+    // answered after 33-66 s — is NOT shown to change nothing. Of 7 web-resource writes whose publish it refused at least once, a later ACCEPTED publish
+    // published the OLD content in 4; an accepted re-send answered 204 while publishing the old content; and an app was seen published right after its
+    // publish was refused. So a re-send turns a loud refusal into a quiet stale publish — which the SDK reads back for a web resource (WEB_RESOURCE_UNVERIFIED)
+    // and for an app, form, view or dashboard nothing does — and it is the SDK's rule that a publish is never re-sent but as a SQL deadlock victim, which
+    // this client's re-send underneath it defeated. A deadlock victim (rolled back) is re-sent by the layer above: see SQL_DEADLOCK_VICTIM. A 5xx from a
+    // gateway (502, 503, 504) may sit in front of a publish that ran, and a transport failure in front of one that is still running: neither is re-sent.
+    // In 15 live builds, no-op rebuilds and teardowns of the release before this one, the plugin sent 30 publishes and none was answered 429 or 5xx: this
+    // bites only under real contention.
+    const publishOnce = !once && isPublishRequest(method_, url);
     const isWrite = method_ !== 'GET';
     // A CONDITIONAL write that got NO answer (a timeout or a dropped connection) is never re-sent.
     // It may still commit — and if it does, the re-send carries a token the first attempt already
@@ -808,7 +864,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         if (res.incompleteResponse && method_ === 'POST') {
           throw transportError(res, `Request failed: ${scrubText(res.error)} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Re-run to reconcile.`);
         }
-        if (last || noRetry || !isTransientTransportFailure(res.error, res.code)) throw transportError(res, `Request failed: ${scrubText(res.error)}`);
+        if (last || noRetry || publishOnce || !isTransientTransportFailure(res.error, res.code)) throw transportError(res, `Request failed: ${scrubText(res.error)}`);
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -822,7 +878,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         }
         continue;
       }
-      if (TRANSIENT.has(res.statusCode) && !last && !noRetry) {
+      if (TRANSIENT.has(res.statusCode) && !last && !noRetry && (!publishOnce || isServiceProtectionRefusal(res))) {
         // A throttle (HTTP 429) is waited out inside the run's budget when the client has one, and handed back as it came when the wait does not fit (waitOutThrottle). What else is re-sent here — a customization lock or a deadlock
         // victim (500), a gateway (502, 503, 504) — is not throttling, and keeps its own schedule.
         if (throttle && res.statusCode === 429) {
@@ -908,4 +964,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };

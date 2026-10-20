@@ -1786,3 +1786,124 @@ test('sendOnce names a request by its method and URL, so a record DELETE it does
   assert.strictEqual(await sendTo(named), 1, 'the named delete: once');
   assert.strictEqual(await sendTo('https://org.crm.dynamics.com/api/data/v9.0/solutions(2)'), 2, 'another one: its 429 exception as before');
 });
+
+// --- a publish is sent ONCE ---------------------------------------------------------------------------------------------------------------------------------------
+// `POST …/PublishXml` is never sent again by this client for a 429 of the customization lock, a 5xx or a failure of the transport: a publish the lock refused
+// is not shown to have changed nothing, and an accepted re-send of one was measured publishing old content. Only the two answers that prove the platform never
+// started it are answered with a second send: a 401 (the token is refreshed) and a 429 of the service protection limits, whose documented codes ask for it.
+// A deadlock victim is re-sent by the layer above (the SDK's publishXml, or lib/publish-xml.js), never here (sdk-resend-layers.test.js counts the layers).
+const { scrub: scrubToken, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal } = require('../lib/sdk-http-client.js');
+const PUBLISH = `${ORG}/api/data/v9.2/PublishXml`;
+const PUBLISH_BODY = { ParameterXml: '<importexportxml><entities><entity>contoso_task</entity></entities></importexportxml>' };
+const PUBLISH_TOKEN = 'eyJ0eXAiOiJKV1QifQ.eyJhdWQiOiJodHRwczovL2NvbnRvc28ifQ.c2lnbmF0dXJlLW9mLXRoZS10b2tlbg';
+const LOCK_WORDS = 'Cannot start the requested operation [Publish] because there is another [WorkflowSetState] running at this moment.';
+const lockAnswer = (statusCode, code) => ({ statusCode, headers: {}, body: JSON.stringify({ error: { code, message: `${LOCK_WORDS} (sent with ${PUBLISH_TOKEN})` } }) });
+const PUBLISH_ONCE_ANSWERS = [
+  ['a 429 of the customization lock (0x80071151)', () => lockAnswer(429, '0x80071151')],
+  ['a 429 of another lock code (0x8004F064)', () => lockAnswer(429, '0x8004F064')],
+  ['a 429 with no code', () => ({ statusCode: 429, headers: { 'retry-after': '1' }, body: '{"error":{"message":"Too many requests"}}' })],
+  ['a 429 whose body is not JSON', () => ({ statusCode: 429, headers: {}, body: '<html>busy</html>' })],
+  ['a 500 that carries a lock code', () => lockAnswer(500, '0x80071151')],
+  ['a 500 SQL deadlock victim', () => ({ statusCode: 500, headers: {}, body: JSON.stringify({ error: { code: '0x80044150', message: ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' } }) })],
+  ['a 502', () => ({ statusCode: 502, headers: {}, body: 'Bad Gateway' })],
+  ['a 503', () => ({ statusCode: 503, headers: { 'retry-after': '1' }, body: 'Service Unavailable' })],
+  ['a 504', () => ({ statusCode: 504, headers: {}, body: 'Gateway Timeout' })],
+];
+
+test('publish once: a PublishXml answered 429 by the lock or a 5xx — a lock code, a deadlock victim, a gateway — is sent ONCE, and its answer reaches the caller as it came, the token taken out', async () => {
+  for (const [what, answer] of PUBLISH_ONCE_ANSWERS) {
+    const slept = [];
+    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? answer() : { statusCode: 204, headers: {}, body: '' }));
+    const http = createAzHttpClient(ORG, { getToken: () => PUBLISH_TOKEN, request, sleep: async (ms) => { slept.push(ms); } });
+    const res = await http.post(PUBLISH, PUBLISH_BODY);
+    const first = answer();
+    assert.strictEqual(calls.length, 1, `${what}: one send`);
+    assert.deepStrictEqual(slept, [], `${what}: nothing waited for`);
+    assert.strictEqual(res.status, first.statusCode, `${what}: the status it was answered with`);
+    let sent;
+    try { sent = JSON.parse(first.body); } catch { sent = first.body; }
+    assert.deepStrictEqual(res.body, typeof sent === 'string' ? sent : JSON.parse(scrubToken(first.body, PUBLISH_TOKEN)), `${what}: the body it was answered with — its code and its words — with the token taken out`);
+    assert.ok(!JSON.stringify(res.body).includes(PUBLISH_TOKEN), `${what}: no access token in what the caller is given`);
+  }
+});
+
+test('publish once: a PublishXml that got no answer — a reset, a timeout, an answer cut off — is not sent again', async () => {
+  for (const failure of [{ error: 'read ECONNRESET', code: 'ECONNRESET' }, { error: 'Request timed out' }, { error: 'socket hang up', code: 'ECONNRESET' }, { error: 'Response aborted before it completed', incompleteResponse: true, statusCode: 204 }]) {
+    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? failure : { statusCode: 204, headers: {}, body: '' }));
+    const http = createAzHttpClient(ORG, { getToken: () => 'TOK', request, sleep: async () => {} });
+    await assert.rejects(http.post(PUBLISH, PUBLISH_BODY), /^Error: Request failed: /, failure.error);
+    assert.strictEqual(calls.length, 1, `${failure.error}: one send`);
+  }
+});
+
+test('publish once: a 401 is refused before the publish ran — the token is refreshed and the publish sent again, once', async () => {
+  const tokens = [];
+  const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { statusCode: 401, headers: {}, body: '' } : { statusCode: 204, headers: {}, body: '' }));
+  const http = createAzHttpClient(ORG, { getToken: (_url, options) => { tokens.push(Boolean(options && options.fresh)); return 'TOK'; }, request, sleep: async () => {} });
+  const res = await http.post(PUBLISH, PUBLISH_BODY);
+  assert.strictEqual(res.status, 204);
+  assert.strictEqual(calls.length, 2, 'the refused send and the one with the new token');
+  assert.deepStrictEqual(tokens, [false, true], 'a fresh token for the second');
+});
+
+test('publish once: a 429 of the service protection limits — each of the three documented codes — is waited out and sent again, as any throttled request is', async () => {
+  for (const code of ['0x80072322', '0x80072321', '0x80072326', '0X80072322']) {
+    const slept = [];
+    const refused = { statusCode: 429, headers: { 'retry-after': '20' }, body: JSON.stringify({ error: { code, message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.' } }) };
+    const { request, calls } = fakeTransport(() => (calls.length <= 2 ? refused : { statusCode: 204, headers: {}, body: '' }));
+    const http = createAzHttpClient(ORG, { getToken: () => 'TOK', request, random: () => 0, sleep: async (ms) => { slept.push(ms); } });
+    assert.strictEqual((await http.post(PUBLISH, PUBLISH_BODY)).status, 204, code);
+    assert.strictEqual(calls.length, 3, `${code}: two refusals, then the send that was accepted`);
+    assert.deepStrictEqual(slept, [20000, 20000], `${code}: the Retry-After it asked for`);
+  }
+  // Inside a run's budget, as every throttled request of a budgeted client.
+  const run = budgeted();
+  const t = fakeTransport(() => (t.calls.length <= 1 ? throttledAnswer(30) : { statusCode: 204, headers: {}, body: '' }));
+  assert.strictEqual((await clientOf(t, run).post(PUBLISH, PUBLISH_BODY)).status, 204);
+  assert.deepStrictEqual([t.calls.length, run.slept, run.throttle.spentMs()], [2, [30000], 30000], 'drawn from the budget');
+  // And a budget with no room for the wait hands the 429 back, as for any request.
+  const spent = budgeted({ spent: 300000 });
+  const t2 = fakeTransport(() => throttledAnswer(30));
+  assert.strictEqual((await clientOf(t2, spent).post(PUBLISH, PUBLISH_BODY)).status, 429);
+  assert.strictEqual(t2.calls.length, 1);
+});
+
+test('publish once: PublishAllXml and the action named with its namespace are publishes too; a custom action whose name ends the same way, a read, and every other POST keep the retry', async () => {
+  const answer = lockAnswer(429, '0x80071151');
+  const sends = async (url, method = 'post') => {
+    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? answer : { statusCode: 204, headers: {}, body: '' }));
+    const http = createAzHttpClient(ORG, { getToken: () => 'TOK', request, sleep: async () => {} });
+    if (method === 'get') await http.get(url);
+    else await http.post(url, {});
+    return calls.length;
+  };
+  assert.strictEqual(await sends(`${ORG}/api/data/v9.2/PublishAllXml`), 1, 'PublishAllXml');
+  assert.strictEqual(await sends(`${ORG}/api/data/v9.0/Microsoft.Dynamics.CRM.PublishXml`), 1, 'the namespace-qualified PublishXml');
+  assert.strictEqual(await sends(`${ORG}/api/data/v9.2/new_PublishXml`), 2, 'a custom action is not a publish');
+  assert.strictEqual(await sends(`${ORG}/api/data/v9.2/systemforms`), 2, 'a form create is re-sent after the lock, as before');
+  assert.strictEqual(await sends(PUBLISH, 'get'), 2, 'a read of the same address is not a publish');
+});
+
+test('publish once: a form create refused by the lock, or answered 503, is still re-sent on its schedule — six sends at most, as before', async () => {
+  for (const answer of [lockAnswer(429, '0x80071151'), { statusCode: 503, headers: {}, body: 'busy' }]) {
+    const { request, calls } = fakeTransport(answer);
+    const http = createAzHttpClient(ORG, { getToken: () => 'TOK', request, sleep: async () => {} });
+    assert.strictEqual((await http.post(`${ORG}/api/data/v9.2/systemforms`, { name: 'Main' })).status, answer.statusCode);
+    assert.strictEqual(calls.length, 6, String(answer.statusCode));
+  }
+});
+
+test('publish once: the service protection codes are the three the api-limits page documents, and a 429 is one only by its code', () => {
+  assert.deepStrictEqual([...SERVICE_PROTECTION_CODES].sort(), ['0x80072321', '0x80072322', '0x80072326']);
+  const answer = (statusCode, body) => ({ statusCode, headers: {}, body });
+  assert.strictEqual(isServiceProtectionRefusal(answer(429, '{"error":{"code":"0x80072326","message":"Number of concurrent requests exceeded the limit of 52."}}')), true);
+  assert.strictEqual(isServiceProtectionRefusal(answer(429, { error: { code: '0x80072321' } })), true, 'a body already parsed');
+  for (const [what, res] of [
+    ['the lock', answer(429, '{"error":{"code":"0x80071151","message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds."}}')],
+    ['the words alone', answer(429, '{"error":{"message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds. 0x80072322"}}')],
+    ['the code on another status', answer(503, '{"error":{"code":"0x80072322"}}')],
+    ['a code that is not a string', answer(429, '{"error":{"code":2147015902}}')],
+    ['no body', answer(429, '')],
+    ['nothing', null],
+  ]) assert.strictEqual(isServiceProtectionRefusal(res), false, what);
+});

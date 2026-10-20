@@ -2227,7 +2227,8 @@ test('REAL SDK: a publish the budget has no room to wait for is said on stderr w
   const refusePublish = (method, requestPath) => {
     if (!(throttled && method === 'POST' && /\/PublishXml$/.test(requestPath))) return undefined;
     throttled = false;
-    return { statusCode: 429, headers: { 'retry-after': '600' }, body: '{"error":{"message":"throttled"}}' };
+    // A throttle of the service protection limits, by its documented code: the one 429 a publish is waited out for. A publish the customization lock refused is sent once (lib/sdk-http-client.js, publishOnce).
+    return { statusCode: 429, headers: { 'retry-after': '600' }, body: '{"error":{"code":"0x80072322","message":"Number of requests exceeded the limit of 6000 over time window of 300 seconds."}}' };
   };
   const backend = (env, fromScript = {}) => {
     const httpClient = createAzHttpClient(env, {

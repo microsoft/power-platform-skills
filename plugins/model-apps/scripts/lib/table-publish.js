@@ -14,6 +14,7 @@
 const { collectionRows, readAppComponentInventory, TABLE_NAME } = require('./app-components.js');
 const { sitemapEntityTables } = require('./app-spec.js');
 const { odataLit } = require('./odata.js');
+const { postPublishXml } = require('./publish-xml.js');
 
 // Lower-case logical names, each once, in the order given; a name that cannot be a table's is left out. `add` and `list` of one collection.
 function namesCollector() {
@@ -122,16 +123,15 @@ const xmlText = (value) => String(value).replace(/&/g, '&amp;').replace(/</g, '&
 // naming a table publishes what anyone saved on it, not only what the build did.
 //
 // Reported by value, never thrown: the callers publish what a maker saved or what a label repair changed, none of which may stop a build. The
-// client answers `{ status, body }` and does not throw on an HTTP error (lib/sdk-http-client.js); a transport failure, after its own resends,
-// does throw. A refusal's platform text, when it gives one, is kept: `{ "error": { "code": "0x80040217", "message": "..." } }`.
-async function publishTablesXml(client, tables) {
+// client answers `{ status, body }` and does not throw on an HTTP error (lib/sdk-http-client.js); a transport failure does throw. The client
+// sends a publish once, so a refusal — the customization lock's 429 included — is reported as it came; a deadlock victim is sent again by
+// postPublishXml (lib/publish-xml.js). A refusal's platform text, when it gives one, is kept: `{ "error": { "code": "0x80040217", "message": "..." } }`.
+async function publishTablesXml(client, tables, { sleep } = {}) {
   const names = Array.isArray(tables) ? tables : [];
   if (!names.length) return { ok: true };
   if (!client || typeof client.post !== 'function') return { ok: false, reason: 'no client to publish with' };
   try {
-    const response = await client.post('/PublishXml', {
-      ParameterXml: `<importexportxml><entities>${names.map((t) => `<entity>${xmlText(t)}</entity>`).join('')}</entities></importexportxml>`,
-    });
+    const response = await postPublishXml(client, `<importexportxml><entities>${names.map((t) => `<entity>${xmlText(t)}</entity>`).join('')}</entities></importexportxml>`, { sleep });
     if (response && response.status >= 200 && response.status < 300) return { ok: true };
     const said = response && response.body && response.body.error && response.body.error.message;
     return { ok: false, reason: `PublishXml answered HTTP ${response && response.status}${typeof said === 'string' && said ? `: ${said}` : ''}` };

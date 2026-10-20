@@ -280,6 +280,105 @@ test('a view create that deadlocks every time stays bounded: the client\u2019s a
   assert.ok(org.posts() > 6, 'and the SDK\u2019s re-send is what takes it past the client\u2019s own six');
 });
 
+// --- a publish ----------------------------------------------------------------------------------------------------
+//
+// A publish is sent ONCE by the client (lib/sdk-http-client.js, `publishOnce`), and its deadlock victim is re-sent by exactly one
+// layer above it: the SDK's publishXml for a publish the SDK makes, lib/publish-xml.js (postPublishXml) for one the plugin sends
+// itself. So a deadlock that clears costs one re-send, and one that never clears four sends — where the client's six times the
+// SDK's four (24) was the bound before. A publish the customization lock refuses is sent once by every layer.
+const WEB_RESOURCE_ID = '88888888-8888-4888-8888-888888888888';
+const LOCK = { code: '0x80071151', message: 'Cannot start the requested operation [Publish] because there is another [WorkflowSetState] running at this moment.' };
+// A web resource the SDK creates, publishes and reads back: the POST writes the saved content, an accepted PublishXml copies it to the
+// published layer, and the plain read by id answers the published one. Each PublishXml is answered from `answers` in turn (the last repeats).
+function publishOrg(answers) {
+  const requests = [];
+  let publishes = 0;
+  const row = { saved: undefined, published: undefined };
+  async function request({ url, method, body }) {
+    const u = new URL(url);
+    requests.push({ method, path: decodeURIComponent(u.pathname + u.search) });
+    if (method === 'POST' && /\/PublishXml$/.test(u.pathname)) {
+      const answer = answers[Math.min(publishes, answers.length - 1)];
+      publishes += 1;
+      if (answer === 'deadlock') return json(500, { error: DEADLOCK });
+      if (answer === 'lock') return json(429, { error: LOCK });
+      row.published = row.saved;
+      return { statusCode: 204, headers: {}, body: '' };
+    }
+    if (method === 'POST' && /\/webresourceset$/.test(u.pathname)) {
+      row.saved = JSON.parse(body).content;
+      return { statusCode: 204, headers: { 'odata-entityid': `${ENV}/api/data/v9.0/webresourceset(${WEB_RESOURCE_ID})` }, body: '' };
+    }
+    if (method === 'GET' && /\/webresourceset\(/.test(u.pathname)) return row.published === undefined ? json(404, { error: { message: 'Does Not Exist' } }) : json(200, { content: row.published });
+    return json(200, { value: [] });
+  }
+  return { request, publishes: () => publishes };
+}
+const webResource = { name: 'co_/scripts/form.js', type: 'js', content: 'var Form = {};' };
+
+test('a publish the SDK makes that loses one deadlock is re-sent by the SDK alone: one re-send in all, and the client waits for nothing', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sleeps = [];
+  const org = publishOrg(['deadlock', 'ok']);
+  const sdk = await sdkOver(org.request, sleeps);
+  const created = await settle(t, sdk.createWebResource(webResource));
+  assert.strictEqual(created.id, WEB_RESOURCE_ID);
+  assert.strictEqual(org.publishes(), 2, 'the first send and the SDK\u2019s one re-send');
+  assert.deepStrictEqual(sleeps, [], 'the client sent the publish once: it never backed off');
+});
+
+test('a publish the SDK makes that deadlocks every time is sent four times — the SDK\u2019s bound — not the client\u2019s six times the SDK\u2019s four', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sleeps = [];
+  const org = publishOrg(['deadlock']);
+  const sdk = await sdkOver(org.request, sleeps);
+  const error = await settle(t, sdk.createWebResource(webResource)).then(() => assert.fail('the publish never landed'), (e) => e);
+  assert.strictEqual(error.code, 'WEB_RESOURCE_UNVERIFIED', 'the row exists and its publication is unconfirmed');
+  assert.strictEqual(org.publishes(), 4);
+  assert.deepStrictEqual(sleeps, []);
+});
+
+test('a publish the lock refuses is sent ONCE by the SDK and the client alike, and its refusal is the cause of what the SDK throws', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sleeps = [];
+  const org = publishOrg(['lock', 'ok']);
+  const sdk = await sdkOver(org.request, sleeps);
+  const error = await settle(t, sdk.createWebResource(webResource)).then(() => assert.fail('a refused publish is not success'), (e) => e);
+  assert.strictEqual(error.code, 'WEB_RESOURCE_UNVERIFIED');
+  assert.strictEqual(error.id, WEB_RESOURCE_ID, 'naming the row that exists');
+  assert.deepStrictEqual([error.cause && error.cause.code, error.cause && error.cause.statusCode], ['CONNECTION_ERROR', 429]);
+  assert.strictEqual(org.publishes(), 1);
+  assert.deepStrictEqual(sleeps, []);
+});
+
+test('a publish the plugin sends itself (publishTablesXml, publishAppComponents) is re-sent for a deadlock by postPublishXml alone — 1 s, 2 s, 4 s, four sends at most — and sent once when the lock refuses it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { publishTablesXml } = require('../lib/table-publish.js');
+  const { publishAppComponents } = require('../lib/app-components.js');
+  for (const [what, answers, sends, waits, ok] of [
+    ['one deadlock', ['deadlock', 'ok'], 2, [1000], true],
+    ['a deadlock that never clears', ['deadlock'], 4, [1000, 2000, 4000], false],
+    ['the lock', ['lock', 'ok'], 1, [], false],
+  ]) {
+    const clientSleeps = [];
+    const org = publishOrg(answers);
+    const sdk = await sdkOver(org.request, clientSleeps);
+    const waited = [];
+    const outcome = await settle(t, publishTablesXml(sdk.dataverse, ['co_ticket'], { sleep: async (ms) => { waited.push(ms); } }));
+    assert.strictEqual(outcome.ok, ok, `${what}: ${JSON.stringify(outcome)}`);
+    assert.strictEqual(org.publishes(), sends, `${what}: the table publish`);
+    assert.deepStrictEqual(waited, waits, `${what}: postPublishXml's waits`);
+    assert.deepStrictEqual(clientSleeps, [], `${what}: the client's none`);
+    if (!ok) assert.match(outcome.reason, answers[0] === 'lock' ? /^PublishXml answered HTTP 429: Cannot start the requested operation \[Publish\]/ : /^PublishXml answered HTTP 500: /, what);
+    const app = publishOrg(answers);
+    const appSdk = await sdkOver(app.request);
+    const published = settle(t, publishAppComponents(appSdk.dataverse, APP_ID, { sleep: async () => {} }));
+    if (ok) await published;
+    else await assert.rejects(published, (e) => e.code === 'APP_TABLES_NOT_PUBLISHED' && e.statusCode === (answers[0] === 'lock' ? 429 : 500), what);
+    assert.strictEqual(app.publishes(), sends, `${what}: the app publish`);
+  }
+});
+
 // --- the SDK's kind check on a form or dashboard delete ----------------------------------------------
 
 // `deleteRemoteArtifact('form' | 'dashboard')` reads the row's type before it deletes, and refuses another kind:

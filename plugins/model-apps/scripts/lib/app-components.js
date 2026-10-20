@@ -6,6 +6,7 @@
 // references; its cached fetchEntityMetadata projection cannot supply these membership reads.
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
 const { odataLit } = require('./odata.js');
+const { postPublishXml } = require('./publish-xml.js');
 const { dashboardNameKey, FORM_GUID_RE, formIdentityKey, compareVersions, isPluginVersion, APP_MEMBERSHIP_MIN_VERSION } = require('./app-spec.js');
 const { isMainForm } = require('./form-order.js');
 const { compareText } = require('./compare-text.js');
@@ -254,14 +255,13 @@ async function pinAppTables(client, appId, logicalNames, { refs: resolvedRefs } 
   return { added, already };
 }
 
-async function publishAppComponents(client, appId) {
+async function publishAppComponents(client, appId, { sleep } = {}) {
   const id = requireGuid(appId, 'app id');
   // A fresh SDK create already publishes before the plugin can pin hidden tables. Publish that
   // newly proven layer too, even without --publish, or a page-less create leaves its pins pending.
+  // Sent once but for a deadlock victim (postPublishXml): a refusal halts here, as it came.
   // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/publishxml
-  const response = await client.post('/PublishXml', {
-    ParameterXml: `<importexportxml><appmodules><appmodule>${id}</appmodule></appmodules></importexportxml>`,
-  });
+  const response = await postPublishXml(client, `<importexportxml><appmodules><appmodule>${id}</appmodule></appmodules></importexportxml>`, { sleep });
   if (!response || response.status < 200 || response.status >= 300) {
     throw componentError('APP_TABLES_NOT_PUBLISHED', `app '${id}' tables were pinned but publishing returned HTTP ${response && response.status}; re-run the build`, response && response.status);
   }
