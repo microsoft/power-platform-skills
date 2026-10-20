@@ -2892,6 +2892,14 @@ test('a length step that fails on its own stops the build at the key that waited
   assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120);
   assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
   assert.deepStrictEqual(run.attempts.map((a) => (a.owedIn || []).length), [0, 1]);
+  // The key fits once the length is set, which the build could not promise: the stop of the first attempt and the warning of its length step said a
+  // run MAY create the key, on that condition — and here the run that follows does.
+  const stop = run.events.find((e) => e.attempt === 1 && e.status === 'error' && e.label === 'alt key new_ticket.new_namekey');
+  assert.match(stop.detail, /Nothing was sent for the key\. Set new_name to 120 characters in Maker, or clear the cause above; running the build again may then create the key: it does if new_name at 120 characters leaves room for it\. That is not certain: the build counts at least 240 bytes for the key at that length/);
+  assert.doesNotMatch(stop.detail, /it creates the key|cannot fit once the length is set/);
+  const warned = run.warnings.filter((w) => w.attempt === 1).map((w) => w.text);
+  assert.strictEqual(warned.length, 1);
+  assert.match(warned[0], /which is over that column and is not asked for while the column is that long\. Running the build again once new_name is 120 characters long may create it: it does if new_name at 120 characters leaves room for it\./);
 });
 
 // The engine's own requests — the read of the column's length, the read of which table answers to a name and the update that pays a carried length (readTextColumn,
@@ -3795,7 +3803,8 @@ test('a key that waits because it could not fit is not asked for when the length
   assert.match(run.error.message, /at most 1,700 bytes, 2 for each character of text/);
   assert.doesNotMatch(run.error.message, /900 bytes/);
   assert.deepStrictEqual(run.events.filter((e) => e.status === 'error').map((e) => e.label), ['primary column length new_ticket.new_name -> 120', 'alt key new_ticket.new_pairkey']);
-  assert.match(run.warnings[0], /the build stops at alt key new_ticket\.new_pairkey, which is over that column and cannot be created while the column is that long/);
+  assert.match(run.warnings[0], /the build stops at alt key new_ticket\.new_pairkey, which is over that column and is not asked for while the column is that long\. /);
+  assert.doesNotMatch(run.warnings[0], /cannot be created while the column is that long/, 'no claim about a key the build did not ask for');
 });
 
 test('the retry that pays a length an attempt owed makes such a key after it, with both labels — and the attempt that never got as far as the key did not ask for it', async () => {
@@ -3993,6 +4002,65 @@ for (const [what, key, columns, dataverse] of [
   });
 }
 
+// --- the stop for a key that waited for a length that could not be set ------------------------------------------------------------
+// When the length step fails, a key that waits for it is not asked for: the build stops at it (createWaitingKeys, `alt-key-name-length-not-set`),
+// and the warning of the step names it (alignPrimaryNameLength). Both say what the build can tell of the key at the length the spec asks, in the
+// words of the warning above, from the same floor: a key proven too large there is promised to no run, and one whose size the build cannot tell is
+// promised nothing either way — setting the length MAY make room. What "no run" and "may" are worth is shown against the platform: the length is
+// then set as a maker sets it in Maker, and the run that follows asks for the key.
+const setInMaker = (dv, length) => { dv.tables.get('new_ticket').primaryLength = length; };
+
+test('a key that waits for a length step that fails, and is proven too large at the length the spec asks, is promised to no run: the stop and the warning give its size and what to change — and once the length is set, the platform refuses it', async () => {
+  // Labelled in one language, so it waits for the length step whatever its size (keyWaitsForNameLength); beside the name column at the 120 characters
+  // the spec asks, a Text column of 900 makes it 2,040 bytes at least.
+  const key = { schemaName: 'new_widekey', displayName: 'Wide Key', columns: ['new_name', 'new_wide'] };
+  const spec = keyedTable([key], asksFor(120), [{ ...textColumn('new_wide'), maxLength: 900 }]);
+  const run = await provisionOver(spec, { dataverse: { updateFails: refusal }, capture: true });
+  assert.ok(run.error instanceof BuildHalt, 'the build stops at the key, as it did');
+  assert.strictEqual(run.error.code, 'alt-key-name-length-not-set');
+  assert.strictEqual(run.error.recoverable, true);
+  assert.deepStrictEqual(keyPosts(run), [], 'and sends nothing for it');
+  const proven = 'It cannot fit once the length is set either: with new_name at 120 characters the key\'s columns take at least 2,040 bytes, and a key may hold at most 1,700, 2 for each character of text — so no run creates it as the spec has it. Take a column out of the key, or make its text columns shorter.';
+  assert.ok(run.error.message.endsWith(`Nothing was sent for the key. ${proven}`), `the stop says it cannot fit, with its size, and what to change: ${run.error.message}`);
+  assert.doesNotMatch(run.error.message, /it creates the key|may then create|in Maker/, 'and promises nothing, nor sends the reader to set a length that makes no room');
+  assert.strictEqual(run.warnings.length, 1, 'the length step warns once');
+  assert.ok(run.warnings[0].startsWith('could not set the length of the primary name column new_ticket.new_name to 120 — it keeps the length the platform gave it, and the build stops at alt key new_ticket.new_widekey, which is over that column and is not asked for while the column is that long. '
+    + `${proven} Why the length could not be set: asked 120, the platform made 850: `), `the warning says the same of the key: ${run.warnings[0]}`);
+  assert.doesNotMatch(run.warnings[0], /cannot be created while the column is that long/, 'and no claim about the key at the length the column was left at');
+  // What the platform enforces agrees: with the length set as the spec asks, the run that follows asks for the key, and it is refused.
+  setInMaker(run.dv, 120);
+  const again = await provisionAgain(run.dv, spec);
+  assert.ok(again.error instanceof BuildHalt, 'no run creates it');
+  assert.match(again.error.message, /Index size exceeded the size limit of 1700 bytes/);
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], []);
+});
+
+test('a key moved after the length step because it could not fit, whose size the build cannot tell, is promised nothing when that step fails: the stop and the warning say setting the length may make room — and here, once the length is set, the platform still refuses it', async () => {
+  // Labelled in several languages, over the name column and an Integer column: at least 1,701 bytes beside the 850 characters the environment made of
+  // the column, so the build moves it after the length step; 1,699 at the 849 the spec asks, which the platform still refuses (the stub counts an
+  // Integer at 8 bytes; any count over two bytes is too many).
+  const key = { schemaName: 'new_countkey', displayName: PAIR_LABELS, columns: ['new_name', 'new_count'] };
+  const spec = keyedTable([key], asksFor(849), [{ schemaName: 'new_count', displayName: 'Count', type: 'Integer' }]);
+  const run = await provisionOver(spec, { dataverse: { updateFails: refusal }, capture: true });
+  assert.ok(run.error instanceof BuildHalt, 'the build stops at the key, as it did');
+  assert.strictEqual(run.error.code, 'alt-key-name-length-not-set');
+  assert.deepStrictEqual(keyPosts(run), [], 'and sends nothing for it');
+  assert.strictEqual(lengthReads(run).length, 2, 'the narrow read that moved the key, and the length step\'s: nothing more');
+  const inconclusive = 'running the build again may then create the key: it does if new_name at 849 characters leaves room for it. That is not certain: the build counts at least 1,699 bytes for the key at that length — one byte for a column that is not text, or that the spec does not describe — and the platform may count more, or allow less than the 1,700 bytes measured. If the next run is refused the same way, compare the platform\'s error with the sizes of the key\'s columns, and take a column out of the key or make its text columns shorter.';
+  assert.ok(run.error.message.endsWith(`Nothing was sent for the key. Set new_name to 849 characters in Maker, or clear the cause above; ${inconclusive}`), `the stop: ${run.error.message}`);
+  assert.doesNotMatch(run.error.message, /it creates the key|cannot fit once the length is set/, 'neither a promise nor a proof');
+  assert.strictEqual(run.warnings.length, 1, 'the length step warns once');
+  assert.match(run.warnings[0], /the build stops at alt key new_ticket\.new_countkey, which is over that column and is not asked for while the column is that long\. Running the build again once new_name is 849 characters long may create it: it does if new_name at 849 characters leaves room for it\. That is not certain: the build counts at least 1,699 bytes/, 'the warning says the same');
+  assert.doesNotMatch(run.warnings[0], /cannot be created while the column is that long/);
+  // What the platform enforces: with the length set as the spec asks, the run that follows asks for the key, and it is refused — "may" was all the
+  // build could say.
+  setInMaker(run.dv, 849);
+  const again = await provisionAgain(run.dv, spec);
+  assert.ok(again.error instanceof BuildHalt);
+  assert.match(again.error.message, /Index size exceeded the size limit of 1700 bytes/);
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], []);
+});
+
 // --- the dry run and the apply agree on where a key goes ------------------------------------------------------------------------
 // The plan lists the steps in the order the apply takes them. Where a key over the name column goes depends only on what the key is
 // sent as, so the plan cannot disagree with the apply about it — whichever language the spec, the command line and the label name. This
@@ -4055,7 +4123,7 @@ test('a length that could not be set: the warning promises the build goes on whe
   const waiting = await provisionOver(keyedTable([NAME_KEY]), { dataverse: { updateFails: refuse }, capture: true });
   assert.strictEqual(waiting.error.code, 'alt-key-name-length-not-set', 'the build stops at the key');
   assert.strictEqual(waiting.warnings.length, 1);
-  assert.match(waiting.warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120 — it keeps the length the platform gave it, and the build stops at alt key new_ticket\.new_namekey, which is over that column and cannot be created while the column is that long: asked 120, the platform made 850: .*invalid length/);
+  assert.match(waiting.warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120 — it keeps the length the platform gave it, and the build stops at alt key new_ticket\.new_namekey, which is over that column and is not asked for while the column is that long\. Running the build again once new_name is 120 characters long may create it: .* Why the length could not be set: asked 120, the platform made 850: .*invalid length/);
   assert.doesNotMatch(waiting.warnings[0], /rest of the build continues/, 'it does not promise what the build is about to refuse');
   const two = await provisionOver(keyedTable([NAME_KEY, { schemaName: 'new_pairkey', columns: ['new_code', 'new_name'] }]), { dataverse: { updateFails: refuse }, capture: true });
   assert.match(two.warnings[0], /the build stops at alt keys new_ticket\.new_namekey, new_ticket\.new_pairkey, which are over that column/, 'every key that waits is named');
@@ -4067,7 +4135,8 @@ test('where the phase stops before the length step and a key that waits was not 
   await assert.rejects(runOrder(doubles, KEYED_PAIR({ schemaName: 'new_k', columns: ['new_n'] }), events), /createRelationship new_a_b/);
   const warned = events.filter((e) => e.warning).map((e) => e.warning);
   assert.strictEqual(warned.length, 1);
-  assert.match(warned[0], /^could not set the length of the primary name column new_a\.new_n to 120 — it keeps the length the platform gave it, and because the data-model phase stopped, and a run that finds the table already there leaves its name column as it is, change the length in Maker if it matters — it does for alt key new_a\.new_k, which is over that column and is refused while the column is that long: /);
+  assert.match(warned[0], /^could not set the length of the primary name column new_a\.new_n to 120 — it keeps the length the platform gave it, and because the data-model phase stopped, and a run that finds the table already there leaves its name column as it is, change the length in Maker if it matters — alt key new_a\.new_k is over that column\. Running the build again once new_n is 120 characters long may create it: it does if new_n at 120 characters leaves room for it\. That is not certain: .* Why the length could not be set: /);
+  assert.doesNotMatch(warned[0], /refused while the column is that long|it creates the key/, 'no claim about the key at the length the column was left at, and no promise');
   assert.doesNotMatch(warned[0], /rest of the build continues/);
   assert.ok(!doubles.calls.includes('createAlternateKey new_a.new_k'), 'the key was not made');
 });

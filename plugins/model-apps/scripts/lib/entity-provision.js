@@ -538,8 +538,10 @@ async function checkOwedTable({ provision, debt, logical, primaryLogical, asked 
 // updateColumn is not used for that update because it resolves the column by name (updateTextColumnLengthById).
 // `halted` says the phase stopped before this step: the warning for a length that could not be set then cannot promise that the build
 // continues, and says what a re-run does instead (it finds the table and leaves an existing table's name column as it is).
-// `keys` are the alternate keys that wait for this step: where there are any, the warning is worded from them — the build does not
-// continue past a key it cannot create (createWaitingKeys) — and not from the best-effort case, where the rest of the build does.
+// `keys` are the alternate keys (the spec's entries) that wait for this step: where there are any, the warning is worded from them — the build
+// does not continue past a key it cannot create (createWaitingKeys) — and not from the best-effort case, where the rest of the build does. Of each
+// it says what the build can tell at the length the spec asks (keyRoomAtAskedLength), in the words of the stop for that key: no claim about the
+// key at the length the column was left at, which the build did not ask the platform about, and no promise that setting the length makes room.
 async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted = false, debt = null, carried = false, keys = [] }) {
   const primaryLogical = String(entity.primaryAttribute.schemaName).toLowerCase();
   const label = `primary column length ${entity.schemaName}.${entity.primaryAttribute.schemaName}`;
@@ -595,12 +597,21 @@ async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical,
   if (read && bound && !columnId) {
     return leave({ step: 'nothing shows which column the build created', why: `the answer to the read of ${primaryLogical} carries no MetadataId, so nothing shows which column an update would write to, and the build never writes to a column it cannot name` });
   }
-  const waiting = keys.length ? `alt key${keys.length > 1 ? 's' : ''} ${keys.map((k) => `${entity.schemaName}.${k}`).join(', ')}` : '';
+  const waiting = keys.length ? `alt key${keys.length > 1 ? 's' : ''} ${keys.map((k) => `${entity.schemaName}.${k.schemaName}`).join(', ')}` : '';
   const be = keys.length > 1 ? 'are' : 'is';
+  // What the build can tell of each waiting key once the length is set (keyRoomAtAskedLength): the words of the stop for that key (createWaitingKeys).
+  // Several keys are each named; the reason the length could not be set follows them all, after the sentences (runBestEffort appends it).
+  const verdicts = keys.map((k) => {
+    const room = keyRoomAtAskedLength(entity, k);
+    const said = room.proven
+      ? `it ${room.provenTooLarge}`
+      : `running the build again once ${primaryLogical} is ${asked} characters long may create it: ${room.condition}. ${room.uncertain} ${room.nextRun}`;
+    return keys.length > 1 ? `For alt key ${entity.schemaName}.${k.schemaName}, ${said}` : `${said.charAt(0).toUpperCase()}${said.slice(1)}`;
+  }).join(' ');
   const afterwards = halted
-    ? `because the data-model phase stopped, and a run that finds the table already there leaves its name column as it is, change the length in Maker if it matters${waiting ? ` — it does for ${waiting}, which ${be} over that column and ${be} refused while the column is that long` : ''}`
+    ? `because the data-model phase stopped, and a run that finds the table already there leaves its name column as it is, change the length in Maker if it matters${waiting ? ` — ${waiting} ${be} over that column. ${verdicts} Why the length could not be set` : ''}`
     : waiting
-      ? `the build stops at ${waiting}, which ${be} over that column and cannot be created while the column is that long`
+      ? `the build stops at ${waiting}, which ${be} over that column and ${be} not asked for while the column is that long. ${verdicts} Why the length could not be set`
       : 'the rest of the build continues';
   let failure;
   let vanished = false;
@@ -1730,7 +1741,7 @@ async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owe
       continue;
     }
     debt.tried = true;
-    const keys = waitingKeys.filter((waiting) => waiting.logical === logical).map((waiting) => waiting.key.schemaName);
+    const keys = waitingKeys.filter((waiting) => waiting.logical === logical).map((waiting) => waiting.key);
     const outcome = await alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted, debt, carried, keys });
     if (outcome.ok || outcome.left) owed.delete(logical);
     else {
@@ -1752,6 +1763,39 @@ function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
     { recoverable: true, skipIf: isAlreadyExists });
 }
 
+// What the build can tell of an alternate key over a table's name column with that column at the length the spec asks — the one wording every
+// message about such a key uses: the warning for a key made ahead of the length step and refused (alternateKeyAheadOfLength), the warning of a
+// length step that failed while keys wait for it (alignPrimaryNameLength), and the stop for such a key (createWaitingKeys). It is decided from
+// the floor of the key's size, counted from its columns as the build creates them (keyBytesAtLeast).
+//   - `proven`: even the floor is over what a key may hold. No length the build sets makes room for the key, and no run creates it as the spec
+//     has it, so a message says that, with the bytes, and what to change.
+//   - otherwise nothing is proven either way: the floor counts a column that is not text, or that the spec does not describe, at one byte, which
+//     the platform may exceed (a name column of 849 characters beside an Integer column counts 1,699 bytes, and is refused), and an environment
+//     may allow less than the 1,700 bytes measured. So a message says a run MAY create the key, on that condition, why that is not certain, and
+//     what to compare when the next run is refused the same way — never that it will.
+// None of them offers a label in one language as a way out: that changes where a key is made, not its size.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+function keyRoomAtAskedLength(entity, key) {
+  const column = String(entity.primaryAttribute.schemaName).toLowerCase();
+  const asked = askedPrimaryNameLength(entity);
+  const atLeast = keyBytesAtLeast(entity, key, asked);
+  const bytes = atLeast.toLocaleString('en-US');
+  const limit = KEY_BYTES_LIMIT.toLocaleString('en-US');
+  const size = `with ${column} at ${asked} characters the key's columns take at least ${bytes} bytes, and a key may hold at most ${limit}, 2 for each character of text`;
+  const remedy = 'Take a column out of the key, or make its text columns shorter.';
+  return {
+    proven: atLeast > KEY_BYTES_LIMIT,
+    size,
+    remedy,
+    // The stop for a key that waited, and the warning of the step it waited for, say this of a key proven too large, after "it".
+    provenTooLarge: `cannot fit once the length is set either: ${size} — so no run creates it as the spec has it. ${remedy}`,
+    condition: `it does if ${column} at ${asked} characters leaves room for it`,
+    uncertain: `That is not certain: the build counts at least ${bytes} bytes for the key at that length — one byte for a column that is not text, `
+      + `or that the spec does not describe — and the platform may count more, or allow less than the ${limit} bytes measured.`,
+    nextRun: 'If the next run is refused the same way, compare the platform\'s error with the sizes of the key\'s columns, and take a column out of the key or make its text columns shorter.',
+  };
+}
+
 // An alternate key over the name column of a table whose length is still to be set that cannot wait for it, because its label goes out in
 // several languages (keyWaitsForNameLength): it is made where it always was, ahead of the length step, so that the read that carries
 // labels, which setting the length starts with, does not come before a create that carries several languages. Where the platform then
@@ -1762,15 +1806,11 @@ function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
 // Said only when the key fails: where the environment keeps the length asked the key is made, and nothing is wrong. What reaches here is
 // a key that was not known to be too large — a key over the name column alone fits even at 850 characters, and a read of the length that
 // failed leaves a key that would not fit as undecided (keyMustWaitForShorterNameColumn) — or one the platform refused for another reason.
-// What the warning tells the reader to do follows from the size the key has at the length the spec asks, counted from its columns as the build
-// creates them (keyBytesAtLeast) — a floor. Where even the floor is over what a key may hold, the key is proven too large: setting the length makes
-// no room for it — which is why it was not made after the step (keyHasRoomOnlyAfterLength) — and the run that follows is refused as this one was,
-// so the warning says that, with the bytes. Where the floor is within the limit, nothing is proven either way: the floor counts a column that is
-// not text, or that the spec does not describe, at one byte, which the platform may exceed (a name column of 849 characters beside an Integer
-// column counts 1,699 bytes, and is refused), and an environment may allow less than the 1,700 bytes measured. So the warning promises nothing
-// there: a run again may create the key, if the length the spec asks leaves room for it, and where that run is refused the same way, the
-// platform's error and the sizes of the key's columns say why. A label in one language is not offered as a way out: it changes where a key is
-// made, not its size.
+// What the warning tells the reader to do follows from what the build can tell of the key at the length the spec asks (keyRoomAtAskedLength).
+// Proven too large, setting the length makes no room for it — which is why it was not made after the step (keyHasRoomOnlyAfterLength) — and the
+// run that follows is refused as this one was, so the warning says that, with the bytes. Otherwise it promises nothing: a run again may create
+// the key, if the length the spec asks leaves room for it, and where that run is refused the same way, the platform's error and the sizes of
+// the key's columns say why.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, languageCode, warn }) {
   try {
@@ -1783,18 +1823,12 @@ async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, la
       // name exactly one language, and only one that names several can get here: the SDK refuses an empty map before it sends anything.
       const languages = Object.keys(key.displayName);
       const named = languages.length > 1 ? `in several languages (${languages.join(', ')})` : 'a language map that does not name exactly one language';
-      const atAsked = keyBytesAtLeast(entity, key, asked);
-      const limit = KEY_BYTES_LIMIT.toLocaleString('en-US');
-      const whatToDo = atAsked > KEY_BYTES_LIMIT
-        ? `It cannot fit at that length either: with ${column} at ${asked} characters the key's columns take at least ${atAsked.toLocaleString('en-US')} bytes, `
-          + `and a key may hold at most ${limit}, 2 for each character of text — so running the build again does not create it. `
-          + 'Take a column out of the key, or make its text columns shorter.'
+      const room = keyRoomAtAskedLength(entity, key);
+      const whatToDo = room.proven
+        ? `It cannot fit at that length either: ${room.size} — so running the build again does not create it. ${room.remedy}`
         : 'If the platform refused it for its size — a key may hold '
           + 'at most 1,700 bytes, 2 for each character of text, so the 850 characters some environments make of a new name column fill it by themselves, and no other column fits beside it — '
-          + `the length is set as the build stops, so running the build again may create the key: it does if ${column} at ${asked} characters leaves room for it. `
-          + `That is not certain: the build counts at least ${atAsked.toLocaleString('en-US')} bytes for the key at that length — one byte for a column that is not text, `
-          + `or that the spec does not describe — and the platform may count more, or allow less than the ${limit} bytes measured. `
-          + 'If the next run is refused the same way, compare the platform\'s error with the sizes of the key\'s columns, and take a column out of the key or make its text columns shorter.';
+          + `the length is set as the build stops, so running the build again may create the key: ${room.condition}. ${room.uncertain} ${room.nextRun}`;
       warn(
         `alt key ${entity.schemaName}.${key.schemaName} was not created. It is over the name column ${column} of a table this build created, and its label is ${named}, `
         + `so the build creates it before it sets that column to ${asked} characters `
@@ -1835,15 +1869,17 @@ async function keyMustWaitForShorterNameColumn({ provision, entity, logical, key
 // once every length step has run. A key whose table's step did not come right is not asked for: the platform may refuse it for the
 // length it is left at — a key may hold at most 1,700 bytes, which a name column of 850 characters fills by itself — in words that say
 // nothing of the length, and the step that failed has already said why in its own. So the key is a failed step of its own, naming
-// both, and the build stops there as it does for a key the platform refuses. A table that turned out not to be the one the length was
-// owed for (`left`, see checkOwedTable) is not one the build set the length of at all: its key is made as the key on any table the build
-// found is, and the platform decides.
+// both, and the build stops there as it does for a key the platform refuses. What the stop tells the reader to do follows from what the
+// build can tell of the key at the length the spec asks (keyRoomAtAskedLength), in the words of the step's warning: a key proven too large
+// there is created by no run as the spec has it; of any other, setting the length MAY make room, which the stop does not promise. A table
+// that turned out not to be the one the length was owed for (`left`, see checkOwedTable) is not one the build set the length of at all: its
+// key is made as the key on any table the build found is, and the platform decides.
 //
 // That stop is retried when the step failed the way a build's retry rides out (a 429, a lock, a 503) and not otherwise: it is a halt
 // raised with the step's failure as its cause and the policy that failure gives (`retry: retryPolicyFor(…)`, lib/retry-policy.js), so the
 // build's check (isTransientHalt, build-model-app.js) judges the failure of the step — the status it carries (and the status the step
 // failed with, which the halt declares), the code of the service's answer, a reset, an explicit "never retry" — and never the halt's own
-// words or code. The retry then finds the length still owed (`owedLengths`), sets it, and makes the key.
+// words or code. The retry then finds the length still owed (`owedLengths`), sets it, and asks for the key.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
   for (const { entity, logical, key, languageCode } of waitingKeys) {
@@ -1852,6 +1888,10 @@ async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
       const column = String(entity.primaryAttribute.schemaName).toLowerCase();
       const asked = askedPrimaryNameLength(entity);
       const why = (outcome.error && outcome.error.message) || String(outcome.error);
+      const room = keyRoomAtAskedLength(entity, key);
+      const whatToDo = room.proven
+        ? `It ${room.provenTooLarge}`
+        : `Set ${column} to ${asked} characters in Maker, or clear the cause above; running the build again may then create the key: ${room.condition}. ${room.uncertain} ${room.nextRun}`;
       // A halt, not an error with a code of its own: the build's retry takes an error's `code` for a refusal of that kind and reads nothing under it
       // (lib/retry-policy.js), while a halt's code only names it. So the stop follows the step's failure, which it carries as its cause.
       const chain = causeChain(outcome.error);
@@ -1859,7 +1899,7 @@ async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
       const halt = new BuildHalt(
         `alt key ${entity.schemaName}.${key.schemaName} was not created: it is over the name column ${column}, whose length the build could not set to ${asked} (${why}) — `
         + 'a key may hold at most 1,700 bytes, 2 for each character of text, and a name column left at the 850 characters some environments give a new table fills that by itself, so Dataverse refuses a key that holds any other column beside it. '
-        + `Nothing was sent for the key. Set ${column} to ${asked} characters in Maker, or clear the cause above, then run the build again: it creates the key.`,
+        + `Nothing was sent for the key. ${whatToDo}`,
         { phase: 'data-model', code: 'alt-key-name-length-not-set', recoverable: true, cause: outcome.error, retry: retryPolicyFor(outcome.error), ...(Number.isInteger(status) ? { statusCode: status } : {}) },
       );
       await runner.run('data-model', `alt key ${entity.schemaName}.${key.schemaName}`, async () => { throw halt; }, { recoverable: true });

@@ -2194,12 +2194,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     know the build's language, and the apply cannot disagree about it. Such a key is made only when the length step
     came out right (`ok`, or `already N`). When it did not, the key is not sent: its own step fails with
     `BuildHalt` code `alt-key-name-length-not-set` (`recoverable`), whose text names the table, the length and why the
-    step failed — not the platform's refusal of the key, which says nothing of the length — and which is raised around the
+    step failed — not the platform's refusal of the key, which says nothing of the length — and what to do, in the proven / inconclusive
+    words below (`keyRoomAtAskedLength`, `lib/entity-provision.js`): a key proven too large at the length asked is created by no run as the
+    spec has it, and of any other key setting the length MAY make room, which the stop does not promise. The warning of the length step that
+    failed names each key that waits for it in the same words (`alignPrimaryNameLength`), instead of claiming the key cannot be created
+    while the column is that long. The halt is raised around the
     step's failure with the policy that failure gives (`retry: retryPolicyFor(…)`, `lib/retry-policy.js`) and the step's
     HTTP status, so a 429, a lock or a 503 is retried by the build and a refusal, or a failure marked `transient: false`, is
     not; the halt's own words (the key's name) never decide — a halt's code names it and is no type, where an error's own
     `code` would read as a refusal of its kind.
-    The retry then finds the length owed, sets it, and makes the key. A key made after the read that carries labels is
+    The retry then finds the length owed, sets it, and asks for the key. A key made after the read that carries labels is
     safe because its label is one label, which a read has nothing to strip. That was measured for a create straight after
     the read and for a label in the base language; it has not been measured separately for a label in another language
     (a build authored in one, or a map that names one), where the key is the same request as every other label of such
@@ -2235,7 +2239,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     beside an Integer column counts 1,699 bytes and is refused all the same): the warning promises nothing — running the build again may create the
     key (the length is set as the build stops) if the asked length leaves room for it; it states the floor, and says to compare the platform's error
     with the sizes of the key's columns if the next run is refused the same way. Neither offers a label in one language as a way out: that changes
-    where a key is made, not its size. Where the environment
+    where a key is made, not its size. The same two wordings (`keyRoomAtAskedLength`) are what the stop for a key that waited for a length step
+    that failed, and that step's warning, say of the key (above). Where the environment
     keeps the length asked, the key is made and nothing is said. Every other key —
     over another column, over the name column of a table that already existed or was found after its create (never
     written to), or in a spec that gives no length — is made with its table, as it always was; a spec that keys a name
@@ -2244,7 +2249,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     table the build creates has it, and a key labelled in several languages with its table — whether the environment makes the build move
     it is known only to the build, and the count is the same either way. `table-columns-in-create.test.js` pins the order (against a
     stub that answers a key that is too large as the platform does: at 1,700 bytes, and at 900 for an environment that enforces the documented
-    limit), the failure, the language rule, the warning (proven and inconclusive, and that the run after agrees with each), the read and the retry,
+    limit), the failure, the language rule, the warning and the stop for a key whose length step failed (proven and inconclusive, and that
+    the run after agrees with each), the read and the retry,
     and that the floor counts each column as the real bundle creates it, for every type the build creates; `app-spec-key-size.test.js` pins the
     size rule.
 

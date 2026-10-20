@@ -584,7 +584,10 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   the count is **inconclusive** (a column that is not text can take more than one byte, and an environment may allow less than
   1,700), so the warning promises nothing: running the build again may create the key, since the length is set as the build
   stops, if the name column at the length you give leaves room for it; if that run is refused the same way, compare Dataverse's
-  error with the sizes of the key's columns. Labelling the key in one language changes where it is made, not its size. Nothing
+  error with the sizes of the key's columns. Labelling the key in one language changes where it is made, not its size. The
+  stop for a key that waited for a length the build could not set says the same of the key: proven too large, no run creates
+  it as the spec has it; otherwise, once the name column has the length you give (set it in Maker, or clear what stopped the
+  build), running the build again may create the key, which the build does not promise. Nothing
   is said where the environment keeps the length asked and the key is made.
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
