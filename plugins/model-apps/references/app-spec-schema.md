@@ -577,7 +577,10 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   languages over the name column alone is made before the length is set whatever the column's length. Where the platform refuses a key made before
   the length is set for its size all the same, the first build stops there; the build then **warns**, naming the key and what
   to do: run it again (the length is set as the build stops, so the key is made then), or label the key in one language so
-  that it is made after the length. Nothing is said where the environment keeps the length asked and the key is made.
+  that it is made after the length. A key too large even at the length you give the name column is refused on every run, and
+  the warning says that instead, with its size: take a column out of the key, or make its text columns shorter. A key's columns
+  count as the build creates them — a `Text` column at its `maxLength` (100 without one), an `AutoNumber` column at 100 (the
+  build gives it no other length). Nothing is said where the environment keeps the length asked and the key is made.
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
 

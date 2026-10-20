@@ -2212,8 +2212,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     others: the platform refuses such a key ahead of the step, and the first build used to stop there for the run that followed to
     make it. `keyHasRoomOnlyAfterLength` (`lib/app-spec.js`) says from the spec when the length can decide that — the key holds the name
     column, cannot fit while that column is 850 characters, and may fit at the length the spec asks; the size is a floor
-    (`keyBytesAtLeast`: a text column counts 2 bytes a character, at its `maxLength` or the SDK's default of 100, and any other column one byte,
-    so that what it shows is certain) — and only for such a key does the build read the column, with one typed
+    (`keyBytesAtLeast`: each column counts as the build creates it — a single line of text 2 bytes a character, a `Text` column at its
+    `maxLength` or the SDK's default of 100, and an `AutoNumber` column or a column that gives no `type` at 100 whatever `maxLength` it
+    carries, because the build sends a `maxLength` only for `Text` and `Memo` — `maxLengthSent`, the one rule `columnOptions` follows too;
+    any other column counts one byte, so that what the floor shows is certain: what the platform counts for the other types a key can hold
+    was not measured, and one byte changes nothing for a key that fits at the length asked) — and only for such a key does the build read the column, with one typed
     `…/StringAttributeMetadata?$select=MaxLength` GET (no labels: the kind of read the build keeps ahead of its labelled creates), before it asks for
     the key (`keyMustWaitForShorterNameColumn`, `lib/entity-provision.js`). Where the column reads too long for the key, the key waits for the
     length step like a key labelled in one language and is made after it, with both labels; where the environment kept the length asked, or the read
@@ -2225,7 +2228,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     cannot be made there is the one that moves. A key that was not known to be too large and that the platform then refuses for its size (an
     environment whose limit is smaller, or a read that failed) is made where it always was, and `alternateKeyAheadOfLength` warns — only when the key fails — naming the
     key, the languages its label goes out in, why it was made first and what to do: run the build again (the length is set as the build stops, so
-    the run that follows finds the table with it and makes the key), or label the key in one language. Where the environment
+    the run that follows finds the table with it and makes the key), or label the key in one language. A key that cannot fit even at the length
+    the spec asks is made there too (waiting makes no room for it), and when the platform refuses it the warning says so instead: the bytes its
+    columns take at that length, that running the build again does not create it, and to take a column out of the key or make its text columns
+    shorter. Where the environment
     keeps the length asked, the key is made and nothing is said. Every other key —
     over another column, over the name column of a table that already existed or was found after its create (never
     written to), or in a spec that gives no length — is made with its table, as it always was; a spec that keys a name
@@ -2234,7 +2240,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     table the build creates has it, and a key labelled in several languages with its table — whether the environment makes the build move
     it is known only to the build, and the count is the same either way. `table-columns-in-create.test.js` pins the order (against a
     stub that answers a key that is too large as the platform does: at 1,700 bytes, and at 900 for an environment that enforces the documented
-    limit), the failure, the language rule, the warning, the read and the retry; `app-spec-key-size.test.js` pins the size rule.
+    limit), the failure, the language rule, the warning, the read and the retry, and that the floor counts each column as the real bundle
+    creates it, for every type the build creates; `app-spec-key-size.test.js` pins the size rule.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an

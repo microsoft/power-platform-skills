@@ -138,6 +138,7 @@ function fakeDataverse({
   tableReadBack = null,        // (table) => response | undefined; overrides the read the SDK makes of a table it just created
   lookupLag = 0,               // how many reads of a new table BY NAME answer 404 before it shows (the metadata-read lag)
   keepsAskedLength = false,    // the environment that keeps the length asked of a plain text primary column in a one-attribute create
+  plainPrimaryLength = 850,    // what an environment that ignores the length asked makes of a plain text primary column: the one measured makes the most there is, 850
   keepsAskedRequired = false,  // the environment that keeps the required level asked of a plain text primary column (the one measured stores it None whatever is sent)
   levelRead = null,            // (n) => response | undefined; overrides the typed read of one column's RequiredLevel (the SDK's check of a primary column's level)
   columnListRead = null,       // (n) => response | undefined; overrides the read of all of a table's columns with their RequiredLevel (the build's read of what an existing table holds)
@@ -284,7 +285,7 @@ function fakeDataverse({
           // What the platform makes of the primary name column's length in a create that carries only that column (measured on two
           // environments): one keeps the length asked, the other makes a plain text column 850 whatever length was asked and keeps
           // the length asked of an auto-numbered one.
-          primaryLength: !body.Attributes[0].AutoNumberFormat && !keepsAskedLength ? 850 : body.Attributes[0].MaxLength,
+          primaryLength: !body.Attributes[0].AutoNumberFormat && !keepsAskedLength ? plainPrimaryLength : body.Attributes[0].MaxLength,
         };
         const collision = firstTaken(table, body.Attributes);
         if (collision) return refuse(p, duplicateAttribute(collision, logical));
@@ -578,6 +579,7 @@ test('each column\'s body in the change set equals the body the per-column path 
   assert.strictEqual(byName.get('new_title').MaxLength, 200);
   assert.strictEqual(byName.get('new_email').FormatName.Value, 'Email', 'a Text column\'s format');
   assert.strictEqual(byName.get('new_email').MaxLength, 120);
+  assert.strictEqual(byName.get('new_notes').MaxLength, 4000, 'a Memo column\'s maxLength');
   assert.strictEqual(byName.get('new_count').RequiredLevel.Value, 'Recommended');
   assert.strictEqual(byName.get('new_minutes').Format, 'Duration', 'an Integer column\'s display format');
   assert.strictEqual(byName.get('new_big').AttributeType, 'BigInt', 'a BigInt column');
@@ -3825,6 +3827,127 @@ test('where such a key is made: after the length step where the name column read
       assert.deepStrictEqual(doubles.calls, expected);
     });
   }
+});
+
+// --- the size of a key is judged by the columns the build creates ---------------------------------------------------------------------
+// Whether a key over the name column and another column is made after the length step comes from sums over the lengths the build creates the
+// key's columns with: it cannot fit while the name column is as long as the environment made it, and can at the length the spec asks
+// (keyHasRoomOnlyAfterLength, keyMustWaitForShorterNameColumn). The build sends a column's `maxLength` only for a column that names its type
+// Text (maxLengthSent, the rule columnOptions follows), so an auto-number column, and a column that gives no type, are the 100 characters the SDK
+// gives a text column whatever maxLength they carry. A key sized from the lengths the spec writes instead moved a key that fits and kept one that
+// does not.
+const REF_COLUMN = (extra = {}) => ({ schemaName: 'new_ref', displayName: 'Reference', type: 'AutoNumber', autoNumberFormat: 'R-{SEQNUM:4}', ...extra });
+const UNTYPED_REF = (extra = {}) => ({ schemaName: 'new_ref', displayName: 'Reference', ...extra });
+const REF_KEY = { schemaName: 'new_refkey', displayName: PAIR_LABELS, columns: ['new_name', 'new_ref'] };
+// A column as it went on the wire, in the change set or in a request of its own, by schema name.
+const wireColumn = (run, schemaName) => [...batchColumns(run), ...columnPosts(run).map((r) => r.body)].find((c) => c.SchemaName === schemaName);
+
+test('an auto-number column, or a column that gives no type, is created 100 characters long whatever maxLength it carries, so a key over the name column and it is made after the length step where the name column is 850 characters long: the first build succeeds, with both labels', async () => {
+  const { planFor } = require('../lib/sdk-build.js');
+  for (const [what, column] of [['an auto-number column', REF_COLUMN({ maxLength: 900 })], ['a column that gives no type', UNTYPED_REF({ maxLength: 900 })]]) {
+    const spec = keyedTable([REF_KEY], asksFor(120), [column]);
+    const run = await provisionOver(spec, { capture: true });
+    assert.strictEqual(run.error, undefined, `${what}: the first build succeeds`);
+    assert.strictEqual(wireColumn(run, 'new_ref').MaxLength, 100, `${what}: the build sent no length for it, so the SDK made it 100 characters long`);
+    assert.deepStrictEqual(run.dv.refusals, [], `${what}: the platform refused nothing: the key was not asked for while it could not fit`);
+    assert.deepStrictEqual(labelsOfSteps(run), [
+      'table new_ticket', `column new_ticket.new_ref (${column.type || 'Text'})`, 'primary column length new_ticket.new_name -> 120', 'alt key new_ticket.new_refkey',
+    ], `${what}: the key is the last step, after the length`);
+    assert.deepStrictEqual(keyLabels(run), [PAIR_BOTH], `${what}: with both of its labels`);
+    assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120, what);
+    assert.strictEqual(run.events.filter((e) => e.status !== 'start').length, planFor(spec, { phases: ['data-model'] }).length, `${what}: as many steps as the plan has`);
+    assert.deepStrictEqual(run.warnings, [], what);
+  }
+});
+
+test('a key that really fits is not moved: beside a name column of 600 characters an auto-number column that carries a maxLength is 100 characters, 1,400 bytes in all — it is made ahead of the length step, where it always was, and a length that cannot be set does not stop the build at it', async () => {
+  const spec = keyedTable([REF_KEY], asksFor(120), [REF_COLUMN({ maxLength: 500 })]);
+  const run = await provisionOver(spec, { dataverse: { plainPrimaryLength: 600 }, capture: true });
+  assert.strictEqual(run.error, undefined, 'the first build succeeds');
+  assert.deepStrictEqual(run.dv.refusals, [], 'the platform took the key beside the column of 600 characters');
+  assert.deepStrictEqual(labelsOfSteps(run), [
+    'table new_ticket', 'column new_ticket.new_ref (AutoNumber)', 'alt key new_ticket.new_refkey', 'primary column length new_ticket.new_name -> 120',
+  ], 'with its table, ahead of the length step');
+  const lines = run.dv.log.map(requestLine);
+  assert.ok(lines.findIndex((l) => /\/Keys$/.test(l)) < lines.findIndex((l) => l.startsWith('PUT ')), 'on the wire too');
+  assert.strictEqual(lengthReads(run).length, 2, 'one narrow read to decide, which shows the column fits, and one by the length step');
+  assert.deepStrictEqual(keyLabels(run), [PAIR_BOTH]);
+  assert.deepStrictEqual(run.warnings, []);
+  // Nothing waits for the length, so one that cannot be set is a warning and the build goes on, as it did before the build read the column.
+  const refused = await provisionOver(spec, { dataverse: { plainPrimaryLength: 600, updateFails: refusal }, capture: true });
+  assert.strictEqual(refused.error, undefined, 'the build goes on');
+  assert.deepStrictEqual([...refused.dv.tables.get('new_ticket').keys.keys()], ['new_refkey'], 'with the key made');
+  assert.strictEqual(refused.warnings.length, 1, 'and one warning, for the length');
+  assert.match(refused.warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120 — .*and the rest of the build continues: asked 120, the platform made 600: /);
+});
+
+test('a Text column is created at the maxLength the spec writes, so it counts in full: a Text column of 700 characters beside the name column is 1,640 bytes at the length asked and 3,100 at 850, and the key is made after the length step', async () => {
+  const key = { ...REF_KEY, schemaName: 'new_widekey', columns: ['new_name', 'new_wide'] };
+  const run = await provisionOver(keyedTable([key], asksFor(120), [{ ...textColumn('new_wide'), maxLength: 700 }]), { capture: true });
+  assert.strictEqual(run.error, undefined, 'the first build succeeds');
+  assert.strictEqual(wireColumn(run, 'new_wide').MaxLength, 700, 'the build sent the length');
+  assert.deepStrictEqual(run.dv.refusals, []);
+  assert.deepStrictEqual(labelsOfSteps(run).slice(-2), ['primary column length new_ticket.new_name -> 120', 'alt key new_ticket.new_widekey']);
+});
+
+test('the floor of a key counts each column as the platform holds it once the build has created it — a single line of text at its MaxLength, a column of any other type at one byte — for every type the build creates, in the change set and one request each', async () => {
+  const { keyBytesAtLeast } = require('../lib/app-spec.js');
+  const { SDK_COLUMN_TYPE } = require('../lib/entity-provision.js');
+  const columns = [
+    ...ORDINARY,
+    ...PER_COLUMN,
+    { ...textColumn('new_t300'), maxLength: 300 },
+    { ...textColumn('new_t0'), maxLength: 0 },
+    REF_COLUMN({ schemaName: 'new_a_plain' }),
+    REF_COLUMN({ schemaName: 'new_a900', maxLength: 900 }),
+    UNTYPED_REF({ schemaName: 'new_u_plain' }),
+    UNTYPED_REF({ schemaName: 'new_u900', maxLength: 900 }),
+    { schemaName: 'new_m900', displayName: 'Long Notes', type: 'Memo', maxLength: 900 },
+    { schemaName: 'new_n900', displayName: 'Number', type: 'Integer', maxLength: 900 },
+    { schemaName: 'new_picture', displayName: 'Picture', type: 'Image' },
+  ];
+  assert.deepStrictEqual(Object.keys(SDK_COLUMN_TYPE).filter((type) => !columns.some((c) => (c.type || 'Text') === type)), [], 'a column of every type the build creates');
+  for (const [how, inlineColumns] of [['in one change set', true], ['one request each', false]]) {
+    const spec = keyedTable([], asksFor(120), columns);
+    const run = await provisionOver(spec, { inlineColumns });
+    assert.strictEqual(batchPosts(run).length > 0, inlineColumns, how);
+    const table = run.dv.tables.get('new_ticket');
+    for (const column of columns) {
+      const made = table.columns.get(column.schemaName.toLowerCase());
+      assert.ok(made, `${how}: ${column.schemaName} was created`);
+      const text = /\.StringAttributeMetadata$/.test(made.body['@odata.type']);
+      assert.strictEqual(
+        keyBytesAtLeast(spec.entities[0], { schemaName: 'new_k', columns: [column.schemaName] }, 120),
+        text ? 2 * made.body.MaxLength : 1,
+        `${how}: ${column.schemaName} (${column.type || 'no type'}) is ${text ? `a single line of text ${made.body.MaxLength} characters long` : made.body['@odata.type']} on the platform`,
+      );
+    }
+  }
+});
+
+// The size decides what the build says, too. A key that cannot fit even at the length the spec asks is not moved (waiting changes nothing), so it
+// is made ahead of the length step, where the platform refuses it; the run after would be refused the same way, so the warning must not send the
+// reader to run the build again, as it does for a key the length step makes room for.
+test('a key that cannot fit even at the length the spec asks is not promised to the run after: the warning says it cannot fit, with the bytes its columns take, and the run after is refused as the first build was', async () => {
+  const key = { schemaName: 'new_widekey', displayName: PAIR_LABELS, columns: ['new_name', 'new_wide'] };
+  const spec = keyedTable([key], asksFor(120), [{ ...textColumn('new_wide'), maxLength: 900 }]);
+  const run = await provisionOver(spec, { capture: true });
+  assert.ok(run.error instanceof BuildHalt, 'the platform refuses the key');
+  assert.match(run.error.message, /Index size exceeded the size limit of 1700 bytes/);
+  const advice = run.warnings.filter((w) => /alt key new_ticket\.new_widekey/.test(w));
+  assert.strictEqual(advice.length, 1, 'one warning names the key');
+  assert.match(advice[0], /its label is in several languages \(1033, 3082\), so the build creates it before it sets that column to 120 characters/, 'why it was made first, as before');
+  assert.match(advice[0], /with new_name at 120 characters the key's columns take at least 2,040 bytes, and a key may hold at most 1,700, 2 for each character of text/, 'what it holds at the length the spec asks, counted from the columns as the build creates them');
+  assert.match(advice[0], /running the build again does not create it/);
+  assert.match(advice[0], /Take a column out of the key, or make its text columns shorter\.$/, 'and what to change');
+  assert.doesNotMatch(advice[0], /the length is set as the build stops, so the key is created then/, 'not the advice for a key the length step makes room for');
+  assert.doesNotMatch(advice[0], /A key labelled in one language is created after the length is set/, 'nor the way out a one-language label gives, which makes no room either');
+  // What the platform enforces agrees: the run after finds the table with the length set, asks for the key with it, and is refused the same way.
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120, 'the length is set as the build stops');
+  const again = await provisionAgain(run.dv, spec);
+  assert.ok(again.error instanceof BuildHalt, 'the run after stops at the key too');
+  assert.match(again.error.message, /Index size exceeded the size limit of 1700 bytes/);
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], [], 'and there is no key');
 });
 
 // --- the dry run and the apply agree on where a key goes ------------------------------------------------------------------------

@@ -983,11 +983,43 @@ function keyWaitsForNameLength(entity, key) {
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 const KEY_BYTES_LIMIT = 1700;
 
-// The fewest bytes a key holds when its table's name column is `nameLength` characters long: a floor, so that what it shows is certain. A text column
-// takes 2 bytes for each character — the name column at the length the environment made it, and a text or auto-number column of the spec at its
-// `maxLength`, else the 100 the SDK gives one — and every other column of the key counts for 1 byte, however much more it takes: one the spec does not
-// describe, or of a type whose size is not measured. A key whose floor is over KEY_BYTES_LIMIT cannot fit; one whose floor is under it may or may not,
-// and the platform decides. Never throws: a key or an entity that is not what it should be holds what can be counted of it.
+// The length the SDK gives a text column it is asked to create without one. The attribute it sends for a `string` and for an `autonumber` column
+// alike is built with `MaxLength: t.maxLength ?? 100` (vendor/cds-maker-sdk.cjs, for createColumn and createColumns).
+const SDK_TEXT_MAX_LENGTH = 100;
+
+// The `maxLength` the build passes on to the SDK when it creates a column of the spec, or undefined when it passes none: only a column that names its
+// type `Text` or `Memo` carries one, and only a value that is truthy, as written — the platform judges it. So an auto-number column, and a column that
+// gives no type (which the build creates as text all the same), are made SDK_TEXT_MAX_LENGTH characters long whatever `maxLength` the spec writes for
+// them. The ONE rule behind what the build sends (columnOptions, lib/entity-provision.js) and the length a key counts a column at (keyBytesAtLeast), so
+// that a key is never sized from a length the build does not create.
+function maxLengthSent(column) {
+  return column && (column.type === 'Text' || column.type === 'Memo') && column.maxLength ? column.maxLength : undefined;
+}
+
+// The types of the spec the build creates as a single line of text — a StringAttributeMetadata, which a key holds at 2 bytes a character: `Text`, which
+// is also what a column that gives no type is made as (SDK_COLUMN_TYPE[c.type || 'Text'], lib/entity-provision.js), and `AutoNumber`, a text column
+// with a format.
+const TEXT_COLUMN_TYPES = new Set(['Text', 'AutoNumber']);
+
+// How many characters long the build creates a column of the spec that it creates as a single line of text, or undefined for a column it creates as
+// something else (or not at all): the length it sends (maxLengthSent), else the SDK's. A value it sends that is not a whole number of characters is
+// the platform's to refuse or to read as it will, so it counts for the one character every text column has.
+function textLengthCreated(column) {
+  if (!column || typeof column !== 'object' || !TEXT_COLUMN_TYPES.has(column.type || 'Text')) return undefined;
+  const sent = maxLengthSent(column);
+  if (sent === undefined) return SDK_TEXT_MAX_LENGTH;
+  return Number.isInteger(sent) && sent > 0 ? sent : 1;
+}
+
+// The fewest bytes a key holds when its table's name column is `nameLength` characters long: a floor, so that what it shows is certain. Each column
+// counts as the build creates it. A single line of text takes 2 bytes for each character — the name column at the length the environment made it, and a
+// column of the spec at the length the build creates it with (textLengthCreated: a `Text` column's `maxLength`, else 100; an auto-number column, and a
+// column that gives no type, 100 whatever `maxLength` they carry). Every other column counts for 1 byte: a column of another type a key can hold —
+// Integer, Decimal, DateTime, Choice, a lookup — whose size the limit was not measured with, and one the spec does not describe. That can leave the
+// floor under what the platform counts, never over it, and it changes nothing for a key that fits at the length the spec asks: beside a name column of
+// 850 characters, 1,700 bytes by themselves, one byte is already too much, and at the length asked such a key's floor is within the limit whatever its
+// other columns take. A key whose floor is over KEY_BYTES_LIMIT cannot fit; one whose floor is under it may or may not, and the platform decides.
+// Never throws: a key or an entity that is not what it should be holds what can be counted of it.
 function keyBytesAtLeast(entity, key, nameLength) {
   const name = String((entity && entity.primaryAttribute && entity.primaryAttribute.schemaName) || '').toLowerCase();
   const declared = (entity && Array.isArray(entity.columns)) ? entity.columns : [];
@@ -998,9 +1030,8 @@ function keyBytesAtLeast(entity, key, nameLength) {
       bytes += 2 * (Number.isInteger(nameLength) && nameLength > 0 ? nameLength : 1);
       continue;
     }
-    const spec = declared.find((c) => c && String(c.schemaName).toLowerCase() === logical);
-    const type = spec && (spec.type || 'Text');
-    bytes += type === 'Text' || type === 'AutoNumber' ? 2 * (Number.isInteger(spec.maxLength) && spec.maxLength > 0 ? spec.maxLength : 100) : 1;
+    const length = textLengthCreated(declared.find((c) => c && String(c.schemaName).toLowerCase() === logical));
+    bytes += length === undefined ? 1 : 2 * length;
   }
   return bytes;
 }
@@ -4397,6 +4428,7 @@ module.exports = {
   keyNeedsNameLength,
   keyWaitsForNameLength,
   KEY_BYTES_LIMIT,
+  maxLengthSent,
   keyBytesAtLeast,
   keyCannotFitAt,
   keyHasRoomOnlyAfterLength,

@@ -10,7 +10,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { KEY_BYTES_LIMIT, PRIMARY_NAME_MAX_LENGTH, keyBytesAtLeast, keyCannotFitAt, keyHasRoomOnlyAfterLength } = require('../lib/app-spec.js');
+const { KEY_BYTES_LIMIT, PRIMARY_NAME_MAX_LENGTH, keyBytesAtLeast, keyCannotFitAt, keyHasRoomOnlyAfterLength, maxLengthSent } = require('../lib/app-spec.js');
+const { SDK_COLUMN_TYPE } = require('../lib/entity-provision.js');
 
 const entity = (primaryAttribute = { schemaName: 'new_Name', maxLength: 120 }, columns = [{ schemaName: 'new_code', type: 'Text' }]) => ({ schemaName: 'new_t', primaryAttribute, columns });
 const key = (columns, extra = {}) => ({ schemaName: 'new_k', columns, ...extra });
@@ -91,4 +92,79 @@ test('the floor never throws: a key, an entity or a column that is not what it s
     assert.doesNotThrow(() => keyCannotFitAt(e, k, 850), what);
     assert.strictEqual(keyHasRoomOnlyAfterLength(e, k), room, what);
   }
+});
+
+// A column is judged by the length the build creates it with, which is not always the length the spec writes. The build sends a column's
+// `maxLength` only when the column names its type Text (or Memo, which a key cannot hold) — maxLengthSent, the one rule what the build sends
+// (columnOptions, lib/entity-provision.js) and the floor both follow — so an auto-number column and a column that gives no type, which the build
+// creates as text all the same, are the 100 characters the SDK gives a text column, whatever maxLength they carry. What the real bundle makes of
+// each column is pinned where it runs (table-columns-in-create.test.js).
+
+test('the maxLength the build passes on is a Text or Memo column\'s own, when it is truthy, as written — and no other column\'s, whatever it carries', () => {
+  for (const type of ['Text', 'Memo']) {
+    assert.strictEqual(maxLengthSent({ schemaName: 'new_c', type, maxLength: 300 }), 300, type);
+    assert.strictEqual(maxLengthSent({ schemaName: 'new_c', type, maxLength: '300' }), '300', `${type}: as written, for the platform to judge`);
+    for (const unsent of [undefined, null, 0, '', false, NaN]) assert.strictEqual(maxLengthSent({ schemaName: 'new_c', type, maxLength: unsent }), undefined, `${type}: ${String(unsent)}`);
+  }
+  for (const [what, column] of [
+    ['an auto-number column', { schemaName: 'new_c', type: 'AutoNumber', autoNumberFormat: 'R-{SEQNUM:4}', maxLength: 300 }],
+    ['a column that gives no type', { schemaName: 'new_c', maxLength: 300 }],
+    ['a column of another type', { schemaName: 'new_c', type: 'Integer', maxLength: 300 }],
+    ['a type the build does not know', { schemaName: 'new_c', type: 'text', maxLength: 300 }],
+    ['no column', undefined],
+    ['a hole', null],
+    ['a name', 'new_c'],
+  ]) assert.strictEqual(maxLengthSent(column), undefined, what);
+});
+
+test('a column counts for the characters the build creates it with: only a column that names its type Text is as long as its maxLength says', () => {
+  const e = entity(undefined, [
+    { schemaName: 'new_text', type: 'Text', maxLength: 300 },
+    { schemaName: 'new_ref', type: 'AutoNumber', autoNumberFormat: 'R-{SEQNUM:4}', maxLength: 900 },
+    { schemaName: 'new_untyped', maxLength: 900 },
+  ]);
+  assert.strictEqual(keyBytesAtLeast(e, key(['new_text']), 120), 600, 'a Text column is created at its maxLength');
+  assert.strictEqual(keyBytesAtLeast(e, key(['new_ref']), 120), 200, 'an auto-number column is created 100 characters long: the build sends no length for it, whatever maxLength it carries');
+  assert.strictEqual(keyBytesAtLeast(e, key(['new_untyped']), 120), 200, 'and so is a column that gives no type: it is created as text, but its length is read only for the type it names');
+  assert.strictEqual(keyBytesAtLeast(e, key(['new_name', 'new_ref', 'new_untyped']), 850), 1700 + 200 + 200, 'in a key, beside the name column');
+});
+
+test('a maxLength the build sends that is no length counts one character, and one it never sends the 100 of the SDK: the floor is never more than can have been created', () => {
+  // The build sends any value that is truthy as it is (`if (c.maxLength)`), and the platform refuses it or reads it as it pleases.
+  for (const sent of ['300', 1.5, -5, true, Infinity, [], {}]) {
+    const e = entity(undefined, [{ schemaName: 'new_odd', type: 'Text', maxLength: sent }]);
+    assert.strictEqual(keyBytesAtLeast(e, key(['new_odd']), 120), 2, `${typeof sent} ${String(sent)}`);
+  }
+  for (const unsent of [0, '', null, false, undefined, NaN]) {
+    const e = entity(undefined, [{ schemaName: 'new_odd', type: 'Text', maxLength: unsent }]);
+    assert.strictEqual(keyBytesAtLeast(e, key(['new_odd']), 120), 200, `${typeof unsent} ${String(unsent)}`);
+  }
+});
+
+test('every type of column the build creates is sized on purpose: a text column by its length, and every other as a single byte — the floor claims nothing about a size that was not measured', () => {
+  const sized = { Text: 2 * 300, AutoNumber: 2 * 100 };
+  for (const type of Object.keys(SDK_COLUMN_TYPE)) {
+    const e = entity(undefined, [{ schemaName: 'new_col', type, maxLength: 300 }]);
+    assert.strictEqual(keyBytesAtLeast(e, key(['new_col']), 120), sized[type] || 1, type);
+  }
+  // Customer is no entry of SDK_COLUMN_TYPE: createCustomerColumn makes it — a lookup, a type a key can hold, whose size was not measured either.
+  assert.strictEqual(keyBytesAtLeast(entity(undefined, [{ schemaName: 'new_col', type: 'Customer' }]), key(['new_col']), 120), 1, 'Customer');
+});
+
+test('where a key has room follows from the lengths the build creates: an auto-number column, or one that gives no type, is 100 characters whatever maxLength it carries', () => {
+  for (const [what, column] of [
+    ['an auto-number column', { schemaName: 'new_ref', type: 'AutoNumber', autoNumberFormat: 'R-{SEQNUM:4}', maxLength: 900 }],
+    ['a column that gives no type', { schemaName: 'new_ref', maxLength: 900 }],
+  ]) {
+    const e = entity(undefined, [column]);
+    const pair = key(['new_name', 'new_ref']);
+    assert.strictEqual(keyCannotFitAt(e, pair, 850), true, `${what}: 1,900 bytes beside a name column of 850 characters`);
+    assert.strictEqual(keyCannotFitAt(e, pair, 120), false, `${what}: 440 bytes at the 120 the spec asks`);
+    assert.strictEqual(keyHasRoomOnlyAfterLength(e, pair), true, `${what}: so only the length step gives it room`);
+    assert.strictEqual(keyCannotFitAt(e, pair, 600), false, `${what}: 1,400 bytes beside a name column of 600 characters — it fits, and a key that fits is not moved`);
+    assert.strictEqual(keyCannotFitAt(e, pair, 750), false, `${what}: 1,700 bytes, to the byte`);
+    assert.strictEqual(keyCannotFitAt(e, pair, 751), true, what);
+  }
+  const text = entity(undefined, [{ schemaName: 'new_ref', type: 'Text', maxLength: 900 }]);
+  assert.strictEqual(keyHasRoomOnlyAfterLength(text, key(['new_name', 'new_ref'])), false, 'a Text column of 900 characters is created 900 long: no length of the name column leaves room for it');
 });

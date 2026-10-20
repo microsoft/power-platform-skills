@@ -26,6 +26,9 @@ const {
   keyWaitsForNameLength,
   keyHasRoomOnlyAfterLength,
   keyCannotFitAt,
+  keyBytesAtLeast,
+  KEY_BYTES_LIMIT,
+  maxLengthSent,
   PRIMARY_NAME_MAX_LENGTH,
 } = require('./app-spec.js');
 const { readColumnLabels, makeTableLabelReader, lookupKey } = require('./lookup-labels.js');
@@ -239,9 +242,12 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
   // skip and easy to forget — so the only reliable moment is the one where the column is authored.
   // Omitted when absent, so an existing column's description is never blanked by a rebuild.
   if (c.description) o.description = String(c.description);
+  // Which columns carry a `maxLength`, and what, is the ONE rule maxLengthSent (lib/app-spec.js) states: the build counts a key over a column at the
+  // length this creates the column with (keyBytesAtLeast), so the two must not disagree.
+  const maxLength = maxLengthSent(c);
   switch (c.type) {
-    case 'Text': if (c.maxLength) o.maxLength = c.maxLength; if (c.format) o.stringFormat = c.format; break;
-    case 'Memo': if (c.maxLength) o.maxLength = c.maxLength; break;
+    case 'Text': if (maxLength !== undefined) o.maxLength = maxLength; if (c.format) o.stringFormat = c.format; break;
+    case 'Memo': if (maxLength !== undefined) o.maxLength = maxLength; break;
     case 'Integer': case 'BigInt': case 'Decimal': case 'Double': case 'Money':
       if (c.minValue !== undefined) o.minValue = c.minValue;
       if (c.maxValue !== undefined) o.maxValue = c.maxValue;
@@ -1755,6 +1761,10 @@ function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
 // Said only when the key fails: where the environment keeps the length asked the key is made, and nothing is wrong. What reaches here is
 // a key that was not known to be too large — a key over the name column alone fits even at 850 characters, and a read of the length that
 // failed leaves a key that would not fit as undecided (keyMustWaitForShorterNameColumn) — or one the platform refused for another reason.
+// What the warning tells the reader to do follows from the size the key has at the length the spec asks, counted from its columns as the build
+// creates them (keyBytesAtLeast). Where even that is over what a key may hold, setting the length makes no room for the key — which is why it was not
+// made after the step (keyHasRoomOnlyAfterLength) — and the run that follows is refused as this one was: so the warning says that, with the bytes,
+// instead of sending the reader to run the build again.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
 async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, languageCode, warn }) {
   try {
@@ -1762,16 +1772,23 @@ async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, la
   } catch (err) {
     if (typeof warn === 'function') {
       const column = String(entity.primaryAttribute.schemaName).toLowerCase();
+      const asked = askedPrimaryNameLength(entity);
       // Said from the languages the label goes out in, which is what keeps the key from waiting. A key that does not wait is a map that does not
       // name exactly one language, and only one that names several can get here: the SDK refuses an empty map before it sends anything.
       const languages = Object.keys(key.displayName);
       const named = languages.length > 1 ? `in several languages (${languages.join(', ')})` : 'a language map that does not name exactly one language';
+      const atAsked = keyBytesAtLeast(entity, key, asked);
+      const whatToDo = atAsked > KEY_BYTES_LIMIT
+        ? `It cannot fit at that length either: with ${column} at ${asked} characters the key's columns take at least ${atAsked.toLocaleString('en-US')} bytes, `
+          + `and a key may hold at most ${KEY_BYTES_LIMIT.toLocaleString('en-US')}, 2 for each character of text — so running the build again does not create it. `
+          + 'Take a column out of the key, or make its text columns shorter.'
+        : 'If the platform refused it for its size — a key may hold '
+          + 'at most 1,700 bytes, 2 for each character of text, so the 850 characters some environments make of a new name column fill it by themselves, and no other column fits beside it — '
+          + 'run the build again: the length is set as the build stops, so the key is created then. A key labelled in one language is created after the length is set.';
       warn(
         `alt key ${entity.schemaName}.${key.schemaName} was not created. It is over the name column ${column} of a table this build created, and its label is ${named}, `
-        + `so the build creates it before it sets that column to ${askedPrimaryNameLength(entity)} characters `
-        + '(setting the length reads the column with its labels, which would keep only one of the languages). If the platform refused it for its size — a key may hold '
-        + 'at most 1,700 bytes, 2 for each character of text, so the 850 characters some environments make of a new name column fill it by themselves, and no other column fits beside it — '
-        + 'run the build again: the length is set as the build stops, so the key is created then. A key labelled in one language is created after the length is set.',
+        + `so the build creates it before it sets that column to ${asked} characters `
+        + `(setting the length reads the column with its labels, which would keep only one of the languages). ${whatToDo}`,
       );
     }
     throw err;
