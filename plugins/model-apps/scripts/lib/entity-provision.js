@@ -233,6 +233,15 @@ async function resolveLanguageCode({ provision, spec, languageCode, warn, provis
   }
 }
 
+// The maximum size, in KB, of a File or Image column whose spec sets no `maxSizeKb`. The build sends no size for one (columnOptions
+// below), and the vendored SDK's createColumn then writes its own default, for both types:
+//   { "@odata.type": "Microsoft.Dynamics.CRM.FileAttributeMetadata", …, "MaxSizeInKB": 10240 }
+// Named here because a download leaves out exactly this size (download-model-app.js), so that a column authored without one comes
+// back as it was authored — which is right only while it is what the build really makes; download-file-image-columns-real-bundle.test.js
+// reads it off the wire of a real build (the vendored bundle, through columnOptions) and fails the day the SDK's default moves. It is NOT
+// the platform's default (32768 for a File column made in Maker), which is why a column made there downloads with its size.
+const DEFAULT_MAX_SIZE_KB = 10240;
+
 // Map an App Spec column to SDK CreateColumnOptions. `globalChoiceIds` maps a global-choice
 // name -> its metadataId (so a column can bind to a shared option set).
 function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
@@ -2890,4 +2899,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder };
+module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder };

@@ -202,7 +202,7 @@ const TEARDOWN_WRITES = {
 const BUDGET = {
   build: { reads: 335, requests: 430 }, // today 302 / 392
   rebuild: { reads: 295, requests: 320 }, // today 268 / 289
-  download: { reads: 130, requests: 130 }, // today 115 / 115
+  download: { reads: 130, requests: 130 }, // today 117 / 117 (the File and the Image column's sizes are one read each, of the one table that has them)
   verify: { reads: 85, requests: 85 }, // today 74 / 74
   teardown: { reads: 95, requests: 135 }, // today 86 / 122
 };
@@ -350,14 +350,15 @@ test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothin
 //   documented  a dashboard comes back pinned by `dashboardId`, its tiles bound to the deployed view and chart ids
 //   documented  an AutoNumber column comes back as Text (download-model-app.js: "no AutoNumber column or format is ever emitted")
 //   documented  a lookup label that is the referenced table's display name is left out (it is the default)
+//   documented  a File or Image column comes back typed, with the size it was made with unless that is the size a build gives a column
+//               that sets none (docs/app-builder-capabilities.md, "Round-trip scope")
 //   documented  personas[] are not carried (references/app-spec-schema.md: "a download carries none")
 //   warned      a Customer column is left out: its two relationships have no relationships[] form (the download warns)
 //   gap         solution.displayName, a global choice's displayName, a table's vectorIcon, statusReasons and alternateKeys, a column's
-//               type options (format, length, range, precision, labels, size, date format), a dashboard tile's size, script and
+//               type options (format, length, range, precision, labels, date format), a dashboard tile's size, script and
 //               table-icon web resources, roleGrants[] and sampleData are not carried
 //   DEFECT      a plural that is not the display name plus "s" is left out, so a rebuild elsewhere names the table "<name>s"
 //               (the test 'a download keeps a plural ...' below, skipped until fixed)
-//   DEFECT      File and Image columns are left out without a word (the test 'a download keeps the File and Image columns ...' below)
 function expectedDownload(authored, ids) {
   const byName = (a, b) => (a.schemaName < b.schemaName ? -1 : a.schemaName > b.schemaName ? 1 : 0);
   const column = (c) => ({
@@ -366,6 +367,7 @@ function expectedDownload(authored, ids) {
     type: c.type === 'AutoNumber' ? 'Text' : c.type, // documented
     ...(c.options ? { options: c.options } : {}),
     ...(c.globalChoice ? { globalChoice: c.globalChoice } : {}),
+    ...((c.type === 'File' || c.type === 'Image') && c.maxSizeKb !== undefined ? { maxSizeKb: c.maxSizeKb } : {}), // documented
   });
   const entity = (e) => ({
     schemaName: e.schemaName,
@@ -373,7 +375,6 @@ function expectedDownload(authored, ids) {
     primaryAttribute: { schemaName: e.primaryAttribute.schemaName, displayName: e.primaryAttribute.displayName },
     columns: e.columns
       .filter((c) => c.type !== 'Customer') // warned
-      .filter((c) => c.type !== 'File' && c.type !== 'Image') // DEFECT
       .map(column).sort(byName),
     existing: true,
     description: e.description,
@@ -483,10 +484,12 @@ test('lifecycle matrix: teardown deletes everything the build made and nothing e
 });
 
 // ====================================================================================================================================
-// DEFECTS the matrix found, kept as tests that state the right behaviour and skip until it is fixed. When one is fixed: remove the
-// `skip`, and drop its step from expectedDownload above.
+// DEFECTS the matrix found, kept as tests that state the right behaviour: skipped while one is open; when it is fixed the `skip` goes,
+// and so does its step from expectedDownload above.
 
-test('lifecycle matrix: a download keeps the File and Image columns it reads', { skip: 'known defect: the download keeps a column only when its AttributeType maps to a spec type, and a File or Image column reports AttributeType "Virtual" (AttributeTypeName FileType / ImageType), so both are left out without a warning' }, async () => {
+// Fixed: a File or Image column reports AttributeType "Virtual", which the download's type map never matched, so both were left out of
+// every download without a word. The download now types them by their AttributeTypeName (FileType / ImageType) and keeps the size.
+test('lifecycle matrix: a download keeps the File and Image columns it reads', async () => {
   const run = await lifecycle();
   const project = stageOf(run, 'download').value.spec.entities.find((e) => e.schemaName === 'contoso_project');
   assert.deepEqual(project.columns.filter((c) => ['File', 'Image'].includes(c.type)).map((c) => c.schemaName), ['contoso_contract', 'contoso_logo']);
