@@ -222,6 +222,7 @@ const ECHOED_UNIQUE_KEY = " Sql error: Violation of UNIQUE KEY constraint 'ndx_n
 // Failures a run again cannot change, as the SDK, the service and the machine report them — every one with a label that reads as transient where a label can be.
 // What `enrichDefaultViews` raises when the publish of the views it saved fails: an SdkError of its own code, the publish error's message inside it, and no cause.
 const wrappedPublish = (answer, table = 'contoso_order') => new SdkError('ENRICH_DEFAULT_VIEWS_PUBLISH_FAILED', `enrichDefaultViews: 2 view(s) on '${table}' were saved but the publish FAILED, so none of them is live (${answer}). Re-publish the entity to make them visible; the saves themselves are unaffected.`);
+const unconfirmedResource = (cause) => Object.assign(new Error(`Web resource '${LABEL}' has unconfirmed published content`, cause ? { cause } : undefined), { code: 'WEB_RESOURCE_UNVERIFIED' });
 // What the build's engine words around an answer it read with a request of its own (lib/entity-provision.js statusError: a column's length, which table answers to a name, the update of a
 // column by its ids): the answer's OData `error` rides on the failure (`answered`), and the rule reads its code as it reads the code the SDK's ConnectionError keeps.
 const engineAnswer = (status, message, code) => serviceFailure(`the update of the column was refused (HTTP ${status}: ${message})`, { status, words: `HTTP ${status}: ${message}`, answered: { ...(code ? { code } : {}), message } });
@@ -229,6 +230,7 @@ const REFUSALS = [
   ['a refusal in the SDK\'s words', () => new Error('same-name role is managed and cannot be adopted')],
   ['a typed validation error that quotes the label', () => Object.assign(new Error(`View '${LABEL}' is invalid`), { code: 'VALIDATION_ERROR' })],
   ['a 403 from the service whose url carries the label', () => connectionError(403, 'permission denied')],
+  ['an unconfirmed web resource whose non-enumerable cause refuses publication (403)', () => unconfirmedResource(connectionError(403, 'permission denied'))],
   ['a local file error that quotes the path', () => Object.assign(new Error(`EACCES: permission denied, open '/work/${LABEL}/page.json'`), { code: 'EACCES', syscall: 'open' })],
   ['an SDK error that wraps a publish the service refused (a 403), on a table called like a timeout', () => wrappedPublish(`HTTP 403 from ${ENV}/api/data/v9.2/PublishXml: permission denied`, 'contoso_sql_timeout')],
   // A logical name has no space, but it can be a word of the rule: `CustomizationLockException` is one word, and `contoso_customizationlockexception` is a valid name.
@@ -254,6 +256,8 @@ const GENUINE = [
   ['a 503', () => connectionError(503, 'The service is unavailable.')],
   ['a 429', () => connectionError(429, 'Too many requests.')],
   ['a reset of the connection', () => connectionError(0, 'Request failed: read ECONNRESET')],
+  ['an unconfirmed web resource whose non-enumerable cause is a refused publish (429)', () => unconfirmedResource(connectionError(429, 'another customization is running'))],
+  ['an unconfirmed web resource whose published read-back differs, with no cause', () => unconfirmedResource()],
   ['an SDK error that wraps a publish the service could not take (a 503)', () => wrappedPublish(`HTTP 503 from ${ENV}/api/data/v9.2/PublishXml: Service Unavailable`)],
   ['an SDK error that wraps a publish the service throttled (a 429), on a table whose logical name holds a word of the retry rule', () => wrappedPublish(`HTTP 429 from ${ENV}/api/data/v9.2/PublishXml: Too many requests.`, 'contoso_customizationlockexception')],
   ['an SDK error that wraps a publish the service refused for a customization lock, which is a throttle (a 429), in its words', () => wrappedPublish(`HTTP 429 from ${ENV}/api/data/v9.2/PublishXml: CustomizationLockException: another solution install is running`)],

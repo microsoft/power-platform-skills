@@ -62,7 +62,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `100000003`, because they are assigned per publisher. Resolve by label via `getOptions()`
   (see `references/app-spec-schema-advanced.md` → webResources). Note also that command and web-resource
   **edits do not redeploy on rebuild** — the phases reuse what exists, so changing a button or a
-  script means deleting it first.
+  script means deleting it first. This does not apply to recovery of the build's own
+  `WEB_RESOURCE_UNVERIFIED` row: keep that row and the same build workspace, then follow its halt.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
   the requirement is field-level and declarative — it is visible in the maker, survives solution
@@ -463,7 +464,7 @@ fails. A form whose read carries no label at all is not such a case: the caption
 Narrate progress as it runs. Transient env errors (a 429 or 503, a customization lock, a concurrent-operation
 guard or a SQL timeout the service names by its error code, a timeout or reset of the connection) are
 **auto-retried** with backoff on `--apply` (the build is idempotent, so a retry reuses what's already created).
-A throttled service is waited for as long as it asks (`Retry-After`) — by the HTTP client's re-sends of a throttled read or publish, by the page writes and by the build's own re-runs of a phase — inside one budget of five minutes per run for all the waiting
+A throttled service is waited for as long as it asks (`Retry-After`) — by the HTTP client's re-sends of a throttled read or service-protection-limited publish, by the page writes and by the build's own re-runs of a phase — inside one budget of five minutes per run for all the waiting
 a throttle costs: when the next wait does not fit, the build stops with a `throttle-budget-exhausted`
 halt that says what the service asked — run it again later and it continues. (A 5xx, a reset connection or a deadlock is not a throttle: those keep their own, shorter schedule and are not counted in it.) If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
@@ -475,7 +476,12 @@ targeted artifact so the change takes effect (see *Notes & limits*).
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`). There is no apply-safe
-`--from <phase>` shortcut; a full rerun is the correct and safe recovery path. One exception: an
+`--from <phase>` shortcut; a full rerun is the correct and safe recovery path — after a `WEB_RESOURCE_UNVERIFIED`
+halt too: a web resource was written but its publication could not be confirmed (often because another customization
+held the environment's lock), the build recorded it, and a rerun using the **same writable workspace** writes it
+again by its id; do not delete or rename it. If the halt says its recovery record could not be saved, or reports
+a conflicting name/id, follow that explicit resolution instead — automatic retry is unsafe without the identity.
+One exception: an
 `already-exists` halt recurs on a rerun until that workspace directory is deleted — follow its message.
 Another: that workspace belongs to the environment it was first opened for. Only `--apply` opens it — a dry
 run works in a temporary workspace, so it binds nothing, previews from any folder, and warns when an `--apply`

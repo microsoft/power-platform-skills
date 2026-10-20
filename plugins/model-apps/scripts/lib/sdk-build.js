@@ -140,6 +140,7 @@ const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComp
 const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
+const { openUnconfirmedWebResources } = require('./web-resource-records.js');
 const { navigationEntryKind, navigationVerdict } = require('./app-navigation.js');
 const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-text.js');
 // The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
@@ -1046,12 +1047,124 @@ function defaultAppIconSvg(appName) {
     `</svg>`;
 }
 
+// --- web resources whose publication the SDK could not confirm ---------------------------------------------------------------------------------------------
+// The bundled SDK reads a web resource's PUBLISHED content back after every create and every write of content it publishes, and throws
+// WEB_RESOURCE_UNVERIFIED when its publish failed or the read-back could not confirm the content — AFTER the row exists, with its id:
+//   { code: 'WEB_RESOURCE_UNVERIFIED', id: '<guid>', webResourceName: '<name>' (after a create), message: "Web resource '<name>' (<id>) was written,
+//     but publishing it failed, so whether its published content is what was sent is unconfirmed (<the failure>). …", cause: <the failure, not enumerable> }
+// The row is therefore never created again (a second create of the name is refused), and its content may be what was written, the old content, or
+// none. What the build does about it is the same at every site that writes one (the spec's web resources, the generated app icon, the page manifest):
+// it records the row — in the run's result, and in the workspace (lib/web-resource-records.js), so that the run that follows writes its content again
+// by id instead of reusing it untouched — adds it to the solution as the success path does, and stops with what a run again does.
+const isUnconfirmedWrite = (e) => Boolean(e) && e.code === 'WEB_RESOURCE_UNVERIFIED' && typeof e.id === 'string' && e.id.length > 0;
+// The SDK's answer to a write by an id whose row is gone: HTTP 404 (`ensureSuccess` throws it as a ConnectionError).
+const isGoneRow = (e) => Boolean(e) && e.code === 'CONNECTION_ERROR' && e.statusCode === 404;
+const contentOf = (options) => (options.contentBase64 !== undefined ? { contentBase64: options.contentBase64 } : { content: options.content });
+
+// The error a step stops with for such a row: the SDK's own words (which name the row, its id, why its publication is unconfirmed, and the SDK call
+// that recovers it), then the plugin's — what this build did with the row and what a run again does, which makes that call. Its code is the SDK's, so the
+// runner's halt carries it, and the SDK's error is its cause: the build's retry reads that as the wrapper it is (lib/retry-policy.js, CAUSE_WRAPPER_CODES),
+// judged by the failure the SDK's error carries, and run again when it carries none.
+function unconfirmedWebResource(error, { name, recorded, inSolution }) {
+  const solution = inSolution === true ? 'added it to the solution' : `could not add it to the solution (${(inSolution && inSolution.message) || inSolution}; a run again adds it)`;
+  const remedy = recorded
+    ? `this build recorded the row as its own and ${solution}. Its publication is UNCONFIRMED, not lost: run the build again — it writes the content again by that id, publishes it and reads it back (the call the message names is made for you).`
+    : `this build ${solution}, but could not save its local recovery record. Its publication is UNCONFIRMED, not lost: this build will not automatically retry it without that record. Write its content again by the id above in Power Apps once the cause is resolved; keep the same writable build workspace for automatic recovery.`;
+  // SDK updates report only the id; the build also knows the authored name, which is what a maker needs to find the resource.
+  const detail = error.webResourceName ? error.message : `Web resource '${name}' (${error.id}): ${error.message}`;
+  const failure = Object.assign(serviceFailure(`${detail} — ${remedy}`, { cause: error }), { code: 'WEB_RESOURCE_UNVERIFIED', id: error.id });
+  // A phase replay without a saved identity could create the name again when the row has no published layer. Likewise, a permanent
+  // solution-add refusal must be resolved first even when the publish itself was transient.
+  if (!recorded || (inSolution !== true && retryPolicyFor(inSolution) === RETRY.NEVER)) failure.transient = false;
+  return failure;
+}
+
+// Records a row the SDK wrote and could not confirm, puts it in the solution, and answers the error to stop the step with (unconfirmedWebResource).
+// The record is written FIRST: it is local, and it is what the next run needs whatever happens to the add.
+async function keepUnconfirmedWebResource(error, { name, unconfirmed, addToSolution }) {
+  const recorded = unconfirmed.note(name, error.id);
+  let inSolution = true;
+  try { await addToSolution(error.id); } catch (e) { inSolution = e; }
+  return unconfirmedWebResource(error, { name, recorded, inSolution });
+}
+
+// A receipt authorizes only its original id, never a different row that came to hold the same name after it. This check costs nothing
+// on an ordinary rebuild: the manifest already reads by name; spec resources/icons check only after an update proves their recorded row gone.
+function assertUnconfirmedWebResourceIdentity(name, recordedId, foundId) {
+  if (!recordedId || !foundId || String(recordedId).toLowerCase() === String(foundId).toLowerCase()) return;
+  throw Object.assign(refusal(`Web resource '${name}' was recorded as ${recordedId}, but its name now belongs to ${foundId}. Refusing to overwrite or adopt that replacement; inspect both ids and resolve the local recovery record before rebuilding.`), { code: 'WEB_RESOURCE_IDENTITY_CONFLICT' });
+}
+
+async function checkRecordedWebResourceName(provision, name, id) {
+  let row;
+  try { row = await provision.getWebResource(id); } catch (e) {
+    // A plain GET can miss a never-published row; the receipt still proves which id this build wrote. Unpublished content
+    // is not ownership evidence, and a later publish may still serve old content. Only the subsequent PATCH's 404 proves the row gone.
+    if (isGoneRow(e)) return;
+    throw e;
+  }
+  if (row && typeof row.name === 'string' && row.name.toLowerCase() === String(name).toLowerCase()) return;
+  throw Object.assign(refusal(`Web resource '${name}' was recorded as ${id}, but that id now reads as ${row && typeof row.name === 'string' ? `'${row.name}'` : 'a row with no verifiable name'}. Refusing to overwrite it; inspect the row and resolve the local recovery record before rebuilding.`), { code: 'WEB_RESOURCE_IDENTITY_CONFLICT' });
+}
+
+// Write a web resource the build OWNS by name — the spec's, or the generated app icon — and add it to the solution: create it, or, when an earlier run
+// of this build wrote it and could not confirm its publication (`recordedId`, from the record), write its content again by that id, which publishes and
+// verifies it again. The entry is cleared only once that write verified and the row is in the solution. A row that is gone by then (404) is created as on
+// a first build. Answers the row's id. A web resource of that name that the record does not hold is the caller's to reuse untouched, as before.
+async function writeOwnedWebResource(provision, unconfirmed, sol, options, recordedId) {
+  const addToSolution = (componentId) => provision.addSolutionComponent({ componentId, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+  if (recordedId) {
+    await checkRecordedWebResourceName(provision, options.name, recordedId);
+    let gone = false;
+    try {
+      await provision.updateWebResource(recordedId, contentOf(options));
+    } catch (e) {
+      if (isUnconfirmedWrite(e)) throw await keepUnconfirmedWebResource(e, { name: options.name, unconfirmed, addToSolution });
+      if (!isGoneRow(e)) throw e;
+      gone = true;
+    }
+    if (!gone) {
+      // Keep the receipt when only the solution add fails. Its 404 is not proof that the web-resource row is gone.
+      await addToSolution(recordedId);
+      unconfirmed.clear(options.name);
+      return recordedId;
+    }
+    const rows = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${odataLit(options.name)}'`, top: 1 });
+    assertUnconfirmedWebResourceIdentity(options.name, recordedId, rows && rows[0] && rows[0].webresourceid);
+    unconfirmed.clear(options.name);
+  }
+  let created;
+  try {
+    created = await provision.createWebResource(options);
+  } catch (e) {
+    if (isUnconfirmedWrite(e)) throw await keepUnconfirmedWebResource(e, { name: options.name, unconfirmed, addToSolution });
+    throw e;
+  }
+  await addToSolution(created.id);
+  return created.id;
+}
+
+// Runs a write of a web resource and hands the id of the row it leaves to `keep` — when the write stops the step because the row's publication
+// could not be confirmed too (isUnconfirmedWrite: the row exists, under `error.id`), so the run's result names the row either way.
+async function keepRowOf(write, keep) {
+  try {
+    const id = await write();
+    keep(id);
+    return id;
+  } catch (e) {
+    if (isUnconfirmedWrite(e)) keep(e.id);
+    throw e;
+  }
+}
+
 // Resolve the app's tile-icon web resource id, ensuring it lives IN this solution. Uses
 // spec.app.icon (a declared web resource) when set; otherwise generates a default SVG icon named
 // `<appUniqueName>_icon` and adds it to the solution (idempotent — reused by name on a re-run).
 // Returns the web-resource id, or undefined if it can't be resolved (the SDK then falls back).
+// A generated icon an earlier run created and could not confirm the publication of is written again by id
+// (writeOwnedWebResource), and is not looked up by name.
 async function ensureAppIcon(spec, created, deps) {
-  const { provision, sol, runner } = deps;
+  const { provision, sol, runner, unconfirmed = openUnconfirmedWebResources() } = deps;
   const findByName = async (name) => {
     const rows = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${odataLit(name)}'`, top: 1 });
     return rows && rows[0] && rows[0].webresourceid;
@@ -1061,18 +1174,19 @@ async function ensureAppIcon(spec, created, deps) {
     return (created.webResources && created.webResources[spec.app.icon]) || (await findByName(spec.app.icon)) || undefined;
   }
   const name = `${appUniqueName(spec)}_icon`;
-  const existing = await findByName(name);
+  const recordedId = unconfirmed.idOf(name);
+  const existing = recordedId ? undefined : await findByName(name);
   if (existing) {
     created.webResources[name] = existing;
     runner.skip('app-shell', `app icon (generated) ${name} (exists — reuse)`);
     return existing;
   }
   let id;
-  await runner.run('app-shell', `app icon (generated) ${name}`, async () => {
-    const r = await provision.createWebResource({ name, displayName: `${spec.app.name} Icon`, type: 'svg', content: defaultAppIconSvg(spec.app.name) });
-    id = r.id;
-    created.webResources[name] = r.id;
-    await provision.addSolutionComponent({ componentId: r.id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+  await runner.run('app-shell', `app icon (generated) ${name}${recordedId ? ' (written again: its publication was not confirmed)' : ''}`, async () => {
+    await keepRowOf(() => writeOwnedWebResource(provision, unconfirmed, sol, { name, displayName: `${spec.app.name} Icon`, type: 'svg', content: defaultAppIconSvg(spec.app.name) }, recordedId), (row) => {
+      id = row;
+      created.webResources[name] = row;
+    });
     return name;
   });
   return id;
@@ -1109,15 +1223,42 @@ async function readPageManifest(provision, appUnique) {
 // optional eighth that only spares the add when the solution is proven to hold the manifest already (see
 // solution-membership.js). Every call goes through it, including the one that creates the manifest, which is
 // why a first build that deploys pages makes the membership read.
-async function persistPageManifest(provision, spec, keyToId, sol, appUnique, existingId, lastContent, solutionMembers) {
+// `unconfirmed` (optional ninth) is the run's record of the web resources whose publication could not be confirmed (lib/web-resource-records.js). A write
+// the SDK could not confirm (WEB_RESOURCE_UNVERIFIED) is recorded and stops the step (keepUnconfirmedWebResource). The next run writes the manifest again
+// whenever its PUBLISHED copy — what readPageManifest reads, and `lastContent` is — is not what the run wants, by the id that read finds or, when no plain
+// read finds the row (a manifest created and never published), by the id the record holds; the name is never created again while the record holds it.
+async function persistPageManifest(provision, spec, keyToId, sol, appUnique, existingId, lastContent, solutionMembers, unconfirmed = openUnconfirmedWebResources()) {
   const name = manifestResourceName(appUnique);
   const content = serializeManifest(buildManifest(spec, keyToId));
-  let id = existingId;
+  const recordedId = unconfirmed.idOf(name);
+  assertUnconfirmedWebResourceIdentity(name, recordedId, existingId);
+  let id = existingId || recordedId;
+  const addToSolution = (componentId) => ensureSolutionComponent(provision, solutionMembers, { componentId, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+  const write = async (writeId) => {
+    try {
+      if (writeId) {
+        await provision.updateWebResource(writeId, { content });
+        return writeId;
+      }
+      return (await provision.createWebResource({ name, displayName: `${spec.app.name} Page Manifest`, type: 'js', content })).id;
+    } catch (e) {
+      if (isUnconfirmedWrite(e)) throw await keepUnconfirmedWebResource(e, { name, unconfirmed, addToSolution });
+      throw e;
+    }
+  };
   if (content !== lastContent) {
-    if (id) await provision.updateWebResource(id, { content });
-    else { const r = await provision.createWebResource({ name, displayName: `${spec.app.name} Page Manifest`, type: 'js', content }); id = r.id; }
+    try {
+      id = await write(id);
+    } catch (e) {
+      // The row the record names, which no plain read found, is gone: the manifest is created again, as on a first build.
+      if (!(recordedId && id === recordedId && isGoneRow(e))) throw e;
+      unconfirmed.clear(name);
+      id = await write(undefined);
+    }
   }
-  if (id) await ensureSolutionComponent(provision, solutionMembers, { componentId: id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+  if (id) await addToSolution(id);
+  // Written and verified now, or its published copy already holds what this run wants: either way it is confirmed.
+  unconfirmed.clear(name);
   return { id, content };
 }
 
@@ -2678,6 +2819,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // The runner stops the run at the next step once the budget has refused a wait (entity-provision.js, makeRunner): the build's retry loop does not run the phases again to meet the same answer.
   const runner = makeRunner({ emit, total: plan.length, throttle: opts.throttle });
   const sol = spec.solution;
+  // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
+  // spec's web resources, the generated app icon and the page manifest are written again by id when they are in it. One per run of the phases, so the
+  // build's own re-run of a halt reads what the attempt before it recorded.
+  const unconfirmedWebResources = openUnconfirmedWebResources({ workspaceDir: opts.workspaceDir, environment: opts.env, warn: opts.warn });
 
   // ADO 6691114: a view-filter label the environment already shows to be wrong stops the build here, before it
   // writes anything — in any apply that writes the solution or the data model, whether or not it also builds the
@@ -2959,8 +3104,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // 3b. Web resources (opt-in via spec.webResources) — JS/HTML/CSS shipped for form logic.
   //     Idempotent: an existing web resource of the same name is reused (and assumed already
   //     in the solution). Built before forms so a form event handler can bind its library.
+  //     One that an earlier run of this build created or wrote and could not confirm was published (WEB_RESOURCE_UNVERIFIED,
+  //     recorded in the workspace) is not reused: its content is written again by id (writeOwnedWebResource).
   if (has('web-resources')) {
     for (const wr of spec.webResources || []) {
+      const recordedId = unconfirmedWebResources.idOf(wr.name);
+      if (recordedId) {
+        await runner.run('web-resources', `web resource ${wr.name} (${wr.type || 'js'}) (written again: its publication was not confirmed)`, async () => {
+          await keepRowOf(() => writeOwnedWebResource(provision, unconfirmedWebResources, sol, webResourceOpts(wr, opts.appDir), recordedId), (id) => { result.created.webResources[wr.name] = id; });
+        });
+        continue;
+      }
       const existing = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${odataLit(wr.name)}'`, top: 1 });
       if (existing && existing[0] && existing[0].webresourceid) {
         result.created.webResources[wr.name] = existing[0].webresourceid;
@@ -2968,9 +3122,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         continue;
       }
       await runner.run('web-resources', `web resource ${wr.name} (${wr.type || 'js'})`, async () => {
-        const r = await provision.createWebResource(webResourceOpts(wr, opts.appDir));
-        result.created.webResources[wr.name] = r.id;
-        await provision.addSolutionComponent({ componentId: r.id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+        await keepRowOf(() => writeOwnedWebResource(provision, unconfirmedWebResources, sol, webResourceOpts(wr, opts.appDir)), (id) => { result.created.webResources[wr.name] = id; });
       });
     }
     // 3c. Table icons — set each entity's OWN icon to a declared web resource (SVG -> IconVectorName
@@ -6010,7 +6162,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // author's spec.app.icon). Resolved BEFORE appDef so the id is embedded at create time — the
     // reliable path (an appmodule's webresourceid is effectively write-once). This replaces the
     // SDK's arbitrary external/managed icon fallback that broke import into a fresh environment.
-    const iconWebResourceId = await ensureAppIcon(spec, result.created, { provision, sol, runner });
+    const iconWebResourceId = await ensureAppIcon(spec, result.created, { provision, sol, runner, unconfirmed: unconfirmedWebResources });
     const def = appDef(spec, result.created, { omitUnbuiltPages: true, iconWebResourceId, mainFormsByTable });
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
       // Whether the app exists says whether its components can be read to prove which tables it holds forms or charts of (publishTablesBeforeApp), so it is looked up first.
@@ -6182,6 +6334,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // and must HALT fail-closed BEFORE reconcile — reconciling it as "no identity" would recreate the
       // app's existing pages as orphans. An ABSENT manifest (present:false) is normal for a fresh app.
       const { id: readId, manifest, text, present } = await readPageManifest(provision, appUnique);
+      const recordedManifestId = unconfirmedWebResources.idOf(manifestResourceName(appUnique));
+      assertUnconfirmedWebResourceIdentity(manifestResourceName(appUnique), recordedManifestId, readId);
+      if (recordedManifestId && !readId) await checkRecordedWebResourceName(provision, manifestResourceName(appUnique), recordedManifestId);
       if (present && !manifest) throw new BuildHalt(`the page manifest ${manifestResourceName(appUnique)} exists but is corrupt/unparseable — refusing to proceed (would risk recreating existing pages as orphans). Fix or delete the web resource and rebuild.`, { phase: 'pages', code: 'pages-manifest-corrupt', recoverable: false, retry: RETRY.NEVER });
       let manifestId = readId;
       let lastManifestContent = text;
@@ -6444,7 +6599,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
       }
 
-      const persistNow = async () => { const pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent, solutionMembers); manifestId = pr.id; lastManifestContent = pr.content; };
+      // A write the SDK could not confirm leaves the manifest's row under the error's id: kept, so that this run's next persist — and the record, the next
+      // run's — writes it again by id rather than creating the name a second time (persistPageManifest).
+      const persistNow = async () => {
+        let pr;
+        try { pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent, solutionMembers, unconfirmedWebResources); } catch (e) {
+          if (isUnconfirmedWrite(e)) manifestId = e.id;
+          throw e;
+        }
+        manifestId = pr.id;
+        lastManifestContent = pr.content;
+      };
       const recordCreate = (p, id) => {
         // No workspace means no durable creation authority. Normal CLI builds always supply one.
         if (!opts.workspaceDir) {

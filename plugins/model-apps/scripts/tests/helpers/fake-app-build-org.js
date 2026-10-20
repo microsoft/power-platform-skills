@@ -105,17 +105,28 @@ function createFakeBuildOrg({ entities, solution = { uniqueName: 'ContosoReview'
     let m;
     const publishedRow = ({ publishedContent, ...row }) => ({ ...row, content: publishedContent });
     if (method === 'POST' && /^\/webresourceset(\?|$)/.test(p)) {
+      // A name is unique in an environment: a second create of one is refused, whatever layer the first is in (the SDK says so of its own create; the
+      // platform's exact code for it is not measured).
+      if ([...resources.values()].some((row) => String(row.name).toLowerCase() === String(body.name).toLowerCase())) {
+        return { status: 400, headers: {}, body: { error: { code: '0x80040237', message: `A web resource named ${body.name} already exists.` } } };
+      }
       const id = (body.webresourceid || randomUUID()).toLowerCase();
       resources.set(id, { ...body, webresourceid: id });
       return { status: 204, headers: { 'odata-entityid': `${ORIGIN}/api/data/v9.0/webresourceset(${id})` }, body: null };
     }
-    if (method === 'PATCH' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)/i.exec(p)) && resources.has(m[1].toLowerCase())) {
+    if (method === 'PATCH' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)/i.exec(p))) {
+      // A write by an id no row has any more is refused as the platform refuses it.
+      if (!resources.has(m[1].toLowerCase())) return { status: 404, headers: {}, body: { error: { code: '0x80040217', message: `webresource With Id = ${m[1]} Does Not Exist` } } };
       Object.assign(resources.get(m[1].toLowerCase()), body);
       return { status: 204, headers: {}, body: null };
     }
     if (method === 'GET' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)\?\$select=content$/i.exec(p))) {
       const row = resources.get(m[1].toLowerCase());
       return row && row.publishedContent !== undefined ? response({ webresourceid: row.webresourceid, content: row.publishedContent }) : { status: 404, headers: {}, body: { error: { message: 'Does Not Exist' } } };
+    }
+    if (method === 'GET' && (m = /^\/webresourceset\(([0-9a-f-]{36})\)\?\$select=name,displayname,webresourcetype,content,description$/i.exec(p))) {
+      const row = resources.get(m[1].toLowerCase());
+      return row && row.publishedContent !== undefined ? response(publishedRow(row)) : { status: 404, headers: {}, body: { error: { message: 'Does Not Exist' } } };
     }
     if (method === 'GET' && /^\/webresources(et)?\?/.test(p)) {
       const named = /name eq '([^']+)'/.exec(p);

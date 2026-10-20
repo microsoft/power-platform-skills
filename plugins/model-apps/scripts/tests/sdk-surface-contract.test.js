@@ -92,6 +92,8 @@ const SKILL_SDK_SURFACE = [
   // saved copy it lists.
   'getManifest',
   'getSolution',
+  // Recovery of an unconfirmed web-resource write verifies the recorded id's name before touching its content.
+  'getWebResource',
   'importSolution',
   'initWorkspace',
   'insertStatusValue',

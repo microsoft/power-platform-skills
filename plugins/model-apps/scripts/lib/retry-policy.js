@@ -86,6 +86,16 @@ const WRAPPED_SERVICE_CODES = Object.freeze(new Set(['ENRICH_DEFAULT_VIEWS_PUBLI
 const WRAPPER_SENTENCE = /^enrichDefaultViews: \d+ view\(s\) on '[^'\s]*' were saved but the publish FAILED, so none of them is live \(([\s\S]+)\)\. Re-publish the entity to make them visible; the saves themselves are unaffected\.$/;
 const EMBEDDED_ANSWER = /^(?:HTTP (\d{3}) from|Transport failure reaching) (\S+): ([\s\S]*)$/;
 
+// The errors that are typed and WRAP a failure they carry as their `cause` — attached NOT enumerably (the SDK's attachCause, a native Error's `cause`), which
+// causeChain reads all the same — so what decides is that failure, never the wrapper's code or its words (which name what the maker named). One today:
+// WEB_RESOURCE_UNVERIFIED, the SDK's error for a web resource it wrote whose PUBLISHED content it could not confirm, and the build's own error around it
+// (lib/sdk-build.js, unconfirmedWebResource). The row exists; a run again writes its content again by id. So:
+//   - it carries a failure — its publish's, or that of the read-back of what was published: that failure is judged by the rule above, a lock refusal (429
+//     `0x80071151`), a 503 or a reset is run again, a 400, 401, 403, 404, a 412 (the SDK's typed VERSION_CONFLICT) or another typed refusal is not;
+//   - it carries none: the read-back answered content that is not what was written, or no content — the write did not apply, or whether it did is
+//     unknown, and nothing in it is a verdict on the request. It is run again (`unconfirmed`, below).
+const CAUSE_WRAPPER_CODES = Object.freeze(new Set(['WEB_RESOURCE_UNVERIFIED']));
+
 // How far down the chain of causes the decision looks. Deeper than any failure the build raises (a halt, a step's wrapper, the SDK's error, the system error under it).
 const MAX_CHAIN = 8;
 
@@ -138,6 +148,8 @@ const messageOf = (error) => (typeof error.message === 'string' ? error.message 
 
 // An SDK error that carries a failed request's answer in its message (WRAPPED_SERVICE_CODES) — the code alone says nothing of whether that answer can be read.
 const wrapsServiceFailure = (error) => WRAPPED_SERVICE_CODES.has(typedCode(error));
+// An error that carries the failure it is about as its cause (CAUSE_WRAPPER_CODES): judged by that cause, and by nothing of its own.
+const wrapsCause = (error) => CAUSE_WRAPPER_CODES.has(typedCode(error));
 // What such an error embeds, as { status, answer }: the status the service answered (0 for a failure of the transport) and the words after the url — or null when the sentence is not the one the SDK words (see
 // WRAPPED_SERVICE_CODES), and then nothing of it is read.
 function embeddedFailure(error) {
@@ -193,7 +205,7 @@ function isTransportBlip(error) {
 
 // An error the SDK or the plugin has typed: its code says what it is, and what it is is not a service hiccup. The one exception is an SDK error that wraps a failed publish in a sentence this code can take apart
 // (embeddedFailure): it is the service's answer, and is judged as such. One it cannot take apart is a refusal like any other.
-const isTypedRefusal = (error) => !isHalt(error) && typedCode(error) !== null && !isConnectionError(error) && !TRANSPORT_CODES.has(typedCode(error)) && embeddedFailure(error) === null;
+const isTypedRefusal = (error) => !isHalt(error) && typedCode(error) !== null && !isConnectionError(error) && !TRANSPORT_CODES.has(typedCode(error)) && embeddedFailure(error) === null && !wrapsCause(error);
 
 // The OData `error.code` of the answer an SDK ConnectionError carries — its `cause` is the response body, `{ "error": { "code": "0x80044151", "message": "SQL timeout expired." } }` — lower-cased (the platform writes
 // them with either case: 0x8004F064, 0x80071151), or null when the error has no such body. Only the SDK's own ConnectionError for an answer (a status above 0) is read, and only the `code` field of the body's `error`:
@@ -298,11 +310,13 @@ function judgeFailure(error, { declares } = {}) {
   const transientStatus = statuses.some(isTransientStatus);
   const transport = chain.some(isTransportBlip);
   const transientCode = chain.some((e) => isTransientServiceAnswer(e, declares));
-  const transient = transientStatus || transport || transientCode;
+  // A wrapper that carries no failure (CAUSE_WRAPPER_CODES): the write's outcome is not confirmed, and nothing says no.
+  const unconfirmed = chain.some((e) => wrapsCause(e) && !isObject(e.cause));
+  const transient = transientStatus || transport || transientCode || unconfirmed;
   const typed = chain.some(isTypedRefusal);
   // A status the service answered that is not transient is a verdict: no word in its answer can undo it (rule 5).
   const refused = statuses.length > 0 && !transientStatus;
-  const found = { transient, transientStatus, transport, transientCode };
+  const found = { transient, transientStatus, transport, transientCode, unconfirmed };
   if (explicit || (!transient && typed)) return { never: true, ...found, text: '' };
   if (!transient && refused) {
     // The one verdict that depends on what only the CALLER knows: the answer that says a column is missing, which is the lag of a column the spec creates or an authoring error according to the spec (MISSING_ATTRIBUTE_CODES).
@@ -312,8 +326,8 @@ function judgeFailure(error, { declares } = {}) {
   }
   if (typed) return { never: false, ...found, text: '' };
   const declared = chain.find((e) => typeof e.retryText === 'string');
-  // A failure of the transport has no words to read (rule 4 decided it), and a halt's own message is never read.
-  const words = declared ? declared.retryText : chain.filter((e) => !isHalt(e) && !isTransportFailure(e)).map(answerOf).join(' ');
+  // A failure of the transport has no words to read (rule 4 decided it), a halt's own message is never read, and neither is a wrapper's: it names what the maker named.
+  const words = declared ? declared.retryText : chain.filter((e) => !isHalt(e) && !isTransportFailure(e) && !wrapsCause(e)).map(answerOf).join(' ');
   return { never: false, ...found, text: words };
 }
 
