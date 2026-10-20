@@ -47,8 +47,9 @@
 // so a new read or write shows up as a loud failure in the test that first sends it — never as a silent empty answer that the code
 // under test might read as "nothing there".
 //
-// Every request is recorded, in order, in `org.requests` as `{ method, path, body, headers }` with the path below the API root,
-// decoded, query included; a `$batch` also carries its `operations` (each `{ method, path, body, headers }`), which run atomically.
+// Every request is recorded, in order, in `org.requests` as `{ method, path, body, headers, status }` with the path below the API root,
+// decoded, query included, and the HTTP status it was answered with; a `$batch` also carries its `operations` (each `{ method, path,
+// body, headers }`), which run atomically.
 const { randomUUID } = require('node:crypto');
 const { matchesFilter } = require('./odata-filter.js');
 const { createMetadataStore } = require('./fake-lifecycle-metadata.js');
