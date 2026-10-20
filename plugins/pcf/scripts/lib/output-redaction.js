@@ -28,6 +28,8 @@
 //   - the files the plugin writes: `writeFileSafe` and `appendFileSafe` (lib/safe-fs.js: the build's journal and status file, a download's spec and pages, a page's file and its deployed copy, the plan, the settings template),
 //     `writeFileAtomic` (lib/apply-snapshot-store.js: the apply snapshot, the baseline `last-applied.json`, the page ownership and publish records) and the SDK's workspace storage — every file the bundle writes goes through its
 //     `writeTextAtomic` (lib/maker-sdk.js wraps it: guardWorkspaceStorage). tests/output-token-writers.test.js lists every other write in the plugin and says why none of them can carry a token.
+//   - in the pcf plugin (which carries a copy of this module): its streams and its fatal errors as above (its scripts note their tokens through the same lib/dataverse-auth.js), the receipt `pcf-push.js` writes
+//     (`pcf-receipt.json`) and the SDK workspace `makePcfSdk` makes; pcf's tests/pcf-push-token.test.js lists every other write of pcf and says why none of them can carry a token.
 //   - not covered, by design: bytes (a Buffer given to a writer is written as it is); a token another process obtained (`pac` has its own); another encoding of a token (percent-encoding, base64 of a whole header, HTML
 //     entities — nothing is known to quote a token in one, and a reader that guessed at them would blank ordinary text); a token written in two separate calls to `write` (no script writes a message in pieces); a token a
 //     formatter CUT SHORT (util.inspect prints at most 10,000 characters of a string, and the end of a part cut off there is not the part); a raw control character other than white space and ESC between two of its characters.

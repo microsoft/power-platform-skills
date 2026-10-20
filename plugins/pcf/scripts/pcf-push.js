@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const nodeProcess = require('node:process');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
+const { redactOutput } = require('./lib/output-redaction.js');
 const { runPac } = require('./lib/pac-exec.js');
 const { validatePublisherPrefix, validateSolutionUniqueName, validateNamespace, validateControlName, orgControlName } = require('./lib/pcf-names.js');
 const { findControlProject } = require('./lib/pcf-build.js');
@@ -365,7 +366,9 @@ function writeReceipt(projectDir, data) {
   let fd = null;
   try {
     fd = fs.openSync(tempPath, 'wx');
-    fs.writeFileSync(fd, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+    // The receipt carries the service's own words (`registered.reason` is the text of a refused read), and a service may repeat the access token it was sent in them — folded onto several lines or with a JSON escape,
+    // which `scrubSecrets` does not read. So the whole text goes through the one function that keeps every token this process obtained out of what it writes (lib/output-redaction.js), as model-apps' file writers do.
+    fs.writeFileSync(fd, redactOutput(`${JSON.stringify(receipt, null, 2)}\n`), 'utf8');
     fs.closeSync(fd);
     fd = null;
     fs.renameSync(tempPath, receiptPath);
