@@ -57,6 +57,15 @@ function normalizeLineEndings(content) {
   return content.replace(/\r\n?/g, '\n');
 }
 
+function assertVsCodeUpdatePath(content) {
+  assert.match(content, /Open the \*\*Extensions\*\* view/);
+  assert.match(content, /`@agentplugin mobile-app`/);
+  assert.match(content, /Select \*\*mobile-app\*\* from \*\*power-platform-skills\*\*/);
+  assert.match(content, /\*\*Developer: Reload Window\*\*/);
+  assert.match(content, /Rerun this skill/);
+  assert.doesNotMatch(content, /Agent Plugins\s*\/?\s*Extensions view/);
+}
+
 test('normalizeLineEndings makes Windows skill frontmatter parseable', () => {
   const content = '---\r\nuser-invocable: true\r\n---\r\n\r\n# Skill\r\n';
   const normalized = normalizeLineEndings(content);
@@ -126,8 +135,7 @@ test('formatUpdateMessage gives VS Code UI guidance without CLI commands', () =>
     'vscode'
   );
 
-  assert.match(message, /Agent Plugins\/Extensions view/);
-  assert.match(message, /reload VS Code/);
+  assertVsCodeUpdatePath(message);
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
@@ -230,7 +238,7 @@ test('checkForUpdate works for a standalone installed plugin without Git metadat
   });
 
   assert.match(message, /Plugin update available: mobile-app 0\.3\.0 -> 0\.4\.0/);
-  assert.match(message, /Agent Plugins\/Extensions view/);
+  assertVsCodeUpdatePath(message);
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
@@ -288,11 +296,7 @@ test('every public skill runs or owns the plugin check before its workflow', () 
     const content = normalizeLineEndings(fs.readFileSync(skillPath, 'utf8'));
     if (/^name: check-updates$/m.test(content)) {
       assert.match(content, /^## Step 1: Check The Plugin$/m);
-      assert.match(content, /Open the \*\*Extensions\*\* view/);
-      assert.match(content, /`@agentplugin mobile-app`/);
-      assert.match(content, /Select \*\*mobile-app\*\* from \*\*power-platform-skills\*\*/);
-      assert.match(content, /\*\*Developer: Reload Window\*\*/);
-      assert.doesNotMatch(content, /Agent Plugins\/Extensions view/);
+      assertVsCodeUpdatePath(content);
       continue;
     }
     const allowedTools = content.match(/^allowed-tools:\s*(.+)$/m);

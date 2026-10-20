@@ -84,7 +84,12 @@ function formatUpdateMessage(
   if (host === 'vscode') {
     return (
       message +
-      `Update ${pluginName} in the Agent Plugins/Extensions view, reload VS Code, and rerun this skill.`
+      `To update in VS Code:\n` +
+      `1. Open the **Extensions** view.\n` +
+      `2. Enter \`@agentplugin ${pluginName}\` in the search box.\n` +
+      `3. Select **${pluginName}** from **${marketplaceName || DEFAULT_MARKETPLACE_NAME}**, then select **Update**.\n` +
+      `4. Run **Developer: Reload Window** from the Command Palette.\n` +
+      `5. Rerun this skill.`
     );
   }
 
