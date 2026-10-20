@@ -2,7 +2,8 @@
 // ONE strict reader of ONE XML document, in ONE pass, for the decision in this plugin that must not be wrong in the dangerous direction: which
 // elements a document holds, when a generative page is DELETED because an element of an app's sitemap names it (sitemap-pages.js, navigationGenPageIds).
 // It also reads the two FormXML documents verify compares to prove a dashboard's tiles are the published ones (formxml-layers.js): there, a document it
-// does not read is a difference, never the same document.
+// does not read is a difference, never the same document. And it reads the workbook of a translation export, from which verify settles a form's captions
+// (translation-labels.js), with the two options a caller that does not trust a document's shape needs (`maxDepth`, `elementOnly`: see readXmlElements).
 //
 // WHY NOT REGULAR EXPRESSIONS. The navigation used to be read by three passes over the text, each taking one kind of construct out of it (comments, then
 // CDATA sections, then processing instructions) before the elements were matched. XML has no such order: a delimiter is data wherever the construct that
@@ -153,21 +154,36 @@ function position(xml, at) {
  *   readXmlElements('<labels><label languagecode="3082" /></labels>', (name) => name === 'label', { spans: true })
  *     → { ok: true, elements: [ { name: 'label', path: 'labels', attrs: { languagecode: '3082' }, start: 8, end: 37 } ] }
  *
+ * Two more options are for a caller that reads a document it does not trust to be the shape it expects (lib/translation-labels.js reads a translation export
+ * with them); without them nothing changes:
+ *   - `maxDepth`: the deepest an element may be (the root is at depth 1). Each element answered carries its `path`, the names of its ancestors, so a document
+ *     nested deep and asked for at every level costs the SQUARE of its depth: some 140 KB of `<a><a>…` exhaust the heap of the process that reads them. A
+ *     document nested deeper is refused at the start tag of the first element that goes over, before that element is read.
+ *   - `elementOnly`: a function of an element's name that says the element holds elements and white space only (a spreadsheet's Table, Row and Cell). Text, a
+ *     reference, a CDATA section, a comment or a processing instruction directly inside such an element is refused: what a caller that reads elements skips
+ *     there could be what the document meant.
+ *
  * @param {*} xml the text of the document; anything that is not a string is refused
  * @param {(name: string) => boolean} wanted decides which elements are answered, by their names as written
- * @param {{ spans?: boolean }} [options]
+ * @param {{ spans?: boolean, maxDepth?: number, elementOnly?: (name: string) => boolean }} [options]
  * @returns {{ ok: true, elements: { name: string, path: string, attrs: Object<string, string>, start?: number, end?: number }[] } | { ok: false, detail: string }}
+ * @throws {TypeError} when `maxDepth` is given and is not a whole number of at least 1, or `elementOnly` is given and is not a function — a mistake of the
+ *   caller, which must not read as "no bound"
  */
 function readXmlElements(xml, wanted, options) {
+  const maxDepth = options ? options.maxDepth : undefined;
+  if (maxDepth !== undefined && !(Number.isSafeInteger(maxDepth) && maxDepth >= 1)) throw new TypeError(`maxDepth must be a whole number of at least 1, not ${String(maxDepth)}`);
+  const elementOnly = options ? options.elementOnly : undefined;
+  if (elementOnly !== undefined && typeof elementOnly !== 'function') throw new TypeError('elementOnly must be a function of an element name');
   try {
-    return { ok: true, elements: scan(xml, wanted, !!options && options.spans === true) };
+    return { ok: true, elements: scan(xml, wanted, !!options && options.spans === true, maxDepth === undefined ? Infinity : maxDepth, elementOnly) };
   } catch (e) {
     if (!(e instanceof Refusal)) throw e;
     return { ok: false, detail: e.at === undefined ? e.message : `${e.message}, at ${position(xml, e.at)}` };
   }
 }
 
-function scan(xml, wanted, spans) {
+function scan(xml, wanted, spans, maxDepth, elementOnly) {
   if (typeof xml !== 'string') throw new Refusal(undefined, 'the XML is not text');
   const illegal = ILLEGAL_CHAR.exec(xml);
   if (illegal) throw new Refusal(illegal.index, 'a character that XML does not allow');
@@ -177,6 +193,11 @@ function scan(xml, wanted, spans) {
   // The names of the elements that are open, outermost first, and the default namespace each is in (a `xmlns="…"` attribute sets it, and an element inherits it).
   const open = [];
   const defaultNamespace = [];
+  // With `elementOnly`, beside `open`: whether each open element holds elements and white space only.
+  const openElementOnly = [];
+  const inElementOnly = () => openElementOnly.length > 0 && openElementOnly[openElementOnly.length - 1];
+  // What may not be directly inside an element that holds elements only, said where it is.
+  const notInElementOnly = (at, what) => new Refusal(at, `${what} inside <${open[open.length - 1]}>, which holds elements only`);
   // With `spans`, beside `open`: the answered element each open one is (null for one not asked for), so that its end tag can say where it ends.
   const openAnswered = [];
   // For each kind of element, where the SDK's parser looks for the end of an element of that kind: the last place the text `</name>` is, or `</name` if there is none after the first start tag.
@@ -245,6 +266,8 @@ function scan(xml, wanted, spans) {
     if (!found) throw new Refusal(from, 'a "<" that starts no element, comment, processing instruction or CDATA section');
     if (state === EPILOG) throw new Refusal(from, 'a second root element (a document has exactly one)');
     const name = found[0];
+    // The bound holds before anything of the element is read: its path is never built, its attributes never decoded.
+    if (open.length >= maxDepth) throw new Refusal(from, `elements nested more than ${maxDepth} levels deep`);
     const attrs = Object.create(null);
     let p = from + 1 + name.length;
     let selfClosing = false;
@@ -295,6 +318,7 @@ function scan(xml, wanted, spans) {
     } else {
       noteWhatTheSdkParserMisreads(from, p - 1, name, attrs);
       open.push(name);
+      if (elementOnly) openElementOnly.push(!!elementOnly(name));
       if (spans) openAnswered.push(answered);
       state = CONTENT;
     }
@@ -335,6 +359,7 @@ function scan(xml, wanted, spans) {
     if (found[0] !== expected) throw new Refusal(from, `closing tag </${found[0]}> where </${expected}> is expected`);
     open.pop();
     defaultNamespace.pop();
+    openElementOnly.pop();
     if (spans) {
       const answered = openAnswered.pop();
       if (answered) answered.end = p + 1;
@@ -358,8 +383,19 @@ function scan(xml, wanted, spans) {
     return end;
   }
 
+  // The content of an element that holds elements only, from `from` up to the next "<": white space as written, and nothing else — a reference, even to a
+  // space, is text.
+  function whiteSpaceOnly(from) {
+    let p = from;
+    for (; p < n && xml.charCodeAt(p) !== LT; p += 1) {
+      if (!isSpace(xml.charCodeAt(p))) throw notInElementOnly(p, 'text');
+    }
+    return p;
+  }
+
   // `<!-- … -->`: the content has no "--" in it (so it cannot end in a "-" either: "--->" is refused), which is why the first "--" has to be the end.
   function comment(from) {
+    if (state === CONTENT && inElementOnly()) throw notInElementOnly(from, 'a comment');
     const dashes = xml.indexOf('--', from + 4);
     if (dashes < 0) throw new Refusal(from, 'a comment that is never closed');
     if (xml.charCodeAt(dashes + 2) !== GT) throw new Refusal(dashes, "'--' inside a comment");
@@ -372,6 +408,7 @@ function scan(xml, wanted, spans) {
     const target = NCNAME.exec(xml);
     if (!target) throw new Refusal(from, 'a processing instruction with no target');
     if (/^xml$/i.test(target[0])) throw new Refusal(from, 'a processing instruction named "xml" (only the XML declaration at the very start of the document may be)');
+    if (state === CONTENT && inElementOnly()) throw notInElementOnly(from, 'a processing instruction');
     const p = from + 2 + target[0].length;
     if (xml.startsWith('?>', p)) return p + 2;
     if (!isSpace(xml.charCodeAt(p))) throw new Refusal(p, 'a processing instruction whose target is not followed by white space or "?>"');
@@ -385,6 +422,7 @@ function scan(xml, wanted, spans) {
     if (xml.startsWith('<!--', from)) return comment(from);
     if (xml.startsWith('<![CDATA[', from)) {
       if (state !== CONTENT) throw new Refusal(from, 'a CDATA section outside the root element');
+      if (inElementOnly()) throw notInElementOnly(from, 'a CDATA section');
       const end = xml.indexOf(']]>', from + 9);
       if (end < 0) throw new Refusal(from, 'a CDATA section that is never closed');
       return end + 3;
@@ -404,7 +442,7 @@ function scan(xml, wanted, spans) {
 
   while (at < n) {
     if (xml.charCodeAt(at) !== LT) {
-      if (state === CONTENT) at = characterData(at);
+      if (state === CONTENT) at = inElementOnly() ? whiteSpaceOnly(at) : characterData(at);
       else if (isSpace(xml.charCodeAt(at))) at += 1;
       else throw new Refusal(at, state === PROLOG ? 'text before the root element' : 'text after the root element');
       continue;

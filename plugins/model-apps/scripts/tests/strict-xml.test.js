@@ -295,3 +295,67 @@ test('readXmlElements: it never reads past a refusal, so a hostile document cann
   for (const xml of [`<a>${'<'.repeat(200000)}`, `<a>${'&'.repeat(200000)}`, `<a ${'b="1" '.repeat(1000)}>`, `<${'a'.repeat(200000)} `, `<a b="${'&amp;'.repeat(100000)}`, '<a>'.repeat(10000)]) readXmlElements(xml, all);
   assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms`);
 });
+
+// An element a caller asks for says its `path`, the names of its ancestors, so a document that is nested deep and is asked for at every level costs the SQUARE of its depth in memory:
+// a few kilobytes of `<a><a><a>…` are enough to exhaust the heap of the process that reads them. A caller that reads a document it does not trust says how deep it may be.
+test('readXmlElements { maxDepth }: a document nested deeper than the caller allows is refused at the element that goes over — at, or one level below, the bound', () => {
+  const nest = (depth, inner = '') => `${'<a>'.repeat(depth)}${inner}${'</a>'.repeat(depth)}`;
+  const bounded = (xml, maxDepth) => readXmlElements(xml, all, { maxDepth });
+  assert.strictEqual(bounded(nest(3), 3).ok, true, 'three levels, three allowed');
+  const over = bounded(nest(4), 3);
+  assert.strictEqual(over.ok, false);
+  assert.deepStrictEqual(Object.keys(over).sort(), ['detail', 'ok'], 'a document that is not read answers no element at all');
+  assert.match(over.detail, /^elements nested more than 3 levels deep, at line 1, column 10$/, 'it says where: the fourth <a> starts after nine characters');
+  // An empty-element tag is a level of its own, as is the root.
+  assert.strictEqual(bounded(nest(2, '<b/>'), 3).ok, true);
+  assert.strictEqual(bounded(nest(3, '<b/>'), 3).ok, false);
+  assert.strictEqual(bounded('<a/>', 1).ok, true);
+  assert.strictEqual(bounded('<a><b/></a>', 1).ok, false);
+  // Siblings are not nesting: a document as wide as you like is read.
+  assert.strictEqual(bounded(`<r>${'<a><b/></a>'.repeat(5000)}</r>`, 3).elements.length, 10001);
+  // The path of an element is as long as its depth, so the bound is also the bound of what the answer holds.
+  const deepest = bounded(nest(5, '<z/>'), 6).elements.at(-1);
+  assert.strictEqual(deepest.path.split('/').length, 5);
+  // A document of thousands of levels asked for at every one is refused at the bound, not read: the answer would be gigabytes of paths.
+  const started = Date.now();
+  const hostile = bounded(nest(6000), 32);
+  assert.strictEqual(hostile.ok, false);
+  assert.match(hostile.detail, /nested more than 32 levels deep/);
+  assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms`);
+  // Without the option nothing changes: a nesting of any depth is read, as before.
+  assert.strictEqual(readXmlElements(nest(300), () => false).ok, true);
+  assert.strictEqual(readXmlElements(nest(300), () => false, {}).ok, true);
+  assert.strictEqual(readXmlElements(nest(300), () => false, { maxDepth: undefined }).ok, true);
+  // The bound is a whole number of at least one — anything else is a mistake of the caller, which must not read as "no bound".
+  for (const wrong of [0, -1, 1.5, NaN, Infinity, '3', null, {}]) assert.throws(() => readXmlElements('<a/>', all, { maxDepth: wrong }), TypeError, String(wrong));
+});
+
+// What a spreadsheet's rows and cells hold is elements. A caller that reads such a document by the elements it names must not lose what is written between them — a sentence in a
+// row, a comment, a CDATA section — because the text it skipped may be what the document meant.
+test('readXmlElements { elementOnly }: an element the caller says holds elements and white space only refuses text, a CDATA section, a comment or an instruction directly inside it', () => {
+  const holdsElements = (name) => name === 'Table' || name === 'Row';
+  const read = (xml) => readXmlElements(xml, all, { elementOnly: holdsElements });
+  const readOk = (xml) => { const r = read(xml); assert.strictEqual(r.ok, true, `${JSON.stringify(xml)}: ${r.detail}`); return r.elements; };
+  assert.deepStrictEqual(readOk('<Table>\r\n <Row> <Cell>x y</Cell>\t</Row>\n<Row/></Table>').map((e) => e.name), ['Table', 'Row', 'Cell', 'Row'], 'elements and white space: what such an element is made of');
+  for (const [what, xml, detail] of [
+    ['text before its elements', '<Table>t<Row/></Table>', /^text inside <Table>, which holds elements only, at line 1, column 8$/],
+    ['text after them', '<Table><Row/>t</Table>', /^text inside <Table>, which holds elements only, at line 1, column 14$/],
+    ['text in an element', '<Table><Row>text</Row></Table>', /text inside <Row>/],
+    ['a reference to a space', '<Table><Row>&#32;</Row></Table>', /text inside <Row>/],
+    ['a CDATA section', '<Table><Row><![CDATA[ ]]></Row></Table>', /a CDATA section inside <Row>, which holds elements only/],
+    ['a comment', '<Table><!-- c --><Row/></Table>', /a comment inside <Table>, which holds elements only/],
+    ['an instruction', '<Table><Row><?p x?></Row></Table>', /a processing instruction inside <Row>, which holds elements only/],
+  ]) {
+    const r = read(xml);
+    assert.strictEqual(r.ok, false, what);
+    assert.deepStrictEqual(Object.keys(r).sort(), ['detail', 'ok'], `${what}: no element is answered`);
+    assert.match(r.detail, detail, what);
+  }
+  // Only the elements the caller names: the text of any other is its own, and so are the prolog and the epilog.
+  assert.deepStrictEqual(readOk('<!-- c --><?p x?><Table><Cell>t<!-- c --><![CDATA[x]]><?p x?>&amp;</Cell></Table><!-- c -->').map((e) => e.name), ['Table', 'Cell']);
+  // Without the option nothing changes: text, comments, CDATA sections and instructions are read wherever they are.
+  assert.strictEqual(readXmlElements('<Table>t<!-- c --><![CDATA[x]]><?p x?><Row>t</Row></Table>', all).ok, true);
+  assert.strictEqual(readXmlElements('<Table>t</Table>', all, { elementOnly: undefined }).ok, true);
+  // It is a function of the name, or nothing.
+  for (const wrong of [true, 'Table', ['Table'], {}, null]) assert.throws(() => readXmlElements('<a/>', all, { elementOnly: wrong }), TypeError, String(wrong));
+});
