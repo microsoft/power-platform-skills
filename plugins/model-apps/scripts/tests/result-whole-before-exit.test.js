@@ -4,11 +4,18 @@
 // reached its reader cut short there: the Linux and macOS CI jobs read the 3.5 MB result of output-token-boundary.test.js as a JSON text that ended mid-string. Windows makes a pipe on stdout and stderr synchronous,
 // so that test passes there whatever the code does. lib/output-redaction.js → makeWritesBlocking is the fix: the last writes are made blocking first.
 //
-// These tests show the failure, and the fix, on EVERY platform:
-//   - in real processes whose stdout and stderr are the kind of stream Linux and macOS give a pipe (helpers/queued-stdio-preload.js: sockets over descriptors 3 and 4, which Node leaves asynchronous on Windows too):
-//     every branch of emitResult, the guard's printer of a fatal error, dataverse-request.js and the 3.5 MB scenario of output-token-boundary.test.js, each with a text of several megabytes — and each also over the
-//     process's own stdout and stderr, which are queued pipes on Linux and macOS;
-//   - in this process, with stand-ins for stdout and stderr that take what a pipe takes at once and queue the rest: emitResult has every text it wrote taken whole when it calls `process.exit`, and never returns.
+// These tests check it on every platform:
+//   - THE ORDER, in real processes (helpers/write-order-preload.js): each process records when it makes stdout or stderr blocking and when it writes
+//     to them, and each stream it wrote to must have been made blocking before its first write. An order does not depend on the platform, the
+//     runtime or how fast the reader reads, so this fails on every run for a printer without the call;
+//   - THE TEXT, in the same processes, whose stdout and stderr are the kind of stream Linux and macOS give a pipe (helpers/queued-stdio-preload.js:
+//     sockets over descriptors 3 and 4, which Node leaves asynchronous on Windows too) — every branch of emitResult, the guard's printer of a fatal
+//     error, dataverse-request.js and the 3.5 MB scenario of output-token-boundary.test.js, each with a text of several megabytes — and also over the
+//     process's own stdout and stderr, which are queued pipes on Linux and macOS. How much of a text a printer without the call loses here depends
+//     on the runtime and on how fast this process reads: with the code before the fix, on Windows, some branches still arrived whole (a different
+//     few under Node 20 and Node 22). This half shows what a reader gets; the order is what proves the fix;
+//   - in this process, with stand-ins for stdout and stderr that take what a pipe takes at once and queue the rest: emitResult has every text it wrote
+//     taken whole when it calls `process.exit`, and never returns — as deterministic as the order.
 // And they pin what must not change: the bytes and exit status of every branch for a small result, and makeWritesBlocking's leaving everything but the handle as it was (the output guard stays on the path).
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -17,12 +24,13 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { table, longText, ACCENT } = require('./helpers/exit-output-child.js');
-const { SECRETS, FOLDED } = require('./helpers/synthetic-token.js');
+const { TOKEN, SECRETS, FOLDED } = require('./helpers/synthetic-token.js');
 const { leaksIn } = require('./helpers/token-leaks.js');
 const { makeWritesBlocking, guardStream } = require('../lib/output-redaction.js');
 
 const CHILD = path.join(__dirname, 'helpers', 'exit-output-child.js');
 const QUEUED = path.join(__dirname, 'helpers', 'queued-stdio-preload.js');
+const ORDER = path.join(__dirname, 'helpers', 'write-order-preload.js');
 const TOKEN_CHILD = path.join(__dirname, 'helpers', 'token-boundary-child.js');
 const DATAVERSE_REQUEST = path.join(__dirname, '..', 'dataverse-request.js');
 const AUTH = path.join(__dirname, '..', 'lib', 'dataverse-auth.js');
@@ -34,19 +42,37 @@ const SMALL = 2;
 // pipes on Linux and macOS, synchronous ones on Windows).
 const MODES = ['queued', 'own'];
 
+// Where each run's record of the order of its writes goes (helpers/write-order-preload.js): one file a run, in a folder of this test file's.
+let orderDir = null;
+let orderRuns = 0;
+const orderFile = () => path.join(orderDir || (orderDir = makeTempDir('write-order-')), `${orderRuns += 1}.json`);
+
 function run(args, mode, env = {}) {
   const queued = mode === 'queued';
-  const result = spawnSync(process.execPath, [...(queued ? ['--require', QUEUED] : []), ...args], {
+  const record = orderFile();
+  const result = spawnSync(process.execPath, [...(queued ? ['--require', QUEUED] : []), '--require', ORDER, ...args], {
     stdio: ['ignore', 'pipe', 'pipe', ...(queued ? ['pipe', 'pipe'] : [])],
-    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', ...env },
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', ...env, WRITE_ORDER_FILE: record },
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
     timeout: 120000,
   });
   assert.equal(result.error, undefined, `the process could not be run: ${result.error}`);
-  if (!queued) return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  const order = fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, 'utf8')).events : null;
+  if (!queued) return { status: result.status, stdout: result.stdout, stderr: result.stderr, order };
   // With the preload, everything the script prints goes to descriptors 3 and 4; what reached 1 and 2 is Node's own (a failure to start), shown if the test fails.
-  return { status: result.status, stdout: result.output[3], stderr: result.output[4], own: `${result.stdout}${result.stderr}` };
+  return { status: result.status, stdout: result.output[3], stderr: result.output[4], own: `${result.stdout}${result.stderr}`, order };
+}
+
+// Each stream the process wrote to was made blocking before its first write — the order the fix is, read from the process itself.
+function assertBlockingFirst(ran, what) {
+  assert.ok(Array.isArray(ran.order), `${what}: the process left no record of its writes`);
+  for (const name of ['stdout', 'stderr']) {
+    const firstWrite = ran.order.indexOf(`write ${name}`);
+    if (firstWrite === -1) continue;
+    const blocking = ran.order.indexOf(`blocking ${name}`);
+    assert.ok(blocking !== -1 && blocking < firstWrite, `${what}: ${name} is made blocking before it is written to — ${blocking === -1 ? 'it never was' : 'only after'} (${ran.order.slice(0, 8).join(', ')})`);
+  }
 }
 
 const runScenario = (scenario, rows, mode) => run([CHILD, scenario, JSON.stringify({ rows })], mode);
@@ -72,6 +98,7 @@ function assertSameText(actual, expected, what) {
 
 function assertPrinted(ran, expected, what) {
   assert.equal(ran.status, expected.status, `${what}: the exit status (${ran.own || ''})`);
+  assertBlockingFirst(ran, what);
   if (expected.document) {
     assert.ok(ran.stdout.endsWith('\n') && ran.stdout.indexOf('\n') === ran.stdout.length - 1, `${what}: one line, ended by a line break — ${ran.stdout.length} characters arrived`);
     assert.match(ran.stdout, /^[\x00-\x7e]*$/, `${what}: every character above U+007E is escaped`);
@@ -104,6 +131,7 @@ test('an error that ends the process after a token was obtained is printed whole
       const ran = runScenario('fatal', rows, mode);
       const what = `${rows} rows, ${mode}`;
       assert.equal(ran.status, 1, `${what}: the status of an error nothing caught (${ran.own || ''})`);
+      assertBlockingFirst(ran, what);
       assert.equal(ran.stdout, '', `${what}: nothing on stdout`);
       const head = `Uncaught Error: ${longText(rows)} Rejected bearer <token>\n`;
       assertSameText(ran.stderr.slice(0, head.length), head, `${what}: the message, with the token taken out`);
@@ -124,6 +152,7 @@ test('the 3.5 MB result of output-token-boundary.test.js — the token in one ro
   const facts = JSON.parse(fs.readFileSync(factsFile, 'utf8'));
   assert.equal(facts.obtained, true, 'the token was obtained, so the output guard was on the streams');
   assert.equal(ran.status, 0, ran.stderr);
+  assertBlockingFirst(ran, 'the 3.5 MB result');
   const escaped = JSON.stringify(FOLDED).slice(1, -1);
   assert.equal(ran.stdout.length, facts.bytes - escaped.length + '<token>'.length + 1, `the whole text, with only the token changed — ${ran.stdout.length} characters arrived of ${facts.bytes}`);
   assert.deepEqual(leaksIn(ran.stdout, SECRETS), []);
@@ -163,10 +192,12 @@ test('dataverse-request.js prints an answer of several megabytes whole before it
       const what = `${rows} rows, ${mode}`;
       const answered = runDataverseRequest(rows, { mode });
       assert.equal(answered.status, 0, `${what}: ${answered.stderr}${answered.own || ''}`);
+      assertBlockingFirst(answered, `${what}: the answer`);
       assertSameText(answered.stdout, `${JSON.stringify({ status: 200, data: { value: table(rows) } })}\n`, `${what}: the answer`);
       assert.equal(answered.stderr, '', `${what}: nothing on stderr`);
       const failed = runDataverseRequest(rows, { fail: true, mode });
       assert.equal(failed.status, 1, `${what}: a failure exits 1`);
+      assertBlockingFirst(failed, `${what}: the failure`);
       assert.equal(failed.stdout, '', `${what}: nothing on stdout`);
       assertSameText(failed.stderr, `${longText(rows)}\n`, `${what}: the failure`);
     }
@@ -279,6 +310,22 @@ test('makeWritesBlocking makes each handle blocking and leaves everything else a
   assert.deepEqual(calls, [['piped', true], ['refusing', true], ['throwing'], ['piped', true]]);
   assert.equal(piped.write, write, 'the stream\'s own write is left as it was');
   assert.doesNotThrow(() => makeWritesBlocking());
+});
+
+// The printer of an error that ends the process reads `process.stderr` inside the try that holds its write, so a stream that cannot even be read — a
+// host that replaced it with an accessor that throws — ends the process as an error nothing caught always has: status 1. Read outside that try, the
+// throw left the handler itself and Node ended the process with 7, its status for a handler that failed, printing that failure.
+test('an error that ends the process when process.stderr cannot even be read — an accessor that throws — still ends it with status 1, printing nothing', () => {
+  const redaction = path.join(__dirname, '..', 'lib', 'output-redaction.js');
+  const ran = spawnSync(process.execPath, ['-e', [
+    `require(${JSON.stringify(redaction)}).noteToken(${JSON.stringify(TOKEN)});`,
+    'Object.defineProperty(process, \'stderr\', { configurable: true, get() { throw new Error(\'stderr is gone\'); } });',
+    'throw new Error(\'the work failed\');',
+  ].join('\n')], { encoding: 'utf8', env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' }, timeout: 60000 });
+  assert.equal(ran.error, undefined, `the process could not be run: ${ran.error}`);
+  assert.equal(ran.status, 1, `the status of an error nothing caught, not 7 (the handler failed): ${ran.stderr.slice(0, 300)}`);
+  assert.equal(ran.stdout, '', 'nothing on stdout');
+  assert.equal(ran.stderr, '', 'no stream to print on — and no failure of the handler printed by Node');
 });
 
 test('makeWritesBlocking leaves the output guard on the stream: what is written after it is still cleaned of the tokens the process obtained', () => {

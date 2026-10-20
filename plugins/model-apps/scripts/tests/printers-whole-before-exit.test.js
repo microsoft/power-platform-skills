@@ -1,18 +1,24 @@
 'use strict';
-// A script that writes and then ends the process at once must write the whole text first — round two of result-whole-before-exit.test.js (which
-// holds emitResult, the printer of an error that ends the process, and dataverse-request.js). Here: every printer a script has of its OWN — check-auth.js,
-// genpage-plan-provenance.js, promote-intent-pages.js, check-page-files.js, genpage-worker-output.js — every usage error and last-resort handler of the
-// scripts, the "last writes" a script makes right before its result, and the hooks' messages. Each makes its writes blocking first
-// (lib/output-redaction.js makeWritesBlocking); exit-writes-inventory.test.js holds that no exit is left out.
+// A script that writes and then ends the process at once must make its writes blocking first (lib/output-redaction.js makeWritesBlocking), or a pipe
+// on Linux and macOS takes only what fits at once. result-whole-before-exit.test.js holds emitResult, the printer of an error that ends the process
+// and dataverse-request.js; this file holds every printer a script has of its OWN — check-auth.js, genpage-plan-provenance.js,
+// promote-intent-pages.js, check-page-files.js, genpage-worker-output.js — every usage error and last-resort handler of the scripts, the "last
+// writes" a script makes right before its result, and the hooks' messages. exit-writes-inventory.test.js is a syntactic tripwire for a new exit.
 //
-// How a test proves it, on every platform: the script runs as a real process whose stdout and stderr are the kind of pipe Linux and macOS give it
-// (helpers/queued-stdio-preload.js), and NOTHING is read from them until the process has ended, or has written and then stopped (it waits for the
-// reader). A script that ends at once after writing more than a pipe and its reader's buffer take (64 KiB each) loses the rest — every time — while
-// one whose writes are blocking waits and delivers it all. The texts are megabytes long and are made without a command line that long (Windows allows
-// 32,767 characters): helpers/huge-failure-preload.js makes the plugin's flag check answer with such a message, or its argument parser throw one;
-// helpers/fake-auth-check-preload.js refuses check-auth.js's WhoAmI with such a diagnostic; plans, specs and pages are files. Each case also runs over
-// the process's own stdout and stderr (queued pipes on Linux and macOS, synchronous ones on Windows) — the reference the queued run must equal — and
-// with a small text, whose bytes and exit status must be what they always were.
+// Each case runs as a real process, with a text a megabyte long and with a small one, and is checked two ways:
+//   - THE ORDER (helpers/write-order-preload.js): the process records when it makes stdout or stderr blocking and when it writes to them, and each
+//     stream it wrote to must have been made blocking before its first write. An order does not depend on the platform, the runtime or how far
+//     anything reads ahead, so this is the check that fails, on every run, for a printer left without the call (or with it after its write, or on
+//     the other stream). With the unchanged printers it failed on Windows under Node 20 and Node 22 alike.
+//   - THE TEXT: what a reader receives is the whole text, with the exit status it always had — over the kind of pipe Linux and macOS give a script
+//     (helpers/queued-stdio-preload.js), whose reader holds back: its streams are paused until the process has ended, or has written and then
+//     written nothing more for a while; and over the process's own stdout and stderr (queued pipes on Linux and macOS, synchronous ones on Windows),
+//     the reference the queued run must equal. Pausing stops the test from taking what arrives, not the runtime from reading ahead below it, so how
+//     much a printer without the call loses here depends on the runtime: on Windows, 65,536 characters of a megabyte arrived under Node 22, and all
+//     of it under Node 20. The text check shows what a reader gets; it is not what proves the fix.
+// The texts are made without a command line that long (Windows allows 32,767 characters): helpers/huge-failure-preload.js makes the plugin's flag
+// check answer with such a message, or its argument parser throw one; helpers/fake-auth-check-preload.js refuses check-auth.js's WhoAmI with such a
+// diagnostic; plans, specs and pages are files. A small text's bytes and exit status must be what they always were.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,24 +31,31 @@ const { validateFlags } = require('../lib/dataverse-auth.js');
 const SCRIPTS = path.join(__dirname, '..');
 const HOOKS = path.join(SCRIPTS, '..', 'hooks');
 const QUEUED = path.join(__dirname, 'helpers', 'queued-stdio-preload.js');
+const ORDER = path.join(__dirname, 'helpers', 'write-order-preload.js');
 const HUGE = path.join(__dirname, 'helpers', 'huge-failure-preload.js');
 const FAKE_AUTH = path.join(__dirname, 'helpers', 'fake-auth-check-preload.js');
 const ENV_URL = 'https://contoso.crm.dynamics.com';
 // A megabyte: some eight times what a pipe and its reader's buffer take before the writer has to wait.
 const BIG = 1024 * 1024;
 const MODES = ['queued', 'own'];
-// A held process that has written something and then written nothing more for this long, while still running, is waiting for its reader.
+// A held process that has written something and then written nothing more for this long, while still running, is taken to be waiting for its reader.
 const QUIET_MS = 300;
 const CAP_MS = 10000;
 
-// Runs `node <args>` and reads what it printed. `queued`: stdout and stderr are descriptors 3 and 4 (the preload), held unread as described above;
-// `own`: the process's own stdout and stderr, read as they come. `input` is written to stdin (a hook's payload).
+// Where each run's record of the order of its writes goes (helpers/write-order-preload.js): one file a run, in a folder of this test file's.
+let orderDir = null;
+let orderRuns = 0;
+const orderFile = () => path.join(orderDir || (orderDir = makeTempDir('write-order-')), `${orderRuns += 1}.json`);
+
+// Runs `node <args>` and reads what it printed, and the order of its writes (`order`). `queued`: stdout and stderr are descriptors 3 and 4 (the
+// preload), held back as described above; `own`: the process's own stdout and stderr, read as they come. `input` is written to stdin (a hook's payload).
 function runScript(args, { mode = 'queued', preloads = [], env = {}, cwd, input } = {}) {
   return new Promise((resolve, reject) => {
     const queued = mode === 'queued';
-    const child = spawn(process.execPath, [...(queued ? ['--require', QUEUED] : []), ...preloads.flatMap((p) => ['--require', p]), ...args], {
+    const record = orderFile();
+    const child = spawn(process.execPath, [...(queued ? ['--require', QUEUED] : []), ...preloads.flatMap((p) => ['--require', p]), '--require', ORDER, ...args], {
       cwd,
-      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', ...env },
+      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', ...env, WRITE_ORDER_FILE: record },
       stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(queued ? ['pipe', 'pipe'] : [])],
     });
     if (input !== undefined) child.stdin.end(input);
@@ -81,6 +94,7 @@ function runScript(args, { mode = 'queued', preloads = [], env = {}, cwd, input 
       stdout: Buffer.concat(read[0]).toString('utf8'),
       stderr: Buffer.concat(read[1]).toString('utf8'),
       own: Buffer.concat(own).toString('utf8'),
+      order: fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, 'utf8')).events : null,
     }));
   });
 }
@@ -106,17 +120,31 @@ function assertSameText(actual, expected, what) {
   assert.fail(`${what}: ${actual.length} characters arrived of the ${expected.length} expected; it ends with ${ending(actual)} where the text ends with ${ending(expected)}`);
 }
 
+// Each stream the process wrote to was made blocking before its first write — the order the fix is, read from the process itself.
+function assertBlockingFirst(ran, what) {
+  assert.ok(Array.isArray(ran.order), `${what}: the process left no record of its writes`);
+  for (const name of ['stdout', 'stderr']) {
+    const firstWrite = ran.order.indexOf(`write ${name}`);
+    if (firstWrite === -1) continue;
+    const blocking = ran.order.indexOf(`blocking ${name}`);
+    assert.ok(blocking !== -1 && blocking < firstWrite, `${what}: ${name} is made blocking before it is written to — ${blocking === -1 ? 'it never was' : 'only after'} (${ran.order.slice(0, 8).join(', ')})`);
+  }
+}
+
 function assertPrinted(ran, expected, what) {
   assert.equal(ran.status, expected.status, `${what}: the exit status (${ran.own || ''}${ran.status === 0 ? '' : ran.stderr.slice(0, 300)})`);
   assertSameText(ran.stdout, expected.stdout, `${what}: stdout`);
   assertSameText(ran.stderr, expected.stderr, `${what}: stderr`);
+  assertBlockingFirst(ran, what);
 }
 
-// The same script, the same text, through both kinds of stream: the queued run held unread must equal the reference, and both must hold `text` whole.
+// The same script, the same text, through both kinds of stream: the queued run held back must equal the reference, both must hold `text` whole, and
+// both must have made each stream blocking before writing to it.
 async function assertWholeBothWays(args, { preloads, env, cwd, input, status, stream, text }, what) {
   const [queued, own] = await Promise.all(MODES.map((mode) => runScript(args, { mode, preloads, env, cwd, input })));
   for (const [ran, mode] of [[queued, 'queued'], [own, 'own']]) {
     assert.equal(ran.status, status, `${what}, ${mode}: the exit status (${ran.own}${ran.stderr.slice(0, 300)})`);
+    assertBlockingFirst(ran, `${what}, ${mode}`);
     assert.ok(ran[stream].includes(text), `${what}, ${mode}: the whole text is on ${stream} — ${ran[stream].length} characters arrived, and they do not hold the ${text.length}-character text that ends it`);
     assert.ok(ran[stream].endsWith('\n'), `${what}, ${mode}: ${stream} ends with its line break`);
   }
@@ -214,8 +242,8 @@ test('check-page-files.js prints the files and problems of a plan of twenty thou
 // ── genpage-worker-output.js: its result quotes the path it was given ───────────────────────────────────────────────────────────────────────────────
 
 test('genpage-worker-output.js prints a result that quotes the longest path a command line can carry whole, with exit 3; a short one exactly as before', async () => {
-  // Bounded by the command line (32,767 characters on Windows): three bytes a character makes the longest text the platform allows. On Windows that
-  // fits a pipe and its reader's buffer, so the queued run cannot show a cut there; on Linux and macOS the own run is the real case.
+  // Bounded by the command line (32,767 characters on Windows): three bytes a character make the longest text the platform allows, some 90 KB —
+  // more than a pipe takes at once, though not the megabyte of the other cases.
   const dir = makeTempDir('worker-output-whole-');
   for (const name of [`${'\u20ac'.repeat(30000)}.tsx`, 'missing.tsx']) {
     const file = path.join(dir, name);
@@ -251,6 +279,7 @@ test('every script\'s usage error is what it always was: the message, then the u
     assert.equal(ran.status, 1, `${script}: ${ran.own}${ran.stderr}`);
     assert.equal(ran.stdout, '', `${script}: nothing on stdout`);
     assert.match(ran.stderr, new RegExp(`^✗ ${text.replace(/[<>]/g, '\\$&')}\\n\\S[^]*\\n$`), `${script}: ${JSON.stringify(ran.stderr.slice(0, 200))}`);
+    assertBlockingFirst(ran, script);
   });
 });
 
@@ -277,6 +306,7 @@ test('every script\'s last-resort handler prints a small error as it always did,
     const ran = await runScript([path.join(SCRIPTS, script), ...args], { preloads: [HUGE], env: { HUGE_FAILURE: 'throw', HUGE_FAILURE_SIZE: '10' } });
     assert.equal(ran.status, 1, `${script}: ${ran.own}${ran.stderr}`);
     assert.match(ran.stderr, new RegExp(`^(?:Error: )?${text.replace(/[<>]/g, '\\$&')}\\n$`), `${script}: ${JSON.stringify(ran.stderr.slice(0, 200))}`);
+    assertBlockingFirst(ran, script);
   });
   const settings = await runScript([path.join(SCRIPTS, 'solution-settings.js'), 'template'], { preloads: [HUGE], env: { HUGE_FAILURE: 'throw', HUGE_FAILURE_SIZE: String(BIG) } });
   assertPrinted(settings, { status: 1, stdout: '', stderr: 'Error: solution-settings.js failed unexpectedly (Error).\n' }, 'solution-settings.js');

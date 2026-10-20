@@ -3,9 +3,14 @@
 // pipe. Node writes to a pipe asynchronously on Linux and macOS, and `process.exit` does not wait for what is still queued (https://nodejs.org/api/process.html#a-note-on-process-io), so a large result reached its reader
 // cut short there; Windows makes a pipe on stdout and stderr synchronous, so nothing shows it there. Each printer now makes its writes blocking first (makeWritesBlocking, lib/output-redaction.js).
 //
-// The tests show it on EVERY platform: real processes whose stdout and stderr are the kind of stream Linux and macOS give a pipe (helpers/queued-stdio-preload.js: sockets over descriptors 3 and 4, which Node leaves
-// asynchronous on Windows too) print a result of megabytes — and the same over the process's own stdout and stderr. In this process, stand-ins for stdout and stderr that take what a pipe takes at once and queue the
-// rest show that emitResult has every text taken whole when it calls `process.exit`, and never returns. A small result is pinned to the bytes and the exit status it always had.
+// The tests check it on every platform. THE ORDER: each real process records when it makes stdout or stderr blocking and when it writes to them
+// (helpers/write-order-preload.js), and each stream it wrote to must have been made blocking before its first write — which does not depend on the
+// platform, the runtime or how fast the reader reads, so it fails on every run for a printer without the call. THE TEXT: the same processes, whose
+// stdout and stderr are the kind of stream Linux and macOS give a pipe (helpers/queued-stdio-preload.js: sockets over descriptors 3 and 4, which Node
+// leaves asynchronous on Windows too), print a result of megabytes — and the same over the process's own stdout and stderr; how much of it a printer
+// without the call loses depends on the runtime and on how fast this process reads, so this half shows what a reader gets, not the fix. In this
+// process, stand-ins for stdout and stderr that take what a pipe takes at once and queue the rest show that emitResult has every text taken whole when
+// it calls `process.exit`, and never returns — as deterministic as the order. A small result is pinned to the bytes and the exit status it always had.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -16,6 +21,7 @@ const { rows, longText, controls } = require('./helpers/big-results.js');
 
 const SCRIPTS = path.join(__dirname, '..');
 const QUEUED = path.join(__dirname, 'helpers', 'queued-stdio-preload.js');
+const ORDER = path.join(__dirname, 'helpers', 'write-order-preload.js');
 const FAKE_ORG = path.join(__dirname, 'helpers', 'fake-big-org-preload.js');
 const BUILDERS = path.join(__dirname, 'helpers', 'big-results.js');
 const AUTH = path.join(SCRIPTS, 'lib', 'dataverse-auth.js');
@@ -34,20 +40,38 @@ function makeTempDir(prefix) {
   return dir;
 }
 
+// Where each run's record of the order of its writes goes (helpers/write-order-preload.js): one file a run.
+let orderDir = null;
+let orderRuns = 0;
+const orderFile = () => path.join(orderDir || (orderDir = makeTempDir('pcf-write-order-')), `${orderRuns += 1}.json`);
+
 function run(args, mode, env = {}) {
   const queued = mode === 'queued';
-  const result = spawnSync(process.execPath, [...(queued ? ['--require', QUEUED] : []), ...args], {
+  const record = orderFile();
+  const result = spawnSync(process.execPath, [...(queued ? ['--require', QUEUED] : []), '--require', ORDER, ...args], {
     cwd: makeTempDir('pcf-whole-before-exit-'),
     stdio: ['ignore', 'pipe', 'pipe', ...(queued ? ['pipe', 'pipe'] : [])],
-    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: '1', ...env },
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: '1', ...env, WRITE_ORDER_FILE: record },
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
     timeout: 120000,
   });
   assert.equal(result.error, undefined, `the process could not be run: ${result.error}`);
-  if (!queued) return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  const order = fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, 'utf8')).events : null;
+  if (!queued) return { status: result.status, stdout: result.stdout, stderr: result.stderr, order };
   // With the preload everything the script prints goes to descriptors 3 and 4; what reached 1 and 2 is Node's own (a failure to start), shown if the test fails.
-  return { status: result.status, stdout: result.output[3], stderr: result.output[4], own: `${result.stdout}${result.stderr}` };
+  return { status: result.status, stdout: result.output[3], stderr: result.output[4], own: `${result.stdout}${result.stderr}`, order };
+}
+
+// Each stream the process wrote to was made blocking before its first write — the order the fix is, read from the process itself.
+function assertBlockingFirst(ran, what) {
+  assert.ok(Array.isArray(ran.order), `${what}: the process left no record of its writes`);
+  for (const name of ['stdout', 'stderr']) {
+    const firstWrite = ran.order.indexOf(`write ${name}`);
+    if (firstWrite === -1) continue;
+    const blocking = ran.order.indexOf(`blocking ${name}`);
+    assert.ok(blocking !== -1 && blocking < firstWrite, `${what}: ${name} is made blocking before it is written to — ${blocking === -1 ? 'it never was' : 'only after'} (${ran.order.slice(0, 8).join(', ')})`);
+  }
 }
 
 // Compares a long text by its length and its two ends first, so that a text cut short fails with a message a person can read.
@@ -60,6 +84,7 @@ function assertSameText(actual, expected, what) {
 
 function assertPrinted(ran, expected, what) {
   assert.equal(ran.status, expected.status, `${what}: the exit status (${ran.own || ''})`);
+  assertBlockingFirst(ran, what);
   assertSameText(ran.stdout, expected.stdout, `${what}: stdout`);
   assertSameText(ran.stderr, expected.stderr, `${what}: stderr`);
 }
@@ -219,6 +244,7 @@ test('lint-pcf.js prints findings of megabytes whole before it exits — through
   for (const mode of MODES) {
     const ran = run([path.join(SCRIPTS, 'lint-pcf.js'), '--manifest', big], mode);
     assert.equal(ran.status, 1, `${mode}: findings exit 1 (${ran.own || ''})`);
+    assertBlockingFirst(ran, `${mode}: the findings`);
     assert.ok(ran.stdout.endsWith('}\n') && ran.stdout.indexOf('\n') === ran.stdout.length - 1, `${mode}: one JSON line, ended by a line break — ${ran.stdout.length} characters arrived`);
     const result = JSON.parse(ran.stdout);
     assert.equal(result.ok, false);
@@ -228,6 +254,7 @@ test('lint-pcf.js prints findings of megabytes whole before it exits — through
     printed[mode] = ran.stdout;
     const fine = run([path.join(SCRIPTS, 'lint-pcf.js'), '--manifest', clean], mode);
     assert.equal(fine.status, 0, `${mode}: a manifest with no error exits 0 (${fine.stderr})`);
+    assertBlockingFirst(fine, `${mode}: no finding`);
     assert.deepEqual(JSON.parse(fine.stdout), { ok: true, results: [{ manifest: clean, errors: [], warnings: JSON.parse(fine.stdout).results[0].warnings }] }, `${mode}: the same shape`);
     assert.equal(fine.stderr, '', `${mode}: nothing on stderr`);
   }

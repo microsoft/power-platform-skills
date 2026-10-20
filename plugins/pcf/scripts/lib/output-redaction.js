@@ -512,7 +512,9 @@ function guardStream(stream, redact = redactOutput) {
 /**
  * Makes the writes to each of `streams` blocking from here on: a `write` returns when the stream has taken the whole text. For the last writes of a process — the ones a `process.exit` follows at once (`emitResult` in
  * lib/dataverse-auth.js, the printer of an error that ends the process below, a script's own result printer). Nothing else about the stream changes: the text still goes through its `write`, the guard above included.
- * Each plugin's tests list every exit of its code that is not protected by this, with the bound that makes it safe (tests/exit-writes-inventory.test.js in model-apps, tests/pcf-exit-writes-inventory.test.js in pcf).
+ * Each plugin's tests keep a tripwire on this (tests/exit-writes-inventory.test.js in model-apps, tests/pcf-exit-writes-inventory.test.js in pcf): a syntactic scan of the source that fails on a new exit that has
+ * no such call before it and is not listed with the bound that makes it safe, and on a call that comes after a write in its own block or leaves out a stream written before the exit. It reads the source, not what
+ * runs: the tests that record the order of a process's own calls (tests/printers-whole-before-exit.test.js with helpers/write-order-preload.js) are what show that a printer makes its stream blocking before it writes.
  *
  * WHY. Node writes to a pipe asynchronously on Linux and macOS, and synchronously on Windows (https://nodejs.org/api/process.html#a-note-on-process-io). What the pipe does not take at once — more than its buffer holds,
  * 64 KiB on Linux — is queued, and `process.exit` ends the process without waiting for the queue (https://nodejs.org/api/process.html#processexitcode). An agent reads a script's result through a pipe, so a large
@@ -522,7 +524,9 @@ function guardStream(stream, redact = redactOutput) {
  * platform: without this, a 3.5 MB result arrived in part on Windows too; with it, whole.
  *
  * SAFE because it is done at the end: the process exits right after, so no other work waits behind a blocking write. A reader that is reading takes the text; one that has stopped reading now holds the script at its last
- * write — as a pipe on Windows always has — instead of receiving a result cut short. On POSIX the flag belongs to the pipe's open file description, which every process holding that end shares, and Node puts it back as
+ * write — as a pipe on Windows always has — instead of receiving a result cut short. A hook is no exception: a host that read a hook's output only after the hook had exited would now wait until its own time limit
+ * for the hook ends it, where it used to read a message cut short; a reader that closes its end does not hold it: the write fails at once (EPIPE).
+ * On POSIX the flag belongs to the pipe's open file description, which every process holding that end shares, and Node puts it back as
  * it found it when the process exits (ResetStdio, src/node.cc). A write queued BEFORE this call (only when the reader has left more than a pipe's buffer unread, with no turn of the event loop since) stays queued, and the
  * writes after it wait behind it in the stream's own buffer: Node has no synchronous flush of a queued write. That is why this is called before the last writes, not just before `process.exit`.
  *
@@ -556,8 +560,11 @@ function guardFatalErrors() {
     } catch {
       text = 'an error that could not be printed';
     }
-    makeWritesBlocking(process.stderr);
     try {
+      // Inside the try, with the write: reading `process.stderr` can itself throw (a host that replaced it with an accessor that does), and the
+      // process must still end with status 1, as an error nothing caught always does — a throw out of this handler would end it with 7 instead
+      // ("Internal Exception Handler Run-Time Failure": https://nodejs.org/api/process.html#exit-codes).
+      makeWritesBlocking(process.stderr);
       process.stderr.write(`${redactOutput(`${origin === 'unhandledRejection' ? 'Uncaught (in promise) ' : 'Uncaught '}${text}`)}\n`);
     } catch {
       // The stream is gone: there is nobody to tell.

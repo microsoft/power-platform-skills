@@ -1,16 +1,21 @@
 'use strict';
-// A pcf script that writes and then ends the process at once must write the whole text first — round two of pcf-result-whole-before-exit.test.js
-// (which holds emitResult and the result printers of pcf-inventory.js, verify-pcf.js and lint-pcf.js). Here: check-auth.js (this plugin's copy of
-// model-apps' script), every script's usage error, and the write-safety hook's message. Each makes its writes blocking first
-// (lib/output-redaction.js makeWritesBlocking); pcf-exit-writes-inventory.test.js holds that no exit is left out.
+// A pcf script that writes and then ends the process at once must make its writes blocking first (lib/output-redaction.js makeWritesBlocking), or a
+// pipe on Linux and macOS takes only what fits at once. pcf-result-whole-before-exit.test.js holds emitResult and the result printers of
+// pcf-inventory.js, verify-pcf.js and lint-pcf.js; this file holds check-auth.js (this plugin's copy of model-apps' script), every script's usage
+// error, and the write-safety hook's message. pcf-exit-writes-inventory.test.js is a syntactic tripwire for a new exit.
 //
-// How a test proves it, on every platform: the script runs as a real process whose stdout and stderr are the kind of pipe Linux and macOS give it
-// (helpers/queued-stdio-preload.js), and NOTHING is read from them until the process has ended, or has written and then stopped (it waits for the
-// reader). A script that ends at once after writing more than a pipe holds loses the rest — every time — while one whose writes are blocking waits
-// and delivers it all. The texts are a megabyte long, made without a command line that long: helpers/huge-failure-preload.js makes the plugin's flag
-// check answer with such a message; helpers/fake-auth-check-preload.js refuses check-auth.js's WhoAmI with such a diagnostic. Each case also runs
-// over the process's own stdout and stderr — the reference the queued run must equal — and with a small text, whose bytes and exit status must be
-// what they always were.
+// Each case runs as a real process, with a text a megabyte long and with a small one, and is checked two ways:
+//   - THE ORDER (helpers/write-order-preload.js): the process records when it makes stdout or stderr blocking and when it writes to them, and each
+//     stream it wrote to must have been made blocking before its first write. An order does not depend on the platform, the runtime or how far
+//     anything reads ahead, so this is the check that fails, on every run, for a printer left without the call.
+//   - THE TEXT: the whole text arrives, with the exit status it always had — over the kind of pipe Linux and macOS give a script
+//     (helpers/queued-stdio-preload.js), whose reader holds back (its streams are paused until the process has ended, or has written and then
+//     written nothing more for a while), and over the process's own stdout and stderr, the reference the queued run must equal. Pausing stops the
+//     test from taking what arrives, not the runtime from reading ahead below it, so how much a printer without the call loses here depends on the
+//     runtime (on Windows: 65,536 characters of a megabyte under Node 22, all of it under Node 20). It shows what a reader gets; the order is the proof.
+// The texts are made without a command line that long: helpers/huge-failure-preload.js makes the plugin's flag check answer with such a message;
+// helpers/fake-auth-check-preload.js refuses check-auth.js's WhoAmI with such a diagnostic. A small text's bytes and exit status must be what they
+// always were.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -23,6 +28,7 @@ const { validateFlags } = require('../lib/dataverse-auth.js');
 const SCRIPTS = path.join(__dirname, '..');
 const HOOKS = path.join(SCRIPTS, '..', 'hooks');
 const QUEUED = path.join(__dirname, 'helpers', 'queued-stdio-preload.js');
+const ORDER = path.join(__dirname, 'helpers', 'write-order-preload.js');
 const HUGE = path.join(__dirname, 'helpers', 'huge-failure-preload.js');
 const FAKE_AUTH = path.join(__dirname, 'helpers', 'fake-auth-check-preload.js');
 const ENV_URL = 'https://contoso.crm.dynamics.com';
@@ -41,14 +47,21 @@ function makeTempDir(prefix) {
   return dir;
 }
 
-// Runs `node <args>` and reads what it printed. `queued`: stdout and stderr are descriptors 3 and 4 (the preload), held unread until the process has
-// ended or has written and then stopped; `own`: the process's own stdout and stderr, read as they come. `input` is written to stdin (a hook's payload).
+// Where each run's record of the order of its writes goes (helpers/write-order-preload.js): one file a run.
+let orderDir = null;
+let orderRuns = 0;
+const orderFile = () => path.join(orderDir || (orderDir = makeTempDir('pcf-write-order-')), `${orderRuns += 1}.json`);
+
+// Runs `node <args>` and reads what it printed, and the order of its writes (`order`). `queued`: stdout and stderr are descriptors 3 and 4 (the
+// preload), held back until the process has ended or has written and then stopped; `own`: the process's own stdout and stderr, read as they come.
+// `input` is written to stdin (a hook's payload).
 function runScript(args, { mode = 'queued', preloads = [], env = {}, cwd, input } = {}) {
   return new Promise((resolve, reject) => {
     const queued = mode === 'queued';
-    const child = spawn(process.execPath, [...(queued ? ['--require', QUEUED] : []), ...preloads.flatMap((p) => ['--require', p]), ...args], {
+    const record = orderFile();
+    const child = spawn(process.execPath, [...(queued ? ['--require', QUEUED] : []), ...preloads.flatMap((p) => ['--require', p]), '--require', ORDER, ...args], {
       cwd: cwd || makeTempDir('pcf-printers-cwd-'),
-      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: '1', ...env },
+      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: '1', ...env, WRITE_ORDER_FILE: record },
       stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(queued ? ['pipe', 'pipe'] : [])],
     });
     if (input !== undefined) child.stdin.end(input);
@@ -87,6 +100,7 @@ function runScript(args, { mode = 'queued', preloads = [], env = {}, cwd, input 
       stdout: Buffer.concat(read[0]).toString('utf8'),
       stderr: Buffer.concat(read[1]).toString('utf8'),
       own: Buffer.concat(own).toString('utf8'),
+      order: fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, 'utf8')).events : null,
     }));
   });
 }
@@ -105,16 +119,29 @@ function assertSameText(actual, expected, what) {
   assert.fail(`${what}: ${actual.length} characters arrived of the ${expected.length} expected; it ends with ${ending(actual)} where the text ends with ${ending(expected)}`);
 }
 
+// Each stream the process wrote to was made blocking before its first write — the order the fix is, read from the process itself.
+function assertBlockingFirst(ran, what) {
+  assert.ok(Array.isArray(ran.order), `${what}: the process left no record of its writes`);
+  for (const name of ['stdout', 'stderr']) {
+    const firstWrite = ran.order.indexOf(`write ${name}`);
+    if (firstWrite === -1) continue;
+    const blocking = ran.order.indexOf(`blocking ${name}`);
+    assert.ok(blocking !== -1 && blocking < firstWrite, `${what}: ${name} is made blocking before it is written to — ${blocking === -1 ? 'it never was' : 'only after'} (${ran.order.slice(0, 8).join(', ')})`);
+  }
+}
+
 function assertPrinted(ran, expected, what) {
   assert.equal(ran.status, expected.status, `${what}: the exit status (${ran.own || ''}${ran.status === 0 ? '' : ran.stderr.slice(0, 300)})`);
   assertSameText(ran.stdout, expected.stdout, `${what}: stdout`);
   assertSameText(ran.stderr, expected.stderr, `${what}: stderr`);
+  assertBlockingFirst(ran, what);
 }
 
 async function assertWholeBothWays(args, { preloads, env, cwd, input, status, stream, text }, what) {
   const [queued, own] = await Promise.all(MODES.map((mode) => runScript(args, { mode, preloads, env, cwd, input })));
   for (const [ran, mode] of [[queued, 'queued'], [own, 'own']]) {
     assert.equal(ran.status, status, `${what}, ${mode}: the exit status (${ran.own}${ran.stderr.slice(0, 300)})`);
+    assertBlockingFirst(ran, `${what}, ${mode}`);
     assert.ok(ran[stream].includes(text), `${what}, ${mode}: the whole text is on ${stream} — ${ran[stream].length} characters arrived, and they do not hold the ${text.length}-character text that ends it`);
     assert.ok(ran[stream].endsWith('\n'), `${what}, ${mode}: ${stream} ends with its line break`);
   }
@@ -170,6 +197,7 @@ test('every pcf script\'s usage error is what it always was: the message and the
     assert.equal(ran.status, 1, `${script}: ${ran.own}${ran.stderr}`);
     assert.equal(ran.stdout, '', `${script}: nothing on stdout`);
     assert.ok(ran.stderr.includes(`${text}\n`) && /usage/i.test(ran.stderr) && ran.stderr.endsWith('\n'), `${script}: ${JSON.stringify(ran.stderr.slice(0, 300))}`);
+    assertBlockingFirst(ran, script);
   });
 });
 
