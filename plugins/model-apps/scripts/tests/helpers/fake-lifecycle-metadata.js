@@ -15,13 +15,14 @@
 // What the platform makes beside what was asked is made here too, because the plugin reads it back and acts on it:
 //   - a table gets its primary id column (`<table>id`), the ownership and audit columns a user-owned table has, `statecode` and
 //     `statuscode` with their two states, `versionnumber`, and the `<lookup>name` / `<lookup>yominame` companions of its lookups;
-//   - a Choice, MultiChoice or Boolean column gets its `<name>name` companion, a Money column its `<name>_base`, a lookup its
-//     `<name>name` and `<name>yominame` (each `AttributeOf` the column, which is how a reader tells them from real columns);
+//   - a Choice, MultiChoice or Boolean column gets its `<name>name` companion, a lookup its `<name>name` and `<name>yominame` (each
+//     `AttributeOf` the column, which is how a reader tells them from real columns), and a Money column its `<name>_base` twin — a
+//     physical column with no AttributeOf, told apart only by `IsBaseCurrency: true` (measured; see companionsOf);
 //   - a 1:N relationship creates its lookup column on the referencing table; an N:N its intersect table.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-relationships-using-web-api
 const { randomUUID } = require('node:crypto');
-const { matchesFilter } = require('./odata-filter.js');
+const { compileFilter, describeFilter, evaluateFilter } = require('./odata-filter.js');
 
 const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const lc = (value) => String(value == null ? '' : value).toLowerCase();
@@ -51,6 +52,150 @@ const TYPE_OF = {
   EntityNameAttributeMetadata: ['EntityName', 'EntityNameType'],
 };
 const classOf = (attribute) => String(attribute['@odata.type'] || '').replace(/^#?Microsoft\.Dynamics\.CRM\./, '');
+
+// THE READ CONTRACT of the metadata half: the properties a read may name, per metadata type, EXPLICITLY. A `$select`, `$filter` or
+// `$expand` that names anything else — and a path segment, a key, a cast or a navigation outside the lists below — is refused as
+// unmodelled (501, recorded in `org.unexpected`) BEFORE a single definition is looked at, so a changed read can never pass as "nothing
+// there". A property on the list that a definition does not hold is answered `null`, as the platform answers an unset property.
+// OData types the properties: one a DERIVED type declares (a string column's `MaxLength`) is readable only through a cast to that type
+// (`Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength`), never on the base collection.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/entitymetadata
+const TABLE_PROPS = ['MetadataId', 'LogicalName', 'SchemaName', 'EntitySetName', 'LogicalCollectionName', 'CollectionSchemaName', 'ObjectTypeCode',
+  'IsCustomEntity', 'IsManaged', 'IsActivity', 'IsIntersect', 'TableType', 'OwnershipType', 'HasNotes', 'HasActivities', 'DisplayName',
+  'DisplayCollectionName', 'Description', 'PrimaryIdAttribute', 'PrimaryNameAttribute', 'PrimaryImageAttribute', 'IconVectorName',
+  'IconSmallName', 'IconMediumName', 'IconLargeName', 'ChangeTrackingEnabled', 'IsQuickCreateEnabled', 'Privileges'];
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributemetadata
+const ATTRIBUTE_BASE = ['MetadataId', 'LogicalName', 'SchemaName', 'EntityLogicalName', 'AttributeType', 'AttributeTypeName', 'DisplayName',
+  'Description', 'RequiredLevel', 'IsCustomAttribute', 'IsCustomizable', 'IsManaged', 'IsPrimaryId', 'IsPrimaryName', 'IsLogical',
+  'IsValidForCreate', 'IsValidForRead', 'IsValidForUpdate', 'AttributeOf', 'SourceType'];
+// What each derived column type adds; the enum-valued ones (a choice, a Boolean, a state or status) also navigate to their option set.
+const ATTRIBUTE_PROPS = {
+  AttributeMetadata: [],
+  StringAttributeMetadata: ['MaxLength', 'FormatName', 'Format', 'AutoNumberFormat'],
+  MemoAttributeMetadata: ['MaxLength', 'FormatName', 'Format'],
+  IntegerAttributeMetadata: ['MinValue', 'MaxValue', 'Format'],
+  BigIntAttributeMetadata: ['MinValue', 'MaxValue'],
+  DecimalAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
+  DoubleAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
+  MoneyAttributeMetadata: ['MinValue', 'MaxValue', 'Precision', 'PrecisionSource', 'IsBaseCurrency'],
+  BooleanAttributeMetadata: ['DefaultValue'],
+  DateTimeAttributeMetadata: ['Format', 'DateTimeBehavior'],
+  PicklistAttributeMetadata: ['DefaultFormValue'],
+  MultiSelectPicklistAttributeMetadata: ['DefaultFormValue'],
+  LookupAttributeMetadata: ['Targets'],
+  UniqueIdentifierAttributeMetadata: [],
+  ImageAttributeMetadata: ['MaxSizeInKB', 'CanStoreFullImage', 'IsPrimaryImage'],
+  FileAttributeMetadata: ['MaxSizeInKB'],
+  StateAttributeMetadata: ['DefaultFormValue'],
+  StatusAttributeMetadata: ['DefaultFormValue'],
+  EntityNameAttributeMetadata: [],
+};
+const ENUM_CLASSES = new Set(['BooleanAttributeMetadata', 'PicklistAttributeMetadata', 'MultiSelectPicklistAttributeMetadata', 'StateAttributeMetadata', 'StatusAttributeMetadata']);
+const KEY_PROPS = ['MetadataId', 'LogicalName', 'SchemaName', 'EntityLogicalName', 'DisplayName', 'KeyAttributes', 'EntityKeyIndexStatus', 'IsManaged'];
+const RELATIONSHIP_BASE = ['MetadataId', 'SchemaName', 'RelationshipType', 'IsCustomRelationship', 'IsManaged', 'IsValidForAdvancedFind'];
+const RELATIONSHIP_PROPS = {
+  OneToManyRelationshipMetadata: ['ReferencedEntity', 'ReferencingEntity', 'ReferencedAttribute', 'ReferencingAttribute',
+    'ReferencedEntityNavigationPropertyName', 'ReferencingEntityNavigationPropertyName', 'CascadeConfiguration', 'AssociatedMenuConfiguration'],
+  ManyToManyRelationshipMetadata: ['Entity1LogicalName', 'Entity2LogicalName', 'Entity1IntersectAttribute', 'Entity2IntersectAttribute',
+    'IntersectEntityName', 'Entity1NavigationPropertyName', 'Entity2NavigationPropertyName', 'Entity1AssociatedMenuConfiguration',
+    'Entity2AssociatedMenuConfiguration'],
+};
+const OPTIONSET_PROPS = ['MetadataId', 'Name', 'IsGlobal', 'IsCustomOptionSet', 'IsManaged', 'OptionSetType', 'DisplayName', 'Description', 'Options', 'TrueOption', 'FalseOption'];
+const OPTIONSET_CASTS = new Set(['OptionSetMetadata', 'BooleanOptionSetMetadata']);
+// A table's collection-valued navigations, and the type each leads to.
+const TABLE_NAVIGATIONS = {
+  Attributes: { kind: 'attribute', cls: null },
+  Keys: { kind: 'key' },
+  OneToManyRelationships: { kind: 'relationship', cls: 'OneToManyRelationshipMetadata' },
+  ManyToOneRelationships: { kind: 'relationship', cls: 'OneToManyRelationshipMetadata' },
+  ManyToManyRelationships: { kind: 'relationship', cls: 'ManyToManyRelationshipMetadata' },
+};
+// The alternate key a path may name a definition by, per collection (beside its MetadataId).
+const KEY_NAMES = { EntityDefinitions: 'LogicalName', Attributes: 'LogicalName', Keys: 'LogicalName', RelationshipDefinitions: 'SchemaName', GlobalOptionSetDefinitions: 'Name' };
+// The query options each read takes; a nested `$expand` takes `$select` and, on a collection, `$filter`.
+const COLLECTION_OPTIONS = ['$select', '$filter', '$expand'];
+const SINGLE_OPTIONS = ['$select', '$expand'];
+
+// The properties a type answers, and its single- or collection-valued navigations.
+function propsOf(type) {
+  if (type.kind === 'table') return TABLE_PROPS;
+  if (type.kind === 'attribute') return [...ATTRIBUTE_BASE, ...(type.cls ? ATTRIBUTE_PROPS[type.cls] : [])];
+  if (type.kind === 'key') return KEY_PROPS;
+  if (type.kind === 'relationship') return [...RELATIONSHIP_BASE, ...(type.cls ? RELATIONSHIP_PROPS[type.cls] : [])];
+  if (type.kind === 'optionset') return OPTIONSET_PROPS;
+  throw new Error(`fake-lifecycle-metadata: no properties for ${type.kind}`);
+}
+function navigationsOf(type) {
+  if (type.kind === 'table') return TABLE_NAVIGATIONS;
+  if (type.kind === 'attribute' && ENUM_CLASSES.has(type.cls)) return { OptionSet: { kind: 'optionset', single: true }, GlobalOptionSet: { kind: 'optionset', single: true } };
+  return {};
+}
+const typeName = (type) => (type.cls || { table: 'EntityMetadata', attribute: 'AttributeMetadata', key: 'EntityKeyMetadata', relationship: 'RelationshipMetadataBase', optionset: 'OptionSetMetadataBase' }[type.kind]);
+const listOf = (text) => String(text).split(',').map((x) => x.trim()).filter(Boolean);
+
+// Refuses a read that names anything the type does not have: an option, a property (in `$select` or `$filter`), a navigation (in
+// `$expand`, with its own options checked against the type it leads to). The filter is parsed here, once, whatever the collection holds.
+function checkMetadataQuery(type, query, options, where) {
+  for (const option of Object.keys(query || {})) if (!options.includes(option)) throw new Error(`fake-lifecycle-metadata: the query option ${option} is not modelled on ${where}`);
+  const props = propsOf(type);
+  const navigations = navigationsOf(type);
+  if (query.$select !== undefined) {
+    for (const name of listOf(query.$select)) if (!props.includes(name)) throw new Error(`fake-lifecycle-metadata: ${typeName(type)} has no property ${name} ($select on ${where})`);
+  }
+  if (query.$filter !== undefined) {
+    const read = describeFilter(compileFilter(query.$filter));
+    if (read.paths.length || read.lambdas.length) throw new Error(`fake-lifecycle-metadata: a navigation in $filter on ${where} is not modelled (${query.$filter})`);
+    for (const name of read.fields) if (!props.includes(name)) throw new Error(`fake-lifecycle-metadata: ${typeName(type)} has no property ${name} ($filter on ${where})`);
+  }
+  if (query.$expand !== undefined) {
+    for (const item of parseExpandText(query.$expand)) {
+      const target = navigations[item.name];
+      if (!target) throw new Error(`fake-lifecycle-metadata: ${typeName(type)} has no navigation ${item.name} ($expand on ${where})`);
+      checkMetadataQuery(target, item.opts, target.single ? ['$select'] : ['$select', '$filter'], `${where} $expand=${item.name}`);
+    }
+  }
+}
+
+// `$expand=Attributes($select=LogicalName,AttributeType;$filter=IsCustomAttribute eq true),OptionSet,Keys` -> [{ name, opts }].
+function parseExpandText(text) {
+  const items = [];
+  let depth = 0;
+  let start = 0;
+  const s = String(text || '');
+  for (let i = 0; i <= s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if ((ch === ',' && depth === 0) || i === s.length) {
+      const part = s.slice(start, i).trim();
+      if (part) {
+        const open = part.indexOf('(');
+        const name = open === -1 ? part : part.slice(0, open);
+        const inner = open === -1 ? '' : part.slice(open + 1, -1);
+        const opts = {};
+        let d = 0;
+        let from = 0;
+        for (let j = 0; j <= inner.length; j += 1) {
+          const c = inner[j];
+          if (c === '(') d += 1;
+          else if (c === ')') d -= 1;
+          else if ((c === ';' && d === 0) || j === inner.length) {
+            const opt = inner.slice(from, j).trim();
+            if (opt) {
+              const eq = opt.indexOf('=');
+              opts[opt.slice(0, eq)] = opt.slice(eq + 1);
+            }
+            from = j + 1;
+          }
+        }
+        items.push({ name, opts });
+      }
+      start = i + 1;
+    }
+  }
+  return items;
+}
 
 function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage, solutionOf, addComponent, removeComponents, onTableCreated, onTableDeleted } = {}) {
   const tables = new Map(); // logical -> definition (see makeTable); `Attributes`/`Keys` are Maps
@@ -105,6 +250,8 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     if (cls === 'StringAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 100;
     if (cls === 'StringAttributeMetadata' && !attribute.FormatName) attribute.FormatName = { Value: (sent.FormatName && sent.FormatName.Value) || 'Text' };
     if (cls === 'MemoAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 2000;
+    // The column a Money column converts is not its base-currency twin (companionsOf makes that one).
+    if (cls === 'MoneyAttributeMetadata' && attribute.IsBaseCurrency === undefined) attribute.IsBaseCurrency = false;
     if (attribute.OptionSet) attribute.OptionSet = storedOptionSet(attribute.OptionSet, { local: true });
     return attribute;
   }
@@ -128,6 +275,7 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
       Name: set.Name || null,
       IsGlobal: !local,
       IsCustomOptionSet: true,
+      IsManaged: false,
       OptionSetType: set.OptionSetType || 'Picklist',
       DisplayName: label(set.DisplayName),
       Description: label(set.Description),
@@ -142,7 +290,12 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     const cls = classOf(attribute);
     const virtual = (logical, type = 'Virtual', typeName = 'VirtualType') => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: name, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
     if (['PicklistAttributeMetadata', 'MultiSelectPicklistAttributeMetadata', 'BooleanAttributeMetadata', 'StateAttributeMetadata', 'StatusAttributeMetadata'].includes(cls)) return [virtual(`${name}name`)];
-    if (cls === 'MoneyAttributeMetadata') return [{ ...virtual(`${name}_base`, 'Money', 'MoneyType'), '@odata.type': '#Microsoft.Dynamics.CRM.MoneyAttributeMetadata', IsBaseCurrency: true }];
+    // A Money column's base-currency twin is a PHYSICAL column, not a shadow: it carries no AttributeOf, is not logical and reports
+    // IsCustomAttribute like the column it converts — only `IsBaseCurrency: true` tells it apart (measured on stock
+    // `opportunity.estimatedvalue_base`; download-model-app.test.js pins the same live shape, and the download filters on it).
+    if (cls === 'MoneyAttributeMetadata') {
+      return [{ ...virtual(`${name}_base`, 'Money', 'MoneyType'), '@odata.type': '#Microsoft.Dynamics.CRM.MoneyAttributeMetadata', AttributeOf: null, IsLogical: false, IsBaseCurrency: true }];
+    }
     if (cls === 'LookupAttributeMetadata') return [virtual(`${name}name`, 'String', 'StringType'), virtual(`${name}yominame`, 'String', 'StringType')];
     if (cls === 'FileAttributeMetadata') return [virtual(`${name}_name`, 'String', 'StringType')];
     if (cls === 'ImageAttributeMetadata') return [virtual(`${name}id`, 'Uniqueidentifier', 'UniqueidentifierType'), virtual(`${name}_timestamp`, 'BigInt', 'BigIntType'), virtual(`${name}_url`, 'String', 'StringType')];
@@ -215,6 +368,7 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
       IconMediumName: sent.IconMediumName || null,
       IconLargeName: sent.IconLargeName || null,
       ChangeTrackingEnabled: false,
+      IsQuickCreateEnabled: !!sent.IsQuickCreateEnabled,
       Attributes: new Map(),
       Keys: new Map(),
     };
@@ -306,95 +460,66 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
   }
 
   // ------------------------------------------------------------------------------------------------------------------------
-  // Reads: `$select`, `$filter` and `$expand` over the stored definitions.
-  //   $expand=Attributes($select=LogicalName,AttributeType;$filter=IsCustomAttribute eq true),OptionSet,Keys
-  function parseExpand(text) {
-    const items = [];
-    let depth = 0;
-    let start = 0;
-    const s = String(text || '');
-    for (let i = 0; i <= s.length; i += 1) {
-      const ch = s[i];
-      if (ch === '(') depth += 1;
-      else if (ch === ')') depth -= 1;
-      else if ((ch === ',' && depth === 0) || i === s.length) {
-        const part = s.slice(start, i).trim();
-        if (part) {
-          const open = part.indexOf('(');
-          const name = open === -1 ? part : part.slice(0, open);
-          const inner = open === -1 ? '' : part.slice(open + 1, -1);
-          const opts = {};
-          let d = 0;
-          let from = 0;
-          for (let j = 0; j <= inner.length; j += 1) {
-            const c = inner[j];
-            if (c === '(') d += 1;
-            else if (c === ')') d -= 1;
-            else if ((c === ';' && d === 0) || j === inner.length) {
-              const opt = inner.slice(from, j).trim();
-              if (opt) {
-                const eq = opt.indexOf('=');
-                opts[opt.slice(0, eq)] = opt.slice(eq + 1);
-              }
-              from = j + 1;
-            }
-          }
-          items.push({ name, opts });
-        }
-        start = i + 1;
-      }
-    }
-    return items;
-  }
-
-  // The properties a definition is answered with. A collection-valued navigation (a table's Attributes, Keys and relationships) comes back
-  // only when it is expanded; `MetadataId` always does, and so does the `@odata.type` of a derived type.
-  const NAVIGATIONS = { table: ['Attributes', 'Keys', 'OneToManyRelationships', 'ManyToOneRelationships', 'ManyToManyRelationships'], attribute: ['OptionSet', 'GlobalOptionSet'] };
-  function project(def, query, kind) {
-    const select = query.$select ? String(query.$select).split(',').map((x) => x.trim()).filter(Boolean) : null;
-    const out = {};
-    if (def['@odata.type']) out['@odata.type'] = def['@odata.type'];
-    for (const [key, value] of Object.entries(def)) {
-      if (key === '@odata.type') continue;
-      if ((NAVIGATIONS[kind] || []).includes(key) && !(kind === 'attribute' && key === 'OptionSet' && !select)) continue;
-      if (select && !select.includes(key) && key !== 'MetadataId') continue;
-      out[key] = value instanceof Map ? undefined : clone(value);
-    }
-    for (const item of parseExpand(query.$expand)) out[item.name] = expandOf(def, kind, item);
-    return out;
-  }
-  function expandOf(def, kind, item) {
-    if (kind === 'table') {
-      if (item.name === 'Attributes') return listAttributes(def, item.opts);
-      if (item.name === 'Keys') return [...def.Keys.values()].map((k) => project(k, item.opts, 'key'));
-      if (/Relationships$/.test(item.name)) return relationshipsOf(def.LogicalName, item.name).filter((r) => !item.opts.$filter || matchesFilter(item.opts.$filter, r)).map((r) => project(r, item.opts, 'relationship'));
-    }
-    if (kind === 'attribute' && (item.name === 'OptionSet' || item.name === 'GlobalOptionSet')) {
-      const set = item.name === 'GlobalOptionSet' ? (def.GlobalOptionSet || (def.OptionSet && def.OptionSet.IsGlobal ? def.OptionSet : null)) : def.OptionSet;
-      return set ? project(set, item.opts, 'optionset') : null;
-    }
-    throw new Error(`fake-lifecycle-metadata: $expand=${item.name} on a ${kind} is not modelled`);
-  }
-  function listAttributes(table, query, cast) {
-    let list = [...table.Attributes.values()];
-    if (cast) list = list.filter((a) => classOf(a) === cast || (cast === 'LookupAttributeMetadata' && ['Lookup', 'Customer', 'Owner'].includes(a.AttributeType) && classOf(a) === 'LookupAttributeMetadata'));
-    if (query.$filter) list = list.filter((a) => matchesFilter(query.$filter, flatForFilter(a)));
-    return list.map((a) => project(a, query, 'attribute'));
-  }
+  // Reads: `$select`, `$filter` and `$expand` over the stored definitions, each already checked against the read contract above
+  // (checkMetadataQuery) before any definition is looked at.
+  const parseExpand = parseExpandText;
   // A filter reads a metadata property's value: an enum-valued one (`AttributeType eq 'Picklist'`) is text, a BooleanManagedProperty its `Value`.
   const flatForFilter = (def) => Object.fromEntries(Object.entries(def).map(([k, v]) => [k, v && typeof v === 'object' && !Array.isArray(v) && 'Value' in v ? v.Value : v]));
+  const filtered = (list, text) => (text === undefined ? list : list.filter((def) => evaluateFilter(compileFilter(text), flatForFilter(def), {})));
 
-  // `LogicalName='x'` / `<MetadataId>` / `SchemaName='x'` / `Name='x'`, as the key of a definition in a path.
-  function keyed(map, key, field) {
+  // The properties a definition is answered with: with `$select`, exactly those (an unset one as `null`, as the platform answers it) and
+  // `MetadataId`; without, every property it holds but its collection-valued navigations, which come back only when expanded. The
+  // `@odata.type` of a derived type always comes back.
+  function project(def, query, type) {
+    const select = query.$select !== undefined ? listOf(query.$select) : null;
+    const navigations = navigationsOf(type);
+    const out = {};
+    if (def['@odata.type']) out['@odata.type'] = def['@odata.type'];
+    if (select) {
+      for (const name of new Set(['MetadataId', ...select])) out[name] = def[name] === undefined ? null : clone(def[name]);
+    } else {
+      for (const [key, value] of Object.entries(def)) {
+        if (key === '@odata.type' || value instanceof Map) continue;
+        if (TABLE_NAVIGATIONS[key] && type.kind === 'table') continue;
+        if (key === 'GlobalOptionSet' && type.kind === 'attribute') continue;
+        out[key] = clone(value);
+      }
+    }
+    for (const item of parseExpand(query.$expand)) out[item.name] = expandOf(def, type, navigations[item.name], item);
+    return out;
+  }
+  function expandOf(def, type, target, item) {
+    if (type.kind === 'table') {
+      if (item.name === 'Attributes') return listAttributes(def, item.opts, null);
+      if (item.name === 'Keys') return filtered([...def.Keys.values()], item.opts.$filter).map((k) => project(k, item.opts, target));
+      return filtered(relationshipsOf(def.LogicalName, item.name), item.opts.$filter).map((r) => project(r, item.opts, target));
+    }
+    // An enum-valued column's option set: `GlobalOptionSet` is the global set it binds (null for a local one).
+    const set = item.name === 'GlobalOptionSet' ? (def.GlobalOptionSet || (def.OptionSet && def.OptionSet.IsGlobal ? def.OptionSet : null)) : def.OptionSet;
+    return set ? project(set, item.opts, target) : null;
+  }
+  // The columns of a table, of one derived type when the path casts (`Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata` —
+  // a Customer or Owner lookup is a LookupAttributeMetadata too).
+  function listAttributes(table, query, cast) {
+    let list = [...table.Attributes.values()];
+    if (cast) list = list.filter((a) => classOf(a) === cast);
+    return filtered(list, query.$filter).map((a) => project(a, query, { kind: 'attribute', cls: cast || null }));
+  }
+
+  // `LogicalName='x'` / `<MetadataId>` / `SchemaName='x'` / `Name='x'`, as the key of a definition in a path. The alternate key a
+  // collection takes is its own (KEY_NAMES): any other is unmodelled.
+  function keyed(map, key, collection) {
     const named = /^(\w+)='((?:[^']|'')*)'$/.exec(key);
     if (named) {
+      if (collection && named[1] !== KEY_NAMES[collection]) throw new Error(`fake-lifecycle-metadata: ${collection} is not keyed by ${named[1]}`);
       const value = lc(named[2].replace(/''/g, "'"));
       return [...map.values()].find((d) => lc(d[named[1]]) === value) || null;
     }
+    if (!GUID_RE.test(bare(key))) throw new Error(`fake-lifecycle-metadata: the key (${key}) of ${collection || 'a definition'} is not modelled`);
     const id = bare(key);
-    return [...map.values()].find((d) => bare(d.MetadataId) === id) || (field ? null : null);
+    return [...map.values()].find((d) => bare(d.MetadataId) === id) || null;
   }
-  const tableAt = (key) => keyed(tables, key);
+  const tableAt = (key) => keyed(tables, key, 'EntityDefinitions');
 
   // ------------------------------------------------------------------------------------------------------------------------
   // The router. `path` is below the API root, decoded, without the query; `query` the query's parameters. Answers
@@ -445,60 +570,101 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     return out;
   }
 
+  // The paths under EntityDefinitions, every one of them (anything else is refused, naming it):
+  //   EntityDefinitions                                              GET (collection) · POST
+  //   EntityDefinitions(K)                                           GET · PUT · DELETE
+  //   EntityDefinitions(K)/Attributes[/<attribute cast>]             GET (collection) · POST (uncast)
+  //   EntityDefinitions(K)/Attributes(K)[/<attribute cast>]          GET · PUT · DELETE (uncast)
+  //   EntityDefinitions(K)/Attributes(K)/<enum cast>/OptionSet       GET (and GlobalOptionSet)
+  //   EntityDefinitions(K)/Keys · Keys(K)                            GET · POST · DELETE
+  //   EntityDefinitions(K)/OneToManyRelationships | ManyToOneRelationships | ManyToManyRelationships   GET (collection)
+  // K is `LogicalName='x'` or a MetadataId. A cast names a type the fake models (ATTRIBUTE_PROPS); a cast to the wrong type of the
+  // column a path names is the platform's 400.
+  const castOf = (segment, allowed, where) => {
+    const cast = segment && CAST.exec(segment.name);
+    if (!cast || segment.key !== null) throw new Error(`fake-lifecycle-metadata: ${where}/${segment ? segment.name : ''} is not modelled`);
+    if (!allowed(cast[1])) throw new Error(`fake-lifecycle-metadata: the cast ${cast[1]} on ${where} is not modelled`);
+    return cast[1];
+  };
+  const isAttributeClass = (name) => Object.prototype.hasOwnProperty.call(ATTRIBUTE_PROPS, name);
+  const unmodelled = (method, where) => { throw new Error(`fake-lifecycle-metadata: ${method} ${where} is not modelled`); };
+
   function entityDefinitions(method, segments, query, body, solutionName, apiRoot, headers) {
-    const [head, sub, third, fourth] = segments;
+    const [head, sub, third, fourth, ...rest] = segments;
+    const table = { kind: 'table' };
+    if (rest.length) unmodelled(method, segments.map((x) => x.name).join('/'));
     if (!head.key) {
-      if (method === 'GET' && !sub) {
-        let list = [...tables.values()];
-        if (query.$filter) list = list.filter((t) => matchesFilter(query.$filter, flatForFilter(t)));
-        return collection(list.map((t) => project(t, query, 'table')));
+      if (sub) unmodelled(method, `EntityDefinitions/${sub.name}`);
+      if (method === 'GET') {
+        checkMetadataQuery(table, query, COLLECTION_OPTIONS, 'EntityDefinitions');
+        return collection(filtered([...tables.values()], query.$filter).map((t) => project(t, query, table)));
       }
-      if (method === 'POST' && !sub) return createTable(body, solutionName, apiRoot);
-      throw new Error(`fake-lifecycle-metadata: ${method} EntityDefinitions/${sub ? sub.name : ''} is not modelled`);
+      if (method === 'POST') return createTable(body, solutionName, apiRoot);
+      unmodelled(method, 'EntityDefinitions');
     }
-    const table = tableAt(head.key);
+    const where = `EntityDefinitions(${head.key})`;
+    const found = tableAt(head.key);
     if (!sub) {
-      if (method === 'GET') return table ? ok(project(table, query, 'table')) : missing(`entity ${head.key}`);
-      if (method === 'PUT') return table ? updateTable(table, body, headers) : missing(`entity ${head.key}`);
-      if (method === 'DELETE') return table ? deleteTable(table) : missing(`entity ${head.key}`);
-      throw new Error(`fake-lifecycle-metadata: ${method} EntityDefinitions(${head.key}) is not modelled`);
+      if (method === 'GET') { checkMetadataQuery(table, query, SINGLE_OPTIONS, where); return found ? ok(project(found, query, table)) : missing(`entity ${head.key}`); }
+      if (method === 'PUT') return found ? updateTable(found, body, headers) : missing(`entity ${head.key}`);
+      if (method === 'DELETE') return found ? deleteTable(found) : missing(`entity ${head.key}`);
+      unmodelled(method, where);
     }
-    if (!table) return missing(`entity ${head.key}`);
+    if (!TABLE_NAVIGATIONS[sub.name]) unmodelled(method, `${where}/${sub.name}`);
     if (sub.name === 'Attributes') {
       if (!sub.key) {
-        const cast = third && CAST.exec(third.name);
-        if (method === 'GET') return collection(listAttributes(table, query, cast && cast[1]));
-        if (method === 'POST' && !third) return createColumn(table, body, solutionName, apiRoot);
-        throw new Error(`fake-lifecycle-metadata: ${method} ${table.LogicalName}/Attributes is not modelled`);
-      }
-      const attribute = keyed(table.Attributes, sub.key);
-      if (!attribute) return missing(`attribute ${sub.key} on ${table.LogicalName}`);
-      const cast = third && CAST.exec(third.name);
-      if (cast && classOf(attribute) !== cast[1]) return fail(400, `The attribute ${attribute.LogicalName} is not a ${cast[1]}.`, '0x80060888');
-      if (method === 'GET') {
-        if (fourth || (third && !cast)) {
-          const nav = cast ? fourth : third;
-          return ok(expandOf(attribute, 'attribute', { name: nav.name, opts: query }));
+        if (fourth) unmodelled(method, `${where}/Attributes/${third.name}/${fourth.name}`);
+        const cast = third ? castOf(third, isAttributeClass, `${where}/Attributes`) : null;
+        if (method === 'GET') {
+          checkMetadataQuery({ kind: 'attribute', cls: cast }, query, COLLECTION_OPTIONS, `${where}/Attributes${cast ? `/${cast}` : ''}`);
+          return found ? collection(listAttributes(found, query, cast)) : missing(`entity ${head.key}`);
         }
-        return ok(project(attribute, query, 'attribute'));
+        if (method === 'POST' && !cast) return found ? createColumn(found, body, solutionName, apiRoot) : missing(`entity ${head.key}`);
+        unmodelled(method, `${where}/Attributes`);
       }
-      if (method === 'PUT') return updateColumn(table, attribute, body, headers);
-      if (method === 'DELETE') return deleteColumn(table, attribute);
-      throw new Error(`fake-lifecycle-metadata: ${method} ${table.LogicalName}/Attributes(${sub.key}) is not modelled`);
+      const at = `${where}/Attributes(${sub.key})`;
+      const cast = third ? castOf(third, isAttributeClass, at) : null;
+      if (fourth) {
+        // An enum-valued column's option set, through the cast that declares the navigation.
+        const navigation = navigationsOf({ kind: 'attribute', cls: cast })[fourth.name];
+        if (!navigation || fourth.key !== null || method !== 'GET') unmodelled(method, `${at}/${third.name}/${fourth.name}`);
+        checkMetadataQuery(navigation, query, ['$select'], `${at}/${fourth.name}`);
+      } else if (method === 'GET') {
+        checkMetadataQuery({ kind: 'attribute', cls: cast }, query, SINGLE_OPTIONS, at);
+      }
+      if (!found) return missing(`entity ${head.key}`);
+      const attribute = keyed(found.Attributes, sub.key, 'Attributes');
+      if (!attribute) return missing(`attribute ${sub.key} on ${found.LogicalName}`);
+      if (cast && classOf(attribute) !== cast) return fail(400, `The attribute ${attribute.LogicalName} is not a ${cast}.`, '0x80060888');
+      if (method === 'GET') {
+        if (fourth) return ok(expandOf(attribute, { kind: 'attribute', cls: cast }, navigationsOf({ kind: 'attribute', cls: cast })[fourth.name], { name: fourth.name, opts: query }));
+        return ok(project(attribute, query, { kind: 'attribute', cls: cast }));
+      }
+      if (method === 'PUT' && !fourth) return updateColumn(found, attribute, body, headers);
+      if (method === 'DELETE' && !cast) return deleteColumn(found, attribute);
+      unmodelled(method, at);
     }
+    if (third) unmodelled(method, `${where}/${sub.name}/${third.name}`);
     if (sub.name === 'Keys') {
-      if (method === 'GET' && !sub.key) return collection([...table.Keys.values()].map((k) => project(k, query, 'key')));
-      if (method === 'POST' && !sub.key) return createKey(table, body, apiRoot);
-      const key = sub.key && keyed(table.Keys, sub.key);
-      if (method === 'GET') return key ? ok(project(key, query, 'key')) : missing(`key ${sub.key}`);
-      if (method === 'DELETE') { if (!key) return missing(`key ${sub.key}`); table.Keys.delete(key.LogicalName); return { status: 204, headers: {} }; }
+      const keyType = { kind: 'key' };
+      if (!sub.key) {
+        if (method === 'GET') { checkMetadataQuery(keyType, query, COLLECTION_OPTIONS, `${where}/Keys`); return found ? collection(filtered([...found.Keys.values()], query.$filter).map((k) => project(k, query, keyType))) : missing(`entity ${head.key}`); }
+        if (method === 'POST') return found ? createKey(found, body, apiRoot) : missing(`entity ${head.key}`);
+        unmodelled(method, `${where}/Keys`);
+      }
+      if (method === 'GET') checkMetadataQuery(keyType, query, SINGLE_OPTIONS, `${where}/Keys(${sub.key})`);
+      if (!found) return missing(`entity ${head.key}`);
+      const key = keyed(found.Keys, sub.key, 'Keys');
+      if (method === 'GET') return key ? ok(project(key, query, keyType)) : missing(`key ${sub.key}`);
+      if (method === 'DELETE') { if (!key) return missing(`key ${sub.key}`); found.Keys.delete(key.LogicalName); return { status: 204, headers: {} }; }
+      unmodelled(method, `${where}/Keys(${sub.key})`);
     }
-    if (/Relationships$/.test(sub.name) && method === 'GET' && !sub.key) {
-      let list = relationshipsOf(table.LogicalName, sub.name);
-      if (query.$filter) list = list.filter((r) => matchesFilter(query.$filter, flatForFilter(r)));
-      return collection(list.map((r) => project(r, query, 'relationship')));
-    }
-    throw new Error(`fake-lifecycle-metadata: ${method} EntityDefinitions(${head.key})/${sub.name} is not modelled`);
+    // OneToManyRelationships / ManyToOneRelationships / ManyToManyRelationships: a collection, read only.
+    if (sub.key || method !== 'GET') unmodelled(method, `${where}/${sub.name}${sub.key ? `(${sub.key})` : ''}`);
+    const type = TABLE_NAVIGATIONS[sub.name];
+    checkMetadataQuery(type, query, COLLECTION_OPTIONS, `${where}/${sub.name}`);
+    if (!found) return missing(`entity ${head.key}`);
+    return collection(filtered(relationshipsOf(found.LogicalName, sub.name), query.$filter).map((r) => project(r, query, type)));
   }
 
   function createTable(body, solutionName, apiRoot) {
@@ -563,6 +729,9 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
   function deleteColumn(table, attribute) {
     table.Attributes.delete(attribute.LogicalName);
     for (const [name, other] of [...table.Attributes]) if (other.AttributeOf === attribute.LogicalName) table.Attributes.delete(name);
+    // The base-currency twin has no AttributeOf to follow (see companionsOf): it goes by its name, as the platform deletes it.
+    const twin = table.Attributes.get(`${attribute.LogicalName}_base`);
+    if (classOf(attribute) === 'MoneyAttributeMetadata' && attribute.IsBaseCurrency !== true && twin && twin.IsBaseCurrency === true) table.Attributes.delete(twin.LogicalName);
     if (removeComponents) removeComponents([attribute.MetadataId]);
     return { status: 204, headers: {} };
   }
@@ -603,16 +772,21 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     if (removeComponents) removeComponents([r.MetadataId]);
   }
 
+  // RelationshipDefinitions[/<relationship cast>] (GET; POST uncast) and RelationshipDefinitions(K)[/<cast>] (GET, PUT; DELETE
+  // uncast), K being `SchemaName='x'` or a MetadataId.
+  const isRelationshipClass = (name) => Object.prototype.hasOwnProperty.call(RELATIONSHIP_PROPS, name);
   function relationshipDefinitions(method, segments, query, body, solutionName, apiRoot) {
-    const [head, sub] = segments;
+    const [head, sub, ...rest] = segments;
+    if (rest.length) unmodelled(method, segments.map((x) => x.name).join('/'));
+    const cast = sub ? castOf(sub, isRelationshipClass, `RelationshipDefinitions${head.key ? `(${head.key})` : ''}`) : null;
+    const type = { kind: 'relationship', cls: cast };
     if (!head.key) {
       if (method === 'GET') {
-        let list = [...relationships.values()];
-        if (sub && CAST.exec(sub.name)) list = list.filter((r) => r['@odata.type'] === `#${sub.name}`);
-        if (query.$filter) list = list.filter((r) => matchesFilter(query.$filter, flatForFilter(r)));
-        return collection(list.map((r) => project(r, query, 'relationship')));
+        checkMetadataQuery(type, query, COLLECTION_OPTIONS, `RelationshipDefinitions${cast ? `/${cast}` : ''}`);
+        const list = [...relationships.values()].filter((r) => !cast || r['@odata.type'] === `#Microsoft.Dynamics.CRM.${cast}`);
+        return collection(filtered(list, query.$filter).map((r) => project(r, query, type)));
       }
-      if (method === 'POST' && !sub) {
+      if (method === 'POST' && !cast) {
         if (relationships.has(lc(body.SchemaName))) return fail(400, `A relationship with the name ${body.SchemaName} already exists.`, '0x80047007');
         const many = /ManyToManyRelationshipMetadata$/.test(String(body['@odata.type']));
         const made = many ? makeManyToMany(body) : makeOneToMany(body);
@@ -620,29 +794,32 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
         if (addComponent) addComponent(solutionName, { objectid: made.relationship.MetadataId, componenttype: 10 });
         return created(`${apiRoot}/RelationshipDefinitions(${made.relationship.MetadataId})`);
       }
-      throw new Error(`fake-lifecycle-metadata: ${method} RelationshipDefinitions is not modelled`);
+      unmodelled(method, 'RelationshipDefinitions');
     }
-    const r = keyed(relationships, head.key);
+    if (method === 'GET') checkMetadataQuery(type, query, ['$select'], `RelationshipDefinitions(${head.key})`);
+    const r = keyed(relationships, head.key, 'RelationshipDefinitions');
     if (!r) return missing(`relationship ${head.key}`);
-    const cast = sub && CAST.exec(sub.name);
-    if (cast && r['@odata.type'] !== `#Microsoft.Dynamics.CRM.${cast[1]}`) return fail(400, `The relationship ${r.SchemaName} is not a ${cast[1]}.`, '0x80060888');
-    if (method === 'GET') return ok(project(r, query, 'relationship'));
+    if (cast && r['@odata.type'] !== `#Microsoft.Dynamics.CRM.${cast}`) return fail(400, `The relationship ${r.SchemaName} is not a ${cast}.`, '0x80060888');
+    if (method === 'GET') return ok(project(r, query, { kind: 'relationship', cls: cast || r['@odata.type'].replace(/^#Microsoft\.Dynamics\.CRM\./, '') }));
     if (method === 'PUT') {
       for (const [key, value] of Object.entries(body || {})) if (!key.startsWith('@odata') && key !== 'MetadataId') r[key] = clone(value);
       return { status: 204, headers: {} };
     }
-    if (method === 'DELETE') { removeRelationship(r); return { status: 204, headers: {} }; }
-    throw new Error(`fake-lifecycle-metadata: ${method} RelationshipDefinitions(${head.key}) is not modelled`);
+    if (method === 'DELETE' && !cast) { removeRelationship(r); return { status: 204, headers: {} }; }
+    unmodelled(method, `RelationshipDefinitions(${head.key})`);
   }
 
-  // A global option set cannot be deleted while a column binds it (the platform names the dependency).
+  // GlobalOptionSetDefinitions (GET, POST) and GlobalOptionSetDefinitions(K)[/<option set cast>] (GET; PUT and DELETE uncast), K being
+  // `Name='x'` or a MetadataId. A global option set cannot be deleted while a column binds it (the platform names the dependency).
   function optionSetDefinitions(method, segments, query, body, solutionName, apiRoot) {
-    const [head] = segments;
+    const [head, sub, ...rest] = segments;
+    if (rest.length || (sub && !head.key)) unmodelled(method, segments.map((x) => x.name).join('/'));
+    const cast = sub ? castOf(sub, (name) => OPTIONSET_CASTS.has(name), `GlobalOptionSetDefinitions(${head.key})`) : null;
+    const type = { kind: 'optionset', cls: cast };
     if (!head.key) {
       if (method === 'GET') {
-        let list = [...optionSets.values()];
-        if (query.$filter) list = list.filter((s) => matchesFilter(query.$filter, flatForFilter(s)));
-        return collection(list.map((s) => project(s, query, 'optionset')));
+        checkMetadataQuery(type, query, ['$select', '$filter'], 'GlobalOptionSetDefinitions');
+        return collection(filtered([...optionSets.values()], query.$filter).map((set) => project(set, query, type)));
       }
       if (method === 'POST') {
         if (optionSets.has(lc(body.Name))) return fail(400, `An option set with the name ${body.Name} already exists.`, '0x80047008');
@@ -651,23 +828,24 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
         if (addComponent) addComponent(solutionName, { objectid: set.MetadataId, componenttype: 9 });
         return created(`${apiRoot}/GlobalOptionSetDefinitions(${set.MetadataId})`);
       }
-      throw new Error(`fake-lifecycle-metadata: ${method} GlobalOptionSetDefinitions is not modelled`);
+      unmodelled(method, 'GlobalOptionSetDefinitions');
     }
-    const set = keyed(optionSets, head.key);
+    if (method === 'GET') checkMetadataQuery(type, query, ['$select'], `GlobalOptionSetDefinitions(${head.key})`);
+    const set = keyed(optionSets, head.key, 'GlobalOptionSetDefinitions');
     if (!set) return missing(`option set ${head.key}`);
-    if (method === 'GET') return ok(project(set, query, 'optionset'));
-    if (method === 'DELETE') {
+    if (method === 'GET') return ok(project(set, query, type));
+    if (method === 'DELETE' && !cast) {
       const binders = [...tables.values()].flatMap((t) => [...t.Attributes.values()].filter((a) => a.OptionSet && bare(a.OptionSet.MetadataId) === bare(set.MetadataId)));
       if (binders.length) return fail(400, `The OptionSet(${set.MetadataId}) component cannot be deleted because it is referenced by ${binders.length} other components.`, '0x8004f01f');
       optionSets.delete(lc(set.Name));
       if (removeComponents) removeComponents([set.MetadataId]);
       return { status: 204, headers: {} };
     }
-    if (method === 'PUT') {
+    if (method === 'PUT' && !cast) {
       Object.assign(set, storedOptionSet({ ...set, ...body }, { local: false }), { MetadataId: set.MetadataId, Name: set.Name });
       return { status: 204, headers: {} };
     }
-    throw new Error(`fake-lifecycle-metadata: ${method} GlobalOptionSetDefinitions(${head.key}) is not modelled`);
+    unmodelled(method, `GlobalOptionSetDefinitions(${head.key})`);
   }
 
   // CreateCustomerRelationships { Lookup: { "@odata.type": "Microsoft.Dynamics.CRM.ComplexLookupAttributeMetadata", SchemaName, Targets },

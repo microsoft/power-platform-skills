@@ -276,7 +276,9 @@ function deployedFeatures(org) {
   const tables = {};
   for (const t of org.metadata.tables.values()) {
     if (!t.LogicalName.startsWith('contoso_')) continue;
-    const attributes = [...t.Attributes.values()].filter((a) => a.IsCustomAttribute && !a.AttributeOf && !a.IsPrimaryId);
+    // The columns the spec authored: custom, not a companion (`AttributeOf`), not the key — and not a Money column's base-currency twin,
+    // which is a physical custom column with no AttributeOf, told apart only by `IsBaseCurrency` (fake-lifecycle-metadata.js companionsOf).
+    const attributes = [...t.Attributes.values()].filter((a) => a.IsCustomAttribute && !a.AttributeOf && !a.IsPrimaryId && a.IsBaseCurrency !== true);
     // A column as `<AttributeTypeName> <RequiredLevel>` and then what its type carries: a text format and length, a whole number's
     // format and range, a decimal's precision, an auto-number format, a file's size, a Boolean's two labels, a choice's options (and
     // whether they are a global set's), a lookup's targets.
@@ -324,7 +326,18 @@ function deployedFeatures(org) {
     relationships: [...org.metadata.relationships.values()].map((r) => (r.RelationshipType === 'ManyToManyRelationship' ? `${r.SchemaName} N:N ${r.Entity1LogicalName}-${r.Entity2LogicalName}` : `${r.SchemaName} 1:N ${r.ReferencedEntity}->${r.ReferencingEntity}.${r.ReferencingAttribute}`)).sort(),
     optionSets: Object.fromEntries([...org.metadata.optionSets.values()].filter((s) => s.Name.startsWith('contoso_')).map((s) => [s.Name, s.Options.map((o) => `${o.Value} ${label(o.Label)}`)])),
     views: own('savedqueries', 'returnedtypecode').filter((v) => !/^(Active|Inactive|Quick Find Active) |( Advanced Find View| Lookup View| Associated View)$/.test(v.name)).map((v) => `${v.returnedtypecode}: ${v.name}`).sort(),
-    charts: rows('savedqueryvisualizations').map((c) => `${c.primaryentitytypecode}: ${c.name}`),
+    // A chart as it draws: the series' type from its presentation XML, and what its data XML measures by what —
+    //   <Chart …><Series><Series ChartType="Pie" … /></Series>…</Chart>
+    //   <datadefinition><fetchcollection><fetch … aggregate="true"><entity name="contoso_project">
+    //     <attribute alias="agg_0" name="contoso_projectid" aggregate="count" /><attribute alias="grp_0" name="contoso_priority" groupby="true" />
+    // as `Pie: count(contoso_projectid) by contoso_priority` (the attributes' order and aliases do not matter).
+    charts: rows('savedqueryvisualizations').map((c) => {
+      const attributes = [...String(c.datadescription || '').matchAll(/<attribute\b([^>]*?)\/?>/g)].map((m) => Object.fromEntries([...m[1].matchAll(/(\w+)="([^"]*)"/g)].map((x) => [x[1], x[2]])));
+      const types = [...String(c.presentationdescription || '').matchAll(/ChartType="([^"]+)"/g)].map((m) => m[1]);
+      const measures = attributes.filter((a) => a.aggregate).map((a) => `${a.aggregate}(${a.name})`);
+      const groups = attributes.filter((a) => a.groupby === 'true').map((a) => a.name);
+      return `${c.primaryentitytypecode}: ${c.name} (${types.join('/')}: ${measures.join(', ')} by ${groups.join(', ')})`;
+    }),
     forms: own('systemforms', 'objecttypecode').map((f) => `${f.objecttypecode}: ${f.name} (type ${f.type}${f.isdefault ? ', default' : ''})`).sort(),
     dashboards: rows('systemforms', (f) => f.type === 0).map((f) => f.name),
     commands: rows('appactions').map((a) => a.contextvalue).sort(),
@@ -359,4 +372,25 @@ function publishesOf(org, step) {
   });
 }
 
-module.exports = { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, deployedFeatures, publishesOf, FOREIGN, appUniqueName, PAGE_SOURCE, ICON_SVG };
+// What changed between two `org.contents()` (fake-lifecycle-org.js): an artifact of `before` that is gone, or that holds something
+// else (naming the first fields that differ: `saved.fetchxml`, `Attributes.fabrikam_name`, `Options`); and — unless `added: false` —
+// one that `after` holds and `before` did not. One line each, empty when nothing changed. A command that only reads must leave the
+// whole environment as it was; one that builds or tears down must leave every artifact it did not make as it was (`added: false`, the
+// identity inventory then proving what it made and deleted).
+function diffContents(before, after, { added = true } = {}) {
+  const out = [];
+  const differing = (a, b, at, depth) => {
+    if (JSON.stringify(a) === JSON.stringify(b)) return [];
+    if (depth >= 2 || !a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) || Array.isArray(b)) return [at || '(the value)'];
+    return [...new Set([...Object.keys(a), ...Object.keys(b)])].flatMap((key) => differing(a[key], b[key], at ? `${at}.${key}` : key, depth + 1));
+  };
+  for (const [key, entry] of Object.entries(before)) {
+    if (!Object.prototype.hasOwnProperty.call(after, key)) { out.push(`gone: ${entry.label}`); continue; }
+    const fields = differing(entry.content, after[key].content, '', 0);
+    if (fields.length) out.push(`changed: ${entry.label} (${fields.slice(0, 6).join(', ')}${fields.length > 6 ? `, +${fields.length - 6} more` : ''})`);
+  }
+  if (added) for (const [key, entry] of Object.entries(after)) if (!Object.prototype.hasOwnProperty.call(before, key)) out.push(`added: ${entry.label}`);
+  return out;
+}
+
+module.exports = { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, deployedFeatures, publishesOf, diffContents, FOREIGN, appUniqueName, PAGE_SOURCE, ICON_SVG };

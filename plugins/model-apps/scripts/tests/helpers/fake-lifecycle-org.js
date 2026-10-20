@@ -34,6 +34,8 @@
 //   - one default form per table and form type: making one the default takes the flag off the other;
 //   - an N:N link that exists is refused as a duplicate; an app's settings, and a role's grants, go with it when it is deleted;
 //   - a File or Image column is `AttributeType: "Virtual"` with `AttributeTypeName` FileType / ImageType (Microsoft Learn);
+//   - a Money column's `<name>_base` twin has no AttributeOf, is not logical, is custom, and is told apart only by `IsBaseCurrency`
+//     (live-measured, pinned in download-model-app.test.js);
 //   - integer columns the SDK sends as text (`type: "0"`) are stored as numbers.
 // ASSUMED, because nothing measured says otherwise (a LIVE CHECK can settle each one):
 //   - the app's publish also publishes the dashboards it holds — a dashboard has no table to publish it through, the build names
@@ -45,13 +47,19 @@
 //
 // Anything it does not model is answered 501 AND recorded in `org.unexpected`, naming the request: a test asserts the list is empty,
 // so a new read or write shows up as a loud failure in the test that first sends it — never as a silent empty answer that the code
-// under test might read as "nothing there".
+// under test might read as "nothing there". For a READ that holds before a single row or definition is looked at: the whole path, every
+// query option, every column or property it names (in `$select`, `$filter`, `$orderby`, `$expand`), every navigation, cast and filter
+// function is checked against an explicit schema (RECORD_SCHEMA below; the metadata read contract in fake-lifecycle-metadata.js), so a
+// read over an empty collection is refused exactly as one over a full one. fake-lifecycle-org-contract.test.js pins that boundary.
+//
+// What a test compares: `inventory()` names what exists (identities: create/delete), `contents()` what each artifact holds (saved and
+// published layers, whole definitions, page files) — the proof that a command left everything it did not make as it found it.
 //
 // Every request is recorded, in order, in `org.requests` as `{ method, path, body, headers, status }` with the path below the API root,
 // decoded, query included, and the HTTP status it was answered with; a `$batch` also carries its `operations` (each `{ method, path,
 // body, headers }`), which run atomically.
 const { randomUUID } = require('node:crypto');
-const { matchesFilter } = require('./odata-filter.js');
+const { compileFilter, describeFilter, evaluateFilter } = require('./odata-filter.js');
 const { createMetadataStore } = require('./fake-lifecycle-metadata.js');
 const { FakeGenPageServer, API: PAGE_API } = require('./fake-genpage-server.js');
 
@@ -96,6 +104,54 @@ const SYSTEM_TABLES = {
   contact: { set: 'contacts', id: 'contactid', name: 'fullname', otc: 2, stock: true },
 };
 const PAGE_PATH = /^\/(uxagentprojects|uxagentprojectfiles|agentconversationmessages)\b/;
+
+// THE READ CONTRACT of the record half: the columns a read may name, per system table, EXPLICITLY — `fields` the platform always fills
+// (the fake fills them too, and a row without one is the fake's own modelling gap, refused loudly), `nullable` the ones a row may leave
+// empty (answered `null`). A lookup is its `_<name>_value` column; `lookups` names the table a lookup points at (a filter may follow it
+// to that row's key, `parentrootroleid/roleid`), `navigations` the collection-valued navigations a read may follow (`$filter` lambdas,
+// `/<set>(<id>)/<navigation>`), `expands` the lookups `$expand` may embed. A table the build creates — and the two stock tables a
+// Customer column points at — takes its columns from its own definition instead (schemaOfTable). Every read is checked against this
+// BEFORE any row is looked at: an unknown column, option, navigation or path is answered 501 and recorded in `org.unexpected`, so an
+// empty collection can never stand in for "nothing there" when the read was never modelled.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/about-entity-reference
+const AUDIT = ['createdon', 'modifiedon', 'versionnumber'];
+const RECORD_SCHEMA = {
+  solution: { fields: ['solutionid', 'uniquename', 'friendlyname', 'version', 'ismanaged', 'isvisible', '_publisherid_value', ...AUDIT], nullable: ['description'], lookups: { publisherid: 'publishers' }, expands: { publisherid: 'publishers' } },
+  publisher: { fields: ['publisherid', 'uniquename', 'friendlyname', 'customizationprefix', 'customizationoptionvalueprefix', ...AUDIT], nullable: ['description'] },
+  solutioncomponent: { fields: ['solutioncomponentid', '_solutionid_value', 'objectid', 'componenttype', ...AUDIT], nullable: ['rootcomponentbehavior'], lookups: { solutionid: 'solutions' } },
+  savedquery: { fields: ['savedqueryid', 'name', 'returnedtypecode', 'querytype', 'isdefault', 'isquickfindquery', 'isprivate', 'fetchxml', 'layoutxml', 'statecode', 'statuscode', 'ismanaged', 'iscustomizable', 'canbedeleted', 'componentstate', ...AUDIT], nullable: ['description'] },
+  systemform: { fields: ['formid', 'formidunique', 'name', 'objecttypecode', 'type', 'formxml', 'isdefault', 'formactivationstate', 'ismanaged', 'iscustomizable', 'canbedeleted', 'componentstate', ...AUDIT], nullable: ['description', 'formpresentation', 'istabletenabled', 'uniquename'] },
+  savedqueryvisualization: { fields: ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'datadescription', 'presentationdescription', 'isdefault', 'ismanaged', 'iscustomizable', 'canbedeleted', 'componentstate', ...AUDIT], nullable: ['description', 'charttype', 'type'] },
+  appmodule: { fields: ['appmoduleid', 'appmoduleidunique', 'name', 'uniquename', 'clienttype', 'ismanaged', 'statecode', 'statuscode', 'componentstate', ...AUDIT], nullable: ['description', 'aiappdescription', 'webresourceid', 'formfactor', 'navigationtype'], navigations: { appmoduleroles_association: 'roles' } },
+  appmodulecomponent: { fields: ['appmodulecomponentid', '_appmoduleidunique_value', 'objectid', 'componenttype', 'rootcomponentbehavior', ...AUDIT], nullable: [] },
+  sitemap: { fields: ['sitemapid', 'sitemapidunique', 'sitemapname', 'sitemapnameunique', 'sitemapxml', 'ismanaged', 'componentstate', ...AUDIT], nullable: [] },
+  webresource: { fields: ['webresourceid', 'name', 'displayname', 'webresourcetype', 'content', 'ismanaged', 'iscustomizable', 'canbedeleted', ...AUDIT], nullable: ['description'] },
+  workflow: { fields: ['workflowid', 'name', 'category', 'type', 'primaryentity', 'statecode', 'statuscode', 'ismanaged', ...AUDIT], nullable: ['description', 'uniquename', 'xaml', 'clientdata', 'businessprocesstype', 'processorder', 'mode', 'scope'] },
+  appaction: { fields: ['appactionid', 'name', 'uniquename', 'context', 'contextvalue', 'location', 'type', 'ismanaged', 'statecode', 'statuscode', ...AUDIT], nullable: ['buttonlabeltext', 'sequence', 'onclickeventtype', 'onclickeventjavascriptfunctionname', 'onclickeventjavascriptparameters', 'grouptitle', 'isgrouptitlehidden', '_contextentity_value', '_parentappactionid_value', '_onclickeventjavascriptwebresourceid_value'], lookups: { parentappactionid: 'appactions' } },
+  role: { fields: ['roleid', 'name', '_businessunitid_value', '_parentrootroleid_value', 'ismanaged', 'iscustomizable', ...AUDIT], nullable: ['description', '_parentroleid_value', '_roletemplateid_value'], lookups: { businessunitid: 'businessunits', parentrootroleid: 'roles', parentroleid: 'roles' }, navigations: { appmoduleroles_association: 'appmodules' } },
+  roleprivileges: { fields: ['roleprivilegeid', 'roleid', 'privilegeid', 'privilegedepthmask', ...AUDIT], nullable: [] },
+  privilege: { fields: ['privilegeid', 'name', 'accessright', 'canbebasic', 'canbelocal', 'canbedeep', 'canbeglobal', ...AUDIT], nullable: [] },
+  businessunit: { fields: ['businessunitid', 'name', ...AUDIT], nullable: ['_parentbusinessunitid_value'], lookups: { parentbusinessunitid: 'businessunits' } },
+  systemuser: { fields: ['systemuserid', 'fullname', 'domainname', '_businessunitid_value', ...AUDIT], nullable: [], lookups: { businessunitid: 'businessunits' } },
+  team: { fields: ['teamid', 'name', ...AUDIT], nullable: ['_businessunitid_value'], lookups: { businessunitid: 'businessunits' } },
+  organization: { fields: ['organizationid', 'name', 'languagecode', ...AUDIT], nullable: [] },
+  settingdefinition: { fields: ['settingdefinitionid', 'uniquename', 'displayname', 'datatype', 'defaultvalue', 'isoverridable', 'overridablelevel', ...AUDIT], nullable: [] },
+  appsetting: { fields: ['appsettingid', '_parentappmoduleid_value', '_settingdefinitionid_value', 'value', 'componentstate', ...AUDIT], nullable: ['uniquename'], lookups: { parentappmoduleid: 'appmodules', settingdefinitionid: 'settingdefinitions' } },
+  organizationsetting: { fields: ['organizationsettingid', '_settingdefinitionid_value', 'value', 'uniquename', ...AUDIT], nullable: [], lookups: { settingdefinitionid: 'settingdefinitions' } },
+  // The page tables are answered by the page fake (helpers/fake-genpage-server.js); their reads are checked here before it sees them.
+  uxagentproject: { fields: ['uxagentprojectid', 'name', 'versionnumber', 'componentstate'], nullable: ['description', 'createdon', 'modifiedon'] },
+  uxagentprojectfile: { fields: ['uxagentprojectfileid', 'filename', 'filetype', '_uxagentprojectid_value', 'versionnumber'], nullable: ['createdon', 'modifiedon'], lookups: { uxagentprojectid: 'uxagentprojects' } },
+  agentconversationmessage: { fields: ['agentconversationmessageid', 'message', 'messagesender', '_regardingobjectid_value', 'createdon', 'versionnumber'], nullable: ['messagecontext', 'modifiedon'], lookups: { regardingobjectid: 'uxagentprojects' } },
+};
+// The query options each kind of read takes.
+const READ_OPTIONS = {
+  collection: ['$select', '$filter', '$orderby', '$top', '$expand'],
+  single: ['$select', '$expand'],
+  navigation: ['$select', '$filter', '$orderby', '$top'],
+  unpublished: ['$select'],
+  unpublishedMany: ['$select', '$filter', '$orderby', '$top'],
+  write: ['$select'],
+};
 
 // The fixed ids a fresh environment hands out, so a test can name them.
 const IDS = {
@@ -227,7 +283,7 @@ function createLifecycleOrg(options = {}) {
     const fetch = (extra = '') => `<fetch version="1.0" mapping="logical"><entity name="${logical}"><attribute name="${primary}" /><attribute name="createdon" /><order attribute="${primary}" descending="false" />${extra}<attribute name="${table.PrimaryIdAttribute}" /></entity></fetch>`;
     const state = (value) => `<filter type="and"><condition attribute="statecode" operator="eq" value="${value}" /></filter>`;
     const layout = `<grid name="resultset" object="${table.ObjectTypeCode}" jump="${primary}" select="1" icon="1" preview="1"><row name="result" id="${table.PrimaryIdAttribute}"><cell name="${primary}" width="300" /><cell name="createdon" width="125" /></row></grid>`;
-    const view = (name, querytype, extra = {}) => insertRow('savedqueries', { name, description: '', returnedtypecode: logical, querytype, isdefault: false, isquickfindquery: querytype === 4, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: false, CanBeChanged: false }, isprivate: false, fetchxml: fetch(querytype === 0 || querytype === 4 ? state(extra.state || 0) : ''), layoutxml: layout, statecode: 0, statuscode: 1, ...extra.data }, { published: true });
+    const view = (name, querytype, extra = {}) => insertRow('savedqueries', { name, description: '', returnedtypecode: logical, querytype, isdefault: false, isquickfindquery: querytype === 4, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: false, CanBeChanged: false }, isprivate: false, ismanaged: false, fetchxml: fetch(querytype === 0 || querytype === 4 ? state(extra.state || 0) : ''), layoutxml: layout, statecode: 0, statuscode: 1, ...extra.data }, { published: true });
     view(`Active ${plural}`, 0, { data: { isdefault: true } });
     view(`Inactive ${plural}`, 0, { state: 1 });
     view(`Quick Find Active ${plural}`, 4, { data: { isdefault: true } });
@@ -239,7 +295,7 @@ function createLifecycleOrg(options = {}) {
     // (lib/form-order.js). Were it to carry `Order="0"`, every build that declares a Main form for a new table would warn that the
     // stock form may open first.
     const formxml = `<form><tabs><tab verticallayout="true" id="${braced()}" IsUserDefined="1"><labels><label description="General" languagecode="${baseLanguage}" /></labels><columns><column width="100%"><sections><section showlabel="false" showbar="false" IsUserDefined="0" id="${braced()}"><labels><label description="General" languagecode="${baseLanguage}" /></labels><rows>${cell(primary, labelText((table.Attributes.get(primary) || {}).DisplayName) || 'Name', classIds.text)}${cell('ownerid', 'Owner', classIds.lookup)}</rows></section></sections></column></columns></tab></tabs></form>`;
-    insertRow('systemforms', { name: 'Information', description: 'A form for this entity.', objecttypecode: logical, type: 2, isdefault: true, formactivationstate: 1, formpresentation: 1, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true }, formxml }, { published: true });
+    insertRow('systemforms', { name: 'Information', description: 'A form for this entity.', objecttypecode: logical, type: 2, isdefault: true, formactivationstate: 1, formpresentation: 1, ismanaged: false, formidunique: randomUUID(), iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true }, formxml }, { published: true });
   }
   // Deleting a table takes its rows, views, forms, charts and privileges (and every role's grant of them) with it.
   function tableDeleted(table) {
@@ -295,29 +351,108 @@ function createLifecycleOrg(options = {}) {
   const appComponentsOf = (app) => [...rowsOf('appmodulecomponents').values()].filter((c) => bare(c.data._appmoduleidunique_value) === bare(app.data.appmoduleidunique));
 
   // ---------------------------------------------------------------------------------------------------------------------------
+  // The read contract (RECORD_SCHEMA above): what a set's rows hold, and the check every read passes before a row is looked at.
+  const listOf = (text) => String(text).split(',').map((x) => x.trim()).filter(Boolean);
+  function schemaOf(set) {
+    const info = infoOfSet(set);
+    if (!info) throw new Unmodelled(`no table has the entity set ${set}`);
+    const explicit = RECORD_SCHEMA[info.logical];
+    if (explicit) {
+      return { info, fields: new Set(explicit.fields), nullable: new Set(explicit.nullable), lookups: explicit.lookups || {}, navigations: explicit.navigations || {}, expands: explicit.expands || {} };
+    }
+    const table = metadata.tables.get(info.logical);
+    if (!table) throw new Unmodelled(`the table of ${set} has no definition`);
+    return schemaOfTable(table, info);
+  }
+  // A table's columns come from its own definition: a lookup (a Customer and an Owner too) is read as `_<name>_value`; a companion
+  // (`AttributeOf`, e.g. a lookup's `<name>name`) is an annotation, not a column a read selects. What the platform always fills on a
+  // row of it: its key, the audit columns, its state and status.
+  function schemaOfTable(table, info) {
+    const fields = new Set([table.PrimaryIdAttribute, 'createdon', 'modifiedon', 'versionnumber', 'statecode', 'statuscode']);
+    const nullable = new Set();
+    const lookups = {};
+    for (const a of table.Attributes.values()) {
+      if (a.AttributeOf) continue;
+      const isLookup = ['Lookup', 'Customer', 'Owner'].includes(a.AttributeType);
+      const name = isLookup ? `_${a.LogicalName}_value` : a.LogicalName;
+      if (isLookup && Array.isArray(a.Targets) && a.Targets.length === 1) {
+        const target = tableInfo(a.Targets[0]);
+        if (target) lookups[a.LogicalName] = target.set;
+      }
+      if (!fields.has(name)) nullable.add(name);
+    }
+    return { info, fields, nullable, lookups, navigations: {}, expands: {} };
+  }
+  const knows = (schema, name) => schema.fields.has(name) || schema.nullable.has(name);
+  // Refuses — before any row is enumerated — a read that names anything the set does not have: an option, a column (in `$select`,
+  // `$orderby` or `$filter`), a navigation (a lambda, a path to a lookup's row, an `$expand`), a filter function. The filter is parsed
+  // here, once, so an empty collection checks it exactly as a full one does. Answers what the read then needs: the schema, the parsed
+  // filter with the columns it reads that the platform always fills, and the expands.
+  function checkRead(set, query, kind, where) {
+    const schema = schemaOf(set);
+    for (const option of Object.keys(query || {})) if (!READ_OPTIONS[kind].includes(option)) throw new Unmodelled(`the query option ${option} is not modelled on ${where}`);
+    const column = (name, clause) => { if (!knows(schema, name)) throw new Unmodelled(`${schema.info.logical} has no column ${name} (${clause} on ${where})`); };
+    if (query.$select !== undefined) for (const name of listOf(query.$select)) column(name, '$select');
+    if (query.$orderby !== undefined) {
+      for (const item of listOf(query.$orderby)) {
+        const [name, dir, ...extra] = item.split(/\s+/);
+        if (extra.length || (dir && !/^(asc|desc)$/i.test(dir))) throw new Unmodelled(`$orderby=${query.$orderby} on ${where}`);
+        column(name, '$orderby');
+      }
+    }
+    if (query.$top !== undefined && !/^\d+$/.test(query.$top)) throw new Unmodelled(`$top=${query.$top} on ${where}`);
+    const expands = query.$expand !== undefined ? expandsOf(schema, query.$expand, where) : [];
+    let filter = null;
+    if (query.$filter !== undefined) {
+      const ast = compileFilter(query.$filter);
+      const read = describeFilter(ast);
+      for (const name of read.fields) column(name, '$filter');
+      for (const path of read.paths) {
+        const target = schema.lookups[path.navigation];
+        if (!target || !knows(schema, `_${path.navigation}_value`) || path.field !== infoOfSet(target).id) throw new Unmodelled(`the navigation path ${path.navigation}/${path.field} is not modelled on ${where}`);
+      }
+      for (const lambda of read.lambdas) {
+        const target = schema.navigations[lambda.navigation];
+        if (!target) throw new Unmodelled(`${schema.info.logical} has no navigation ${lambda.navigation} ($filter on ${where})`);
+        const related = schemaOf(target);
+        for (const name of lambda.fields) if (!knows(related, name)) throw new Unmodelled(`${related.info.logical} has no column ${name} (${lambda.navigation}/${lambda.op} on ${where})`);
+      }
+      filter = { ast, required: read.fields.filter((name) => !schema.nullable.has(name)) };
+    }
+    return { schema, filter, expands };
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------------------
   // Rows as a read answers them: `$select` narrows the columns (the primary key and `@odata.etag` always come back); a lookup is read
   // as `_<name>_value`. A plain read of a layered row answers its published layer; RetrieveUnpublished* its saved one, with
-  // `componentstate`: 0 when no publish is owed, 1 when one is.
+  // `componentstate`: 0 when no publish is owed, 1 when one is. A selected column the row does not hold is `null` when the platform
+  // lets it be empty, and refused otherwise: the platform would have filled it, and the fake does not model how.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/select-columns
   function shape(row, data, query, info, { saved = false } = {}) {
-    const select = query.$select ? String(query.$select).split(',').map((x) => x.trim()).filter(Boolean) : null;
+    const select = query.$select ? listOf(query.$select) : null;
     const full = { ...data, '@odata.etag': etagOf(saved ? row.version : (row.publishedVersion || row.version)) };
     if (info.layered) full.componentstate = saved ? (row.publishedVersion === row.version ? 0 : 1) : 0;
     if (!select) return full;
+    const schema = schemaOf(row.set);
     const out = { '@odata.etag': full['@odata.etag'], [info.id]: full[info.id] };
-    for (const name of select) out[name] = full[name] === undefined ? null : full[name];
+    for (const name of select) {
+      if (full[name] !== undefined && full[name] !== null) out[name] = full[name];
+      else if (schema.nullable.has(name)) out[name] = null;
+      else throw new Unmodelled(`${info.logical} ${row.id} holds no ${name}, which the platform always fills`);
+    }
     return out;
   }
   const etagOf = (version) => `W/"${version}"`;
-  function readRows(set, query, { saved = false } = {}) {
-    const info = infoOfSet(set);
-    if (!info) throw new Unmodelled(`no table has the entity set ${set}`);
-    const expands = expandsOf(set, query.$expand);
+  const readRows = (set, query, options = {}) => answerRows(set, [...rowsOf(set).values()], query, options);
+  // The rows a read answers, out of `candidates` (a whole set, or the rows a navigation links): checked, filtered, ordered, cut, shaped.
+  function answerRows(set, candidates, query, { saved = false, kind = 'collection', where = `/${set}` } = {}) {
+    const { schema, filter, expands } = checkRead(set, query, kind, where);
+    const { info } = schema;
     const layered = !!info.layered;
-    let rows = [...rowsOf(set).values()]
+    let rows = candidates
       .map((row) => ({ row, data: layered && !saved ? row.published : row.data }))
       .filter((x) => x.data);
-    if (query.$filter) {
+    if (filter) {
       // A lambda over an N:N navigation (`appmoduleroles_association/any(x:x/roleid eq <id>)`) follows the row's links.
       const navigate = (data, nav) => {
         const id = bare(data[info.id]);
@@ -329,11 +464,22 @@ function createLifecycleOrg(options = {}) {
         }
         return out.filter(Boolean);
       };
-      rows = rows.filter((x) => matchesFilter(query.$filter, layered && saved ? { ...x.data, componentstate: x.row.publishedVersion === x.row.version ? 0 : 1 } : x.data, { navigate }));
+      rows = rows.filter((x) => {
+        const data = layered ? { ...x.data, componentstate: saved && x.row.publishedVersion !== x.row.version ? 1 : 0 } : x.data;
+        for (const name of filter.required) if (data[name] === undefined || data[name] === null) throw new Unmodelled(`${info.logical} ${x.row.id} holds no ${name}, which the platform always fills ($filter on ${where})`);
+        return evaluateFilter(filter.ast, data, { navigate });
+      });
     }
     if (query.$orderby) {
-      const [field, dir] = String(query.$orderby).split(',')[0].trim().split(/\s+/);
-      rows.sort((a, b) => (a.data[field] > b.data[field] ? 1 : a.data[field] < b.data[field] ? -1 : 0) * (lc(dir) === 'desc' ? -1 : 1));
+      const keys = listOf(query.$orderby).map((item) => { const [field, dir] = item.split(/\s+/); return { field, sign: lc(dir) === 'desc' ? -1 : 1 }; });
+      rows.sort((a, b) => {
+        for (const { field, sign } of keys) {
+          const x = a.data[field];
+          const y = b.data[field];
+          if (x !== y) return (x > y ? 1 : -1) * sign;
+        }
+        return 0;
+      });
     }
     if (query.$top) rows = rows.slice(0, Number(query.$top));
     return rows.map((x) => withExpands(shape(x.row, x.data, query, info, { saved }), x.data, expands));
@@ -342,14 +488,15 @@ function createLifecycleOrg(options = {}) {
   // `$expand` of a single-valued navigation — a lookup — embeds the row it points at, with its own `$select`:
   //   /solutions?$select=solutionid,uniquename&$expand=publisherid($select=publisherid,customizationprefix)
   //   -> { "solutionid": "…", "uniquename": "…", "publisherid": { "publisherid": "…", "customizationprefix": "contoso" } }
-  // The navigations modelled are the lookups the lifecycle expands; any other is refused by name.
+  // The navigations modelled are the lookups the lifecycle expands (RECORD_SCHEMA `expands`); any other is refused by name.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/join-tables#expand-many-to-one-relationships
-  const EXPANDABLE = { solutions: { publisherid: 'publishers' } };
-  function expandsOf(set, text) {
-    if (!text) return [];
+  function expandsOf(schema, text, where) {
     return metadata.parseExpand(text).map((item) => {
-      const target = (EXPANDABLE[set] || {})[item.name];
-      if (!target) throw new Unmodelled(`$expand=${item.name} on ${set} is not modelled`);
+      const target = schema.expands[item.name];
+      if (!target) throw new Unmodelled(`$expand=${item.name} on ${where} is not modelled`);
+      for (const option of Object.keys(item.opts)) if (option !== '$select') throw new Unmodelled(`$expand=${item.name}(${option}) on ${where} is not modelled`);
+      const related = schemaOf(target);
+      if (item.opts.$select !== undefined) for (const name of listOf(item.opts.$select)) if (!knows(related, name)) throw new Unmodelled(`${related.info.logical} has no column ${name} ($expand=${item.name} on ${where})`);
       return { ...item, target };
     });
   }
@@ -395,13 +542,13 @@ function createLifecycleOrg(options = {}) {
   const solutionHeader = (headers) => (Object.entries(headers || {}).find(([k]) => lc(k) === 'mscrm.solutionuniquename') || [])[1] || null;
 
   // The columns the platform fills in on a create, by entity set: a solution-aware row's unique-layer id and managed state, a form's
-  // activation state, a view's and a form's managed properties.
+  // activation state, a view's and a form's managed properties and default flag (false until one is made the default).
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_AppModuleIdUnique
   const CREATE_DEFAULTS = {
     appmodules: () => ({ appmoduleidunique: randomUUID(), ismanaged: false, statecode: 0, statuscode: 1 }),
     sitemaps: () => ({ sitemapidunique: randomUUID(), ismanaged: false }),
-    savedqueries: () => ({ ismanaged: false, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true }, statecode: 0, statuscode: 1, isprivate: false }),
-    systemforms: () => ({ ismanaged: false, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true }, formactivationstate: 1, formidunique: randomUUID() }),
+    savedqueries: () => ({ ismanaged: false, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true }, statecode: 0, statuscode: 1, isprivate: false, isdefault: false, isquickfindquery: false }),
+    systemforms: () => ({ ismanaged: false, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true }, formactivationstate: 1, formidunique: randomUUID(), isdefault: false }),
     savedqueryvisualizations: () => ({ ismanaged: false, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true } }),
     webresourceset: () => ({ ismanaged: false, iscustomizable: { Value: true, CanBeChanged: true }, canbedeleted: { Value: true, CanBeChanged: true } }),
     workflows: () => ({ ismanaged: false, statecode: 0, statuscode: 1 }),
@@ -418,6 +565,15 @@ function createLifecycleOrg(options = {}) {
     if (set === 'systemforms' && Number(data.type) === 0 && !data.objecttypecode) data.objecttypecode = 'none';
     const id = bare(data[info.id] || randomUUID());
     if (rowsOf(set).has(id)) return failure(412, '0x80040237', 'A record with matching key values already exists.');
+    // A role of the root business unit is its own `parentrootroleid` (the stock roles are seeded so); a row of a table with a state
+    // starts Active (statecode 0) with that state's default status (1) unless the request names another.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/role#BKMK_ParentRootRoleId
+    if (set === 'roles' && data._parentrootroleid_value === undefined) data._parentrootroleid_value = id;
+    const definition = (!SYSTEM_TABLES[info.logical] || SYSTEM_TABLES[info.logical].stock) && metadata.tables.get(info.logical);
+    if (definition && definition.Attributes.has('statecode')) {
+      if (data.statecode === undefined) data.statecode = 0;
+      if (data.statuscode === undefined) data.statuscode = 1;
+    }
     const row = insertRow(set, { ...data, [info.id]: id, createdon: '2026-10-01T00:00:00Z', modifiedon: '2026-10-01T00:00:00Z' });
     const solution = solutionHeader(headers);
     if (solution && info.componentType) addComponentByName(solution, { objectid: id, componenttype: info.componentType });
@@ -498,7 +654,7 @@ function createLifecycleOrg(options = {}) {
   insertRow('businessunits', { businessunitid: IDS.businessUnit, name: 'contoso', _parentbusinessunitid_value: null });
   insertRow('systemusers', { systemuserid: IDS.user, fullname: 'Maker', domainname: 'maker@contoso.onmicrosoft.com', _businessunitid_value: IDS.businessUnit });
   insertRow('publishers', { publisherid: IDS.defaultPublisher, uniquename: 'DefaultPublisherContoso', friendlyname: 'Default Publisher for Contoso', customizationprefix: 'new', customizationoptionvalueprefix: 10000 });
-  insertRow('solutions', { solutionid: IDS.defaultSolution, uniquename: 'Default', friendlyname: 'Default Solution', ismanaged: false, isvisible: false, _publisherid_value: IDS.defaultPublisher });
+  insertRow('solutions', { solutionid: IDS.defaultSolution, uniquename: 'Default', friendlyname: 'Default Solution', version: '1.0', ismanaged: false, isvisible: false, _publisherid_value: IDS.defaultPublisher });
   // The two stock roles of the root business unit. A root role is its own `parentrootroleid`; System Administrator carries its fixed
   // role template id, which is how the SDK finds it to associate it with a new app.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/role#BKMK_RoleTemplateId
@@ -513,14 +669,28 @@ function createLifecycleOrg(options = {}) {
   // The page tables are served by the page fake, over the SDK's own HttpClient shape (`{ status, headers, body }`).
   const pageServer = new FakeGenPageServer();
   pageServer.languages = { base: baseLanguage, provisioned: options.provisionedLanguages || [baseLanguage], available: options.provisionedLanguages || [baseLanguage] };
+  // The page reads, each checked against RECORD_SCHEMA before the page fake sees it (it answers what it routes, and would not refuse a
+  // column it does not know):
+  //   /uxagentprojects · /uxagentprojects(<id>) · /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple() ·
+  //   /uxagentprojectfiles · /uxagentprojectfiles(<id>) · /uxagentprojectfiles(<id>)/filecontent/$value · /agentconversationmessages
+  function checkPageRead(p, query) {
+    const m = /^\/(uxagentprojects|uxagentprojectfiles|agentconversationmessages)(?:\(([^)]+)\))?(?:\/(.+))?$/.exec(p);
+    if (!m) throw new Unmodelled(`GET ${p}`);
+    const [, set, key, rest] = m;
+    if (!key && !rest) return checkRead(set, query, 'collection', p);
+    if (key && !rest) return checkRead(set, query, 'single', p);
+    if (!key && set === 'uxagentprojects' && rest === 'Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') return checkRead(set, query, 'unpublishedMany', p);
+    if (key && set === 'uxagentprojectfiles' && rest === 'filecontent/$value') return noQuery(query, p);
+    throw new Unmodelled(`GET ${p}`);
+  }
   async function pageRequest(method, where, body, headers) {
+    const checked = method === 'GET' ? checkPageRead(pathOf(where), queryOf(where)) : null;
     // The saved layer of the page list, by id — the app push's check that every page its navigation names exists, drafts included:
     //   GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> or …
     // `componentstate` 1 while the page holds a draft no publish has copied (helpers/fake-apps-org.js answers it the same way).
-    if (method === 'GET' && /^\/uxagentprojects\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(where)) {
-      const rows = [...pageServer.state.projects.values()].map((p) => ({ uxagentprojectid: p.id, name: p.name, componentstate: p.draft || !pageServer.publishedPages.has(p.id) ? 1 : 0, '@odata.etag': `W/"${p.etag}"` }));
-      const filter = queryOf(where).$filter;
-      return json(200, { value: rows.filter((r) => !filter || matchesFilter(filter, r)) });
+    if (method === 'GET' && /^\/uxagentprojects\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)$/.test(pathOf(where))) {
+      const rows = [...pageServer.state.projects.values()].map((p) => ({ uxagentprojectid: p.id, name: p.name, versionnumber: p.etag, componentstate: p.draft || !pageServer.publishedPages.has(p.id) ? 1 : 0, '@odata.etag': `W/"${p.etag}"` }));
+      return json(200, { value: rows.filter((r) => !checked.filter || evaluateFilter(checked.filter.ast, r, {})) });
     }
     const res = await pageServer.receive(method, `${PAGE_API}${where}`, body, { headers }, false, {});
     // The page fake answers what it does not route with a 404/405 "no route": that is a request this fake does not model either.
@@ -571,7 +741,11 @@ function createLifecycleOrg(options = {}) {
 
   // ---------------------------------------------------------------------------------------------------------------------------
   // Actions and functions (unbound and bound). Each answers as the platform does; null when the path is not one.
+  // An action or function takes the parameters in its body or its path, never a query option — but for the ones that read rows
+  // (RetrieveUnpublished*: the options of a read) and RetrieveFilteredForms (its `@e`, `@t`, `@u` parameter aliases).
+  const ACTIONS = /^\/(WhoAmI|RetrieveProvisionedLanguages\(\)|RetrieveAvailableLanguages\(\)|PublishXml|PublishAllXml|AddSolutionComponent|AddAppComponents|RemoveAppComponents|InsertStatusValue|InsertOptionValue|SaveSettingValue|RetrieveSetting\(.*\)|\$batch|[A-Za-z_]\w*\([^)]+\)\/Microsoft\.Dynamics\.CRM\.(AddPrivilegesRole|ReplacePrivilegesRole)|[A-Za-z_]\w*\/Microsoft\.Dynamics\.CRM\.CreateMultiple)$/;
   async function actions(method, p, query, body, headers, where) {
+    if (ACTIONS.test(p)) noQuery(query, p);
     if (method === 'GET' && p === '/WhoAmI') return json(200, { UserId: IDS.user, BusinessUnitId: IDS.businessUnit, OrganizationId: IDS.organization });
     if (method === 'GET' && p === '/RetrieveProvisionedLanguages()') return json(200, { RetrieveProvisionedLanguages: pageServer.languages.provisioned });
     if (method === 'GET' && p === '/RetrieveAvailableLanguages()') return json(200, { LocaleIds: pageServer.languages.available });
@@ -623,14 +797,18 @@ function createLifecycleOrg(options = {}) {
     }
     const unpublished = /^\/([A-Za-z_]\w*)\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\)$/.exec(p);
     if (method === 'GET' && unpublished) {
-      const info = infoOfSet(unpublished[1]);
-      const row = info && rowsOf(unpublished[1]).get(bare(unpublished[2]));
+      const { info } = checkRead(unpublished[1], query, 'unpublished', p).schema;
+      if (!info.layered) throw new Unmodelled(`${unpublished[1]} has no unpublished layer (${p})`);
+      const row = rowsOf(unpublished[1]).get(bare(unpublished[2]));
       if (!row) return failure(404, '0x80040217', `${unpublished[1]} With Id = ${unpublished[2]} Does Not Exist`);
       const shaped = shape(row, row.data, query, info, { saved: true });
       return json(200, shaped, { etag: shaped['@odata.etag'] });
     }
     const unpublishedMany = /^\/([A-Za-z_]\w*)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)$/.exec(p);
-    if (method === 'GET' && unpublishedMany) return json(200, { value: readRows(unpublishedMany[1], query, { saved: true }) });
+    if (method === 'GET' && unpublishedMany) {
+      if (!(infoOfSet(unpublishedMany[1]) || {}).layered) throw new Unmodelled(`${unpublishedMany[1]} has no unpublished layer (${p})`);
+      return json(200, { value: readRows(unpublishedMany[1], query, { saved: true, kind: 'unpublishedMany', where: p }) });
+    }
     // The business-rule designer's bound members (`CreateProcessWithWfomJson`, `RetrieveProcessWithWfomJson`) are a preview that most
     // environments do not expose; this one does not, and answers as Dataverse answers a member it does not declare. The SDK reads that
     // 404 as "business-rule authoring is not enabled here" (WFOM_API_UNAVAILABLE) and the build skips the rules with a warning
@@ -643,7 +821,8 @@ function createLifecycleOrg(options = {}) {
     // records it measured: by the published `<DisplayConditions Order>`, a form with conditions but no Order after those with one, a
     // form with no conditions after every form that has them; forms that tie come in the order they were created.
     // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievefilteredforms
-    if (method === 'GET' && /^\/systemforms\/Microsoft\.Dynamics\.CRM\.RetrieveFilteredForms\(/.test(p)) {
+    if (method === 'GET' && /^\/systemforms\/Microsoft\.Dynamics\.CRM\.RetrieveFilteredForms\(EntityLogicalName=@e,FormType=@t,User=@u\)$/.test(p)) {
+      for (const option of Object.keys(query)) if (!['@e', '@t', '@u'].includes(option)) throw new Unmodelled(`the parameter ${option} is not modelled on ${p}`);
       const entity = lc(String(query['@e'] || '').replace(/^'|'$/g, ''));
       const type = Number(query['@t']);
       const rank = (xml) => {
@@ -744,7 +923,10 @@ function createLifecycleOrg(options = {}) {
   }
 
   // ---------------------------------------------------------------------------------------------------------------------------
-  // Rows: `/<set>`, `/<set>(<id>)`, `/<set>(<id>)/<navigation>` and `/<set>(<id>)/<navigation>/$ref`.
+  // Rows: `/<set>`, `/<set>(<id>)`, `/<set>(<id>)/<navigation>` and `/<set>(<id>)/<navigation>/$ref` — and nothing else. A read is checked
+  // against the set's schema first (checkRead); a write may carry only the `$select` of the row it answers with; a navigation must be one
+  // the set declares.
+  const noQuery = (query, where) => { const options = Object.keys(query || {}); if (options.length) throw new Unmodelled(`the query option ${options[0]} is not modelled on ${where}`); };
   function records(method, p, query, body, headers) {
     const m = /^\/([A-Za-z_]\w*)(?:\(([^)]*)\))?(?:\/(.+))?$/.exec(p);
     if (!m) throw new Unmodelled(`${method} ${p}`);
@@ -752,11 +934,12 @@ function createLifecycleOrg(options = {}) {
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`${method} ${p}: no table has the entity set ${set}`);
     if (!key && !rest) {
-      if (method === 'GET') return json(200, { value: readRows(set, query) });
-      if (method === 'POST') return createRow(set, body, headers);
+      if (method === 'GET') return json(200, { value: readRows(set, query, { kind: 'collection', where: p }) });
+      if (method === 'POST') { checkRead(set, query, 'write', p); return createRow(set, body, headers); }
     }
     if (key && !rest) {
       if (method === 'GET') {
+        checkRead(set, query, 'single', p);
         // A read by id answers the row as saved, with its current version — the SDK reads a form right after it creates it
         // (`systemforms(<id>)?$select=formid`, for the token of its next write) and the platform answers it (fake-dataverse.js models the
         // same). Only a plain read of the COLLECTION is the published layer.
@@ -766,17 +949,20 @@ function createLifecycleOrg(options = {}) {
         // (measured; helpers/fake-apps-org.js) — which is why the download tells the maker to publish a new app first.
         if (set === 'appmodules' && !row.published) return failure(404, '0x80040217', `appmodule With Id = ${key} Does Not Exist`);
         const shaped = shape(row, set === 'appmodules' ? row.published : row.data, query, info, { saved: true });
-        if (info.layered) delete shaped.componentstate;
+        if (info.layered && !String(query.$select || '').split(',').map((x) => x.trim()).includes('componentstate')) delete shaped.componentstate;
         return json(200, shaped, { etag: shaped['@odata.etag'] });
       }
-      if (method === 'PATCH') return updateRow(set, key, body, headers);
-      if (method === 'DELETE') return deleteRow(set, key);
+      if (method === 'PATCH') { checkRead(set, query, 'write', p); return updateRow(set, key, body, headers); }
+      if (method === 'DELETE') { noQuery(query, p); return deleteRow(set, key); }
     }
     if (key && rest) {
+      const schema = schemaOf(set);
       const ref = /^([A-Za-z_]\w*)(?:\(([^)]+)\))?\/\$ref$/.exec(rest);
+      if (ref && !schema.navigations[ref[1]]) throw new Unmodelled(`${info.logical} has no navigation ${ref[1]} (${method} ${p})`);
       if (ref && method === 'POST') {
+        noQuery(query, p);
         const target = /\/([A-Za-z_]\w*)\(([^)]+)\)$/.exec(String(body['@odata.id'] || ''));
-        if (!target) throw new Unmodelled(`cannot read the reference ${JSON.stringify(body)}`);
+        if (!target || target[1] !== schema.navigations[ref[1]]) throw new Unmodelled(`cannot read the reference ${JSON.stringify(body)} for ${ref[1]}`);
         // An N:N link that exists already is refused as a duplicate, as Dataverse does (sdk-build.js ensureAppAvailableToRole relies on it
         // and treats the refusal as "already linked").
         if (associations.some((a) => a.id === bare(key) && a.nav === ref[1] && a.toId === bare(target[2]))) return failure(400, '0x80040237', 'Cannot insert duplicate key.');
@@ -784,6 +970,7 @@ function createLifecycleOrg(options = {}) {
         return noContent();
       }
       if (ref && method === 'DELETE') {
+        for (const option of Object.keys(query)) if (option !== '$id') throw new Unmodelled(`the query option ${option} is not modelled on ${p}`);
         const toId = bare(ref[2] || (/\(([^)]+)\)$/.exec(String(query.$id || '')) || [])[1]);
         const at = associations.findIndex((a) => a.id === bare(key) && a.nav === ref[1] && a.toId === toId);
         if (at === -1) return failure(404, '0x80040217', 'The association does not exist.');
@@ -792,14 +979,14 @@ function createLifecycleOrg(options = {}) {
       }
       const nav = /^([A-Za-z_]\w*)$/.exec(rest);
       if (nav && method === 'GET') {
-        const linked = associations.filter((a) => (a.id === bare(key) && a.nav === nav[1]) || (a.toId === bare(key) && a.nav === nav[1]));
-        const values = linked.map((a) => {
-          const otherSet = a.id === bare(key) ? a.toSet : a.set;
-          const otherId = a.id === bare(key) ? a.toId : a.id;
-          const row = rowsOf(otherSet).get(otherId);
-          return row ? shape(row, row.data, query, infoOfSet(otherSet)) : null;
-        }).filter(Boolean);
-        return json(200, { value: values });
+        const target = schema.navigations[nav[1]];
+        if (!target) throw new Unmodelled(`${info.logical} has no navigation ${nav[1]} (GET ${p})`);
+        // The related rows, by the link either side made, answered as rows of the related set (its own schema, its own options).
+        const linked = associations
+          .filter((a) => a.nav === nav[1] && ((a.set === set && a.id === bare(key)) || (a.toSet === set && a.toId === bare(key))))
+          .map((a) => rowsOf(target).get(a.set === set && a.id === bare(key) ? a.toId : a.id))
+          .filter(Boolean);
+        return json(200, { value: answerRows(target, linked, query, { saved: true, kind: 'navigation', where: p }) });
       }
     }
     throw new Unmodelled(`${method} ${p}`);
@@ -955,7 +1142,8 @@ function createLifecycleOrg(options = {}) {
   // Reads by `GET resource`, for a budget.
   const readNames = (since = 0) => requests.slice(since).filter((r) => r.method === 'GET').map((r) => `GET ${resourceOf(r.path)}`);
 
-  // Everything the environment holds, named so two inventories can be compared: what a teardown must take back to the seed.
+  // Everything the environment holds, by IDENTITY, named so two inventories can be compared: what was made and what was deleted (a
+  // teardown must take it back to the seed). What each artifact HOLDS is contents()'s to compare.
   function inventory() {
     const label = (t) => t.LogicalName;
     const out = {
@@ -987,6 +1175,48 @@ function createLifecycleOrg(options = {}) {
     return out;
   }
 
+  // Everything the environment holds BY CONTENT, keyed by identity — the proof that a command left another maker's work (and the
+  // system's own rows and definitions) as it found it, where `inventory()` only proves what exists:
+  //   `row <set> <id>`          a row's saved AND published layers, whole: a view's FetchXML and LayoutXML, a form's XML, a web resource's
+  //                             content, a setting's value, a role's grant, a sample row's columns
+  //   `table <logical>`         a definition whole: its columns (with their lengths, formats, ranges and option sets), keys and privileges
+  //   `relationship <schema>` · `optionset <name>` (with its options) · `link <set>(<id>) <navigation> <set>(<id>)` (an N:N link)
+  //   `page <id>` · `page file <id>` · `page message <id>` · `page published <id>`   a generative page, its files' content, its
+  //                             conversation, and what its last publish made live
+  // Each entry is `{ label, content }`, the content canonical (keys sorted, Maps as objects, bytes as base64). Nothing is normalized:
+  // a row's `versionnumber` and `modifiedon` move on every write, and a publish that names a row moves its version — either is touching it.
+  function contents() {
+    const canon = (value) => {
+      if (value instanceof Map) return canon(Object.fromEntries(value));
+      if (value instanceof Set) return [...value].map(canon).sort();
+      if (Buffer.isBuffer(value) || value instanceof Uint8Array) return { base64: Buffer.from(value).toString('base64') };
+      if (Array.isArray(value)) return value.map(canon);
+      if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canon(value[key])]));
+      return value;
+    };
+    const out = {};
+    for (const [set, rows] of sets) {
+      const info = infoOfSet(set);
+      for (const row of rows.values()) {
+        const name = info && info.name ? row.data[info.name] : null;
+        out[`row ${set} ${row.id}`] = { label: `${set} ${row.id}${name ? ` "${name}"` : ''}`, content: canon({ saved: row.data, published: row.published }) };
+      }
+    }
+    for (const table of metadata.tables.values()) out[`table ${table.LogicalName}`] = { label: `table ${table.LogicalName}`, content: canon(table) };
+    for (const r of metadata.relationships.values()) out[`relationship ${r.SchemaName}`] = { label: `relationship ${r.SchemaName}`, content: canon(r) };
+    for (const set of metadata.optionSets.values()) out[`optionset ${set.Name}`] = { label: `global option set ${set.Name}`, content: canon(set) };
+    for (const a of associations) {
+      const key = `link ${a.set}(${a.id}) ${a.nav} ${a.toSet}(${a.toId})`;
+      out[key] = { label: key, content: true };
+    }
+    const pages = pageServer.state;
+    for (const [id, project] of pages.projects) out[`page ${id}`] = { label: `page ${id} "${project.name}"`, content: canon(project) };
+    for (const [id, file] of pages.files) out[`page file ${id}`] = { label: `page file ${id} "${file.filename}"`, content: canon(file) };
+    for (const [id, message] of pages.messages) out[`page message ${id}`] = { label: `page message ${id}`, content: canon(message) };
+    for (const [id, published] of pageServer.publishedPages) out[`page published ${id}`] = { label: `the published page ${id}`, content: canon(published) };
+    return out;
+  }
+
   return {
     origin,
     API,
@@ -1009,6 +1239,7 @@ function createLifecycleOrg(options = {}) {
     readNames,
     readCounts: (since = 0) => countBy(readNames(since)),
     inventory,
+    contents,
     // Rows whose saved layer holds a change no publish has copied.
     unpublished: () => [...sets].flatMap(([set, rows]) => (isLayered(set) ? [...rows.values()].filter((row) => row.publishedVersion !== row.version).map((row) => `${set} ${row.data.name || row.id}`) : [])),
     // A row by name, saved layer: what the platform holds whatever is published.

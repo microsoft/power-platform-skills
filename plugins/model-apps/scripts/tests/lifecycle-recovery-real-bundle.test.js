@@ -15,13 +15,14 @@
 //            teardown of the authored spec -> a teardown of what is gone
 //   FAULTED  a build refused part way -> the build run again | a teardown refused part way -> the teardown run again
 // A failure is provoked only by refusing a request for this test's own app, in front of the fake: the refused request never reaches
-// the fake, so the environment holds what it would after a real refusal.
+// the fake, so the environment holds what it would after a real refusal. Whatever a step does, everything the environment held before
+// the build is held to what it held — by identity and by content (assertBackToSeed, diffContents).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
-const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, deployedFeatures, appUniqueName } = require('./helpers/lifecycle-harness.js');
+const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, deployedFeatures, diffContents, appUniqueName } = require('./helpers/lifecycle-harness.js');
 
 const spec = kitchenSinkSpec();
 
@@ -46,8 +47,10 @@ async function environment() {
     return { lift: () => { faults.splice(faults.indexOf(fault), 1); return fault.hits; } };
   };
   const harness = createLifecycleHarness({ ...org, request }, makeTempDir('lifecycle-recovery-'));
-  return { org, harness, refuse, seed: org.inventory() };
+  return { org, harness, refuse, seed: org.inventory(), seedContents: org.contents() };
 }
+// The publisher a build made for the prefix: the publisher rows that were not there before it (captured right after the build).
+const publishersMade = (env) => env.org.inventory().rows.publishers.filter((p) => !env.seed.rows.publishers.includes(p));
 
 // What a maker does in Maker, sent to the fake as the Web API call Maker makes.
 async function inMaker(org, method, where) {
@@ -65,6 +68,7 @@ const clean = () => cleanP || (cleanP = (async () => {
   const { org, harness } = env;
   const build = await harness.build(spec);
   assert.equal(build.result.ok, true, JSON.stringify(build.result.errors));
+  env.builtPublisher = publishersMade(env);
   env.reference = deployedFeatures(org);
   env.buttons = buttonsOf(org);
   const one = (set, predicate) => { const rows = org.find(set, predicate); assert.equal(rows.length, 1, `one ${set} row matches`); return rows[0]; };
@@ -81,6 +85,7 @@ const clean = () => cleanP || (cleanP = (async () => {
   env.drifted = await harness.measure(() => harness.verify(spec));
   env.rebuild = await harness.measure(() => harness.build(spec));
   env.afterRebuild = deployedFeatures(org);
+  env.afterRebuildContents = org.contents();
   return env;
 })());
 
@@ -94,7 +99,9 @@ const faulted = () => faultedP || (faultedP = (async () => {
   env.failedBuild = await harness.measure(() => harness.build(spec));
   env.failedBuild.hits = refusal.lift();
   env.resumedBuild = await harness.measure(() => harness.build(spec));
+  env.builtPublisher = publishersMade(env);
   env.afterResume = deployedFeatures(env.org);
+  env.afterResumeContents = env.org.contents();
   return env;
 })());
 
@@ -106,11 +113,16 @@ const ran = (step, label) => {
   return step;
 };
 
-// The environment is as the seed left it, but for the publisher the build made for the prefix: teardown never deletes a publisher.
-function assertBackToSeed(org, seed) {
+// The environment is as the seed left it, but for the publisher the build made for the prefix (teardown never deletes a publisher) —
+// set aside by its identity, so a publisher the environment had before that went missing still fails. By identity, nothing the build
+// made is left and nothing the environment had is missing; by content, everything the environment had holds exactly what it held.
+function assertBackToSeed(env) {
+  const { org, seed } = env;
   const now = org.inventory();
-  assert.deepEqual(now.rows.publishers.filter((p) => !seed.rows.publishers.includes(p)).map((p) => / contosopublisher$/.test(p)), [true]);
-  assert.deepEqual({ ...now, rows: { ...now.rows, publishers: seed.rows.publishers } }, seed, 'every other row is as it was before the build');
+  assert.equal(env.builtPublisher.length, 1);
+  assert.deepEqual(now.rows.publishers.filter((p) => !seed.rows.publishers.includes(p)), env.builtPublisher, 'the one row left that the environment did not have is the build\'s publisher');
+  assert.deepEqual({ ...now, rows: { ...now.rows, publishers: now.rows.publishers.filter((p) => !env.builtPublisher.includes(p)) } }, seed, 'every other row is as it was before the build: no more, no fewer');
+  assert.deepEqual(diffContents(env.seedContents, org.contents(), { added: false }), [], 'and every one of them holds exactly what it held');
 }
 
 // ====================================================================================================================================
@@ -183,6 +195,7 @@ test('lifecycle recovery: verify names every artifact a maker deleted in Maker, 
   assert.deepEqual(buttonsOf(env.org), env.buttons.filter((label) => label !== 'Escalate'));
   assert.ok(rebuild.value.log.some((line) => line.includes("command bar for contoso_project (exists — reuse; button edits aren't applied on rebuild, recreate to change)")));
   assert.deepEqual({ ...env.afterRebuild, commands: env.reference.commands }, env.reference, 'every other deleted artifact is back, once, as the clean build made it');
+  assert.deepEqual(diffContents(env.seedContents, env.afterRebuildContents, { added: false }), [], 'and nothing the environment had before the build was touched');
 });
 
 test('lifecycle recovery: a build that fails part way, run again, ends as a clean build ends', async () => {
@@ -195,10 +208,12 @@ test('lifecycle recovery: a build that fails part way, run again, ends as a clea
   const resumed = ran(env.resumedBuild, 'the build run again');
   assert.equal(resumed.value.result.ok, true, JSON.stringify(resumed.value.result.errors));
   assert.deepEqual(env.afterResume, (await clean()).reference, 'nothing is missing, nothing is made twice, nothing is left unpublished');
+  assert.deepEqual(diffContents(env.seedContents, env.afterResumeContents, { added: false }), [], 'and nothing the environment had before was touched');
 });
 
 test('lifecycle recovery: a teardown that fails part way, run again, deletes the rest and nothing else', async () => {
-  const { org, harness, refuse, seed } = await faulted();
+  const env = await faulted();
+  const { harness, refuse } = env;
   const refusal = refuse('DELETE', /EntityDefinitions\(LogicalName='contoso_tag'\)$/, 'The Entity component cannot be deleted because it is referenced by 1 other component.');
   const failed = ran(await harness.measure(() => harness.teardown(spec)), 'the refused teardown');
   assert.ok(refusal.lift() > 0, 'the refusal was hit');
@@ -207,29 +222,34 @@ test('lifecycle recovery: a teardown that fails part way, run again, deletes the
   const resumed = ran(await harness.measure(() => harness.teardown(spec)), 'the teardown run again');
   assert.equal(resumed.value.result.ok, true, JSON.stringify(resumed.value.result.errors));
   assert.deepEqual(resumed.writes, RESUMED_TEARDOWN_WRITES);
-  assertBackToSeed(org, seed);
+  assertBackToSeed(env);
 });
 
 test('lifecycle recovery: a teardown of the downloaded spec keeps every table, column, relationship, global choice and row', async () => {
-  const { org, harness, seed } = await clean();
+  const env = await clean();
+  const { org, harness } = env;
   const dir = path.join(makeTempDir('lifecycle-recovery-download-'), 'app');
   const download = ran(await harness.measure(() => harness.download(appUniqueName(spec), dir)), 'the download');
   const before = deployedFeatures(org);
+  const beforeContents = org.contents();
   const teardown = ran(await harness.measure(() => harness.teardown(download.value.spec, { workspace: path.join(dir, '.maker-workspace') })), 'the teardown of the downloaded spec');
   assert.equal(teardown.value.result.ok, true, JSON.stringify(teardown.value.result.errors));
   assert.deepEqual(teardown.writes, DOWNLOADED_TEARDOWN_WRITES);
   const after = deployedFeatures(org);
   for (const kept of ['tables', 'relationships', 'optionSets', 'records', 'views', 'charts', 'forms', 'commands']) assert.deepEqual(after[kept], before[kept], `the ${kept} are kept`);
+  // ...and what it kept, it kept whole: no artifact that is still there holds anything else (a column, an option, a row's value, a view's
+  // XML), whatever the teardown deleted around it.
+  assert.deepEqual(diffContents(beforeContents, org.contents(), { added: false }).filter((line) => !line.startsWith('gone: ')), []);
   // The authored spec's teardown then deletes the rest...
   const rest = ran(await harness.measure(() => harness.teardown(spec)), 'the teardown of the authored spec');
   assert.equal(rest.value.result.ok, true, JSON.stringify(rest.value.result.errors));
-  assertBackToSeed(org, seed);
+  assertBackToSeed(env);
   // ...and a teardown of what is gone changes nothing: what is resolved by a query is skipped when the query finds nothing, and a table
   // or global choice is deleted by name, the platform's 404 read as "already gone".
   const again = ran(await harness.measure(() => harness.teardown(spec)), 'the teardown of what is gone');
   assert.equal(again.value.result.ok, true, JSON.stringify(again.value.result.errors));
   assert.deepEqual(again.writes, { 'DELETE EntityDefinitions': 3, 'DELETE GlobalOptionSetDefinitions': 1 });
   assert.deepEqual(org.since(again.mark).filter((r) => r.method !== 'GET').map((r) => r.status), [404, 404, 404, 404]);
-  assertBackToSeed(org, seed);
+  assertBackToSeed(env);
   assert.deepEqual(again.value.log.filter((line) => /teardown complete|finished with errors/.test(line)).map((line) => line.trim()), [AGAIN_SUMMARY]);
 });

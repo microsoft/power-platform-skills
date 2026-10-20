@@ -17,7 +17,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
-const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, publishesOf, appUniqueName } = require('./helpers/lifecycle-harness.js');
+const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, publishesOf, diffContents, appUniqueName } = require('./helpers/lifecycle-harness.js');
 
 const spec = kitchenSinkSpec();
 const APP = appUniqueName(spec);
@@ -27,12 +27,13 @@ let builtP;
 const built = () => builtP || (builtP = (async () => {
   const org = createLifecycleOrg();
   await seedForeignWork(org);
+  const seedContents = org.contents();
   const root = makeTempDir('lifecycle-scenarios-');
   const harness = createLifecycleHarness(org, root);
   const build = await harness.measure(() => harness.build(spec));
   if (build.error) throw build.error;
   assert.equal(build.value.result.ok, true, JSON.stringify(build.value.result.errors));
-  return { org, root, harness };
+  return { org, root, harness, seedContents };
 })());
 
 // Every request a measured step sent was one the fake models, and the step did not throw.
@@ -106,19 +107,19 @@ test('lifecycle scenarios: a dry run of the build writes nothing, against an emp
   // An empty environment: everything would be created, nothing may be.
   const emptyOrg = createLifecycleOrg();
   const empty = createLifecycleHarness(emptyOrg, makeTempDir('lifecycle-scenarios-empty-'));
-  const before = emptyOrg.inventory();
+  const before = emptyOrg.contents();
   const fresh = clean(await empty.measure(() => empty.build(spec, { apply: false })), 'the dry run on an empty environment');
   assert.equal(fresh.value.result.ok, true, JSON.stringify(fresh.value.result.errors));
   assert.equal(fresh.value.result.dryRun, true);
   assert.deepEqual(fresh.writes, {}, 'a preview sends no write');
-  assert.deepEqual(emptyOrg.inventory(), before);
+  assert.deepEqual(diffContents(before, emptyOrg.contents()), [], 'and the environment is as it was, artifact by artifact');
   // The built environment: everything would be reused, and nothing may be written either.
   const { org, harness } = await built();
-  const held = org.inventory();
+  const held = org.contents();
   const again = clean(await harness.measure(() => harness.build(spec, { apply: false })), 'the dry run on the built environment');
   assert.equal(again.value.result.ok, true, JSON.stringify(again.value.result.errors));
   assert.deepEqual(again.writes, {});
-  assert.deepEqual(org.inventory(), held);
+  assert.deepEqual(diffContents(held, org.contents()), []);
   // The live plan tells the two apart: on the empty environment nothing is reused, on the built one the tables and the app are.
   const stateOf = (r, label) => (r.value.result.planItems.find((p) => p.label === label) || {}).state;
   assert.equal(stateOf(fresh, 'app module "Kitchen Sink" + sitemap'), 'create');
@@ -127,16 +128,17 @@ test('lifecycle scenarios: a dry run of the build writes nothing, against an emp
 
 test('lifecycle scenarios: a teardown without --apply writes nothing and lists every artifact the build made', async () => {
   const { org, harness } = await built();
-  const held = org.inventory();
+  const held = org.contents();
   const plan = clean(await harness.measure(() => harness.teardown(spec, { apply: false })), 'the teardown preview');
   assert.equal(plan.value.result.dryRun, true);
   assert.deepEqual(plan.writes, {}, 'a teardown preview sends no write');
-  assert.deepEqual(org.inventory(), held);
+  assert.deepEqual(diffContents(held, org.contents()), [], 'and changes nothing');
   assert.deepEqual(plan.value.result.plan.map((line) => line.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<id>')), TEARDOWN_PLAN);
 });
 
 test('lifecycle scenarios: two downloads of an unchanged app write the same spec', async () => {
-  const { harness, root } = await built();
+  const { org, harness, root } = await built();
+  const held = org.contents();
   const first = clean(await harness.measure(() => harness.download(APP, path.join(root, 'download-a'))), 'the first download');
   const second = clean(await harness.measure(() => harness.download(APP, path.join(root, 'download-b'))), 'the second download');
   assert.equal(first.value.emitted.ok, true, JSON.stringify(first.value.emitted));
@@ -144,14 +146,16 @@ test('lifecycle scenarios: two downloads of an unchanged app write the same spec
   // And downloading again into the folder that holds the first spec rewrites it unchanged (the page keys it gave are kept).
   const third = clean(await harness.measure(() => harness.download(APP, path.join(root, 'download-a'))), 'the download over the first');
   assert.equal(third.value.text, first.value.text);
+  assert.deepEqual(diffContents(held, org.contents()), [], 'three downloads change nothing in the environment');
 });
 
 test('lifecycle scenarios: a rebuild without --publish skips the bulk publishes, and leaves the rest unpublished', async () => {
-  const { org, harness } = await built();
+  const { org, harness, seedContents } = await built();
   const held = org.inventory();
   const rebuild = clean(await harness.measure(() => harness.build(spec, { publish: false })), 'the rebuild without --publish');
   assert.equal(rebuild.value.result.ok, true, JSON.stringify(rebuild.value.result.errors));
   assert.deepEqual(org.inventory(), held);
+  assert.deepEqual(diffContents(seedContents, org.contents(), { added: false }), [], 'nothing the environment had before the build was touched, or published');
   const publishes = publishesOf(org, rebuild);
   assert.deepEqual(publishes.reduce((counts, name) => ({ ...counts, [name]: (counts[name] || 0) + 1 }), {}), UNPUBLISHED_REBUILD_PUBLISHES);
   assert.equal(publishes[publishes.length - 1], 'app');
@@ -159,13 +163,14 @@ test('lifecycle scenarios: a rebuild without --publish skips the bulk publishes,
 });
 
 test('lifecycle scenarios: the downloaded spec rebuilds in the same environment without creating or deleting anything, and verifies', async () => {
-  const { org, harness, root } = await built();
+  const { org, harness, root, seedContents } = await built();
   const dir = path.join(root, 'download-a');
   const downloaded = (await harness.download(APP, dir)).spec;
   const held = org.inventory();
   const rebuild = clean(await harness.measure(() => harness.build(downloaded, { appFolder: dir, workspace: path.join(dir, '.maker-workspace') })), 'the rebuild of the downloaded spec');
   assert.equal(rebuild.value.result.ok, true, JSON.stringify(rebuild.value.result.errors));
   assert.deepEqual(org.inventory(), held, 'nothing is created or deleted: the app keeps every form, view, chart, command and page the download did not carry');
+  assert.deepEqual(diffContents(seedContents, org.contents(), { added: false }), [], 'nothing the environment had before the build was touched');
   assert.deepEqual(rebuild.writes, DOWNLOADED_REBUILD_WRITES);
   const verified = clean(await harness.measure(() => harness.verify(downloaded, { workspace: path.join(dir, '.maker-workspace') })), 'verify of the downloaded spec');
   assert.deepEqual({ ok: verified.value.ok, missing: verified.value.missing }, { ok: true, missing: [] });
@@ -173,4 +178,3 @@ test('lifecycle scenarios: the downloaded spec rebuilds in the same environment 
   const original = clean(await harness.measure(() => harness.verify(spec)), 'verify of the authored spec');
   assert.deepEqual({ ok: original.value.ok, missing: original.value.missing }, { ok: true, missing: [] });
 });
-

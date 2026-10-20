@@ -13,7 +13,8 @@
 //   literals         'text' (a quote is doubled: 'O''Neil') · integers and decimals · true · false · null · bare GUIDs
 //
 // Text compares IGNORING CASE, as Dataverse does: its SQL collation is case-insensitive, so `uniquename eq 'contososd'` finds
-// `ContosoSD`. A GUID compares ignoring case and braces. A column the row does not hold is `null`.
+// `ContosoSD`. A GUID compares ignoring case and braces. A column the row does not hold is `null` here: whether the column EXISTS is
+// the caller's question, which a fake answers from its own schema before it evaluates a single row (describeFilter).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/filter-rows
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
@@ -265,9 +266,50 @@ function fieldsOf(node, into = new Set()) {
   return into;
 }
 
-function matchesFilter(text, row, ctx) {
-  if (!text) return true;
-  return evaluate(parseFilter(text), row, ctx || {});
+// What a parsed filter reads, by where it reads it — what a fake validates against its schema BEFORE it looks at a single row, so a
+// filter over an empty collection is checked exactly as one over a full one:
+//   fields    the columns of the row itself (`name`, `_parentid_value`)
+//   paths     a single-valued navigation followed to the key of the row it points at (`parentrootroleid/roleid`), as
+//             `{ navigation, field }`
+//   lambdas   a collection-valued navigation and the columns its variable reads of the related rows
+//             (`appmoduleroles_association/any(x:x/roleid eq …)` -> `{ navigation: 'appmoduleroles_association', fields: ['roleid'] }`)
+function describeFilter(ast) {
+  const out = { fields: new Set(), paths: [], lambdas: [] };
+  const visit = (node, scope) => {
+    if (!node || typeof node !== 'object') return;
+    if (node.kind === 'field') {
+      const parts = node.name.split('/');
+      if (parts.length === 1) out.fields.add(node.name);
+      else if (parts.length === 2 && scope.has(parts[0])) scope.get(parts[0]).fields.add(parts[1]);
+      else if (parts.length === 2) out.paths.push({ navigation: parts[0], field: parts[1] });
+      else throw new Error(`odata-filter: the path ${node.name} is not modelled`);
+    }
+    if (node.kind === 'in') out.fields.add(node.field);
+    if (node.kind === 'lambda') {
+      const lambda = { navigation: node.nav, op: node.op, fields: new Set() };
+      out.lambdas.push(lambda);
+      visit(node.body, new Map([...scope, [node.variable, lambda]]));
+      return;
+    }
+    for (const key of ['left', 'right', 'expr', 'body']) if (node[key]) visit(node[key], scope);
+    for (const arg of node.args || []) visit(arg, scope);
+  };
+  visit(ast, new Map());
+  return { fields: [...out.fields], paths: out.paths, lambdas: out.lambdas.map((l) => ({ ...l, fields: [...l.fields] })) };
 }
 
-module.exports = { parseFilter, matchesFilter, evaluateFilter: evaluate, filterFields: fieldsOf };
+// A filter's text is parsed once and kept: the fakes parse it before they enumerate (so an empty collection still refuses a filter it
+// cannot answer), then evaluate the same tree against each row.
+const compiled = new Map();
+function compileFilter(text) {
+  const key = String(text);
+  if (!compiled.has(key)) compiled.set(key, parseFilter(key));
+  return compiled.get(key);
+}
+
+function matchesFilter(text, row, ctx) {
+  if (!text) return true;
+  return evaluate(compileFilter(text), row, ctx || {});
+}
+
+module.exports = { parseFilter, compileFilter, describeFilter, matchesFilter, evaluateFilter: evaluate, filterFields: fieldsOf };

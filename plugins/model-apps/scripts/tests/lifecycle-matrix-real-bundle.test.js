@@ -6,10 +6,14 @@
 //   build          buildModelApp, as the CLI wires it (--apply --publish --sample-data --verify)
 //   NOOP rebuild   the same spec again, unchanged: what it still writes and publishes is pinned, request by request
 //   download       download-model-app.js main(), as the CLI runs it: the spec it writes must equal the authored one, except for the
-//                  differences the round trip is documented to have (DOWNLOAD_DIFFERENCES, below)
+//                  differences the round trip is documented to have (the difference table at THE ROUND TRIP, below)
 //   verify         verifySpec over the CLI's reader, in a throwaway workspace: every check passes, and the checks it makes are pinned
 //   teardown       teardownModelApp --apply --allow-destructive: the environment ends exactly as it started, but for what teardown is
 //                  documented to keep
+//
+// Another maker's work is in the environment from the start, and every stage is held to leaving it — and every row and definition the
+// environment had — as it found it, compared by CONTENT (saved and published layers, whole definitions, page files: org.contents),
+// not only by identity; the two read-only stages (download, verify) to changing nothing at all.
 //
 // Each phase also has a REQUEST BUDGET: its writes are pinned exactly (`METHOD resource` -> count) and its reads are held under a
 // ceiling, so a regression that adds a write — or turns one read into one per row — fails here even when every artifact still ends up
@@ -36,7 +40,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
-const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, deployedFeatures, publishesOf, appUniqueName, PAGE_SOURCE } = require('./helpers/lifecycle-harness.js');
+const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, deployedFeatures, publishesOf, diffContents, appUniqueName, PAGE_SOURCE } = require('./helpers/lifecycle-harness.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 
 // ------------------------------------------------------------------------------------------------------------------------------------
@@ -51,13 +55,18 @@ async function runLifecycle() {
   const harness = createLifecycleHarness(org, makeTempDir('lifecycle-matrix-'));
   // Another maker's work is there first: everything the lifecycle does must leave it as it was.
   await seedForeignWork(org);
-  const out = { spec, org, seed: org.inventory(), stages: {}, timings: {} };
+  // What it holds then, by identity (inventory) and by content (contents, after every stage too): the proofs that a stage made and
+  // deleted only its own, and left everything else — another maker's work, the system's rows and definitions — exactly as it was.
+  const out = { spec, org, seed: org.inventory(), seedContents: org.contents(), contents: {}, stages: {}, timings: {} };
   const stage = async (name, fn) => {
     out.stages[name] = await harness.measure(fn);
     out.timings[name] = out.stages[name].ms;
+    out.contents[name] = org.contents();
   };
   await stage('build', () => harness.build(spec));
   out.afterBuild = org.inventory();
+  // The one row a teardown leaves behind on purpose: the publisher the build made for the prefix (see the teardown test).
+  out.builtPublisher = out.afterBuild.rows.publishers.filter((p) => !out.seed.rows.publishers.includes(p));
   out.built = deployedFeatures(org);
   // The ids the round trip writes back, read from what the environment holds once the app is built (teardown removes them).
   const one = (set, predicate) => { const rows = org.find(set, predicate); return rows.length === 1 ? rows[0] : null; };
@@ -262,7 +271,8 @@ const BUILT = {
   ],
   optionSets: { contoso_stage: ['100000000 Planned', '100000001 Active', '100000002 Done'] },
   views: ['contoso_project: Open Projects', 'contoso_task: My Open Tasks', 'contoso_task: Open Tasks'],
-  charts: ['contoso_project: Projects by Priority'],
+  // The chart as it draws: its type, and what it counts by what (the chart's datadescription and presentationdescription).
+  charts: ['contoso_project: Projects by Priority (Pie: count(contoso_projectid) by contoso_priority)'],
   // Each table's chosen Main form is its default (the platform keeps one), next to the stock form the platform made.
   forms: [
     'contoso_project: Information (type 2)', 'contoso_project: Project (type 2, default)', 'contoso_project: Project Card (type 6)',
@@ -302,6 +312,7 @@ test('lifecycle matrix: the build makes every feature of the kitchen-sink spec, 
   assert.deepEqual(result.verify && { ok: result.verify.ok, missing: result.verify.missing }, { ok: true, missing: [] }, 'the build\'s --verify finds every artifact');
   assert.deepEqual(warnings, [], 'the build of this spec warns about nothing');
   assert.deepEqual(run.built, BUILT, 'the environment holds every feature as the spec declares it');
+  assert.deepEqual(diffContents(run.seedContents, run.contents.build, { added: false }), [], 'every artifact the environment held before the build — another maker\'s, the system\'s — holds exactly what it held');
   assert.deepEqual(s.writes, BUILD_WRITES);
   assert.deepEqual(publishesOfStage(run, 'build'), BUILD_PUBLISHES);
   assert.deepEqual(s.unpublished, [], 'nothing is left saved but not published');
@@ -316,6 +327,7 @@ test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothin
   assert.equal(result.ok, true, JSON.stringify(result.errors || result.error));
   assert.deepEqual(result.verify && { ok: result.verify.ok, missing: result.verify.missing }, { ok: true, missing: [] });
   assert.deepEqual(run.afterRebuild, run.afterBuild, 'the environment holds exactly what it held after the build: no component, column, row, link or page is added or removed');
+  assert.deepEqual(diffContents(run.seedContents, run.contents.rebuild, { added: false }), [], 'every artifact the environment held before the build still holds exactly what it held');
   assert.deepEqual(s.writes, REBUILD_WRITES);
   assert.deepEqual(publishesOfStage(run, 'rebuild'), REBUILD_PUBLISHES);
   assert.deepEqual(s.unpublished, []);
@@ -411,6 +423,7 @@ test('lifecycle matrix: the download writes the authored spec back, but for the 
   const { emitted, stderr, spec, dir } = s.value;
   assert.equal(emitted && emitted.ok, true, JSON.stringify(emitted));
   assert.deepEqual(s.writes, {}, 'a download writes nothing to the environment');
+  assert.deepEqual(diffContents(run.contents.rebuild, run.contents.download), [], 'and changes nothing in it');
   const { descriptionInventory, ...downloaded } = spec;
   assert.deepEqual(sortRelationships(downloaded), sortRelationships(expectedDownload(run.spec, run.ids)));
   // The page's source comes back byte for byte.
@@ -444,6 +457,7 @@ test('lifecycle matrix: verify passes, and makes every check it made before', as
   for (const c of result.checks) kinds[c.kind] = (kinds[c.kind] || 0) + 1;
   assert.deepEqual(kinds, VERIFY_CHECKS);
   assert.deepEqual(s.writes, {}, 'verify writes nothing');
+  assert.deepEqual(diffContents(run.contents.download, run.contents.verify), [], 'and changes nothing');
   withinBudget(s, 'verify');
 });
 
@@ -456,12 +470,15 @@ test('lifecycle matrix: teardown deletes everything the build made and nothing e
   assert.deepEqual({ errors: result.errors, skipped: result.skipped }, { errors: [], skipped: [] });
   assert.deepEqual(s.writes, TEARDOWN_WRITES);
   // The environment is back to where it started, but for the publisher the build made for the prefix: teardown deletes the solution and
-  // never a publisher, which other solutions may share.
+  // never a publisher, which other solutions may share. Only THAT row is set aside — by its identity, captured after the build — so a
+  // publisher the environment had before that went missing would still fail here.
+  assert.equal(run.builtPublisher.length, 1);
+  assert.match(run.builtPublisher[0], / contosopublisher$/);
   const publishers = run.afterTeardown.rows.publishers;
-  const kept = publishers.filter((p) => !run.seed.rows.publishers.includes(p));
-  assert.equal(kept.length, 1);
-  assert.match(kept[0], / contosopublisher$/);
-  assert.deepEqual({ ...run.afterTeardown, rows: { ...run.afterTeardown.rows, publishers: run.seed.rows.publishers } }, run.seed, 'every table, column, relationship, option set, row, solution component, link and page the build made is gone, and nothing the environment had before was touched');
+  assert.deepEqual(publishers.filter((p) => !run.seed.rows.publishers.includes(p)), run.builtPublisher, 'the one row left that the environment did not have is the build\'s publisher');
+  assert.deepEqual({ ...run.afterTeardown, rows: { ...run.afterTeardown.rows, publishers: publishers.filter((p) => !run.builtPublisher.includes(p)) } }, run.seed, 'every table, column, relationship, option set, row, solution component, link and page the build made is gone, and nothing the environment had before is missing');
+  // ...and every artifact the environment had before holds exactly what it held: saved and published layers, metadata, page files.
+  assert.deepEqual(diffContents(run.seedContents, run.contents.teardown, { added: false }), [], 'nothing the environment had before was touched');
   withinBudget(s, 'teardown');
 });
 
