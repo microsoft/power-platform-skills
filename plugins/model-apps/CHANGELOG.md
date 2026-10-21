@@ -171,19 +171,30 @@ other spellings, and out of text cut short or split between two writes.
   on the far side of an escape split between two writes, base64 of a part of the token, and bytes written to a file. pcf's copy of
   the module changes the same way.
 - The capabilities document no longer says that a download leaves `relationships[]` out (#567).
-- **A rebuild no longer stops at something that already exists when the platform answers in another language, nor at a 1:N relationship it
-  did not see before creating it.** The build read only English words in an "already exists" answer, and the platform can word that answer in
-  the caller's language: on a Spanish environment the refusal of an alternate key the build could not prove from its table read came back in
-  Spanish, and the data-model phase stopped. A status reason, a column of a table whose columns could not be read, or a table found only after
-  its create stopped the same way wherever its refusal was worded in another language (on that environment those came back in English). Each
-  of those creates now also recognises the answer by its error code, which is the same in every language (`0x80060893` key, `0x80044310` status
-  reason, `0x80047013`/`0x80060304` column, `0x80044363`/`0x8009050d`/`0x8004700b` table); a table is still reused only when it is read back.
-  The create of an existing 1:N relationship was answered `0x80072551` ("NavigationPropertyName … is not unique within an entity"), which no
-  release recognised, so a 1:N the build did not see before creating it stopped the build in every language. The build now reads that
-  relationship and reuses it only when the read proves it is the declared one; another relationship, or one the read cannot prove, still stops
-  the build (the reference's code for a taken relationship name, `0x8004432B`, leads to the same read). The codes add to the existing rules — a
-  409 and the English wording are still recognised whatever code the answer carries — and a code of another create, a generic code or a code
-  the message only quotes does not count by itself.
+- **A rebuild no longer stops at something that already exists when the platform answers in another language, nor at a 1:N
+  relationship it did not see before creating it.** The build read only English words in an "already exists" answer, and the platform
+  can word that answer in the caller's language: on a Spanish environment the refusal of an alternate key the build could not prove
+  from its table read came back in Spanish, and the data-model phase stopped. A status reason, a column of a table whose columns could
+  not be read, or a table found only after its create stopped the same way wherever its refusal was worded in another language (on
+  that environment those came back in English). Each of those creates now also recognises the answer by its error code, which is the
+  same in every language (`0x80060893` key, `0x80044310` status reason, `0x80047013`/`0x80060304` column,
+  `0x80044363`/`0x8009050d`/`0x8004700b` table); a table is still reused only when it is read back. The create of an existing 1:N
+  relationship was answered `0x80072551` ("NavigationPropertyName … is not unique within an entity"), which no release recognised, so
+  a 1:N the build did not see before creating it stopped the build in every language. The build now reads that relationship and reuses
+  it only when the read proves it is the declared one; another relationship, or one the read cannot prove, still stops the build (the
+  reference's code for a taken relationship name, `0x8004432B`, leads to the same read). The codes add to the existing rules — a 409
+  and the English wording are still recognised whatever code the answer carries — and a code of another create, a generic code or a
+  code the message only quotes does not count by itself.
+- **Teardown removes a published app whose navigation names a sitemap that no longer exists, once it reaches the app.** Before 2.18.0,
+  tearing down one app could delete a sitemap another app shared, leaving that app's SiteMap component pointing at nothing. 2.17.0
+  then deleted such an app on its own (no sitemap had the app's name); the component-aware delete in 2.18.0 refused it with "… was not
+  returned by the unpublished-aware read … Retry.", which no retry could pass. Teardown now reads the app's row version, proves that
+  sitemap gone — by its id, in the published and the saved layer, with no other app's navigation naming it and the link unchanged —
+  and deletes the app on its own: the delete is conditioned on that version and touches no sitemap, and the app is then read back
+  gone. When it cannot prove that, when the app changed while it was proving it, or when the app was never published, it refuses with
+  what it found and asks you to delete the app in Power Apps and run the teardown again. An app with live generative pages still stops
+  earlier, at the page check, because its pages are proven from the navigation that is gone; delete such an app in Power Apps, then
+  run the teardown again.
 
 ## [2.17.0]
 
